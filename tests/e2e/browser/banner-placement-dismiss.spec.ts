@@ -202,7 +202,7 @@ test.describe('expiry, undo and the way back', () => {
     expect(await storedKeys(page)).toContain('netbox|connect')
   })
 
-  test('BP-C55: Settings shows Hidden from the banner with Show again for a dismissed host only; Show again brings the row back', async ({ page, request }) => {
+  test('BP-C55: Settings says the problem was hidden on the home page, with Show again for a dismissed host only; Show again brings the row back', async ({ page, request }) => {
     await isolatePrefs(page)
     await page.addInitScript((k) => localStorage.removeItem(k), DISMISS_KEY)
     await loadFixture(request, 'host-problems')
@@ -212,12 +212,12 @@ test.describe('expiry, undo and the way back', () => {
     await cardRow(tasksBanner(page), 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(cardRow(tasksBanner(page), 'certbox')).toHaveCount(0)
     await openRemoteHosts(page)
-    await expect(hostRow(page, 'certbox')).toContainText('Hidden from the banner.')
-    await expect(hostRow(page, 'keybox')).not.toContainText('Hidden from the banner.')
+    await expect(hostRow(page, 'certbox')).toContainText('You hid this problem on the home page.')
+    await expect(hostRow(page, 'keybox')).not.toContainText('You hid this problem on the home page.')
     await expect(hostRow(page, 'keybox').getByRole('button', { name: 'Show again' })).toHaveCount(0)
     await hostRow(page, 'certbox').screenshot({ path: `${BP_SHOTS}/c55-settings-hidden.png` })
     await hostRow(page, 'certbox').getByRole('button', { name: 'Show again' }).click()
-    await expect(hostRow(page, 'certbox')).not.toContainText('Hidden from the banner.')
+    await expect(hostRow(page, 'certbox')).not.toContainText('You hid this problem on the home page.')
     await goRail(page, 'home')
     await expandSystemAttention(page)
     await expect(cardRow(tasksBanner(page), 'certbox')).toBeVisible({ timeout: 20_000 })

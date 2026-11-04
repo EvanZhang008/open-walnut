@@ -76,6 +76,7 @@ test('F02: Remote Hosts still saves a real edit', async ({ page }) => {
   await openSettings(page)
   await clickNav(page, 'remote-hosts')
   await page.getByTestId('remote-hosts-add').click()
+  await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()
   await page.locator('#remote-hosts').getByPlaceholder('devbox').last().fill('box-one')
   await page.locator('#remote-hosts').getByPlaceholder('host.example.com').last().fill('box-one.example.test')
   await expect.poll(() => writes.filter((w) => w.includes('/api/config') && w.includes('box-one')).length,

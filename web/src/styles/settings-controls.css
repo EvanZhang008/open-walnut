@@ -389,6 +389,19 @@
   outline-offset: 2px;
 }
 
+/* Focus a press moved here (utils/focus-landed.ts: the new link's Copy, the row after a
+   removed one) rings like keyboard focus: :focus-visible stays off after a mouse press. */
+.settings-pane :is(button, a, [tabindex])[data-landed='true']:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.settings-pane .settings-row[data-landed='true']:focus,
+.settings-pane .hf-card[data-landed='true']:focus,
+.settings-pane .hf-off[data-landed='true']:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .settings-button-stack {
   display: inline-grid;
 }

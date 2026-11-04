@@ -163,7 +163,7 @@ describe('a removal of most sessions, confirmed by the user', () => {
     expect(row).toMatchObject({
       id: `${TARGET}/sessions`, state: 'refused', confirm: { target: TARGET, kind: 'sessions', entries: 100, keys: expect.stringMatching(/^[0-9a-f]{12}$/) },
     })
-    expect(row.text).toBe('This Mac has 100 sessions now, and the copy there would drop 140 of its 240. Walnut held off in case this Mac lost them. If you removed them on purpose, remove them there too.')
+    expect(row.text).toBe('This Mac has 100 sessions now, and the copy there would drop 140 of its 240. Walnut kept them there, in case this Mac lost them by mistake. If you removed them on purpose, remove them there too.')
 
     // The copy scheduler runs as on the Mac; its rounds are held at their first step until released.
     let release = (): void => {}

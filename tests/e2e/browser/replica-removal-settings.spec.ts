@@ -1,5 +1,5 @@
 /**
- * Settings, Remote Hosts, "Copies that held off" (docs/plan/walnut-replica-servers-impl.md,
+ * Settings, Remote Hosts, "Removals to confirm" (docs/plan/walnut-replica-servers-impl.md,
  * section 4): a host's copy refused, three rounds in a row, a copy that would remove
  * most of its tasks. The row says how many would go; "Remove them there" takes two
  * clicks and posts exactly the refusal the user read (count and keys); the row then
@@ -84,7 +84,7 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.getByTestId('replica-removals-host').screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
 }
 
-test.describe('Copies that held off', () => {
+test.describe('Removals to confirm (copies that held off)', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1200, height: 900 })
   })
@@ -95,9 +95,10 @@ test.describe('Copies that held off', () => {
     const read = page.waitForResponse('**/api/replicas/status')
     await openRemoteHosts(page)
     await read
-    await expect(page.getByRole('heading', { name: 'Session limits' })).toBeVisible()
+    // The pane has rendered down to its last part (More settings).
+    await expect(page.getByTestId('remote-hosts-more')).toBeVisible()
     await expect(page.getByTestId('replica-removals-host')).toHaveCount(0)
-    await expect(page.getByText('Copies that held off')).toHaveCount(0)
+    await expect(page.getByText('Removals to confirm')).toHaveCount(0)
   })
 
   test('a refusal names the size; two clicks confirm exactly the rows read; the row then says the next copy takes it', async ({ page }) => {
@@ -106,13 +107,13 @@ test.describe('Copies that held off', () => {
     await openRemoteHosts(page)
     const group = page.getByTestId('replica-removals-host')
     await expect(group).toBeVisible({ timeout: 30_000 })
-    await expect(group).toContainText('Copies that held off')
+    await expect(group).toContainText('Removals to confirm')
     const row = page.getByTestId(`replica-removal-${ROW}`)
     await expect(row).toHaveAttribute('data-removal', 'refused')
     await expect(row).toHaveAttribute('data-state', 'warning')
     await expect(row).toContainText('pw-rr-box')
     await expect(page.getByTestId(`replica-removal-text-${ROW}`)).toHaveText(
-      'This Mac has 3 tasks now, and the copy there would drop 97 of its 100. Walnut held off in case this Mac lost them. If you removed them on purpose, remove them there too.',
+      'This Mac has 3 tasks now, and the copy there would drop 97 of its 100. Walnut kept them there, in case this Mac lost them by mistake. If you removed them on purpose, remove them there too.',
     )
     await group.scrollIntoViewIfNeeded()
     await shot(page, 'refused')
@@ -140,7 +141,7 @@ test.describe('Copies that held off', () => {
     await button.click()
     const row = page.getByTestId(`replica-removal-${ROW}`)
     // The row's error sits right under it (SettingsRow), inside the group.
-    await expect(page.getByTestId('replica-removals-host').getByRole('alert')).toContainText('The rows changed since you read this')
+    await expect(page.getByTestId('replica-removals-host').getByRole('alert')).toContainText('The numbers changed since you read this')
     await expect(row).toHaveAttribute('data-state', 'error')
     await expect(row).toHaveAttribute('data-removal', 'refused')
     // The row shows the refusal as it is now, and the error is about it.
@@ -161,14 +162,14 @@ test.describe('Copies that held off', () => {
     const group = page.getByTestId('replica-removals-host')
     const row = page.getByTestId(`replica-removal-${ROW}`)
     const text = page.getByTestId(`replica-removal-text-${ROW}`)
-    await expect(group.getByRole('alert')).toContainText('The rows changed since you read this')
+    await expect(group.getByRole('alert')).toContainText('The numbers changed since you read this')
     await expect(text).toContainText('This Mac has 4 tasks now')
     // The next read (30 s later) shows the same refusal: the error stays.
     let reads = f.reads ?? 0
     await page.clock.fastForward(31_000)
     await expect.poll(() => f.reads ?? 0).toBeGreaterThan(reads)
     await expect(text).toContainText('This Mac has 4 tasks now')
-    await expect(group.getByRole('alert')).toContainText('The rows changed since you read this')
+    await expect(group.getByRole('alert')).toContainText('The numbers changed since you read this')
     // This Mac's rows move again: the row says the new count and the old error is gone.
     f.entries = 5
     reads = f.reads ?? 0

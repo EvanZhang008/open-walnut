@@ -328,6 +328,8 @@ test('Settings > Remote Hosts: "What Walnut knows" shows the profile and edits k
   await page.goto('/')
   await page.getByTestId('sidebar-core-app-settings').click()
   await page.getByTestId('settings-nav-remote-hosts').click()
+  // What Walnut knows sits under the host's Edit.
+  await page.locator(`#rh-host-${HOST}`).getByRole('button', { name: 'Edit' }).click()
   const toggle = page.getByTestId(`host-profile-toggle-${HOST}`)
   await expect(toggle).toBeVisible()
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')

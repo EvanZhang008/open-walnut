@@ -126,6 +126,8 @@ test('the host that carries the tunnel says so in Remote Hosts, its switch held 
   const s: Server = { runOn: null, puts: [], places: true }
   await serve(page, s)
   await openSettings(page, 'settings-nav-remote-hosts')
+  // Walnut on a host sits under More settings, closed by default.
+  await page.getByTestId('remote-hosts-more-toggle').click()
   const group = page.getByTestId('host-servers')
   await expect(group).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('host-server-carries-devbox')).toContainText("Runs this computer's tunnel: change it in Phones & Cloud, Open from a browser.")

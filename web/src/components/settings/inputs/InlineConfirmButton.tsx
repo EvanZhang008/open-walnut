@@ -27,6 +27,8 @@ export interface InlineConfirmButtonProps {
   disabled?: boolean
   /** `text` for a non-destructive two-step action (Show QR); default `danger`. */
   variant?: 'danger' | 'text'
+  /** Drawn as a plain text button until armed, red only while it asks to confirm (a list's row action). */
+  quiet?: boolean
   'data-testid'?: string
   'aria-label'?: string
 }
@@ -37,6 +39,7 @@ export function InlineConfirmButton({
   confirmLabel = 'Confirm remove',
   disabled,
   variant = 'danger',
+  quiet,
   'data-testid': testId,
   'aria-label': ariaLabel,
 }: InlineConfirmButtonProps) {
@@ -61,7 +64,7 @@ export function InlineConfirmButton({
   }
   return (
     <SettingsButton
-      variant={variant}
+      variant={quiet ? (armed ? 'danger' : 'text') : variant}
       reserve={[label, confirmLabel]}
       onClick={onClick}
       onKeyDown={(e) => {

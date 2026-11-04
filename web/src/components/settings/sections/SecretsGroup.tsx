@@ -5,7 +5,7 @@
  * never comes back: a row shows only where each copy stands. A rotate is a new
  * value; unticking a host removes its copy; Delete removes every copy.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { deleteSecret, fetchSecrets, saveSecret, type FleetSecret, type SecretChange } from '@/api/secrets';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
@@ -13,6 +13,8 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SecretInput } from '../inputs/SecretInput';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { focusLanded } from '@/utils/focus-landed';
+import { useFoldAttention } from '../SettingsFold';
 
 const REFRESH_MS = 30_000;
 const LOCAL = '__local__';
@@ -32,6 +34,10 @@ export function copiesLine(s: FleetSecret, label: (host: string) => string): str
   if (s.deletedAt) return `Deleted. ${parts.join(' · ')}`;
   return parts.length ? parts.join(' · ') : 'Kept on this Mac only: tick a host to copy it there';
 }
+
+/** Which field a refusal is about: it shows under that field, which takes the focus. */
+type Field = 'name' | 'value' | 'env' | 'form';
+const FIELD_ID: Record<Exclude<Field, 'form'>, string> = { name: 'secret-name', value: 'secret-value', env: 'secret-env' };
 
 interface Draft {
   name: string;
@@ -54,7 +60,26 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(draftOf(null));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<{ field: Field; text: string } | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // 2026-11-04 review: a refused Save put its reason above the group, off screen, and focus stayed on Save.
+  const [focusField, setFocusField] = useState<Field | 'name-new' | null>(null);
+  const setError = (text: string | null, field: Field = 'form') => {
+    setErrorState(text === null ? null : { field, text });
+    if (text !== null && field !== 'form') setFocusField(field);
+  };
+  useEffect(() => {
+    if (!focusField) return;
+    const raf = requestAnimationFrame(() => {
+      const id = focusField === 'name-new' ? 'secret-name' : focusField === 'form' ? null : FIELD_ID[focusField];
+      focusLanded(id ? root.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`) : null);
+      setFocusField(null);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focusField]);
+  // A copy that could not go to a host needs a look (More settings says how many).
+  const needs = (state?.secrets ?? []).filter((s) => !s.deletedAt && Object.values(s.copies).some((c) => !!c.error)).length;
+  useFoldAttention('secrets', needs);
 
   const load = useCallback(async () => {
     try {
@@ -74,16 +99,22 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   const label = (host: string) => (host === LOCAL ? 'this Mac' : hostLabels[host] || host);
   // A host no longer configured but still ticked stays in the list, so it can be unticked.
   const hostKeys = [...new Set([LOCAL, ...Object.keys(hostLabels), ...draft.hosts])];
-  const open = (s: FleetSecret | null) => { setEditing(s ? s.name : ''); setDraft(draftOf(s)); setError(null); };
+  const open = (s: FleetSecret | null) => {
+    setEditing(s ? s.name : '');
+    setDraft(draftOf(s));
+    setError(null);
+    // Add: straight into the Name field.
+    if (!s) setFocusField('name-new');
+  };
   const close = () => { setEditing(null); setDraft(draftOf(null)); };
   const isNew = editing === '';
 
   const save = async () => {
     const name = draft.name.trim();
-    if (!NAME_RE.test(name)) { setError('A name is lower case letters, digits, . _ - (like github-read)'); return; }
-    if (isNew && !draft.value) { setError('Give the value'); return; }
-    if (isNew && state.secrets.some((s) => s.name === name && !s.deletedAt)) { setError(`${name} already exists: use its Edit to rotate it`); return; }
-    if (draft.sessions && !draft.env.trim()) { setError('Sessions get it as an environment variable: give its name (GH_TOKEN)'); return; }
+    if (!NAME_RE.test(name)) { setError('A name is lower case letters, digits, . _ - (like github-read).', 'name'); return; }
+    if (isNew && !draft.value) { setError('Paste the value.', 'value'); return; }
+    if (isNew && state.secrets.some((s) => s.name === name && !s.deletedAt)) { setError(`${name} already exists: use its Edit to rotate it.`, 'name'); return; }
+    if (draft.sessions && !draft.env.trim()) { setError('Sessions get it as an environment variable: give its name (GH_TOKEN).', 'env'); return; }
     const change: SecretChange = {
       hosts: draft.hosts,
       env: draft.env.trim() || null,
@@ -124,7 +155,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
 
   return (
     <SettingsGroup heading="Secrets" data-testid="fleet-secrets" footer={footer}>
-      {error && <p className="hf-error" role="status">{error}</p>}
+      {error && editing === null && <p className="hf-error" role="status">{error.text}</p>}
       {state.active && state.secrets.length === 0 && editing === null && (
         <SettingsRow label="No secret yet" help="Add one (a read-only GitHub token, say) and pick the hosts that may use it." />
       )}
@@ -148,14 +179,14 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
         <SettingsRow label="Add a secret" control={<SettingsButton onClick={() => open(null)} data-testid="secret-add">Add…</SettingsButton>} />
       )}
       {editing !== null && (
-        <div className="fleet-secret-editor" data-testid="secret-editor">
+        <div className="fleet-secret-editor" data-testid="secret-editor" ref={root}>
           {isNew && (
-            <SettingsRow label="Name" htmlFor="secret-name" help="Lower case, like github-read: sessions find it at $WALNUT_SECRETS_DIR/<name>." control={
+            <SettingsRow label="Name" htmlFor="secret-name" help="Lower case, like github-read: sessions find it at $WALNUT_SECRETS_DIR/<name>." error={error?.field === 'name' ? error.text : undefined} control={
               <input id="secret-name" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
                 value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} data-testid="secret-name" />
             } />
           )}
-          <SettingsRow label={isNew ? 'Value' : `Value of ${editing}`} help={isNew ? 'Pasted once; Walnut never shows it again.' : 'Replace to rotate: every host gets the new value.'} control={
+          <SettingsRow label={isNew ? 'Value' : `Value of ${editing}`} help={isNew ? 'Pasted once; Walnut never shows it again.' : 'Replace to rotate: every host gets the new value.'} error={error?.field === 'value' ? error.text : undefined} control={
             <SecretInput value={draft.value} onChange={(v) => setDraft({ ...draft, value: v })} saved={!isNew} aria-label="Secret value" data-testid="secret-value" />
           } />
           <SettingsRow label="What it is" htmlFor="secret-description" help="Sessions read this to know when to use it." control={
@@ -167,13 +198,13 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
             <SettingsCheckbox key={h} checked={draft.hosts.includes(h)} label={label(h)} data-testid={`secret-host-${h}`}
               onChange={(on) => setDraft({ ...draft, hosts: on ? [...draft.hosts, h] : draft.hosts.filter((x) => x !== h) })} />
           ))}
-          <SettingsRow label="Environment name" htmlFor="secret-env" help="Optional: the variable a session on those hosts gets it as." control={
+          <SettingsRow label="Environment name" htmlFor="secret-env" help="Optional: the variable a session on those hosts gets it as." error={error?.field === 'env' ? error.text : undefined} control={
             <input id="secret-env" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
               value={draft.env} onChange={(e) => setDraft({ ...draft, env: e.target.value.toUpperCase() })} placeholder="GH_TOKEN" data-testid="secret-env" />
           } />
           <SettingsCheckbox checked={draft.sessions} label="Give it to every new session on those hosts" data-testid="secret-sessions"
             onChange={(on) => setDraft({ ...draft, sessions: on })} />
-          <SettingsRow control={
+          <SettingsRow error={error?.field === 'form' ? error.text : undefined} control={
             <>
               <SettingsButton variant="text" onClick={close} disabled={busy}>Cancel</SettingsButton>
               <SettingsButton variant="primary" onClick={() => void save()} disabled={busy} data-testid="secret-save">{busy ? 'Saving…' : 'Save'}</SettingsButton>

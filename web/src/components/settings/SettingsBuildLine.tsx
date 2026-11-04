@@ -4,8 +4,12 @@ import { useUpdateStatus } from '@/hooks/useUpdateStatus'
 import { buildLineTitle, formatBuildLine, formatUpdateSegment } from './build-line'
 import { CopyDiagnosticsLink, DiagnosticsFallback, useCopyDiagnostics } from './CopyDiagnostics'
 
-/** Muted build identity under the open pane; renders nothing until it is known. */
-export function SettingsBuildLine() {
+/**
+ * Muted build identity under the open pane; renders nothing until it is known. `copyLink`
+ * false: the pane has its own Copy diagnostics (Remote Hosts' header), so this one would be a
+ * second button for the same thing.
+ */
+export function SettingsBuildLine({ copyLink = true }: { copyLink?: boolean } = {}) {
   const [info, setInfo] = useState<BuildInfo | null>(() => peekBuildInfo())
   const copy = useCopyDiagnostics('all')
   // The same answer the notification panel's System card shows: one quiet segment
@@ -29,8 +33,12 @@ export function SettingsBuildLine() {
             <span className="settings-build-line-update" data-testid="settings-build-line-update" title={segment.title}>{segment.text}</span>
           </>
         )}
-        <span className="settings-build-line-sep" aria-hidden="true">{' · '}</span>
-        <CopyDiagnosticsLink copy={copy} />
+        {copyLink && (
+          <>
+            <span className="settings-build-line-sep" aria-hidden="true">{' · '}</span>
+            <CopyDiagnosticsLink copy={copy} />
+          </>
+        )}
       </p>
       <DiagnosticsFallback copy={copy} testId="settings-diagnostics-fallback" />
     </>

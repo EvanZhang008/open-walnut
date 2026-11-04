@@ -72,6 +72,14 @@ export function copyChoiceOf(raw: Partial<HostCopyChoice> | undefined | null): H
   return out;
 }
 
+/** The folded copy rows' summary: `All 11 kinds copied`, `8 of 11 copied`. */
+export function copiesSummary(raw: Partial<HostCopyChoice> | undefined | null): string {
+  const choice = copyChoiceOf(raw);
+  const on = HOST_COPY_ROWS.filter((row) => choice[row.key]).length;
+  const all = HOST_COPY_ROWS.length;
+  return on === all ? `All ${all} kinds copied` : on === 0 ? 'Nothing copied' : `${on} of ${all} copied`;
+}
+
 /** The change one row's click writes: turning an index off turns the rows riding with it off too. */
 export function copyChoicePatch(key: keyof HostCopyChoice, on: boolean): Partial<HostCopyChoice> {
   const patch: Partial<HostCopyChoice> = { [key]: on };

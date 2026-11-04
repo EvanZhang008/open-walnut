@@ -435,6 +435,7 @@ test('Remote Hosts: Add host lives in the header, the empty state says so', asyn
   await expect(page.locator('#remote-hosts')).toContainText('No remote hosts yet.')
   await expect(page.locator('#remote-hosts .settings-pane-header').getByTestId('remote-hosts-add')).toBeVisible()
   await page.locator('#remote-hosts .settings-pane-header').getByTestId('remote-hosts-add').click()
+  await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()
   await expect(page.locator('#rh-alias-0')).toBeVisible()
   await shot(page, 'remote-hosts')
   await expect(page.locator('#remote-hosts details.settings-collapsible, #remote-hosts .form-group')).toHaveCount(0)

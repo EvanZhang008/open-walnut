@@ -16,14 +16,15 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { apiGet, apiPost, apiPut } from '@/api/client';
 import { log } from '@/utils/log';
-import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsDisclosure, SettingsGroup, SettingsRow } from '../SettingsSection';
+import { useFoldAttention } from '../SettingsFold';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { saveErrorMessage } from '../settings-pane-context';
 import { describeExpose, optionFits } from './cloud/browser-access-status';
-import { describeHostServer, hostServersPollMs, type HostCopyChoice, type HostServerEntry, type HostServersResponse } from './host-servers-status';
+import { copiesSummary, describeHostServer, hostServersPollMs, type HostCopyChoice, type HostServerEntry, type HostServersResponse } from './host-servers-status';
 import { ReplicaCopyRows } from './ReplicaCopyRows';
 import '@/styles/browser-access.css';
 
@@ -96,6 +97,11 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
 
   const write = (hostKey: string, body: { enabled?: boolean; expose?: ExposePatch; copies?: Partial<HostCopyChoice> }, optionKey?: string) =>
     call(hostKey, () => apiPut<{ host: HostServerEntry | null }>(`${PATH}/${encodeURIComponent(hostKey)}`, body), optionKey);
+
+  // A host whose Walnut or tunnel offers a retry needs a look (More settings says how many).
+  const needs = (data?.hosts ?? []).filter((h) => h.settings.enabled
+    && (describeHostServer(h).retry || (h.settings.expose.enabled && describeExpose(h.view?.server?.expose ?? null, '').retry) || !!errors[h.hostKey])).length;
+  useFoldAttention('host-servers', needs);
 
   if (!data || data.hosts.length === 0) return null;
   const providers = data.providers;
@@ -171,16 +177,27 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
               }
             />
             {/* The replica is every host's program since D13; 'host-server' is the rollback, which keeps no copies. */}
+            {/* Eleven switches per host, folded behind one row that says how many are on (2026-11-04 review). */}
             {on && host.settings.program !== 'host-server' && host.settings.copies && (
-              <div className="settings-disclosure-content host-server-copies" data-testid={`host-server-copies-${host.hostKey}`}>
-                <ReplicaCopyRows
-                  idOf={(key) => `host-server-copy-${host.hostKey}-${key}`}
-                  copies={host.settings.copies}
-                  busy={busy === host.hostKey}
-                  help="What this host still shows while your Mac sleeps."
-                  onChange={(patch) => { void write(host.hostKey, { copies: patch }); }}
-                />
-              </div>
+              <SettingsDisclosure
+                id={`host-server-copies-${host.hostKey}`}
+                indent
+                label="Kept on this host"
+                help="What this host still shows while your Mac sleeps."
+                summary={copiesSummary(host.settings.copies)}
+                data-testid={`host-server-copies-toggle-${host.hostKey}`}
+              >
+                <div className="host-server-copies" data-testid={`host-server-copies-${host.hostKey}`}>
+                  <ReplicaCopyRows
+                    idOf={(key) => `host-server-copy-${host.hostKey}-${key}`}
+                    copies={host.settings.copies}
+                    busy={busy === host.hostKey}
+                    heading={false}
+                    help="What this host still shows while your Mac sleeps."
+                    onChange={(patch) => { void write(host.hostKey, { copies: patch }); }}
+                  />
+                </div>
+              </SettingsDisclosure>
             )}
             {on && carries && (
               <>

@@ -24,6 +24,8 @@ async function openRemoteHosts(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-remote-hosts').click()
+  // The group sits under More settings, closed by default.
+  await page.getByTestId('remote-hosts-more-toggle').click()
 }
 
 test('secrets: add with hosts and env, the value never shown again, rotate, untick, delete', async ({ page }) => {

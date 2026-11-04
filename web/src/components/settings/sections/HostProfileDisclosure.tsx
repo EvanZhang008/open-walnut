@@ -23,6 +23,7 @@ import { SettingsRow } from '../SettingsSection';
 import { ChevronGlyph } from '../settings-glyphs';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
+import { focusLanded } from '@/utils/focus-landed';
 import '@/styles/settings-mic.css';
 
 const AUTO = 'auto';
@@ -77,15 +78,29 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
     return () => { cancelled = true; };
   }, [open, alias, apply]);
 
-  // The kind picker closes on a press outside it or Escape.
+  // The kind picker closes on a press outside it or Escape; Escape and a pick give focus back
+  // to the Kind button (it fell to the page).
+  const backToKind = useCallback(() => {
+    setPicker(null);
+    requestAnimationFrame(() => focusLanded(kindBtn.current?.querySelector('button')));
+  }, []);
   useEffect(() => {
     if (!picker) return;
     const close = (e: Event) => { if (!(e.target as HTMLElement | null)?.closest?.('.task-kebab-project-flyout')) setPicker(null); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPicker(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') backToKind(); };
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey); };
-  }, [picker]);
+  }, [picker, backToKind]);
+  // A pick disables the button while it saves (a disabled button takes no focus), so the
+  // focus comes back once the save rendered, unless the person moved it since.
+  const refocusKind = useRef(false);
+  useEffect(() => {
+    if (busy === 'kind' || !refocusKind.current) return;
+    refocusKind.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) focusLanded(kindBtn.current?.querySelector('button'));
+  }, [busy]);
 
   const noteInFlight = useRef<string | null>(null);
   const patch = useCallback(async (kind: 'probe' | 'kind' | 'note', body: Parameters<typeof updateHostProfile>[1]) => {
@@ -121,6 +136,7 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
       <button
         type="button"
         className="settings-row settings-disclosure-row settings-row-indent"
+        data-indent="true"
         aria-expanded={open}
         data-open={open ? 'true' : 'false'}
         data-testid={`host-profile-toggle-${alias}`}
@@ -232,8 +248,8 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
           options={KIND_PICKS}
           current={currentPick}
           ariaLabel={`Kind of ${name}`}
-          onPick={(v) => void patch('kind', { kind: v === AUTO ? null : (v as HostKind) })}
-          onClose={() => setPicker(null)}
+          onPick={(v) => { refocusKind.current = true; void patch('kind', { kind: v === AUTO ? null : (v as HostKind) }); }}
+          onClose={backToKind}
         />
       )}
     </>

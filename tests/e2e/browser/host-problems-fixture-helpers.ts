@@ -78,6 +78,13 @@ export async function openRemoteHosts(page: Page): Promise<void> {
   await expect(page.locator('#remote-hosts')).toBeVisible({ timeout: 20_000 })
 }
 
+/** Remote Hosts' More settings (Relay, Walnut on a host, tasks, secrets, session limits): closed by default. */
+export async function openRemoteHostsMore(page: Page): Promise<void> {
+  const toggle = page.getByTestId('remote-hosts-more-toggle')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
 export const hostRow = (page: Page, alias: string): Locator => page.locator(`#rh-host-${alias}`)
 /** The Ask Walnut slot's card: only under slotLayout (the task panel hidden, the slot shown). */
 export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')

@@ -3,7 +3,8 @@
  * clipboard (GET /api/diagnostics?format=text, redacted server-side), so a
  * support thread gets build, claude, runtime, PATH and hosts in one paste.
  * Two looks, one behaviour: a muted inline link on the Settings build line, and
- * a regular Settings button in the Remote Hosts header (hosts section only).
+ * a regular Settings button in the Remote Hosts header (hosts section only; that
+ * pane's build line shows no link of its own, so the pane offers one, not two).
  *
  * The first click fetches, then copies: collection takes seconds, and by then a
  * browser without the async clipboard (plain-HTTP LAN, Firefox) has expired the
@@ -111,10 +112,10 @@ export function CopyDiagnosticsLink({ copy }: { copy: DiagnosticsCopy }) {
   )
 }
 
-/** Header button for the Remote Hosts pane: the hosts section only. */
+/** Header button for the Remote Hosts pane: the hosts section only (the pane's one Copy diagnostics). */
 export function CopyHostDiagnosticsButton({ copy }: { copy: DiagnosticsCopy }) {
   const { state } = copy
-  const label = state.kind === 'copied' ? 'Copied' : 'Copy host diagnostics'
+  const label = state.kind === 'copied' ? 'Copied' : 'Copy diagnostics'
   return (
     <>
       {state.kind === 'failed' && (
@@ -124,7 +125,7 @@ export function CopyHostDiagnosticsButton({ copy }: { copy: DiagnosticsCopy }) {
         onClick={copy.copy}
         busy={state.kind === 'busy'}
         busyLabel="Collecting..."
-        reserve={['Copy host diagnostics', 'Copied']}
+        reserve={['Copy diagnostics', 'Copied']}
         data-testid="remote-hosts-copy-diagnostics"
         title="Copy each host's connection, daemon and preflight details, with usernames and hostnames masked"
       >

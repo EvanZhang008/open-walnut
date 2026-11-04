@@ -42,7 +42,8 @@ const DISABLED_TITLE = 'Turn this host on to connect to it.';
 
 type Line = { text: string; title?: string; button: null | { label: string; disabled: boolean; kind: 'retry' | 'connectNow' } };
 
-export function RemoteHostStatus({ alias, name, enabled = true }: { alias: string; name?: string; enabled?: boolean }) {
+/** `canConnect` false: a host not saved yet (a new row), which the server cannot dial. */
+export function RemoteHostStatus({ alias, name, enabled = true, canConnect = true }: { alias: string; name?: string; enabled?: boolean; canConnect?: boolean }) {
   const status = useHostStatus(alias);
   const hydration = useHostStatusHydration();
   const actions = useHostActions(alias);
@@ -73,7 +74,7 @@ export function RemoteHostStatus({ alias, name, enabled = true }: { alias: strin
   else if (connecting) line = { text: plain(hostStatusText(status, hydration)), button: { label: 'Retrying...', disabled: true, kind: 'retry' } };
   else if (status.connected) line = { text: 'Connected', button: null };
   else line = { text: 'Not connected', button: { label: retrying ? 'Retrying...' : 'Connect now', disabled: retrying, kind: 'connectNow' } };
-  if (replica) line = { ...line, button: null };
+  if (replica || !canConnect) line = { ...line, button: null };
 
   const started = status?.attemptStartedAt;
   const elapsed = connecting && typeof started === 'number' ? formatElapsed(Math.max(0, now - started)) : '';
@@ -142,9 +143,9 @@ export function RemoteHostDetail({ alias, name, enabled = true }: { alias: strin
       {failure}
       {readiness}
       {hidden && (
-        // The way back for a row the user hid on the banner (the problem is still there).
+        // The way back for a problem the user hid on the home page's banner (it is still there).
         <div className="rh-readiness-line rh-banner-hidden" data-tone="info">
-          <span className="rh-readiness-note">Hidden from the banner.</span>
+          <span className="rh-readiness-note">You hid this problem on the home page.</span>
           <span className="rh-readiness-actions">
             <SettingsButton variant="text" className="rh-show-again-btn" onClick={(e) => { e.preventDefault(); e.stopPropagation(); restoreHost(alias); }}>
               Show again

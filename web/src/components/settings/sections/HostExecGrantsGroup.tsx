@@ -113,17 +113,25 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
     <SettingsGroup
       heading="Tasks using other hosts"
       data-testid="host-exec-grants"
-      footer="A task on one of your hosts uses your other hosts without asking you: runs a command, calls an MCP server or reaches a web service there, each use counted here. Revoke stops that task (it asks by letter from then on); a switch off closes that host to every task on another host. A command there can read anything your account can."
+      footer="Revoke stops one task (it asks by letter from then on). A command a task runs on a host can read anything your account can there."
     >
       {error && <p className="hf-error" role="status">{error}</p>}
+      {/* Said once for every switch below (2026-11-04 review: six rows repeated the same sentence). */}
+      <SettingsRow
+        label="Tasks on other hosts may use"
+        help="A task on one of your hosts uses the others without asking you: it runs commands, calls MCP servers and reaches web services there, each use counted below. Turn a host off to close it to them."
+      />
       {switchHosts.map((host) => {
         const open = !closed.includes(host);
+        const name = label(host);
         return (
           <SettingsRow
             key={`host-${host}`}
+            indent
             data-exec-host={host}
-            label={`Tasks on other hosts may use ${label(host)}`}
-            help={open ? 'On: they start commands, MCP servers and web requests there.' : 'Off: nothing new starts there from another host.'}
+            // A host's own name keeps its case (lab-mac); only this Mac starts the line.
+            label={host === '__local__' ? 'This Mac' : name}
+            help={open ? undefined : 'Off: nothing new starts there from another host.'}
             control={
               <ToggleSwitch
                 checked={open}

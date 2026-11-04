@@ -55,16 +55,17 @@ export interface ReplicaRemovalRow {
   confirm?: { target: string; kind: string; entries: number; keys: string };
 }
 
-/** What a kind's rows are called in a sentence. */
+const NOUNS: Record<string, string> = {
+  tasks: 'tasks', registry: 'project and folder entries', sessions: 'sessions', requests: 'reply requests',
+  boards: 'boards', inbox: 'letters', 'inbox-bodies': 'letter bodies', notes: 'notes', memory: 'memory entries',
+  skills: 'skills', attachments: 'attachments', conversations: 'chats', 'conversation-bodies': 'chat messages',
+  routines: 'routines', notifications: 'notification cards', personas: 'agents', 'model-catalogs': 'model lists',
+  'stt-vocab': 'vocabulary words', devices: 'devices', config: 'settings', prefs: 'layout settings',
+};
+
+/** What a kind's rows are called in a sentence, in the words the person knows them by. */
 export function rowNoun(kind: string): string {
-  if (kind === 'tasks') return 'tasks';
-  if (kind === 'registry') return 'project and folder entries';
-  if (kind === 'sessions') return 'sessions';
-  if (kind === 'requests') return 'reply requests';
-  if (kind === 'boards') return 'boards';
-  if (kind === 'inbox') return 'letters';
-  if (kind === 'inbox-bodies') return 'letter bodies';
-  return `${kind} rows`;
+  return NOUNS[kind] ?? `${kind.replace(/-/g, ' ')} entries`;
 }
 
 function clock(ms: number): string {
@@ -80,7 +81,7 @@ function sizeText(kind: string, r: ReplicaRefusal): string {
 }
 
 export function refusedText(kind: string, r: ReplicaRefusal): string {
-  return `${sizeText(kind, r)} Walnut held off in case this Mac lost them. If you removed them on purpose, remove them there too.`;
+  return `${sizeText(kind, r)} Walnut kept them there, in case this Mac lost them by mistake. If you removed them on purpose, remove them there too.`;
 }
 
 export function outdatedText(kind: string, r: ReplicaRefusal): string {

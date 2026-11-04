@@ -325,7 +325,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'remote-hosts', label: 'Remote Hosts', title: 'Remote Hosts', group: 'configure',
     icon: 'server-stack', tint: '#64748B',
-    description: 'SSH hosts that run sessions on another machine.',
+    description: 'Machines Walnut runs work on: this Mac, SSH hosts, and machines that joined with a link.',
     keywords: ['ssh', 'host', 'dev box', 'daemon', 'remote'],
     render: ({ config, saveSection }) => <RemoteHostsSection config={config} onSave={saveSection} />,
   },

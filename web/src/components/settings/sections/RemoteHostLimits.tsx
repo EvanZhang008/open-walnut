@@ -1,13 +1,52 @@
 /**
- * The last row of Remote Hosts > Session limits: a labelled row that adds a
- * limit, the same shape as Search > Excluded folders (N3-21). The limits
- * themselves are rows above it.
+ * Remote Hosts > More settings > Session limits: how many sessions one host runs at once
+ * (config.session_limits, keyed by the hosts' aliases plus "local"). Each limit is a row,
+ * host on the left, its number on the right (N3-21), and the last row adds one, the same
+ * shape as Search > Excluded folders.
  */
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
-import { SettingsRow } from '../SettingsSection';
+import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { NumberInput } from '../inputs/NumberInput';
 import { SettingsButton } from '../inputs/SettingsButton';
+
+export function SessionLimitsGroup({ limits, onChange }: {
+  limits: Record<string, string | number>;
+  onChange: (update: (prev: Record<string, string | number>) => Record<string, string | number>) => void;
+}) {
+  return (
+    <SettingsGroup heading="Session limits" footer="Most sessions one host runs at once." data-testid="rh-session-limits">
+      {Object.entries(limits).map(([alias, max]) => (
+        <SettingsRow
+          key={alias}
+          className="rh-limit-row"
+          data-limit-host={alias}
+          label={alias === 'local' ? 'This Mac' : <span className="settings-addons-mono">{alias}</span>}
+          htmlFor={`rh-limit-${alias}`}
+          control={
+            <>
+              <NumberInput
+                id={`rh-limit-${alias}`}
+                value={typeof max === 'number' ? max : parseInt(String(max), 10) || undefined}
+                onChange={(v) => onChange((prev) => ({ ...prev, [alias]: v ?? 0 }))}
+                min={0}
+                unit="sessions"
+              />
+              <SettingsButton
+                variant="text"
+                aria-label={`Remove the limit for ${alias}`}
+                onClick={() => onChange((prev) => { const next = { ...prev }; delete next[alias]; return next; })}
+              >
+                Remove
+              </SettingsButton>
+            </>
+          }
+        />
+      ))}
+      <AddLimitRow taken={Object.keys(limits)} onAdd={(alias, max) => onChange((prev) => ({ ...prev, [alias]: max }))} />
+    </SettingsGroup>
+  );
+}
 
 export function AddLimitRow({ taken, onAdd }: { taken: string[]; onAdd: (alias: string, max: number) => void }) {
   // A limit typed and not added yet survives leaving the pane; Add ends it.

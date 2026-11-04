@@ -1,5 +1,6 @@
 /**
- * "Copies that held off" (docs/plan/walnut-replica-servers-impl.md, section 4):
+ * "Removals to confirm" (docs/plan/walnut-replica-servers-impl.md, section 4; it was
+ * "Copies that held off", which said nothing a person could act on):
  * a copy of this Mac's data on another server (a host's Walnut, the cloud
  * companion) refused three rounds in a row a copy that would remove most of its
  * rows, in case this Mac lost them. One row per refusal says how many rows would
@@ -86,7 +87,7 @@ export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind
       const message = saveErrorMessage(err);
       log.warn('settings', 'replica removal not confirmed', { target: row.target, kind: row.kind, error: message });
       failed = /not_refused|409/.test(message)
-        ? 'The rows changed since you read this; Walnut checks again on the next copy.'
+        ? 'The numbers changed since you read this; Walnut checks again on the next copy.'
         : message;
     }
     // The error is about the row as this read shows it (a 409 means it moved): a later change takes it away.
@@ -100,7 +101,7 @@ export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind
 
   if (rows.length === 0) return null;
   return (
-    <SettingsGroup heading="Copies that held off" data-testid={`replica-removals${only ? `-${only}` : ''}`}>
+    <SettingsGroup heading="Removals to confirm" data-testid={`replica-removals${only ? `-${only}` : ''}`}>
       {rows.map((row) => (
         <SettingsRow
           key={row.id}
@@ -112,6 +113,8 @@ export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind
           error={errors[row.id]?.about === row.about ? errors[row.id].text : undefined}
           control={row.state === 'refused' ? (
             <InlineConfirmButton
+              // Quiet until armed, like every Remove on the Remote Hosts page: red only in its Confirm.
+              quiet
               label="Remove them there"
               confirmLabel="Confirm remove"
               disabled={busy === row.id}

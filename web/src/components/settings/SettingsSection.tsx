@@ -420,7 +420,7 @@ export function hashTargetId(hash: string): string | null {
   }
 }
 
-function sessionStore(): StoreLike {
+export function sessionStore(): StoreLike {
   try {
     return typeof window === 'undefined' ? null : window.sessionStorage
   } catch {
@@ -429,7 +429,7 @@ function sessionStore(): StoreLike {
 }
 
 /** Router navigations (navigate({ hash })) fire no hashchange; watch them too. */
-function RouterHashWatcher({ onHash }: { onHash: () => void }) {
+export function RouterHashWatcher({ onHash }: { onHash: () => void }) {
   const { hash } = useLocation()
   useEffect(() => {
     if (hash) onHash()
@@ -446,6 +446,8 @@ export interface SettingsDisclosureProps {
   summary?: ReactNode
   forceOpen?: boolean
   defaultOpen?: boolean
+  /** A child row of the row above it (36px inset), like an indent SettingsRow. */
+  indent?: boolean
   children?: ReactNode
   'data-testid'?: string
 }
@@ -462,6 +464,7 @@ export function SettingsDisclosure({
   summary,
   forceOpen,
   defaultOpen = false,
+  indent,
   children,
   'data-testid': testId,
 }: SettingsDisclosureProps) {
@@ -496,7 +499,8 @@ export function SettingsDisclosure({
       {inRouter && <RouterHashWatcher onHash={openForHash} />}
       <button
         type="button"
-        className="settings-row settings-disclosure-row"
+        className={`settings-row settings-disclosure-row${indent ? ' settings-row-indent' : ''}`}
+        data-indent={indent ? 'true' : undefined}
         tabIndex={0}
         aria-expanded={shown}
         aria-controls={contentId}

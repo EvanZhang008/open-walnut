@@ -312,13 +312,13 @@ test('a fleet of five: summary, diagram, cards for the three live hosts, a row e
   await expect(dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]').getByTestId('host-fleet-problem')).toHaveCount(0)
   await expect(dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]').getByTestId('host-fleet-roles')).toHaveText('Cloud')
 
-  // The two hosts away: one row each, Connect, the error in the title.
+  // The two hosts away: one row each, Retry (its last try failed, the Hosts list's word), the error in the title.
   const away = dash.getByTestId('host-fleet-offline')
   await expect(away).toHaveCount(2)
   const home = dash.locator('[data-testid="host-fleet-offline"][data-host="homepc"]')
   await expect(home.locator('.hf-off-why')).toHaveText('Could not reach Home PC')
   await expect(home.locator('.hf-off-why')).toHaveAttribute('title', 'ssh: connection timed out')
-  await expect(home.getByTestId('host-fleet-connect')).toHaveText('Connect')
+  await expect(home.getByTestId('host-fleet-connect')).toHaveText('Retry')
   const card = await home.boundingBox()
   expect(card && card.height < 50).toBe(true)
 
@@ -408,7 +408,7 @@ test('Set up: the button waits, then the card reads as fixed; a refusal or a che
   await expect(fix).toBeDisabled()
   await expect(fix).toHaveText('Setting up...')
   // The card's own Set up never shows as busy on another host's row.
-  await expect(page.getByTestId('host-fleet-connect').first()).toHaveText('Connect')
+  await expect(page.getByTestId('host-fleet-connect').first()).toHaveText(/^(Retry|Connect now)$/)
   release()
   await expect(dev.getByTestId('host-fleet-action-error')).toHaveText('Could not set it up: Walnut could not check Big dev box: ssh: connection reset.')
   await expect(fix).toBeEnabled()
@@ -424,7 +424,8 @@ test('Set up: the button waits, then the card reads as fixed; a refusal or a che
   await expect(fix).toHaveText('Setting up...')
   release()
   await expect(dev.getByTestId('host-fleet-problem')).toHaveCount(0)
-  await expect(dev.getByTestId('host-fleet-action-note')).toHaveCount(0)
+  // A short confirmation of what the setup did.
+  await expect(dev.getByTestId('host-fleet-action-note')).toHaveText('Set up: starts by itself after a reboot (as a systemd user service).')
   await shot(page, '4-setup-done', dev)
 })
 
@@ -443,7 +444,8 @@ test('Connect: the row waits, then the host comes back as a card; a refusal stay
     await new Promise<void>((r) => { release = r })
     if (refuse) return route.fulfill({ status: 409, json: { error: 'Home PC refused the sign-in' } })
     homeUp = true
-    return route.fulfill({ json: { ok: true, status: { host: 'homepc', phase: 'connected' } } })
+    // What the server answers: the host's status now (the store takes it, as from a push).
+    return route.fulfill({ json: { ok: true, status: { host: 'homepc', label: 'Home PC', connected: true, phase: 'connected', phaseLabel: 'Connected', at: Date.now(), serverNow: Date.now() } } })
   })
   await openRemoteHosts(page)
   const dash = page.getByTestId('host-fleet')
@@ -451,14 +453,18 @@ test('Connect: the row waits, then the host comes back as a card; a refusal stay
   const connect = row.getByTestId('host-fleet-connect')
   await expect(connect).toBeVisible({ timeout: 30_000 })
   await connect.click()
-  await expect(connect).toHaveText('Connecting...')
+  // The host's one connect attempt, in the Hosts list's words.
+  await expect(connect).toHaveText('Retrying...')
   release()
-  await expect(row.getByTestId('host-fleet-action-error')).toHaveText(/^Could not connect: .*refused the sign-in\.$/)
+  await expect(row.getByTestId('host-fleet-action-error')).toHaveText('Could not retry right now.')
   await expect(connect).toBeEnabled()
   refuse = false
   await connect.click()
   release()
-  await expect(dash.locator('[data-testid="host-fleet-card"][data-host="homepc"]')).toBeVisible()
+  const homeCard = dash.locator('[data-testid="host-fleet-card"][data-host="homepc"]')
+  await expect(homeCard).toBeVisible()
+  await expect(homeCard.getByTestId('host-fleet-action-note')).toHaveText('Connected.')
+  await expect(homeCard).toBeFocused()
   await expect(dash.getByTestId('host-fleet-offline')).toHaveCount(1)
   await expect(dash.getByTestId('host-fleet-stat-online')).toContainText('4/5')
   await expect(dash.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveAttribute('data-live', 'true')
@@ -718,6 +724,8 @@ test('opening a host\'s "What Walnut knows" reads that host again', async ({ pag
   serveFleet(page, () => FLEET.slice(0, 2))
   const asks = serveRefresh(page)
   await openRemoteHosts(page)
+  // What Walnut knows sits under the host's Edit.
+  await page.locator('#rh-host-fixture-remote').getByRole('button', { name: 'Edit' }).click({ timeout: 30_000 })
   const toggle = page.getByTestId('host-profile-toggle-fixture-remote')
   await expect(toggle).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => asks).toEqual([['__local__']]) // this computer's 12 minute old card

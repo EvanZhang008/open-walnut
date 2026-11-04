@@ -36,6 +36,8 @@ async function openRemoteHosts(page: Page) {
   const nav = page.getByTestId('settings-nav-remote-hosts')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
+  // The group sits under More settings, closed by default.
+  await page.getByTestId('remote-hosts-more-toggle').click()
   const group = page.getByTestId('host-servers')
   await expect(group).toBeVisible({ timeout: 30_000 })
   return group
@@ -124,9 +126,13 @@ test.describe('Walnut on a host', () => {
     delete plain.server_program
     await putHosts(page, { ...hosts, [KEY]: plain })
     const group = await openRemoteHosts(page)
+    // The switches fold behind one line that says how many are kept.
+    const kept = page.getByTestId(`host-server-copies-toggle-${KEY}`)
+    await expect(kept).toContainText('Kept on this host', { timeout: 15_000 })
+    await expect(kept).toContainText('All 11 kinds copied')
+    if ((await kept.getAttribute('aria-expanded')) !== 'true') await kept.click()
     const copies = page.getByTestId(`host-server-copies-${KEY}`)
     await expect(copies).toBeVisible({ timeout: 15_000 })
-    await expect(copies).toContainText('Kept on this host')
     const box = (key: string) => page.getByTestId(`host-server-copy-${KEY}-${key}`)
     // Default: every kind kept, letter bodies too (the same defaults as every replica).
     for (const key of ['sessions', 'requests', 'boards', 'inbox', 'inbox_bodies']) await expect(box(key)).toBeChecked()
@@ -162,7 +168,9 @@ test.describe('Walnut on a host', () => {
     await expect(box('inbox')).not.toBeChecked({ timeout: 15_000 })
 
     await page.reload()
+    // The fold and the switches stay open for this tab.
     await expect(page.getByTestId(`host-server-copies-${KEY}`)).toBeVisible({ timeout: 30_000 })
+    await expect(kept).toContainText('9 of 11 copied')
     await expect(box('inbox')).not.toBeChecked()
     await expect(box('sessions')).toBeChecked()
 

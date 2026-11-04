@@ -87,7 +87,8 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
 
   const lab = row(page, 'lab-mac')
   await expect(lab).toBeVisible({ timeout: 30_000 })
-  await expect(lab).toContainText('Auto-discovered')
+  // Its kind tag (SSH) says where it was found; the question says the rest.
+  await expect(lab.locator('.settings-tag', { hasText: 'SSH' })).toHaveAttribute('title', 'Found in ~/.ssh/config: Walnut reaches it with ssh')
   await expect(lab.getByTestId('rh-found-question')).toHaveText('Walnut found lab-mac in ~/.ssh/config. Connect to it?')
   await expect(lab.getByTestId('rh-found-connect')).toBeVisible()
   await expect(lab.getByTestId('rh-found-not-now')).toBeVisible()

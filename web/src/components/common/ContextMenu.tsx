@@ -33,6 +33,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
@@ -98,6 +99,12 @@ interface ContextMenuProps {
    * the right end of a bar).
    */
   align?: 'left' | 'right';
+  /**
+   * A menu a BUTTON opens (Remote Hosts' Add host): placed under that button with its right edge on
+   * the button's, at every width, instead of at `point` opening rightward. A cursor point clamped at
+   * a narrow window's edge slid the menu under the neighbouring button, detached from its own.
+   */
+  anchorRef?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -201,7 +208,7 @@ export function contextMenuReasonRows(rows: ContextMenuItem[]): Map<number, stri
 }
 
 export function ContextMenu({
-  point, items, onClose, ariaLabel, testId, className, returnFocus, align = 'left',
+  point, items, onClose, ariaLabel, testId, className, returnFocus, align = 'left', anchorRef,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
@@ -213,7 +220,7 @@ export function ContextMenu({
   // align 'left' = the menu's LEFT edge sits at the cursor and it opens
   // rightward, which is the platform convention (and never covers the row the
   // click landed on). The hook still flips/clamps at the viewport edges.
-  const placement = useMenuPlacement(true, noTrigger, menuRef, { anchorPoint: point, align, gap: 2 });
+  const placement = useMenuPlacement(true, anchorRef ?? noTrigger, menuRef, anchorRef ? { align: 'right', gap: 4 } : { anchorPoint: point, align, gap: 2 });
 
   // Held in a ref so the Escape handler below does not have to be rebuilt when the prop identity moves.
   const back = useRef<HTMLElement | null>(returnFocus ?? null);

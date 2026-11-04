@@ -19,6 +19,8 @@ import { dayTitle, dayTone, fleetRows, statusKind, usd } from './host-fleet-mode
 import { readFailure, readLabel } from './host-fleet-read-model';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { FleetNumber, UNKNOWN_MARK } from './FleetNumber';
+import { useHostStatus } from '@/hooks/useHostStatus';
+import { useHostActions, RETRY_FAILED_TEXT } from '@/hooks/useHostActions';
 
 /** A reason names a command in backticks (the same text an agent reads): shown as code. */
 function withCode(text: string) {
@@ -199,26 +201,47 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
   );
 }
 
-export function HostFleetOfflineRow({ host, now, action, onConnect, onDetails }: {
-  host: FleetHost; now: number; action?: ActionState; onConnect: (host: string) => void; onDetails?: (host: string) => void;
+/**
+ * A host Walnut is not connected to. Its Connect is the host's one connect attempt
+ * (useHostActions), with the Hosts list's words and look: Retry on a host whose last try
+ * failed, Connect now otherwise, Retrying... while it runs. Once tried here, the line says what
+ * the attempt found, never the old failure; a host that comes up turns into a card.
+ */
+export function HostFleetOfflineRow({ host, now, onConnect, onDetails }: {
+  host: FleetHost; now: number; onConnect: (host: string) => void; onDetails?: (host: string) => void;
 }) {
   const [open, toggle] = useDetails(host.host, onDetails);
+  const status = useHostStatus(host.host);
+  const actions = useHostActions(host.host);
   const canConnect = host.connection.kind === 'ssh-tunnel' || host.connection.kind === 'host-network';
+  const retrying = actions.pending === 'retry';
+  const tried = actions.lastTriedAt !== null && !!status;
+  const failed = (tried ? status?.phase : host.connection.phase) === 'failed';
+  const line = !tried || retrying ? offlineLine(host)
+    : status.connected ? 'Connected' : status.error ? `Could not connect: ${status.error.replace(/[.\s]*$/, '')}` : status.phaseLabel.replace(/…/g, '...');
   return (
     <div className="hf-off" data-testid="host-fleet-offline" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <div className="hf-off-line">
-        <span className="sps-host-dot hsd" data-kind={statusKind(host)} aria-hidden="true" />
+        <span className="sps-host-dot hsd" data-kind={tried && status.connected ? 'connected' : statusKind(host)} aria-hidden="true" />
         <span className="hf-off-name" title={host.label}>{host.label}</span>
-        <span className="hf-off-why" title={host.connection.error ?? undefined}>{offlineLine(host)}</span>
+        <span className="hf-off-why" title={(tried ? status.error : host.connection.error) ?? undefined} data-testid="host-fleet-offline-line">{line}</span>
         {host.refreshing && <ReadMark host={host} now={now} />}
         <DetailsToggle open={open} onToggle={toggle} label={host.label} />
         {canConnect && (
-          <SettingsButton busy={action?.busy} busyLabel="Connecting..." onClick={() => onConnect(host.host)} data-testid="host-fleet-connect">
-            Connect
+          <SettingsButton
+            variant="text"
+            className="rh-connect-btn"
+            disabled={retrying}
+            reserve={['Connect now', 'Retry', 'Retrying...']}
+            onClick={() => { onConnect(host.host); void actions.retry(); }}
+            data-testid="host-fleet-connect"
+            aria-label={`${failed ? 'Retry' : 'Connect now'}: ${host.label}`}
+          >
+            {retrying ? 'Retrying...' : failed ? 'Retry' : 'Connect now'}
           </SettingsButton>
         )}
       </div>
-      {action?.error && <p className="hf-action-error" role="status" data-testid="host-fleet-action-error">{action.error}</p>}
+      {actions.failed === 'retry' && <p className="hf-action-error" role="status" data-testid="host-fleet-action-error">{RETRY_FAILED_TEXT}</p>}
       <ReadError host={host} now={now} />
       {open && <Details host={host} now={now} />}
     </div>

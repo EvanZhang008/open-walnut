@@ -1,5 +1,5 @@
 /**
- * The rows "Copies that held off" shows from GET /api/replicas/status
+ * The rows "Removals to confirm" shows from GET /api/replicas/status
  * (web/src/components/settings/sections/replica-removal-status.ts): a row only
  * for a refusal three rounds in a row or an armed confirm, its sentence naming
  * the size of the removal, and the confirm naming exactly the refusal read; a
@@ -28,7 +28,7 @@ function status(): ReplicasStatusResponse {
   }
 }
 
-describe('the rows of copies that held off', () => {
+describe('the rows of removals to confirm', () => {
   it('a copy that works, or one refused fewer than three times, has no row', () => {
     const rows = replicaRemovalRows(status())
     expect(rows.map((r) => r.id)).toEqual(['host:marina/tasks'])
@@ -37,7 +37,7 @@ describe('the rows of copies that held off', () => {
   it('a refusal says how many rows would go, and its confirm names the count and keys read', () => {
     const [row] = replicaRemovalRows(status())
     expect(row).toMatchObject({ state: 'refused', label: 'marina', confirm: { target: 'host:marina', kind: 'tasks', entries: 3, keys: 'abcdef012345' } })
-    expect(row.text).toBe('This Mac has 3 tasks now, and the copy there would drop 97 of its 100. Walnut held off in case this Mac lost them. If you removed them on purpose, remove them there too.')
+    expect(row.text).toBe('This Mac has 3 tasks now, and the copy there would drop 97 of its 100. Walnut kept them there, in case this Mac lost them by mistake. If you removed them on purpose, remove them there too.')
   })
 
   it('an older copy that does not say its size still gets the row', () => {
@@ -64,9 +64,10 @@ describe('the rows of copies that held off', () => {
 
   it('names each copy kind\'s rows in plain words (WP4 kinds included)', () => {
     const words = (kind: string) => refusedText(kind, { error: 'manifest_removes_most_rows', at: 1, entries: 3, local: 100, removing: 97 }).split(' now,')[0]
-    expect(['tasks', 'registry', 'sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'search'].map(words)).toEqual([
+    expect(['tasks', 'registry', 'sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'search', 'notes', 'conversation-bodies'].map(words)).toEqual([
       'This Mac has 3 tasks', 'This Mac has 3 project and folder entries', 'This Mac has 3 sessions', 'This Mac has 3 reply requests',
-      'This Mac has 3 boards', 'This Mac has 3 letters', 'This Mac has 3 letter bodies', 'This Mac has 3 search rows',
+      'This Mac has 3 boards', 'This Mac has 3 letters', 'This Mac has 3 letter bodies', 'This Mac has 3 search entries',
+      'This Mac has 3 notes', 'This Mac has 3 chat messages',
     ])
   })
 

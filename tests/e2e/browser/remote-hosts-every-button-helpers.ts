@@ -5,15 +5,16 @@
  * routes). Everything else the pane reads is answered here, so no click reaches a real host,
  * starts an agent or deletes anything: the config (the fixture's hosts plus one host found in
  * ~/.ssh/config; saves are kept here, never written), the Overview, the host network, Walnut
- * on a host, the exec grants, the secrets, the held-off copies, the host profiles and voice
- * status. Each routed request is recorded in `calls`; a gated route waits for its release so
+ * on a host, the exec grants, the secrets, the removals to confirm, the host profiles and voice
+ * status. Where the real server answers in steps (a read of the hosts runs a while, a host that
+ * connects shows as live in the next read), these routes answer the same way. Each routed request is recorded in `calls`; a gated route waits for its release so
  * a busy label can be seen.
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { expect, type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test'
-import { fixtureFile, hostFixture, isolatePrefs, loadApp, loadFixture, openRemoteHosts } from './host-problems-fixture-helpers'
+import { fixtureFile, hostFixture, isolatePrefs, loadApp, loadFixture, openRemoteHosts, openRemoteHostsMore } from './host-problems-fixture-helpers'
 import { connected, stamp } from './host-problems-helpers'
 
 export interface Call { method: string; path: string; body: unknown }
@@ -22,6 +23,8 @@ interface Grant { id: string; taskId: string; taskTitle: string | null; host: st
 const GB = 1024 ** 3
 const DAY = 86_400_000
 const MIN = 60_000
+/** How long a read of the hosts runs (the real one waits on each host's daemon). */
+const READ_MS = 1_200
 
 /**
  * Every name a button may carry: the sweep writes `<host>`, `<task>` or `<secret>` for each, so
@@ -32,11 +35,6 @@ export const NAMES: Record<string, string> = Object.fromEntries([
   ...['Nightly build', 'Lint job'].map((n) => [n, '<task>']),
   ...['github-read', 'deploy-key'].map((n) => [n, '<secret>']),
 ])
-/** Short names for the long group headings (a key starts with its group). */
-const GROUP_NAMES: Record<string, string> = {
-  'Machines that joined with a link': 'Machines',
-  'When two machines cannot connect directly, they go through': 'Relay',
-}
 /** Buttons known by their class (their name is a command, a state, or an icon). */
 const STABLE_CLASSES = ['setup-copy-btn', 'hc-other', 'rh-connect-btn', 'rh-show-again-btn', 'hft-details', 'mic-btn', 'mic-chevron-badge', 'mic-error-retry', 'mic-error-dismiss', 'secret-toggle']
 /** A button whose label is its state: the key it is registered under. */
@@ -55,7 +53,7 @@ const FOLDS: Array<[RegExp, string]> = [[/^(.*)\/switch#host-server-copy-<host>-
  * class, else its accessible name, with each host's name written `<host>`.
  */
 export async function paneKeys(page: Page): Promise<string[]> {
-  const raw = await page.evaluate(({ names, classes, groups }) => {
+  const raw = await page.evaluate(({ names, classes }) => {
     const root = document.getElementById('remote-hosts')
     if (!root) throw new Error('#remote-hosts is not on the page')
     // Scrolled down, the pane's header buttons move to the sticky bar above it (SettingsSection PaneHeader).
@@ -71,7 +69,7 @@ export async function paneKeys(page: Page): Promise<string[]> {
       if (!root.contains(el) || el.closest('.settings-pane-header, .settings-card-head')) return 'Header'
       if (el.closest('[data-testid="host-fleet"]')) return 'Overview'
       const title = el.closest('.settings-group-block')?.querySelector(':scope > .settings-group-heading .settings-group-title')?.textContent?.trim()
-      return title ? (groups[title] ?? title) : 'Pane'
+      return title ?? 'Pane'
     }
     const out: string[] = []
     for (const el of roots.flatMap((r) => [...r.querySelectorAll<HTMLElement>(sel)])) {
@@ -89,7 +87,7 @@ export async function paneKeys(page: Page): Promise<string[]> {
       out.push(tid ? `${role}#${norm(tid)}` : relay ? `${role}[relay=${relay}]` : cls ? `${role}.${cls}` : `${role}:${norm(el.getAttribute('aria-label') || el.textContent || '')}`)
     }
     return out
-  }, { names: NAMES, classes: STABLE_CLASSES, groups: GROUP_NAMES })
+  }, { names: NAMES, classes: STABLE_CLASSES })
   return [...new Set(raw.map((k) => FOLDS.reduce((acc, [re, to]) => acc.replace(re, to), STATE_ALIASES[k] ?? k)))]
 }
 
@@ -121,8 +119,11 @@ function card(over: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
-/** This computer and Alpha box live (Alpha box's daemon does not start after a reboot: Set up), Far box away (Connect). */
-function fleet(alphaFixed: boolean): Record<string, unknown>[] {
+/**
+ * This computer and Alpha box live (Alpha box's daemon does not start after a reboot: Set up),
+ * Far box away (Retry) until a connect brings it up.
+ */
+function fleet(alphaFixed: boolean, farUp: boolean): Record<string, unknown>[] {
   const now = Date.now()
   const alphaDaemon = alphaFixed
     ? { version: 'walnut-daemon-0123456789ab', startedAt: now - DAY, startup: 'service', startsAfterReboot: true, runtime: 'bun', vitals: true, bootStart: { mode: 'boot', backend: 'systemd-user', reason: null, checkedAt: now, setupRunning: false, setupError: null, next: null }, reboot: 'starts by itself after a reboot (as a systemd user service)' }
@@ -134,7 +135,7 @@ function fleet(alphaFixed: boolean): Record<string, unknown>[] {
       system: { os: 'macOS 15.1', arch: 'arm64', cpus: 10, memBytes: 32 * GB, diskFreeBytes: 300 * GB, kind: 'laptop', probedAt: null },
     }),
     card({ host: 'devbox', label: 'Alpha box', daemon: alphaDaemon }),
-    card({
+    farUp ? card({ host: 'farbox', label: 'Far box' }) : card({
       host: 'farbox', label: 'Far box',
       connection: { kind: 'ssh-tunnel', connected: false, phase: 'failed', phaseLabel: 'Could not reach Far box', since: null, rttMs: null, error: 'ssh: connection timed out' },
       now: null, history: null, sessions: { running: null }, readAt: now - 5 * MIN,
@@ -176,6 +177,12 @@ export class PaneRoutes {
   limits: Record<string, number> = { devbox: 3 }
   readonly found: Record<string, Record<string, unknown>> = { 'lab-mac': { hostname: '10.0.0.9', user: 'sam', discovered: true, connect: 'ask', enabled: false } }
   alphaFixed = false
+  /** Far box answered a connect: the next read shows it live, as the server's cached read does. */
+  farUp = false
+  /** A read of the hosts runs until then (the server answers `refreshing: true` meanwhile). */
+  private refreshUntil = 0
+  /** The join links read back as expired (the 10 minutes ran out). */
+  expireInvites = false
   relay: 'own' | 'public' | 'none' = 'public'
   invites = 0
   readonly servers = [
@@ -258,6 +265,7 @@ export class PaneRoutes {
       const call = this.record(route)
       const host = call.path.split('/')[3]
       await this.pass(`connect:${host}`)
+      if (host === 'farbox') this.farUp = true
       return route.fulfill({ json: { ok: true, status: stamp(connected(host, host === 'farbox' ? 'Far box' : host)) } })
     })
     await this.installFleet()
@@ -267,16 +275,21 @@ export class PaneRoutes {
 
   private async installFleet(): Promise<void> {
     const page = this.page
-    await page.route((url) => url.pathname === '/api/v1/hosts', (route) => route.fulfill({ json: { hosts: fleet(this.alphaFixed), checkedAt: Date.now(), refreshing: false } }))
+    await page.route((url) => url.pathname === '/api/v1/hosts', (route) => {
+      const refreshing = Date.now() < this.refreshUntil
+      const hosts = fleet(this.alphaFixed, this.farUp).map((h) => ({ ...h, refreshing }))
+      return route.fulfill({ json: { hosts, checkedAt: Date.now(), refreshing } })
+    })
     await page.route('**/api/v1/hosts/refresh', (route) => {
       const body = (this.record(route).body ?? {}) as { hosts?: string[] }
+      this.refreshUntil = Date.now() + READ_MS
       return route.fulfill({ status: 202, json: { started: body.hosts ?? [], refreshing: body.hosts ?? [] } })
     })
     await page.route('**/api/v1/hosts/*/boot-start', async (route) => {
       this.record(route)
       await this.pass('boot')
       this.alphaFixed = true
-      return route.fulfill({ json: { host: fleet(true)[1] } })
+      return route.fulfill({ json: { host: fleet(true, this.farUp)[1] } })
     })
     await page.route('**/api/v1/hosts/*/profile', async (route) => {
       const host = decodeURIComponent(new URL(route.request().url()).pathname.split('/')[4])
@@ -294,10 +307,11 @@ export class PaneRoutes {
 
   private async installNet(): Promise<void> {
     const page = this.page
-    let machines = [{ host: 'gpu-box', endpoint: 'e'.repeat(64), enabled: true, platform: 'linux-x64', addedAt: Date.now() - DAY, path: 'direct', rttMs: 31.4 }]
+    // Not connected (no host status for it), so no link either: the real server says both at once.
+    let machines = [{ host: 'gpu-box', endpoint: 'e'.repeat(64), enabled: true, platform: 'linux-x64', addedAt: Date.now() - DAY, path: 'none' }]
     const invite = (id: string) => {
       const n = Number(id.split('-')[1])
-      return { id, link: netLink(n), command: netCommand(n), windowsCommand: netWindows(n), windowsApp: WINDOWS_APP, expiresAt: Date.now() + 10 * MIN, state: 'waiting' }
+      return { id, link: netLink(n), command: netCommand(n), windowsCommand: netWindows(n), windowsApp: WINDOWS_APP, expiresAt: Date.now() + 10 * MIN, state: this.expireInvites ? 'expired' : 'waiting' }
     }
     await page.route('**/api/hosts/net', (route) => route.fulfill({
       json: { enabled: true, macId: 'a'.repeat(64), companion: false, relay: this.relay, relays: [], syncedAt: Date.now(), error: null, machines },
@@ -465,7 +479,16 @@ export async function openPane(page: Page): Promise<void> {
   await openRemoteHosts(page)
   await expect(page.locator('#rh-host-devbox')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[id="hf-card-devbox"]')).toBeVisible({ timeout: 20_000 })
-  for (const id of ['host-network-group', 'host-servers', 'host-exec-grants', 'fleet-secrets', 'replica-removals-host']) {
+  await expect(page.locator('[data-host-alias="gpu-box"]')).toBeVisible({ timeout: 20_000 })
+  for (const id of ['remote-hosts-list', 'replica-removals-host', 'remote-hosts-more']) {
+    await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
+  }
+}
+
+/** Opens More settings (closed by default) and waits for its groups. */
+export async function openMore(page: Page): Promise<void> {
+  await openRemoteHostsMore(page)
+  for (const id of ['host-network-relay', 'host-servers', 'host-exec-grants', 'fleet-secrets', 'rh-session-limits']) {
     await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
   }
 }

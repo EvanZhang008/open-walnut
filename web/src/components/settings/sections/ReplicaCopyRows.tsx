@@ -18,13 +18,15 @@ interface Props {
   /** The heading row's sentence. */
   help: string;
   label?: string;
+  /** false: no heading row (the caller folds the rows under a row of its own that says it). */
+  heading?: boolean;
 }
 
-export function ReplicaCopyRows({ idOf, copies, busy, onChange, help, label = 'Kept on this host' }: Props) {
+export function ReplicaCopyRows({ idOf, copies, busy, onChange, help, label = 'Kept on this host', heading = true }: Props) {
   const choice = copyChoiceOf(copies);
   return (
     <>
-      <SettingsRow label={label} help={help} />
+      {heading && <SettingsRow label={label} help={help} />}
       {HOST_COPY_ROWS.map((row) => (
         <SettingsRow
           key={row.key}

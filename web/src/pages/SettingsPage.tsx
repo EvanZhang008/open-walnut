@@ -31,6 +31,7 @@ import { SettingsNav, useSettingsNavModel, type SettingsNavModel } from '@/compo
 import { SettingsGroup, SettingsRow, SettingsSection } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { SettingsBuildLine } from '@/components/settings/SettingsBuildLine'
+import { hasStatusHosts } from '@/components/settings/diagnostics-copy'
 import { SettingsPaneBack } from '@/components/settings/SettingsPaneBack'
 import type { SaveSectionOptions } from '@/components/settings/core-settings-registry'
 import {
@@ -430,7 +431,8 @@ function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: Layout
           <div className="settings-pane-inner" key={paneId}>
             <SettingsPaneBack paneId={paneId} metaFor={model.metaFor} />
             {body}
-            {labelled && <SettingsBuildLine />}
+            {/* Remote Hosts' header has its own Copy diagnostics while it has a host to report. */}
+            {labelled && <SettingsBuildLine copyLink={paneId !== 'remote-hosts' || !config || !hasStatusHosts(config)} />}
             {anchorRoom > 0 && <div className="settings-pane-anchor-room" aria-hidden="true" style={{ height: anchorRoom }} />}
           </div>
         </div>

@@ -24,7 +24,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchFleet, onFleetRefresh, refreshFleet, setUpBootStart, type FleetHost } from '@/api/hosts-fleet';
 import { keepFleet, lastFleet } from '@/api/fleet-last';
-import { connectHost } from '@/api/hosts';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
 import { useHostLinkChange } from '@/hooks/useHostLinkChange';
@@ -36,6 +35,7 @@ import { HostFleetCard, HostFleetOfflineRow, type ActionState } from './HostFlee
 import { HostFleetTopology } from './HostFleetTopology';
 import { FleetNumber } from './FleetNumber';
 import { ChevronGlyph } from '../settings-glyphs';
+import { flashOnce, focusLanded } from '@/utils/focus-landed';
 import '@/styles/host-status.css';
 import '@/styles/host-fleet.css';
 
@@ -43,6 +43,10 @@ import '@/styles/host-fleet.css';
 const POLL_MS = 1_500;
 /** The "read N min ago" words age on this clock; nothing is fetched by it. */
 const TICK_MS = 30_000;
+/** How long a card that just connected says so. */
+const CONNECTED_NOTE_MS = 8_000;
+/** A Connect pressed here owns the host coming up within this long (CONNECT_CAP_MS is shorter). */
+const CONNECT_WATCH_MS = 60_000;
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 
 /**
@@ -66,7 +70,8 @@ function Stat({ value, label, tone, testId, title, why }: { value: string | null
   );
 }
 
-export function HostFleetGroup() {
+/** `onPickHost`: a diagram node's host shown in the Hosts list; false when it has no row there (this computer). */
+export function HostFleetGroup({ onPickHost }: { onPickHost?: (host: string) => boolean } = {}) {
   const [open, setOpen] = usePersistentState<boolean>('walnut-host-fleet-open', true, isBool);
   // The last answer this browser kept paints at once; the server's read replaces it.
   const [hosts, setHosts] = useState<FleetHost[] | null>(lastFleet);
@@ -149,7 +154,10 @@ export function HostFleetGroup() {
   /** Read these hosts again (every host with none named); the cards follow as each read ends. */
   const refresh = useCallback((names?: string[]) => {
     setRefreshError(null);
+    // Said at once: the press shows it runs before the server has answered.
+    setRefreshing(true);
     void refreshFleet(names).catch((err) => {
+      setRefreshing(false);
       // An older server has no refresh: its read is live, so read that.
       if (err instanceof ApiError && err.status === 404) { void load(); return; }
       const msg = errorText(err);
@@ -197,22 +205,12 @@ export function HostFleetGroup() {
     }
   }, []);
 
-  /**
-   * Connect only dials: the host is read once on its new link, by the server when it connects
-   * and by load's once-per-link rule (readOnOpen, ownReadKey), never by the press itself.
-   * 2026-11-04: the press read it at once (while it was still dialing) and again 5 s later, on
-   * top of that per-link read, so one Connect read the host two or three times.
-   */
-  const onConnect = useCallback((host: string) => {
-    void run(`${host}:connect`, 'connect', async () => {
-      await connectHost(host);
-      void load();
-      // The link takes a few seconds to come up; look at the cached read again when it should
-      // be, in case no link change reached this page.
-      after(5_000, () => { void load(); });
-      return { card: null, note: null };
-    });
-  }, [run, load, after]);
+  // Connect on a row below the cards runs the host's one connect attempt (useHostActions, the
+  // same as the Hosts list's Retry): the row follows it, and once the host is up the cached read
+  // shows it as a card (useHostLinkChange), which then says so and takes the focus the row had.
+  // When each Connect was pressed: a host that comes up much later, on its own, is not this press's.
+  const connected = useRef(new Map<string, number>());
+  const onConnect = useCallback((host: string) => { connected.current.set(host, Date.now()); }, []);
 
   const onBootStart = useCallback((host: string) => {
     void run(`${host}:boot`, 'set it up', async () => {
@@ -221,18 +219,22 @@ export function HostFleetGroup() {
       // A finished setup hands the daemon to its service, which drops the link for a moment.
       if (!card.connection.connected) { later(5_000, [host]); return { card: null, note: 'Set up. Walnut reconnects to it now.' }; }
       if (d?.bootStart?.setupRunning) { later(15_000, [host]); return { card, note: null }; }
-      if (d?.startsAfterReboot) return { card, note: null };
+      if (d?.startsAfterReboot) return { card, note: `Set up: ${(d.reboot ?? 'it starts by itself after a reboot').replace(/`/g, '')}.` };
       return { card, note: `Checked just now: ${(d?.reboot ?? 'it still does not start by itself after a reboot').replace(/`/g, '')}.` };
     });
   }, [run, later]);
 
   const onDetails = useCallback((host: string) => refresh([host]), [refresh]);
 
+  // A node of the diagram: that host's row in Hosts (its card was already in view, so a press
+  // that only focused it seemed to do nothing); this computer has no row, so its card flashes.
   const onPick = useCallback((host: string) => {
+    if (onPickHost?.(host)) return;
     const el = document.getElementById(`hf-card-${host}`);
     el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    el?.focus({ preventScroll: true });
-  }, []);
+    flashOnce(el);
+    focusLanded(el);
+  }, [onPickHost]);
 
   const shown = hosts ? shownHosts(hosts) : [];
   const pending = (hosts?.length ?? 0) - shown.length;
@@ -240,6 +242,32 @@ export function HostFleetGroup() {
   const off = shown.filter((h) => !isLive(h));
   const sum = shown.length ? fleetSummary(shown, now) : null;
   const newest = hosts ? newestRead(hosts) : null;
+  const liveKey = live.map((h) => h.host).join('\n');
+  useEffect(() => {
+    const at = Date.now();
+    for (const [host, t] of connected.current) if (at - t > CONNECT_WATCH_MS) connected.current.delete(host);
+    const up = live.filter((h) => connected.current.has(h.host));
+    if (!up.length) return;
+    for (const h of up) connected.current.delete(h.host);
+    const keys = up.map((h) => `${h.host}:connect`);
+    setActions((a) => ({ ...a, ...Object.fromEntries(keys.map((k) => [k, { busy: false, error: null, note: 'Connected.' }])) }));
+    // No read of its own here: the cached read that showed it live already asks one for a card
+    // read before it connected (readOnOpen), so a second would read the host twice.
+    // The word is for the moment it happened; the card says the rest.
+    const clear = window.setTimeout(() => {
+      timers.current.delete(clear);
+      setActions((a) => Object.fromEntries(Object.entries(a).filter(([k]) => !keys.includes(k))));
+    }, CONNECTED_NOTE_MS);
+    timers.current.add(clear);
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById(`hf-card-${up[0].host}`);
+      flashOnce(el);
+      // The Connect pressed went with its row: its focus moves to the card, never to the page.
+      if (!document.activeElement || document.activeElement === document.body) focusLanded(el);
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKey]);
 
   return (
     <section className="hf-dash" data-testid="host-fleet" data-open={open ? 'true' : 'false'} aria-labelledby="hf-dash-title">
@@ -277,12 +305,12 @@ export function HostFleetGroup() {
               </div>
               {pending > 0 && <p className="hf-loading hf-loading-more" data-testid="host-fleet-reading">Reading {pending === 1 ? '1 more host' : `${pending} more hosts`}...</p>}
               <div className="hf-grid">
-                {live.map((h) => <HostFleetCard key={h.host} host={h} now={now} action={actions[`${h.host}:boot`]} onBootStart={onBootStart} onDetails={onDetails} />)}
+                {live.map((h) => <HostFleetCard key={h.host} host={h} now={now} action={actions[`${h.host}:boot`] ?? actions[`${h.host}:connect`]} onBootStart={onBootStart} onDetails={onDetails} />)}
               </div>
               {off.length > 0 && (
                 <div className="hf-panel hf-off-list" data-testid="host-fleet-offline-list">
                   <p className="hf-off-head">Not connected ({off.length})</p>
-                  {off.map((h) => <HostFleetOfflineRow key={h.host} host={h} now={now} action={actions[`${h.host}:connect`]} onConnect={onConnect} onDetails={onDetails} />)}
+                  {off.map((h) => <HostFleetOfflineRow key={h.host} host={h} now={now} onConnect={onConnect} onDetails={onDetails} />)}
                 </div>
               )}
             </>

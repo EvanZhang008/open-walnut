@@ -25,14 +25,14 @@ export function HostNetworkRelay({ net, onChanged }: { net: NetOverview; onChang
       id: 'own',
       label: 'Your relay',
       help: companion
-        ? `on your cloud companion${host ? ` (${host})` : ''}. Only your machines use it.`
+        ? `On your cloud companion${host ? ` (${host})` : ''}. Only your machines use it.`
         : 'Pair a cloud companion first (Settings > Cloud Companion).',
       disabled: !companion,
     },
     {
       id: 'public',
       label: 'Public relays',
-      help: "run by n0, the company behind iroh. They pass on traffic they cannot read. They see your machines' internet addresses and which of them talk to each other, and n0's lookup service lists which relay each machine uses.",
+      help: "Run by n0, the company behind iroh. They pass on traffic they cannot read. They see your machines' internet addresses and which of them talk to each other, and n0's lookup service lists which relay each machine uses.",
       disabled: companion,
     },
     {
@@ -62,9 +62,9 @@ export function HostNetworkRelay({ net, onChanged }: { net: NetOverview; onChang
 
   return (
     <SettingsGroup
-      heading="When two machines cannot connect directly, they go through"
+      heading="Relay"
       // Machines that join through the companion come up on its relay, so it is the one used.
-      footer={companion ? 'While a cloud companion is paired, your machines use its relay.' : undefined}
+      footer={`When two machines that joined with a link cannot connect directly, their traffic goes through the relay picked here.${companion ? ' While a cloud companion is paired, your machines use its relay.' : ''}`}
       data-testid="host-network-relay"
     >
       <div role="radiogroup" aria-label="Relay" className="settings-addons-contents">

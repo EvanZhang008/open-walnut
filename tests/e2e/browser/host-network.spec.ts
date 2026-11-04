@@ -1,14 +1,15 @@
 /**
- * Settings › Remote Hosts › Machines that joined with a link (HostNetworkGroup.tsx;
- * server: src/web/routes/hosts-net.ts). With none, one line says so; Add a machine shows
- * the command to run on the new machine with Copy and the minutes left, watches the
- * invite, and the machine that joins becomes a row saying how this Mac reaches it;
- * an expired link offers a new one; a refused invite says why; Remove asks once more,
- * sends the DELETE and drops the row; the relay choice says what each one shares, a
+ * Settings › Remote Hosts: machines that join with a link (useHostNetwork.ts, HostJoinLink.tsx,
+ * NetMachineRow.tsx, HostNetworkRelay.tsx; server: src/web/routes/hosts-net.ts). Add host >
+ * Join a machine with a link puts the link first in Hosts: the command for the new machine's
+ * system with Copy and the minutes left, the notes folded; it watches the invite, and the
+ * machine that joins becomes a Hosts row (a Link tag) saying how this Mac reaches it; an
+ * expired link offers a new one; a refused invite says why; Remove asks once more, sends the
+ * DELETE and drops the row; the relay choice (More settings) says what each one shares, a
  * companion means its relay, without one a pick is sent once and the rows follow it, a
- * refused pick says why, and the invite is a ticket. The server is faked at the route (no companion here;
- * tests/e2e/host-network-e2e.test.ts runs the real one). Navigation is by clicks.
- * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
+ * refused pick says why, and the invite is a ticket. The server is faked at the route (no
+ * companion here; tests/e2e/host-network-e2e.test.ts runs the real one). Navigation is by
+ * clicks. WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
@@ -28,6 +29,19 @@ async function openRemoteHosts(page: Page) {
   await page.getByTestId('settings-nav-remote-hosts').click()
 }
 
+/** Add host > Join a machine with a link (the pane's one way to make a link). */
+async function joinWithLink(page: Page) {
+  await page.locator('[data-testid="remote-hosts-add"]:visible').first().click()
+  await page.getByRole('menuitem', { name: /^Join a machine with a link/ }).click()
+}
+
+/** The relay picker sits under More settings, closed by default (open stays open for the tab). */
+async function openMore(page: Page) {
+  const toggle = page.getByTestId('remote-hosts-more-toggle')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
 function overview(machines: unknown[], extra: Record<string, unknown> = {}) {
   return { enabled: true, macId: 'a'.repeat(64), relays: ['https://wn.example.com'], syncedAt: Date.now(), error: null, machines, ...extra }
 }
@@ -35,7 +49,7 @@ function overview(machines: unknown[], extra: Record<string, unknown> = {}) {
 const shot = async (page: Page, name: string) => {
   mkdirSync(SHOTS, { recursive: true })
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
-  await page.getByTestId('host-network-group').screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
+  await page.getByTestId('remote-hosts-list').screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
 }
 const pickerShot = async (page: Page, name: string) => {
   mkdirSync(SHOTS, { recursive: true })
@@ -43,7 +57,7 @@ const pickerShot = async (page: Page, name: string) => {
   await page.getByTestId('host-network-relay').screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
 }
 
-test('Add a machine: the command, the countdown, the join, the path, Remove', async ({ page }) => {
+test('Join a machine with a link: the command, the countdown, the join, the path, Remove', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -68,20 +82,20 @@ test('Add a machine: the command, the countdown, the join, the path, Remove', as
   })
 
   await openRemoteHosts(page)
-  const group = page.getByTestId('host-network-group')
+  const group = page.getByTestId('remote-hosts-list')
   await expect(group).toBeVisible({ timeout: 30_000 })
-  await expect(group).toContainText('Machines that joined with a link')
-  await expect(group).toContainText('No machines yet.')
-  await expect(group).toContainText('These machines need no SSH.')
+  await expect(page.getByTestId('host-network-invite')).toHaveCount(0)
   await group.scrollIntoViewIfNeeded()
   await shot(page, '1-empty')
 
-  await page.getByTestId('host-network-add').click()
+  await joinWithLink(page)
   const invite = page.getByTestId('host-network-invite')
-  await expect(invite).toContainText('Run this in a terminal on the new machine (macOS or Linux):')
+  // The first row of Hosts: the command for a Mac (the default system), then how long it lasts.
+  await expect(group.locator('.settings-row').first()).toHaveAttribute('data-testid', 'host-network-invite')
+  await expect(invite).toContainText('Run this on the new machine')
+  await expect(invite).toContainText('In Terminal on the new Mac:')
   await expect(page.getByTestId('host-network-command')).toHaveText(COMMAND)
-  await expect(invite).toContainText(/Works once, for 10 minutes \((9|10):\d\d left\)\. +Waiting for the machine\.\.\./)
-  await expect(group).not.toContainText('No machines yet.')
+  await expect(page.getByTestId('host-network-wait')).toHaveText(/^Waiting for the machine\.\.\. The link works once, for 10 minutes \((9|10):\d\d left\)\./)
   await shot(page, '2-waiting')
   // Copy puts the exact command on the clipboard (read back where the engine lets a test).
   const chromium = page.context().browser()?.browserType().name() === 'chromium'
@@ -95,10 +109,13 @@ test('Add a machine: the command, the countdown, the join, the path, Remove', as
   // The machine runs it: the invite reads joined, and the machine is a row with its path.
   await expect(invite).toHaveAttribute('data-invite-state', 'joined', { timeout: 15_000 })
   await expect(invite).toContainText('gpu-box joined.')
+  await expect(invite).toContainText('It is in the list below.')
   const row = group.locator('[data-host-alias="gpu-box"]')
   await expect(row).toBeVisible({ timeout: 10_000 })
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Direct · 31 ms')
-  await expect(page.getByTestId('host-network-add')).toHaveText('New link')
+  await expect(row).toContainText('Link')
+  // A joined link is done: no New link on it (Add host makes the next one).
+  await expect(page.getByTestId('host-network-new-link')).toHaveCount(0)
   expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
   await shot(page, '3-joined')
 
@@ -133,13 +150,13 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
   await openRemoteHosts(page)
   // A narrow window (the sidebar collapses below this, so the window narrows once there).
   await page.setViewportSize({ width: 720, height: 900 })
-  const group = page.getByTestId('host-network-group')
+  const group = page.getByTestId('remote-hosts-list')
   await expect(group).toBeVisible({ timeout: 30_000 })
   const row = group.locator('[data-net-path="relay"]')
   await expect(row.getByTestId('host-network-path')).toHaveText('macOS arm64 · Through your relay · 88 ms')
   expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 
-  await page.getByTestId('host-network-add').click()
+  await joinWithLink(page)
   // The row names what failed; the reason sits under it.
   await expect(page.getByTestId('host-network-invite-error')).toContainText('Could not make a link')
   await expect(group.getByRole('alert')).toContainText('pair one first')
@@ -147,12 +164,12 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
   await shot(page, '4-refused')
 
   refuse = false
-  await page.getByTestId('host-network-add').click()
+  await joinWithLink(page)
   await expect(page.getByTestId('host-network-invite-error')).toHaveCount(0)
   const invite = page.getByTestId('host-network-invite')
   await expect(invite).toHaveAttribute('data-invite-state', 'expired', { timeout: 15_000 })
   await expect(invite).toContainText('This link expired.')
-  await expect(page.getByTestId('host-network-add')).toHaveText('New link')
+  await expect(page.getByTestId('host-network-new-link')).toHaveText('New link')
   await shot(page, '5-expired')
   expect(errors).toEqual([])
 })
@@ -185,15 +202,16 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await page.route('**/api/hosts/net/invites/ni-3', (route) => route.fulfill({ json: { ...ticketInvite, expiresAt: Date.now() + 9 * 60_000 } }))
 
   await openRemoteHosts(page)
+  await openMore(page)
   const picker = page.getByTestId('host-network-relay')
   await expect(picker).toBeVisible({ timeout: 30_000 })
-  await expect(picker).toContainText('When two machines cannot connect directly, they go through')
+  await expect(picker).toContainText('When two machines that joined with a link cannot connect directly, their traffic goes through the relay picked here.')
   const own = picker.locator('[data-relay="own"]')
   const pub = picker.locator('[data-relay="public"]')
   const none = picker.locator('[data-relay="none"]')
   // A companion: its relay, and the other two say what they share but cannot be picked.
   await expect(own).toHaveAttribute('aria-checked', 'true')
-  await expect(own).toContainText('on your cloud companion (wn.example.com). Only your machines use it.')
+  await expect(own).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
   await expect(pub).toContainText("They see your machines' internet addresses and which of them talk to each other")
   await expect(none).toContainText('Machines behind two home routers may not connect.')
   await expect(pub).toBeDisabled()
@@ -201,7 +219,7 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect(picker).toContainText('While a cloud companion is paired, your machines use its relay.')
   await picker.scrollIntoViewIfNeeded()
   await pickerShot(page, '6-relay-own')
-  const row = page.getByTestId('host-network-group').locator('[data-host-alias="gpu-box"]')
+  const row = page.getByTestId('remote-hosts-list').locator('[data-host-alias="gpu-box"]')
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Through your relay · 40 ms')
 
   // No companion: public relays, and Your relay cannot be picked. Another section and back:
@@ -211,13 +229,13 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await page.getByTestId('settings-nav-general').click()
   await expect(picker).toHaveCount(0)
   await page.getByTestId('settings-nav-remote-hosts').click()
+  // More settings stays open for this tab.
   await expect(pub).toHaveAttribute('aria-checked', 'true')
   await expect(own).toHaveAttribute('aria-disabled', 'true')
   await expect(own).toBeDisabled()
   await expect(own).toContainText('Pair a cloud companion first (Settings > Cloud Companion).')
   await expect(picker).not.toContainText('While a cloud companion is paired')
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Through a public relay · 40 ms')
-  await expect(page.getByTestId('host-network-group')).toContainText('through a public relay that cannot read the traffic')
 
   // A refused change says why and keeps the choice it had.
   failNext = true
@@ -232,14 +250,18 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect(none).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByTestId('host-network-relay-error')).toHaveCount(0)
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Direct · 40 ms')
-  await expect(page.getByTestId('host-network-group')).toContainText('They reach this Mac directly. Only Walnut can use this connection.')
 
   // The invite is a ticket, and the Mac must stay on while the machine joins.
-  await page.getByTestId('host-network-add').click()
+  await joinWithLink(page)
   await expect(page.getByTestId('host-network-command')).toHaveText(TICKET_CMD)
-  // A Windows PC gets its own line, in PowerShell, and the page says what it needs.
   const ticketRow = page.getByTestId('host-network-invite')
-  await expect(ticketRow).toContainText('Run this on the new machine, in Terminal on macOS or Linux, in PowerShell on Windows:')
+  // How the machines reach each other, for the relay picked: under More about this link.
+  const more = page.getByTestId('host-network-more')
+  await more.click()
+  await expect(ticketRow).toContainText('The machine needs no SSH: it reaches this Mac directly. Only Walnut can use this connection. You pick the relay under More settings.')
+  // A Windows PC gets its own line, in PowerShell, and the notes say what it needs.
+  await page.getByTestId('host-network-os-windows').click()
+  await expect(ticketRow).toContainText('In PowerShell on the PC:')
   await expect(page.getByTestId('host-network-windows-command')).toHaveText(TICKET_WIN)
   await expect(ticketRow).toContainText('On Windows, Walnut runs in WSL (Linux inside Windows). A PC without WSL asks once for an administrator to turn it on, then a restart and a new link.')
   const chromiumTicket = page.context().browser()?.browserType().name() === 'chromium'
@@ -249,14 +271,17 @@ test('the relay choice: what each one shares, a companion means its relay, and w
     await expect(page.getByTestId('host-network-windows-copy')).toHaveText('Copied')
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(TICKET_WIN)
   }
-  // Both lines stay inside the row at this width (each command is one ellipsized line).
+  // Each command stays inside the row at this width (one line that scrolls).
   const rowBox = (await ticketRow.boundingBox())!
-  for (const id of ['host-network-command', 'host-network-windows-command']) {
+  const inside = async (id: string) => {
     const b = (await page.getByTestId(id).boundingBox())!
     expect(b.x + b.width, id).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1)
   }
-  await expect(ticketRow).toContainText('Keep this Mac awake and online until the machine joins.')
-  await page.getByTestId('host-network-group').scrollIntoViewIfNeeded()
+  await inside('host-network-windows-command')
+  await expect(page.getByTestId('host-network-wait')).toContainText('Keep this Mac awake and online until it joins.')
+  await page.getByTestId('host-network-os-mac').click()
+  await inside('host-network-command')
+  await page.getByTestId('remote-hosts-list').scrollIntoViewIfNeeded()
   await shot(page, '7-no-companion')
   await picker.scrollIntoViewIfNeeded()
   await pickerShot(page, '8-relay-no-companion')
@@ -266,7 +291,7 @@ test('the relay choice: what each one shares, a companion means its relay, and w
 // Once the newest release carries Walnut for Windows, a PC joins with the app: the row says
 // where to get it, gives the link to paste in it, says what Windows asks first (the app is not
 // signed), and keeps the PowerShell line beside it.
-test('Add a machine on Windows: the app, the link to paste in it, and PowerShell beside it', async ({ page }) => {
+test('Join a machine on Windows: the app, the link to paste in it, and PowerShell under the notes', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -278,15 +303,20 @@ test('Add a machine on Windows: the app, the link to paste in it, and PowerShell
   await page.route('**/api/hosts/net/invites/ni-4', (route) => route.fulfill({ json: { ...invite, expiresAt: Date.now() + 9 * 60_000 } }))
 
   await openRemoteHosts(page)
-  await expect(page.getByTestId('host-network-group')).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('host-network-add').click()
+  await expect(page.getByTestId('remote-hosts-list')).toBeVisible({ timeout: 30_000 })
+  await joinWithLink(page)
   const row = page.getByTestId('host-network-invite')
-  await expect(row).toContainText('On the new machine: run this in Terminal on macOS or Linux, or use the Walnut app on Windows:')
+  await expect(row).toHaveAttribute('data-os', 'mac')
+  await page.getByTestId('host-network-os-windows').click()
+  await expect(row).toHaveAttribute('data-os', 'windows')
   await expect(page.getByTestId('host-network-windows-app')).toContainText('Download Walnut for Windows on the PC, open it, choose Add this PC to my Walnut, and paste this link:')
   await expect(page.getByTestId('host-network-windows-app').getByRole('link', { name: 'Walnut for Windows' })).toHaveAttribute('href', APP)
   await expect(page.getByTestId('host-network-windows-link')).toHaveText(LINK)
+  // The signing warning and the PowerShell way are notes, folded under More about this link.
+  await expect(page.getByTestId('host-network-windows-command')).toBeHidden()
+  await page.getByTestId('host-network-more').click()
   await expect(row).toContainText('The Windows app is not signed yet: when Windows says “Windows protected your PC”, click More info, then Run anyway.')
-  await expect(row).toContainText('or PowerShell')
+  await expect(row).toContainText('Or in PowerShell on the PC:')
   await expect(page.getByTestId('host-network-windows-command')).toHaveText(WIN)
   if (page.context().browser()?.browserType().name() === 'chromium') {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
@@ -296,11 +326,11 @@ test('Add a machine on Windows: the app, the link to paste in it, and PowerShell
   }
   // Every line stays inside the row.
   const rowBox = (await row.boundingBox())!
-  for (const id of ['host-network-command', 'host-network-windows-app', 'host-network-windows-link', 'host-network-windows-command']) {
+  for (const id of ['host-network-windows-app', 'host-network-windows-link', 'host-network-windows-command']) {
     const b = (await page.getByTestId(id).boundingBox())!
     expect(b.x + b.width, id).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1)
   }
-  await page.getByTestId('host-network-group').scrollIntoViewIfNeeded()
+  await page.getByTestId('remote-hosts-list').scrollIntoViewIfNeeded()
   await shot(page, '9-windows-app')
   expect(errors).toEqual([])
 })

@@ -1,6 +1,6 @@
 /**
- * Settings "Copy diagnostics" (the build line) and "Copy host diagnostics"
- * (Remote Hosts header), clicked as a user would, in either engine:
+ * Settings "Copy diagnostics": the build line's, and Remote Hosts' header button
+ * (the hosts section; that pane's build line has none), clicked as a user would, in either engine:
  * `PW_WEBKIT=1 npx playwright test --project=webkit settings-copy-diagnostics`
  * is the Mac app's WKWebView.
  *
@@ -137,6 +137,10 @@ test('Remote Hosts copies the hosts section when a host is saved', async ({ page
   await page.getByTestId('settings-nav-remote-hosts').click()
   const button = page.getByTestId('remote-hosts-copy-diagnostics')
   await expect(button).toBeVisible({ timeout: 20_000 })
+  // The pane's one Copy diagnostics: its build line offers no second one.
+  await expect(page.getByTestId('settings-build-line')).toBeVisible()
+  await expect(page.getByTestId('settings-copy-diagnostics')).toHaveCount(0)
+  await expect(button).toHaveText('Copy diagnostics')
   await button.click()
   await expect(button).toHaveText('Copied', { timeout: 30_000 })
   const text = await copied(page)

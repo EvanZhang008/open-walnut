@@ -430,6 +430,7 @@ test.describe('Settings host row head', () => {
       return !!ws && ws.readyState === WebSocket.OPEN
     }, null, { timeout: 20_000 })
     await page.getByTestId('remote-hosts-add').first().click()
+    await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()
     const aliasInput = page.locator('input[id^="rh-alias-"]').last()
     await aliasInput.fill('draftbox')
     const dot = page.locator('.rh-status[data-host="draftbox"] .sps-host-dot')

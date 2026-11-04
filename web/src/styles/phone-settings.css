@@ -236,6 +236,16 @@
 
 /* Every control in a pane offers a finger 44 px (spec 4.2, C19). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* The top bar already names the pane, so the compact bar under it shows only the pane's
+     actions, and is tall enough that their 44 px buttons do not touch its edges (2026-11-04:
+     two "Remote Hosts" titles stacked, and Add host sat flush on the bar's border). */
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-stickybar-title {
+    visibility: hidden;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-stickybar-inner {
+    height: 56px;
+  }
+
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane :is(.settings-button, .settings-input:not(textarea)) {
     min-height: 44px;
   }
