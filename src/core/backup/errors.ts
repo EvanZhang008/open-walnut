@@ -29,7 +29,8 @@ export function friendlyStoreError(err: unknown, dest: BackupDestinationConfig):
   const code = codeOf(err);
   const status = statusOf(err);
   const bucket = dest.bucket ? `"${dest.bucket}"` : 'this bucket';
-  const tag = code ? ` (${code})` : '';
+  // Plain words only: the service's own code (SignatureDoesNotMatch) is for the log, not the person.
+  const tag = '';
   if (dest.type === 'gdrive') return raw;
   if (/invalid url/i.test(raw)) return 'The endpoint is not a web address. Type it in full, like https://<account>.r2.cloudflarestorage.com.';
   const cloudflare = dest.type === 'r2' && !dest.endpoint?.trim();

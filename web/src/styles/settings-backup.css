@@ -81,3 +81,16 @@
   position: relative;
   top: -1px;
 }
+
+.backup-restore-latest { margin-left: 8px; vertical-align: 1px; }
+
+/* A destructive confirm here sits beside bordered buttons: it is one too, in red, not a link. */
+.settings-button.settings-button-danger.backup-danger-button {
+  padding: 0 12px;
+  border-color: var(--settings-error-text, var(--error));
+}
+.settings-button.settings-button-danger.backup-danger-button:hover:not(:disabled) {
+  text-decoration: none;
+  background: rgba(255, 59, 48, 0.08);
+}
+.backup-contents { display: contents; }

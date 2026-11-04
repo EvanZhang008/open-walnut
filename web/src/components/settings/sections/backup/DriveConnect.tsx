@@ -26,6 +26,8 @@ interface DriveStatus {
   email: string | null
   folderName: string | null
   pending: boolean
+  /** The Google page of the sign-in under way. */
+  authUrl?: string
 }
 
 interface Props {
@@ -67,7 +69,11 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   useEffect(() => { void refresh() }, [refresh])
   // A reload while the Google page is still open: the row keeps waiting, never offers a second sign-in.
   useEffect(() => {
-    void apiGet<DriveStatus>('/api/backup/gdrive/status').then((s) => { if (s.pending && !s.connected) setWaiting(true) }).catch(() => {})
+    void apiGet<DriveStatus>('/api/backup/gdrive/status').then((s) => {
+      if (!s.pending || s.connected) return
+      setWaiting(true)
+      if (s.authUrl) setAuthUrl(s.authUrl)
+    }).catch(() => {})
   }, [])
 
   const signedIn = useCallback(() => {
@@ -80,7 +86,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   useEvent('backup:gdrive', useCallback((data: unknown) => {
     const d = data as { connected: boolean; error: string | null }
     setWaiting(false)
-    setError(d.connected ? null : d.error)
+    // The person's own Cancel is no error to show them.
+    setError(d.connected || d.error === 'Sign-in cancelled.' ? null : d.error)
     void refresh()
     if (d.connected) signedIn()
   }, [refresh, signedIn]))
@@ -161,7 +168,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           control={
             <span className="settings-inline-pair" data-testid="backup-gdrive-disconnect-confirm">
               <SettingsButton onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
-              <SettingsButton variant="danger" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
+              <SettingsButton variant="danger" className="backup-danger-button" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
             </span>
           }
         />
@@ -229,7 +236,9 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
       <SettingsRow
         label="Google account"
         help={waiting
-          ? <>Finish signing in on the Google page that opened. This row updates by itself.{authUrl && <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</>}</>
+          ? <>Finish signing in on the Google page that opened. This row updates by itself.{authUrl
+            ? <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</>
+            : <> Closed it? Choose Cancel, then Connect again.</>}</>
           : halfClient
             ? `Add the client ${hasId ? 'secret' : 'ID'} too: Google needs both.`
             : needsOwnClient && !hasOwnClient
@@ -241,7 +250,12 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           // A closed Google page must not leave the row stuck: Cancel, then Connect starts again with the values shown.
           <span className="settings-inline-pair">
             <SettingsButton busy busyLabel="Waiting for Google..." data-testid="backup-gdrive-connect">Connect Google Drive</SettingsButton>
-            <SettingsButton onClick={() => { setWaiting(false); setAuthUrl(null) }} data-testid="backup-gdrive-cancel">Cancel</SettingsButton>
+            <SettingsButton onClick={() => {
+              setWaiting(false)
+              setAuthUrl(null)
+              // Ended on the server too: a reload must not show it waiting again.
+              void apiPost('/api/backup/gdrive/connect/cancel', {}).catch(() => {})
+            }} data-testid="backup-gdrive-cancel">Cancel</SettingsButton>
           </span>
         ) : (
           <SettingsButton variant="primary" onClick={connect} busy={busy} busyLabel="Opening..."

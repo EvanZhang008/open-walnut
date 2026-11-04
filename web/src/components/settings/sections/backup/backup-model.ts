@@ -113,10 +113,13 @@ export function fieldProblem(d: BackupDestinationConfig): string | null {
   return null
 }
 
-/** Where a destination writes: a saved (masked) key stands only for the place it was saved for. */
+/**
+ * Where a saved (masked) key may go: the same service account it was saved for
+ * (keys belong to the account or the endpoint, not to one bucket in it).
+ */
 export function sameTarget(a: BackupDestinationConfig, b: BackupDestinationConfig): boolean {
   const t = (v?: string) => trimmed(v) ?? ''
-  return a.type === b.type && t(a.bucket) === t(b.bucket) && t(a.account_id) === t(b.account_id)
+  return a.type === b.type && t(a.account_id) === t(b.account_id)
     && t(a.endpoint) === t(b.endpoint) && t(a.client_id) === t(b.client_id)
 }
 
@@ -124,7 +127,7 @@ const isMasked = (v?: string): boolean => typeof v === 'string' && v.includes('\
 
 /**
  * True when the form still shows a saved (masked) secret but now points at
- * another bucket, account or endpoint: the server will not send that key
+ * another account or endpoint: the server will not send that key
  * anywhere else, so it has to be typed again.
  */
 export function secretNeedsRetyping(form: BackupDestinationConfig, owners: BackupDestinationConfig[]): boolean {
@@ -153,6 +156,8 @@ export interface DestinationTest {
   error?: string
   /** The pane saved it as the destination after this test. */
   savedNow?: boolean
+  /** Connected, not saved: its backups were made with another recovery key, so the person is asked first. */
+  askOtherKey?: boolean
 }
 
 /** The Connection row's words after a test. */
@@ -160,6 +165,7 @@ export function testHelp(r: DestinationTest | null, legacy: boolean): string {
   if (!r) return legacy ? 'Checks the bucket with these credentials.' : 'Writes, reads back and deletes a small test file.'
   if (!r.ok) return `Couldn't connect. ${r.error ?? ''}`.trim()
   if (legacy) return `Connected as ${r.arn ?? 'unknown identity'}`
+  if (r.askOtherKey) return 'Connected, not saved yet: this folder holds backups made with another recovery key. Using it pauses backups until you enter that key (or start over in a new folder).'
   const head = r.savedNow ? 'Connected and saved: backups go here now.' : 'Connected.'
   if (!r.hasBackups) return r.savedNow ? head : `${head} Walnut can write here; no backups yet.`
   if (r.keyMatches === false) return `${head} It holds Walnut backups made with another recovery key.`

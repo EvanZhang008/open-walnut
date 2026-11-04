@@ -277,6 +277,14 @@ function finish(p: PendingConnect, result: ConnectResult | null): void {
   if (result) p.onDone(result);
 }
 
+/** The person gave up on the sign-in under way (closed the Google page): it ends now, not at its timeout. */
+export function cancelDriveConnect(): boolean {
+  const all = [...pending.values()];
+  for (const p of all) finish(p, { ok: false, error: SIGN_IN_CANCELLED });
+  return all.length > 0;
+}
+export const SIGN_IN_CANCELLED = 'Sign-in cancelled.';
+
 function deniedMessage(error: string, description?: string | null): string {
   if (error === 'access_denied') return 'Google sign-in was cancelled: Walnut was not allowed to use Google Drive.';
   return `Google sign-in failed: ${error}${description ? ` (${description})` : ''}.`;

@@ -55,6 +55,8 @@ interface Props {
   pendingSwitch?: { restored: string; aside: string } | null
   /** How the last start's switch failed, if it did. */
   switchError?: string | null
+  /** A switch done at the last start, not read yet: said once, with where the previous data is. */
+  switchDone?: { restored: string; aside: string; at: string } | null
   /** The switch was asked for or dropped: read the status again. */
   onSwitchChanged?: () => void
   /** Walnut can restart by itself into the restored data (else the user quits and opens it). */
@@ -67,7 +69,7 @@ const whenOf = (iso: string, seconds = false): string =>
     weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}),
   })
 
-export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, onSwitchChanged, canRestart }: Props) {
+export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, switchDone, onSwitchChanged, canRestart }: Props) {
   const sources = dest ? [{ label: destLabel ?? 'In use', dest }, ...others] : []
   const [from, setFrom] = useState(0)
   const source = sources[Math.min(from, Math.max(0, sources.length - 1))]?.dest ?? null
@@ -215,17 +217,18 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       {items && items.length > 0 && (
         <>
           <div className="settings-row settings-row-indent backup-restore-list" role="radiogroup" aria-label="Backups" data-testid="backup-restore-list">
-            {items.map((it) => (
+            {items.map((it, i) => (
               <label key={it.id} className="backup-restore-item" data-picked={picked === it.id ? 'true' : undefined}>
                 <input type="radio" name="backup-restore-pick" value={it.id} checked={picked === it.id} onChange={() => setPicked(it.id)} />
                 <span className="backup-restore-when">
                   {whenOf(it.createdAt, items.some((o) => o.id !== it.id && whenOf(o.createdAt) === whenOf(it.createdAt)))}
+                  {/* The list is newest first; the newest one says so, not only by its place. */}
+                  {(it.isLatest || i === 0) && <span className="settings-tag settings-tag-neutral backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
                 </span>
                 <span className="backup-restore-meta">
                   {[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,
                     it.totalBytes !== undefined ? fmtBytes(it.totalBytes) : null,
-                    it.hostname ? `from ${it.hostname}` : null,
-                    it.isLatest ? 'latest' : null].filter(Boolean).join(' · ')}
+                    it.hostname ? `from ${it.hostname}` : null].filter(Boolean).join(' · ')}
                 </span>
               </label>
             ))}
@@ -317,6 +320,11 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           </div>
           <p className="settings-steps-note">Quit Walnut, run it in a terminal (it keeps your current data aside and deletes nothing), then start Walnut.</p>
         </SettingsDisclosure>
+      )}
+      {switchDone && !pendingSwitch && !switchError && (
+        <SettingsRow label="Now running on the restored data" wide data-testid="backup-restore-switch-done"
+          help={<>Walnut uses the data restored from the backup. Your previous data is kept at <code>{switchDone.aside}</code>; delete that folder yourself once you no longer need it.</>}
+          control={<SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-done-dismiss">Done</SettingsButton>} />
       )}
       {switchError && !pendingSwitch && (
         <SettingsRow label="The restored data was not switched in" error={switchError} data-testid="backup-restore-switch-error"

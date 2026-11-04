@@ -3,6 +3,7 @@
  * place that turns config + the local recovery key into a run, a list of
  * backups, a restore, a connection test, or a writer move.
  */
+import { log } from '../../logging/index.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -196,6 +197,11 @@ export async function testDestination(
     }
     return out;
   } catch (err) {
+    // The person reads plain words; the service's own code and message stay in the log.
+    log.session.warn('backup: destination test failed', {
+      error: err instanceof Error ? err.message : String(err),
+      code: (err as { name?: string; Code?: string } | undefined)?.Code ?? (err as { name?: string } | undefined)?.name,
+    });
     return { ok: false, destination, error: friendlyStoreError(err, dest) };
   }
 }

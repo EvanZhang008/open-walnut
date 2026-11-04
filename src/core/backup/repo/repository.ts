@@ -120,7 +120,7 @@ export class Repository {
       throw new RepoError('bad_format', `These backups were written by a newer Walnut (format ${config.version}). Update Walnut to read them.`);
     }
     if (config.keyCheck !== keyCheck(keys, config.repoId)) {
-      throw new RepoError('key_mismatch', `The backups at ${store.describe()} were made with a different recovery key.`);
+      throw new RepoError('key_mismatch', 'The backups here were made with another recovery key. Enter that key to use them, or start over in a new folder.');
     }
     return new Repository(store, keys, config);
   }

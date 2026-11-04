@@ -48,6 +48,8 @@ export interface SwitchDeps {
 
 export const switchMarkerPath = (home: string): string => `${path.resolve(home)}.restore-switch.json`;
 export const switchErrorPath = (home: string): string => `${path.resolve(home)}.restore-switch-error.txt`;
+/** The last switch done: where the previous data went, so the pane can say it once. */
+export const switchDonePath = (home: string): string => `${path.resolve(home)}.restore-switch-done.json`;
 
 const exists = (p: string): Promise<boolean> => fs.stat(p).then(() => true, () => false);
 
@@ -98,10 +100,21 @@ export async function readPendingSwitch(home: string): Promise<PendingSwitch | n
   }
 }
 
-/** Drop the request, and the last failure's note with it (the user has read it). */
+/** Drop the request, and the last failure's or success's note with it (the user has read it). */
 export async function cancelSwitch(home: string): Promise<void> {
   await fs.rm(switchMarkerPath(home), { force: true });
   await fs.rm(switchErrorPath(home), { force: true });
+  await fs.rm(switchDonePath(home), { force: true });
+}
+
+/** The last switch done and not yet read: the folder now in use came from `restored`, the previous one is at `aside`. */
+export async function lastSwitchDone(home: string): Promise<{ restored: string; aside: string; at: string } | null> {
+  try {
+    const d = JSON.parse(await fs.readFile(switchDonePath(home), 'utf8')) as { restored?: unknown; aside?: unknown; at?: unknown };
+    return typeof d.restored === 'string' && typeof d.aside === 'string' ? { restored: d.restored, aside: d.aside, at: String(d.at ?? '') } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The last start's failed switch, in words, or null. */
@@ -187,6 +200,7 @@ export async function applyPendingSwitch(home: string, deps: SwitchDeps = {}): P
     return fail(`The switch failed (${err instanceof Error ? err.message : String(err)}); Walnut kept its data folder.`);
   }
   await carryMachineId(p.aside, h).catch(() => {});
+  await fs.writeFile(switchDonePath(h), `${JSON.stringify({ restored: p.restored, aside: p.aside, at: new Date().toISOString() })}\n`).catch(() => {});
   await fs.rm(switchMarkerPath(h), { force: true }).catch(() => {});
   await fs.rm(switchErrorPath(h), { force: true }).catch(() => {});
   return { kind: 'switched', aside: p.aside };

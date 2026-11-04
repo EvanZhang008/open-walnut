@@ -64,6 +64,8 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
   const [askedForKey, setNeedsKey] = useState(false)
   const needsKey = askedForKey || mismatch
   const [shown, setShown] = useState(false)
+  // The key was shown, copied or downloaded: only then can "I saved it" be said.
+  const [seen, setSeen] = useState(false)
   // "Downloaded" for a moment after the kit is saved, so a second click is never needed to be sure.
   const [downloaded, setDownloaded] = useState(false)
   const [typed, setTyped] = useState('')
@@ -114,6 +116,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
 
   const download = () => {
     if (!key) return
+    setSeen(true)
     const blob = new Blob([recoveryKitText(key, destinationLabel, machineName ?? 'this computer', new Date())], { type: 'text/plain' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -170,7 +173,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               control={
                 <span className="settings-inline-pair">
                   <SettingsButton onClick={() => setConfirmStartOver(false)} data-testid="backup-key-start-over-cancel">Cancel</SettingsButton>
-                  <SettingsButton variant="danger" onClick={() => void startOver()} busy={startingOver} busyLabel="Starting over..." data-testid="backup-key-start-over-yes">Start over</SettingsButton>
+                  <SettingsButton variant="danger" className="backup-danger-button" onClick={() => void startOver()} busy={startingOver} busyLabel="Starting over..." data-testid="backup-key-start-over-yes">Start over</SettingsButton>
                 </span>
               }
             />
@@ -195,8 +198,8 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             data-testid="backup-key-row"
             control={
               <span className="settings-inline-pair">
-                <SettingsButton onClick={() => setShown(!shown)} reserve={['Show', 'Hide']} data-testid="backup-key-show">{shown ? 'Hide' : 'Show'}</SettingsButton>
-                <CopyButton text={key} bordered data-testid="backup-key-copy" />
+                <SettingsButton onClick={() => { setShown(!shown); setSeen(true) }} reserve={['Show', 'Hide']} data-testid="backup-key-show">{shown ? 'Hide' : 'Show'}</SettingsButton>
+                <span className="backup-contents" onClickCapture={() => setSeen(true)}><CopyButton text={key} bordered data-testid="backup-key-copy" /></span>
                 <SettingsButton onClick={download} reserve={['Download', 'Downloaded']} data-testid="backup-key-download">{downloaded ? 'Downloaded' : 'Download'}</SettingsButton>
               </span>
             }
@@ -210,10 +213,12 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             <SettingsRow
               state="warning"
               label="Save it somewhere safe"
-              help="In a password manager or on paper, not only on this computer: a new computer needs it to restore."
+              help={seen
+                ? 'In a password manager or on paper, not only on this computer: a new computer needs it to restore.'
+                : 'Show, copy or download it first, then keep it in a password manager or on paper: a new computer needs it to restore.'}
               data-testid="backup-key-unsaved"
               control={
-                <SettingsButton variant={firstSetup ? 'primary' : undefined} onClick={() => { setShown(false); onMarkSaved(firstSetup) }} data-testid="backup-key-saved">
+                <SettingsButton variant={firstSetup ? 'primary' : undefined} disabled={!seen} onClick={() => { setShown(false); onMarkSaved(firstSetup) }} data-testid="backup-key-saved">
                   {firstSetup ? 'I saved it, turn on backups' : 'I saved it'}
                 </SettingsButton>
               }

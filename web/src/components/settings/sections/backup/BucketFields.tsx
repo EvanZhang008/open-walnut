@@ -144,6 +144,16 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
           } />
         </>
       )}
+      {!custom && auth.method === 'access_keys' && (
+        <SettingsDisclosure id="backup-s3-help" label="Where to find these in AWS" data-testid="backup-s3-help">
+          <ol className="settings-steps" data-testid="backup-s3-steps">
+            <li>Open <a href="https://s3.console.aws.amazon.com/s3/bucket/create" target="_blank" rel="noreferrer">S3: Create bucket</a>, name it (for example <code>my-walnut-backup</code>), keep the defaults, and note its Region.</li>
+            <li>Open <a href="https://console.aws.amazon.com/iam/home#/users" target="_blank" rel="noreferrer">IAM: Users</a>, choose <b>Create user</b> (no console access), and give it the <b>AmazonS3FullAccess</b> permission (or one limited to that bucket).</li>
+            <li>On the user choose <b>Security credentials</b>, then <b>Create access key</b> (use: Application running outside AWS).</li>
+            <li>Copy the <b>Access key ID</b> and <b>Secret access key</b> into the rows above (AWS shows the secret once), then choose <b>Test and save</b>.</li>
+          </ol>
+        </SettingsDisclosure>
+      )}
       <SettingsDisclosure id="backup-s3-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-s3-advanced">
         <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="Optional" help="Empty: a folder named walnut-backup." />
         <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" value={dest.endpoint} onChange={setEndpoint}

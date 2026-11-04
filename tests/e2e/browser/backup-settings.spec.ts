@@ -191,8 +191,11 @@ test.describe('Backup settings', () => {
     await connect.click()
     await expect.poll(() => connectBody).toMatchObject({ client_id: '1234-abc.apps.googleusercontent.com' })
     await expect(section.getByTestId('backup-gdrive-open-link')).toBeVisible()
-    // A closed Google page: Cancel frees the row, and Connect starts again.
+    // A closed Google page: Cancel frees the row (on the server too), and Connect starts again.
+    let cancelled = false
+    await page.route('**/api/backup/gdrive/connect/cancel', (route) => { cancelled = true; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
     await section.getByTestId('backup-gdrive-cancel').click()
+    await expect.poll(() => cancelled).toBe(true)
     await expect(connect).toBeEnabled()
     connectBody = null
     await connect.click()
@@ -224,7 +227,7 @@ test.describe('Backup settings', () => {
     await expect(section.getByRole('alert')).toContainText('whole number of hours')
     await section.locator('#backup-interval').blur()
     await expect(section.locator('#backup-interval')).toHaveValue('24')
-    await expect(section.getByRole('alert')).toContainText('0 hours is not 1 to 168: kept 24 hours.')
+    await expect(section.getByRole('alert')).toContainText('0 hours is not a whole number from 1 to 168: kept 24 hours.')
     await section.getByTestId('backup-service-gdrive').click()
     await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
@@ -283,6 +286,26 @@ test.describe('Backup settings', () => {
     await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({
       type: 's3', endpoint: 'https://minio.example', access_key_id: 'MINIOKEY', secret_access_key: 'MINIOSECRET',
     })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('a folder holding backups made with another key is asked about before it is used', async ({ page }) => {
+    const config = await holdConfigWrites(page, { enabled: false, interval_hours: 24 })
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true, engine: null })
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: null })
+    await answer(page, '**/api/backup/destination/test', { ok: true, hasBackups: true, keyMatches: false })
+    const section = await openBackup(page)
+    await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
+    await section.locator('#backup-r2-bucket').fill('old-backups')
+    await section.locator('#backup-r2-access-key').fill('AK')
+    await section.locator('#backup-r2-secret').fill('SK')
+    await section.getByTestId('backup-test-connection').click()
+    await expect(section.getByTestId('backup-connection-row')).toContainText('another recovery key')
+    await expect(section.getByTestId('backup-test-connection')).toHaveText('Use it and enter its key')
+    await page.waitForTimeout(500)
+    expect(config.last()).toBeNull()
+    await section.getByTestId('backup-test-connection').click()
+    await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({ type: 'r2', bucket: 'old-backups' })
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 

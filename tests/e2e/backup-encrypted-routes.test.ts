@@ -166,11 +166,15 @@ describe('encrypted backups through the routes', () => {
     expect((await call<{ pendingSwitch: unknown }>('GET', '/status')).body.pendingSwitch).toBeNull();
   }, 60_000);
 
-  it('masked secrets stand only for the saved target', async () => {
+  it('masked secrets stand only for the saved service account', async () => {
     const masked = { ...r2(), secret_access_key: '••••••alue' };
     expect((await call('POST', '/destination/test', { destination: masked })).body).toMatchObject({ ok: true });
-    const other = { ...masked, bucket: 'someone-elses-bucket' };
-    const r = await call('POST', '/destination/test', { destination: other });
+    // Another bucket in the same account: the saved key is that account's, so it goes with it.
+    const otherBucket = await call('POST', '/destination/test', { destination: { ...masked, bucket: 'another-bucket-here' } });
+    expect(otherBucket.status).toBe(200);
+    expect(String(otherBucket.body.error ?? '')).not.toMatch(/Type the keys/);
+    // Another endpoint: never sent there.
+    const r = await call('POST', '/destination/test', { destination: { ...masked, endpoint: 'http://127.0.0.1:1' } });
     expect(r.status).toBe(400);
     expect(String(r.body.error)).toMatch(/Type the keys/);
   });
@@ -206,7 +210,7 @@ describe('encrypted backups through the routes', () => {
     }
   });
 
-  it('masked keys nested under auth are restored for the saved S3 target only', async () => {
+  it('masked keys nested under auth are restored for the saved S3 account only', async () => {
     const saved = (await getConfig()).backup!;
     const s3dest = {
       type: 's3' as const, bucket: 'walnut-r2', endpoint: s3.url, region: 'us-east-1',
@@ -217,7 +221,7 @@ describe('encrypted backups through the routes', () => {
       const masked = { ...s3dest, auth: { ...s3dest.auth, aws_secret_access_key: '••••••cret' } };
       const t = await call('POST', '/destination/test', { destination: masked });
       expect(t.body, JSON.stringify(t.body)).toMatchObject({ ok: true, canWrite: true });
-      const other = await call('POST', '/destination/test', { destination: { ...masked, bucket: 'another' } });
+      const other = await call('POST', '/destination/test', { destination: { ...masked, endpoint: 'http://127.0.0.1:1' } });
       expect(other.status).toBe(400);
     } finally {
       await updateConfig({ backup: saved } as never);
@@ -252,6 +256,8 @@ describe('encrypted backups through the routes', () => {
     const c = await call<{ authUrl: string }>('POST', '/gdrive/connect', {});
     expect(c.body.authUrl).toContain('code_challenge_method=S256');
     expect(c.body.authUrl).toContain(encodeURIComponent('https://www.googleapis.com/auth/drive.file'));
+    // While it waits, a reloaded pane can open the same Google page again.
+    expect((await call('GET', '/gdrive/status')).body).toMatchObject({ pending: true, authUrl: c.body.authUrl });
     // The fake consents at once and sends the browser to the loopback listener.
     const consent = await fetch(c.body.authUrl, { redirect: 'follow' });
     expect(consent.ok).toBe(true);
@@ -292,6 +298,12 @@ describe('encrypted backups through the routes', () => {
     const d = await call('POST', '/gdrive/disconnect', {});
     expect(d.body).toMatchObject({ ok: true });
     expect((await call('GET', '/gdrive/status')).body).toMatchObject({ connected: false });
+
+    // A sign-in the person gave up on ends on the server: a reloaded pane never shows it waiting.
+    expect((await call('POST', '/gdrive/connect', {})).status).toBe(200);
+    expect((await call('GET', '/gdrive/status')).body).toMatchObject({ pending: true });
+    expect((await call('POST', '/gdrive/connect/cancel', {})).body).toMatchObject({ ok: true, cancelled: true });
+    await until(async () => (await call<{ pending: boolean }>('GET', '/gdrive/status')).body.pending === false);
   }, 60_000);
 
   it('the older S3 copy keeps its own engine', async () => {

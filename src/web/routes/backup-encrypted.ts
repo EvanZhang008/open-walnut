@@ -40,9 +40,14 @@ export const encryptedBackupRouter = Router();
 const MASK = '•';
 const SECRET_KEYS = ['access_key_id', 'secret_access_key', 'client_secret'] as const;
 const AUTH_SECRET_KEYS = ['aws_access_key_id', 'aws_secret_access_key'] as const;
-const sameTarget = (a: BackupDestinationConfig, b: BackupDestinationConfig): boolean =>
-  a.type === b.type && (a.bucket ?? '') === (b.bucket ?? '') && (a.account_id ?? '') === (b.account_id ?? '')
+// Where a saved key may be sent: the same service account (keys belong to the account or the
+// endpoint, not to one bucket in it, so another bucket there keeps the saved key).
+const sameAccount = (a: BackupDestinationConfig, b: BackupDestinationConfig): boolean =>
+  a.type === b.type && (a.account_id ?? '') === (b.account_id ?? '')
   && (a.endpoint ?? '') === (b.endpoint ?? '') && (a.client_id ?? '') === (b.client_id ?? '');
+// Where the data goes: another bucket is another place (a request naming one is the person's step).
+const sameTarget = (a: BackupDestinationConfig, b: BackupDestinationConfig): boolean =>
+  sameAccount(a, b) && (a.bucket ?? '') === (b.bucket ?? '');
 const masked = (v: unknown): boolean => typeof v === 'string' && v.includes(MASK);
 
 /**
@@ -57,9 +62,9 @@ async function requestDestination(body: unknown): Promise<{ dest?: BackupDestina
   if (!sent?.type) return { dest: saved, cfg };
   const dest: BackupDestinationConfig = { ...sent, ...(sent.auth ? { auth: { ...sent.auth } } : {}) };
   const same = Boolean(saved && sameTarget(saved, dest));
-  // A masked key stands for the one saved for this very target: the destination in
-  // use, or a service kept for later (other_destinations). Never another target's.
-  const owner = same ? saved : (cfg.other_destinations ?? []).find((o) => sameTarget(o, dest));
+  // A masked key stands for the one saved for this service account: the destination in
+  // use, or a service kept for later (other_destinations). Never another account's.
+  const owner = saved && sameAccount(saved, dest) ? saved : (cfg.other_destinations ?? []).find((o) => sameAccount(o, dest));
   const refuse = { cfg, error: 'The saved keys belong to another destination. Type the keys for this one.' };
   for (const k of SECRET_KEYS) {
     if (!masked(dest[k])) continue;
@@ -361,6 +366,8 @@ encryptedBackupRouter.post('/adopt', async (req: Request, res: Response) => {
 // ── Google Drive sign-in ───────────────────────────────────────────────────
 
 let connectDone: Promise<{ ok: boolean; error?: string; email?: string }> | null = null;
+/** The Google page of the sign-in under way, so a reloaded pane can open it again. */
+let connectAuthUrl: string | null = null;
 
 async function driveClientFor(body: unknown): Promise<OAuthClient | null> {
   const { dest } = await requestDestination(body);
@@ -391,10 +398,18 @@ encryptedBackupRouter.get('/gdrive/status', async (_req: Request, res: Response)
     folderName: tokens?.folder_name ?? null,
     connectedAt: tokens?.connected_at ?? null,
     pending: connectDone !== null,
+    ...(connectDone !== null && connectAuthUrl ? { authUrl: connectAuthUrl } : {}),
   });
 });
 
 // POST /api/backup/gdrive/connect — returns Google's sign-in address; the browser opens it.
+// POST /api/backup/gdrive/connect/cancel — end the sign-in under way (its Google page was closed).
+encryptedBackupRouter.post('/gdrive/connect/cancel', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'A Google Drive sign-in is cancelled')) return;
+  const { cancelDriveConnect } = await import('../../core/backup/gdrive-oauth.js');
+  res.json({ ok: true, cancelled: cancelDriveConnect() });
+});
+
 encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response) => {
   if (!personOnly(req, res, 'Google Drive is connected')) return;
   try {
@@ -439,8 +454,9 @@ encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response
       if (connectDone === mine) connectDone = null;
       throw err;
     }
+    if (connectDone === mine) connectAuthUrl = started.authUrl;
     void mine.then((r) => {
-      if (connectDone === mine) connectDone = null;
+      if (connectDone === mine) { connectDone = null; connectAuthUrl = null; }
       broadcastDrive(r);
     });
     res.json({ authUrl: started.authUrl, redirectUri: started.redirectUri });

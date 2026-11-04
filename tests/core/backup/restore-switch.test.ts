@@ -10,7 +10,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  applyPendingSwitch, cancelSwitch, lastSwitchError, readPendingSwitch, requestSwitch, switchMarkerPath,
+  applyPendingSwitch, cancelSwitch, lastSwitchDone, lastSwitchError, readPendingSwitch, requestSwitch, switchMarkerPath,
 } from '../../../src/core/backup/restore-switch.js';
 import { machineIdPath } from '../../../src/core/backup/local-state.js';
 
@@ -57,8 +57,12 @@ describe('restore switch', () => {
     expect(await exists(restored)).toBe(false);
     expect((await read(machineIdPath(home))).trim()).toBe('a'.repeat(32));
     expect(await exists(switchMarkerPath(home))).toBe(false);
+    // The pane says it once: where the previous data went. Done clears it.
+    expect(await lastSwitchDone(home)).toMatchObject({ restored, aside: p.aside });
     // A second start does nothing more.
     expect(await applyPendingSwitch(home)).toEqual({ kind: 'none' });
+    await cancelSwitch(home);
+    expect(await lastSwitchDone(home)).toBeNull();
   });
 
   it('a start that died between the two renames finishes the switch', async () => {

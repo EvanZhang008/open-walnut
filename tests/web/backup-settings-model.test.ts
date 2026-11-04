@@ -126,8 +126,10 @@ describe('secretNeedsRetyping', () => {
   it('a masked key on the place it was saved for is fine; pointed elsewhere it must be typed again', () => {
     expect(secretNeedsRetyping(saved, [saved])).toBe(false);
     expect(secretNeedsRetyping({ ...saved, prefix: 'other-folder' }, [saved])).toBe(false);
-    expect(secretNeedsRetyping({ ...saved, bucket: 'other' }, [saved])).toBe(true);
-    expect(secretNeedsRetyping({ ...saved, bucket: 'other', secret_access_key: 'typed' }, [saved])).toBe(false);
+    // Another bucket in the same account: the same keys.
+    expect(secretNeedsRetyping({ ...saved, bucket: 'other' }, [saved])).toBe(false);
+    expect(secretNeedsRetyping({ ...saved, account_id: 'another-account' }, [saved])).toBe(true);
+    expect(secretNeedsRetyping({ ...saved, account_id: 'another-account', secret_access_key: 'typed' }, [saved])).toBe(false);
     // A service kept for later owns its own masked key.
     const kept = { type: 's3' as const, bucket: 'k', endpoint: 'https://m', access_key_id: 'a', secret_access_key: mask };
     expect(secretNeedsRetyping(kept, [saved, kept])).toBe(false);
@@ -158,6 +160,6 @@ describe('S3 with an endpoint keeps its keys', () => {
     const mask = '\u2022\u2022\u2022\u2022abcd';
     const saved = { type: 's3' as const, bucket: 'b', endpoint: 'https://minio.example', access_key_id: 'AK', secret_access_key: mask };
     const form = { ...saved, secret_access_key: 'typed-new', auth: { method: 'access_keys' as const, aws_secret_access_key: mask } };
-    expect(secretNeedsRetyping({ ...form, bucket: 'other' }, [saved])).toBe(false);
+    expect(secretNeedsRetyping({ ...form, endpoint: 'https://other.example' }, [saved])).toBe(false);
   });
 });

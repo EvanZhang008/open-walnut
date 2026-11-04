@@ -11,7 +11,9 @@ const named = (name: string, status?: number): Error => Object.assign(new Error(
 describe('friendlyStoreError', () => {
   it('names what to check for each common cause', () => {
     const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9999'), { code: 'ECONNREFUSED' });
-    expect(friendlyStoreError(refused, { ...r2, endpoint: 'http://127.0.0.1:9999' })).toMatch(/Can't reach the custom endpoint http:\/\/127\.0\.0\.1:9999.*\(ECONNREFUSED\)/);
+    expect(friendlyStoreError(refused, { ...r2, endpoint: 'http://127.0.0.1:9999' })).toMatch(/Can't reach the custom endpoint http:\/\/127\.0\.0\.1:9999/);
+    // Plain words only: the service's code stays in the log.
+    expect(friendlyStoreError(refused, { ...r2, endpoint: 'http://127.0.0.1:9999' })).not.toContain('ECONNREFUSED');
     expect(friendlyStoreError(new TypeError('fetch failed', { cause: refused }), r2)).toMatch(/Can't reach Cloudflare with this Account ID/);
     expect(friendlyStoreError(named('NoSuchBucket', 404), r2)).toMatch(/No bucket named "walnut-backup" in this Cloudflare account.*Create bucket/);
     expect(friendlyStoreError(named('SignatureDoesNotMatch', 403), r2)).toMatch(/Cloudflare refused these keys/);

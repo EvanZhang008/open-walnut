@@ -55,6 +55,7 @@ interface BackupStatus {
   pendingSwitch?: { restored: string; aside: string } | null
   canRestart?: boolean
   switchError?: string | null
+  switchDone?: { restored: string; aside: string; at: string } | null
   notice?: string
   lastBackupAt?: string
   lastFileCount?: number
@@ -198,7 +199,7 @@ export function BackupSection({ config, onSave }: Props) {
   useEvent('backup:status', useCallback((data: unknown) => {
     setStatus((prev) => ({
       primary: prev?.primary, dataDir: prev?.dataDir, machineName: prev?.machineName,
-      pendingSwitch: prev?.pendingSwitch, switchError: prev?.switchError, canRestart: prev?.canRestart, ...(data as BackupStatus),
+      pendingSwitch: prev?.pendingSwitch, switchError: prev?.switchError, switchDone: prev?.switchDone, canRestart: prev?.canRestart, ...(data as BackupStatus),
     }))
   }, []))
 
@@ -304,7 +305,8 @@ export function BackupSection({ config, onSave }: Props) {
     setTestResult(null)
   }
 
-  const handleTest = async () => {
+  /** `confirmed`: the person chose to use a folder whose backups were made with another key. */
+  const handleTest = async (confirmed = false) => {
     setTesting(true)
     setTestResult(null)
     try {
@@ -314,6 +316,11 @@ export function BackupSection({ config, onSave }: Props) {
       }
       const r = await apiPost<DestinationTest>('/api/backup/destination/test', { destination: draft }, { timeoutMs: 45000 })
       if (r.ok && !draftIsSaved) {
+        // Backups that would stop (they cannot open this folder's backups) are asked about, never switched silently.
+        if (r.hasBackups && r.keyMatches === false && !confirmed) {
+          setTestResult({ ...r, askOtherKey: true })
+          return
+        }
         await saveDestination(cleanDestination(draft))
         setTestResult({ ...r, savedNow: true })
       } else {
@@ -333,7 +340,7 @@ export function BackupSection({ config, onSave }: Props) {
     return !!readTyped()[t] && (savedDest?.type === t || (saved.other_destinations ?? []).some((o) => o.type === t))
   })
   const handleRunNow = async () => {
-    if (runStarting || status?.running) return
+    if (runStarting || status?.running || justDone) return
     setRunError(null)
     setRunStarting(true)
     try {
@@ -346,6 +353,20 @@ export function BackupSection({ config, onSave }: Props) {
       setRunStarting(false)
     }
   }
+  // A run that just finished says so for a moment, and a second click in that moment
+  // (the second half of a double click on a fast backup) makes no second backup.
+  const [justDone, setJustDone] = useState(false)
+  const wasRunning = useRef(false)
+  useEffect(() => {
+    const running = status?.running === true
+    if (wasRunning.current && !running && !status?.error) {
+      setJustDone(true)
+      const t = setTimeout(() => setJustDone(false), 3000)
+      wasRunning.current = running
+      return () => clearTimeout(t)
+    }
+    wasRunning.current = running
+  }, [status?.running, status?.error])
   // A refusal belongs to the click that got it: the next run, or a finished one, clears it.
   useEffect(() => {
     if (status?.running || status?.lastBackupAt) setRunError(null)
@@ -536,6 +557,7 @@ export function BackupSection({ config, onSave }: Props) {
         {(legacyMode || type !== 'gdrive') && (
           <SettingsRow
             label="Connection"
+            state={testResult?.askOtherKey ? 'warning' : undefined}
             help={(testResult && !testResult.ok) || (!legacyMode && missing.length === 0 && problem) ? undefined : connectionHelp()}
             error={(testResult && !testResult.ok) || (!legacyMode && missing.length === 0 && problem) ? connectionHelp() : undefined}
             data-testid="backup-connection-row"
@@ -544,10 +566,11 @@ export function BackupSection({ config, onSave }: Props) {
                 {!legacyMode && kept && (editing || !draftIsKept) && (
                   <SettingsButton onClick={cancelEdit} data-testid="backup-dest-cancel">Cancel</SettingsButton>
                 )}
-                <SettingsButton onClick={handleTest} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
+                <SettingsButton onClick={() => void handleTest(Boolean(testResult?.askOtherKey))} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
                   variant={!legacyMode && !draftIsSaved && missing.length === 0 && !problem ? 'primary' : undefined}
                   disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0 || !!problem}>
-                  {legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
+                  {testResult?.askOtherKey ? 'Use it and enter its key'
+                    : legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
                 </SettingsButton>
               </span>
             }
@@ -618,7 +641,7 @@ export function BackupSection({ config, onSave }: Props) {
               onBlur={() => {
                 if (intervalOk) return
                 const kept = saved.interval_hours ?? 24
-                setIntervalNote(`${intervalHours === undefined ? 'An empty value' : `${intervalHours} hours`} is not 1 to ${MAX_INTERVAL_HOURS}: kept ${kept} hours.`)
+                setIntervalNote(`${intervalHours === undefined ? 'An empty value' : `${intervalHours} hours`} is not a whole number from 1 to ${MAX_INTERVAL_HOURS}: kept ${kept} hours.`)
                 setIntervalHours(kept)
               }} />
           }
@@ -634,15 +657,21 @@ export function BackupSection({ config, onSave }: Props) {
         )}
         <SettingsRow
           label="Last backup"
-          help={lastHelp}
+          help={justDone && !lastError ? `Backed up just now. ${lastHelp}` : lastHelp}
           error={lastError ?? undefined}
           data-testid="backup-last-row"
-          control={
-            <SettingsButton onClick={handleRunNow} disabled={!!runBlocked} busy={status?.running === true || runStarting} busyLabel="Backing up..."
-              data-testid="backup-run-now">
-              Back up now
+          control={status?.running && progressPct !== null ? (
+            // A run under way shows its progress the way a restore does.
+            <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPct} data-testid="backup-run-progress">
+              <span className="settings-progress-track"><span className="settings-progress-fill" style={{ width: `${progressPct}%` }} /></span>
+              <span className="settings-progress-pct">{progressPct}%</span>
+            </span>
+          ) : (
+            <SettingsButton onClick={handleRunNow} disabled={!!runBlocked || justDone} busy={status?.running === true || runStarting} busyLabel="Backing up..."
+              reserve={['Back up now', 'Backed up']} data-testid="backup-run-now">
+              {justDone ? 'Backed up' : 'Back up now'}
             </SettingsButton>
-          }
+          )}
         />
         <RestorePanel
           dest={legacyMode ? null : savedDest ?? null}
@@ -656,6 +685,7 @@ export function BackupSection({ config, onSave }: Props) {
           blockedWhy={blocked ?? undefined}
           pendingSwitch={status?.pendingSwitch}
           switchError={status?.switchError}
+          switchDone={status?.switchDone}
           onSwitchChanged={loadStatus}
           canRestart={status?.canRestart}
         />
