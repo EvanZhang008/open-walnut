@@ -30,11 +30,12 @@ describe('a VP Brief', () => {
     // A list of four asks in one line; a line that spells out its steps is one thing.
     const several = briefIssues(`- ${ref(docSync)}: pick: the table design; the review doc; the sandbox change; the chat threads.`, vp, all)
     expect(several.map((i) => i.kind)).toEqual(['several_things'])
-    expect(briefIssues(`- ${ref(docSync)}\u3001the table\u3001the doc\u3001the threads`, vp, all).map((i) => i.kind)).toEqual(['several_things'])
     for (const fine of [
       `- ${ref(docSync)}: install build 129, open a letter, tap Reply, and check the sheet.`,
       `- ${ref(docSync)}: iOS\u3001Mac\u3001web all shipped.`,
       `- ${ref(docSync)}: done; shipped; nothing waits.`,
+      // \u3001 enumerates nouns, not independent actions.
+      `- ${ref(docSync)}\u3001the table\u3001the doc\u3001the threads`,
     ]) expect(briefIssues(fine, vp, all), fine).toEqual([])
     // "Needs you: nothing" names no task and needs none.
     // Labels, rules and "nothing" lines are not items.
@@ -81,6 +82,44 @@ describe("Main's Brief", () => {
     const doneVp = { ...vp, phase: 'COMPLETE' } as Task
     expect(briefIssues(`- ${ref(docSync)}: approve the docs sync push.`, main, [main, doneVp, docSync])).toEqual([])
     expect(briefVpLines(main, [main, doneVp])).toEqual([])
+  })
+})
+
+describe('severalThings: parenthesized noun lists are not several things', () => {
+  // 2026-11-02: a VP's brief_write refused a line with a parenthesized 、-list as "holds several
+  // things". The parenthesized list is detail about one record, not separate items.
+  const cases: Array<{ line: string; flagged: boolean; why: string }> = [
+    // FALSE POSITIVES that must NOT be flagged:
+    { line: `- ${ref(docSync)} 正在笔记库里写今天的项目进展（设计、前端、后端、测试、文档）。`, flagged: false, why: 'parenthesized noun list' },
+    { line: `- ${ref(docSync)} 处理了四个方面的配置（认证、缓存、日志、路由）`, flagged: false, why: 'parenthesized noun list in paren' },
+    { line: `- ${ref(docSync)} fixed the config (auth, cache, logs, routing, and DNS).`, flagged: false, why: 'English parenthesized list' },
+    { line: `- ${ref(docSync)} 改了按钮样式、字体、颜色、边距和圆角`, flagged: false, why: '、-separated noun list outside parens' },
+    { line: `- ${ref(docSync)}: iOS、Mac、web、Android all shipped.`, flagged: false, why: '、-separated platforms' },
+    { line: `- ${ref(docSync)}: status update; nothing waits; on track.`, flagged: false, why: 'two semicolons only (3 parts, threshold is 4)' },
+    // TRUE POSITIVES that MUST be flagged:
+    { line: `- ${ref(docSync)}: pick: the table design; the review doc; the sandbox change; the chat threads.`, flagged: true, why: 'four items separated by semicolons' },
+    { line: `- ${ref(docSync)}: approve the API; update the tests; fix the lint errors; deploy to staging.`, flagged: true, why: 'four independent actions with semicolons' },
+    { line: `- ${ref(docSync)}: 审批 API 变更；更新测试用例；修复 lint；部署到 staging`, flagged: true, why: 'four actions with fullwidth semicolons' },
+  ]
+  for (const { line, flagged, why } of cases) {
+    it(`${flagged ? 'flags' : 'passes'}: ${why}`, () => {
+      const issues = briefIssues(line, vp, all).filter((i) => i.kind === 'several_things')
+      if (flagged) {
+        expect(issues.length, line).toBe(1)
+        expect(issues[0]!.detail, 'detail tells which part looks separate').toBeTruthy()
+      } else {
+        expect(issues, line).toEqual([])
+      }
+    })
+  }
+})
+
+describe('several_things issue text names the offending part', () => {
+  it('includes the second clause so the writer knows what to split', () => {
+    const issues = briefIssues(`- ${ref(docSync)}: pick the table; fix the review; push the sandbox; close the threads.`, vp, all)
+    const formatted = formatBriefIssues(issues)
+    expect(formatted[0]).toContain('looks like a separate item')
+    expect(formatted[0]).toContain('fix the review')
   })
 })
 

@@ -48,9 +48,13 @@ function refsOf(line: string): string[] {
   return [...line.matchAll(REF_RE)].map((m) => m[1]!);
 }
 
-/** A list of asks in one line: four or more items (three enumeration commas or semicolons). */
-function severalThings(line: string): boolean {
-  return (line.replace(REF_RE, '').match(/[\u3001;\uff1b]/g) ?? []).length >= 3;
+/** A list of independent actions in one line: four or more clauses separated by semicolons.
+ *  \u3001 enumerates nouns within one thing; content inside parentheses is detail, not a separate item. */
+function severalThings(line: string): string | null {
+  const stripped = line.replace(REF_RE, '').replace(/[\uff08(][^\uff09)]*[\uff09)]/g, '');
+  const parts = stripped.split(/[;\uff1b]/).map(p => p.trim()).filter(Boolean);
+  if (parts.length < 4) return null;
+  return parts[1] || null;
 }
 
 /** The VP over a task for Main's Brief: its project's open lead, never the task itself. */
@@ -80,7 +84,8 @@ export function briefIssues(text: string, owner: BriefTask, tasks: readonly Brie
     if (ADDED_MORE_RE.test(line)) continue;
     const refs = refsOf(line);
     if (!refs.length) { issues.push({ kind: 'no_task', line }); continue; }
-    if (severalThings(line)) issues.push({ kind: 'several_things', line });
+    const detail = severalThings(line);
+    if (detail) issues.push({ kind: 'several_things', line, detail });
     if (owner.org_role !== 'main') continue;
     // Main's line about a worker names that worker's VP too.
     const work = byId.get(refs[0]!);
@@ -97,7 +102,7 @@ export function formatBriefIssues(issues: readonly BriefIssue[]): string[] {
   return issues.map((i) => {
     const line = i.line.length > 200 ? `${i.line.slice(0, 197)}...` : i.line;
     if (i.kind === 'no_task') return `- names no task (start it with the <task-ref/> of the task it is about): ${line}`;
-    if (i.kind === 'several_things') return `- holds several things (one line each, each with its task): ${line}`;
+    if (i.kind === 'several_things') return `- holds several things — "${i.detail}" looks like a separate item (one line each, each with its task): ${line}`;
     return `- names no VP (add <task-ref id="${i.vp!.id}" label="${quote(i.vp!.title)}"/> after the task): ${line}`;
   });
 }

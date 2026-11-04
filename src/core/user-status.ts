@@ -1120,7 +1120,7 @@ export interface TaskBrief {
   text: string;
   at: string;
   /** The lines that break the Brief's rules (sessions/brief-rules.ts), as Walnut found them. */
-  issues?: Array<{ kind: 'no_task' | 'no_vp' | 'several_things'; line: string; vp?: { id: string; title: string } }>;
+  issues?: Array<{ kind: 'no_task' | 'no_vp' | 'several_things'; line: string; vp?: { id: string; title: string }; detail?: string }>;
   /** Each named task's status mark when it was written (sessions/brief-fresh.ts briefSnapshot):
    *  a line whose task's mark differs now moved since. Absent on a letter stored before. */
   marks?: Record<string, string>;
