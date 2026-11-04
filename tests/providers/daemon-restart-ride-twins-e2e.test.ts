@@ -68,7 +68,11 @@ function env(extra: Record<string, string> = {}): Record<string, string | undefi
   }
 }
 
-async function boot(twin: Twin, extra: Record<string, string>): Promise<{ proc: ChildProcess; port: number }> {
+// 'probe': false for a successor booted while a call waits for it. The probe socket names no
+// Walnut, which a daemon takes for an older server, so a call arriving while it is open is relayed
+// to it and lost when it closes (a task_send is never sent twice): 3 runs in 12 under load
+// (2026-11-04, CI's Node side job). The server's own hello is that daemon's round trip.
+async function boot(twin: Twin, extra: Record<string, string>, probe = true): Promise<{ proc: ChildProcess; port: number }> {
   const [cmd, args] = twin.command('--start')
   const proc = spawn(cmd, args, { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] })
   procs.push(proc)
@@ -82,6 +86,7 @@ async function boot(twin: Twin, extra: Record<string, string>): Promise<{ proc: 
     onDaemonEarlyExit(proc, { daemonDir: dirs().daemon }, (err) => { clearTimeout(timer); reject(err) })
   })
   expect(await waitFor(() => fs.existsSync(dirs().sock), 30_000)).toBe(true)
+  if (!probe) return { proc, port }
   // One round trip: the daemon's start block, signal handlers last, has run to its end.
   await new Promise<void>((resolve, reject) => {
     const w = new WebSocket(`ws://127.0.0.1:${port}`)
@@ -192,7 +197,7 @@ for (const twin of TWINS) {
 
       const call = cli(twin)
       await new Promise((r) => setTimeout(r, 1_500))
-      const next = await boot(twin, SUCCESSOR)
+      const next = await boot(twin, SUCCESSOR, false)
       // Listening again: the mark is gone, so nothing else waits on it.
       expect(await waitFor(() => !fs.existsSync(dirs().mark))).toBe(true)
       const server = await connect(next.port, 'run-b')
@@ -228,7 +233,7 @@ for (const twin of TWINS) {
       const call = cli(twin, 'host_list')
       expect(await waitFor(() => took === 1 && gone, 20_000)).toBe(true)
       try { fs.unlinkSync(dirs().sock) } catch { /* removed with the server */ }
-      const next = await boot(twin, SUCCESSOR)
+      const next = await boot(twin, SUCCESSOR, false)
       const server = await connect(next.port, 'run-b')
       expect(await waitFor(() => server.requests.length > 0, 20_000)).toBe(true)
       expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
@@ -249,7 +254,7 @@ for (const twin of TWINS) {
       expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
       // The server has it and has not answered when the daemon is replaced.
       await stop(first.proc)
-      const next = await boot(twin, SUCCESSOR)
+      const next = await boot(twin, SUCCESSOR, false)
       const server = await connect(next.port, 'run-a', ['host_list'])
       expect(await waitFor(() => server.requests.length === 1, 20_000)).toBe(true)
       expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
@@ -273,7 +278,7 @@ for (const twin of TWINS) {
       expect(r.err).toContain('it may have run, so check before running it again')
       expect(r.err).not.toContain('socket closed without a response')
       // The next daemon never gets it.
-      const next = await boot(twin, SUCCESSOR)
+      const next = await boot(twin, SUCCESSOR, false)
       const server = await connect(next.port, 'run-a', ['host_list'])
       await new Promise((res) => setTimeout(res, 1_500))
       expect(server.requests).toEqual([])
