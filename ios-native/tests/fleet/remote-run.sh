@@ -54,7 +54,7 @@ LOCK_DIR="$HOME/Library/Caches/walnut-fleet/sim.lock"
 SIM_FILE="$HOME/Library/Caches/walnut-fleet/simulator-udid"   # the UDID of the one it made
 mkdir -p "$OUT"
 # In UTC, so runs on Macs in other time zones (and the caller) read the same clock.
-T0=$(date +%s); STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+T0=$(date +%s); RUN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 UDID=""; REC_PID=""; STATUS=0; XCODE=""; RUNTIME_NAME=""
@@ -80,9 +80,9 @@ result() { # $1 = exit status, $2 = word
   # One line a person reads instead of xcodebuild's thousands.
   if [ -n "$more" ]; then
     n() { printf '%s' "$more" | sed -n "s/.*\"$1\":\([0-9]*\).*/\1/p"; }
-    echo "remote-run: $2: $(n passed) passed, $(n failed) failed, $(n skipped) skipped; $secs s in all (xcodebuild $(n xcodeSecs) s), $STARTED to $ended" >&2
+    echo "remote-run: $2: $(n passed) passed, $(n failed) failed, $(n skipped) skipped; $secs s in all (xcodebuild $(n xcodeSecs) s), $RUN_AT to $ended" >&2
   fi
-  printf 'FLEET_RESULT {"exit":%s,"state":"%s","out":"%s","bytes":%s,"udid":"%s","xcode":"%s","runtime":"%s","startedAt":"%s","endedAt":"%s","secs":%s%s}\n' "$1" "$2" "$RUN_DIR/out.tgz" "$bytes" "$UDID" "$XCODE" "$RUNTIME_NAME" "$STARTED" "$ended" "$secs" "$more"
+  printf 'FLEET_RESULT {"exit":%s,"state":"%s","out":"%s","bytes":%s,"udid":"%s","xcode":"%s","runtime":"%s","startedAt":"%s","endedAt":"%s","secs":%s%s}\n' "$1" "$2" "$RUN_DIR/out.tgz" "$bytes" "$UDID" "$XCODE" "$RUNTIME_NAME" "$RUN_AT" "$ended" "$secs" "$more"
 }
 refuse() { echo "remote-run: $2" >&2; result "$1" "$3"; exit "$1"; }
 

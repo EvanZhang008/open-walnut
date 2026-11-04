@@ -389,6 +389,23 @@ describe('remote-run.sh (the Mac half)', () => {
     expect(fs.existsSync(path.join(dir, 'Library'))).toBe(false)
   })
 
+  it('every variable the result line reads is set in one place only (no other use of the name)', () => {
+    // 2026-11-04: the start time shared its name with the "this run started the simulator" flag,
+    // which the run later set to the simulator's UDID, so a passed run reported its UDID as startedAt.
+    // The refusal above ends before that line, and a real run needs a Mac, so this reads the script.
+    const src = fs.readFileSync(REMOTE, 'utf8')
+    const printf = src.split('\n').find((l) => l.includes("printf 'FLEET_RESULT")) ?? ''
+    const vars = [...printf.matchAll(/"\$([A-Z_][A-Z0-9_]*)"/g)].map((m) => m[1])
+    // Set once at the top and then only by the steps that discover them.
+    const discovered = new Set(['UDID', 'XCODE', 'RUNTIME_NAME', 'RUN_DIR'])
+    const once = vars.filter((v) => !discovered.has(v))
+    expect(once).toEqual(['RUN_AT'])
+    for (const v of once) {
+      const sets = src.split('\n').filter((l) => !l.trim().startsWith('#') && new RegExp(`(^|[\\s;(])${v}=`).test(l))
+      expect(sets, `${v} is set more than once`).toHaveLength(1)
+    }
+  })
+
   it('an unknown option is refused before anything runs', () => {
     const r = spawnSync('bash', [REMOTE, path.join(dir, 'run'), 'unit', '--bogus'], { encoding: 'utf8', env: { HOME: dir, PATH: guardedPath([], '/usr/bin:/bin') } })
     expect(r.status).toBe(64)
