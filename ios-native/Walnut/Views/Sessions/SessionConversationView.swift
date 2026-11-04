@@ -56,6 +56,7 @@ struct SessionConversationView: View {
     @State private var showLatestUpdate = false
     @State private var showRename = false
     @State private var askStop = false
+    @State private var keyboardUp = false
     @State private var renameDraft = ""
     /// Non-nil = terminate hit 409 cron_owner; confirm to force.
     @State private var forceTerminateMessage: String?
@@ -266,6 +267,8 @@ struct SessionConversationView: View {
                     .presentationDragIndicator(.visible)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         .alert("Stop the agent?", isPresented: $askStop) {
             Button("Keep going", role: .cancel) {}
             Button("Stop", role: .destructive) { Task { await store.stopTurn() } }
@@ -413,7 +416,8 @@ struct SessionConversationView: View {
         SessionQueueStrip(
             queue: queue, turnRunning: store.streaming,
             onOpen: { managingQueueRow = $0 }, onShowAll: { showQueue = true },
-            onUndo: { gone in Task { await undoWithdraw(gone) } }
+            onUndo: { gone in Task { await undoWithdraw(gone) } },
+            keyboardUp: keyboardUp
         )
     }
 

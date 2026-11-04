@@ -192,7 +192,7 @@ final class SessionQueueModelTests: XCTestCase {
 
     func testTheOfferToTakeItBackLapses() async {
         SessionQueueModel.undoWindow = 0.05
-        defer { SessionQueueModel.undoWindow = 10 }
+        defer { SessionQueueModel.undoWindow = 15 }
         let t = Transport()
         t.rows = [row("qm-a")]
         let m = model(t)

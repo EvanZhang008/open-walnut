@@ -18,6 +18,8 @@ struct SessionQueueStrip: View {
     let onShowAll: () -> Void
     /// Put a message the person just withdrew back where it was.
     let onUndo: (WithdrawnQueuedMessage) -> Void
+    /// The keyboard is up: the conversation above has little room, so the tray lists fewer rows.
+    let keyboardUp: Bool
 
     /// Rows listed in the strip; the rest are one tap away in the list.
     static let visibleRows = 3
@@ -27,12 +29,13 @@ struct SessionQueueStrip: View {
     /// The tray shares the screen with the composer and the keyboard: at the accessibility
     /// sizes it lists one message and the rest are behind "Show all".
     private var shownRows: Int {
-        dynamicTypeSize.isAccessibilitySize ? 1 : (keyboardUp ? Self.visibleRowsWithKeyboard : Self.visibleRows)
+        if dynamicTypeSize.isAccessibilitySize { return keyboardUp ? 0 : 1 }
+        // Large text and the keyboard leave the conversation almost nothing: the tray shrinks to its header.
+        if keyboardUp { return dynamicTypeSize >= .xxLarge ? 0 : Self.visibleRowsWithKeyboard }
+        return Self.visibleRows
     }
 
-    /// With the keyboard up the conversation above has little room: the tray lists fewer rows.
     static let visibleRowsWithKeyboard = 2
-    @State private var keyboardUp = false
 
     var body: some View {
         if queue.hasRows || queue.withdrawn != nil {
@@ -56,12 +59,7 @@ struct SessionQueueStrip: View {
             .padding(.top, 6)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("session.queue.strip")
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                keyboardUp = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                keyboardUp = false
-            }
+
         }
     }
 

@@ -94,9 +94,12 @@ struct SessionQueueSheet: View {
                         .foregroundStyle(message.status == "processing" ? Theme.doneText
                                          : message.statusNote == nil ? Color.secondary : Theme.needsText)
                     if let when = message.enqueuedDate {
-                        Text(AppClock.relativeNamed(when))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                        // Re-read every half minute, so "2 minutes ago" does not stand still.
+                        TimelineView(.periodic(from: .now, by: 30)) { _ in
+                            Text(AppClock.relativeNamed(when))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     if queue.busyIds.contains(message.id) { ProgressView().controlSize(.small) }
                 }

@@ -28,7 +28,7 @@ final class SessionQueueModel {
     private(set) var withdrawn: WithdrawnQueuedMessage?
     @ObservationIgnored private var withdrawnClear: Task<Void, Never>?
     /// How long a withdrawn message can be taken back.
-    nonisolated(unsafe) static var undoWindow: TimeInterval = 10
+    nonisolated(unsafe) static var undoWindow: TimeInterval = 15
 
     /// The queue row with this id was withdrawn (server confirmed).
     @ObservationIgnored var onWithdrawn: ((String) -> Void)?

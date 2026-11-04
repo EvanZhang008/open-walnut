@@ -485,7 +485,7 @@ struct ComposerBar: View {
             Group {
                 if showsInterruptSend {
                     ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Spacer(minLength: 0)
                             stopChip
                             interruptSendButton
@@ -1143,7 +1143,7 @@ struct ComposerBar: View {
             // names wrap instead. Mode, then model (with its effort): the web
             // composer's order, on every composer.
             if showsModePill || showsModelPill {
-                Self.pillLayout(stacked: dynamicTypeSize >= .xxxLarge) {
+                Self.pillLayout(stacked: dynamicTypeSize.isAccessibilitySize) {
                     if showsModePill {
                         // Short and safety-relevant: it keeps its word at the large sizes,
                         // and the longer model name gives way first.
@@ -1586,7 +1586,7 @@ struct ComposerBar: View {
                     .lineLimit(1)
             }
             .foregroundStyle(Theme.decideText)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .frame(minHeight: 34)
             .background(Theme.dangerSoft, in: Capsule())
             .frame(minHeight: 44)
@@ -1612,7 +1612,7 @@ struct ComposerBar: View {
                     .lineLimit(1)
             }
             .foregroundStyle(Theme.tint)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .frame(minHeight: 34)
             .background(Theme.tintSoft, in: Capsule())
             .frame(minHeight: 44)
@@ -1662,15 +1662,11 @@ struct ComposerBar: View {
                     .background(Theme.tint, in: Circle())
             } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
                 // Its whole name: this send puts the words in the queue, the others act now.
-                HStack(spacing: 5) {
-                    Image(systemName: Symbol.queue)
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("Queue")
-                        .font(.footnote.weight(.semibold))
-                        .lineLimit(1)
-                }
+                Text("Queue")
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
                 .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
                 .frame(height: 32)
                 .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Capsule())
             } else {

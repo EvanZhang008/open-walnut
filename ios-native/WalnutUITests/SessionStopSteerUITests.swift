@@ -48,9 +48,13 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "the demo never opened")
         let tasks = app.tabBars.buttons["Tasks"]
         XCTAssertTrue(tasks.waitForExistence(timeout: 20))
-        tasks.tap()
         let scrim = element(app, "tasks.drawer.scrim")
-        if !scrim.waitForExistence(timeout: 3) {
+        // A tap on the tab bar right after the app opened can be lost: tap until the Tasks page answers.
+        for _ in 0..<4 {
+            tasks.tap()
+            if scrim.waitForExistence(timeout: 3) || app.buttons["tasks.menu"].waitForExistence(timeout: 3) { break }
+        }
+        if !scrim.exists {
             app.buttons["tasks.menu"].tap()
             XCTAssertTrue(scrim.waitForExistence(timeout: 10), "the board drawer did not open")
         }
@@ -245,7 +249,7 @@ final class SessionStopSteerUITests: XCTestCase {
         let before = cross.frame
         // Undo's place and the cross must never be the same place: the cross does not move when
         // the offer lapses, so a second tap meant for Undo cannot withdraw the next message.
-        XCTAssertTrue(undo.waitForNonExistence(timeout: 20), "the offer to undo never lapsed")
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 25), "the offer to undo never lapsed")
         XCTAssertEqual(cross.frame, before, "the rows moved when the offer to undo went away")
         XCTAssertEqual(rows.count, 1)
     }
