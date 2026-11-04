@@ -95,7 +95,7 @@ async function rowsBetween(hist: Locator, from: string, to: string): Promise<str
 
 for (const [name, history, a, b, phrase] of [
   ['the reported session', reported, 'OR_ANSWER_A', 'OR_ANSWER_B', /^Received 2 messages · Ran 5 tools\s*21 failed/],
-  ['every step kind', everyKind, 'OR_ANSWER_C', 'OR_ANSWER_D', /^Received 2 messages · Sent 1 · Ran 4 tools · 2 notices\s*4 failed/],
+  ['every step kind', everyKind, 'OR_ANSWER_C', 'OR_ANSWER_D', /^Context compacted · Received 2 messages · Sent 1 · Ran 4 tools · 1 notice\s*4 failed/],
 ] as const) {
   test(`${name}: the steps between two answers are one fold row`, async ({ page }) => {
     await mockSession(page, history, 'idle');
