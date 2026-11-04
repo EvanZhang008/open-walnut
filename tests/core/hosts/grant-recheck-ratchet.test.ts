@@ -87,4 +87,23 @@ describe('grant recheck ratchet', () => {
     expect(sends).toHaveLength(3)
     for (const i of sends) expect(client[i - 1], `the line before "${client[i].trim()}"`).toMatch(/^\s*gate\?\.\(/)
   })
+
+  // 2026-11-04 review: a wait that began before a revoke went on reading the job's new lines.
+  it('every read of a job\'s output on the server goes through readJob, which reads the grant before the send and after the answer', () => {
+    const readers = files(SRC).filter((f) => !f.includes(`${path.sep}providers${path.sep}`)).flatMap((f) => {
+      const n = (fs.readFileSync(f, 'utf8').match(/'exec\.read'/g) ?? []).length
+      return n ? [[path.relative(SRC, f), n]] : []
+    })
+    expect(Object.fromEntries(readers)).toEqual({ 'core/hosts/host-exec.ts': 1 })
+    const src = fs.readFileSync(path.join(SRC, 'core/hosts/host-exec.ts'), 'utf8')
+    const body = src.slice(src.indexOf('export async function readJob('), src.indexOf('\n}\n', src.indexOf('export async function readJob(')))
+    const send = body.indexOf("'exec.read'")
+    expect(body.lastIndexOf('assertMayRead(', send), 'a check before the send').toBeGreaterThan(0)
+    expect(body.indexOf('assertMayRead(', send), 'a check after the answer').toBeGreaterThan(send)
+    // A read that swallows its errors must still let a revoke through.
+    for (const f of ['core/hosts/host-exec.ts', 'core/hosts/host-exec-wait.ts']) {
+      const text = fs.readFileSync(path.join(SRC, f), 'utf8')
+      for (const m of text.matchAll(/readJob\([^\n]*\n?[^\n]*\.catch\(([^\n]*)/g)) expect(m[1], `${f}: a catch on readJob`).toContain('isReadStop(err)')
+    }
+  })
 })

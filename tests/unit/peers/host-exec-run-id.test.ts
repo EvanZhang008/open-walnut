@@ -121,6 +121,10 @@ describe('the rule', () => {
     expect(lines[1]).toBe(`  walnut tools call host_exec_read '{"host":"o'\\''brien-mac","job_id":"hx-1234","wait_ms":10000}'`)
     expect(lines[2]).toContain('host_exec_list')
     expect(lostRunLines('task_get', {}, 'x')).toEqual([])
+    // A call that waited for something: the read waits for the same, from the run's start (2026-11-05 review).
+    const waited = lostRunLines('host_exec', { host: 'mac', wait_for: { output: 'READY' }, wait_ms: 20_000 }, 'hx-5678')
+    expect(waited[1]).toBe(`  walnut tools call host_exec_read '{"host":"mac","job_id":"hx-5678","offset":0,"wait_for":{"output":"READY"},"wait_ms":20000}'`)
+    expect(lostRunLines('host_exec', { host: 'mac', wait_for: { port: 80 } }, 'hx-5678')[1]).toContain('"wait_for":{"port":80},"wait_ms":10000')
   })
 
   it('knows an older server\'s refusal of the field, and nothing else', () => {
@@ -380,5 +384,15 @@ describe('the MCP server on a host (walnut-mcp-stdio.ts)', () => {
     const broke = createWalnutMcpHandler({ formatError, request: async () => { throw new Error('agent socket closed without a response') } })
     const b = ((await broke(call))?.result as { content: Array<{ text: string }> }).content[0].text
     expect(b).toContain('do not run it again')
+  })
+})
+
+describe('the lost-run lines name the op the call made, in both twins (2026-11-05 code review 11)', () => {
+  it('host_exec_pinned says host_exec_pinned; the source twin builds the line from the op, never a fixed host_exec', () => {
+    expect(lostRunLines('host_exec_pinned', { host: 'h', grant_id: 'xg-0000', command: 'true' }, 'hx-abcd-1234')[0])
+      .toBe('walnut: host_exec_pinned may have started on h as job hx-abcd-1234: do not run it again. Read it first:')
+    const twin = fs.readFileSync(path.join(__dirname, '../../../src/providers/daemon-source.ts'), 'utf8')
+    expect(twin).toContain("errOut('walnut: ' + wnRunId.op + ' may have started on ' + wnRunId.host")
+    expect(twin).not.toContain("errOut('walnut: host_exec may have started on '")
   })
 })

@@ -247,6 +247,7 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
 
 /** Answer one `gateway-request` frame a host's bridge carried (bridge-registry.ts). */
 export async function handleBackupGatewayFrame(host: string, frame: GatewayRequestFrame): Promise<void> {
+  const receivedAt = Date.now()
   const { getBackupLeader } = await import('./backup-leader.js')
   const leader = await getBackupLeader()
   const registry = await import('../../web/ws/bridge-registry.js')
@@ -271,10 +272,14 @@ export async function handleBackupGatewayFrame(host: string, frame: GatewayReque
       }
     },
     executeOp: async (name, args, ctx) => {
-      const [{ executeOp }, { hostOrigin }] = await Promise.all([import('../../ops/index.js'), import('../../lib/caller-origin.js')])
-      return executeOp(name, args, {
+      const [{ executeOp }, { hostOrigin }, { withAnswerBy }, { gatewayHubTimeoutMs }] = await Promise.all([
+        import('../../ops/index.js'), import('../../lib/caller-origin.js'), import('../../lib/answer-by.js'), import('../../providers/gateway-core.js'),
+      ])
+      // The host's gateway gives up on this call at its hub timeout: work that holds an answer
+      // (host_exec, a read's wait) is held to it, as on the Mac's relay (daemon-connection.ts).
+      return withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => executeOp(name, args, {
         callerSid: ctx.callerSid, callerHost: ctx.callerHost, origin: hostOrigin(ctx.callerHost), ...(ctx.callId ? { callId: ctx.callId } : {}),
-      })
+      }), { fresh: true })
     },
   })
   await gateway.handle(host, frame)

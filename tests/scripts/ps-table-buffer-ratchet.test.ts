@@ -22,6 +22,8 @@ const ROOT = path.resolve(__dirname, '../..')
 const WRAPPED: Record<string, string> = {
   // deps.exec is boundedExecFile with maxBuffer 64 MB in both daemon twins.
   'src/providers/cli-owner-core.ts': 'deps.exec sets maxBuffer in daemon-standalone.ts and daemon-source.ts',
+  // A streamed read: spawn keeps no buffer, and psRowReader parses rows as they come with no cap.
+  'src/providers/host-exec-group.ts': 'o.spawn streams the table into psRowReader, which keeps only the job group\'s rows',
 }
 
 const CALL = /\b(execFileSync|execFile|spawnSync|spawn|execSync|run)\(\s*['"`](\/bin\/)?ps\b/

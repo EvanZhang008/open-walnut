@@ -39,7 +39,7 @@ defineOp({
     + 'and a description). Names only, no grant needed (with `cwd` it needs the grant). Never your own host '
     + '(use your own MCP tools).',
   input: {
-    host: z.string().min(1).describe('Host alias ("__local__" = the Mac) or a selector like "@ios"'),
+    host: z.string().min(1).describe('Host alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios"'),
     cwd: z.string().optional().describe('A project folder on that host, to include its own servers'),
   },
   bind: { method: 'GET', path: '/hosts/:host/mcp' },
@@ -115,7 +115,7 @@ defineOp({
     + 'timeout_ms (default 30 s, at most 5 min; about 12 s from a session on another host). Up to 256 KB of the body comes back, text as '
     + '`body`, anything else as `bodyBase64`; Set-Cookie values and lines that look like a credential are hidden. Never your own host (use curl).',
   input: {
-    host: z.string().min(1).describe('Host alias ("__local__" = the Mac) or a selector like "@ios"'),
+    host: z.string().min(1).describe('Host alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios"'),
     url: z.string().min(1).describe('The full address as that host sees it, e.g. http://localhost:3000/api/health'),
     method: z.string().optional().describe('GET (default), HEAD, POST, PUT, PATCH, DELETE or OPTIONS'),
     headers: z.record(z.string(), z.string()).optional().describe('Request headers'),

@@ -55,6 +55,12 @@ if (first === '__selftest') {
 } else if (first === '__session-host-approve') {
   const { runSessionHostApprove } = await import('../providers/session-host-approve.js')
   process.exit(await runSessionHostApprove(userArgs.slice(1)))
+} else if (first === '--wait-matcher') {
+  // The daemon this file runs as starts it again as wait_for's matcher (host-exec-matcher.ts):
+  // `<file> --wait-matcher`, the way a daemon binary is started for it.
+  const { runWaitMatcher } = await import('../providers/host-exec-matcher.js')
+  await runWaitMatcher()
+  process.exit(0)
 } else if (first === '__daemon' || first === '--start' || first === '--stop' || first === '--status' || first === '--service') {
   // The daemon reads its own argv (`--start`, `--stop`, `--status`, `--service`, `--version`).
   // Its lifecycle flags also work bare (no CLI meaning as a first word), so the file stands in

@@ -51,10 +51,11 @@ const FAKE = path.resolve(__dirname, '../fixtures/mcp/host-mcp-fake.cjs')
 // Random bytes made up at each run, shaped like a GitHub token so the redaction scanner sees one: never a credential.
 const FAKE_TOKEN = 'ghp_' + randomBytes(27).toString('base64url').replace(/[-_]/g, 'x').slice(0, 36)
 
+/** A session's call comes through its host's gateway, which sets its deadline (20 s from when the server got it). */
 async function api(method: string, p: string, body?: unknown, sid?: string): Promise<{ status: number; body: any }> {
   const r = await fetch(`http://127.0.0.1:${port}${p}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid, 'x-walnut-answer-by': String(Date.now() + 20_000) } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   const text = await r.text()
@@ -248,7 +249,8 @@ describe('host_mcp and host_http', () => {
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants
     expect((await api('DELETE', `/api/v1/host-exec/grants/${g.id}`)).status).toBe(200)
     expect(await call('fake', { tool: 'echo' })).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
-    expect((await api('GET', `/api/v1/hosts/macbox/mcp-calls/mc-anything-1234`, undefined, SID))).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
+    // A read after a revoke reads as revoked (2026-11-05: one code for one state).
+    expect((await api('GET', `/api/v1/hosts/macbox/mcp-calls/mc-anything-1234`, undefined, SID))).toMatchObject({ status: 403, body: { code: 'exec_grant_revoked' } })
     expect((await api('GET', '/api/v1/hosts/macbox/mcp', undefined, SID)).status).toBe(200)
   }, 30_000)
 

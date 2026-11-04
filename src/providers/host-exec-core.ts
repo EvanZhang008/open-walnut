@@ -13,8 +13,8 @@
  * KB at most) rides the reply; every run is one start and one end line in
  * `<state dir>/host-exec-audit.jsonl`.
  *
- * Which shell, and the line from `command` or `argv`: host-exec-line.ts (host-exec-v2: the login
- * shell, then bash). The child gets WALNUT_TASK_DIR, the caller task's directory here
+ * Which shell, the line from `command` or `argv`, its cwd, and the output read back as whole lines:
+ * host-exec-line.ts (host-exec-v2: the login shell, then bash). The child gets WALNUT_TASK_DIR, the caller task's directory here
  * (src/lib/task-dir.ts), where its logs are kept too. Every reply names the shell, the login
  * shell and the task directory.
  *
@@ -24,8 +24,12 @@
  *
  * Bundled into the binary daemon and shipped as the host-exec-core.cjs sidecar
  * for the source twin; 'host-exec-v1' is advertised only where it loads, and
- * 'host-exec-v2' where it carries this shell and WALNUT_TASK_DIR (`version`).
- * It never signals a process itself: the twin hands in `killGroup`.
+ * 'host-exec-v2' where it carries this shell and WALNUT_TASK_DIR (`version`), 'host-exec-wait-v1'
+ * where exec.read waits for a pattern, a port or a file (host-exec-wait.ts, `version` 3); the
+ * pattern runs in a matcher process the twin starts (`matcher`, host-exec-matcher.ts).
+ * It never signals a process itself: the twin hands in `killGroup`. How a run ends, and what its
+ * shell left running in its process group is stopped with it when the server asks (exec.run
+ * `endGroup`, 'host-exec-group-v1', `version` 4): host-exec-group.ts.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,8 +38,16 @@ import { ensureTaskDir } from './task-dir-core.js'
 import { permissionMessage, permissionRisk } from './host-exec-guards.js'
 import { cltInstalled, cltMessage, cltStubRun, loginPath, type CltFs } from './host-exec-clt.js'
 import { IDLE_WINDOW_MS, createPromptWatcher, macPromptProbe, type PromptBlock, type PromptProbe } from './host-exec-watch.js'
-import { bad, commandLine, findBash, lineSpan, shellPlan, type ExecError } from './host-exec-line.js'
+import { bad, commandLine, findBash, openRunLog, readLogLines, resolveCwd, shellPlan, tailLines, type ExecError } from './host-exec-line.js'
+import { waitBefore, waitOnJob, type HeldBefore, type WaitedFor } from './host-exec-wait.js'
+import { createMatcher, type MatcherStart } from './host-exec-matcher.js'
+import { stuckFileLooks } from './host-exec-probe.js'
+import { watchShellEnd } from './host-exec-group.js'
+import { jobView, type Job, type JobView, type RunReply } from './host-exec-job.js'
 
+export type { JobView, RunReply } from './host-exec-job.js'
+
+export { runWaitMatcher, type MatcherStart } from './host-exec-matcher.js'
 export { BASH_CANDIDATES, LINE_ENV, commandLine, findBash, lineSpan, shellPlan, shellQuote, type ExecError } from './host-exec-line.js'
 
 export const FOREGROUND_MAX_MS = 10 * 60_000
@@ -43,18 +55,23 @@ export const BACKGROUND_MAX_MS = 2 * 60 * 60_000
 export const DEFAULT_TIMEOUT_MS = 2 * 60_000
 export const OUTPUT_MAX_BYTES = 256 * 1024
 const KILL_GRACE_MS = 3_000
-/** How long the pipes may stay open after the shell exited (a process that left its group holds them). */
-const EXIT_DRAIN_MS = 2_000
 const KEEP_FINISHED_MS = 60 * 60_000
 const MAX_JOBS = 200
+/** At most this many reads of one job wait on a wait_for at once. */
+export const WAITS_PER_JOB = 4
+/**
+ * ... and on all of this host's jobs (up to MAX_JOBS kept an hour): each holds up to a few MB of
+ * lines and all of them queue in the one matcher (2026-11-05 review: only the per-job cap held).
+ */
+export const WAITS_PER_HOST = 32
 /** A job's id: the caller may choose it (`hx-<uuid>`), so a call whose answer was lost can still read the run. */
 export const JOB_ID_RE = /^hx-[A-Za-z0-9_-]{4,64}$/
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 export interface HostExecDeps {
   spawn: (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
-  /** Signal a whole process group (the twin's own, signal-checked helper). */
-  killGroup: (pid: number, signal: NodeJS.Signals) => void
+  /** Signal a whole process group (the twin's own, signal-checked helper); 0 only asks whether it has a member. */
+  killGroup: (pid: number, signal: NodeJS.Signals | 0) => void
   /** The user's login shell (`$SHELL` when it runs), else bash, else sh. */
   shell: string
   /** The bash that runs the line; null for none (sh runs it). Found on this host when not given. */
@@ -78,6 +95,8 @@ export interface HostExecDeps {
   promptProbe?: PromptProbe | null
   /** How often that check runs (IDLE_WINDOW_MS). */
   promptCheckMs?: number
+  /** How to start the wait_for matcher process: this daemon run again as one; without it no output wait can run here. */
+  matcher?: MatcherStart | (() => MatcherStart)
 }
 
 export interface RunRequest {
@@ -95,73 +114,32 @@ export interface RunRequest {
   allowPrompts?: unknown
   /** Who asked, for the audit line only: the caller's task and host. */
   caller?: { task?: unknown; host?: unknown }
+  /** The wait_for the server waits on next (exec.read `until`): one that could never hold here runs nothing. */
+  until?: unknown
+  /**
+   * Stop what the shell leaves running in the job's process group when it exits (host-exec-group.ts,
+   * 'host-exec-group-v1'). The server asks on each run, so a server older than that, whose help says
+   * only that a child still holding the job's output is stopped, keeps exactly that.
+   */
+  endGroup?: unknown
 }
 
-export interface JobView {
-  jobId: string
-  running: boolean
-  exitCode: number | null
-  signal: string | null
-  timedOut: boolean
-  killed: boolean
-  startedAt: number
-  ms: number
-  cwd: string
-  logFile: string
-  /** Bytes the command wrote in all. */
-  outputBytes: number
-  /** What ran the line ("bash", "sh"), after the login shell (`loginShell`, "zsh") set up the environment. */
-  shell: string
-  loginShell: string
-  /** The caller task's directory on this host, the child's WALNUT_TASK_DIR; null when this host has none for it. */
-  taskDir: string | null
-  /** The task that started it, and the head of its line (a task lists its own jobs). */
-  taskId: string | null
-  command: string
-  /** Stopped because it sat at a dialog on this host's screen (host-exec-watch.ts), else null. */
-  blocked: PromptBlock | null
-}
-
-export interface RunReply extends JobView {
-  /** The last `maxOutputBytes` of the output (stdout and stderr in the order written). */
-  output: string
-  truncated: boolean
-}
-
-
-interface Job {
-  id: string
-  pid: number | null
-  startedAt: number
-  endedAt: number | null
-  exitCode: number | null
-  signal: string | null
-  timedOut: boolean
-  killed: boolean
-  cwd: string
-  logFile: string
-  /** The task that started it: only that task reads or stops it. */
-  taskId: string | null
-  shell: string
-  loginShell: string
-  taskDir: string | null
-  command: string
-  blocked: PromptBlock | null
-  unwatch: (() => void) | null
-  bytes: number
-  tail: Buffer[]
-  tailBytes: number
-  tailMax: number
-  waiters: Array<() => void>
-  timer: ReturnType<typeof setTimeout> | null
-}
-
-/** Bumped when exec.run changes what a server may rely on: 2 = bash after the login shell, WALNUT_TASK_DIR. */
-export const HOST_EXEC_VERSION = 2
+/**
+ * Bumped when exec.* changes what a server may rely on: 2 = bash after the login shell,
+ * WALNUT_TASK_DIR; 3 = exec.read `until` (host-exec-wait.ts, 'host-exec-wait-v1'); 4 = exec.run
+ * `endGroup` (host-exec-group.ts, 'host-exec-group-v1').
+ */
+export const HOST_EXEC_VERSION = 4
 
 export function createHostExec(deps: HostExecDeps) {
   const now = deps.now ?? Date.now
   const jobs = new Map<string, Job>()
+  // Reads waiting on a wait_for now, over every job (WAITS_PER_HOST).
+  let hostWaits = 0
+  // Ids of runs past their id check and not in `jobs` yet (the look a wait_for takes before the run
+  // sits between), each settled once its run is recorded or refused: a second run with the same id
+  // at once is refused, never started beside it, and a read or stop of that id waits for it.
+  const starting = new Map<string, Promise<void>>()
   let seq = 0
   let bash: string | null | undefined = deps.bash
   const bashPath = (): string | null => {
@@ -174,6 +152,8 @@ export function createHostExec(deps: HostExecDeps) {
   const watcher = probe ? createPromptWatcher(probe, { everyMs: deps.promptCheckMs ?? IDLE_WINDOW_MS, now }) : null
   // A Mac's login shell PATH, asked only when the Command Line Tools are missing (host-exec-clt.ts).
   let askedPath: (() => string) | null = null
+  // One matcher process for every wait_for here, started on the first output wait (host-exec-matcher.ts).
+  const matcher = deps.matcher ? createMatcher(deps.matcher, deps.spawn) : null
   const pathOfRun = (): string => (deps.runPath ?? (askedPath ??= loginPath({
     spawn: deps.spawn, killGroup: deps.killGroup, env: deps.env, home: deps.home, now,
     plan: (line) => { const login = deps.shell || '/bin/sh'; const p = shellPlan(login, bashPath(), line); return { cmd: login, args: p.args, env: p.env } },
@@ -196,43 +176,18 @@ export function createHostExec(deps: HostExecDeps) {
     }
   }
 
-  function resolveCwd(raw: unknown): string | ExecError {
-    let cwd = typeof raw === 'string' && raw.trim() ? raw.trim() : deps.home
-    if (cwd === '~') cwd = deps.home
-    else if (cwd.startsWith('~/')) cwd = path.join(deps.home, cwd.slice(2))
-    if (!path.isAbsolute(cwd)) return bad(`cwd must be an absolute path or start with ~/ (got "${cwd}")`)
-    try {
-      const real = fs.realpathSync(cwd)
-      if (!fs.statSync(real).isDirectory()) return bad(`${cwd} is not a directory on this host`, 'cwd_missing')
-      return real
-    } catch {
-      return bad(`${cwd} does not exist on this host`, 'cwd_missing')
-    }
-  }
-
   /** The caller task's directory here, made (with its marker) on first use; null without a root or a usable id. */
   function taskDirOf(taskId: unknown, home: unknown): string | null {
     if (!deps.taskDirRoot || typeof taskId !== 'string' || !TASK_ID_RE.test(taskId)) return null
     return ensureTaskDir(deps.taskDirRoot, taskId, home, new Date(now()))
   }
 
-  function view(j: Job): JobView {
-    return {
-      jobId: j.id, running: j.endedAt === null, exitCode: j.exitCode, signal: j.signal, timedOut: j.timedOut, killed: j.killed,
-      startedAt: j.startedAt, ms: (j.endedAt ?? now()) - j.startedAt, cwd: j.cwd, logFile: j.logFile, outputBytes: j.bytes,
-      shell: j.shell, loginShell: j.loginShell, taskDir: j.taskDir, taskId: j.taskId, command: j.command, blocked: j.blocked,
-    }
-  }
-
-  function tailText(j: Job): { output: string; truncated: boolean } {
-    const buf = Buffer.concat(j.tail)
-    const cut = buf.length > j.tailMax ? buf.subarray(buf.length - j.tailMax) : buf
-    const { start, end } = lineSpan(cut, cut.length < j.bytes, j.endedAt === null)
-    return { output: cut.subarray(start, end).toString('utf8'), truncated: j.bytes > end - start }
-  }
+  const view = (j: Job): JobView => jobView(j, now())
 
   function stop(j: Job, why: 'timeout' | 'asked' | 'blocked'): void {
     if (j.endedAt !== null || j.pid === null) return
+    // Its shell already exited by itself: the run ended, so this only stops what it left, at once.
+    if (j.shellExitedAt !== null) { j.stopLeft?.(); return }
     if (why === 'timeout') j.timedOut = true
     else if (why === 'asked') j.killed = true
     const pid = j.pid
@@ -246,7 +201,7 @@ export function createHostExec(deps: HostExecDeps) {
     prune()
     const line = commandLine(req)
     if (typeof line !== 'string') return line
-    const cwd = resolveCwd(req.cwd)
+    const cwd = resolveCwd(req.cwd, deps.home)
     if (typeof cwd !== 'string') return cwd
     const allowPrompts = req.allowPrompts === true
     const taskDir = taskDirOf(req.taskId, req.home)
@@ -264,26 +219,55 @@ export function createHostExec(deps: HostExecDeps) {
     const timeoutMs = Math.min(asked, cap)
     const tailMax = typeof req.maxOutputBytes === 'number' && req.maxOutputBytes > 0 ? Math.min(req.maxOutputBytes, OUTPUT_MAX_BYTES) : OUTPUT_MAX_BYTES
     const id = typeof req.jobId === 'string' && JOB_ID_RE.test(req.jobId) ? req.jobId : `hx-${now().toString(36)}-${(++seq).toString(36)}`
-    if (jobs.has(id)) return bad(`job ${id} already exists`, 'job_exists')
+    if (jobs.has(id) || starting.has(id)) return bad(`job ${id} already exists`, 'job_exists')
+    // Held from here until the job is in `jobs` (or nothing ran): the id check and the record are
+    // one step to any other run, whatever this one awaits in between.
+    let settle = () => {}
+    const held = new Promise<void>((resolve) => { settle = resolve })
+    starting.set(id, held)
+    const recorded = () => { if (starting.get(id) === held) starting.delete(id); settle() }
+    try {
+      return await start(req, { line, cwd, allowPrompts, taskDir, background, timeoutMs, tailMax, id, recorded })
+    } finally {
+      recorded()
+    }
+  }
 
+  /** A run of this id still starting: settled once it is recorded (or nothing ran). */
+  async function started(jobId: unknown): Promise<void> {
+    const s = typeof jobId === 'string' ? starting.get(jobId) : undefined
+    if (s) await s
+  }
+
+  /** The rest of run(), its id held: the checks that await, the spawn, and the job's record (`recorded`). */
+  async function start(req: RunRequest, o: { line: string; cwd: string; allowPrompts: boolean; taskDir: string | null; background: boolean; timeoutMs: number; tailMax: number; id: string; recorded: () => void }): Promise<RunReply | ExecError> {
+    const { line, cwd, allowPrompts, taskDir, background, timeoutMs, tailMax, id } = o
     // Unset, `$WALNUT_TASK_DIR/x` would be `/x`: refuse rather than run it there.
     if (!taskDir && /\bWALNUT_TASK_DIR\b/.test(line)) return bad('this host has no task directory for this task, so WALNUT_TASK_DIR is unset here; nothing ran', 'task_dir_unset')
+    // A port or file the run will be waited on: is it there before the run could have made it?
+    let before: HeldBefore = { ports: [], files: [] }
+    if (req.until !== undefined) {
+      const b = await waitBefore(req.until, { cwd, home: deps.home, taskDir })
+      if (!b.ok) return bad(`${b.error}; nothing ran`, b.code)
+      before = b.before
+    }
     const dir = taskDir ? path.join(taskDir, 'host-exec') : path.join(deps.stateDir, 'host-exec')
-    const logFile = path.join(dir, `${id}.log`)
     let fd: number
+    let logFile: string
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-      fd = fs.openSync(logFile, 'a', 0o600)
+      ;({ fd, logFile } = openRunLog(dir, id))
     } catch (err) {
-      return bad(`could not open the log ${logFile}: ${(err as Error).message}`, 'spawn_failed')
+      return bad(`could not open a log in ${dir}: ${(err as Error).message}`, 'spawn_failed')
     }
 
     const login = deps.shell || '/bin/sh'
     const plan = shellPlan(login, bashPath(), line)
     const job: Job = {
-      id, pid: null, startedAt: now(), endedAt: null, exitCode: null, signal: null, timedOut: false, killed: false,
+      id, pid: null, startedAt: now(), endedAt: null, shellExitedAt: null, exitCode: null, signal: null, timedOut: false, killed: false,
       cwd, logFile, taskId: typeof req.taskId === 'string' ? req.taskId : null, bytes: 0, tail: [], tailBytes: 0, tailMax, waiters: [], timer: null,
-      shell: plan.shell, loginShell: plan.loginShell, taskDir, command: line.slice(0, 200), blocked: null, unwatch: null,
+      shell: plan.shell, loginShell: plan.loginShell, taskDir, command: line.slice(0, 200), blocked: null, leftBehind: false, outputCut: false,
+      before, unwatch: null, stopLeft: null, timeoutMs, waits: 0,
     }
     const caller = req.caller ?? {}
     const who = { task: typeof caller.task === 'string' ? caller.task.slice(0, 128) : null, host: typeof caller.host === 'string' ? caller.host.slice(0, 200) : null }
@@ -303,6 +287,7 @@ export function createHostExec(deps: HostExecDeps) {
     }
     job.pid = typeof child.pid === 'number' ? child.pid : null
     jobs.set(id, job)
+    o.recorded()
 
     const onData = (chunk: Buffer) => {
       job.bytes += chunk.length
@@ -315,41 +300,34 @@ export function createHostExec(deps: HostExecDeps) {
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
 
+    // The shell's exit ends the job, a moment later at most: what it left running in its group is
+    // stopped (a terminal closing does the same), and the answer names it (host-exec-group.ts).
     const finished = new Promise<void>((resolve) => {
-      let done = false
-      const end = (code: number | null, signal: string | null, error?: string) => {
-        if (done) return
-        done = true
-        if (job.timer) clearTimeout(job.timer)
-        job.unwatch?.()
-        job.endedAt = now()
-        job.exitCode = code
-        job.signal = signal
-        try { fs.closeSync(fd) } catch { /* closed */ }
-        audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ...(job.blocked ? { blocked: job.blocked.reason } : {}), ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(error ? { error } : {}) })
-        for (const w of job.waiters.splice(0)) w()
-        resolve()
-      }
-      child.on('error', (err) => end(null, null, err.message))
-      child.on('close', (code, signal) => end(code, signal))
-      // Something the shell left behind can hold the pipes open long after it exited: a
-      // process in its group (`cmd &`), or one that left the group (setsid, a daemonizing
-      // tool) that no group signal reaches. The shell's exit ends the job, a moment later at
-      // most: what is still in its group gets SIGTERM (a terminal closing does the same),
-      // and the pipes are closed so a process outside it holds nothing of ours.
-      child.on('exit', (code, signal) => {
-        const t = setTimeout(() => {
-          if (done) return
-          if (job.pid !== null) { try { deps.killGroup(job.pid, 'SIGTERM') } catch { /* the group is gone */ } }
-          child.stdout?.destroy()
-          child.stderr?.destroy()
-          end(code, signal)
-        }, EXIT_DRAIN_MS)
-        t.unref?.()
+      const watch = watchShellEnd(child, {
+        pgid: job.pid, line, endGroup: req.endGroup === true, killGroup: deps.killGroup, spawn: deps.spawn,
+        // Its deadline is the shell's: one that exited by itself is never "stopped at its deadline".
+        onExit: () => { job.shellExitedAt = now(); if (job.timer) { clearTimeout(job.timer); job.timer = null } },
+        onEnd: ({ code, signal, error, leftBehind, leftCommands, outputCut }) => {
+          if (job.timer) clearTimeout(job.timer)
+          job.unwatch?.()
+          job.endedAt = now()
+          job.exitCode = code
+          job.signal = signal
+          job.leftBehind = leftBehind
+          job.outputCut = outputCut
+          if (leftCommands) job.leftCommands = leftCommands
+          try { fs.closeSync(fd) } catch { /* closed */ }
+          audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ...(job.blocked ? { blocked: job.blocked.reason } : {}), ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(leftBehind ? { leftBehind: leftCommands ?? true } : {}), ...(outputCut ? { outputCut } : {}), ...(error ? { error } : {}) })
+          for (const w of job.waiters.splice(0)) w()
+          resolve()
+        },
       })
+      job.stopLeft = () => watch.stopLeft()
     })
-    job.timer = setTimeout(() => stop(job, 'timeout'), timeoutMs)
-    job.timer.unref?.()
+    if (job.endedAt === null && job.shellExitedAt === null) {
+      job.timer = setTimeout(() => stop(job, 'timeout'), timeoutMs)
+      job.timer.unref?.()
+    }
     // A run that sits at a dialog nobody here asked for is stopped, and says so.
     if (watcher && !allowPrompts && job.pid !== null && job.endedAt === null) {
       job.unwatch = watcher.watch({ pgid: job.pid, startedAt: job.startedAt }, (blocked) => {
@@ -361,14 +339,13 @@ export function createHostExec(deps: HostExecDeps) {
     }
 
     if (!background) await finished
-    return { ...view(job), ...tailText(job) }
+    return { ...view(job), ...tailLines(job.tail, job.tailMax, job.bytes, job.endedAt === null) }
   }
 
-  /**
-   * Read a job's output from its log: `offset` onward, at most `maxBytes`; with no
-   * offset, the last `maxBytes`. `wait` (ms, 60 s at most) holds the answer until the
-   * job ends or the time is up, so a reader polls rarely.
-   */
+  function logSize(file: string): number {
+    try { return fs.statSync(file).size } catch { return 0 }
+  }
+
   /** The job, when it exists and the asking task (if named) is the one that started it. */
   function own(jobId: unknown, taskId: unknown): Job | undefined {
     const j = typeof jobId === 'string' ? jobs.get(jobId) : undefined
@@ -377,11 +354,46 @@ export function createHostExec(deps: HostExecDeps) {
     return j
   }
 
-  async function read(req: { jobId?: unknown; taskId?: unknown; offset?: unknown; maxBytes?: unknown; wait?: unknown }): Promise<(JobView & { output: string; offset: number; nextOffset: number }) | ExecError> {
+  /**
+   * Read a job's output from its log: `offset` onward (an offset past the log's end reads from its
+   * end), at most `maxBytes`; with no offset, the last `maxBytes`. `wait` (ms, 60 s at most) holds
+   * the answer until the job ends. With `until` (host-exec-wait.ts) it also answers as soon as that
+   * holds, in `waitedFor`; the output is tested from `scanFrom` (a line start an earlier wait got
+   * to), else `offset`, else the start; `by` (ms) is when the answer must go at the latest, every
+   * look included (the server's read gives up soon after). A match on a line still being written
+   * (`partial`) comes back with that line in `output`.
+   */
+  async function read(req: { jobId?: unknown; taskId?: unknown; offset?: unknown; maxBytes?: unknown; wait?: unknown; until?: unknown; scanFrom?: unknown; by?: unknown }): Promise<(JobView & { output: string; offset: number; nextOffset: number; waitedFor?: WaitedFor }) | ExecError> {
+    // A run of this id still starting (a same-id call refused job_exists reads it next): it, once recorded.
+    await started(req.jobId)
     const j = own(req.jobId, req.taskId)
     if (!j) return bad(`no job ${String(req.jobId)} on this host (finished jobs are kept for an hour; the log file stays)`, 'unknown_job')
     const wait = typeof req.wait === 'number' && req.wait > 0 ? Math.min(req.wait, 60_000) : 0
-    if (wait && j.endedAt === null) {
+    // An offset past the log's end is its end (2026-11-04 usability review: offset 999999 on a 5-byte log said scanned 999999).
+    const offset = typeof req.offset === 'number' && req.offset >= 0 ? Math.min(req.offset, logSize(j.logFile)) : null
+    let waitedFor: WaitedFor | undefined
+    if (req.until !== undefined) {
+      // Each wait reads the log and asks the matcher on its own: a few at once per job is plenty.
+      if (j.waits >= WAITS_PER_JOB) return bad(`${WAITS_PER_JOB} waits on job ${j.id} already run; let one end (or read it with no wait_for) before starting another`, 'busy')
+      if (hostWaits >= WAITS_PER_HOST) return bad(`${WAITS_PER_HOST} waits already run on this host's jobs; let one end (or read with no wait_for) before starting another`, 'busy')
+      const from = typeof req.scanFrom === 'number' && req.scanFrom >= 0 ? req.scanFrom : offset ?? 0
+      const by = typeof req.by === 'number' && Number.isFinite(req.by) && req.by >= 0 ? req.by : undefined
+      j.waits += 1
+      hostWaits += 1
+      let w: Awaited<ReturnType<typeof waitOnJob>>
+      try {
+        w = await waitOnJob(req.until, {
+          logFile: j.logFile, cwd: j.cwd, home: deps.home, taskDir: j.taskDir, from, before: j.before, jobId: j.id,
+          ended: () => j.endedAt !== null,
+          onEnd: (wake) => { j.waiters.push(wake); return () => { const i = j.waiters.indexOf(wake); if (i !== -1) j.waiters.splice(i, 1) } },
+        }, matcher, wait, by)
+      } finally {
+        j.waits -= 1
+        hostWaits -= 1
+      }
+      if ('ok' in w) return bad(w.error, w.code)
+      waitedFor = w
+    } else if (wait && j.endedAt === null) {
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, wait)
         t.unref?.()
@@ -389,32 +401,15 @@ export function createHostExec(deps: HostExecDeps) {
       })
     }
     const max = typeof req.maxBytes === 'number' && req.maxBytes > 0 ? Math.min(req.maxBytes, OUTPUT_MAX_BYTES) : OUTPUT_MAX_BYTES
-    let size = 0
-    try { size = fs.statSync(j.logFile).size } catch { /* gone */ }
-    const explicit = typeof req.offset === 'number' && req.offset >= 0
-    let from = explicit ? Math.min(req.offset as number, size) : Math.max(0, size - max)
-    const len = Math.min(max, size - from)
-    let output = ''
-    let next = from + len
-    if (len > 0) {
-      const buf = Buffer.alloc(len)
-      let fd: number | null = null
-      try {
-        fd = fs.openSync(j.logFile, 'r')
-        fs.readSync(fd, buf, 0, len, from)
-        // Whole lines only: a tail read starts at a line, and a window that stops before the
-        // end, or while the job still writes, stops at one, so nextOffset is a line start
-        // (an offset is the reader's own: it is never moved forward, which could skip output).
-        const span = lineSpan(buf, !explicit && from > 0, from + len < size || j.endedAt === null)
-        output = buf.subarray(span.start, span.end).toString('utf8')
-        next = from + span.end
-        from += span.start
-      } catch { /* gone */ } finally { if (fd !== null) try { fs.closeSync(fd) } catch { /* closed */ } }
-    }
-    return { ...view(j), output, offset: from, nextOffset: next }
+    // A match on the line still being written: the output shows it (2026-11-04 usability review: a
+    // partial match on `Password: ` answered output "hi\n", as if the line had never been seen).
+    const partialHit = waitedFor?.matched === 'output' && waitedFor.unfinished === true
+    const lines = readLogLines(j.logFile, offset, max, j.endedAt === null && !partialHit)
+    return { ...view(j), ...lines, ...(waitedFor ? { waitedFor } : {}) }
   }
 
-  function stopJob(req: { jobId?: unknown; taskId?: unknown }): JobView | ExecError {
+  async function stopJob(req: { jobId?: unknown; taskId?: unknown }): Promise<JobView | ExecError> {
+    await started(req.jobId)
     const j = own(req.jobId, req.taskId)
     if (!j) return bad(`no job ${String(req.jobId)} on this host`, 'unknown_job')
     stop(j, 'asked')
@@ -474,6 +469,10 @@ export function createHostExec(deps: HostExecDeps) {
     active: (): Array<{ taskId: string | null; cwd: string }> =>
       [...jobs.values()].filter((j) => j.endedAt === null).map((j) => ({ taskId: j.taskId ?? null, cwd: j.cwd })),
     endForUpdate,
+    /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them (daemon-source.ts). */
+    stuck: (minAgeMs?: number) => stuckFileLooks(Date.now(), minAgeMs) > 0,
+    /** End the matcher process (the daemon's shutdown, tests). */
+    close: () => matcher?.close(),
   }
 }
 

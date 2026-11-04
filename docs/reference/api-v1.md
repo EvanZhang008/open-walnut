@@ -2028,7 +2028,7 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
 `host_exec_stop`), through the Mac's link to it; the host's daemon runs it (capability
 `host-exec-v1`). The caller is the session in `x-walnut-caller-sid`.
 
-- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background? }` →
+- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background?, wait_for?, wait_ms? }` →
   `200 { host, jobId, running, exitCode, signal, timedOut, ms, cwd, output, truncated,
   outputBytes, logFile, redactedLines? }`. `command` runs in the user's login shell; `argv`
   runs a program with no shell parsing. A run ends by `timeout_ms` (default 120000, at
@@ -2038,12 +2038,20 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   with its `jobId`, and a retry would run it twice. `output` is the last 256 KB in whole
   lines; `logFile` (in the task's directory on that host) holds all of it. A line that looks
   like a credential is replaced and counted in `redactedLines`, and a private key's whole
-  block with it. `:host` may
+  block with it: a secret-shaped value, a password in a URL, and a value given to a key named
+  like a password, a secret, a token or an API key (after `:` or `=`, or after a `--password`
+  style flag) when it is quoted (to its closing quote), or bare and not code (`a.b`, a call or
+  an index, open or closed: `os.environ[`), a placeholder (`$X`, `<x>`, `null`, a flag's
+  `PASSWORD` in help text) or plain words (`expired`; for a password any bare value counts). A
+  password's value has 3 characters or more, any other 6; a bare `pass` is a key only after
+  `_` or `-` (`DB_PASS`), so a test runner's `PASS: name` stays. `:host` may
   be a selector (`@ios`). Refusals: `403 session_only` (no task session), `400 same_host`
   (the caller's own host: use its own shell), `404 unknown_host`, `400 bad_request`,
   `403 exec_grant_required { letterId }` (no grant yet: ONE letter asks the user, the session
-  is told when they allow it), `403 exec_grant_denied`, `429 busy` (2 runs per task, 4 per
-  host), `409 daemon_upgrade`, `503 host_offline`, `400 cwd_missing`. The grant and the host's
+  is told when they allow it), `403 exec_grant_denied`, `429 busy` (4 runs per task on all
+  hosts together, 8 per host; a call at a cap waits up to 20 s for a slot first, and a task at
+  its cap is told its running jobs, `running: [{ jobId, host }]`; a run that waited a second or
+  more for its slot adds `slotWaitMs`), `409 daemon_upgrade`, `503 host_offline`, `400 cwd_missing`. The grant and the host's
   hard stop are read again right before the run is sent: a revoke or a stop while the call
   waited for a slot or the host answers `403 exec_grant_revoked` or `403 exec_host_closed`
   with nothing run (also for `host_mcp`, `host_http`, `host_copy` and `host_daemon_update`).
@@ -2058,9 +2066,128 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   grant on that host), `403 exec_grant_revoked { grantId }` (revoked, also during the wait),
   `403 exec_host_closed`, each with nothing run there; `400 bad_request` without `host`.
 - `GET /api/v1/hosts/:host/exec/:jobId?offset=&wait_ms=` → the job's output from `offset`
-  (else its tail) with `nextOffset`, in whole lines; `wait_ms` (at most 60000, about 15000
-  for a session on another host) waits for it to end. Only the task that started a job
-  reads or stops it (`404 unknown_job` otherwise).
+  (else its tail) with `nextOffset`, in whole lines; `wait_ms` (at most 60000, about 10000
+  for a call relayed by a host's gateway; a longer one waits 60000 and the answer adds
+  `waitCappedMs: 60000`; with `wait_for` up to 600000) waits for it to end. Only the task that
+  started a job reads or stops it (`404 unknown_job` otherwise). A read from an offset inside a
+  line starts at that line's start (up to 64 KB back), so a line is never shown in two halves.
+  A revoke or a closed host while a read or a call waits on a job answers `403
+  exec_grant_revoked { jobId }` or `403 exec_host_closed { jobId }` at once (not when the host's
+  read comes back) and shows nothing more of it;
+  the run goes on to its deadline, and `stop` and the list still reach it under a revoked grant
+  (their answers add `grantRevoked: true`). A read of a job after the user revoked the task's
+  grant there is `403 exec_grant_revoked` too (it was `exec_grant_required` before 2026-11-05).
+  The list (`GET /api/v1/hosts/:host/exec`) adds `grantId`, the task's live grant on that host,
+  which `host_exec_pinned` names.
+- `wait_for: { output?, flags?, partial?, port?, file? }` on both (in a read's query as JSON,
+  `?wait_for={"output":"ready"}`; additive, 2026-11): the call answers as soon as a line of the
+  job's output matches `output` (a JavaScript regular expression of at most 200 characters,
+  tested on each line on its own: a line ends at `\n` or `\r` (a `\r` ends it at once, and a
+  `\n` right after it ends nothing more), colour codes are removed first, a line longer than
+  64 K characters is tested on its first 64 K, where `$`, `\b` and a negative lookahead never
+  hold at the cut; `.` matches any character of a line, U+2028 and U+2029 included; the line still being written counts with `partial: true` once it has not
+  grown for 200 ms, else only once the job ended; `flags: "i"` or a leading `(?i)` ignores case
+  (`"u"` is Unicode mode), a pattern written as a literal, `/ready/i` (any JavaScript flags), is
+  read as its body with its flags (`g` and `d` dropped, the answer says so), and `m`, `s`, `v`,
+  an inline flag group such as `(?m)` (a modifier group such as `(?i:x)` compiles on bun, the
+  server's and the binary daemon's engine, and is taken there; a host running the node source
+  daemon refuses it the same way, before anything runs), `\p{...}` without `u`, `\A`, `\Z` or
+  `\z` (the letter in JavaScript: `^` and `$` are the line's ends), or a line break in the pattern
+  (also written `\x0a`, `\u000a`, `\cJ`, `\012`, or a class of only line breaks such as
+  `[\r\n]`; an optional one, `ready\r?$`, is taken: a line holds none, and a host whose daemon
+  is older refuses it until its daemon updates, on its next connect) is `400 bad_request`; so is
+  syntax of other regex flavours that JavaScript reads as something else, each refusal saying what
+  to write instead: grep's `[[:digit:]]`, `\<` and `\>`, PCRE's `\h`, `\Q…\E`, `\K`, `\e`, `\G`,
+  `\R`, `\X`, any other letter escape JavaScript has none for (outside a class), `\x` or `\u`
+  without its hex digits, and `\k` with no named group; on a read, from `offset`, else from the
+  start), anything listens on `port` at one of that host's local addresses (127.0.0.1, ::1, each
+  interface's), or `file` exists there (one path, not a pattern: a path with `*` or `?` is
+  `400 bad_request`, `[`, `]`, `{` and `}` are part of the name; relative to the job's cwd; `~`, a leading `$HOME` (sent on as `~`) and `$WALNUT_TASK_DIR` expand, no other variable, and
+  a `$WALNUT_TASK_DIR` where that host has no directory for the task is `409 task_dir_unset`; a
+  symlink counts once its target exists; it is looked for about every 200 ms);
+  else when the job ends or the wait runs out (a read: `wait_ms`, 60000 by default with
+  `wait_for`; a run: its own `wait_ms` (with `wait_for` only, at most 600000; additive,
+  2026-11), by default a foreground run to its deadline and a background run 120000, while
+  `timeout_ms` stays the run's deadline; a run whose deadline falls inside the wait, to its stop
+  at that deadline; for a call relayed by a host's gateway, which is how a session on another
+  host calls, its answer time (about 12 s), and the answer then adds `heldMs` when that hold is
+  what ended the wait, as a read with `wait_ms` cut short does; a call that reaches the server
+  itself waits as long as it asks). A
+  wait whose job reaches its deadline is waited on to the job's end (its stop and kill grace),
+  once, as far as the answer time allows and never more than about 10 s past the wait; a job
+  still running carries `deadlineInMs`, 0 while the host stops it there, or `shellExited: true`
+  once its shell has exited by itself (no deadline then: what it left in its group is being
+  stopped, and it ends within a few seconds; a deadline or a stop in that time is no timeout
+  and no stop of the run). The answer adds
+  `waitedFor { matched: "output" | "port" | "file" | null, match?, matchAt?, ms, scanned?,
+  untested?, long?, unfinished?, wouldMatch?, wouldMatchAt?, tooSlow?, unreachable?, already?,
+  beforeRun?, sinceRun?, unchecked?, size?, dir?, error? }` (`match`: the line (up to 300 characters, and only as the output
+  filter run over it with the lines around it allows: one outside the output shown is read from
+  the log with the lines around it and checked with them; one Walnut could not check that way is
+  hidden, with the offset to read it at), the address or the path; `matchAt`, `wouldMatchAt`:
+  where that line starts in the log; `size`: a found file's size (0: it exists and holds nothing
+  yet); `dir`: the path found is a directory; `scanned`: the log offset
+  up to which the output was tested, which a read takes as `offset` to go on; `untested`: the
+  bytes after it the wait ran out before; `long {lines, at}`: lines tested only on their first
+  64 K; `unfinished`: the matched line had no line end yet (without `partial`, it was tested
+  because the job ended); `wouldMatch`: no match, but the line still being written matches, and
+  only `partial` counts it; `tooSlow`: matching took about 200 ms of the matcher's CPU on the
+  lines it was testing and was stopped, which ended the wait; `already`: the port or file held at
+  the wait's first look, `beforeRun` that port or that file held before the run started,
+  `sinceRun` it held at a later read's first look but not when the run started; `unchecked`: a
+  file that could not be looked at (a mount that does not answer, a directory on its path closed
+  to the user), one found as a symlink to a path that does not exist, or a port whose host's
+  socket tables could not be read in time; `unreachable`: the wait was for a file alone, whose
+  path stayed closed to the user there for 2 s, so it ended early; `error`: a read
+  failed, or the host's matcher could not check the lines, and that ended the wait). Every wait
+  answers within its bound and a moment, and still tests the output already there with
+  `wait_ms` 0; a match on the line still being written (`partial`) comes back with that line in
+  `output`, and an `offset` past the log's end reads from its end. An `offset` inside a line
+  reads from that line's start (the answer's `offset` says where), and a wait from there tests
+  that line, less any piece of it a `\r` ended before `offset`, counting a match only when it
+  ends past `offset` (past the line's first match, only matches starting within 1024 characters
+  before `offset` are looked for). A trailing `.*`, `.+` or `\s*` counts only as far as it must
+  (`.+` one character), so a `scanned` past a `partial` prompt such as `Password:.*` does not
+  match that prompt again once a byte lands after it; a trailing class repeat that must take a
+  character (`\d+`, `\S+`) takes its whole run, so `port \d+` matches again as `port 3000` grows
+  from `port 30`. A match on the last line the job wrote waits up to 150 ms for the job's
+  end, so a job that printed it as it exited answers as ended. A strict run ends its output with
+  Walnut's own line about its failed step (`walnut strict <jobId>: exit <code> [<pipe codes>] line <line>: <command>`, the line counted in the
+  command as sent; in the log on the host it carries the run's seal after the id, 12 hex digits only
+  this server knows, so a line the job prints in that form, its own id included, is output;
+  only that job's line with the code the run exited with counts, so a job printing that text, or another
+  job's log, is output like any other;
+  the command as `failedStep` names it, once. In the log each such line ends in a tab and
+  `(bash <major>, bg <pid>)`, a subshell's own line in `(in a subshell, bash <major>, pid <pid>)`;
+  the answer drops both tags and the subshell's line. That line lends its command to the shell's
+  step when it was printed right before it (nothing between) by no background job (its pid is
+  not the shell's `$!`) and the step is the subshell itself, a pipe member other than the last,
+  a pipe ending in a loop or `{ … }` that exited with its code, or any step under bash 4; under
+  bash 3.2, which prints no line of its own after a subshell, the subshell's line last of all is
+  the step when nothing was printed after it and the run exited with its code. bash's own line
+  number is used only from bash 5. Known limits: under bash 4 a `( … )` that runs no ERR trap
+  inside (it ends with `exit N`, or bash ran its one failing command in its place) is named by
+  a command that ran before it; under bash 3.2 a background subshell that failed last of all,
+  with nothing after it, is taken as the step), which a wait never matches, on any job. A job that host_exec_stop
+  ended answers `stoppedByCall: true`. A run's answer adds
+  `leftBehind: true` when processes it started in the background (`cmd &`, `nohup cmd &`) still
+  ran in its process group when its shell exited, whatever they did with their output: they get
+  2 s to end, then its process group is stopped, and `leftCommands` names them (as `ps` lists
+  them, hidden like the output). `outputCut: true`: a process that had left its group (a
+  daemonizing tool, one in a new session) still held its output once the group was empty; the
+  job stopped reading it, and that process still runs. The server asks the host for this on
+  each run (capability `host-exec-group-v1`); on a host whose daemon lacks it, the answer adds
+  `groupKept: true`: that daemon stops only a group still holding the output, as before.
+  At most 4 waits run on one job at once, and 32 on one host's jobs: one more is `429 busy`. A wait
+  a revoke ended on the server keeps its place on the host until its own bound (up to 60 s), so a
+  call right after a new grant can meet that `429 busy`. A run under
+  a `job_id` the host no longer holds gets a new log (`<id>.<n>.log`), never the old run's. The host's
+  daemon waits (capability `host-exec-wait-v1`) and tests the lines in a matcher process of its
+  own, never on its loop or the server's. A bad `wait_for` is `400 bad_request` before
+  anything runs; any `wait_for` on a host whose daemon lacks the capability is
+  `400 wait_for_needs_daemon_upgrade`, also before anything runs.
+  A `job_id` this task already ran answers that run with `sameJob: true`, and with
+  `sameJobCommand` (that run's command) when the call sent another command, which did not run.
 - `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
 - `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`) → updates the Walnut
   daemon on a machine that joined over the host network to this server's build, now:

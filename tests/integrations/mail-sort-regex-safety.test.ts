@@ -216,6 +216,14 @@ describe('allowed patterns', () => {
     expect(test(no)).toBe(false)
   })
 
+  // 2026-11-04 review: a shared check in the wait_for work refused these real sort rules (a
+  // repeated group around an alternation of distinct words), so a saved rule stopped loading.
+  it.each([
+    '^(?:(?:re|fw):\\s)+', '(?:(?:re|fwd):)+', '^\\[(?:(?:jira|github))\\]+', '(?:x(?:a|b))+',
+  ])('%s, a rule that loaded before wait_for, still loads', (pattern) => {
+    expect(compileSubjectPattern(pattern).ok).toBe(true)
+  })
+
   it.each([
     ['\\[[A-Z]+-\\d+\\] .*(resolved|closed)', '[OPS-1234] Disk alert was resolved', '[ops] resolved'],
     ['ticket #?\\d+ .*(updated|commented)', 'Ticket #4521 was updated by the desk', 'ticket updated'],

@@ -57,8 +57,8 @@ defineOp({
   input: {
     from: z.string().min(1).describe('The file on the sending host: an absolute path or ~/...'),
     to: z.string().min(1).describe('Where it goes on the receiving host: an absolute path or ~/...; ending in "/" (or a folder) keeps the file\'s name'),
-    from_host: z.string().optional().describe('The sending host: an alias ("__local__" = the Mac) or a selector like "@ios" (default: your own host)'),
-    to_host: z.string().optional().describe('The receiving host: an alias ("__local__" = the Mac) or a selector like "@ios" (default: your own host)'),
+    from_host: z.string().optional().describe('The sending host: an alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios" (default: your own host)'),
+    to_host: z.string().optional().describe('The receiving host: an alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios" (default: your own host)'),
     copy_id: z.string().optional().describe('The id this copy gets (hc-...; the walnut CLI picks one). The same id again from this task answers that copy, never a second one'),
     allow_prompts: z.boolean().optional().describe('The user agreed this copy may show a permission dialog on a Mac\'s screen (a 409 may_prompt asked for it)'),
   },

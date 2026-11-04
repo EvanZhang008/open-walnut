@@ -16,6 +16,7 @@ import * as daemonConnections from '../../../src/providers/daemon-connection.js'
 import { __setTransferConnectionResolverForTesting } from '../../../src/core/transfer/daemon-transfer-client.js'
 import { RELAYED_HOLD_MS, type Caller } from '../../../src/core/hosts/host-exec.js'
 import { saveCallImages } from '../../../src/core/hosts/host-mcp-images.js'
+import { withAnswerBy } from '../../../src/lib/answer-by.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-mcp-images-')))
 const localRoot = path.join(root, 'local-tasks')
@@ -89,7 +90,8 @@ describe('images from another host\'s MCP tool', () => {
     writeDelayMs = 1_500
     const t0 = Date.now() - RELAYED_HOLD_MS + 1_300 // about 300 ms left after the answer's margin
     const started = Date.now()
-    const out = await saveCallImages(remote, 'mc-slow-1', [{ mimeType: 'image/png', bytes: 300, data: png(4) }], t0)
+    // A call its host's gateway relayed: it carries the gateway's deadline.
+    const out = await withAnswerBy(t0 + 20_000, () => saveCallImages(remote, 'mc-slow-1', [{ mimeType: 'image/png', bytes: 300, data: png(4) }], t0))
     expect(Date.now() - started).toBeLessThan(1_200)
     const file = path.join(remoteRoot, 'task-remote', 'host-mcp', 'mc-slow-1-1.png')
     expect(out).toEqual([{ mimeType: 'image/png', bytes: 300, path: file, pending: true }])

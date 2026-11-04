@@ -57,7 +57,8 @@ describe('host_exec runs the line in bash after the login shell', () => {
     expect(shellPlan('/usr/local/bin/bash', '/bin/bash', 'echo hi')).toEqual({ args: ['-l', '-c', 'echo hi'], shell: 'bash', loginShell: 'bash' })
     expect(shellPlan('/bin/zsh', null, 'echo hi')).toEqual({ args: ['-l', '-c', "exec /bin/sh -c 'echo hi'"], shell: 'sh', loginShell: 'zsh' })
     expect(shellPlan('/bin/sh', null, 'echo hi')).toEqual({ args: ['-l', '-c', 'echo hi'], shell: 'sh', loginShell: 'sh' })
-    expect(HOST_EXEC_VERSION).toBe(2)
+    // host-exec-v2 is advertised from version 2 on (3 added exec.read `until`).
+    expect(HOST_EXEC_VERSION).toBeGreaterThanOrEqual(2)
     expect(findBash(SYSTEM_PATH)).toMatch(/\/bash$/)
   })
 

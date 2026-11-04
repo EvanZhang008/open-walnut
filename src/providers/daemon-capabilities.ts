@@ -546,6 +546,30 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Without it the server wraps the line itself (src/core/hosts/host-exec-legacy.ts).
   // Sidecar-gated in the source twin (host-exec-core.cjs `version` 2).
   'host-exec-v2',
+  // 'host-exec-wait-v1': `exec.read {until: {output?, flags?, partial?, port?, file?}, wait,
+  // scanFrom?, by?}` answers as soon as a line of the job's output matches `output` (a JavaScript
+  // regular expression tested per line in the daemon's killable matcher process,
+  // host-exec-matcher.ts), anything listens on `port` at a local address, or `file` exists here
+  // (relative to the job's cwd), checked about every 200 ms; else when the job ended and all its
+  // output was tested, or `wait` runs out, and by `by` ms at the latest, every look included. The
+  // reply carries `waitedFor {matched, match, matchAt, ms, scanned, untested, long, unfinished,
+  // wouldMatch, wouldMatchAt, tooSlow, already, beforeRun, unchecked, size}` (host-exec-wait.ts),
+  // and a running job's `deadlineInMs`, or `shellExited` once its shell exited by itself; at most
+  // 4 `until` reads run on a job at once (code `busy`); `until.flags` may hold "i" and "u";
+  // `scanFrom` goes on from an earlier `scanned`. `exec.run {until}` notes what of it holds
+  // before the run starts. Without it the server refuses every wait_for
+  // (src/core/hosts/host-exec-wait.ts): no pattern runs on the server.
+  // Sidecar-gated in the source twin (host-exec-core.cjs `version` 3).
+  'host-exec-wait-v1',
+  // 'host-exec-group-v1': `exec.run {endGroup: true}` stops what the run's shell left running in
+  // its process group when it exits (`&` children, `nohup`, whatever they do with their output):
+  // SIGTERM after 2 s, SIGKILL 3 s on; the reply names them (`leftBehind`, `leftCommands`,
+  // host-exec-group.ts), and `outputCut` says a process that left the group still held the output
+  // once the group was empty. The server asks on each run, so a daemon that updates under an older
+  // server keeps the older behaviour (only a group still holding the output is stopped). Without
+  // it the server says so in the answer (`groupKept`). Sidecar-gated in the source twin
+  // (host-exec-core.cjs `version` 4).
+  'host-exec-group-v1',
   // 'net-v1' — the host network (net-core.ts): the daemon runs walnut-net (iroh) while
   // the server configured it: `net.configure {relays, relayRoots, members, enabled}`
   // writes its config (members with `accept: true` may open streams to this daemon;

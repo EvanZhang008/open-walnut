@@ -230,7 +230,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -1119,6 +1119,8 @@ function runWnMinimal(argv, stdinText) {
   // answer lost on the way back (hub_timeout) still leaves an id to read the run by.
   var wnRunOps = { host_exec: { field: 'job_id', prefix: 'hx-' }, host_exec_pinned: { field: 'job_id', prefix: 'hx-' }, host_copy: { field: 'copy_id', prefix: 'hc-' } };
   var wnRunId = null;
+  // The call's answer came: a stop signal after it names no run (twin of unarmRun in wn-cli.ts).
+  var wnAnswered = false;
   var wnShellWord = function (t) { return "'" + t.replace(/'/g, "'\\\\''") + "'"; };
   var wnLostRunJob = function () {
     if (!wnRunId) return [];
@@ -1129,9 +1131,13 @@ function runWnMinimal(argv, stdinText) {
         'walnut: (if that read says unknown_copy, the copy never reached the Walnut server: call host_copy again)',
       ];
     }
-    var readArgs = JSON.stringify({ host: wnRunId.host, job_id: wnRunId.id, wait_ms: 10000 });
+    // Twin of lostRunLines: a call that waited for something has its read wait for the same.
+    var readCall = { host: wnRunId.host, job_id: wnRunId.id };
+    if (wnRunId.waitFor && typeof wnRunId.waitFor === 'object') { readCall.offset = 0; readCall.wait_for = wnRunId.waitFor; }
+    readCall.wait_ms = readCall.wait_for && typeof wnRunId.waitMs === 'number' && wnRunId.waitMs > 0 ? Math.min(wnRunId.waitMs, 600000) : 10000;
+    var readArgs = JSON.stringify(readCall);
     return [
-      'walnut: host_exec may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:',
+      'walnut: ' + wnRunId.op + ' may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:',
       '  walnut tools call host_exec_read ' + wnShellWord(readArgs),
       'walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ': host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)",
     ];
@@ -1392,7 +1398,9 @@ function runWnMinimal(argv, stdinText) {
           if (wnRunOp) {
             var wnGiven = parsedCall.args[wnRunOp.field];
             if (!(typeof wnGiven === 'string' && wnGiven)) parsedCall.args[wnRunOp.field] = wnRunOp.prefix + crypto.randomUUID();
-            wnRunId = { op: rest[0], field: wnRunOp.field, host: String(parsedCall.args.host), id: parsedCall.args[wnRunOp.field] };
+            wnRunId = { op: rest[0], field: wnRunOp.field, host: String(parsedCall.args.host), id: parsedCall.args[wnRunOp.field], waitFor: parsedCall.args.wait_for, waitMs: parsedCall.args.wait_ms };
+            // Twin of namedOnSignal: stopped before its answer, the run's id is printed all the same.
+            ['SIGTERM', 'SIGINT', 'SIGHUP'].forEach(function (sig) { process.once(sig, function () { if (!wnAnswered) wnLostRun(); process.kill(process.pid, sig); }); });
           }
           args = { name: rest[0], args: parsedCall.args, callId: wnCallId };
         }
@@ -1610,6 +1618,7 @@ function runWnMinimal(argv, stdinText) {
         wnRunId = null;
         return wnConnect();
       }
+      wnAnswered = true;
       // Legacy --json (before call or the op): the envelope as it came, its run id on stderr, as before.
       if (json && wnIsCall && legacyJson) {
         out(JSON.stringify(resp));
@@ -1657,9 +1666,20 @@ function runWnMinimal(argv, stdinText) {
               if (ps[pi].description) out('    ' + ps[pi].description);
             }
           }
+          // PARITY: op-help.ts exampleArgs: every required parameter, so the example runs as shown.
+          var exArgs = {};
+          if (ps) {
+            var exReq = ps.filter(function (p) { return p.required; });
+            var exShown = exReq.length ? exReq : ps.slice(0, 1);
+            for (var ei = 0; ei < exShown.length; ei++) {
+              var et = String(exShown[ei].type || '');
+              exArgs[exShown[ei].name] = (et === 'number' || et === 'int' || et === 'bigint') ? 1 : et === 'boolean' ? true : et === 'array' ? []
+                : (et === 'object' || et === 'record') ? {} : et.indexOf(' | ') !== -1 ? et.split(' | ')[0] : 'value';
+            }
+          }
           out('');
           out('Usage:');
-          out("  walnut tools call " + helpRow.name + " '{...}'");
+          out("  walnut tools call " + helpRow.name + " " + (ps ? "'" + JSON.stringify(exArgs) + "'" : "'{...}'"));
           out("  walnut tools call " + helpRow.name + " @/tmp/args.json   # payloads over ~128KB must not go in argv");
           out('');
           out(wnSkillPointer);
@@ -13661,6 +13681,11 @@ try {
     taskDirRoot: TASK_DIR_ROOT,
     stateDir: HOST_EXEC_DIR,
     env: hostExecEnv,
+    // wait_for's matcher (host-exec-matcher.ts): this runtime, running the sidecar's matcher.
+    matcher: {
+      command: process.execPath,
+      args: ['-e', 'require(' + JSON.stringify(path.join(__dirname, 'host-exec-core.cjs')) + ').runWaitMatcher().then(function () { process.exit(0); })'],
+    },
   });
 } catch (err) { hostExec = null; }
 // MCP servers and web services for tasks on other hosts (host-reach-core.cjs): 'host-mcp-v1'
@@ -13850,6 +13875,8 @@ function daemonCapabilities() {
   if (taskDirCore && typeof taskDirCore.pruneHostCaches === 'function') caps.push('host-cache-prune-v1');
   if (hostExec) caps.push('host-exec-v1');
   if (hostExec && hostExec.version >= 2) caps.push('host-exec-v2');
+  if (hostExec && hostExec.version >= 3) caps.push('host-exec-wait-v1');
+  if (hostExec && hostExec.version >= 4) caps.push('host-exec-group-v1');
   if (netSupervisor) caps.push('net-v1');
   if (netSupervisor && typeof netSupervisor.join === 'function') caps.push('net-join-v1');
   if (hostMcp) caps.push('host-mcp-v1');
@@ -15775,6 +15802,32 @@ function cleanupOrphanedProcessGroups() {
 }
 
 // ── Cleanup ──
+// Node's exit waits for every thread of its pool, and a host_exec file look on a mount that stopped
+// answering holds one for as long as the mount does: a look still in flight at exit gets
+// EXIT_LOOK_GRACE_MS to answer (a stat that is only slow, near a wait's bound, must not turn an
+// orderly exit into a SIGKILL), and with one still in flight then, the daemon ends itself hard once
+// its normal shutdown is done (2026-11-04 review: its stop, update and handover hung on one).
+// Bun's exit does not wait, so daemon-standalone.ts exits as before.
+const EXIT_LOOK_GRACE_MS = 1000;
+let exitingDaemon = false;
+function exitDaemon(code) {
+  if (exitingDaemon) return;
+  exitingDaemon = true;
+  const t0 = Date.now();
+  const lookInFlight = function () {
+    try { return !!(hostExec && typeof hostExec.stuck === 'function' && hostExec.stuck(0)); } catch (e) { return false; }
+  };
+  const end = function () {
+    if (lookInFlight()) {
+      if (Date.now() - t0 < EXIT_LOOK_GRACE_MS) { setTimeout(end, 50); return; }
+      logMsg('warn', 'exit: a host_exec file check is stuck on a mount that does not answer; ending the daemon hard', { code: code });
+      process.kill(process.pid, 'SIGKILL');
+    }
+    process.exit(code);
+  };
+  end();
+}
+
 function cleanup() {
   // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
   try { oneShot.disposeAll(); } catch {}
@@ -16368,7 +16421,7 @@ async function startDaemon() {
             ourPid: process.pid, ownerPid,
           });
           cleanup();
-          process.exit(0);
+          exitDaemon(0);
         }
       } catch {}
       // Parent-liveness watchdog: isolated-dir daemons (tests, sandbox, demos)
@@ -16384,7 +16437,7 @@ async function startDaemon() {
             parentPid: WATCHDOG_PARENT_PID,
           });
           cleanup();
-          process.exit(0);
+          exitDaemon(0);
         }
       }
       // A test server's isolated daemon on a remote host: no server socket for the
@@ -16400,7 +16453,7 @@ async function startDaemon() {
             try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* /tmp is swept anyway */ }
             try { fs.rmSync(DAEMON_DIR + '-images', { recursive: true, force: true }); } catch { /* same */ }
           }
-          process.exit(0);
+          exitDaemon(0);
         }
       }
     }, HEARTBEAT_INTERVAL_MS);
@@ -16441,10 +16494,10 @@ async function startDaemon() {
       // Work still stuck in a file call (a FIFO no one reads) holds a libuv pool thread, and a
       // normal exit joins those threads: it would never return. Its state is saved; end hard.
       if (settled === 'cap') process.kill(process.pid, 'SIGKILL');
-      process.exit(failed || serviceUpdateRequested ? 1 : 0);
+      exitDaemon(failed || serviceUpdateRequested ? 1 : 0);
     })().catch(function (err) {
       logMsg('error', 'daemon shutdown failed', { error: String(err) });
-      process.exit(1);
+      exitDaemon(1);
     });
   };
   requestDaemonShutdown = stopDaemon;

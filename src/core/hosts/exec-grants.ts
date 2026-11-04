@@ -88,15 +88,61 @@ function read(): Store {
 
 // One writer at a time in this process; the file is the primary's alone.
 let chain: Promise<unknown> = Promise.resolve()
+/** Whether a task may use a host now: a live grant there, and the host not closed. */
+export type AccessCheck = (taskId: string, host: string) => boolean
+
+/** Told after every change to who may use which host: a grant made or revoked, a host closed or opened. */
+const accessListeners = new Set<(may: AccessCheck) => void>()
+
+/** Hear every change to the grants and the closed hosts (a read in flight ends at a revoke); returns the removal. */
+export function onAccessChange(fn: (may: AccessCheck) => void): () => void {
+  accessListeners.add(fn)
+  return () => { accessListeners.delete(fn) }
+}
+
+/** The live grants, as `task\nhost` keys: what a listener's check reads. */
+function liveKeys(s: Store): Set<string> {
+  return new Set(s.grants.filter((g) => !g.revokedAt).map((g) => `${g.taskId}\n${g.host}`))
+}
+
+function sameKeys(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const k of a) if (!b.has(k)) return false
+  return true
+}
+
+/**
+ * Every listener asks one answer built once a change, from the grants just written (`live`, else
+ * read) and the closed hosts (2026-11-05 code review: each waiting read re-read and parsed both
+ * files itself, 404 ms of the server's loop at 2000 grants and 128 waits, on every run's noteRun
+ * write). Only a change to who may use a host tells them: a run noted or an ask settled does not.
+ */
+function accessChanged(live?: Set<string>): void {
+  if (!accessListeners.size) return
+  let may: AccessCheck
+  try {
+    const closed = new Set(closedHosts())
+    const keys = live ?? liveKeys(read())
+    may = (taskId, host) => !closed.has(host) && keys.has(`${taskId}\n${host}`)
+  } catch { return }
+  for (const fn of [...accessListeners]) {
+    try { fn(may) } catch { /* one listener's fault is its own */ }
+  }
+}
+
 function mutate<T>(fn: (s: Store) => T): Promise<T> {
   const next = chain.then(async () => {
     const s = read()
+    // Taken whether or not anyone listens yet: a read may start listening while this write runs.
+    const before = liveKeys(s)
     const out = fn(s)
     const target = file()
     const tmp = `${target}.${process.pid}.tmp`
     await fs.promises.mkdir(path.dirname(target), { recursive: true })
     await fs.promises.writeFile(tmp, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 })
     await fs.promises.rename(tmp, target)
+    const after = liveKeys(s)
+    if (!sameKeys(before, after)) accessChanged(after)
     return out
   })
   chain = next.catch(() => {})
@@ -111,6 +157,13 @@ export function findGrant(taskId: string, host: string): ExecGrant | undefined {
 /** The grant with this id, live or revoked, if any. */
 export function grantById(id: string): ExecGrant | undefined {
   return read().grants.find((g) => g.id === id)
+}
+
+/** When the user last revoked a grant of this task on this host, if ever. */
+export function lastRevokedAt(taskId: string, host: string): number | undefined {
+  let at: number | undefined
+  for (const g of read().grants) if (g.taskId === taskId && g.host === host && g.revokedAt && (at === undefined || g.revokedAt > at)) at = g.revokedAt
+  return at
 }
 
 /** Whether the user ever revoked a grant of this task on this host: then it asks by letter again. */
@@ -150,6 +203,7 @@ export async function setHostClosed(host: string, closed: boolean): Promise<stri
     await fs.promises.mkdir(path.dirname(target), { recursive: true })
     await fs.promises.writeFile(tmp, JSON.stringify({ closed: out }, null, 2) + '\n', { mode: 0o600 })
     await fs.promises.rename(tmp, target)
+    accessChanged()
     return out
   })
   chain = next.catch(() => {})

@@ -264,7 +264,8 @@ export function materializeBinding(
   }
 
   const sp = new URLSearchParams()
-  for (const [k, v] of queryEntries) sp.set(k, String(v))
+  // An object goes as JSON (host_exec_read's wait_for); String() would send "[object Object]".
+  for (const [k, v] of queryEntries) sp.set(k, v !== null && typeof v === 'object' && !Array.isArray(v) ? JSON.stringify(v) : String(v))
   const qs = sp.toString()
 
   // Writes always send a JSON object (even empty) — several v1 handlers read

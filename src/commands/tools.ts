@@ -290,9 +290,11 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     }
     let callId = given.callId
     // A host_exec run's id chosen here, so an answer that never comes back still leaves one to read.
-    const { awayLines, callerRunId, dropRunId, lostRunLines, refusedRunId } = await import('../providers/host-exec-run-id.js')
+    const { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, refusedRunId } = await import('../providers/host-exec-run-id.js')
     let runId = callerRunId(name, parsed)
     const lostLines = () => [...(runId ? lostRunLines(name, parsed, runId) : []), ...lostCallLines(name, parsed, callId)].join('\n')
+    // Stopped before its answer (a caller's timeout, ^C): the run's id is printed all the same.
+    let answered = namedOnSignal(name, parsed, runId)
     // A message from a session goes through its host daemon first, on the Mac as
     // on any host: a message between two sessions on one host is that host's to
     // deliver, and the daemon hands everything else to the server itself. Only
@@ -334,6 +336,9 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       runId = null
       // Other arguments, so another call: nothing of the first ran.
       callId = newCallId()
+      // The id is gone from the call: a stop now must not name it (2026-11-05 review).
+      answered()
+      answered = () => {}
       r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...caller })
     }
     if (!r.ok && r.unreachable) {
@@ -342,6 +347,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       const code = await callThroughHostDaemon(name, { ...parsed, _call_id: callId }, process.env, { json: output.json })
       if (code !== null) { process.exitCode = code; return }
     }
+    answered()
     if (!r.ok) {
       if (!r.unreachable) await record(false, r.result, r.message)
       // No answer at all (a timeout, a dropped connection): the call may have run all the same.

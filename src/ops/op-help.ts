@@ -147,6 +147,27 @@ export function formatToolsTable(ops: ToolRow[]): string {
   ].join('\n')
 }
 
+/** A stand-in value of a parameter's rendered type, one that type accepts. */
+function exampleValue(type: string): unknown {
+  if (type === 'number' || type === 'int' || type === 'bigint') return 1
+  if (type === 'boolean') return true
+  if (type === 'array') return []
+  if (type === 'object' || type === 'record') return {}
+  // An enum renders as `a | b | c`: its first value.
+  if (type.includes(' | ')) return type.split(' | ')[0]
+  return 'value'
+}
+
+/**
+ * The arguments of the Usage example: every required parameter, so the line runs as shown
+ * (2026-11-04: host_exec_read's example named only `host`, not the required `job_id`); with none
+ * required, the first parameter, as an example of the shape.
+ */
+export function exampleArgs(params: OpParam[]): Record<string, unknown> {
+  const shown = params.some((p) => p.required) ? params.filter((p) => p.required) : params.slice(0, 1)
+  return Object.fromEntries(shown.map((p) => [p.name, exampleValue(p.type)]))
+}
+
 /**
  * One op's detail: description, every parameter with type/requiredness/help
  * text, and the three call forms. Printed by `tools help <op>` AND by
@@ -170,7 +191,7 @@ export function formatOpHelp(row: ToolRow): string {
       if (p.description) lines.push(`    ${p.description}`)
     }
   }
-  const example = params && params.length > 0 ? `'{"${params[0].name}":"value"}'` : `'{}'`
+  const example = `'${JSON.stringify(exampleArgs(params ?? []))}'`
   lines.push(
     '',
     'Usage:',

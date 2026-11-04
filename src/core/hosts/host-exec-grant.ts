@@ -39,12 +39,28 @@ export async function pinnedGrant(caller: Caller, host: string, grantId: string)
   }
   const g = grants.grantById(grantId)
   if (!g || g.taskId !== caller.taskId || g.host !== host) {
-    throw new HostExecError(`Grant ${grantId} is not this task's grant on ${name}; nothing ran. Walnut made no grant and asked no one.`, 403, 'exec_grant_mismatch', { grantId })
+    // The id to name instead, so a wrong one costs no lookup (2026-11-04 review).
+    const mine = grants.findGrant(caller.taskId, host)
+    const hint = mine ? ` This task's grant on ${name} is ${mine.id}: name that one.` : ` This task holds no grant on ${name}: an ordinary host_exec there asks the user for one.`
+    throw new HostExecError(`Grant ${grantId} is not this task's grant on ${name}; nothing ran. Walnut made no grant and asked no one.${hint}`, 403, 'exec_grant_mismatch', { grantId, ...(mine ? { current: mine.id } : {}) })
   }
   if (g.revokedAt) {
-    throw new HostExecError(`Grant ${grantId} for ${name} was revoked; nothing ran. Walnut made no grant and asked no one.`, 403, 'exec_grant_revoked', { grantId })
+    throw new HostExecError(`Grant ${grantId} for ${name} was revoked; nothing ran. Walnut made no grant and asked no one.${newerGrant(grants, caller.taskId, host, grantId)}`, 403, 'exec_grant_revoked', { grantId, ...current(grants, caller.taskId, host, grantId) })
   }
   return g.id
+}
+
+/** The task's live grant on the host other than `named` (one the user gave after revoking that one), for a pinned refusal to name. */
+function current(grants: Grants, taskId: string, host: string, named: string): { current?: string } {
+  const g = grants.findGrant(taskId, host)
+  return g && g.id !== named ? { current: g.id } : {}
+}
+
+function newerGrant(grants: Grants, taskId: string, host: string, named: string): string {
+  const { current: id } = current(grants, taskId, host, named)
+  // No grant there now: say what gets one, since the pinned mode never asks (2026-11-05 review: no next step).
+  return id ? ` This task holds another grant there now, ${id}: name that one to run under it.`
+    : ' This task holds no grant there now: an ordinary host_exec asks the user for one by letter, or do the step another way.'
 }
 
 /**
@@ -84,7 +100,64 @@ export function grantRefusal(grants: Grants, taskId: string, host: string, grant
   if (closed) {
     return new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts) while this call waited; nothing ran there.`, 403, 'exec_host_closed')
   }
-  return new HostExecError(`This task's grant to use ${name} was revoked while this call waited; nothing ran there.`, 403, 'exec_grant_revoked', { grantId })
+  const newer = pinned ? newerGrant(grants, taskId, host, grantId) : ''
+  return new HostExecError(`This task's grant to use ${name} was revoked while this call waited; nothing ran there.${newer}`, 403, 'exec_grant_revoked', { grantId, ...(pinned ? current(grants, taskId, host, grantId) : {}) })
+}
+
+/**
+ * Stopping or listing the task's own runs on `host`: a live grant, or one the user revoked (its
+ * runs there keep going, and the task may still stop them; the host only ever answers with the
+ * task's own jobs). A task that never had a grant there is refused as grantFor refuses it.
+ */
+export async function mayTendRuns(caller: Caller, host: string): Promise<{ revoked: boolean; grantId: string | null }> {
+  const grants = await import('./exec-grants.js')
+  const g = grants.findGrant(caller.taskId, host)
+  if (g) return { revoked: false, grantId: g.id }
+  if (grants.wasRevoked(caller.taskId, host)) return { revoked: true, grantId: null }
+  return { revoked: false, grantId: await grantFor(caller, host, null) }
+}
+
+/** A refusal that ends a read in flight: the user took the task's way to that host away. */
+export function isReadStop(err: unknown): boolean {
+  return err instanceof HostExecError && err.status === 403 && (err.code === 'exec_grant_revoked' || err.code === 'exec_host_closed')
+}
+
+/**
+ * A read of a job's output, at its send and again when its answer comes back (a read may wait a
+ * minute on the host): the task still holds a grant there and the host is open, so a revoke or a
+ * closed host while a call waited shows nothing more of the job (2026-11-04 review: a wait that
+ * began before a revoke went on returning the lines the job printed after it). Any live grant of
+ * the task counts, as for every read. The run itself keeps going: stop and list still reach it.
+ */
+export async function assertMayRead(taskId: string, host: string, jobId: unknown): Promise<void> {
+  const grants = await import('./exec-grants.js')
+  const closed = grants.isHostClosed(host)
+  if (!closed && grants.findGrant(taskId, host)) return
+  const job = typeof jobId === 'string' ? `job ${jobId}` : 'the job'
+  const then = `It keeps running to its deadline: host_exec_stop stops it, and host_exec_list shows how it ends.`
+  log.session.info('host exec: read stopped', { taskId, host, jobId, closed })
+  if (closed) throw new HostExecError(`The user closed ${await hostName(host)} to tasks on other hosts (Settings › Remote Hosts) while this call waited, so Walnut shows nothing more of ${job}. ${then}`, 403, 'exec_host_closed', { jobId })
+  throw new HostExecError(`The user revoked this task's grant to use ${await hostName(host)} while this call waited, so Walnut shows nothing more of ${job}. ${then}`, 403, 'exec_grant_revoked', { jobId })
+}
+
+/**
+ * The moment the task loses its way to `host` while a read is held there (a revoke, a closed host):
+ * `stopped` rejects with assertMayRead's refusal then, so the call answers at once instead of when
+ * the host's read comes back, up to a minute later (2026-11-05 review: a revoke during a 30 s wait
+ * was answered 25 s on). `off` when the read is done.
+ */
+export async function readStopWatch(taskId: string, host: string, jobId: unknown): Promise<{ stopped: Promise<never>; off: () => void }> {
+  const grants = await import('./exec-grants.js')
+  let off = () => {}
+  const stopped = new Promise<never>((_resolve, reject) => {
+    off = grants.onAccessChange((may) => {
+      if (may(taskId, host)) return
+      off()
+      assertMayRead(taskId, host, jobId).then(() => {}, reject)
+    })
+  })
+  stopped.catch(() => { /* a stop that comes after the read is nobody's */ })
+  return { stopped, off: () => off() }
 }
 
 /**
@@ -107,7 +180,13 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   const g = grants.findGrant(caller.taskId, host)
   if (g) return g.id
   // Reading or stopping a job needs the grant the run had; it never asks for one.
-  if (preview === null) throw new HostExecError(`This task has no grant to use ${name} (it was revoked).`, 403, 'exec_grant_required')
+  if (preview === null) {
+    // A revoke reads as the pinned mode reads it: one code for one state (2026-11-05 review).
+    if (grants.wasRevoked(caller.taskId, host)) {
+      throw new HostExecError(`The user revoked this task's grant to use ${name}, so Walnut reads nothing more there for it. Runs it started there keep going to their deadline: host_exec_stop still stops them (host_exec_list lists them).`, 403, 'exec_grant_revoked')
+    }
+    throw new HostExecError(`This task has no grant to use ${name}.`, 403, 'exec_grant_required')
+  }
   let ask = grants.findAsk(caller.taskId, host)
   // A task on one of the user's own hosts asks no one; a grant he revoked, or his Deny, still stands.
   if (ask?.state !== 'denied' && !grants.wasRevoked(caller.taskId, host) && await isOwnHost(caller.host)) {
@@ -153,5 +232,15 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   }, { opKey: letterOpKey(HOST_EXEC_ASK.id, host, caller.taskId, Date.now().toString(36)) })
   await grants.recordAsk({ taskId: caller.taskId, host, letterId: letter.id, askedAt: Date.now(), sid: caller.sid, fromHost: caller.host, state: 'pending' })
   log.session.info('host exec: asked the user for a grant', { taskId: caller.taskId, host, letterId: letter.id })
+  // After a revoke the answer says so: the user took it back, and this letter asks again (2026-11-05 review claude13).
+  const revokedAt = grants.lastRevokedAt(caller.taskId, host)
+  if (revokedAt !== undefined) {
+    throw new HostExecError(`The user revoked this task's grant to use ${name} ${agoText(Date.now() - revokedAt)}, so nothing ran; a letter asks them again (${letter.id}). You will get a notice if they allow it; meanwhile do other work, or do the step another way.`, 403, 'exec_grant_required', { letterId: letter.id, revokedAt })
+  }
   throw new HostExecError(`This task may not use ${name} yet: a letter asks the user (${letter.id}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: letter.id })
+}
+
+function agoText(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 172_800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86_400)} days ago`
 }

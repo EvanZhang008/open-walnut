@@ -34,7 +34,7 @@ import {
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
 import { gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
-import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
+import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
 import {
@@ -875,6 +875,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   // How the arguments arrived, for the session's chat card (recordCardedCall).
   let argForm: 'inline' | 'file' | 'stdin' | 'none' = 'none'
   let argPath: string | undefined
+  // Undoes the stop handler that names the run (namedOnSignal), once the call no longer needs it.
+  let unarmRun: () => void = () => {}
   // Every call's id (src/lib/op-call-id.ts), sent beside its name: a resend runs it at most
   // once, and op_result reads what it did when its answer is lost.
   let callId = ''
@@ -951,6 +953,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       callId = given.callId
       // A run's id chosen here, so an answer lost on the way back still leaves one to read.
       runId = callerRunId(parsed.name, callArgs)
+      // Stopped before its answer (a caller's timeout, ^C): the run's id is printed all the same.
+      unarmRun = namedOnSignal(parsed.name, callArgs, runId)
       // A "$14.99" the shell already turned into ".99" on the command line: refused, nothing sent.
       const cut = process.env.WALNUT_TEXT_CHECK === '0' || source.kind !== 'inline' ? null : strippedShellText(callArgs)
       if (cut) return failCall('shell_cut_text', strippedShellTextMessage(cut), 2)
@@ -999,6 +1003,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       runId = null
       // Other arguments, so another call: nothing of the first ran.
       args.callId = callId = newCallId()
+      // The id is gone from the call: a stop now must not name it (2026-11-05 review).
+      unarmRun()
       resp = await requestRidingRestart(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
     }
   } catch (err) {
@@ -1023,6 +1029,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     return 6
   } finally {
     clearTimeout(waitNotice)
+    // An answer or a failure is in: a stop from here on is no lost run.
+    unarmRun()
     // Only OUR spill is removed. A path the user passed with @ is theirs, and
     // the hub has finished reading by the time the response lands either way.
     if (spilledArgsFile) { try { fs.unlinkSync(spilledArgsFile) } catch { /* already gone */ } }

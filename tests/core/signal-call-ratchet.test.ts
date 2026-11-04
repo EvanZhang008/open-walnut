@@ -83,6 +83,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI
+  'src/providers/host-exec-matcher.ts': 1,         // the wait_for matcher ends its own process once the daemon that started it is gone
   'src/providers/host-fix-core.ts': 3,             // its own fix-script child (a process.kill wrapper + its two calls)
   'src/providers/local-daemon.ts': 1,              // an ISOLATED daemon it manages (refuses the production dir)
   'src/providers/trigger-check-core.ts': 1,        // its own check-script child's group

@@ -2,10 +2,11 @@
  * `walnut __selftest`: the compiled file checks the parts of itself that a
  * server boot does not reach on a fresh machine, without starting a server:
  * the unpacked tree, SQLite on bun, the worker threads that load code from that
- * tree by path, the daemon source a host without a daemon binary receives, and
- * which optional components are present, and whether the file starts from its
- * bytecode. One JSON line per check; exit 1 when any required check fails. The
- * release rehearsal and a new host run it first.
+ * tree by path, wait_for's matcher process (this file started again), the daemon
+ * source a host without a daemon binary receives, and which optional components
+ * are present, and whether the file starts from its bytecode. One JSON line per
+ * check; exit 1 when any required check fails. The release rehearsal and a new
+ * host run it first.
  */
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
@@ -104,6 +105,21 @@ export async function runSelftest(): Promise<number> {
           return `wasm encoder, ${count} tokens`
         } finally {
           tokenizer.free()
+        }
+      },
+    },
+    {
+      // A daemon this file runs as tests wait_for's lines in this file started again (main.ts).
+      name: 'wait-matcher', required: true, run: async () => {
+        const { createMatcher } = await import('../providers/host-exec-matcher.js')
+        const { spawn } = await import('node:child_process')
+        const matcher = createMatcher({ command: process.execPath, args: ['--wait-matcher'] }, spawn)
+        try {
+          const r = await matcher.test({ source: 'ready in \\d+ ms', flags: '', cut: 'ready in \\d+ ms' }, [{ text: 'boot', cut: false }, { text: '\x1b[32mready\x1b[0m in 312 ms', cut: false }])
+          if (!('hit' in r) || r.hit !== 1) throw new Error(JSON.stringify(r))
+          return 'a matcher process of this file, colour codes removed'
+        } finally {
+          matcher.close()
         }
       },
     },

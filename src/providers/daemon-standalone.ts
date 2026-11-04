@@ -191,7 +191,7 @@ import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
 import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, findNameMatch, restoreSessionAnywhere, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
-import { createHostExec } from './host-exec-core.js'
+import { createHostExec, runWaitMatcher } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
 import { createHostHttp } from './host-http-core.js'
@@ -262,6 +262,13 @@ const DAEMON_VERSION = process.env.DAEMON_VERSION || 'dev'
 // pass it, and a payload containing `--version` must not print the version.
 if (process.argv.includes('--version') && !isDaemonCliKeyword(process.argv[2])) {
   console.log(DAEMON_VERSION)
+  process.exit(0)
+}
+
+// This binary run again as wait_for's matcher (host-exec-matcher.ts): a job's output lines are
+// tested here, in a process the daemon can kill when a pattern runs too long on one line.
+if (process.argv[2] === '--wait-matcher') {
+  await runWaitMatcher()
   process.exit(0)
 }
 
@@ -11982,6 +11989,8 @@ const hostExec = createHostExec({
   taskDirRoot: TASK_DIR_ROOT,
   stateDir: HOST_EXEC_DIR,
   env: hostExecEnv(),
+  // wait_for's matcher: this program again (the stable copy once the shim made one), as --wait-matcher.
+  matcher: () => ({ command: walnutCliArgv[0]!, args: [...walnutCliArgv.slice(1), '--wait-matcher'] }),
 })
 // A task on another host calling this host's MCP servers ('host-mcp-v1', host-mcp-core.ts)
 // and its web services ('host-http-v1', host-http-core.ts). PARITY: keep in sync with daemon-source.ts.
@@ -14150,6 +14159,8 @@ if (action === '--start' || SERVICE_MODE) {
       // Work still stuck in a file call (a FIFO no one reads) holds a pool thread, and a normal
       // exit joins those threads: it would never return (twin of daemon-source.ts). Its state is saved; end hard.
       if (settled === 'cap') process.kill(process.pid, 'SIGKILL')
+      // PARITY: daemon-source.ts ends itself hard here (exitDaemon) when a host_exec file look is
+      // stuck in node's thread pool, whose exit waits for it; bun's exit does not, so this one exits as is.
       process.exit(failed || serviceUpdateRequested ? 1 : 0)
     })().catch((error) => { logMsg('error', 'daemon shutdown failed', { error: String(error) }); process.exit(1) })
   }

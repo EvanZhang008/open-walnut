@@ -85,6 +85,8 @@ const LITERAL_PATH_BUDGET: Record<string, number> = {
   'tests/providers/daemon-start-cmd.test.ts': 2,
   'tests/providers/daemon-workspace-twins-e2e.test.ts': 1,
   'tests/providers/git-commit-core.test.ts': 1,
+  // matcherEnv's input and its answer: data for a pure function, never a child's env.
+  'tests/providers/host-exec-matcher.test.ts': 2,
   'tests/providers/host-fix-core.test.ts': 1,
   'tests/providers/host-runtime-core.test.ts': 18,
   'tests/providers/host-runtime-preflight-shell.test.ts': 5,

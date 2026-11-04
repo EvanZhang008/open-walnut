@@ -45,6 +45,10 @@ import { INPUT_PREFIX, refusalAdvice } from '../../providers/sound-rules.js'
 
 export { redact }
 import { GRANT_ID_RE, assertStillGranted, grantFor, isOwnHost, pinnedGrant } from './host-exec-grant.js'
+import { HostExecError, callerOf, hostName, targetHost, type Caller } from './host-exec-target.js'
+
+// Who asks and where it goes (host-exec-target.ts), for every host_exec-family call.
+export { HostExecError, callerOf, hostName, sameMachineAs, sameMachineNote, targetHost, type Caller } from './host-exec-target.js'
 
 // The user's grant for a task on a host (host-exec-grant.ts), for host_mcp and host_http too.
 export { assertStillGranted, grantFor, isOwnHost }
@@ -74,13 +78,12 @@ export const ANSWER_RETURN_MS = 8_000
 const FOREGROUND_MAX_MS = 10 * 60_000
 const BACKGROUND_MAX_MS = 2 * 60 * 60_000
 const LOCAL = '__local__'
-
-export class HostExecError extends Error {
-  constructor(message: string, public status: number, public code: string, public data: Record<string, unknown> = {}) {
-    super(message)
-    this.name = 'HostExecError'
-  }
-}
+/**
+ * The host stops what a run's shell left running in its process group when the server asks
+ * (exec.run `endGroup`, src/providers/host-exec-group.ts): this server asks on every run, so the
+ * help is true for it, and a daemon that updates under an older server keeps what that one says.
+ */
+export const GROUP_CAPABILITY = 'host-exec-group-v1'
 
 export interface ExecParams {
   host: string
@@ -103,15 +106,17 @@ export interface ExecParams {
    */
   job_id?: string
   /**
-   * Run only under this grant (an id from GET /api/v1/host-exec/grants): no other grant counts,
+   * Run only under this grant (an id host_exec_list names, or GET /api/v1/host-exec/grants): no other grant counts,
    * none is made (not even a task on the user's own host gets one), and no letter asks the user.
    * The grant must be this task's on this host and live, and the host open, at the start and
    * again right before the run is sent; otherwise nothing runs (host-exec-grant.ts pinnedGrant).
    */
   grant_id?: string
+  /** Return as soon as the output matches, a port listens or a file exists there (host-exec-wait.ts). */
+  wait_for?: unknown
+  /** How long the call waits for wait_for (default: a foreground run's deadline; 2 minutes with background); timeout_ms stays the run's deadline. */
+  wait_ms?: number
 }
-
-export interface Caller { sid: string; taskId: string; taskTitle: string; host: string }
 
 /**
  * In flight, by job: who runs it and until when it may run (a background job that is never read
@@ -146,76 +151,6 @@ function countRunning(pred: (r: { taskId: string; host: string }) => boolean): n
   return n
 }
 
-function normHost(h: string | undefined | null): string {
-  return !h || h === 'local' ? LOCAL : h
-}
-
-export async function callerOf(sid: string | undefined): Promise<Caller> {
-  const { resolveCaller } = await import('../sessions/session-send-core.js')
-  const c = await resolveCaller(sid)
-  if (c.kind !== 'session' || !c.record.taskId) {
-    throw new HostExecError('host_exec runs for a task\'s session; a person runs commands in their own terminal', 403, 'session_only')
-  }
-  const { getTask } = await import('../task-manager.js')
-  const task = await getTask(c.record.taskId).catch(() => undefined)
-  return { sid: c.record.claudeSessionId, taskId: c.record.taskId, taskTitle: task?.title ?? c.record.taskId, host: normHost(c.record.host) }
-}
-
-/**
- * The joined row of the machine whose found ~/.ssh/config row `alias` is, or null:
- * one machine, and the joined row is the one that works (joined-twins.ts).
- */
-export async function sameMachineAs(alias: string): Promise<string | null> {
-  const name = alias.trim()
-  if (!name || normHost(name) === LOCAL) return null
-  const [{ getConfig }, { joinedAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
-  const config = await getConfig()
-  const to = joinedAliasOf(config.hosts ?? {}, config.net)(name)
-  return to && to !== name ? to : null
-}
-
-/** What an answer for a call on a found twin says (`refused`: nothing ran there), or null for any other host. */
-export async function sameMachineNote(alias: string, refused = false): Promise<string | null> {
-  const to = await sameMachineAs(alias).catch(() => null)
-  if (!to) return null
-  const name = await hostName(to)
-  return `${alias.trim()} is the same machine as ${name === to ? to : `${name} (host ${to})`}, which joined over the host network; `
-    + `${refused ? `this answer is ${to}'s` : `Walnut used ${to}`}. Name ${to} from now on.`
-}
-
-export async function targetHost(raw: string, caller: Caller, sameHostHint = 'run the command with your own Bash tool'): Promise<string> {
-  const { parseHostSelector, pickHost, HostSelectorError } = await import('./host-select.js')
-  let host: string
-  try {
-    const tags = parseHostSelector(raw)
-    host = normHost(tags ? (await pickHost(tags)).host : raw.trim())
-  } catch (err) {
-    if (err instanceof HostSelectorError) throw new HostExecError(err.message, err.code === 'bad_selector' ? 400 : 409, err.code)
-    throw err
-  }
-  // A selector already picks the joined row (pickHost); a named found twin goes there too.
-  const joined = await sameMachineAs(host)
-  if (joined) {
-    log.session.info('host exec: a found twin is its joined machine', { asked: host, host: joined, taskId: caller.taskId })
-    host = joined
-  }
-  if (host === caller.host) {
-    throw new HostExecError(`This session already runs on ${host === LOCAL ? 'this Mac' : host}: ${sameHostHint}`, 400, 'same_host')
-  }
-  if (host !== LOCAL) {
-    const { getConfig } = await import('../config-manager.js')
-    const hosts = (await getConfig()).hosts ?? {}
-    if (!Object.hasOwn(hosts, host)) throw new HostExecError(`Unknown host: ${host} (host_list names them)`, 404, 'unknown_host')
-  }
-  return host
-}
-
-export async function hostName(host: string): Promise<string> {
-  if (host === LOCAL) return 'the Mac'
-  const { hostDisplayNameFor } = await import('./host-display-name.js')
-  return hostDisplayNameFor(host)
-}
-
 /** The link to `host`, by `within` ms, with the daemon capability the call needs. */
 export async function dial(host: string, within = DIAL_MS, capability = 'host-exec-v1', what = 'run commands') {
   const { link } = await import('./link.js')
@@ -237,8 +172,19 @@ export async function dial(host: string, within = DIAL_MS, capability = 'host-ex
   }
 }
 
+/** What a failed step names that looks like a credential (its command, line, the `return` it ran), hidden like the output's lines. */
+const HIDDEN_STEP = '[hidden by Walnut: it looks like a credential]'
+async function hideStepSecrets<T extends { command: string; text?: string; returned?: string }>(step: T): Promise<T> {
+  const out = { ...step }
+  for (const k of ['command', 'text', 'returned'] as const) {
+    const v = out[k]
+    if (typeof v === 'string' && v && (await redact(v)).redacted) out[k] = HIDDEN_STEP
+  }
+  return out
+}
+
 /** The host's refusal as an answer: its words, and a status by its code. */
-const DAEMON_STATUS: Record<string, number> = { cwd_missing: 400, bad_request: 400, unknown_job: 404, task_dir_unset: 409, may_prompt: 409, job_exists: 409 }
+const DAEMON_STATUS: Record<string, number> = { cwd_missing: 400, bad_request: 400, unknown_job: 404, task_dir_unset: 409, may_prompt: 409, job_exists: 409, busy: 429 }
 
 export function daemonError(reply: Record<string, unknown>, fallback: string): HostExecError {
   const code = typeof reply.code === 'string' ? reply.code : 'host_failed'
@@ -255,21 +201,44 @@ export async function ask(conn: Awaited<ReturnType<typeof dial>>, host: string, 
   }
 }
 
+/**
+ * Every read of a job's output on the server goes through here (ratchet:
+ * tests/core/hosts/grant-recheck-ratchet.test.ts): the task's grant is read right before the read
+ * is sent and again when its answer comes back, so nothing a job printed after a revoke is shown.
+ */
+export async function readJob(conn: Awaited<ReturnType<typeof dial>>, host: string, taskId: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+  const { assertMayRead, readStopWatch } = await import('./host-exec-grant.js')
+  await assertMayRead(taskId, host, params.jobId)
+  // A revoke while the host holds the read ends the call then; the host's answer, when it comes, is dropped.
+  const watch = await readStopWatch(taskId, host, params.jobId)
+  try {
+    const reply = await Promise.race([ask(conn, host, 'exec.read', params, timeoutMs), watch.stopped])
+    await assertMayRead(taskId, host, params.jobId)
+    return reply
+  } finally {
+    watch.off()
+  }
+}
+
 /** How long one call may hold its answer: a session on another host reaches us through its gateway, which gives up at 20 s. */
 function holdBudget(caller: Caller, wanted: number, since: number): number {
   return Math.max(0, Math.min(wanted, budgetLeft(caller, since)))
 }
 
 /**
- * What is left of a call's answer time: to the caller's own deadline less the way back, when the
- * call carries one (a relayed call, src/lib/answer-by.ts), and for a session on another host at
- * most RELAYED_HOLD_MS from `since`; unbounded for a caller on the Mac whose call has no deadline.
+ * What is left of a call's answer time. A call relayed by a host's gateway carries its deadline (the
+ * relay sets it, src/lib/answer-by.ts): to it less the way back, and for a session on another host
+ * at most RELAYED_HOLD_MS from `since`, since the way in is not counted. A call with no deadline
+ * reached this server on its own (the CLI over HTTP, the browser) and waits as long as it asks,
+ * whichever host its session runs on (2026-11-05 review: a session that called the server
+ * directly from the server's own machine was held 10 s a read, as if a gateway stood between).
  */
 export function budgetLeft(caller: Caller, since: number): number {
   const now = Date.now()
   const by = ambientAnswerBy()
+  if (by === undefined) return Number.POSITIVE_INFINITY
   const relayed = caller.host === LOCAL ? Number.POSITIVE_INFINITY : RELAYED_HOLD_MS - (now - since)
-  return by === undefined ? relayed : Math.min(relayed, by - ANSWER_RETURN_MS - now)
+  return Math.min(relayed, by - ANSWER_RETURN_MS - now)
 }
 
 /** Below this much time left, a relayed call starts nothing: its answer could not get back. */
@@ -299,7 +268,8 @@ async function refreshRunning(pred: (r: { taskId: string; host: string }) => boo
  * waits for a slot, at most SLOT_WAIT_MAX_MS and half of what its answer time leaves, asking the
  * hosts now and then which runs still go (a background job nobody read again may have ended).
  */
-async function takeSlot(caller: Caller, host: string, jobId: string, since: number): Promise<void> {
+async function takeSlot(caller: Caller, host: string, jobId: string, since: number, recheck: () => Promise<unknown>): Promise<number> {
+  const t0 = Date.now()
   const mine = (r: { taskId: string }) => r.taskId === caller.taskId
   const theirs = (r: { host: string }) => r.host === host
   // A refresh may use at most half of what is left, so the run itself still fits.
@@ -307,10 +277,13 @@ async function takeSlot(caller: Caller, host: string, jobId: string, since: numb
   const waitUntil = Date.now() + Math.max(0, Math.min(SLOT_WAIT_MAX_MS, (budgetLeft(caller, since) - START_MIN_LEFT_MS) / 2))
   let refreshAt = 0
   for (;;) {
+    // A revoke or the host's hard stop while it waits answers as that at once (403), never as a
+    // full host after the whole wait, and asks the host nothing more.
+    await recheck()
     const taskFull = countRunning(mine) >= MAX_RUNNING_PER_TASK
     if (!taskFull && countRunning(theirs) < MAX_RUNNING_PER_HOST) {
       running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + DIAL_MS + 2 * REPLY_MARGIN_MS, at: Date.now(), pending: true })
-      return
+      return Date.now() - t0
     }
     if (Date.now() >= refreshAt) {
       refreshAt = Date.now() + SLOT_REFRESH_MS
@@ -320,8 +293,14 @@ async function takeSlot(caller: Caller, host: string, jobId: string, since: numb
     const left = waitUntil - Date.now()
     if (left <= 0) {
       const waited = `waited ${Math.round((Date.now() - since) / 1000)} s for one to end`
-      if (taskFull) throw new HostExecError(`This task already runs ${MAX_RUNNING_PER_TASK} commands on other hosts (${waited}); wait for one (host_exec_read) or stop one (host_exec_stop).`, 429, 'busy')
-      throw new HostExecError(`${await hostName(host)} already runs ${MAX_RUNNING_PER_HOST} commands for other hosts (${waited}); try again in a moment.`, 429, 'busy')
+      // The caps count host_exec runs, wherever they run (2026-11-05 review: "on other hosts" for four runs on __local__).
+      if (taskFull) {
+        // Named, so the caller knows which to read or stop (2026-11-05 review).
+        const jobs = [...running].filter(([id, r]) => mine(r) && id !== jobId && !r.pending).map(([id, r]) => ({ jobId: id, host: r.host }))
+        const named = jobs.length ? `: ${jobs.map((j) => `${j.jobId} on ${j.host}`).join(', ')}` : ''
+        throw new HostExecError(`This task already runs ${MAX_RUNNING_PER_TASK} host_exec commands, the most it may run at once on all hosts together (${waited})${named}; wait for one (host_exec_read) or stop one (host_exec_stop).`, 429, 'busy', jobs.length ? { running: jobs } : {})
+      }
+      throw new HostExecError(`${await hostName(host)} already runs ${MAX_RUNNING_PER_HOST} host_exec commands, the most it runs at once for all tasks (${waited}); try again in a moment.`, 429, 'busy')
     }
     await slotFreed(Math.min(left, SLOT_POLL_MS, Math.max(1, refreshAt - Date.now())))
   }
@@ -334,23 +313,49 @@ async function takeSlot(caller: Caller, host: string, jobId: string, since: numb
  * the log's very end said truncated and sent the reader back to offset 0); `more` says output
  * AFTER it is waiting (read again from nextOffset). `blocked` is a run the host stopped at a dialog.
  */
-export async function jobAnswer(host: string, jobId: string, reply: Record<string, unknown>, opts: { known?: RunShape; fromOffset?: boolean } = {}): Promise<Record<string, unknown> & { redactedLines?: number }> {
+export async function jobAnswer(host: string, jobId: string, reply: Record<string, unknown>, opts: { known?: RunShape; fromOffset?: boolean; bashLine?: boolean } = {}): Promise<Record<string, unknown> & { redactedLines?: number }> {
   const { shapeOf } = await import('./host-exec-legacy.js')
   if (reply.running !== true) release(jobId)
-  const { text, redacted } = await redact(typeof reply.output === 'string' ? reply.output : '')
-  const { failedStepOf } = await import('./host-exec-strict.js')
-  const failedStep = reply.running !== true ? failedStepOf(text) : null
+  const raw = typeof reply.output === 'string' ? reply.output : ''
+  const { text, redacted, keyToEnd } = await redact(raw)
+  const strict = await import('./host-exec-strict.js')
+  // Read from the output as it came: a step whose command looks like a credential had its whole
+  // line hidden, and the step with it (2026-11-05 review sol13: `test password=… = x` named none).
+  const failedStep = reply.running !== true ? strict.failedStepOf(raw, jobId, reply.exitCode) : null
+  // bash's own line number serves only the run's lookup of the step (functionCall); never shown.
+  if (failedStep && !opts.bashLine) { delete failedStep.bashLine; delete failedStep.inner }
+  // A strict run's own lines say the failing step once, and name what failedStep names. The run's
+  // lookup (bashLine) still reads the command as it is, and hides it after.
+  const hidden = failedStep ? await hideStepSecrets(failedStep) : null
+  const named = opts.bashLine ? failedStep : hidden
+  // The run names it once, after its own lookup (the line's sealed marker is still there for it).
+  const shown = !hidden ? text : opts.bashLine ? strict.withoutInnerMarks(text, jobId) : strict.withStepNamed(strict.withoutInnerMarks(text, jobId), hidden, jobId)
   const offset = typeof reply.offset === 'number' ? reply.offset : undefined
+  // What it left running that was stopped, named by ps on the host: hidden like the output (an
+  // argument may carry a token the line took from the environment).
+  const left = Array.isArray(reply.leftCommands) ? (await redact(reply.leftCommands.filter((c) => typeof c === 'string').join('\n'))).text.split('\n').filter(Boolean) : []
   const more = opts.fromOffset === true && typeof reply.nextOffset === 'number' && typeof reply.outputBytes === 'number' && reply.nextOffset < reply.outputBytes
   const blocked = reply.blocked && typeof reply.blocked === 'object' ? reply.blocked : null
   return {
     host, jobId, running: reply.running === true, exitCode: reply.exitCode ?? null, signal: reply.signal ?? null,
-    timedOut: reply.timedOut === true, ms: reply.ms, cwd: reply.cwd, ...shapeOf(reply, opts.known), output: text,
+    timedOut: reply.timedOut === true, ms: reply.ms, cwd: reply.cwd, ...shapeOf(reply, opts.known), output: shown,
     truncated: opts.fromOffset === true ? false : offset !== undefined ? offset > 0 : reply.truncated === true,
     ...(more ? { more: true } : {}),
     offset: reply.offset, nextOffset: reply.nextOffset,
-    outputBytes: reply.outputBytes, logFile: reply.logFile, ...(blocked ? { blocked } : {}), ...(redacted ? { redactedLines: redacted } : {}),
-    ...(failedStep ? { failedStep } : {}),
+    outputBytes: reply.outputBytes, logFile: reply.logFile, ...(blocked ? { blocked } : {}), ...(redacted ? { redactedLines: redacted } : {}), ...(keyToEnd ? { redactedToEnd: true } : {}),
+    // Processes it left running in the background were stopped when the shell exited (host-exec-group.ts);
+    // `outputCut`: one outside its group held its output, and still runs.
+    ...(reply.leftBehind === true ? { leftBehind: true, ...(left.length ? { leftCommands: left } : {}) } : {}),
+    ...(reply.outputCut === true ? { outputCut: true } : {}),
+    // While it runs: its shell has exited (what it left is being stopped), or how long to its
+    // deadline on the host (0: the host is stopping it there).
+    ...(reply.running === true && reply.shellExited === true ? { shellExited: true } : {}),
+    // host_exec_stop asked, and the host is stopping it (its 3 s before SIGKILL).
+    ...(reply.running === true && reply.killed === true ? { stopAsked: true } : {}),
+    // It ended because host_exec_stop asked (the only sender of exec.kill).
+    ...(reply.running !== true && reply.killed === true ? { stoppedByCall: true } : {}),
+    ...(reply.running === true && typeof reply.deadlineInMs === 'number' ? { deadlineInMs: reply.deadlineInMs } : {}),
+    ...(named ? { failedStep: named } : {}),
   }
 }
 
@@ -390,11 +395,15 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const hasCommand = typeof params.command === 'string' && params.command.trim() !== ''
   const hasArgv = Array.isArray(params.argv) && params.argv.length > 0
   if (hasCommand === hasArgv) throw new HostExecError('Give exactly one of command (a shell line) or argv (a program and its arguments)', 400, 'bad_request')
+  const waits = await import('./host-exec-wait.js')
+  const waitFor = waits.checkWaitFor(params.wait_for)
+  // Every refusal of the call's own arguments comes before the grant, so a bad call never asks the user.
+  if (params.wait_ms !== undefined && !waitFor) throw new HostExecError('wait_ms is how long the call waits for wait_for: give wait_for too, or leave wait_ms out (host_exec_read with wait_ms waits for a run to end). Nothing ran.', 400, 'bad_request')
   const asked = typeof params.job_id === 'string' && params.job_id !== '' ? params.job_id : null
   if (asked !== null && !JOB_ID_RE.test(asked)) throw new HostExecError('job_id must be hx- and 4 to 64 letters, digits, - or _ (the walnut CLI picks one)', 400, 'bad_request')
   // Any grant_id at all is the pinned mode: an empty or malformed one is refused, never read as none.
   const pinned = params.grant_id !== undefined ? String(params.grant_id) : null
-  if (pinned !== null && !GRANT_ID_RE.test(pinned)) throw new HostExecError('grant_id must be a grant\'s id (xg-..., GET /api/v1/host-exec/grants lists them)', 400, 'bad_request')
+  if (pinned !== null && !GRANT_ID_RE.test(pinned)) throw new HostExecError('grant_id must be a grant\'s id (xg-...; host_exec_list on the host names this task\'s as grantId)', 400, 'bad_request')
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
   const preview = hasCommand ? params.command! : params.argv!.join(' ')
@@ -408,13 +417,17 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   // The same call again (a retry after a lost answer): its run, never a second one.
   const known = running.get(jobId)
   if (known && (known.taskId !== caller.taskId || known.host !== host)) throw jobTaken(jobId)
-  if (known) return sameJob(caller, host, jobId, params.background === true, t0)
-  // An id Walnut already ran (it may have ended, and the host forgotten it since): never again.
   const jobs = await import('./host-exec-jobs.js')
   const ran = asked ? jobs.startedRun(jobId) : undefined
+  // The same id with another command: its run all the same, and the answer says so (2026-11-05
+  // review: a reused job_id with a new command answered the old run without a word).
+  const other = ran && ran.taskId === caller.taskId && ran.command !== preview.slice(0, 200) ? ran.command : undefined
+  const again = { background: params.background === true, waitFor, asked: params.timeout_ms, waitMs: params.wait_ms, ...(other !== undefined ? { other } : {}) }
+  if (known) return sameJob(caller, host, jobId, t0, again)
+  // An id Walnut already ran (it may have ended, and the host forgotten it since): never again.
   if (ran && (ran.taskId !== caller.taskId || ran.host !== host)) throw jobTaken(jobId)
-  if (ran) return sameJob(caller, host, jobId, params.background === true, t0, ran.startedAt)
-  await takeSlot(caller, host, jobId, t0)
+  if (ran) return sameJob(caller, host, jobId, t0, { ...again, ranAt: ran.startedAt })
+  const slotMs = await takeSlot(caller, host, jobId, t0, () => assertStillGranted(caller.taskId, host, grantId, pinned !== null))
 
   const background = params.background === true
   const cap = background ? BACKGROUND_MAX_MS : FOREGROUND_MAX_MS
@@ -435,11 +448,12 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     conn = await dial(host, budgetLeft(caller, t0) - START_MIN_LEFT_MS)
     await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
+    await waits.assertWaitSupported(conn, host, waitFor)
     // Strict shapes the line here, after the dialog guards read the user's own text.
     const strict = params.strict === true && hasCommand
     const { strictLine } = await import('./host-exec-strict.js')
-    const runParams = strict ? { ...params, command: strictLine(params.command!) } : params
-    ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, strict ? strictLine(line) : line))
+    const runParams = strict ? { ...params, command: strictLine(params.command!, jobId) } : params
+    ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, strict ? strictLine(line, jobId) : line))
     // Last look before anything reaches the host: from here to the send nothing waits.
     used = await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
   } catch (err) {
@@ -459,6 +473,10 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
       ...(params.allow_prompts === true ? { allowPrompts: true } : {}),
       // A foreground run keeps its own deadline on the host; only our wait for it is bounded.
       timeoutMs, background: true, caller: { task: caller.taskId, host: caller.host },
+      // The host refuses a wait_for that could never hold there before it runs anything.
+      ...(waitFor && conn.hasCapability(waits.WAIT_CAPABILITY) ? { until: waitFor } : {}),
+      // What its shell leaves in its process group is stopped when it exits (the help says so).
+      ...(conn.hasCapability(GROUP_CAPABILITY) ? { endGroup: true } : {}),
     }, Math.min(REPLY_MARGIN_MS, budgetLeft(caller, t0)))
   } catch (err) {
     // The host may have started it: the job keeps its slot until its deadline, and the
@@ -474,7 +492,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     // The host has a job by this id: this task's own run (its answer was lost, or a call with the
     // same id at once holds the slot), or another task's.
     if (reply.code === 'job_exists' || (typeof reply.error === 'string' && / already exists$/.test(reply.error))) {
-      return sameJob(caller, host, jobId, background, t0)
+      return sameJob(caller, host, jobId, t0, again)
     }
     release(jobId)
     throw daemonError(reply, 'the host refused the command')
@@ -485,26 +503,56 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   noteRun()
   void import('./exec-grants.js').then((g) => g.noteRun(used, preview))
   let last = reply
-  if (!background) {
+  // Cut short by the call's own answer time (a session on another host): the answer says so.
+  let cut = false
+  // wait_for: the host waits for it, as long as a foreground run is held (host-exec-wait.ts).
+  if (waitFor) cut = waits.execWaitWanted(background, timeoutMs, params.wait_ms) > budgetLeft(caller, t0)
+  const waited = waitFor ? await waits.waitOnJob(conn, host, caller, jobId, waitFor, { since: t0, within: waits.execWaitWindow(caller, t0, background, timeoutMs, params.wait_ms), started: reply, scanFrom: 0 }) : null
+  if (waited) last = { ...waited.reply, cwd: reply.cwd }
+  else if (!background) {
+    cut = timeoutMs + KILL_GRACE_MS + 2_000 > budgetLeft(caller, t0)
     const until = Date.now() + holdBudget(caller, timeoutMs + KILL_GRACE_MS + 2_000, t0)
     while (last.running === true && Date.now() < until) {
       const wait = Math.min(until - Date.now(), HOST_WAIT_MAX_MS)
-      // A read that fails leaves the run as it was: running, with its jobId to read later.
-      const read = await ask(conn, host, 'exec.read', { jobId, taskId: caller.taskId, wait }, wait + Math.min(REPLY_MARGIN_MS, Math.max(1_000, budgetLeft(caller, t0) - wait)))
-        .catch(() => null)
+      // A read that fails leaves the run as it was: running, with its jobId to read later; a
+      // revoke while it waited ends the call (the run keeps going).
+      const read = await readJob(conn, host, caller.taskId, { jobId, taskId: caller.taskId, wait }, wait + Math.min(REPLY_MARGIN_MS, Math.max(1_000, budgetLeft(caller, t0) - wait)))
+        .catch(async (err) => { if ((await import('./host-exec-grant.js')).isReadStop(err)) throw err; return null })
       if (!read?.ok) break
       last = { ...read, cwd: reply.cwd }
     }
   }
-  const out = await jobAnswer(host, jobId, last, { known: shape })
+  const out = await jobAnswer(host, jobId, last, { known: shape, bashLine: true })
+  // An older daemon there leaves a child that sent its output elsewhere running: the answer says so.
+  if (!conn.hasCapability(GROUP_CAPABILITY)) out.groupKept = true
+  if (waited) out.waitedFor = await waits.shownWait(last, out, waited.waitedFor, waits.readAtOf(conn, host, caller, jobId, t0))
+  if (cut && out.running === true && waits.ranOut(waited?.waitedFor)) out.heldMs = Date.now() - t0
+  // It waited for a slot under a cap first: the answer says how long (2026-11-05 review).
+  if (slotMs >= 1_000) out.slotWaitMs = slotMs
+  // A deadline over the most a run of its kind may have ran with that most: the answer says so (2026-11-05 review 12).
+  if (typeof params.timeout_ms === 'number' && params.timeout_ms > cap) out.timeoutCappedMs = cap
   const step = out.failedStep as import('./host-exec-strict.js').FailedStep | undefined
   if (step && hasCommand) {
-    const at = (await import('./host-exec-strict.js')).lineOf(step, params.command!)
-    if (at) { step.line = at; step.text = params.command!.split('\n')[at - 1].trim().slice(0, 200) }
+    const strict = await import('./host-exec-strict.js')
+    const called = strict.functionCall(step, params.command!)
+    const at = called === step ? strict.lineOf(step, params.command!) : undefined
+    if (called !== step) out.failedStep = called
+    else if (at) {
+      step.line = at
+      step.text = params.command!.split('\n')[at - 1].trim().slice(0, 200)
+      out.failedStep = strict.pipeMember(step)
+    }
   }
+  if (step) {
+    const strict = await import('./host-exec-strict.js')
+    out.failedStep = await hideStepSecrets(out.failedStep as typeof step)
+    if (typeof out.output === 'string') out.output = strict.withStepNamed(out.output, out.failedStep as typeof step, jobId)
+  }
+  // bash's own line number only serves the lookup above.
+  if (out.failedStep && typeof out.failedStep === 'object') { delete (out.failedStep as { bashLine?: number }).bashLine; delete (out.failedStep as { inner?: true }).inner }
   log.session.info('host exec', {
     taskId: caller.taskId, fromHost: caller.host, host, jobId, cwd: reply.cwd, background, running: out.running, shell: out.shell, legacy: !conn.hasCapability('host-exec-v2'),
-    exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0,
+    exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0, waitedFor: waited?.waitedFor.matched,
     command: preview.slice(0, 200),
   })
   return out
@@ -516,12 +564,14 @@ function jobTaken(jobId: string): HostExecError {
 
 /**
  * A job_id this task already started on this host: its run as it is now (a foreground
- * call waits for it as the first one would have), marked `sameJob`, so nothing runs twice.
+ * call waits for it as the first one would have, a wait_for waits again), marked `sameJob`,
+ * so nothing runs twice.
  */
-async function sameJob(caller: Caller, host: string, jobId: string, background: boolean, t0: number, ranAt?: number): Promise<Record<string, unknown>> {
+async function sameJob(caller: Caller, host: string, jobId: string, t0: number, o: Parameters<typeof import('./host-exec-wait.js').readAgain>[5] & { ranAt?: number; other?: string }): Promise<Record<string, unknown>> {
+  const { ranAt, other } = o
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000)
-  const wait = background ? 0 : Math.max(0, Math.min(HOST_WAIT_MAX_MS, holdBudget(caller, FOREGROUND_MAX_MS, t0) - 2_000))
-  const reply = await ask(conn, host, 'exec.read', { jobId, taskId: caller.taskId, ...(wait ? { wait } : {}) }, wait + Math.min(REPLY_MARGIN_MS, Math.max(2_000, budgetLeft(caller, t0) - wait)))
+  const waits = await import('./host-exec-wait.js')
+  const { reply, waitedFor } = await waits.readAgain(conn, host, caller, jobId, t0, o)
   if (!reply.ok) {
     if (reply.code === 'unknown_job' && ranAt !== undefined) {
       throw new HostExecError(`Job ${jobId} already ran for this task on ${await hostName(host)} (started ${new Date(ranAt).toISOString()}), and that host no longer holds it `
@@ -533,7 +583,8 @@ async function sameJob(caller: Caller, host: string, jobId: string, background: 
   // Still running: it holds a slot here too (a call with the same id at once, or the server restarted).
   if (reply.running === true && !running.has(jobId)) running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + BACKGROUND_MAX_MS + REPLY_MARGIN_MS, at: 0 })
   log.session.info('host exec: the same job id again, answered with its run', { taskId: caller.taskId, host, jobId })
-  return { ...await jobAnswer(host, jobId, reply), sameJob: true }
+  const out = { ...await jobAnswer(host, jobId, reply), sameJob: true, ...(other !== undefined ? { sameJobCommand: (await redact(other)).text } : {}) }
+  return waitedFor ? { ...out, waitedFor: await waits.shownWait(reply, out, waitedFor, waits.readAtOf(conn, host, caller, jobId, t0)) } : out
 }
 
 /** Tests: forget the in-flight runs. */

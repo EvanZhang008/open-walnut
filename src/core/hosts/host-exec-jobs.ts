@@ -12,8 +12,9 @@
  * longer holds (it restarted, or an hour went by) is listed as `gone`.
  */
 import {
-  HOST_WAIT_MAX_MS, LIST_MS, REPLY_MARGIN_MS, ask, budgetLeft, callerOf, daemonError, dial, grantFor, HostExecError, jobAnswer, redact, targetHost,
+  HOST_WAIT_MAX_MS, LIST_MS, REPLY_MARGIN_MS, ask, budgetLeft, callerOf, daemonError, dial, grantFor, HostExecError, jobAnswer, readJob, redact, targetHost,
 } from './host-exec.js'
+import { mayTendRuns } from './host-exec-grant.js'
 
 /** What this server knows of a run it started (the host may know more). */
 interface StartedRun { jobId: string; taskId: string; host: string; command: string; startedAt: number }
@@ -64,21 +65,43 @@ export function startedRun(jobId: string): StartedRun | undefined {
   return r
 }
 
-/** Read a job's output (from `offset`, or its tail), waiting up to `wait_ms` for it to end. */
-export async function readHostJob(params: { host: string; job_id: string; offset?: number; wait_ms?: number }, callerSid: string | undefined): Promise<Record<string, unknown>> {
+/**
+ * Read a job's output (from `offset`, or its tail), waiting up to `wait_ms` for it to end; with
+ * `wait_for`, also until its output matches, a port listens or a file exists (host-exec-wait.ts),
+ * by default as long as a read may hold.
+ */
+export async function readHostJob(params: { host: string; job_id: string; offset?: number; wait_ms?: number; wait_for?: unknown }, callerSid: string | undefined): Promise<Record<string, unknown>> {
   const t0 = Date.now()
+  const waits = await import('./host-exec-wait.js')
+  const waitFor = waits.checkWaitFor(params.wait_for, 'Nothing was read.')
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
   await grantFor(caller, host, null)
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000)
-  // The host's answer needs a moment to get back: the wait leaves it 2 s.
-  const wait = typeof params.wait_ms === 'number' && params.wait_ms > 0 ? Math.max(0, Math.min(params.wait_ms, HOST_WAIT_MAX_MS, budgetLeft(caller, t0) - 2_000)) : 0
+  // The host's answer needs a moment to get back: the wait leaves it 2 s. With wait_for the wait
+  // is relayed in reads of at most HOST_WAIT_MAX_MS, so it may be as long as host_exec's.
+  const asked = typeof params.wait_ms === 'number' && params.wait_ms >= 0 ? params.wait_ms : waitFor ? HOST_WAIT_MAX_MS : 0
+  const most = waitFor ? waits.WAIT_MAX_MS : HOST_WAIT_MAX_MS
+  const wait = asked > 0 ? Math.max(0, Math.min(asked, most, budgetLeft(caller, t0) - 2_000)) : 0
   const fromOffset = typeof params.offset === 'number'
-  const reply = await ask(conn, host, 'exec.read', {
+  // The call's own answer time (a session on another host) cut the wait asked for: the answer says so.
+  const cut = asked > 0 && wait < Math.min(asked, most)
+  // Only when the hold is what ended the wait: not a match, a pattern stopped as too slow, an error.
+  const held = (out: Record<string, unknown>, w?: import('./host-exec-wait.js').WaitedFor) => (cut && out.running === true && waits.ranOut(w) ? { heldMs: Date.now() - t0 } : {})
+  if (waitFor) {
+    await waits.assertWaitSupported(conn, host, waitFor)
+    const { reply, waitedFor } = await waits.waitOnJob(conn, host, caller, params.job_id, waitFor, { since: t0, within: wait, ...(fromOffset ? { offset: params.offset } : {}) })
+    const out = await jobAnswer(host, params.job_id, reply, { fromOffset })
+    return { ...out, ...held(out, waitedFor), waitedFor: await waits.shownWait(reply, out, waitedFor, waits.readAtOf(conn, host, caller, params.job_id, t0)) }
+  }
+  const reply = await readJob(conn, host, caller.taskId, {
     jobId: params.job_id, taskId: caller.taskId, ...(fromOffset ? { offset: params.offset } : {}), ...(wait ? { wait } : {}),
   }, wait + Math.min(REPLY_MARGIN_MS, Math.max(2_000, budgetLeft(caller, t0) - wait)))
   if (!reply.ok) throw daemonError(reply, 'the host could not read the job')
-  return jobAnswer(host, params.job_id, reply, { fromOffset })
+  const out = await jobAnswer(host, params.job_id, reply, { fromOffset })
+  // A read without wait_for waits a minute at most (2026-11-04 review: a refusal of a longer one cost a call).
+  const capped = !cut && asked > most && out.running === true ? { waitCappedMs: most } : {}
+  return { ...out, ...held(out), ...capped }
 }
 
 /** Stop a running job (its whole process group). */
@@ -86,11 +109,20 @@ export async function stopHostJob(params: { host: string; job_id: string }, call
   const t0 = Date.now()
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
-  await grantFor(caller, host, null)
+  const { revoked } = await mayTendRuns(caller, host)
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000)
   const reply = await ask(conn, host, 'exec.kill', { jobId: params.job_id, taskId: caller.taskId }, Math.min(REPLY_MARGIN_MS, Math.max(2_000, budgetLeft(caller, t0))))
   if (!reply.ok) throw daemonError(reply, 'the host could not stop the job')
-  return { host, jobId: params.job_id, running: reply.running === true, stopping: reply.running === true }
+  const running = reply.running === true
+  // A job that had already ended says how, so its stop is not read as one in flight.
+  const ended = running ? {} : {
+    exitCode: typeof reply.exitCode === 'number' ? reply.exitCode : null,
+    signal: typeof reply.signal === 'string' ? reply.signal : null,
+    timedOut: reply.timedOut === true, killed: reply.killed === true,
+    ...(typeof reply.ms === 'number' ? { ms: reply.ms } : {}),
+  }
+  // Under a revoked grant only stop and list reach the run: the answer says so, for the next step.
+  return { host, jobId: params.job_id, running, stopping: running, ...ended, ...(revoked ? { grantRevoked: true } : {}) }
 }
 
 /** One job in the list. */
@@ -127,7 +159,7 @@ export async function listHostJobs(params: { host: string }, callerSid: string |
   const t0 = Date.now()
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
-  await grantFor(caller, host, null)
+  const { revoked, grantId } = await mayTendRuns(caller, host)
   const cutoff = Date.now() - RECORD_MAX_AGE_MS
   const mine = (started.get(keyOf(caller.taskId, host)) ?? []).filter((r) => r.startedAt >= cutoff)
   const byId = new Map(mine.map((r) => [r.jobId, r]))
@@ -152,7 +184,8 @@ export async function listHostJobs(params: { host: string }, callerSid: string |
     const startedAt = typeof j.startedAt === 'number' ? j.startedAt : byId.get(id)?.startedAt ?? Date.now()
     rows.push({
       jobId: id,
-      command: typeof j.command === 'string' ? j.command : byId.get(id)?.command ?? null,
+      // The command as the task gave it (the host holds the line it ran, strict:true's wrapped one too).
+      command: byId.get(id)?.command ?? (typeof j.command === 'string' ? j.command : null),
       startedAt: new Date(startedAt).toISOString(),
       running: j.running === true,
       state: stateOf(j),
@@ -172,11 +205,14 @@ export async function listHostJobs(params: { host: string }, callerSid: string |
     })
   }
   rows.sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-  const kept = [...rows.filter((r) => r.running === true), ...rows.filter((r) => r.running !== true).slice(0, LIST_ENDED_MAX)]
+  const endedAll = rows.filter((r) => r.running !== true)
+  const kept = [...rows.filter((r) => r.running === true), ...endedAll.slice(0, LIST_ENDED_MAX)]
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
   // A command line can hold a secret: the same filter as the output.
   for (const r of kept) if (r.command) r.command = (await redact(r.command)).text
-  return { host, jobs: kept, ...(away ? { hostAway: away } : {}) }
+  // The task's grant there, so host_exec_pinned can name it without another lookup (2026-11-05 review).
+  // grantId first: host_exec_pinned's help sends a caller here for it (2026-11-05 review 12).
+  return { host, ...(grantId ? { grantId } : {}), jobs: kept, ...(endedAll.length > LIST_ENDED_MAX ? { endedOf: endedAll.length } : {}), ...(away ? { hostAway: away } : {}), ...(revoked ? { grantRevoked: true } : {}) }
 }
 
 /** Tests: forget the record. */

@@ -5,7 +5,11 @@
  * parsing, the log lands in the task's directory, a refusal comes back with its
  * code, a deadline stops the whole process group, a background job is read and
  * stopped (only by the task that started it), a process that left the group does
- * not hold the run open, and every run is in the audit file.
+ * not hold the run open, and every run is in the audit file; host-exec-group-v1 ends a run's group
+ * only when asked (`endGroup`); host-exec-wait-v1's
+ * exec.read `until` waits for a line, tested in a matcher process each twin starts as its own
+ * program (a runaway pattern kills that process, never the daemon's loop), and a wait_for that
+ * could never hold is refused.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the task root are temp paths; the
  * commands are /bin/sh builtins and sleep; the daemon is SIGKILLed after each twin.
@@ -179,5 +183,75 @@ describe.each(TWINS)('$name', (twin) => {
     const mine = await rpc({ cmd: 'exec.list', taskId })
     expect(mine.jobs).toMatchObject([{ jobId: 'hx-v2-one', taskId, running: false, exitCode: 0, command: expect.stringContaining('echo ===') }])
     expect(((await rpc({ cmd: 'exec.list' })).jobs as Array<{ jobId: string }>).map((j) => j.jobId).sort()).toEqual(['hx-v2-one', 'hx-v2-other'])
+  }, 60_000)
+
+  it('host-exec-wait-v1: exec.read until answers at the line, and refuses a bad pattern', async () => {
+    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-wait`)
+    await boot(twin, dir)
+    expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('host-exec-wait-v1')
+    const taskId = 'task-hx-wait'
+    expect(await rpc({ cmd: 'exec.run', jobId: 'hx-wait-one', taskId, command: 'sleep 0.5; echo "listening on :4000"; sleep 30', background: true })).toMatchObject({ ok: true, running: true })
+    const t0 = Date.now()
+    const hit = await rpc({ cmd: 'exec.read', jobId: 'hx-wait-one', taskId, wait: 15_000, until: { output: 'listening on :\\d+' } })
+    expect(hit).toMatchObject({ ok: true, running: true, waitedFor: { matched: 'output', match: 'listening on :4000' } })
+    expect(Date.now() - t0).toBeLessThan(10_000)
+    expect(await rpc({ cmd: 'exec.read', jobId: 'hx-wait-one', taskId, until: { output: '(a+)+$' } })).toMatchObject({ ok: false, code: 'bad_request' })
+    // An alternation one group down repeats as badly (2026-11-04 review): refused by this twin's own check too.
+    expect(await rpc({ cmd: 'exec.read', jobId: 'hx-wait-one', taskId, until: { output: '((a|a)b)*c' } })).toMatchObject({ ok: false, code: 'bad_request' })
+    // A file under a task directory this host does not have for the run: refused before anything runs.
+    expect(await rpc({ cmd: 'exec.run', jobId: 'hx-wait-nodir', command: 'echo never', background: true, until: { file: '$WALNUT_TASK_DIR/ready' } })).toMatchObject({ ok: false, code: 'task_dir_unset' })
+    expect(((await rpc({ cmd: 'exec.list' })).jobs as Array<{ jobId: string }>).map((j) => j.jobId)).not.toContain('hx-wait-nodir')
+    expect(await rpc({ cmd: 'exec.kill', jobId: 'hx-wait-one', taskId })).toMatchObject({ ok: true })
+  }, 60_000)
+
+  it('host-exec-group-v1: exec.run endGroup stops what the shell left in its group; without it a redirected child runs on, as before', async () => {
+    // Code review 6, item 2: the server asks on each run, so a daemon that updates under an older server keeps the older behaviour.
+    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-group`)
+    await boot(twin, dir)
+    expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('host-exec-group-v1')
+    const taskId = 'task-hx-group'
+    const ended = await rpc({ cmd: 'exec.run', jobId: 'hx-group-end', taskId, command: 'sleep 65 > /dev/null 2>&1 & echo "child $!"', endGroup: true })
+    expect(ended).toMatchObject({ ok: true, exitCode: 0, leftBehind: true })
+    expect(String(ended.leftCommands)).toContain('sleep 65')
+    const kept = await rpc({ cmd: 'exec.run', jobId: 'hx-group-keep', taskId, command: 'sleep 66 > /dev/null 2>&1 & echo "child $!"' })
+    expect(kept).toMatchObject({ ok: true, exitCode: 0, leftBehind: false })
+    const pid = Number(/child (\d+)/.exec(String(kept.output))?.[1])
+    expect(pid).toBeGreaterThan(1)
+    try {
+      expect(() => process.kill(pid, 0)).not.toThrow()
+    } finally {
+      if (pid > 1) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    }
+  }, 60_000)
+
+  it('host-exec-wait-v1: lines are tested in a matcher process of the daemon, which a runaway pattern loses while the daemon answers on', async () => {
+    // 2026-11-04 review: patterns the static check passed held the daemon's loop 3 to 6 s a line.
+    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-matcher`)
+    await boot(twin, dir)
+    const taskId = 'task-hx-matcher'
+    expect(await rpc({ cmd: 'exec.run', jobId: 'hx-matcher-one', taskId, command: "printf '\\033[32mready\\033[0m on 4000\\n'; printf '%020000d\\n' 0; sleep 30", background: true })).toMatchObject({ ok: true, running: true })
+    const hit = await rpc({ cmd: 'exec.read', jobId: 'hx-matcher-one', taskId, wait: 15_000, until: { output: 'READY on \\d+', flags: 'i' } })
+    expect(hit).toMatchObject({ ok: true, waitedFor: { matched: 'output', match: 'ready on 4000' } })
+    // The matcher is this daemon's child, run as this twin's own program.
+    const children = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout.split('\n')
+      .map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter((m): m is RegExpMatchArray => m !== null && Number(m[2]) === proc!.pid)
+    const matcher = children.find((m) => /--wait-matcher|runWaitMatcher/.test(m[3]!))
+    expect(matcher, children.map((m) => m[3]).join('\n')).toBeDefined()
+    // Cubic on the 20 000-character line: stopped at its limit, and the daemon answered all the while.
+    const t0 = Date.now()
+    const slow = rpc({ cmd: 'exec.read', jobId: 'hx-matcher-one', taskId, wait: 15_000, scanFrom: hit.waitedFor && (hit.waitedFor as { scanned: number }).scanned, until: { output: '0.*0.*0.*x' } })
+    await new Promise((r) => setTimeout(r, 100))
+    const h0 = Date.now()
+    expect(await rpc({ cmd: 'hello' })).toMatchObject({ ok: true })
+    expect(Date.now() - h0).toBeLessThan(1_000)
+    expect(await slow).toMatchObject({ ok: true, running: true, waitedFor: { matched: null, tooSlow: true } })
+    expect(Date.now() - t0).toBeLessThan(10_000)
+    // That process is gone; the next wait gets a new one.
+    const matcherPid = Number(matcher![1])
+    let gone = false
+    for (let i = 0; i < 20 && !gone; i++) { try { process.kill(matcherPid, 0) } catch { gone = true }; if (!gone) await new Promise((r) => setTimeout(r, 100)) }
+    expect(gone).toBe(true)
+    expect(await rpc({ cmd: 'exec.read', jobId: 'hx-matcher-one', taskId, wait: 5_000, until: { output: '^ready' } })).toMatchObject({ waitedFor: { matched: 'output' } })
+    expect(await rpc({ cmd: 'exec.kill', jobId: 'hx-matcher-one', taskId })).toMatchObject({ ok: true })
   }, 60_000)
 })

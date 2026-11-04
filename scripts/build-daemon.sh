@@ -108,6 +108,12 @@ SOURCES=(
   src/providers/host-exec-guards.ts
   src/providers/host-exec-clt.ts
   src/providers/host-exec-watch.ts
+  src/providers/host-exec-wait.ts
+  src/providers/host-exec-probe.ts
+  src/providers/host-exec-pattern.ts
+  src/providers/host-exec-matcher.ts
+  src/providers/host-exec-group.ts
+  src/providers/host-exec-job.ts
   src/providers/host-exec-run-id.ts
   src/providers/net-core.ts
   src/providers/net-binary.ts

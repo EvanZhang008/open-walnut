@@ -97,10 +97,42 @@ export function lostRunLines(name: string, args: Record<string, unknown>, runId:
       `walnut: (if that read says unknown_copy, the copy never reached the Walnut server: call ${name} again)`,
     ]
   }
-  const read = JSON.stringify({ host: args.host, [op.field]: runId, wait_ms: 10_000 })
+  // A call that waited for something: the read waits for the same, over the run's output from its
+  // start (2026-11-05 review: the read without it waited for the job's end, not the line).
+  const waited = args.wait_for && typeof args.wait_for === 'object' ? { offset: 0, wait_for: args.wait_for } : null
+  const waitMs = waited && typeof args.wait_ms === 'number' && args.wait_ms > 0 ? Math.min(args.wait_ms, 600_000) : 10_000
+  const read = JSON.stringify({ host: args.host, [op.field]: runId, ...(waited ?? {}), wait_ms: waitMs })
   return [
     `walnut: ${name} may have started on ${String(args.host)} as job ${runId}: do not run it again. Read it first:`,
     `  walnut tools call ${op.read} ${shellWord(read)}`,
     `walnut: (if that read says unknown_job, the run never reached ${String(args.host)}: host_exec_list ${shellWord(JSON.stringify({ host: args.host }))} lists this task's jobs there)`,
   ]
+}
+
+/** The signals a caller stops a CLI with: its own timeout (SIGTERM), a ^C, a closed terminal. */
+const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
+type StopSignal = typeof STOP_SIGNALS[number]
+/** The part of `process` namedOnSignal uses (a test hands a stand-in). */
+export interface SignalProc {
+  once(sig: StopSignal, fn: () => void): unknown
+  removeListener(sig: StopSignal, fn: () => void): unknown
+  kill(pid: number, sig: StopSignal): unknown
+  pid: number
+}
+
+/**
+ * While a run's call is out, a stop signal prints the lines that name the run (lostRunLines)
+ * before the process ends by that signal, as a lost answer does (2026-11-04 review: a CLI its
+ * caller's timeout stopped printed nothing, and its job was found only through host_exec_list).
+ * Returns what takes the handlers off once the call has its answer.
+ */
+export function namedOnSignal(name: string, args: Record<string, unknown>, runId: string | null,
+  write: (text: string) => void = (t) => { process.stderr.write(t) }, proc: SignalProc = process as unknown as SignalProc): () => void {
+  if (!runId) return () => {}
+  const lines = lostRunLines(name, args, runId)
+  if (!lines.length) return () => {}
+  const handlers = STOP_SIGNALS.map((sig) => [sig, () => { write(`${lines.join('\n')}\n`); off(); proc.kill(proc.pid, sig) }] as const)
+  const off = () => { for (const [sig, fn] of handlers) proc.removeListener(sig, fn) }
+  for (const [sig, fn] of handlers) proc.once(sig, fn)
+  return off
 }

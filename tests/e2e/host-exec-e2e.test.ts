@@ -17,6 +17,13 @@
  * daemon and, shaped by the server, on an older one (zsh as its login shell); a run the caller
  * named (job_id) is read after its answer was lost and never runs twice; a relayed call answers
  * inside its deadline; a read from an offset is not "truncated"; host_exec_list lists a task's jobs.
+ * And wait_for (host-exec-wait.ts): one call returns when a line of the output matches (tested in
+ * the host's killable matcher, colour codes removed), a port listens or a file exists, or the job
+ * ends, or its bound runs out; a port or file already there before the run says so; a pattern
+ * that runs away on a line is stopped and says so; a line over 64 K is named; a run whose `&`
+ * children were stopped with it says so; every miss names the exact read that goes on; a bad
+ * pattern is refused before anything runs; a daemon from before host-exec-wait-v1 is refused
+ * every wait_for before anything runs (no pattern ever runs on the server).
  * And (2026-11-04): a run under one named grant (POST /host-exec/grants/:id/exec, op host_exec_pinned,
  * listed as host-exec-pinned-v1 in /status) runs only under it, makes no grant and sends no letter; a revoke or the hard stop while a call waits for a slot or the host starts nothing.
  *
@@ -32,6 +39,7 @@ import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { testMatcherStart } from '../helpers/wait-matcher.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-exec-e2e'))
 
@@ -54,6 +62,7 @@ import { updateHostProfile } from '../../src/core/hosts/host-profile.js'
 import { getConfig } from '../../src/core/config-manager.js'
 import { spawn as spawnChild } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import net from 'node:net'
 
 let server: HttpServer
 let port: number
@@ -75,11 +84,20 @@ const awayHosts = new Set<string>()
 const oldJobs: Array<{ host: string; jobId: string; at: number }> = []
 /** The login shell of the older daemon below: zsh, as on a Mac, where this machine has it. */
 const OLD_LOGIN_SHELL = ['/bin/zsh', '/usr/bin/zsh'].find((f) => existsSync(f)) ?? '/bin/sh'
+/** The host cores below: each ends its matcher process at the end. */
+const cores: Array<{ close: () => void }> = []
 
+/**
+ * Every session here runs on another host, and such a session's call comes through its host's
+ * gateway, which sets the call's deadline (20 s from when the server got it): so does this, unless a
+ * test names its own (or '' for a call that reached the server itself, with no deadline).
+ */
 async function api(method: string, p: string, body?: unknown, sid?: string, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
+  const relay = sid && !('x-walnut-answer-by' in headers) ? { 'x-walnut-answer-by': String(Date.now() + 20_000) } : {}
+  const named = Object.fromEntries(Object.entries(headers).filter(([, v]) => v !== ''))
   const r = await fetch(`http://127.0.0.1:${port}${p}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}), ...headers },
+    headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}), ...relay, ...named },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   const text = await r.text()
@@ -113,19 +131,22 @@ beforeAll(async () => {
     // HOME too: with none, the login shell reads the real account's ~/.profile.
     stateDir: path.join(hostRoot, 'state'), env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: path.join(hostRoot, 'home') },
     // Never the real ps and log, even where this suite runs on a Mac.
-    promptProbe: null,
+    promptProbe: null, matcher: testMatcherStart(),
   })
-  // A current daemon (host-exec-v2) in front of a real host core.
-  const currentHost = (hostKey: string, hostCore = core) => ({
+  cores.push(core)
+  // A current daemon (host-exec-v2, host-exec-wait-v1, host-exec-group-v1) in front of a real host
+  // core; `wait` false is one from before wait_for, which ignores an `until` and an `endGroup` it does not know.
+  const currentHost = (hostKey: string, hostCore = core, wait = true) => ({
     connected: true, hostKey, connect: async () => {}, taskDirRoot: path.join(hostRoot, 'tasks'),
-    hasCapability: (c: string) => c === 'host-exec-v1' || c === 'host-exec-v2' || c === 'task-dir-v1',
+    hasCapability: (c: string) => c === 'host-exec-v1' || c === 'host-exec-v2' || c === 'task-dir-v1' || (wait && (c === 'host-exec-wait-v1' || c === 'host-exec-group-v1')),
     send: async (cmd: string, params: Record<string, unknown> = {}) => {
       sent.push({ cmd, params, host: hostKey })
       if (String(params.command ?? '').includes('LOSE_THE_HOST')) throw new Error('socket closed')
       if (cmd === 'exec.list' && awayHosts.has(hostKey)) throw new Error('socket closed')
       try {
         const op = cmd.slice('exec.'.length) as 'run' | 'read' | 'kill' | 'list'
-        return { ok: true, ...(await (hostCore[op] as (p: unknown) => Promise<Record<string, unknown>>)(params)) }
+        const { until: _until, endGroup: _endGroup, ...known } = params
+        return { ok: true, ...(await (hostCore[op] as (p: unknown) => Promise<Record<string, unknown>>)(wait ? params : known)) }
       } catch (err) {
         return { ok: false, error: `${cmd} failed: ${(err as Error).message}`, code: (err as { code?: string }).code }
       }
@@ -181,10 +202,11 @@ beforeAll(async () => {
     // Each watched group holds an idle `security` (a keychain call) while SecurityAgent is up.
     promptProbe: { snapshot: async (pgids) => ({ processes: pgids.map((pgid) => ({ pid: 99_999, pgid, cpuMs: 0, comm: '/usr/bin/security' })), securityAgentStartedAt: Date.now() }), tccPrompts: async () => [] },
   })
+  cores.push(tccCore)
   const fakes: Record<string, unknown> = {
     macbox, devbox, strangerbox: devbox, 'Studio-MacBook': currentHost('Studio-MacBook'), 'studio-mac': devbox,
     oldmac: olderHost('oldmac', path.join(hostRoot, 'old-tasks')), 'oldmac-nodir': olderHost('oldmac-nodir', null),
-    tccmac: currentHost('tccmac', tccCore),
+    tccmac: currentHost('tccmac', tccCore), waitless: currentHost('waitless', core, false),
   }
   const real = daemonConnections.getDaemonConnection
   vi.spyOn(daemonConnections, 'getDaemonConnection').mockImplementation(async (key, target) =>
@@ -205,7 +227,7 @@ beforeAll(async () => {
       'studio-mac': { hostname: 'Studio-MacBook.local', user: 'sam', discovered: true },
       'Studio-MacBook': { hostname: 'Studio-MacBook.walnut-net.invalid', label: 'Studio-MacBook', transport: 'net', endpoint: 'a'.repeat(64) },
       oldmac: { hostname: 'oldmac.example' }, 'oldmac-nodir': { hostname: 'oldmac-nodir.example' },
-      tccmac: { hostname: 'tccmac.example' },
+      tccmac: { hostname: 'tccmac.example' }, waitless: { hostname: 'waitless.example', label: 'Waitless box' },
     } as never,
     net: { enabled: true },
   } as never)
@@ -224,6 +246,7 @@ beforeAll(async () => {
 }, 120_000)
 
 afterAll(async () => {
+  for (const c of cores) c.close()
   await stopServer()
   vi.restoreAllMocks()
   resetHostExecForTest()
@@ -312,6 +335,39 @@ describe('host_exec', () => {
     await until(async () => ((await api('GET', '/api/v1/host-exec/grants')).body.grants[0].runs ?? 0) >= 3, 'the run count')
   }, 60_000)
 
+  it('host_exec_stop says Stopping only for a job still running; one that had ended says how it ended', async () => {
+    // 2026-11-04: a reviewer stopped a job that had already ended at its deadline and read
+    // "Stopping." next to running:false, so it had to read the job again to learn it was long over.
+    const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const stop = async (jobId: unknown) => (await executeOp('host_exec_stop', { host: 'macbox', job_id: String(jobId) }, opts) as { ok: boolean; result: Record<string, unknown> }).result
+    const read = async (jobId: unknown) => (await api('GET', `/api/v1/hosts/macbox/exec/${jobId}?wait_ms=0`, undefined, SID)).body as Record<string, unknown>
+
+    const long = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true, timeout_ms: 60_000 }, SID)
+    const first = await stop(long.body.jobId)
+    expect(first).toMatchObject({ running: true, stopping: true })
+    expect(String(first.outcome)).toMatch(/^Stopping: its process group got SIGTERM/)
+    await until(async () => (await read(long.body.jobId)).running === false, 'the stopped job to end')
+    const again = await stop(long.body.jobId)
+    expect(again).toMatchObject({ running: false, stopping: false, killed: true })
+    expect(String(again.outcome)).toMatch(/^Nothing to stop: it had already been stopped after \d+\.\d s\./)
+    expect(String(again.outcome)).not.toContain('Stopping')
+
+    const quick = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'exit 3', background: true }, SID)
+    await until(async () => (await read(quick.body.jobId)).running === false, 'the quick job to end')
+    const done = await stop(quick.body.jobId)
+    expect(done).toMatchObject({ running: false, exitCode: 3 })
+    expect(String(done.outcome)).toMatch(/^Nothing to stop: it had already exited 3 after/)
+    expect(String(done.next)).toContain('host_exec_read')
+  }, 60_000)
+
+  it('a call that reached the server itself, with no gateway deadline, waits as long as it asks, whatever host its session is on (2026-11-05 review)', async () => {
+    const t0 = Date.now()
+    const ran = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 14; echo done', timeout_ms: 60_000 }, SID, { 'x-walnut-answer-by': '' })
+    expect(ran.body).toMatchObject({ running: false, exitCode: 0, output: 'done\n' })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(13_500)
+    expect(ran.body.heldMs).toBeUndefined()
+  }, 60_000)
+
   it('a run still going after about 12 s comes back running; host_exec_read waits for it; only its task reads it', async () => {
     const t0 = Date.now()
     const slow = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 17; echo done', timeout_ms: 60_000 }, SID)
@@ -348,7 +404,7 @@ describe('host_exec', () => {
     const t0 = Date.now()
     const full = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)
     expect(full).toMatchObject({ status: 429, body: { code: 'busy' } })
-    expect(full.body.error).toMatch(/already runs 4 commands on other hosts \(waited \d+ s for one to end\)/)
+    expect(full.body.error).toMatch(/already runs 4 host_exec commands, the most it may run at once on all hosts together \(waited \d+ s for one to end\)/)
     expect(Date.now() - t0).toBeGreaterThan(2_000)
     // A stop while a call waits: it takes the freed slot and runs.
     const waiting = api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo got-a-slot' }, SID)
@@ -387,8 +443,11 @@ describe('host_exec', () => {
     expect(plain.body).toMatchObject({ exitCode: 0, output: 'start\nnever\n' })
     expect(plain.body.failedStep).toBeUndefined()
     const strict = await api('POST', '/api/v1/hosts/macbox/exec', { command: line, strict: true }, SID)
-    expect(strict.body).toMatchObject({ exitCode: 1, failedStep: { exitCode: 1, command: 'cat', pipeStatus: [0, 1, 0], line: 2, text: 'true | false | cat' } })
+    expect(strict.body).toMatchObject({ exitCode: 1, failedStep: { exitCode: 1, command: 'false', pipeStatus: [0, 1, 0], line: 2, text: 'true | false | cat' } })
     expect(strict.body.output).not.toContain('never')
+    // Walnut's own line about the step names the command failedStep names, not the pipe's last (2026-11-05 review).
+    expect(strict.body.output).toContain(`walnut strict ${String(strict.body.jobId)}: exit 1 [0 1 0] line 2: false`)
+    expect(strict.body.output).not.toContain(': cat')
     // A function's failure names the command inside it; the op's outcome says where it stopped.
     const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'check() { grep -q zzz-not-there /dev/null; }\ncheck\necho never', strict: true },
       { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
@@ -400,6 +459,38 @@ describe('host_exec', () => {
     expect(String(piped.result.outcome)).toContain("It stopped on line 2 (`true | false | cat`): command 2 of its pipe of 3 exited 1 (the pipe's commands exited 0, 1, 0 in order).")
     // argv runs one program: strict changes nothing there.
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { argv: ['sh', '-c', 'false; echo after'], strict: true }, SID)).body).toMatchObject({ exitCode: 0, output: 'after\n' })
+    // A subshell fails inside and then in the shell around it: one line, naming what failed inside (2026-11-05 review).
+    const sub = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo a\n(false)\necho never', strict: true }, SID)
+    expect(sub.body).toMatchObject({ exitCode: 1, failedStep: { command: 'false', line: 2 } })
+    expect(sub.body.output.match(/walnut strict hx-/g)).toHaveLength(1)
+    // A run without strict that prints that text, or the old form, gets no failed step and its line matches (review 12).
+    const fake = await api('POST', '/api/v1/hosts/macbox/exec', { command: "printf 'walnut strict: exit 9 [9]: NOT_REAL\\nREADY\\n'", wait_for: { output: 'NOT_REAL' } }, SID)
+    expect(fake.body).toMatchObject({ exitCode: 0, waitedFor: { matched: 'output' } })
+    expect(fake.body.failedStep).toBeUndefined()
+    expect(sub.body.output).not.toContain('in a subshell')
+    // Code review 12: a failure inside `$( … )` goes on (bash turns -e off there) and is never the step;
+    // a background subshell's failure is not the shell's own; a pipe inside a subshell names its member.
+    for (const [command, failedStep] of [
+      ['x=$(false; echo y)\necho a\n[ -f /no/such/file ]', { command: '[ -f /no/such/file ]', line: 3 }],
+      ['( sleep 0.1; false ) &\nsleep 0.5\ntest -f /no/such', { command: 'test -f /no/such', line: 3 }],
+      ['n=$(ls /nope 2>/dev/null | wc -l)', { command: 'n=$(ls /nope 2> /dev/null | wc -l)', line: 1 }],
+      ['(ls /nope | cat)', { command: 'ls /nope', pipeStatus: [2, 0] }],
+      ['echo a\ngrep -q zzz-not-there /dev/null', { command: 'grep -q zzz-not-there /dev/null', line: 2 }],
+    ] as const) {
+      const r = await api('POST', '/api/v1/hosts/macbox/exec', { command, strict: true }, SID)
+      expect(r.body.failedStep, command).toMatchObject(failedStep)
+      expect(r.body.failedStep, command).not.toHaveProperty('inner')
+      expect(r.body.output, command).not.toContain('in a subshell')
+    }
+    // A function's own `return N`, and a pipe a reader left early (SIGPIPE): the outcome says what they are.
+    const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const ret = await executeOp('host_exec', { host: 'macbox', command: 'f() { return 3; }\nf\necho never', strict: true }, opts) as { result: Record<string, unknown> }
+    // Under bash 5 the call of that function is named, with the return it ran (2026-11-05 review 12).
+    expect(ret.result).toMatchObject({ exitCode: 3, failedStep: { command: 'f', line: 2, returned: 'return 3' } })
+    expect(String(ret.result.outcome)).toContain('It stopped at `f` on line 2, which exited 3 (the function ran `return 3`).')
+    const pipe = await executeOp('host_exec', { host: 'macbox', command: 'yes | head -1 >/dev/null\necho never', strict: true }, opts) as { result: Record<string, unknown> }
+    expect(pipe.result).toMatchObject({ exitCode: 141, failedStep: { pipeStatus: [141, 0] } })
+    expect(String(pipe.result.outcome)).toContain('Exit 141 is SIGPIPE')
   }, 60_000)
 
   it('a revoked grant stops the task and the next call asks the user again; Deny is kept', async () => {
@@ -408,6 +499,8 @@ describe('host_exec', () => {
     expect((await api('DELETE', `/api/v1/host-exec/grants/${g.id}`)).status).toBe(200)
     const again = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)
     expect(again).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
+    // It says the user took the grant back, and that this letter asks again (2026-11-05 review claude13).
+    expect(String(again.body.error)).toMatch(/^The user revoked this task's grant to use .+ \d+ s ago, so nothing ran; a letter asks them again/)
     expect((await api('POST', `/api/v1/human-inbox/${again.body.letterId}/answer`, { actionId: 'deny' })).status).toBeLessThan(300)
     await until(async () => (await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)).body.code === 'exec_grant_denied', 'the denial')
     const asks = (await letters()).filter((l) => l.subject.includes('" use '))
@@ -703,11 +796,15 @@ describe('host_exec', () => {
     const read = await api('GET', `/api/v1/hosts/macbox/exec/${jobId}?wait_ms=10000`, undefined, OWN_SID)
     expect(read).toMatchObject({ status: 200, body: { jobId, running: false, exitCode: 0, output: 'lost-and-found\n' } })
     // The same id again (a retry after the lost answer): that run, never a second one.
-    const again = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo second', job_id: jobId }, OWN_SID)
+    const again = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 1; echo lost-and-found', job_id: jobId }, OWN_SID)
     expect(again).toMatchObject({ status: 200, body: { jobId, sameJob: true, output: 'lost-and-found\n' } })
+    expect(again.body.sameJobCommand).toBeUndefined()
+    const retry = await executeOp('host_exec', { host: 'macbox', command: 'sleep 1; echo lost-and-found', job_id: jobId }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
+    expect(String(retry.result.outcome)).toContain('it did not run again')
+    // The same id with another command: that run all the same, and the answer says the command sent did not run (2026-11-05 review).
     const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'echo second', job_id: jobId }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
-    expect(viaOp).toMatchObject({ ok: true, result: { sameJob: true, output: 'lost-and-found\n' } })
-    expect(String(viaOp.result.outcome)).toContain('it did not run again')
+    expect(viaOp).toMatchObject({ ok: true, result: { sameJob: true, sameJobCommand: 'sleep 1; echo lost-and-found', output: 'lost-and-found\n' } })
+    expect(String(viaOp.result.outcome)).toContain('the command you sent is another one, and it did not run')
     // Another task may not take it; a malformed id is refused before anything runs.
     const other = await taskOnDevbox('Takes another task\'s id')
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true', job_id: jobId }, other.sid)).toMatchObject({ status: 409, body: { code: 'job_id_taken' } })
@@ -790,7 +887,7 @@ describe('host_exec', () => {
     expect(listed.result.jobs[0]).toMatchObject({ state: 'running', running: true, command: 'sleep 30', exitCode: null })
     expect(listed.result.jobs[1]).toMatchObject({ state: 'exited', running: false, command: 'echo listed', exitCode: 0, logFile: expect.stringContaining(`${t.task}/host-exec/`) })
     expect(Date.parse(listed.result.jobs[1].startedAt)).toBeGreaterThan(0)
-    expect(listed.result.outcome).toMatch(/^2 job\(s\) of this task on macbox, 1 running\./)
+    expect(listed.result.outcome).toMatch(/^2 jobs of this task on macbox, 1 running\./)
     // Another task's list has none of them; a task with no grant there lists nothing.
     const own = await api('GET', '/api/v1/hosts/macbox/exec', undefined, OWN_SID)
     expect(own.status).toBe(200)
@@ -876,6 +973,7 @@ describe('host_exec', () => {
     // No grant yet, on the user's own host: an ordinary call would make one; this one does not.
     const none = await pin('xg-000000000000', { command: 'echo no', job_id: 'hx-pin-none-1' })
     expect(none).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch', grantId: 'xg-000000000000' } })
+    expect(none.body.error).toContain('This task holds no grant on')
     expect(await grantsOf(pinned)).toEqual([])
     expect(ranJob('hx-pin-none-1')).toBe(false)
     const mine = (await api('POST', '/api/v1/host-exec/grants', { task_id: pinned, host: 'macbox' })).body.grant
@@ -886,8 +984,12 @@ describe('host_exec', () => {
       { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: PIN_SID }) as { ok: boolean; result: Record<string, unknown> }
     expect(viaOp).toMatchObject({ ok: true, result: { exitCode: 0, output: 'op\n' } })
     await until(async () => (await grantsOf(pinned)).some((g) => g.id === mine.id && g.runs === 2), 'the runs counted on that grant')
-    // Another task's grant, and this task's grant on another host, are not this call's.
-    expect(await pin(theirs.id, { command: 'true' })).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch' } })
+    // Another task's grant, and this task's grant on another host, are not this call's; the
+    // refusal names the grant this task holds there.
+    const wrong = await pin(theirs.id, { command: 'true' })
+    expect(wrong).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch', current: mine.id } })
+    expect(wrong.body.error).toContain(`This task's grant on`)
+    expect(wrong.body.error).toContain(`is ${mine.id}: name that one.`)
     expect(await pin(mine.id, { command: 'true' }, 'oldmac')).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch' } })
     expect((await grantsOf(pinned)).map((g) => g.host)).toEqual(['macbox'])
     // The hard stop wins over the grant.
@@ -997,4 +1099,405 @@ describe('host_exec', () => {
     // Open again, the same grant runs.
     expect(await pinnedRun(grant, { command: 'echo open' }, WAIT_SID)).toMatchObject({ status: 200, body: { output: 'open\n' } })
   }, 90_000)
+
+  // 2026-11-04 review: a wait that began before a revoke went on returning the lines printed after it.
+  it('a revoke while a read waits shows nothing more of the job; stop and list still reach it, and say so', async () => {
+    const SID = 'host-exec-e2e-read-revoke'
+    const task = await pinTask('Read through a revoke', SID, '')
+    const grant = (await api('POST', '/api/v1/host-exec/grants', { task_id: task, host: 'macbox' })).body.grant.id as string
+    const bg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 2; echo after-revoke; sleep 30', background: true }, SID)
+    expect(bg).toMatchObject({ status: 200, body: { running: true } })
+    const job = bg.body.jobId as string
+    const reads = () => sent.filter((m) => m.cmd === 'exec.read' && m.params.jobId === job).length
+    const before = reads()
+    const waiting = api('GET', `/api/v1/hosts/macbox/exec/${job}?wait_ms=20000&wait_for=${encodeURIComponent(JSON.stringify({ output: '^after-revoke$' }))}`, undefined, SID)
+    await until(async () => reads() > before, 'the read to be sent')
+    expect((await api('DELETE', `/api/v1/host-exec/grants/${grant}`)).status).toBe(200)
+    const r = await waiting
+    expect(r).toMatchObject({ status: 403, body: { code: 'exec_grant_revoked', jobId: job } })
+    expect(r.body.error).toContain(`shows nothing more of job ${job}`)
+    expect(JSON.stringify(r.body)).not.toContain('after-revoke')
+    // A new read is refused before anything is sent.
+    const sentBefore = reads()
+    expect(await api('GET', `/api/v1/hosts/macbox/exec/${job}`, undefined, SID)).toMatchObject({ status: 403, body: { code: 'exec_grant_revoked' } })
+    expect(reads()).toBe(sentBefore)
+    // The run keeps going: list and stop reach it, and their next steps never point at a read.
+    const opAs = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const list = await executeOp('host_exec_list', { host: 'macbox' }, opAs) as { ok: boolean; result: Record<string, any> }
+    expect(list.result.jobs.some((j: { jobId: string; state: string }) => j.jobId === job && j.state === 'running')).toBe(true)
+    expect(list.result.next).toContain('host_exec_stop')
+    expect(list.result.next).not.toContain('host_exec_read')
+    const stop = await executeOp('host_exec_stop', { host: 'macbox', job_id: job }, opAs) as { ok: boolean; result: Record<string, any> }
+    expect(stop.result).toMatchObject({ stopping: true, grantRevoked: true })
+    expect(stop.result.next).toContain('host_exec_list')
+    expect(stop.result.next).not.toContain('host_exec_read')
+  }, 60_000)
+
+  // 2026-11-05 review: a revoke during a 30 s wait was answered 25 s on, when the host's read came back.
+  it('a revoke ends a waiting read at once, not when the host\'s read comes back', async () => {
+    const SID = 'host-exec-e2e-read-revoke-now'
+    const task = await pinTask('Read cut by a revoke', SID, '')
+    const grant = (await api('POST', '/api/v1/host-exec/grants', { task_id: task, host: 'macbox' })).body.grant.id as string
+    const bg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 40; echo late', background: true, timeout_ms: 60_000 }, SID)
+    const job = bg.body.jobId as string
+    const reads = () => sent.filter((m) => m.cmd === 'exec.read' && m.params.jobId === job).length
+    const before = reads()
+    const waiting = api('GET', `/api/v1/hosts/macbox/exec/${job}?wait_ms=30000&wait_for=${encodeURIComponent(JSON.stringify({ output: '^late$' }))}`, undefined, SID)
+    await until(async () => reads() > before, 'the read to be sent')
+    const t0 = Date.now()
+    expect((await api('DELETE', `/api/v1/host-exec/grants/${grant}`)).status).toBe(200)
+    const r = await waiting
+    expect(r).toMatchObject({ status: 403, body: { code: 'exec_grant_revoked', jobId: job } })
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    // The run goes on: stop still reaches it.
+    expect(await api('POST', `/api/v1/hosts/macbox/exec/${job}/stop`, {}, SID)).toMatchObject({ status: 200 })
+  }, 60_000)
+
+  describe('wait_for', () => {
+    type OpResult = { ok: boolean; message?: string; result: Record<string, any> }
+    const opAs = (sid: string) => ({ apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: sid })
+    const stop = async (host: string, jobId: string, sid: string) => {
+      expect((await api('POST', `/api/v1/hosts/${host}/exec/${jobId}/stop`, undefined, sid)).status).toBe(200)
+      await api('GET', `/api/v1/hosts/${host}/exec/${jobId}?wait_ms=10000`, undefined, sid)
+    }
+    let waiter: { task: string; sid: string }
+    beforeAll(async () => { waiter = await taskOnDevbox('Waits for its server') })
+
+    it('output: a background job that prints after about a second answers at its line, and keeps running', async () => {
+      const t0 = Date.now()
+      const r = await executeOp('host_exec', {
+        host: 'macbox', command: 'echo booting; sleep 1; echo "  listening on :5173"; sleep 30', background: true, wait_for: { output: 'listening on :\\d+' },
+      }, opAs(waiter.sid)) as OpResult
+      expect(r.ok).toBe(true)
+      expect(r.result).toMatchObject({ running: true, waitedFor: { matched: 'output', match: '  listening on :5173' } })
+      expect(r.result.waitedFor.ms).toBeGreaterThanOrEqual(800)
+      expect(Date.now() - t0).toBeLessThan(8_000)
+      expect(r.result.output).toContain('booting\n')
+      expect(r.result.outcome).toMatch(/^Saw \/listening on :\\d\+\/ after \d\.\d s \(line: `  listening on :5173`\); job hx-\S+ keeps running\./)
+      // The wait's sentence says the state; no second sentence says it again.
+      expect(r.result.outcome).not.toContain('It runs on')
+      // The next step is the exact read that waits for the next such line, from past this one.
+      expect(r.result.next).toBe(`host_exec_read ${JSON.stringify({ host: 'macbox', job_id: r.result.jobId, offset: r.result.waitedFor.scanned, wait_for: { output: 'listening on :\\d+' } })} waits for the next matching line; host_exec_stop stops the job.`)
+      expect(r.result.waitedFor.scanned).toBe('booting\n  listening on :5173\n'.length)
+      // The host did the waiting: one read carrying the condition, no poll loop here.
+      const reads = sent.filter((m) => m.cmd === 'exec.read' && m.params.jobId === r.result.jobId)
+      expect(reads).toHaveLength(1)
+      expect(reads[0].params.until).toEqual({ output: 'listening on :\\d+' })
+      // The run carried it too, so the host could refuse one that never holds there before running anything.
+      expect(sent.find((m) => m.cmd === 'exec.run' && m.params.jobId === r.result.jobId)?.params.until).toEqual({ output: 'listening on :\\d+' })
+      // host_exec_read with wait_for on the running job: the line is there already, so at once.
+      const again = await executeOp('host_exec_read', { host: 'macbox', job_id: r.result.jobId, wait_for: { output: '^\\s+listening' } }, opAs(waiter.sid)) as OpResult
+      expect(again.result).toMatchObject({ running: true, waitedFor: { matched: 'output', match: '  listening on :5173' } })
+      expect(again.result.waitedFor.ms).toBeLessThan(1_500)
+      await stop('macbox', r.result.jobId, waiter.sid)
+      // A matched line that looks like a credential is hidden like the output.
+      const token = `ghp_${randomBytes(27).toString('base64url').replace(/[-_]/g, 'x').slice(0, 36)}`
+      const leak = await api('POST', '/api/v1/hosts/macbox/exec', { command: `echo "token ${token}"`, wait_for: { output: 'token' } }, waiter.sid)
+      expect(leak.body.waitedFor).toMatchObject({ matched: 'output', match: expect.stringContaining('Walnut hid this line') })
+      expect(JSON.stringify(leak.body)).not.toContain(token)
+      // Also when the token runs past the 300 characters a match shows (it is hidden before the cut).
+      const wide = await api('POST', '/api/v1/hosts/macbox/exec', { command: `echo "ready ${'x'.repeat(285)} ${token}"`, wait_for: { output: '^ready' } }, waiter.sid)
+      expect(wide.body.waitedFor.match).toContain('Walnut hid this line')
+      expect(JSON.stringify(wide.body)).not.toContain(token.slice(0, 12))
+      // And a private key's body line, which looks like nothing on its own, is hidden as the output hides it.
+      const body = randomBytes(48).toString('base64')
+      const pem = await api('POST', '/api/v1/hosts/macbox/exec', {
+        command: `printf '%s\\n' '-----BEGIN OPENSSH PRIVATE KEY-----' '${body}' '-----END OPENSSH PRIVATE KEY-----'`, wait_for: { output: body.slice(0, 20).replace(/[+/]/g, '.') },
+      }, waiter.sid)
+      expect(pem.body.waitedFor).toMatchObject({ matched: 'output', match: expect.stringContaining('Walnut hid this line') })
+      expect(JSON.stringify(pem.body)).not.toContain(body)
+      const pemRead = await api('GET', `/api/v1/hosts/macbox/exec/${pem.body.jobId}?wait_for=${encodeURIComponent(JSON.stringify({ output: body.slice(0, 20).replace(/[+/]/g, '.') }))}`, undefined, waiter.sid)
+      expect(pemRead.body.waitedFor).toMatchObject({ matched: 'output', match: expect.stringContaining('Walnut hid this line') })
+      expect(JSON.stringify(pemRead.body)).not.toContain(body)
+      // A foreground run that matched keeps running, and is stopped at its own deadline unless it ends first: the outcome says so.
+      const fg = await executeOp('host_exec', { host: 'macbox', command: 'echo up; sleep 30', timeout_ms: 60_000, wait_for: { output: '^up$' } }, opAs(waiter.sid)) as OpResult
+      expect(fg.result).toMatchObject({ running: true, waitedFor: { matched: 'output', match: 'up' } })
+      expect(fg.result.outcome).toMatch(/keeps running \(to its deadline in (59|60) s at most\)\./)
+      await stop('macbox', fg.result.jobId, waiter.sid)
+    }, 60_000)
+
+    it('a retry with the same job_id waits for wait_for too, on that one run', async () => {
+      const jobId = 'hx-e2e-wait-retry-0001'
+      const call = { command: 'sleep 0.8; echo "ready to serve"; sleep 30', background: true, job_id: jobId, wait_for: { output: 'ready to' } }
+      const first = await api('POST', '/api/v1/hosts/macbox/exec', call, waiter.sid)
+      expect(first.body).toMatchObject({ jobId, running: true, waitedFor: { matched: 'output' } })
+      const again = await executeOp('host_exec', { host: 'macbox', ...call }, opAs(waiter.sid)) as OpResult
+      expect(again.result).toMatchObject({ jobId, sameJob: true, running: true, waitedFor: { matched: 'output', match: 'ready to serve' } })
+      expect(again.result.outcome).toMatch(/^Saw \/ready to\/ after/)
+      expect(sent.filter((m) => m.cmd === 'exec.run' && m.params.jobId === jobId)).toHaveLength(1)
+      await stop('macbox', jobId, waiter.sid)
+    }, 30_000)
+
+    it('port and file: a listener that comes up, a file that appears', async () => {
+      const free = net.createServer()
+      await new Promise<void>((r) => free.listen(0, '127.0.0.1', () => r()))
+      const listenPort = (free.address() as net.AddressInfo).port
+      await new Promise<void>((r) => free.close(() => r()))
+      const js = `setTimeout(() => require("net").createServer().listen(${listenPort}, "127.0.0.1"), 800); setTimeout(() => {}, 30000)`
+      const p = await executeOp('host_exec', { host: 'macbox', command: `'${process.execPath}' -e '${js}'`, background: true, wait_for: { port: listenPort } }, opAs(waiter.sid)) as OpResult
+      expect(p.result).toMatchObject({ running: true, waitedFor: { matched: 'port', match: `127.0.0.1:${listenPort}` } })
+      expect(p.result.waitedFor.ms).toBeGreaterThanOrEqual(500)
+      expect(p.result.outcome).toMatch(new RegExp(`^Port ${listenPort} is listening \\(127\\.0\\.0\\.1:${listenPort}\\) after \\d\\.\\d s; job hx-\\S+ keeps running\\.`))
+      expect(p.result.waitedFor.already).toBeUndefined()
+      await stop('macbox', p.result.jobId, waiter.sid)
+
+      const work = path.join(hostRoot, 'home', 'work')
+      await fs.rm(path.join(work, 'out'), { recursive: true, force: true })
+      const f = await executeOp('host_exec', { host: 'macbox', command: 'sleep 0.8; mkdir -p out; : > out/ready.txt; sleep 30', cwd: '~/work', background: true, wait_for: { file: 'out/ready.txt' } }, opAs(waiter.sid)) as OpResult
+      expect(f.result).toMatchObject({ running: true, waitedFor: { matched: 'file', match: path.join(work, 'out', 'ready.txt') } })
+      expect(f.result.outcome).toMatch(/^`out\/ready\.txt` exists \(.*ready\.txt, \d+ bytes? so far\) after \d\.\d s; job hx-\S+ keeps running\./)
+      await stop('macbox', f.result.jobId, waiter.sid)
+    }, 60_000)
+
+    it('the job ends before the match: null with its exit code; a bound that runs out: null, still running', async () => {
+      const ended = await executeOp('host_exec', { host: 'macbox', command: 'echo starting; sleep 0.3; exit 1', background: true, wait_for: { output: 'ready' } }, opAs(waiter.sid)) as OpResult
+      expect(ended.result).toMatchObject({ running: false, exitCode: 1, output: 'starting\n', waitedFor: { matched: null } })
+      expect(ended.result.outcome).toMatch(/^The job exited 1, and no line of its output matched \/ready\/\. It ran \d+(\.\d)? s on macbox/)
+      expect(ended.result.next).toBe('Read output and exitCode to see why it ended before a line matched /ready/.')
+
+      const bg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, waiter.sid)
+      expect(bg.body.running).toBe(true)
+      const t0 = Date.now()
+      const out = await executeOp('host_exec_read', { host: 'macbox', job_id: bg.body.jobId, wait_ms: 1_000, wait_for: { output: 'never', file: 'no/such/file' } }, opAs(waiter.sid)) as OpResult
+      expect(out.result).toMatchObject({ running: true, waitedFor: { matched: null } })
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(900)
+      expect(Date.now() - t0).toBeLessThan(5_000)
+      expect(out.result.outcome).toMatch(/^Did not see \/never\/ or `no\/such\/file` within 1\.\d s; job hx-\S+ keeps running: host_exec_read with the same wait_for and offset 0 keeps waiting\./)
+      // It printed nothing in 1 s: too soon to say it may hold its output off a terminal. The hint is said once, in the outcome, and only after a wait of a few seconds (2026-11-04 usability review, claude6).
+      expect(out.result.outcome).not.toContain('It has printed nothing yet')
+      expect(out.result.next).toBe(`host_exec_read ${JSON.stringify({ host: 'macbox', job_id: bg.body.jobId, offset: 0, wait_for: { output: 'never', file: 'no/such/file' } })} keeps waiting; host_exec_stop stops the job.`)
+      await stop('macbox', bg.body.jobId, waiter.sid)
+
+      // A relayed call (its gateway gives up 13 s from now) waits only as long as its answer can still get back.
+      const t1 = Date.now()
+      const held = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true, wait_for: { output: 'never' } }, waiter.sid, { 'x-walnut-answer-by': String(t1 + 13_000) })
+      expect(held).toMatchObject({ status: 200, body: { running: true, waitedFor: { matched: null } } })
+      expect(Date.now() - t1).toBeLessThan(13_000 - ANSWER_RETURN_MS + 1_500)
+      await stop('macbox', held.body.jobId, waiter.sid)
+    }, 60_000)
+
+    it('a bad wait_for is refused before anything runs or waits', async () => {
+      const runs = () => sent.filter((m) => m.cmd === 'exec.run').length
+      const before = runs()
+      for (const [waitFor, why] of [
+        [{ output: '(unclosed' }, 'not a valid regular expression'], [{ output: '(a+)+$' }, 'could take too long'],
+        [{ output: 'x', flags: 'm' }, 'each line is matched on its own'], [{ output: 'one\\ntwo' }, 'has a line break in it'],
+        [{}, 'needs output, port or file'], [{ port: 99999 }, 'TCP port'], ['ready', 'must be an object'],
+      ] as const) {
+        const r = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo never', background: true, wait_for: waitFor }, waiter.sid)
+        expect(r).toMatchObject({ status: 400, body: { code: 'bad_request', error: expect.stringContaining(why) } })
+        // Said plainly, so the refusal is not read as a run that failed.
+        expect(r.body.error).toMatch(/\. Nothing ran\.$/)
+      }
+      expect(runs()).toBe(before)
+      // A read refuses it at once, whatever it would have waited.
+      const t0 = Date.now()
+      const read = await api('GET', `/api/v1/hosts/macbox/exec/hx-none-0001?wait_ms=60000&wait_for=${encodeURIComponent(JSON.stringify({ output: '[' }))}`, undefined, waiter.sid)
+      expect(read).toMatchObject({ status: 400, body: { code: 'bad_request', error: expect.stringMatching(/\. Nothing was read\.$/) } })
+      expect((await api('GET', '/api/v1/hosts/macbox/exec/hx-none-0001?wait_for=not-json', undefined, waiter.sid)).body.error).toContain('must be an object')
+      expect(Date.now() - t0).toBeLessThan(3_000)
+      // The op refuses a key it does not know before it calls.
+      const typo = await executeOp('host_exec_read', { host: 'macbox', job_id: 'hx-none-0001', wait_for: { outptu: 'x' } }, opAs(waiter.sid)) as OpResult
+      expect(typo.ok).toBe(false)
+      // With wait_for a read may wait as long as host_exec (600000): the op takes it and the host is asked.
+      const asked = sent.length
+      const tenMin = await executeOp('host_exec_read', { host: 'macbox', job_id: 'hx-none-0001', wait_ms: 600_000, wait_for: { output: 'x' } }, opAs(waiter.sid)) as OpResult
+      expect(tenMin.ok).toBe(false)
+      expect(sent.slice(asked).some((m) => m.cmd === 'exec.read')).toBe(true)
+    }, 30_000)
+
+    it('a daemon from before host-exec-wait-v1 is refused every wait_for before anything runs; without one it runs', async () => {
+      // 2026-11-04 review: the server's own fallback ran patterns on its loop; now no pattern runs on the server.
+      const runs = () => sent.filter((m) => m.cmd === 'exec.run' && m.host === 'waitless').length
+      const before = runs()
+      for (const waitFor of [{ output: '^ready' }, { port: 5173 }, { file: 'dist/index.html' }, { output: 'x', port: 1 }]) {
+        const refused = await api('POST', '/api/v1/hosts/waitless/exec', { command: 'echo never', background: true, wait_for: waitFor }, waiter.sid)
+        expect(refused).toMatchObject({ status: 400, body: { code: 'wait_for_needs_daemon_upgrade' } })
+        expect(refused.body.error).toMatch(/^The Walnut daemon on Waitless box must update before it can wait \(wait_for\); nothing ran\. It updates on its next connect \(host_daemon_update asks for it now\); until then run the command without wait_for and read it with host_exec_read and wait_ms\.$/)
+      }
+      expect(runs()).toBe(before)
+      const plain = await api('POST', '/api/v1/hosts/waitless/exec', { command: 'sleep 30', background: true }, waiter.sid)
+      expect(plain.body.running).toBe(true)
+      const read = await api('GET', `/api/v1/hosts/waitless/exec/${plain.body.jobId}?wait_for=${encodeURIComponent(JSON.stringify({ output: 'x' }))}`, undefined, waiter.sid)
+      expect(read).toMatchObject({ status: 400, body: { code: 'wait_for_needs_daemon_upgrade' } })
+      expect(sent.filter((m) => m.host === 'waitless' && m.cmd === 'exec.read' && m.params.jobId === plain.body.jobId && m.params.until !== undefined)).toEqual([])
+      await stop('waitless', plain.body.jobId, waiter.sid)
+      // Code review 6, item 2: the server asks to end a run's group only of a daemon that says it can, and says when it could not.
+      const amp = await executeOp('host_exec', { host: 'waitless', command: 'sleep 62 > /dev/null 2>&1 & echo "child $!"' }, opAs(waiter.sid)) as OpResult
+      const child = Number(/child (\d+)/.exec(String(amp.result.output))?.[1])
+      try {
+        expect(sent.filter((m) => m.cmd === 'exec.run' && m.params.jobId === amp.result.jobId).map((m) => m.params.endGroup)).toEqual([undefined])
+        expect(amp.result).toMatchObject({ running: false, exitCode: 0, groupKept: true })
+        expect(amp.result.leftBehind).toBeUndefined()
+        expect(amp.result.outcome).toContain('The Walnut daemon on that host is older than this server: what this line started with `&` that sent its output elsewhere may still run there (it updates on its next connect).')
+      } finally {
+        if (child > 1) { try { process.kill(child, 'SIGKILL') } catch { /* gone */ } }
+      }
+    }, 60_000)
+
+    it('a port already listening before the run is said so; one already there when a read began too', async () => {
+      // 2026-11-04 real-use review: a stale server on the port answered "accepted a connection after 0.0 s",
+      // and the agent's own server then died on EADDRINUSE.
+      const stale = net.createServer((c) => c.destroy())
+      await new Promise<void>((r) => stale.listen(0, '127.0.0.1', () => r()))
+      const held = (stale.address() as net.AddressInfo).port
+      try {
+        const r = await executeOp('host_exec', { host: 'macbox', command: 'sleep 30', background: true, wait_for: { port: held } }, opAs(waiter.sid)) as OpResult
+        expect(r.result).toMatchObject({ running: true, waitedFor: { matched: 'port', already: true, beforeRun: true } })
+        expect(r.result.outcome).toMatch(new RegExp(`^Port ${held} is listening \\(127\\.0\\.0\\.1:${held}\\), but something already listened on it before this job started, so it may not be this job's server`))
+        expect(r.result.next).toBe('host_exec_read reads its output, to see whether it started (a server that finds its port taken stops); host_exec_stop stops it.')
+        // A read of a job started without wait_for: already there when this wait began.
+        const plain = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, waiter.sid)
+        const read = await executeOp('host_exec_read', { host: 'macbox', job_id: plain.body.jobId, wait_for: { port: held } }, opAs(waiter.sid)) as OpResult
+        expect(read.result.waitedFor).toMatchObject({ matched: 'port', already: true })
+        expect(read.result.waitedFor.beforeRun).toBeUndefined()
+        // 2026-11-04 usability review: it read as "my server is up"; a read cannot know who listens.
+        expect(read.result.outcome).toMatch(new RegExp(`^Port ${held} is listening \\(127\\.0\\.0\\.1:${held}\\); it already was when this wait began, and this job's start did not look at the port, so Walnut cannot tell whether this job opened it;`))
+        expect(read.result.next).toBe('host_exec_read reads its output, to see whether it started (a server that finds its port taken stops); host_exec_stop stops it.')
+        await stop('macbox', r.result.jobId, waiter.sid)
+        await stop('macbox', plain.body.jobId, waiter.sid)
+      } finally {
+        await new Promise<void>((r) => stale.close(() => r()))
+      }
+    }, 60_000)
+
+    it('colour codes, the i flag, a line over 64 K, and a pattern that runs away on a line', async () => {
+      // 2026-11-04 real-use reviews: Vite's coloured ready line never matched; a 501-character line
+      // was tested on its first 500 and the answer said the line never came.
+      const vite = await executeOp('host_exec', { host: 'macbox', command: "printf '\\033[32mVITE\\033[0m Ready in \\033[1m312\\033[0m ms\\n'", wait_for: { output: 'ready in 312 ms', flags: 'i' } }, opAs(waiter.sid)) as OpResult
+      expect(vite.result.waitedFor).toMatchObject({ matched: 'output', match: 'VITE Ready in 312 ms' })
+      const near = await executeOp('host_exec', { host: 'macbox', command: "printf '%060000d RESULT=ok\\n' 0", wait_for: { output: 'RESULT=ok' } }, opAs(waiter.sid)) as OpResult
+      expect(near.result.waitedFor).toMatchObject({ matched: 'output' })
+      const far = await executeOp('host_exec', { host: 'macbox', command: "echo start; printf '%070000d RESULT=ok\\n' 0", wait_for: { output: 'RESULT=ok' } }, opAs(waiter.sid)) as OpResult
+      expect(far.result.waitedFor).toMatchObject({ matched: null, long: { lines: 1, at: 6 } })
+      expect(far.result.outcome).toContain('The job exited 0, and no line of its output matched /RESULT=ok/. One line of its output (the first at byte 6) is longer than 64 K characters: only the first 64 K of it were tested.')
+      expect(far.result.outcome).not.toContain('appeared')
+      // Cubic on a line of 20 000 zeros: stopped in the host's matcher, and the server answered all along.
+      const t0 = Date.now()
+      const [slow, probe] = await Promise.all([
+        executeOp('host_exec', { host: 'macbox', command: "printf '%020000d\\n' 0; sleep 30", background: true, wait_for: { output: '0.*0.*0.*x' } }, opAs(waiter.sid)) as Promise<OpResult>,
+        (async () => { await new Promise((r) => setTimeout(r, 300)); const t = Date.now(); await api('GET', '/api/config'); return Date.now() - t })(),
+      ])
+      expect(slow.result).toMatchObject({ running: true, waitedFor: { matched: null, tooSlow: true } })
+      expect(Date.now() - t0).toBeLessThan(10_000)
+      expect(probe).toBeLessThan(1_000)
+      expect(slow.result.outcome).toMatch(/^\/0\.\*0\.\*0\.\*x\/ took too long matching \(about 200 ms of CPU on the lines it was testing\) and was stopped: match a plainer piece of the line/)
+      expect(slow.result.next).toMatch(/^host_exec_read \{"host":"macbox","job_id":"hx-[^"]+","offset":0,"wait_for":\{"output":"<a fixed word from the line>"\}\} keeps waiting, with a plainer pattern in place of <a fixed word from the line>\.$/)
+      await stop('macbox', slow.result.jobId, waiter.sid)
+    }, 60_000)
+
+    it('a foreground run whose `&` children were stopped with it says so, and points at background:true', async () => {
+      // 2026-11-04 real-use review: `(sleep 5; echo x > file) & echo started` answered "exited 0 before the file appeared".
+      const work = path.join(hostRoot, 'home', 'work')
+      await fs.rm(path.join(work, 'late.txt'), { force: true })
+      const r = await executeOp('host_exec', { host: 'macbox', command: '(sleep 5; : > late.txt) & echo started', cwd: '~/work', wait_for: { file: 'late.txt' } }, opAs(waiter.sid)) as OpResult
+      expect(r.result).toMatchObject({ running: false, exitCode: 0, leftBehind: true, waitedFor: { matched: null } })
+      expect(r.result.outcome).toContain('When its shell exited, what it had started in the background (`&`, `nohup` too) still ran: Walnut stopped `sleep 5` (its process group). To keep a process running after the command returns (a dev server), start it as its own job (host_exec with background:true and no `&`) and wait on it with wait_for')
+      // The server asked the host to end the run's group (host-exec-group-v1).
+      expect(sent.filter((m) => m.cmd === 'exec.run' && m.params.jobId === r.result.jobId).map((m) => m.params.endGroup)).toEqual([true])
+    }, 30_000)
+
+    it('a background wait whose run reaches its deadline waits for the stop, and never says it keeps running', async () => {
+      // 2026-11-04 usability review: background:true, timeout_ms 5000 answered running:true "keeps running" at
+      // 5041 ms while the host was stopping it at that same deadline (a python job, 5 of 5).
+      const r = await executeOp('host_exec', {
+        host: 'macbox', command: "trap 'sleep 1; exit 143' TERM; sleep 30 & wait", background: true, timeout_ms: 1_500, wait_for: { output: 'never' },
+      }, opAs(waiter.sid)) as OpResult
+      expect(r.result).toMatchObject({ running: false, timedOut: true, waitedFor: { matched: null } })
+      expect(r.result.outcome).toMatch(/^The job stopped at its deadline and printed nothing, so no line matched \/never\//)
+      expect(r.result.outcome).not.toContain('keeps running')
+      expect(r.result.next).toContain("with background:true, timeout_ms is only the run's deadline (default 2 hours) and wait_ms how long the call waits")
+    }, 30_000)
+
+    it('an answer the call\'s hold cut short says so, with wait_for and without', async () => {
+      // 2026-11-04 usability review: timeout_ms 60000 came back at 12 s and wait_ms 45000 at 10 s, with no word of why.
+      const { getOp } = await import('../../src/ops/index.js')
+      const bg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, waiter.sid)
+      const t1 = Date.now()
+      const read = await api('GET', `/api/v1/hosts/macbox/exec/${bg.body.jobId}?wait_ms=45000`, undefined, waiter.sid, { 'x-walnut-answer-by': String(t1 + ANSWER_RETURN_MS + 4_000) })
+      expect(read.body).toMatchObject({ running: true, heldMs: expect.any(Number) })
+      expect(Date.now() - t1).toBeLessThan(8_000)
+      const said = getOp('host_exec_read')!.mapResult!({ body: read.body, args: { host: 'macbox', job_id: bg.body.jobId, wait_ms: 45_000 } }) as { outcome: string; next: string }
+      expect(said.outcome).toMatch(/This call came through a host's gateway \(a session on another host calls that way\), which ends a call at 20 s, so Walnut answered after \d+(\.\d)? s, before the wait you asked for ran out\./)
+      const t2 = Date.now()
+      const fg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 20', timeout_ms: 60_000, wait_for: { output: '^READY$' } }, waiter.sid, { 'x-walnut-answer-by': String(t2 + ANSWER_RETURN_MS + 6_000) })
+      expect(fg.body).toMatchObject({ running: true, heldMs: expect.any(Number), waitedFor: { matched: null } })
+      // Waited the whole run: not cut, nothing said.
+      const short = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo READY', wait_for: { output: '^READY$' } }, waiter.sid)
+      expect(short.body.heldMs).toBeUndefined()
+      await stop('macbox', bg.body.jobId, waiter.sid)
+      await stop('macbox', fg.body.jobId, waiter.sid)
+    }, 60_000)
+
+    it('a matched line outside the output shown is hidden, with where it is: a key\'s body line past the window', async () => {
+      // 2026-11-04 review: a private key's body line outside the returned window matched \w{40,} and came back in clear.
+      const body = randomBytes(48).toString('base64')
+      const filler = "awk 'BEGIN { for (i = 0; i < 3000; i++) printf \"%099d\\n\", i }'"
+      const job = await api('POST', '/api/v1/hosts/macbox/exec', {
+        command: `${filler}; printf '%s\\n' '-----BEGIN OPENSSH PRIVATE KEY-----' '${body}' '-----END OPENSSH PRIVATE KEY-----'; sleep 30`, background: true,
+      }, waiter.sid)
+      const pattern = body.slice(0, 20).replace(/[+/]/g, '.')
+      const read = await api('GET', `/api/v1/hosts/macbox/exec/${job.body.jobId}?offset=0&wait_ms=10000&wait_for=${encodeURIComponent(JSON.stringify({ output: pattern }))}`, undefined, waiter.sid)
+      // Read with the lines around it, which hold the key's first line: still hidden.
+      expect(read.body.waitedFor).toMatchObject({ matched: 'output', matchAt: 300_036, match: '[Walnut hid this line: it may be part of a credential the lines around it hold]' })
+      expect(JSON.stringify(read.body)).not.toContain(body)
+      await stop('macbox', job.body.jobId, waiter.sid)
+    }, 30_000)
+
+    it('a matched line followed by more than the output shown is read with the lines around it, and shown', async () => {
+      // 2026-11-04 usability review (claude4 U1): the server's ready line came back hidden, and the URL in it took one more call.
+      const job = await api('POST', '/api/v1/hosts/macbox/exec', {
+        command: 'seq 1 1000; echo "Server ready at http://localhost:19490"; seq 1 100000 | sed s/^/log-line-/; sleep 30', background: true,
+      }, waiter.sid)
+      await new Promise((r) => setTimeout(r, 1_500))
+      const read = await executeOp('host_exec_read', { host: 'macbox', job_id: job.body.jobId, wait_ms: 10_000, wait_for: { output: 'ready at (\\S+)' } }, opAs(waiter.sid)) as OpResult
+      expect(read.result.offset).toBeGreaterThan(300_000)
+      expect(read.result.waitedFor).toMatchObject({ matched: 'output', match: 'Server ready at http://localhost:19490', matchAt: 3_893 })
+      await stop('macbox', job.body.jobId, waiter.sid)
+    }, 30_000)
+
+    it('a pattern stopped as too slow is not said to be cut by the call\'s hold', async () => {
+      // 2026-11-04 usability review (claude4 F1): tooSlow, heldMs 1499, "Walnut holds a call ... about 1.5 s".
+      const { getOp } = await import('../../src/ops/index.js')
+      const job = await api('POST', '/api/v1/hosts/macbox/exec', { command: "printf '%020000d\\n' 0 | tr 0 a; sleep 30", background: true }, waiter.sid)
+      const t1 = Date.now()
+      const read = await api('GET', `/api/v1/hosts/macbox/exec/${job.body.jobId}?wait_ms=45000&wait_for=${encodeURIComponent(JSON.stringify({ output: '^.*a.*a.*a.*c$' }))}`, undefined, waiter.sid, { 'x-walnut-answer-by': String(t1 + ANSWER_RETURN_MS + 8_000) })
+      expect(read.body).toMatchObject({ running: true, waitedFor: { matched: null, tooSlow: true } })
+      expect(read.body.heldMs).toBeUndefined()
+      const said = getOp('host_exec_read')!.mapResult!({ body: read.body, args: { host: 'macbox', job_id: job.body.jobId, wait_ms: 45_000, wait_for: { output: '^.*a.*a.*a.*c$' } } }) as { outcome: string }
+      expect(said.outcome).not.toContain('came through a host\'s gateway')
+      await stop('macbox', job.body.jobId, waiter.sid)
+    }, 40_000)
+
+    it('wait_ms is the wait of a background run, timeout_ms its deadline: a short wait on a run kept for an hour', async () => {
+      // 2026-11-04 usability review (claude4 U2): "wait 20 s for the port, keep the server for an hour" was not one call.
+      const t0 = Date.now()
+      const r = await executeOp('host_exec', { host: 'macbox', command: 'sleep 60', background: true, timeout_ms: 3_600_000, wait_ms: 1_500, wait_for: { output: 'never' } }, opAs(waiter.sid)) as OpResult
+      expect(Date.now() - t0).toBeLessThan(6_000)
+      expect(r.result).toMatchObject({ running: true, waitedFor: { matched: null } })
+      expect(r.result.deadlineInMs).toBeGreaterThan(3_500_000)
+      // Without wait_for it has nothing to wait for: refused, nothing ran.
+      const bad = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo never-runs', background: true, wait_ms: 1_000 }, waiter.sid)
+      expect(bad.status).toBe(400)
+      expect(bad.body.error).toContain('wait_ms is how long the call waits for wait_for')
+      // Refused before the caller's grant is even looked at: a task with no grant gets no letter for it.
+      const ungranted = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo never-runs', wait_ms: 1_000 }, 'host-exec-e2e-no-grant-yet')
+      expect(ungranted).toMatchObject({ status: 400, body: { code: 'bad_request', error: expect.stringContaining('Nothing ran.') } })
+      await stop('macbox', r.result.jobId, waiter.sid)
+    }, 30_000)
+
+    it('a background line that starts its server with `&` says its shell exited and the server is being stopped, and how to keep it', async () => {
+      // 2026-11-04 review (bg-amp): matched port, "keeps running"; 3.5 s later the port was closed and the server in leftCommands.
+      const listen = await new Promise<number>((resolve) => { const srv = net.createServer(); srv.listen(0, '127.0.0.1', () => { const p = (srv.address() as net.AddressInfo).port; srv.close(() => resolve(p)) }) })
+      const server = `${process.execPath} -e "require('net').createServer(()=>{}).listen(${listen},'127.0.0.1'); setInterval(() => {}, 1000)"`
+      const r = await executeOp('host_exec', { host: 'macbox', command: `${server} >/dev/null 2>&1 &`, background: true, wait_for: { port: listen } }, opAs(waiter.sid)) as OpResult
+      expect(r.result).toMatchObject({ running: true, shellExited: true, waitedFor: { matched: 'port' } })
+      expect(r.result.outcome).toContain("'s shell has exited, and what it left running is being stopped")
+      expect(r.result.outcome).not.toContain('keeps running')
+      expect(r.result.outcome).toContain('with background:true leave the `&` out')
+      expect(r.result.next).toMatch(/^To keep what it starts running, run the line again without `&`; host_exec_read .* shows how it ended\.$/)
+      const end = await api('GET', `/api/v1/hosts/macbox/exec/${r.result.jobId}?wait_ms=10000`, undefined, waiter.sid)
+      expect(end.body).toMatchObject({ running: false, exitCode: 0, leftBehind: true })
+    }, 30_000)
+  })
 })

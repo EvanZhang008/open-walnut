@@ -143,6 +143,16 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-exec-guards.ts',
   'src/providers/host-exec-clt.ts',
   'src/providers/host-exec-watch.ts',
+  // wait_for: the line scanner, the port and file checks, the pattern rules, and the killable
+  // matcher process its lines are tested in.
+  'src/providers/host-exec-wait.ts',
+  'src/providers/host-exec-probe.ts',
+  'src/providers/host-exec-pattern.ts',
+  'src/providers/host-exec-matcher.ts',
+  // How a run ends: what its shell left running in its process group is stopped with it.
+  'src/providers/host-exec-group.ts',
+  // A job as the daemon keeps it and as an answer shows it.
+  'src/providers/host-exec-job.ts',
   // The id of a host_exec run, chosen by the CLI and the MCP server bundled into the binary.
   'src/providers/host-exec-run-id.ts',
   // The host network (net.*): bundled into the binary AND shipped as net-core.cjs,

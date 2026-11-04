@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
 import {
   SKILL_POINTER,
+  exampleArgs,
   fieldType,
   formatOpHelp,
   formatParamSignature,
@@ -21,6 +22,12 @@ import {
   type ZodLike,
 } from '../../../src/ops/op-help.js'
 import { listOps } from '../../../src/ops/index.js'
+
+/** One op's parameter rows, as the hub renders them. */
+function getOpParams(name: string) {
+  const op = listOps().find((o) => o.name === name)!
+  return opParams(op.input as Record<string, ZodLike>)
+}
 
 const SHAPE: Record<string, ZodLike> = {
   q: z.string().min(1).describe('Search query') as unknown as ZodLike,
@@ -104,6 +111,32 @@ describe('formatOpHelp', () => {
     expect(out).toContain('Search query')
     expect(out).toContain('walnut tools call note_read \'{"q":"value"}\'')
     expect(out).toContain('walnut tools call note_read @/tmp/args.json')
+  })
+
+  it('the Usage example carries every required parameter, each a value its type takes, so it runs as shown', () => {
+    // 2026-11-04 usability review: host_exec_read's example was '{"host":"value"}', without the required job_id.
+    const read = formatOpHelp({ name: 'host_exec_read', params: getOpParams('host_exec_read') })
+    expect(read).toContain('walnut tools call host_exec_read \'{"host":"value","job_id":"value"}\'')
+    expect(read).toContain('echo \'{"host":"value","job_id":"value"}\' | walnut tools call host_exec_read')
+    expect(exampleArgs([
+      { name: 'n', type: 'number', required: true }, { name: 'on', type: 'boolean', required: true }, { name: 'tags', type: 'array', required: true },
+      { name: 'mode', type: 'a | b', required: true }, { name: 'meta', type: 'object', required: true }, { name: 'x', type: 'string', required: false },
+    ])).toEqual({ n: 1, on: true, tags: [], mode: 'a', meta: {} })
+    // None required: the first one, as the shape.
+    expect(exampleArgs([{ name: 'limit', type: 'number', required: false }, { name: 'q', type: 'string', required: false }])).toEqual({ limit: 1 })
+    expect(exampleArgs([])).toEqual({})
+    // Every op: each required parameter is in its example.
+    for (const op of listOps()) {
+      const params = opParams(op.input as Record<string, ZodLike>)
+      const shown = JSON.parse(/walnut tools call \S+ '(.*)'/.exec(formatOpHelp({ name: op.name, params }))![1]!) as Record<string, unknown>
+      for (const p of params.filter((x) => x.required)) expect(Object.keys(shown), `${op.name} ${p.name}`).toContain(p.name)
+    }
+  })
+
+  it('the daemon source twin builds its example from the required parameters too', () => {
+    const twin = readFileSync(new URL('../../../src/providers/daemon-source.ts', import.meta.url), 'utf-8')
+    expect(twin).toContain('PARITY: op-help.ts exampleArgs')
+    expect(twin).not.toContain(`" '{...}'");`)
   })
 
   it('distinguishes "takes no parameters" from "this server did not tell me"', () => {
