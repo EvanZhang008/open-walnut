@@ -39,6 +39,6 @@ export async function openOutline(toc: Locator): Promise<Locator> {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   const panel = toc.locator('.session-toc-panel')
   await expect(panel).toBeVisible()
-  await panel.evaluate((el) => Promise.allSettled(el.getAnimations().map((a) => a.finished)).then(() => undefined))
+  await panel.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))).then(() => undefined))
   return panel
 }
