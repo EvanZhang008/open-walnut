@@ -324,6 +324,17 @@ esac
     expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/heads/gate/${gated.slice(0, 12)}`)
   })
 
+  it('names the commits GitHub has no copy of when --run is refused, not the gate commit', () => {
+    const g = ghRepo({ statuses: [st('walnut/push-gate (quick 1/3)', 'failure', '1 NEW failure(s)')] })
+    git(g.r, 'push', '-q', URL, 'main:main')
+    commit(g.r, { 'a.txt': '1\n' }, 'the change that broke it')
+    const tip = commit(g.r, { 'b.txt': '2\n' }, 'a later change')
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv(g.env) })
+    expect(out.status).toBe(1)
+    expect(out.stdout).toMatch(/This push carries:\n {2}[0-9a-f]+ a later change\n {2}[0-9a-f]+ the change that broke it/)
+    expect(out.stdout).not.toMatch(/push gate: the files of/)
+  })
+
   it('passes the same files pushed as another commit at once, from the verdict --run kept', () => {
     const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
     git(g.r, 'push', '-q', URL, 'main:main')

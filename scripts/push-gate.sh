@@ -98,6 +98,8 @@ if [ "${1:-}" = --run ]; then
   [ -n "$b" ] || { echo "push-gate --run: could not read main from $remote_url" >&2; exit 1; }
   git cat-file -e "$b^{commit}" 2>/dev/null || git fetch -q "$remote_url" main 2>/dev/null || { echo "push-gate --run: could not fetch main from $remote_url" >&2; exit 1; }
   if [ "$(git rev-parse "$b^{tree}")" = "$(git rev-parse "$t^{tree}")" ]; then echo "Test gate: GitHub's main already has these files; nothing to judge."; exit 0; fi
+  # What the push will carry, as the Mac's own commits: the ones GitHub has no copy of (by patch).
+  carried=$(git log --cherry-pick --right-only --no-merges --format='  %h %s' "$b...$t" 2>/dev/null | head -40)
   t=$(git commit-tree "$t^{tree}" -p "$b" -m "push gate: the files of $(git rev-parse --short "$t")") \
     || { echo "push-gate --run: could not write the gate commit" >&2; exit 1; }
   refs="refs/heads/main $t refs/heads/main $b"
@@ -140,7 +142,8 @@ passed_files() { # the run URL
 # that never fetched it): then only the tip is named and no browser spec is picked.
 have_base=0
 case $base in *[!0]*) git cat-file -e "$base^{commit}" 2>/dev/null && have_base=1 ;; esac
-if [ $have_base = 1 ]; then commits=$(git log --format='  %h %an: %s' "$base..$target"); else commits=$(git log -1 --format='  %h %an: %s' "$target"); fi
+if [ -n "${carried:-}" ]; then commits=$carried
+elif [ $have_base = 1 ]; then commits=$(git log --format='  %h %an: %s' "$base..$target"); else commits=$(git log -1 --format='  %h %an: %s' "$target"); fi
 blocked() { # what happened (the details are above)
   echo ""
   echo "Push blocked: $*"
