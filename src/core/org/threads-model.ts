@@ -623,9 +623,12 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   // A pin goes with the messages: the thread he kept in sight is the one they are in now (his pin wins).
   const pinned = into.pinned?.by === 'human' ? into.pinned : from.pinned?.by === 'human' ? from.pinned : into.pinned ?? from.pinned;
   const messages = [...into.messages, ...from.messages].sort((a, b) => a.at.localeCompare(b.at));
+  // The phone buzz either one gave this absence stays with the merged thread (push/thread-push.ts).
+  const needsBuzzedAt = [into.needsBuzzedAt, from.needsBuzzedAt].filter((x): x is string => !!x).sort().pop();
   const next: OrgThread = {
     ...into, messages, updatedAt: at, by,
     ...(pinned ? { pinned } : {}),
+    ...(needsBuzzedAt ? { needsBuzzedAt } : {}),
     ...(from.tasks?.length || into.tasks?.length ? { tasks: taskList([...(into.tasks ?? []), ...(from.tasks ?? [])]) } : {}),
     ...(into.state === 'answered' || into.state === 'pending' ? { state: 'working' as ThreadState } : {}),
   };

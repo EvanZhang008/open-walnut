@@ -50,13 +50,14 @@ export function planAwaySend(
   const thread = same.find((l) => l.type !== 'action_required' && !l.settled && l.sender.sessionId === sessionId);
   const unread = same.filter((l) => !l.read);
   // A thread's buzz of this absence is the absence's buzz too: he has not been back since.
-  const threadBuzzed = threadBuzzAt !== null && threadBuzzAt > (mark.since ?? 0);
+  // Only one still waiting on him, and only inside the decision clock: it has no "read" to end it.
+  const threadBuzzed = threadBuzzAt !== null && threadBuzzAt > (mark.since ?? 0) && now - threadBuzzAt < DECISION_QUIET_MS;
   if (input.type !== 'action_required') {
     if (thread) return { kind: 'fold', into: thread };
     return { kind: 'new', mark, quiet: unread.length > 0 || threadBuzzed };
   }
   // A decision: quiet only while the absence buzzed lately and he has not looked.
-  const quiet = unread.some((l) => now - l.createdAt < DECISION_QUIET_MS) || (threadBuzzed && now - threadBuzzAt! < DECISION_QUIET_MS);
+  const quiet = unread.some((l) => now - l.createdAt < DECISION_QUIET_MS) || threadBuzzed;
   return { kind: 'new', mark, quiet };
 }
 

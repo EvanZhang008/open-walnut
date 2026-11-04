@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { emptyThreads, enteredNeeds, fileMessage, openThread, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
+import { emptyThreads, enteredNeeds, fileMessage, mergeThreads, openThread, splitThreadMessage, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import { THREAD_PUSH_TYPE, lastThreadBuzz, planThreadBuzz, threadPushContent } from '../../../src/core/push/thread-push.js'
 import { DECISION_QUIET_MS, planAwaySend } from '../../../src/core/human-inbox/away-thread.js'
 
@@ -44,6 +44,33 @@ describe('a move into needs is seen (enteredNeeds)', () => {
     expect(enteredNeeds(f0, updateThread(f0, id, { state: 'needs' }, 'human', iso(50)).file)).toEqual([])
   })
 
+  it('merge, split, reopen and the buzz mark itself: each counted once or not at all', () => {
+    const f0 = asked()
+    const a = f0.threads[0].id
+    let f = updateThread(f0, a, { state: 'needs', ...KIND }, NODE, iso(50)).file
+    // The buzz mark changes no state: no new entry, so it cannot buzz again.
+    const marked = { ...f, threads: f.threads.map((t) => ({ ...t, needsBuzzedAt: iso(49) })) }
+    expect(enteredNeeds(f, marked)).toEqual([])
+    // A second ask merged into the needs thread: still needs, no new entry; its buzz mark is kept.
+    let g = fileMessage(marked, { text: 'and the price?', via: 'chat', at: iso(45) }).file
+    const b = g.threads.find((t) => t.id !== a)!.id
+    const merged = mergeThreads(g, b, a, NODE, iso(44))
+    expect(enteredNeeds(g, merged.file)).toEqual([])
+    expect(merged.thread.needsBuzzedAt).toBe(iso(49))
+    // The merged one buzzed: the mark moves with its messages into the other thread.
+    g = updateThread(fileMessage(f0, { text: 'another', via: 'chat', at: iso(45) }).file, a, { state: 'working' }, NODE, iso(44)).file
+    const c = g.threads.find((t) => t.id !== a)!.id
+    g = { ...g, threads: g.threads.map((t) => (t.id === c ? { ...t, needsBuzzedAt: iso(43) } : t)) }
+    expect(mergeThreads(g, c, a, NODE, iso(42)).thread.needsBuzzedAt).toBe(iso(43))
+    // A message split out of a needs thread is a new thread that waits on no one yet.
+    f = fileMessage(marked, { text: 'and the invoice?', via: 'follow-up', at: iso(40), threadId: a }).file
+    const msg = f.threads.find((t) => t.id === a)!.messages.at(-1)!.id
+    expect(enteredNeeds(f, splitThreadMessage(f, a, msg, NODE, iso(39)).file)).toEqual([])
+    // Closed by him, reopened by the node straight into needs: a new entry.
+    const closed = { ...marked, threads: marked.threads.map((t) => ({ ...t, closed: { how: 'acked' as const, at: iso(30), by: 'human' as const } })) }
+    expect(enteredNeeds(closed, updateThread(closed, a, { reopen: true, state: 'needs', ...KIND }, NODE, iso(20)).file).map((t) => t.id)).toEqual([a])
+  })
+
   it('a thread the node opens waiting on him is an entry too', () => {
     const f0 = emptyThreads('lead-1')
     const r = openThread(f0, { title: 'Answer the organizer', text: 'A mail asks for a date', from: 'mail', ...KIND }, NODE, iso(5))
@@ -65,20 +92,30 @@ describe('when it buzzes (planThreadBuzz)', () => {
     expect(planThreadBuzz({ ...base, letters: [{ createdAt: NOW - 10 * 60_000, read: false }] })).toMatchObject({ buzz: false, reason: expect.stringMatching(/unread letter/) })
     expect(planThreadBuzz({ ...base, letters: [{ createdAt: NOW - 10 * 60_000, read: true }] })).toEqual({ buzz: true })
     expect(planThreadBuzz({ ...base, letters: [{ createdAt: NOW - DECISION_QUIET_MS - 1, read: false }] })).toEqual({ buzz: true })
-    expect(planThreadBuzz({ ...base, threads: [{ id: 'th-bbbbbbbbbbbb', needsBuzzedAt: iso(5) }] })).toMatchObject({ buzz: false, reason: expect.stringMatching(/another thread/) })
-    // Before he was last back: another absence.
-    expect(planThreadBuzz({ ...base, threads: [{ id: 'th-bbbbbbbbbbbb', needsBuzzedAt: iso(130) }] })).toEqual({ buzz: true })
+    const other = { id: 'th-bbbbbbbbbbbb', state: 'needs' as const, needsBuzzedAt: iso(5) }
+    expect(planThreadBuzz({ ...base, threads: [other] })).toMatchObject({ buzz: false, reason: expect.stringMatching(/another thread/) })
+    // He answered that one (it left needs), or it closed: like a letter he read, it holds nothing.
+    expect(planThreadBuzz({ ...base, threads: [{ ...other, state: 'working' }] })).toEqual({ buzz: true })
+    expect(planThreadBuzz({ ...base, threads: [{ ...other, closed: { how: 'acked', at: iso(1), by: 'human' } }] })).toEqual({ buzz: true })
+    // Older than the decision clock, or before he was last back (another absence).
+    expect(planThreadBuzz({ ...base, threads: [{ ...other, needsBuzzedAt: new Date(NOW - DECISION_QUIET_MS - 1).toISOString() }] })).toEqual({ buzz: true })
+    expect(planThreadBuzz({ ...base, threads: [{ ...other, needsBuzzedAt: iso(130) }] })).toEqual({ buzz: true })
     // Its own earlier buzz does not silence its next entry.
-    expect(planThreadBuzz({ ...base, threads: [{ id: base.threadId, needsBuzzedAt: iso(5) }] })).toEqual({ buzz: true })
+    expect(planThreadBuzz({ ...base, threads: [{ ...other, id: base.threadId }] })).toEqual({ buzz: true })
   })
 
   it('an away letter counts a thread\'s buzz of the absence as the absence\'s buzz', () => {
     const mark = { taskId: 'lead-1', since: NOW - 120 * 60_000 }
-    const buzz = lastThreadBuzz([{ needsBuzzedAt: iso(5) }, { needsBuzzedAt: iso(200) }, {}], mark.since)
+    const needs = 'needs' as const
+    const buzz = lastThreadBuzz([{ state: needs, needsBuzzedAt: iso(5) }, { state: needs, needsBuzzedAt: iso(200) }, { state: needs }, { state: 'working', needsBuzzedAt: iso(1) }], mark.since)
     expect(buzz).toBe(NOW - 5 * 60_000)
-    expect(planAwaySend({ type: 'info' }, mark, 's1', [], NOW, buzz)).toMatchObject({ kind: 'new', quiet: true })
-    expect(planAwaySend({ type: 'action_required' }, mark, 's1', [], NOW, buzz)).toMatchObject({ kind: 'new', quiet: true })
-    expect(planAwaySend({ type: 'action_required' }, mark, 's1', [], NOW + DECISION_QUIET_MS, buzz)).toMatchObject({ kind: 'new', quiet: false })
+    // Nothing still waiting, or never back in the chat (since null) with only an answered thread: no buzz to count.
+    expect(lastThreadBuzz([{ state: 'answered', needsBuzzedAt: iso(1) }], null)).toBeNull()
+    for (const type of ['info', 'action_required'] as const) {
+      expect(planAwaySend({ type }, mark, 's1', [], NOW, buzz), type).toMatchObject({ kind: 'new', quiet: true })
+      // The decision clock ends it for both, as no "read" can.
+      expect(planAwaySend({ type }, mark, 's1', [], NOW + DECISION_QUIET_MS, buzz), type).toMatchObject({ kind: 'new', quiet: false })
+    }
     expect(planAwaySend({ type: 'info' }, mark, 's1', [], NOW, null)).toMatchObject({ kind: 'new', quiet: false })
   })
 })

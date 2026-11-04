@@ -12,8 +12,8 @@
  *    one that leaves it and comes back buzzes again (threads-model.ts enteredNeeds);
  *  - never while he is in the node's chat (org/user-away.ts: not away);
  *  - one buzz per absence, shared with the away letters (human-inbox/away-thread.ts): quiet while an
- *    unread letter of the absence, or another thread's buzz, is younger than DECISION_QUIET_MS, the
- *    same clock a decision letter of the absence uses. Each buzz is recorded on its thread
+ *    unread letter of the absence, or the buzz of another thread still in needs, is younger than
+ *    DECISION_QUIET_MS, the same clock a decision letter of the absence uses. Each buzz is recorded on its thread
  *    (`needsBuzzedAt`), and away-thread.ts counts it as the absence's buzz too.
  * The title is the thread's title, the body its ask; a tap carries the node and the thread.
  * Every move into needs logs exactly one `thread push` line saying what happened.
@@ -63,7 +63,7 @@ export type ThreadBuzzPlan = { buzz: true } | { buzz: false; reason: string }
 export function planThreadBuzz(input: {
   threadId: string
   away: AwayState | null
-  threads: readonly Pick<OrgThread, 'id' | 'needsBuzzedAt'>[]
+  threads: readonly Pick<OrgThread, 'id' | 'needsBuzzedAt' | 'state' | 'closed'>[]
   letters: readonly Pick<LetterRecord, 'createdAt' | 'read' | 'archived'>[]
   now: number
 }): ThreadBuzzPlan {
@@ -74,17 +74,26 @@ export function planThreadBuzz(input: {
   if (input.letters.some((l) => !l.read && !l.archived && recent(l.createdAt))) {
     return { buzz: false, reason: 'an unread letter of this absence buzzed lately' }
   }
-  if (input.threads.some((t) => t.id !== input.threadId && !!t.needsBuzzedAt && recent(Date.parse(t.needsBuzzedAt)))) {
+  // Like a letter he read: a thread he answered (out of needs) no longer holds the buzz.
+  if (input.threads.some((t) => t.id !== input.threadId && stillBuzzing(t) && recent(Date.parse(t.needsBuzzedAt!)))) {
     return { buzz: false, reason: 'another thread of this absence buzzed lately' }
   }
   return { buzz: true }
 }
 
-/** The latest buzz of the node's threads after `since` (epoch ms), or null: away-thread.ts counts it as the absence's. */
-export function lastThreadBuzz(threads: readonly Pick<OrgThread, 'needsBuzzedAt'>[], since: number | null): number | null {
+/** A thread whose buzz still stands: it buzzed and still waits on him (like a letter he has not read). */
+function stillBuzzing(t: Pick<OrgThread, 'needsBuzzedAt' | 'state' | 'closed'>): boolean {
+  return !!t.needsBuzzedAt && t.state === 'needs' && !t.closed
+}
+
+/**
+ * The latest buzz after `since` (epoch ms) of the node's threads that still wait on him, or null:
+ * away-thread.ts counts it as the absence's buzz, inside the same DECISION_QUIET_MS clock.
+ */
+export function lastThreadBuzz(threads: readonly Pick<OrgThread, 'needsBuzzedAt' | 'state' | 'closed'>[], since: number | null): number | null {
   let last: number | null = null
   for (const t of threads) {
-    const at = t.needsBuzzedAt ? Date.parse(t.needsBuzzedAt) : NaN
+    const at = stillBuzzing(t) ? Date.parse(t.needsBuzzedAt!) : NaN
     if (Number.isFinite(at) && at > (since ?? 0) && (last === null || at > last)) last = at
   }
   return last
