@@ -6,6 +6,119 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.25] - 2026-11-04
+
+### Added
+
+- Every view comes back as it was left, plugin pages included
+- A Windows PC joins with one PowerShell line, and Walnut runs there in WSL
+- Stop a whole project syncing, a batch at a time
+- Send waits for the words still being spoken, then sends them once
+- Send waits for the dictation in every composer with a mic
+- One header and a side bar beside the chat; Changed, Files, Terminal and Board move into the kebab
+- A tapped path opens from the host that has it, through GET /api/v1/files/locate
+- The Task / Brief / Threads panel closes and comes back per node; the Threads tab shows a dot for news
+- A clickable org, under-the-hood scenes and a small Walnut demo
+- A minimal dark landing page with one download button
+- Task providers lives under Tasks, a task plugin's page links to its rules, and the AI rule field fits its text
+- Walnut-net 0.2.0 downloads are checked against pinned checksums
+- Task providers cards: the plugin's tile and a one-line summary, hard rules as chips, a clear pass or fail line
+- A turn-end ask names which of the user's kinds it is, or reads as a report to the lead
+- The host network picks its relay, and a Mac with no companion takes machines in itself
+- Import a Claude Code setup into pi, and name an ACP session's walnut calls
+- A question reaches the user only when it is theirs, and Walnut checks the line
+- The Threads view shows a thread only when it has something for the user; his reply sends it out at once
+- Settings > Task providers: per-provider hard rules and an AI rule, pass or fail with a reason
+- Walnut-net downloads are checked against pinned checksums
+- The host network: a machine with no SSH joins with one link
+- A focus block turns on Mac Do Not Disturb until it ends, quiet hides every rail badge, and Focus or Rest is the person's choice
+- Local choice on create and Make local in the task menu for projects that sync
+- Every doc comment shows in every view of the doc, the HTML preview included
+- The task board's status sections: Watching on top, Waiting / snoozed by soonest wake
+- A Threads card never echoes the user's own unanswered message back to him
+- Google Docs style comments on a document, kept in a sidecar the AI replies and resolves in
+- Private tasks stay local in projects that sync to an outside service
+- A thread with nothing new for the user is pending and out of sight; one reply to two threads stays off both cards
+- The session command is Ask Walnut, the hub is Tell Main
+- Quote and Comment stay marked on the passage and wait above the composer; selection matches go with the selection
+- Name the two chat commands by what answers: Quick Answer and Ask Claude Code
+- A Threads card holds only its summary and what the user has not seen
+
+### Fixed
+
+- The service install asks a busy daemon again instead of giving up
+- Step 2 of a join says why the login service did not install
+- Stop dtach masters by their recorded pid, never by command-line pattern
+- The last host network error that said this Mac says this machine
+- The view-state scan judges a state by how it is set, not by its name
+- Rewriting an unchanged kept view writes nothing, so two panels stop ping-ponging
+- Each tab keeps its own view, and plugin drafts get walnut.ui.useDraft
+- The Windows join checks the Ubuntu download without Get-FileHash
+- Rehearsals pick their server port below the OS's ephemeral range
+- The Windows join job builds its daemon, and net errors name this machine
+- A session whose Walnut is on another machine runs that Walnut's walnut
+- Stop processes by the pid that was recorded, never by name, pattern or port
+- A build as root no longer reads Bun's /$bunfs/root/ paths as its own
+- A doc comment's hover card follows pointer events, not mousemove
+- The Windows join job builds its Linux file outside /root
+- The Windows join job checks out the tree with LF endings
+- The iOS locate route asks the server role, not CLOUD_MODE
+- The companion applies security updates from the latest release daily and reboots when one needs it
+- Full screen fills the page area edge to edge, not a bigger pop-up
+- A highlight taken away repaints its words in WebKit, so a given-up comment leaves no paint
+- A machine that joins keeps another Walnut's walnut command
+- A daemon whose /tmp files were swept is found and handed over
+- A person's own NEED_ACTION reads Needs you; browser specs follow the real-ask rule
+- A new Mac finishes the join, and an older Walnut there is left alone
+- A test run's request never starts a focus block, quiets the user or touches the Mac
+- A doc comment opens in place, under its words, and the side column is gone
+- Full screen is one state of the tab, so leaving it anywhere leaves it everywhere
+- Only a test run's window takes its toggle's answer, and it rereads its view on a published change
+- A test run's Quiet toggle stays in its own copy, so it never silences the user
+- SentBy "person" holds only for text a person typed; every other line is framed at the send
+- Only a real ask reaches Needs you, and every agent task read carries the live status
+- A task under a new project name makes a Local project
+- A machine that joins shows Connected at once, and connects by itself
+- Ask for the reply language in the user's own language
+- A host's name no longer starts or stops its Walnut server; a guard keeps every toggle label to its own words
+- A live turn's fold keeps the saved fold's form, so nothing in it moves when the turn is saved
+- A returned call last in the stream gives way to its saved twin, so a mid-turn save never shows it twice
+- Pi's ACP adapter runs on the Node that runs pi, not on a second boot of the walnut file
+- A clicked path missing on the session's host opens from the host that has it
+- A task provider's name no longer flips its sync check; only the switch does
+- Search keys follow the hit by path, wait out IME and the first answer, and every close drops a late answer
+- The sidebar search starts at the top, a click previews a hit and keeps the search, a double click opens and closes it
+- A message written during the turn-end status question waits for it instead of killing the worker
+- A pi session starts without a version probe and reports its status at the turn end
+- No script picks a simulator for its user; one helper resolves it
+- A task kept out of a service asks the user nothing; Main hears one line a day
+- A refresh restates only the Needs you items that changed since the node last told the user
+- What the reader opened stays open across every handover, and a subagent's reader is one timeline
+- The AI rule field is seven lines tall, so Walnut's default rule shows whole
+- A Question stack push or pop stays under 50 ms of main thread (C38)
+- A host whose daemon is the compiled walnut file runs ACP engines again
+- A project move never sends a task to a new service
+- A bulk result with failures keeps its Retry and Undo working for as long as its line shows, and the specs press a group tool through one hover-and-click
+- On a slow phone a drawer opened before the page is drawn stays open, and its Ask Walnut goes home
+- A history read asked after a turn boundary never joins a read started before it, and an opened notice stays open when its persisted row lands
+- A streamed reply's own elements become its saved row, so a script block never reloads
+- A settled reply keeps its cards and islands in the web views that drew them
+- The no-end-time warning names only today's shortcut
+- One painter for the selected-word echo, which ends when the user leaves the selection
+- Do Not Disturb always ends with the block, and a test copy never touches the Mac
+- A repository no host can clone moves from its bundle, and a shell edit counts as the session's change
+- The host network survives bad configs, version bumps and a cut-short Remove
+- A service only the user reads is never checked; kept tasks share one letter
+- The tree snapshot never trusts a folder changed in the clock step its scan began in, so a note added right after a scan shows on a coarse clock
+- The column follows a turn's last text when it lands in the commit that ends the turn
+- A reply looks the same while it streams and after its persisted row replaces it
+- Every notes search result leads with its file name and folder, and a file name's words find it
+- The private tasks fields pass their ratchets: rows redraw on a sync hold, the draft's Sync chip maps to task_create local, the words stay on the Mac, and the skill is regenerated
+- The Inbox shows only the inbox; the per-project strip is gone
+- A message whose reply was not found, sent before that reply covered a later one, joins its exchange
+- A pending thread is never called back by the tidy reminder; quiet threads are asked once and last
+- A Threads card leaves out messages older than its last answer, and a click on a link in an answer stays a link
+
 ## [0.6.24] - 2026-11-03
 
 ### Added
