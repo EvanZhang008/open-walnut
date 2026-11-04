@@ -216,7 +216,7 @@ if [ -z "$runner" ]; then
     [ -n "$job" ] || continue
     echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run/job/$job)"
     gh api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g' \
-      | awk '/NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
+      | awk '/^Fix them|^##\[error\]|^##\[group\]Run /{if (p) exit} /NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
   done
   blocked "the test gate failed on $short. The failing tests are listed above."
 fi
