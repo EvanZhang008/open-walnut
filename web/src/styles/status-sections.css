@@ -1,8 +1,8 @@
 /* Status sections of the home task panel (StatusSections.tsx): Watching, Needs you,
    Working, Waiting, Completed. A heading is a thin divider row, "Waiting (13) ---- >",
-   grey, the open one tinted (2026-10-30, the user picked this look from ten, modelled
-   on T3 Code: "so clean so simple"). Every section has one, Needs you included, with the
-   section's own mark before its name (2026-10-31: headless Needs you rows read as Watching's).
+   grey, the open one tinted (2026-10-30, the user picked this look from ten: "so clean
+   so simple"). Every section has one, Needs you included, with the section's own mark
+   before its name (2026-10-31: headless Needs you rows read as Watching's).
    Each row is two lines: a small line with the project, its tags and the time, then
    the title alone (the user: the tags "on another line", never beside the title), and a
    Waiting row's sentence of what it waits on a third line under it. */

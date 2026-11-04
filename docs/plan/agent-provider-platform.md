@@ -6,7 +6,6 @@
 > What shipped: `SESSION_ENGINE_IDS` = claude/codex/gemini/opencode/goose/custom (`src/core/types.ts`); registry descriptors with a declarative `acpAdapter` field (`src/core/agents/engine-registry.ts`); registry-driven `resolveEngine`/`normalizeEngine`; ACP-engine-set routing in both daemon twins; `AcpSession` genericized (engine threading, per-engine adapter resolution via the shared executable policy in `src/core/agents/engine-probe.ts`, codex-only env kept codex-gated); `GET /api/engines` catalog (probe with cache, deadline, `WALNUT_ENGINE_PROBE_ALL=1` test override); web UI fully catalog-driven (`web/src/hooks/useEngineCatalog.ts`, dynamic engine toggle, capability-gated surfaces); per-engine skill links in the daemon twins (`~/.gemini/skills`, goose via `~/.agents/skills`). Tests at every layer per engine: L1 registry/routing matrices, L2 daemon `agent.*` wire tests, L3 server conformance slice over all five ACP engines against the mock adapter, live-matrix specs gated by `WALNUT_LIVE_GEMINI/OPENCODE/GOOSE`, and a Playwright engine-matrix spec. The executable policy change is deliberate: the old blanket node_modules ban (which would have rejected homebrew-installed gemini/opencode, and rejects an `npm i -g` codex today) is scoped to npm-shim PATH entries and walnut's own bundled node_modules.
 > Pi and DeepSeek Harness also use the ACP transport. Install Pi with `npm i -g @earendil-works/pi-coding-agent` or DeepSeek Harness with `npm i -g @deepseek-ai/dsh`, then configure model access in that CLI. `WALNUT_PI_PATH` and `WALNUT_DSH_PATH` select their executables. Walnut bundles `pi-acp` 0.0.33 with a checked build-time correction for failed Pi turns; no separate adapter installation is needed. Pi requires version 0.80.4 or newer, uses `pi --mode rpc`, supports `session/load`, and runs tools without a built-in approval prompt. Its adapter does not mount MCP servers; sessions use the `walnut` CLI for Walnut operations. DSH uses its official `dsh --profile acp` endpoint and restores threads through `session/resume` without replaying history. Both use the provider's advertised model controls. Grouped ACP choices are flattened without rewriting their values, including DSH's JSON-array model IDs. Neither engine supports Walnut fork, rewind, remote execution, or external-session import yet.
 > Scope: turn Walnut's two hardcoded coding-agent engines (`claude`, `codex`) into an open set of engines (add `opencode`, `cursor`, `gemini`, others) that share ONE core in the daemon, ONE canonical event vocabulary, and ONE capability contract.
-> Reference studied: T3 Code (`apps/server/src/provider/`), which ships 5 providers behind one driver SPI.
 
 ## Executive summary
 
@@ -14,7 +13,7 @@
 2. The fix is a **descriptor plus capability record per engine**, registered in one file, so no call site ever branches on an engine name again. Every current branch is really asking one of nine capability questions (steering, permission shape, history source, id provisioning, rewind, health probe, mode control, external import, skill sync). Capabilities answer them uniformly, and a new engine ships by adding a descriptor rather than by editing session lifecycle code.
 3. The daemon keeps ownership of every process, and gets **one command family** (`agent.*`) with three transport strategies behind it: stream-json over a FIFO (Claude CLI today), ACP over a worker's stdio (Codex today, plus Cursor, Gemini, Grok with almost no new code), and a managed local HTTP server with an event stream (OpenCode). Supervision (idle reaping, process-group adoption, startup repair, journal tailing) is written once and shared by all three, instead of being duplicated per transport as it is today between `daemon-core.ts` and `acp-daemon.ts`.
 4. Remote parity is part of the contract, not a later patch. ACP sessions today work only on hosts running the compiled daemon; the SSH-deployed fallback twin answers `acp_unsupported`. The platform must state, per engine and per host, whether the engine is available, and degrade with a clear reason instead of a raw error.
-5. What Walnut should NOT copy from T3 Code: its remote model (one full server per environment) and its in-process SDK adapters. Walnut's daemon plus process adoption survives server restarts and SSH drops, which is a stronger guarantee than a per-environment server, and running an agent SDK inside the server process would put agent work back on the event loop the web routes share.
+5. What Walnut deliberately does NOT do: run one full server per environment, or run agent SDKs in-process. Walnut's daemon plus process adoption survives server restarts and SSH drops, which is a stronger guarantee than a per-environment server, and running an agent SDK inside the server process would put agent work back on the event loop the web routes share.
 6. Suggested order: contract and capability registry first (pure refactor, no behavior change), then the unified daemon command family, then remote parity, then OpenCode as the first genuinely new transport shape, then the provider catalog UI (installed, version, auth, models) and finally multiple instances of one engine.
 
 ## Where we are today
@@ -30,22 +29,22 @@
 | Remote parity | `src/providers/daemon-source.ts:2002-2012` | JS twin rejects all `acp*` commands. |
 | Provider health | none | No "is this engine installed / authed / what version / which models" concept. The model picker hardcodes per-engine knowledge. |
 
-## What T3 Code does, and which parts to take
+## Design choices
 
-Worth taking:
+Choices the platform makes:
 
-- **Driver as a plain value, not a service.** A driver is a record with `kind`, `metadata`, a config schema, and `create(input)` returning one instance. Instances are created per configuration and torn down by closing their scope. Walnut's equivalent: a descriptor record plus a factory, registered in one array (`BUILT_IN_DRIVERS` is their whole registration story, `builtInDrivers.ts` is 54 lines of real content).
-- **A capability record on the adapter.** They expose `capabilities.sessionModelSwitch: 'in-session' | 'unsupported'` so call sites ask the capability, not the vendor. Walnut needs the same idea with more axes.
-- **A canonical runtime event union with the raw frame attached.** Their `ProviderRuntimeEvent` carries `provider`, ids (`threadId`, `turnId`, `itemId`, `requestId`), provider-native ids under `providerRefs`, and an optional `raw` envelope tagged with its source (`claude.sdk.message`, `opencode.sdk.event`, `acp.jsonrpc`, and so on). Walnut's journal records already do the raw half; the canonical half exists as bus events but is not a single typed union with provider ids on it.
-- **Unavailable instances stay visible.** A configured provider whose driver is missing in this build becomes a shadow snapshot marked unavailable rather than disappearing. That is exactly the behavior Walnut needs for "engine not installed on this host".
-- **One shared snapshot machine.** `makeManagedServerProvider` gives every driver the same polling, refresh, settings-change reaction, and change stream. Per-driver code only supplies the probe.
+- **Driver as a plain value, not a service.** A driver is a record with `kind`, `metadata`, a config schema, and `create(input)` returning one instance. Instances are created per configuration and torn down by closing their scope. In Walnut: a descriptor record plus a factory, registered in one array, so registration is one short file.
+- **A capability record on the adapter.** For example `capabilities.sessionModelSwitch: 'in-session' | 'unsupported'`, so call sites ask the capability, not the vendor, across every axis listed below.
+- **A canonical runtime event union with the raw frame attached.** Each event carries `provider`, ids (`threadId`, `turnId`, `itemId`, `requestId`), provider-native ids under `providerRefs`, and an optional `raw` envelope tagged with its source (`claude.sdk.message`, `opencode.sdk.event`, `acp.jsonrpc`, and so on). Walnut's journal records already do the raw half; the canonical half exists as bus events but is not a single typed union with provider ids on it.
+- **Unavailable instances stay visible.** A configured provider whose driver is missing in this build becomes a shadow snapshot marked unavailable rather than disappearing. That is the behavior Walnut needs for "engine not installed on this host".
+- **One shared snapshot machine.** Every driver gets the same polling, refresh, settings-change reaction, and change stream. Per-driver code only supplies the probe.
 - **Maintenance as data.** Install and update capability is declared per engine (package name, formula, native update command) rather than written as per-engine procedures.
 
-Not worth taking:
+Choices the platform rejects:
 
-- **Environment equals one server.** Their remote story is "run another whole server and connect a WebSocket to it". Walnut's daemon plus FIFO plus process-group adoption already survives more failures, and the daemon is far cheaper to deploy than a full server.
-- **In-process SDK adapters.** Their Claude driver runs the Agent SDK inside the server. Walnut deliberately keeps agent processes out of the server process (one blocked event loop stalls every route).
-- **Effect-based dependency injection.** The value is the shape (records, explicit dependencies, scoped teardown), not the framework. Plain factories and an explicit registry give the same seams here.
+- **Environment equals one server.** A remote environment is not "run another whole server and connect a WebSocket to it". Walnut's daemon plus FIFO plus process-group adoption already survives more failures, and the daemon is far cheaper to deploy than a full server.
+- **In-process SDK adapters.** No driver runs an agent SDK inside the server. Walnut deliberately keeps agent processes out of the server process (one blocked event loop stalls every route).
+- **A dependency injection framework.** The value is the shape (records, explicit dependencies, scoped teardown), not the framework. Plain factories and an explicit registry give the same seams here.
 
 ## Target architecture
 
@@ -163,7 +162,7 @@ ACP-based engines (Cursor, Gemini, Grok) are descriptor-only work once P1 and P2
 
 ## Risks and decisions
 
-- **Instances now or later.** T3 Code routes by `instanceId` from the start and pays a migration tax for it (their code carries "legacy kind-keyed" shims everywhere). Recommendation: keep (host, engine) as the routing key through P4 and introduce instances in P5, but reserve the field in the contract so the later change is additive.
+- **Instances now or later.** Routing by `instanceId` from the start would mean carrying "legacy kind-keyed" shims everywhere during the migration. Recommendation: keep (host, engine) as the routing key through P4 and introduce instances in P5, but reserve the field in the contract so the later change is additive.
 - **Do not rename `engine` to `provider`.** `SessionProvider` already means the execution substrate in Walnut, and the ACP work already learned that a repository-wide identity rename is not worth it (`claudeSessionId` still carries the ACP session id).
 - **Do not make ACP the universal internal protocol.** Walnut's canonical vocabulary is already ACP-aligned, which is the useful part. Forcing the Claude CLI path through ACP semantics would put an adapter in front of the most battle-tested code in the repo and lose behavior that has no ACP expression (idle debt accounting, compact usage re-seed, disk queue semantics).
 - **Transport count is the real cost driver.** Three strategies is the honest number today. Each new engine should be forced to answer "which existing strategy do you use" first; a fourth strategy needs an explicit decision, not a quiet addition.

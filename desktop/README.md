@@ -19,9 +19,9 @@ codebase. This wrapper only:
   installed. That copy also updates itself in place. A Mac that still has the
   Node archive an older app installed keeps running it until the next app
   update installs the file over it.
-- Updates itself the way T3 Code's app does: a quiet check 15 seconds after
-  launch and every 4 minutes, an update item in the sidebar once there is one,
-  a download you start, and **Restart to update** (see [Updates](#updates)).
+- Updates itself: a quiet check 15 seconds after launch and every 4 minutes,
+  an update item in the sidebar once there is one, a download you start, and
+  **Restart to update** (see [Updates](#updates)).
   Or point it at an existing `~/.open-walnut` install or a source checkout.
 - For a source checkout, finds **bun** (PATH, `~/.bun/bin`, Homebrew, `/usr/local/bin`),
   at least the version the checkout's `package.json` pins.
@@ -153,9 +153,8 @@ start instantly. **Reset Setup…** (app menu) shows the choice again.
 
 ## Updates
 
-The app updates itself as a whole, T3 Code's flow (`AppUpdater.swift`, with
-the state and its rules in `AppUpdateMachine.swift`, a port of T3's
-`updateMachine.ts`):
+The app updates itself as a whole (`AppUpdater.swift`, with the state and its
+rules in `AppUpdateMachine.swift`):
 
 1. **Check.** 15 seconds after launch, then every 4 minutes, the app asks the
    releases page for the newest release (`releases/latest`, the redirect to its

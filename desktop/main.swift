@@ -111,7 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // is looking (see WebContentPolicy.swift for why a long-lived WKWebView
     // needs this and a browser tab does not).
     var webContentWatchdog: WebContentWatchdog?
-    // The app's own update (AppUpdater.swift, T3 Code's flow): checks quietly,
+    // The app's own update (AppUpdater.swift): checks quietly,
     // the user downloads it from the rail or the app menu, it installs on restart.
     var appUpdater: AppUpdater?
     var updateMenuItem: NSMenuItem?

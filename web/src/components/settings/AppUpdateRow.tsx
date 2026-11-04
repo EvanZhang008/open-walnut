@@ -1,7 +1,7 @@
 /**
- * Settings → General: the Mac app's version and its one update button (T3
- * Code's "app-version" row): Check for Updates, Download, Restart to Update,
- * or what it is doing. Only inside a Walnut.app that updates itself.
+ * Settings → General: the Mac app's version and its one update button: Check
+ * for Updates, Download, Restart to Update, or what it is doing. Only inside a
+ * Walnut.app that updates itself.
  */
 import { useAppUpdateState } from '@/hooks/useAppUpdate';
 import {

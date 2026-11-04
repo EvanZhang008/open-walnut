@@ -1,8 +1,7 @@
 /**
  * Is there a newer open-walnut on npm? One checker per server process.
  *
- * Shape, learned from how other npm-distributed CLIs do it (T3 Code polls a
- * release feed at a fixed cadence and shows a quiet pill; Codex and Gemini ask
+ * Shape, learned from how other npm-distributed CLIs do it (Codex and Gemini ask
  * the registry's `/latest` document and print the install command):
  *
  *   - ONE small GET of the package's dist-tags (`latest`, `nightly`), 5 s

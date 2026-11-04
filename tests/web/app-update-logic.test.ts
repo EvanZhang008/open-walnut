@@ -1,7 +1,5 @@
 /**
- * The Mac app's update item: what it shows and does in each state. These are
- * T3 Code's own cases (apps/web/src/components/desktopUpdate.logic.test.ts),
- * ported one for one so the tested flow carries over; the words are Walnut's.
+ * The Mac app's update item: what it shows and does in each state.
  * Then the page side of the bridge: the state store hears the shell's events,
  * reads the first state once, and never lets that read undo a newer event.
  */
@@ -32,7 +30,7 @@ const baseState: AppUpdateState = {
   disabledReason: null,
 };
 
-describe('app update button state (T3 desktopUpdate.logic)', () => {
+describe('app update button state', () => {
   it('shows a download action when an update is available', () => {
     expect(resolveAppUpdateButtonAction({ ...baseState, status: 'available', availableVersion: '1.1.0' })).toBe('download');
   });

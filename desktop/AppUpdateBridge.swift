@@ -32,7 +32,7 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
         }
     }
 
-    // MARK: - The page's requests (T3's desktopBridge: getState / check / download / install)
+    // MARK: - The page's requests (getState / check / download / install)
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage,
                                replyHandler: @escaping (Any?, String?) -> Void) {
@@ -264,9 +264,9 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
         }
     }
 
-    /// T3 stops every backend with a 5 s budget before quitAndInstall. A server
-    /// still running after that keeps its pid on record, so the new app reclaims
-    /// it as its own orphan instead of attaching to it.
+    /// Stops the server with a 5 s budget before the install. A server still
+    /// running after that keeps its pid on record, so the new app reclaims it as
+    /// its own orphan instead of attaching to it.
     func stopServerForUpdate(timeout: TimeInterval, then: @escaping () -> Void) {
         let proc = ownsServer ? serverProcess : nil
         DesktopLogger.shared.log("app_update_stopping_server", fields: ["owned": String(proc != nil)])

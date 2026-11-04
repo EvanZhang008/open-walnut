@@ -1,11 +1,9 @@
 import Foundation
 
-// The Mac app's own update, the flow T3 Code ships (apps/desktop/src/updates in
-// pingdotgg/t3code, electron-updater underneath): a quiet check 15 s after launch
-// and every 4 minutes, the user downloads from the rail's update item, and a
-// downloaded update installs on "Restart to update". This file is the part that
-// decides: the state and its reducers (a port of T3's updateMachine.ts, same
-// statuses and fields, so the web side's logic ports over unchanged), which
+// The Mac app's own update: a quiet check 15 s after launch and every 4 minutes,
+// the user downloads from the rail's update item, and a downloaded update
+// installs on "Restart to update". This file is the part that decides: the state
+// and its reducers (the same statuses and fields the web side reads), which
 // release to fetch, why updates are off in this copy, and whether a relaunched
 // app installs the Walnut it carries. AppUpdater.swift does the I/O.
 //
@@ -21,9 +19,9 @@ enum AppUpdateErrorContext: String, Codable {
     case check, download, install
 }
 
-/// What the web console and the app menu show. Field names match T3's
-/// DesktopUpdateState (minus its channels and release notes: the app only
-/// follows stable releases, which is all a GitHub release is here).
+/// What the web console and the app menu show. No channels and no release
+/// notes: the app only follows stable releases, which is all a GitHub release
+/// is here.
 struct AppUpdateState: Codable, Equatable {
     var enabled: Bool
     var status: AppUpdateStatus
@@ -39,7 +37,7 @@ struct AppUpdateState: Codable, Equatable {
     var message: String?
     var errorContext: AppUpdateErrorContext?
     var canRetry: Bool
-    /// Why `enabled` is false (T3 keeps this beside the state; one field here).
+    /// Why `enabled` is false.
     var disabledReason: String?
 
     // Optionals encode as null, not as absent keys: the page reads every field.
@@ -67,7 +65,7 @@ struct AppUpdateState: Codable, Equatable {
     }
 }
 
-// MARK: - Reducers (T3 updateMachine.ts, one function each)
+// MARK: - Reducers (one function each)
 
 enum AppUpdateMachine {
     static func initial(currentVersion: String, hostArch: String, appArch: String, translated: Bool) -> AppUpdateState {
@@ -78,7 +76,7 @@ enum AppUpdateMachine {
             message: nil, errorContext: nil, canRetry: false, disabledReason: nil)
     }
 
-    /// T3 createBaseUpdateState: idle when updates can run here, disabled (with why) otherwise.
+    /// Idle when updates can run here, disabled (with why) otherwise.
     static func base(_ s: AppUpdateState, disabledReason: String?) -> AppUpdateState {
         var n = initial(currentVersion: s.currentVersion, hostArch: s.hostArch, appArch: s.appArch, translated: s.runningUnderArm64Translation)
         n.enabled = disabledReason == nil
@@ -207,13 +205,13 @@ enum AppUpdateMachine {
         return n
     }
 
-    /// T3 shouldBroadcastDownloadProgress: every 10% step (and 100), not every byte.
+    /// Whether to broadcast download progress: every 10% step (and 100), not every byte.
     static func shouldBroadcastProgress(_ s: AppUpdateState, nextPercent: Double) -> Bool {
         guard s.status == .downloading, let current = s.downloadPercent else { return true }
         return Int(current / 10) != Int(nextPercent / 10) || nextPercent >= 100
     }
 
-    /// T3 installDownloadedUpdate's admission: a download is there and nothing broke it since.
+    /// Whether an install may start: a download is there and nothing broke it since.
     static func isInstallable(_ s: AppUpdateState) -> Bool {
         guard s.downloadedVersion != nil else { return false }
         return s.status == .downloaded || (s.status == .error && (s.errorContext == nil || s.errorContext == .install))
@@ -292,7 +290,7 @@ enum AppUpdateFeed {
     }
 }
 
-// MARK: - Whether this copy updates at all (T3 getAutoUpdateDisabledReason)
+// MARK: - Whether this copy updates at all
 
 enum AppUpdatePolicy {
     struct Inputs {
@@ -322,7 +320,7 @@ enum AppUpdatePolicy {
 enum RuntimeUpgrade {
     /// After an app update, the new app carries a newer Walnut than the one
     /// installed: it installs it before the server starts (offline, a few
-    /// seconds), the way T3's update brings its new backend inside the app.
+    /// seconds), so an app update brings its new backend inside the app.
     /// Never a downgrade: a runtime that updated itself past the app (the
     /// nightly channel, `walnut update`) keeps its own.
     ///

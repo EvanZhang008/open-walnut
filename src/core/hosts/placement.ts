@@ -4,8 +4,8 @@
  * ran 14 task sessions at load 400 to 800 while clouddev sat idle, because every start
  * took its project's default host (or its lead's) whatever that host was doing.
  *
- * The rule, decided on the leader (one answer for every surface; T3 Code decides it in
- * each client and so gives different answers):
+ * The rule, decided on the leader (one answer for every surface, never a different one
+ * per client):
  *   - a start that names a host, a task that already has a session, and Mac-only work
  *     (iOS, the Mac app, the user's screen) are never placed;
  *   - otherwise the host the start would use keeps it while it is under every cap;
@@ -15,8 +15,8 @@
  * stalled on memory, which CPU use alone misses), CPU busy 95%, memory available 5%,
  * free disk 20 GB, and the host's running-session limit (`session_limits`). A host's
  * numbers come from its daemon (`host.load`, 'host-load-v1'), the Mac's from this
- * process; one older than 15 s is asked again (as T3 Code), and a host that does not answer in 4 s
- * is unknown and never chosen. Like T3: a placed task keeps its host (no rebalancing), and
+ * process; one older than 15 s is asked again, and a host that does not answer in 4 s
+ * is unknown and never chosen. A placed task keeps its host (no rebalancing), and
  * each host carries a weight (config placement_weights: 100 prefer, 50 normal, 25 less
  * often, 0 never) that scales its room score.
  */
@@ -29,9 +29,9 @@ import { log } from '../../logging/index.js';
 import type { HostLoad } from '../../providers/host-facts-core.js';
 
 export const LOCAL = '__local__';
-/** A host's numbers are asked again after this (T3 Code drops a sample older than 15 s). */
+/** A host's numbers are asked again after this (a sample older than 15 s is dropped). */
 const FRESH_MS = 15_000;
-/** placement_weights' default step (T3 Code's "Normal"). */
+/** placement_weights' default step ("Normal"). */
 export const DEFAULT_WEIGHT = 50;
 
 /** A host's placement weight: config placement_weights, 0 for `place: false`, else 50. */
@@ -168,7 +168,7 @@ export function judgeHost(
   if (running >= runningLimit) view.reasons.push(`${running} sessions in a turn (limit ${runningLimit})`);
   view.busy = view.reasons.length > 0;
   if (!view.busy) {
-    // T3 Code's score (cores x idle share x memory share), with the load and the sessions in it.
+    // The score (cores x idle share x memory share), with the load and the sessions in it.
     const idle = load.cpuBusy != null ? 1 - load.cpuBusy : 1;
     view.score = Math.round(cpus * Math.max(0.05, 1 - perCpu / caps.loadPerCpu) * Math.max(0.05, idle)
       * Math.max(0.05, memShare ?? 0.5) * Math.max(0.05, 1 - running / runningLimit) * 1000) / 1000;
@@ -194,7 +194,7 @@ export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLo
     const got = await loadOf(host);
     const label = host === LOCAL ? 'this Mac' : hostDisplayName(host, config.hosts?.[host]?.label);
     const view = judgeHost(host, label, got.load, running, activeSessionLimitFor(key, config.session_limits), caps, got.error);
-    // T3 Code's weight: the room score scaled by how much the user prefers this host.
+    // The weight: the room score scaled by how much the user prefers this host.
     view.weight = placementWeight(host, config);
     view.score = Math.round(view.score * (view.weight / DEFAULT_WEIGHT) * 1000) / 1000;
     return view;

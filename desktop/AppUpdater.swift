@@ -1,14 +1,13 @@
 import Foundation
 import Security
 
-// The Mac app's updater: T3 Code's DesktopUpdates.ts (electron-updater on
-// Squirrel.Mac) done with the system's own pieces. AppUpdateMachine.swift holds
-// the state and decides; this does the I/O and keeps T3's rules:
+// The Mac app's updater, done with the system's own pieces. AppUpdateMachine.swift
+// holds the state and decides; this does the I/O and keeps these rules:
 //
 // - a check 15 s after launch, then every 4 minutes; none while downloading;
 // - downloads are never automatic: the user starts one (the rail's update item
 //   or the app menu), and it ends with a verified copy of the new app;
-// - one action at a time (check, download, install), as T3's single reservation;
+// - one action at a time (check, download, install), through a single reservation;
 // - install = stop the server (5 s budget), hand the swap to apply-update.sh and
 //   quit; the script waits for this process, swaps the app, and opens it.
 //
@@ -68,7 +67,7 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
         super.init()
     }
 
-    // MARK: - Configure (T3 configure)
+    // MARK: - Configure
 
     func configure() {
         let env = ProcessInfo.processInfo.environment
@@ -93,7 +92,7 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
         }
     }
 
-    // MARK: - Check (T3 checkForUpdates)
+    // MARK: - Check
 
     /// Returns false when the check did not run (disabled, busy, quitting).
     @discardableResult
@@ -170,7 +169,7 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
         completionHandler(session === probeSession ? nil : request)
     }
 
-    // MARK: - Download (T3 downloadAvailableUpdate)
+    // MARK: - Download
 
     /// `done(true)` once the new app is downloaded and verified.
     func download(done: @escaping (_ accepted: Bool, _ completed: Bool) -> Void) {
@@ -348,7 +347,7 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
         }
     }
 
-    // MARK: - Install (T3 installDownloadedUpdate + quitAndInstall)
+    // MARK: - Install
 
     /// `failed` comes back only when the swap could not be prepared; on
     /// success the app quits and the new one opens.
@@ -430,7 +429,7 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
         return true
     }
 
-    // MARK: - The single action reservation (T3 tryStartUpdateAction)
+    // MARK: - The single action reservation
 
     var activeAction: Action? { active }
 

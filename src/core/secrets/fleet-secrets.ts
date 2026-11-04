@@ -2,10 +2,9 @@
  * Fleet secrets: the Mac keeps each secret the user gives it and copies it to
  * the hosts the user picks, so a task there keeps working while the Mac is away
  * (the user, 2026-10-31: "the Mac as a secret manager that replicates it ...
- * because the Mac may go down; look at how T3 Code does it"). T3 Code never
- * copies a secret; every machine signs in by itself. We borrow its file
- * discipline (0700 dir, 0600 files, temp file then rename) and its rule that
- * settings and APIs carry only "set", never the value; the copying is ours.
+ * because the Mac may go down"). Files keep a strict discipline (0700 dir, 0600
+ * files, temp file then rename), and settings and APIs carry only "set", never
+ * the value.
  *
  * The Mac's copy (the master) lives outside the data home, in
  * `$XDG_STATE_HOME/open-walnut/secrets-master`, so git sync never carries it.

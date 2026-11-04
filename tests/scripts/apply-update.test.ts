@@ -1,6 +1,6 @@
 /**
- * desktop/apply-update.sh: the step after the Mac app quits to update (T3 Code's
- * quitAndInstall, Squirrel's ShipIt). It waits for the app's pid, swaps the
+ * desktop/apply-update.sh: the step after the Mac app quits to update (what
+ * Squirrel's ShipIt does). It waits for the app's pid, swaps the
  * staged new app into place with two renames and opens it; any failure puts the
  * old app back and opens that. Run for real on temp dirs with a stub opener.
  * And the two build scripts ship it and compile the updater, so a release app

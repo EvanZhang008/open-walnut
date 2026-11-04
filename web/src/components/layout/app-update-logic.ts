@@ -1,7 +1,5 @@
 /**
- * What the Mac app's update item shows and does in each state: a port of T3
- * Code's desktopUpdate.logic.ts (apps/web/src/components), kept function for
- * function so the tested behavior carries over. The words are Walnut's.
+ * What the Mac app's update item shows and does in each state.
  */
 import type { AppUpdateActionResult, AppUpdateState } from '@/hooks/useAppUpdate';
 
@@ -83,7 +81,7 @@ export function canCheckForUpdate(state: AppUpdateState | null): boolean {
   return state.status !== 'checking' && state.status !== 'downloading' && state.status !== 'disabled';
 }
 
-/** T3 shows the update control once there is something to do or a download running. */
+/** The update control shows once there is something to do or a download running. */
 export function shouldShowAppUpdateItem(state: AppUpdateState | null): boolean {
   if (!state || !state.enabled) return false;
   return resolveAppUpdateButtonAction(state) !== 'none' || state.status === 'downloading';

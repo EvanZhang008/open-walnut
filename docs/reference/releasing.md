@@ -356,8 +356,8 @@ Release get is what the matrix ran. Both channels also publish only a commit who
   quarantines it, as a browser does), requires Gatekeeper to see a notarized Developer ID app,
   and attaches `walnut.rb`. The tap's workflow copies it to `Casks/walnut.rb` with the formula:
   `brew install --cask evanzhang008/tap/walnut`.
-- **Updates**: see "How an install updates" below. The Mac app updates itself as a whole, T3
-  Code's flow (`desktop/AppUpdater.swift`, `desktop/README.md#updates`): it checks the releases
+- **Updates**: see "How an install updates" below. The Mac app updates itself as a whole
+  (`desktop/AppUpdater.swift`, `desktop/README.md#updates`): it checks the releases
   page 15 seconds after launch and every 4 minutes, offers `Walnut-<arch>.dmg` once the release
   has it, downloads it (by itself with `updates.auto` on, the default; when the user says so with
   it off), accepts it only when it satisfies the running app's designated requirement, and on

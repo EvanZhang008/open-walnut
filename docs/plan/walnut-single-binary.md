@@ -42,7 +42,6 @@ start on a machine where the session daemon, a bun-compiled file, runs fine.
 | Project | Build | What a person gets |
 |---|---|---|
 | Claude Code | `bun build --compile` | one file (216 MB on macOS arm64; the bun runtime plus a 157 MB `__BUN` segment of its own code and assets) |
-| T3 Code | Node single executable (SEA) | an executable plus a small `node_modules` beside it for node-pty; SQLite through the built-in `node:sqlite` |
 | Tailscale | Go | one static file |
 | Walnut session daemon | `bun build --compile` | one file (61 MB) |
 

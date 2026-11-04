@@ -1,12 +1,12 @@
 /**
  * The Mac app's own update, as the page sees it. The app shell owns the updater
- * (desktop/AppUpdater.swift, T3 Code's flow); the page reads its state and asks
+ * (desktop/AppUpdater.swift); the page reads its state and asks
  * for the next step through the `walnutUpdate` message handler, which answers
  * each request with a promise, and hears every change as a `walnut:app-update`
  * window event. In a browser tab, or an app built before this, there is no
  * handler and nothing here renders.
  *
- * One module-level copy (T3's desktop update atom): subscribe first, then read
+ * One module-level copy: subscribe first, then read
  * the current state (three tries), and drop that read if an event already came.
  */
 import { useEffect, useState } from 'react';
@@ -15,7 +15,7 @@ import { log } from '@/utils/log';
 export type AppUpdateStatus =
   | 'disabled' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error';
 
-/** Twin of AppUpdateState in desktop/AppUpdateMachine.swift (T3's DesktopUpdateState). */
+/** Twin of AppUpdateState in desktop/AppUpdateMachine.swift. */
 export interface AppUpdateState {
   enabled: boolean;
   status: AppUpdateStatus;

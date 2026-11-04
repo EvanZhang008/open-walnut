@@ -1,10 +1,9 @@
 import Foundation
 
-/// AppUpdateMachine (desktop/AppUpdateMachine.swift): the Mac app's update state,
-/// ported from T3 Code's updateMachine.ts. The reducer cases are T3's own tests
-/// (apps/desktop/src/updates/updateMachine.test.ts), one block each, so the two
-/// machines cannot drift; then the feed, the version order, the reasons a copy
-/// does not update, and when a relaunched app installs the Walnut it carries.
+/// AppUpdateMachine (desktop/AppUpdateMachine.swift): the Mac app's update state.
+/// The reducer cases come first, one block each; then the feed, the version
+/// order, the reasons a copy does not update, and when a relaunched app installs
+/// the Walnut it carries.
 @main
 struct AppUpdateTests {
     static func base() -> AppUpdateState {
@@ -162,7 +161,7 @@ struct AppUpdateTests {
             == gh + "/download/v0.6.9/Walnut-x64.dmg")
         precondition(AppUpdateFeed.releaseURL(base: gh, version: "0.6.9")?.absoluteString == gh + "/tag/v0.6.9")
 
-        // Why a copy does not update, in T3's order: no feed, not a signed release, opted out, read-only place.
+        // Why a copy does not update, in this order: no feed, not a signed release, opted out, read-only place.
         let ok = AppUpdatePolicy.Inputs(hasFeed: true, hasStableSignature: true, disabledByEnv: false, bundlePath: "/Applications/Walnut.app")
         precondition(AppUpdatePolicy.disabledReason(ok) == nil)
         var i = ok; i.hasFeed = false; i.hasStableSignature = false

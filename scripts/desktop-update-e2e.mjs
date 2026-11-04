@@ -4,7 +4,7 @@
  * newer one on a releases page, downloads it (the first try breaks off halfway
  * and is retried), checks it is signed by the same developer, and on "Restart to
  * update" stops its server, quits, is swapped for the new app, and the new app
- * opens and serves the console again. T3 Code's flow (desktop/AppUpdater.swift).
+ * opens and serves the console again (desktop/AppUpdater.swift).
  *
  *   bun scripts/desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> [--source <dir>] [--work <dir>] [--keep]
  *                                      [--read-only-folder] [--auto] [--video <out.mp4>]

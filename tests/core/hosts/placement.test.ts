@@ -139,7 +139,7 @@ describe('choosePlacement', () => {
   });
 });
 
-// T3 Code's per-machine preference (Prefer 100 / Normal 50 / Less often 25 / Manual only 0).
+// The per-machine preference (Prefer 100 / Normal 50 / Less often 25 / Manual only 0).
 describe('placement weights', () => {
   it('reads config, 0 for place:false, 50 by default', () => {
     expect(placementWeight('cloud', {})).toBe(50);

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Puts a downloaded Walnut.app in place of the running one and opens it: the
-# step Squirrel's ShipIt does for an Electron app's quitAndInstall (T3 Code).
+# step Squirrel's ShipIt does for an Electron app's quitAndInstall.
 # AppUpdater.swift copies the verified new app NEXT TO the old one first (same
 # folder, same volume, so both moves below are renames) and starts this script;
 # the app then stops its server and quits. Nothing is replaced while it runs.
