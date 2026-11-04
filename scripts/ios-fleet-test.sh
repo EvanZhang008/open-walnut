@@ -43,6 +43,11 @@
 # 64 a wrong option.
 set -uo pipefail
 
+# The whole script is one block that ends in exit: bash reads all of it before it runs a
+# line, so an edit to this file during a run (a commit, an editor) cannot change the rest
+# of the run (2026-11-04: one did, and a passed run ended in a syntax error).
+{
+
 die() { printf 'ios-fleet: %s\n' "$*" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
@@ -274,3 +279,4 @@ if [ "$FETCHED" = 0 ]; then
 fi
 say "results: $LOCAL$([ -f "$LOCAL/out/run.mp4" ] && echo " (video: $LOCAL/out/run.mp4)")"
 exit "$STATUS"
+}

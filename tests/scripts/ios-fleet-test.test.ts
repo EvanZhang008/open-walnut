@@ -64,7 +64,15 @@ if (op === 'host_copy') {
   out({ running: true, copyId: 'hc-' + args.to_host })
 }
 if (op === 'host_copy_result') out({ running: false, outcome: 'Copied to ' + args.copy_id })
-if (op === 'host_exec') out(args.background ? { jobId: 'hx-' + args.host, running: true } : { exitCode: 0, running: false })
+if (op === 'host_exec') {
+  // An edit to the script while it runs (a commit, the editor), written in place.
+  const edit = path.join(dir, 'edit-script')
+  if (args.background && fs.existsSync(edit)) {
+    const f = fs.readFileSync(edit, 'utf8')
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('\\nset -uo pipefail\\n', '\\n# ' + 'an inserted comment that moves every later line '.repeat(8) + '\\nset -uo pipefail\\n'))
+  }
+  out(args.background ? { jobId: 'hx-' + args.host, running: true } : { exitCode: 0, running: false })
+}
 if (op === 'host_exec_read') {
   const m = mac(args.host)
   const r = m.result || { exit: 0, state: 'passed' }
@@ -85,8 +93,8 @@ function git(...a: string[]): void {
   if (r.status !== 0) throw new Error(r.stderr)
 }
 
-function run(args: string[], bin: string) {
-  const r = spawnSync('bash', [SCRIPT, ...args], {
+function run(args: string[], bin: string, script = SCRIPT) {
+  const r = spawnSync('bash', [script, ...args], {
     cwd: repo, encoding: 'utf8',
     env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir, IOS_FLEET_RETRY_SECS: '0', IOS_FLEET_LOG_POLL_SECS: '0' },
   })
@@ -207,6 +215,20 @@ describe('ios-fleet-test.sh', () => {
     expect(r2.status, r2.stderr).toBe(0)
     expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 3.1 per CPU, over 0.75')
     expect(r2.stderr).toMatch(/using __local__ \(__local__\): load 0\.2 per CPU; no other iOS Mac can take the run/)
+  })
+
+  it('an edit to the script while it runs does not change the run (bash reads the whole script first)', () => {
+    // 2026-11-04: a commit to this script during a 7-minute run made bash read the rest of
+    // the new file from the old offset: "syntax error near unexpected token done", exit 2,
+    // after the tests had passed on the Mac.
+    const copy = path.join(dir, 'ios-fleet-test.sh')
+    fs.copyFileSync(SCRIPT, copy)
+    fs.writeFileSync(path.join(dir, 'edit-script'), copy)
+    const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz()), copy)
+    expect(fs.readFileSync(copy, 'utf8'), r.stderr).toContain('an inserted comment')
+    expect(r.stderr).not.toMatch(/syntax error|command not found/)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('results: ')
   })
 
   it('a Mac that turns out busy hands the run to the next one; a failed run keeps its exit code', () => {
