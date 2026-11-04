@@ -146,6 +146,23 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertNil(m.withdrawn)
     }
 
+    func testARowActionRightBehindAnotherOneIsIgnored() {
+        let m = model(Transport())
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(m.takeRowTap(at: t0))
+        XCTAssertFalse(m.takeRowTap(at: t0.addingTimeInterval(0.3)), "the second tap of a double tap")
+        XCTAssertTrue(m.takeRowTap(at: t0.addingTimeInterval(1.1)))
+    }
+
+    func testUndoIsAlwaysADecisionButShieldsTheRowsThatMoveIntoItsPlace() {
+        let m = model(Transport())
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(m.takeRowTap(at: t0), "the cross")
+        m.noteRowTap(at: t0.addingTimeInterval(0.4))
+        XCTAssertFalse(m.takeRowTap(at: t0.addingTimeInterval(0.8)), "a cross under the finger that tapped Undo")
+        XCTAssertTrue(m.takeRowTap(at: t0.addingTimeInterval(1.5)))
+    }
+
     func testUndoSaysWhenTheMessageWillComeBackLast() async {
         let t = Transport()
         t.rows = [row("qm-a", "first"), row("qm-b", "second")]

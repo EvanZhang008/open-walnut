@@ -1037,6 +1037,8 @@ struct ComposerBar: View {
         static let camera = "camera"
         static let mic = "mic.fill"
         static let send = "arrow.up"
+        /// The send seat while a turn runs and words are typed: they go in the queue tray.
+        static let queue = "tray.and.arrow.down.fill"
         static let stop = "stop.fill"
         static let interruptSend = "bolt.fill"
         static let voiceMode = "waveform"
@@ -1056,7 +1058,7 @@ struct ComposerBar: View {
         // The voice notices' glyphs are `VoiceNoticeRows`' own (VoiceInputControls.swift).
 
         static let all = [
-            plus, photo, files, fileNotice, fileImporting, camera, mic, send, stop, voiceMode, confirm,
+            plus, photo, files, fileNotice, fileImporting, camera, mic, send, queue, stop, voiceMode, confirm,
             cancel, removeImage, offlineNotice, imageNotice, cameraDeniedNotice, queueFullNotice,
         ]
     }
@@ -1103,8 +1105,9 @@ struct ComposerBar: View {
             if useLongDraftEditor {
                 LongDraftEditor(text: draft, isFocused: $longDraftFocused, visibleLines: maximumInputLines)
             } else {
-                TextField(waitingForReply ? (busyAcceptsSend ? "Queue a message, or interrupt…" : "Waiting for reply…") : placeholder,
-                          text: draft, axis: .vertical)
+                TextField(fieldHint, text: draft,
+                          prompt: Text(fieldHint).foregroundColor(Color(uiColor: waitingForReply ? .secondaryLabel : .placeholderText)),
+                          axis: .vertical)
                     .lineLimit(1...maximumInputLines)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
@@ -1140,7 +1143,7 @@ struct ComposerBar: View {
             // names wrap instead. Mode, then model (with its effort): the web
             // composer's order, on every composer.
             if showsModePill || showsModelPill {
-                Self.pillLayout(stacked: dynamicTypeSize.isAccessibilitySize) {
+                Self.pillLayout(stacked: dynamicTypeSize >= .xxxLarge) {
                     if showsModePill {
                         // Short and safety-relevant: it keeps its word at the large sizes,
                         // and the longer model name gives way first.
@@ -1639,6 +1642,14 @@ struct ComposerBar: View {
         sendGate.send { _ in send(interrupting: true) }
     }
 
+    /// What the empty field says: while a turn runs it says what a send will do, in a colour that reads as text.
+    private var fieldHint: String {
+        waitingForReply ? (busyAcceptsSend ? "Queue a message, or interrupt…" : "Waiting for reply…") : placeholder
+    }
+
+    /// A turn runs and this composer can hold words behind it: the seat puts them in the queue.
+    private var queuesInsteadOfSending: Bool { waitingForReply && busyAcceptsSend && hasContent }
+
     private var sendButton: some View {
         Button(action: gatedSend) {
             if sendGate.isWaiting {
@@ -1650,8 +1661,8 @@ struct ComposerBar: View {
                     .frame(width: 32, height: 32)
                     .background(Theme.tint, in: Circle())
             } else {
-                Image(systemName: Symbol.send)
-                    .font(.system(size: 17, weight: .semibold))
+                Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
+                    .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))
                     .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
                     .frame(width: 32, height: 32)
                     .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
@@ -1660,7 +1671,7 @@ struct ComposerBar: View {
         .disabled(!canSend && !sendGate.isWaiting)
         // VoiceOver read the arrow's symbol name, "Up".
         .accessibilityLabel(sendGate.isWaiting ? DictationSendGate.waitingLabel
-                            : (waitingForReply && busyAcceptsSend ? "Queue message" : "Send"))
+                            : (queuesInsteadOfSending ? "Queue message" : "Send"))
         .accessibilityHint(waitingForReply && busyAcceptsSend ? "Goes in after the running turn, or when the agent can take it" : "")
         .accessibilityIdentifier("chat.send")
     }

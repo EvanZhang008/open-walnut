@@ -22,9 +22,6 @@ struct SessionQueueStrip: View {
     /// Rows listed in the strip; the rest are one tap away in the list.
     static let visibleRows = 3
 
-    /// The rows move up when one goes, so the second tap of a double tap would land on the
-    /// next row's cross or Send: a row action right behind another one is ignored.
-    @State private var rowTaps = SeatTapGuard(span: 1.0)
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// The tray shares the screen with the composer and the keyboard: at the accessibility
@@ -163,8 +160,7 @@ struct SessionQueueStrip: View {
             if row.status == "parked", !turnRunning, !queue.busyIds.contains(row.id) {
                 // Nothing runs, so Send just puts it back in line: one tap, no sheet.
                 Button {
-                    guard rowTaps.allows() else { return }
-                    rowTaps.record()
+                    guard queue.takeRowTap() else { return }
                     Task { _ = await queue.sendNow(row, interrupt: false) }
                 } label: {
                     Text("Send")
@@ -184,8 +180,7 @@ struct SessionQueueStrip: View {
                 ProgressView().controlSize(.small).frame(width: 44, height: 44)
             } else if row.canWithdraw {
                 Button {
-                    guard rowTaps.allows() else { return }
-                    rowTaps.record()
+                    guard queue.takeRowTap() else { return }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     Task { await queue.withdraw(row) }
                 } label: {
@@ -221,6 +216,7 @@ struct QueueUndoLine: View {
                 .foregroundStyle(Theme.secondaryOnCard)
             Spacer(minLength: 8)
             Button {
+                queue.noteRowTap()
                 queue.clearUndo()
                 onUndo(gone.text)
             } label: {

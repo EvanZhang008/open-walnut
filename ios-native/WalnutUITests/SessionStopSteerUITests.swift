@@ -201,6 +201,28 @@ final class SessionStopSteerUITests: XCTestCase {
         attach(app, "10-cross-double-tap")
     }
 
+    func testADoubleTapOnUndoBringsBackOnlyThatMessage() throws {
+        let app = openLongSession()
+        type("First waiting words", in: app)
+        element(app, "chat.send").tap()
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForExistence(timeout: 20))
+        type("Second waiting words", in: app)
+        element(app, "chat.send").tap()
+        let rows = elements(app, beginningWith: "session.queue.row.")
+        let deadline = Date().addingTimeInterval(20)
+        while rows.count < 2 && Date() < deadline { usleep(200_000) }
+        XCTAssertEqual(rows.count, 2)
+        elements(app, beginningWith: "session.queue.withdraw.").element(boundBy: 1).tap()
+        let undo = element(app, "session.queue.undo")
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        undo.doubleTap()
+        sleep(3)
+        XCTAssertEqual(rows.count, 2, "Undo, tapped twice, took another message with it or brought one back twice")
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("First waiting words"))
+        XCTAssertTrue(rows.element(boundBy: 1).label.contains("Second waiting words"))
+        attach(app, "12-undo-double-tap")
+    }
+
     // MARK: - Stop with a message waiting
 
     func testStopSetsTheWaitingMessageAsideAndSendPutsItBack() throws {

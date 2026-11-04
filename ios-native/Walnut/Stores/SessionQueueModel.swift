@@ -35,6 +35,10 @@ final class SessionQueueModel {
     /// The queue row with this id now holds these words (server confirmed).
     @ObservationIgnored var onEdited: ((String, String) -> Void)?
 
+    /// Rows move under the finger when one goes or comes back: a row action right behind another
+    /// one (the second tap of a double tap, Undo then a cross) would land on a different row.
+    @ObservationIgnored private var rowTaps = SeatTapGuard(span: 1.0)
+
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var failures = 0
     /// Bumps per accepted write so a slower GET that started before it cannot put the
@@ -47,6 +51,20 @@ final class SessionQueueModel {
     }
 
     var hasRows: Bool { !rows.isEmpty }
+
+    /// True = this tap on a row action (cross, Send, Undo) is a decision; false = it came right
+    /// behind another one and is ignored.
+    func takeRowTap(at now: Date = Date()) -> Bool {
+        guard rowTaps.allows(at: now) else { return false }
+        rowTaps.record(at: now)
+        return true
+    }
+
+    /// A tap that is always a decision (Undo, right after a cross) but still shields the rows
+    /// that move into its place.
+    func noteRowTap(at now: Date = Date()) {
+        rowTaps.record(at: now)
+    }
 
     // MARK: - Reading
 
