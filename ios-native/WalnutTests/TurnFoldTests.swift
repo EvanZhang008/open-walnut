@@ -250,6 +250,22 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertEqual(TimelineFoldSteps.phrase([.calls(2), .notice(error: false)]), "Ran 2 tools \u{00B7} 1 notice")
     }
 
+    func testAStopThatEndsThePageStaysInViewAndOneWithWordsAfterItFolds() {
+        func stop() -> ChatMessage {
+            ChatMessage(id: "n\(clock)", role: "user", text: "Turn interrupted", createdAt: at(),
+                        kind: .notification, source: "interrupt")
+        }
+        // The person tapped Stop in the middle of a command: the page ends on the marker, which is
+        // not folded into the failed call's count.
+        let ended = plan([person(), said("Running the shards."), tool("Bash", "sleep 25", isError: true), stop()])
+        XCTAssertEqual(outline(ended).last, "bubble:Turn interrupted", "\(outline(ended))")
+        XCTAssertFalse(outline(ended).contains { $0.hasPrefix("fold:") && $0.contains("bubble:Turn interrupted") })
+        // The same marker with a message after it (an interrupting send) is one more step of the stretch.
+        let followed = plan([person(), said("Running the shards."), tool("Bash", "sleep 25", isError: true), stop(),
+                             person("Just say hello."), said("Hello.")])
+        XCTAssertFalse(outline(followed).contains("bubble:Turn interrupted"), "\(outline(followed))")
+    }
+
     func testAQuestionToThePersonAndWordsStillEndAStretch() {
         let parts = plan([person(), said("Answer."), peer(), tool("Bash", "a", isError: true),
                           said("Halfway there."), tool("AskUserQuestion")])

@@ -141,7 +141,9 @@ final class SessionQueueModelTests: XCTestCase {
         let m = model(t)
         await m.refresh()
         await m.withdraw(m.rows[0])
-        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(id: "qm-a", text: "keep these words", followers: [], wasSetAside: false))
+        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(
+            id: "qm-a", text: "keep these words", followers: [], wasSetAside: false, enqueuedAt: "2026-11-04T00:00:00Z"
+        ))
         m.clearUndo()
         XCTAssertNil(m.withdrawn)
     }
@@ -174,6 +176,56 @@ final class SessionQueueModelTests: XCTestCase {
         await m.withdraw(m.rows[1])
         XCTAssertEqual(m.withdrawn?.wasSetAside, true, "a Stop had set it aside: Undo returns it to the box")
         XCTAssertEqual(m.withdrawn?.followers, [])
+    }
+
+    private func timed(_ id: String, _ text: String, _ second: Int, status: String = "pending") -> SessionQueuedMessage {
+        SessionQueuedMessage(id: id, message: text, status: status, enqueuedAt: String(format: "2026-11-04T00:00:%02dZ", second))
+    }
+
+    func testAnotherWithdrawalWhileTheOfferStandsJoinsIt() async {
+        let t = Transport()
+        t.rows = [timed("qm-a", "first", 1), timed("qm-b", "second", 2), timed("qm-c", "third", 3)]
+        let m = model(t)
+        await m.refresh()
+        await m.withdraw(m.rows[0])
+        await m.withdraw(m.rows[1])
+        XCTAssertEqual(m.withdrawn?.id, "qm-c")
+        XCTAssertEqual(m.withdrawn?.all.map(\.id), ["qm-a", "qm-c"], "one Undo gives both back")
+        XCTAssertEqual(m.withdrawn?.earlier.map(\.id), ["qm-a"])
+    }
+
+    func testUndoPutsSeveralMessagesBackInTheOrderTheyStoodIn() {
+        let a = timed("qm-a", "first", 1), b = timed("qm-b", "second", 2), c = timed("qm-c", "third", 3)
+        // a was withdrawn (b and c stood behind it), then c.
+        let first = WithdrawnQueuedMessage(id: "qm-a", text: "first", followers: [b, c], wasSetAside: false, enqueuedAt: a.enqueuedAt)
+        let both = WithdrawnQueuedMessage(id: "qm-c", text: "third", followers: [], wasSetAside: false,
+                                          enqueuedAt: c.enqueuedAt, earlier: [first])
+        let plan = both.restorePlan(rows: [b])
+        XCTAssertEqual(plan.steps.map(\.text), ["first", "second", "third"])
+        XCTAssertEqual(plan.steps.map(\.pullRowID), [nil, "qm-b", nil], "the one still waiting is taken off the line and sent again in its place")
+        XCTAssertNil(plan.draftText)
+    }
+
+    func testUndoSkipsAFollowerThatLeftTheLineAndHandsSetAsideWordsToTheBox() {
+        let a = timed("qm-a", "first", 1), b = timed("qm-b", "second", 2)
+        let aside = WithdrawnQueuedMessage(id: "qm-p", text: "parked words", followers: [], wasSetAside: true, enqueuedAt: nil)
+        let latest = WithdrawnQueuedMessage(id: "qm-a", text: "first", followers: [b], wasSetAside: false,
+                                            enqueuedAt: a.enqueuedAt, earlier: [aside])
+        let plan = latest.restorePlan(rows: [])
+        XCTAssertEqual(plan.steps.map(\.text), ["first"], "qm-b went out meanwhile: gone is gone")
+        XCTAssertEqual(plan.draftText, "parked words")
+    }
+
+    func testSendAllPutsEveryHeldMessageBackInLineInOrder() async {
+        let t = Transport()
+        t.rows = [timed("qm-a", "first", 1, status: "parked"), timed("qm-b", "second", 2, status: "parked"),
+                  timed("qm-c", "third", 3)]
+        let m = model(t)
+        await m.refresh()
+        XCTAssertEqual(m.heldCount, 2, "only the ones a Stop held back")
+        await m.sendAllHeld()
+        XCTAssertEqual(t.sentNow.map(\.0), ["qm-a", "qm-b"], "in the order they stood in, the waiting one untouched")
+        XCTAssertEqual(t.sentNow.map(\.1), [false, false], "nothing runs, so nothing is interrupted")
     }
 
     func testPullingAMessageOffTheLineForRequeueTellsThePageAndKeepsNoUndo() async {
@@ -438,5 +490,41 @@ final class SeatTapGuardTests: XCTestCase {
         XCTAssertFalse(row.allows(at: t0.addingTimeInterval(0.9)))
         XCTAssertTrue(row.allows(at: t0.addingTimeInterval(1.0)))
         XCTAssertLessThan(row.span, SeatTapGuard().span)
+    }
+
+    // MARK: - The Withdraw button's words
+
+    /// Words on a bordered destructive button sit on the danger tint at a quarter strength over the
+    /// sheet: that pair must clear the text bar in both appearances.
+    func testTheWithdrawLabelClearsTheTextBarOnItsOwnFill() {
+        func linear(_ v: CGFloat) -> Double {
+            let c = Double(v)
+            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        func luminance(_ color: UIColor, _ traits: UITraitCollection) -> Double {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+            return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+        for dark in [false, true] {
+            let traits = UITraitCollection { $0.userInterfaceStyle = dark ? .dark : .light }
+            for sheet in [UIColor.systemBackground, UIColor.secondarySystemBackground] {
+                func channels(_ color: UIColor) -> (CGFloat, CGFloat, CGFloat) {
+                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                    color.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+                    return (r, g, b)
+                }
+                let f = channels(Theme.dangerColor)
+                let p = channels(sheet)
+                let fill = UIColor(
+                    red: p.0 + (f.0 - p.0) * 0.25, green: p.1 + (f.1 - p.1) * 0.25,
+                    blue: p.2 + (f.2 - p.2) * 0.25, alpha: 1
+                )
+                let ink = luminance(Theme.dangerTextColor, traits)
+                let paper = luminance(fill, traits)
+                let ratio = (max(ink, paper) + 0.05) / (min(ink, paper) + 0.05)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5, "dark=\(dark): \(ratio):1")
+            }
+        }
     }
 }

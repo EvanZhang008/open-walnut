@@ -283,6 +283,45 @@ final class SessionStopSteerUITests: XCTestCase {
         attach(app, "13-undo-keeps-order")
     }
 
+    func testWithdrawingTwoMessagesOffersOneUndoThatBringsBothBackInOrder() throws {
+        let app = openLongSession()
+        let rows = elements(app, beginningWith: "session.queue.row.")
+        for (index, words) in ["First waiting words", "Second waiting words", "Third waiting words"].enumerated() {
+            type(words, in: app)
+            element(app, "chat.send").tap()
+            // The keyboard is up, so the tray lists two and offers the rest behind "Show all".
+            let deadline = Date().addingTimeInterval(25)
+            while rows.count < min(index + 1, 2) && Date() < deadline { usleep(200_000) }
+            XCTAssertEqual(rows.count, min(index + 1, 2))
+            sleep(2)
+        }
+        XCTAssertTrue(element(app, "session.queue.showAll").exists, "the third waits behind Show all")
+        elements(app, beginningWith: "session.queue.withdraw.").firstMatch.tap()
+        XCTAssertTrue(element(app, "session.queue.undo").waitForExistence(timeout: 10))
+        sleep(2)
+        elements(app, beginningWith: "session.queue.withdraw.").firstMatch.tap()
+        let undo = element(app, "session.queue.undo")
+        XCTAssertTrue(text(app, containing: "2 messages withdrawn").waitForExistence(timeout: 10), "the offer did not grow to both")
+        attach(app, "14-two-withdrawn")
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        undo.tap()
+        let deadline = Date().addingTimeInterval(40)
+        while Date() < deadline {
+            if rows.count == 2, rows.element(boundBy: 0).label.contains("First waiting words"),
+               rows.element(boundBy: 1).label.contains("Second waiting words") { break }
+            usleep(300_000)
+        }
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("First waiting words"), "Undo changed the order")
+        XCTAssertTrue(rows.element(boundBy: 1).label.contains("Second waiting words"))
+        // The third is still behind them: open the list and read it.
+        element(app, "session.queue.showAll").tap()
+        let listed = elements(app, beginningWith: "session.queue.row.")
+        XCTAssertTrue(listed.element(boundBy: 2).waitForExistence(timeout: 10))
+        XCTAssertTrue(listed.element(boundBy: 2).label.contains("Third waiting words"), "the third is no longer last")
+        attach(app, "15-both-back")
+    }
+
     // MARK: - Stop with a message waiting
 
     func testStopSetsTheWaitingMessageAsideAndSendPutsItBack() throws {
@@ -304,6 +343,25 @@ final class SessionStopSteerUITests: XCTestCase {
         send.tap()
         XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 30), "Send was not answered")
         XCTAssertTrue(element(app, "session.queue.strip").waitForNonExistence(timeout: 10))
+    }
+
+    func testSendAllPutsEveryHeldMessageBackInLineWithOneTap() throws {
+        let app = openLongSession()
+        for words in ["Held one", "Held two"] {
+            type(words, in: app)
+            element(app, "chat.send").tap()
+            sleep(2)
+        }
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForExistence(timeout: 20))
+        tapStop(app)
+        XCTAssertTrue(element(app, "chat.stop").waitForNonExistence(timeout: 20), "the turn did not stop")
+        let sendAll = element(app, "session.queue.sendAll")
+        XCTAssertTrue(sendAll.waitForExistence(timeout: 20), "two held messages offer Send all")
+        attach(app, "16-send-all-offered")
+        sendAll.tap()
+        XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 40), "Send all was not answered")
+        XCTAssertFalse(element(app, "session.queue.sendAll").exists)
+        attach(app, "17-send-all-done")
     }
 
     func testASetAsideMessageCanBeCorrectedAndAnUnsavedCorrectionIsNotLostSilently() throws {

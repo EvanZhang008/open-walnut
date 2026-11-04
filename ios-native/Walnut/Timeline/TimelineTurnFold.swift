@@ -272,8 +272,22 @@ private final class Planner {
             flushQuiet()
             out += defaultParts([item], ridersFolded: folded)
         }
+        // The line a Stop leaves at the very end of the page stays in view: folded into the red
+        // "failed" count above it, the one sign that the person's own tap worked would be hidden.
+        // With anything after it, it joins the stretch around it like any other notice.
+        let endsOnStop: Bool = {
+            if case .message(let m)? = parts.last?.part { return m.kind == .notification && m.source == "interrupt" }
+            return false
+        }()
         func place(_ item: TimelineToolRunFold.Part) {
-            if Self.isQuiet(item) { quiet.append(item); return }
+            if Self.isQuiet(item) {
+                if endsOnStop, case .message(let m) = item, m.id == messages.last?.id {
+                    person(item)
+                    return
+                }
+                quiet.append(item)
+                return
+            }
             person(item)
         }
         var p = 0
@@ -281,7 +295,7 @@ private final class Planner {
             var mine: [(start: Int, part: TimelineToolRunFold.Part)] = []
             while p < end, parts[p].start < turn.end { mine.append(parts[p]); p += 1 }
             guard !mine.isEmpty else { continue }
-            if turn.kind == .hidden { quiet += mine.map(\.part); continue }
+            if turn.kind == .hidden { mine.forEach { place($0.part) }; continue }
             let answer = turn.kind == .answered ? mine.firstIndex(where: { $0.start == turn.answer }) : nil
             guard let answerAt = answer else { mine.forEach { place($0.part) }; continue }
             var ans = answerAt

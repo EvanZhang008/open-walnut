@@ -146,8 +146,11 @@ final class SessionQueueModel {
 
     private func offerUndo(of row: SessionQueuedMessage, followers: [SessionQueuedMessage]) {
         withdrawnClear?.cancel()
+        // A second withdrawal while the offer stands joins it: one Undo gives them all back.
+        let before = withdrawn.map { $0.earlier + [$0] } ?? []
         withdrawn = WithdrawnQueuedMessage(
-            id: row.id, text: row.message, followers: followers, wasSetAside: row.status == "parked"
+            id: row.id, text: row.message, followers: followers, wasSetAside: row.status == "parked",
+            enqueuedAt: row.enqueuedAt, earlier: before.map(\.flattened)
         )
         withdrawnClear = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.undoWindow))
@@ -206,6 +209,17 @@ final class SessionQueueModel {
         }
     }
 
+    /// Messages a Stop held back, in the order they stood in.
+    var heldCount: Int { rows.filter { $0.status == "parked" }.count }
+
+    /// Put every held-back message in line again, one after the other.
+    func sendAllHeld() async {
+        for row in rows.filter({ $0.status == "parked" }) {
+            guard rows.contains(where: { $0.id == row.id && $0.status == "parked" }) else { continue }
+            guard await sendNow(row, interrupt: false) else { return }
+        }
+    }
+
     /// Send a queued message now. While a turn runs this stops it first (`interrupt`),
     /// so the row goes out in a fresh turn; the list is read again after.
     func sendNow(_ row: SessionQueuedMessage, interrupt: Bool) async -> Bool {
@@ -233,7 +247,7 @@ final class SessionQueueModel {
     }
 }
 
-/// A queued message the person withdrew a moment ago.
+/// A queued message the person withdrew a moment ago (and, in `earlier`, the ones withdrawn just before it).
 struct WithdrawnQueuedMessage: Equatable {
     let id: String
     let text: String
@@ -243,6 +257,50 @@ struct WithdrawnQueuedMessage: Equatable {
     /// A Stop had set it aside: Undo hands the words back to the message box instead of sending
     /// them (nothing had asked for them to go).
     let wasSetAside: Bool
+    /// When the server took it in: the order the messages stood in.
+    var enqueuedAt: String? = nil
+    var earlier: [WithdrawnQueuedMessage] = []
+
+    /// This one without the ones before it.
+    var flattened: WithdrawnQueuedMessage {
+        WithdrawnQueuedMessage(id: id, text: text, followers: followers, wasSetAside: wasSetAside, enqueuedAt: enqueuedAt)
+    }
+
+    /// Every message one Undo gives back.
+    var all: [WithdrawnQueuedMessage] { earlier + [flattened] }
+
+    /// What Undo does: words to hand back to the message box, and the messages to send again in the
+    /// order they stood in (a row still waiting behind one of them is taken off the line first, so it
+    /// goes in after it).
+    func restorePlan(rows: [SessionQueuedMessage]) -> RestorePlan {
+        let items = all
+        let aside = items.filter(\.wasSetAside).map(\.text)
+        let waiting = items.filter { !$0.wasSetAside }
+        let gone = Set(items.map(\.id))
+        func time(_ iso: String?) -> Date { WalnutTask.parseISO(iso) ?? .distantPast }
+        var entries: [(at: Date, step: RestorePlan.Step)] = waiting.map { (time($0.enqueuedAt), .init(text: $0.text, pullRowID: nil)) }
+        var seen = Set<String>()
+        for item in waiting {
+            for later in item.followers where !gone.contains(later.id) && seen.insert(later.id).inserted {
+                // Its words as they are now (it may have been edited meanwhile); gone from the line = gone.
+                guard let current = rows.first(where: { $0.id == later.id }) else { continue }
+                entries.append((time(current.enqueuedAt), .init(text: current.message, pullRowID: current.id)))
+            }
+        }
+        let ordered = entries.enumerated().sorted {
+            $0.element.at == $1.element.at ? $0.offset < $1.offset : $0.element.at < $1.element.at
+        }
+        return RestorePlan(draftText: aside.isEmpty ? nil : aside.joined(separator: "\n"), steps: ordered.map(\.element.step))
+    }
+}
+
+struct RestorePlan: Equatable {
+    struct Step: Equatable {
+        let text: String
+        let pullRowID: String?
+    }
+    let draftText: String?
+    let steps: [Step]
 }
 
 extension Array where Element == SessionQueuedMessage {

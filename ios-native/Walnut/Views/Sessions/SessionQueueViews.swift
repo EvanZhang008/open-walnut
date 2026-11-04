@@ -37,8 +37,14 @@ struct SessionQueueStrip: View {
 
     static let visibleRowsWithKeyboard = 2
 
+    /// At the accessibility sizes the keyboard leaves the conversation no room at all: the tray steps aside
+    /// while the person types, and is back when the keyboard goes.
+    private var trayShown: Bool {
+        queue.hasRows && !(dynamicTypeSize.isAccessibilitySize && keyboardUp)
+    }
+
     var body: some View {
-        if queue.hasRows || queue.withdrawn != nil {
+        if trayShown || queue.withdrawn != nil {
             // The offer to take a withdrawn message back sits ABOVE the tray, in a card of its own:
             // when it goes the rows below do not move, so no tap meant for Undo can land on a cross.
             VStack(spacing: 6) {
@@ -51,7 +57,7 @@ struct SessionQueueStrip: View {
                                 .strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
                         )
                 }
-                if queue.hasRows {
+                if trayShown {
                     trayCard
                 }
             }
@@ -70,15 +76,29 @@ struct SessionQueueStrip: View {
                 rowView(row)
             }
             if queue.rows.count > shownRows {
-                Button(action: onShowAll) {
-                    Text("Show all \(queue.rows.count)")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Theme.tint)
-                        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                if shownRows == 0, let first = queue.rows.first {
+                    // Squeezed to one line: the first message in words, and the way to the rest.
+                    HStack(spacing: 8) {
+                        Button { onOpen(QueueRowRef(id: first.id)) } label: {
+                            Text(first.message)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(first.message)
+                        .accessibilityHint("Opens it to edit, send now or withdraw")
+                        .accessibilityIdentifier("session.queue.row.\(first.id)")
+                        showAllButton
+                    }
+                    .padding(.horizontal, 14)
+                } else {
+                    showAllButton
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14)
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("session.queue.showAll")
             }
             if let notice = queue.notice {
                 Text(notice)
@@ -99,6 +119,18 @@ struct SessionQueueStrip: View {
         )
     }
 
+    private var showAllButton: some View {
+        Button(action: onShowAll) {
+            Text("Show all \(queue.rows.count)")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.tint)
+                .frame(minHeight: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("session.queue.showAll")
+    }
+
     private var header: some View {
         // One line when it fits; the status drops under the title at large text sizes
         // instead of being cut short.
@@ -107,10 +139,15 @@ struct SessionQueueStrip: View {
                 title
                 Spacer(minLength: 8)
                 headline.lineLimit(1)
+                sendAllButton
             }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) { title }
-                headline
+                HStack(spacing: 8) {
+                    headline
+                    Spacer(minLength: 8)
+                    sendAllButton
+                }
             }
         }
         .foregroundStyle(Theme.secondaryOnCard)
@@ -132,6 +169,27 @@ struct SessionQueueStrip: View {
             .padding(.vertical, 1)
             .background(Theme.tintSoft, in: Capsule())
             .foregroundStyle(Theme.tint)
+    }
+
+    /// Two or more messages a Stop held back, with nothing running: one tap puts them all in line again.
+    @ViewBuilder
+    private var sendAllButton: some View {
+        if !turnRunning, queue.heldCount >= 2 {
+            Button {
+                guard queue.takeRowTap() else { return }
+                Task { await queue.sendAllHeld() }
+            } label: {
+                Text("Send all")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.tint)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 32)
+                    .background(Theme.tintSoft, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("session.queue.sendAll")
+        }
     }
 
     private var headline: some View {
@@ -235,7 +293,9 @@ struct QueueUndoLine: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(gone.wasSetAside ? "Withdrawn \u{00B7} Undo returns it to the box" : "Message withdrawn")
+            Text(gone.earlier.isEmpty
+                 ? (gone.wasSetAside ? "Withdrawn \u{00B7} Undo returns it to the box" : "Message withdrawn")
+                 : "\(gone.earlier.count + 1) messages withdrawn")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondaryOnCard)
             Spacer(minLength: 8)
@@ -337,6 +397,7 @@ struct SessionQueuedMessageSheet: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(Theme.danger)
+                            .foregroundStyle(Theme.dangerText)
                             .disabled(saving || queue.busyIds.contains(row.id))
                             .accessibilityIdentifier("session.queue.withdrawSheet")
                         }
@@ -401,7 +462,7 @@ struct SessionQueuedMessageSheet: View {
                 ? "Waiting to go in. You can edit it until it does."
                 : "About to go out."
         case "processing": return "This message is with the agent now."
-        case "parked": return "Not sent: a Stop set it aside. Edit it if you like, then send it."
+        case "parked": return "Not sent: you stopped the agent first. Edit it if you like, then send it."
         case "held": return "Waiting for your Mac to come back online."
         default: return ""
         }

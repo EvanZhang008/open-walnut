@@ -19,6 +19,11 @@ enum Theme {
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))
     static let danger = Color(dynamic: dangerColor)
     static let dangerColor = UIColor(light: 0xFF3B30, dark: 0xFF453A)
+    /// Words on a button whose fill is the danger tint at about a quarter strength (a bordered
+    /// destructive button): 4.5:1 or more on that fill in both appearances, where the bare tint
+    /// reaches only about 3.6:1 in dark.
+    static let dangerText = Color(dynamic: dangerTextColor)
+    static let dangerTextColor = UIColor(light: 0xB0121A, dark: 0xFF7A75)
     /// The user states as words (UserStatePill.textColor): 4.5:1 on the light background and
     /// on the dark one, where the bright tints above only work as dots and washes.
     static let needsText = Color(dynamic: UIColor(light: 0xB23A06, dark: 0xFF9A5C))

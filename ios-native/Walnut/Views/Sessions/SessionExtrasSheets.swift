@@ -43,7 +43,7 @@ struct SessionQueueSheet: View {
                         }
                     } footer: {
                         if queue.rows.contains(where: { $0.status == "parked" }) {
-                            Text("Messages marked Not sent were set aside by a Stop. Tap one to send it; swipe to withdraw.")
+                            Text("Messages marked Not sent were held back when you stopped the agent. Tap one to send it; swipe to withdraw.")
                         } else {
                             Text(turnRunning
                                  ? "Waiting messages go in as soon as the session can take them. Tap one to edit it or send it now; swipe to withdraw."
@@ -116,6 +116,7 @@ struct SessionQueueSheet: View {
                 } label: {
                     Label("Withdraw", systemImage: "trash")
                 }
+                .tint(Theme.danger)
             }
         }
     }

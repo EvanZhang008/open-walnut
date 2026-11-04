@@ -268,14 +268,16 @@ struct SessionConversationView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        // The tray grows back only once the keyboard is gone: the timeline holds its bottom through the
+        // keyboard's own move and re-pins when the inset changes after it.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
         .alert("Stop the agent?", isPresented: $askStop) {
             Button("Keep going", role: .cancel) {}
             Button("Stop", role: .destructive) { Task { await store.stopTurn() } }
         } message: {
             Text(waitingToGoIn == 1
-                 ? "Your waiting message will be set aside, not sent."
-                 : "Your \(waitingToGoIn) waiting messages will be set aside, not sent.")
+                 ? "Your waiting message will stay here, not sent. You can send it afterwards."
+                 : "Your \(waitingToGoIn) waiting messages will stay here, not sent. You can send them afterwards.")
         }
         // The composer's keyboard would cover a half-height sheet: whichever opens, it goes first.
         .onChange(of: anySheetShown) { _, shown in
@@ -385,17 +387,18 @@ struct SessionConversationView: View {
     /// behind it follow it, so the order is what it was. One a Stop had set aside returns to the
     /// message box: nothing had asked for it to go.
     private func undoWithdraw(_ gone: WithdrawnQueuedMessage) async {
-        if gone.wasSetAside {
+        let plan = gone.restorePlan(rows: queue.rows)
+        if let words = plan.draftText {
             let key = "session:\(session.id)"
             let now = ComposerDrafts.shared.draft(key)
-            ComposerDrafts.shared.setDraft(now.isEmpty ? gone.text : now + "\n" + gone.text, key: key)
-            return
+            ComposerDrafts.shared.setDraft(now.isEmpty ? words : now + "\n" + words, key: key)
         }
-        guard await store.sendFromComposer(gone.text) else { return }
-        for later in gone.followers {
-            // Its words as they are now (it may have been edited meanwhile); gone from the line = gone.
-            guard let current = queue.rows.first(where: { $0.id == later.id }) else { continue }
-            if await queue.pullForRequeue(current) { _ = await store.sendFromComposer(current.message) }
+        for step in plan.steps {
+            if let id = step.pullRowID {
+                guard let current = queue.rows.first(where: { $0.id == id }) else { continue }
+                guard await queue.pullForRequeue(current) else { continue }
+            }
+            guard await store.sendFromComposer(step.text) else { return }
         }
     }
 
