@@ -58,7 +58,7 @@ export function manifestFor(browser, build) {
     content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
     // alarms: agents in this browser (agent.ts) come back after the background was stopped.
     // contextMenus: "Ask Walnut about ..." on a selection or a page, which opens the side panel.
-    permissions: ['storage', 'alarms', 'contextMenus', ...(browser === 'chrome' ? ['sidePanel'] : [])],
+    permissions: ['storage', 'alarms', 'contextMenus', 'scripting', ...(browser === 'chrome' ? ['sidePanel'] : [])],
     // Every web page (the same warning as http and https alone): a screenshot of an agent's
     // tab (captureVisibleTab) needs all URLs, so it is asked once, at install.
     host_permissions: ['<all_urls>'],
@@ -182,6 +182,10 @@ async function main() {
       throw new Error(`build-extension: ${entry} failed`)
     }
   }
+  // content.js may be put into a page twice (at load by the browser, and by page-reach.ts into a
+  // tab older than the extension): a second run where a live copy already runs does nothing.
+  const contentJs = join(tmp, 'content.js')
+  writeFileSync(contentJs, `if (!(globalThis.__walnutContentLive && globalThis.__walnutContentLive())) {\n${readFileSync(contentJs, 'utf8')}\n}\n`)
   const h = createHash('sha256')
   for (const entry of ENTRIES) h.update(readFileSync(join(tmp, `${entry}.js`)))
   h.update(readFileSync(join(SRC, 'ui.css')))

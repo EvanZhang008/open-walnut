@@ -62,8 +62,8 @@ export function BrowserSection() {
         <SettingsRow
           label="When an agent opens a site it has not used"
           help={st?.mode === 'any' ? 'Agents may open any site.' : 'You approve each new site once, on your Mac or phone; it is allowed from then on.'}
-          control={<SegmentedControl<SiteMode> id="browser-site-mode" aria-label="When an agent opens a site it has not used" value={st?.mode ?? 'ask'} disabled={!st || busy === 'mode'}
-            options={[{ value: 'ask', label: 'Ask me first' }, { value: 'any', label: 'Allow any site' }]}
+          control={<SegmentedControl<SiteMode> id="browser-site-mode" aria-label="When an agent opens a site it has not used" value={st?.mode ?? 'any'} disabled={!st || busy === 'mode'}
+            options={[{ value: 'any', label: 'Allow any site' }, { value: 'ask', label: 'Ask me first' }]}
             onChange={(v) => void save('mode', { mode: v })} />}
         />
         {st && st.mode === 'ask' && st.sites.length === 0 && <SettingsRow label="Allowed sites" help="None yet. A site you approve shows here." control={null} />}

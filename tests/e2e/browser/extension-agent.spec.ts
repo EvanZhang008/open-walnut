@@ -137,9 +137,11 @@ test('connect, and turn agents on in the popup', async () => {
   await again.close()
 })
 
-test('a new site waits for the person; approved, the agent opens it in its own window', async () => {
+test('with Ask me first, a new site waits for the person; approved, the agent opens it in its own window', async () => {
   const mine = await ctx.newPage()
   await mine.goto(site('shop.other.test', '/mine'))
+  // Any site is the default; the person may ask to approve each new one in Settings.
+  expect((await (await mine.request.put(`${base}/api/v1/browser/settings`, { data: { mode: 'ask' } })).json()).mode).toBe('ask')
   const first = await act(mine, { action: 'open', url: site('shop.example.test', '/order') })
   expect(first.status).toBe(202)
   expect(first.body).toMatchObject({ status: 'needs_ok', site: 'example.test' })

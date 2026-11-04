@@ -700,8 +700,12 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         && UUID_RE.test((req.body as { sessionId: string }).sessionId)
         ? (req.body as { sessionId: string }).sessionId : undefined
       const preassignedSessionId = isNativeEngine ? (clientSessionId ?? randomUUID()) : undefined
+      const { requestedHintsOf } = await import('../../core/hints/hint-request.js')
+      const requestedHints = requestedHintsOf((req.body as { hints?: unknown }).hints)
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
+        // Hints the first message asks for (the side panel's object-context), beside the words.
+        ...(requestedHints ? { hints: requestedHints } : {}),
         existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
         // A session that makes this request is not a person: its first line is framed (sessions/send-frame.ts).
         source: routeSource('quick-start', req.headers), requestTs,

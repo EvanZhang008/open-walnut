@@ -16,11 +16,14 @@ on in the extension's popup (Settings, "Let Walnut agents use this browser").
   no list says whose a tab is. Walnut tells tasks apart by the session id each one's requests
   carry, as it does for every agent request; a process that is not a Walnut task (a script, an
   agent outside a task) shares one set of tabs of its own, apart from the person's.
-- **Only sites you allowed.** The first time an agent opens a site, Walnut asks you (a
-  notification on your Mac and phone, like any Walnut approval). Approve, and agents may use
-  that site until you remove it; deny, and that task is refused there and not asked again for
-  an hour. A page that moves to another site (a link, a redirect) asks the same way before the
-  agent may read or act there. Or set "Allow any site" in Settings, Browser extension.
+- **Any site, or only sites you allowed.** Turning agents on in the extension is the permission:
+  by default agents may open any web page (Settings, Browser extension, "Allow any site"). Pick
+  "Ask me first" there and the first time an agent opens a site Walnut asks you (a notification
+  on your Mac and phone, like any Walnut approval). Approve, and agents may use that site until
+  you remove it; deny, and that task is refused there and not asked again for an hour. A page
+  that moves to another site (a link, a redirect) asks the same way. A tab you hand over from the
+  side panel may go on in its own site with no ask. Agents still ask you before a step that
+  sends, buys, posts or deletes in your name, and each password they use is yours to approve.
 - **Never Walnut's own pages, nor the browser's** (settings, extension pages, `file:`). Walnut at
   any address (its tunnel, the cloud companion, another machine) is known by the mark its page
   carries; such a tab is closed at once.

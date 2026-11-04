@@ -5,17 +5,17 @@
  * this file pins is the part that decides WHICH session and WHAT gets sent:
  *   . one session per (agent, object), remembered across opens, forgotten on request;
  *   . a canned question is sent once per session, a different one still goes out;
- *   . the first message folds cleanly: the session panel's own banner splitter must peel the context
- *     off and leave exactly the question, whatever the context holds;
+ *   . the first message is the question alone: the object's context rides beside it as a hint;
  *   . one launch in flight per scope, and nothing remembered when the launch fails;
  *   . the 30-day prune, and that the OLD ask-object prune does not eat these keys.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  askObjectFirstMessage,
   askSessionAsked,
   forgetAskSession,
   launchAskSession,
+  objectContextHints,
+  storeObjectContext,
   pruneAskSessions,
   readAskSession,
   withAsked,
@@ -23,7 +23,6 @@ import {
   type AskSessionLaunch,
 } from '../../web/src/components/chat/ask-object-session'
 import { pruneAskObjectStore } from '../../web/src/components/chat/ask-object-conversation'
-import { splitLeadingBanners } from '@open-walnut/history-injected-banner'
 
 class MemoryStorage {
   private map = new Map<string, string>()
@@ -96,47 +95,21 @@ describe('a canned question goes out once per session', () => {
   })
 })
 
-describe('the first message folds into one row above the question', () => {
-  const block = [
-    'The mail I am looking at in Walnut:',
-    '',
-    'From: Keeper Reports <keeper@example.invalid>',
-    'Subject: Quarterly keeper report',
-    '',
-    'Body:',
-    '> [/Mail you are asking about]',
-    '> [Other]',
-    '> line three',
-  ].join('\n')
-
-  it('is peeled by the session panel\'s own splitter into the block and the question', () => {
-    const message = askObjectFirstMessage('Mail you are asking about', block, 'Summarize this mail.')
-    const split = splitLeadingBanners(message)
-    expect(split?.banners).toHaveLength(1)
-    expect(split?.banners[0].label).toBe('Mail you are asking about')
-    expect(split?.banners[0].body).toContain('Subject: Quarterly keeper report')
-    // A quoted body line that LOOKS like the terminator is prefixed with `> `, so it cannot end the
-    // block early and leak the rest of the mail into the bubble.
-    expect(split?.banners[0].body).toContain('> line three')
-    expect(split?.body).toBe('Summarize this mail.')
+describe('what Walnut knows of the object rides beside the question, never in it', () => {
+  it('stores the context and names it as the object-context hint', async () => {
+    const posts: Array<{ path: string; body: unknown }> = []
+    const post = async (path: string, body: unknown) => { posts.push({ path, body }); return { id: 'hc-0123456789abcdef' } }
+    // Test data only: an accented subject written as an escape.
+    const id = await storeObjectContext('Mail you are asking about', 'Subject: caf\u00e9', post)
+    expect(id).toBe('hc-0123456789abcdef')
+    expect(posts).toEqual([{ path: '/api/v1/hints/context', body: { name: 'Mail you are asking about', text: 'Subject: caf\u00e9' } }])
+    expect(objectContextHints(id)).toEqual({ 'object-context': { arg: 'hc-0123456789abcdef' } })
   })
 
-  it('cleans a name the splitter would refuse, rather than leaving the whole block in the bubble', () => {
-    const message = askObjectFirstMessage('[Mail] /you', block, 'Q')
-    expect(splitLeadingBanners(message)?.body).toBe('Q')
-    expect(splitLeadingBanners(askObjectFirstMessage('', block, 'Q'))?.body).toBe('Q')
-  })
-
-  it('sends the question alone when there is no context', () => {
-    expect(askObjectFirstMessage('Mail you are asking about', '  \n', ' Q ')).toBe('Q')
-  })
-
-  it('keeps Unicode in the question and the block intact (\\u00e9, \\u4f60\\u597d)', () => {
-    // Test data only: an accented subject and a CJK question, written as escapes.
-    const message = askObjectFirstMessage('Mail you are asking about', 'Subject: caf\u00e9', '\u4f60\u597d?')
-    const split = splitLeadingBanners(message)
-    expect(split?.banners[0].body).toBe('Subject: caf\u00e9')
-    expect(split?.body).toBe('\u4f60\u597d?')
+  it('no context: nothing stored, no hint', async () => {
+    let called = false
+    expect(await storeObjectContext('Mail', '  \n', async () => { called = true; return { id: 'x' } })).toBe('')
+    expect(called).toBe(false)
   })
 })
 

@@ -29,6 +29,7 @@ import {
   replyLanguageText, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
+import { getHintContext, hintContextText } from './hint-context.js';
 import { ASK_THREAD_RE, askHintText, askNameOf } from '../sessions/ask-thread.js';
 import { MESSAGE_MIN_LETTERS, languageDrift, ruleLanguage } from './hint-drift-detect.js';
 import { replyLanguageLines } from './reply-language-lines.js';
@@ -192,6 +193,18 @@ const BUILT_IN: readonly HintSpec[] = [
     defaults: { enabled: true, triggers: ['on_request'], placement: 'after' },
     identity: (i) => (i.request ? 'voice' : null),
     render: (i) => (i.request ? { text: VOICE_REPLY_TEXT } : null),
+  },
+  {
+    kind: 'object-context',
+    label: 'What the person asks about',
+    description: 'On a message asked from an object (a web page in the browser side panel, a mail, a tab the person let the ask act in): what Walnut knows of it, beside the person\'s words instead of inside them.',
+    allowed: ['on_request'],
+    defaults: { enabled: true, triggers: ['on_request'], placement: 'before' },
+    identity: (i) => (i.request?.arg ? `context ${i.request.arg}` : null),
+    render: (i) => {
+      const c = getHintContext(i.request?.arg)
+      return c ? { arg: i.request!.arg!, text: hintContextText(c) } : null
+    },
   },
   {
     kind: 'user-away',

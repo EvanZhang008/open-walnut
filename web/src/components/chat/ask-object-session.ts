@@ -123,20 +123,22 @@ export function withAsked(record: AskSessionRecord, preset: string | undefined, 
 }
 
 /**
- * The first message about an object: its context as a named leading block, then the question.
- *
- * `bannerName` is what the session panel's disclosure row says (`Mail you are asking about`), so it
- * names the object in the person's words. A name the banner splitter would refuse (brackets, a slash
- * first, too long) is cleaned rather than trusted, because a refused name leaves the whole block in the
- * bubble. An empty context sends the question alone.
+ * What Walnut knows of the object rides the first message as the `object-context` message hint,
+ * beside the person's words, never inside them (2026-11-04, the user: the instruction to Walnut is
+ * "some automatic thing"; it was a leading `[Name]` block in his message before, so it read as his
+ * words and `sentBy: "person"` carried it). The client stores the text, then names its id here.
  */
-export function askObjectFirstMessage(bannerName: string, contextBlock: string, question: string): string {
-  const context = contextBlock.trim();
-  const asked = question.trim();
-  if (!context) return asked;
-  const name = bannerName.replace(/[[\]]/g, '').replace(/^\/+/, '').replace(/\s+/g, ' ').trim().slice(0, 60)
-    || 'Context';
-  return `[${name}]\n${context}\n[/${name}]\n\n${asked}`;
+export const OBJECT_CONTEXT_HINT = 'object-context';
+
+export function objectContextHints(contextId: string): Record<string, { arg: string }> {
+  return { [OBJECT_CONTEXT_HINT]: { arg: contextId } };
+}
+
+/** Stores the context for the hint (POST /api/v1/hints/context); its id, or '' for no context. */
+export async function storeObjectContext(name: string, text: string, post: (path: string, body: unknown) => Promise<{ id: string }>): Promise<string> {
+  if (!text.trim()) return '';
+  const r = await post('/api/v1/hints/context', { name, text });
+  return typeof r?.id === 'string' ? r.id : '';
 }
 
 export type AskSessionLaunch = Parameters<typeof quickStartSession>[0];

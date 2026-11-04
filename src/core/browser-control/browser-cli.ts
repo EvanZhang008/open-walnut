@@ -20,7 +20,7 @@ export const BROWSER_USAGE = [
   '       walnut browser scroll [up|down|<ref>] [--amount N] [--tab N]',
   '       walnut browser wait <text> | --ms N [--tab N]',
   '       walnut browser screenshot [<file>] [--tab N]   (default: a file in $WALNUT_TASK_DIR/shots)',
-  '  --json prints the whole result. A site agents have not used yet waits for the person to approve it.',
+  '  --json prints the whole result. A site agents have not used yet waits for the person to approve it only when they chose "Ask me first" in Settings.',
   'Exit: 0 done; 1 refused (the person said no, not your tab); 2 no answer in time; 3 an error.',
 ].join('\n')
 

@@ -145,17 +145,13 @@ test('S4-W3: one full round trip in the engine the Mac app is', async ({ page })
   await expect(drawer(page)).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('mail-reader')).toHaveCount(0)
 
-  // The question went out as the session's first message, context block and all. The block is read off
-  // the launch itself: the mock CLI peels a leading `[Name]…[/Name]` block off its echo the way a model
-  // reads one and never repeats it (`stripBanners` in tests/providers/mock-claude.mjs, since 2026-09-30),
-  // so its answer opens on the question, which is the proof the CLI got the question after that block.
+  // The question went out as the session's first message, alone: what Walnut knows of the mail rides
+  // beside it as a Walnut hint (the mock CLI takes hints off its echo, as a model reads them).
   const session = drawer(page).getByTestId('ask-object-session')
   await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
   expect(launches, 'one launch').toHaveLength(1)
-  const [block, question] = launches[0]!.split('\n[/Mail you are asking about]\n\n')
-  expect(block!.startsWith('[Mail you are asking about]\n'), 'the block leads the first message').toBe(true)
-  expect(block).toContain('Subject: Quarterly keeper report')
-  expect(question).toMatch(/^Summarize this mail/)
+  expect(launches[0]).toMatch(/^Summarize this mail/)
+  expect(launches[0]).not.toContain('Subject: Quarterly keeper report')
   const answer = drawer(page).locator('.session-msg-assistant').filter({ hasText: /summarize this mail/i })
   await expect(answer).toHaveCount(1, { timeout: 90_000 })
   await expect(answer).toContainText(/processed your message: Summarize this mail/)

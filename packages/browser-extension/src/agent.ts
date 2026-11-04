@@ -13,6 +13,7 @@ import { ApiError, call, connection } from './walnut-api'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { tabStore } from './tab-store'
 import { walnutAddress } from './walnut-address'
+import { pageCheck, reachPage, toPage, type ReachError } from './page-reach'
 
 interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[] } }
 
@@ -99,14 +100,21 @@ async function agentWindow(url: string): Promise<Tab> {
   return w.tabs?.[0] ?? (await ext.tabs.query({ active: true, windowId: w.id }))[0] ?? {}
 }
 
-/** The page's own word on what it is (its content script reads the document now loaded). */
-async function pageCheck(tabId: number): Promise<{ walnut: boolean; href: string } | null> {
-  const r = await ext.tabs.sendMessage(tabId, { type: 'agent-check' }, { frameId: 0 }).catch(() => null) as { ok?: boolean; walnut?: boolean; href?: string } | null
-  return r?.ok ? { walnut: r.walnut === true, href: String(r.href ?? '') } : null
+async function mark(tabId: number, on: boolean, who?: string): Promise<void> {
+  await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}) }, 4000)
 }
 
-async function mark(tabId: number, on: boolean, who?: string): Promise<void> {
-  await ext.tabs.sendMessage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}) }, { frameId: 0 }).catch(() => undefined)
+const UNREACHED: Record<ReachError, string> = {
+  gone: 'That tab was closed.',
+  not_web: 'Agents use web pages only (http or https).',
+  no_script: 'Walnut could not reach this page (the browser keeps the extension out of it, or it stopped answering): reload the tab and try again.',
+}
+
+/** The page's script answers, put in first when the tab had none (page-reach.ts). */
+async function reached(tabId: number): Promise<{ walnut: boolean; href: string }> {
+  const r = await reachPage(tabId)
+  if (!r.ok) throw new AgentError(UNREACHED[r.why], r.why === 'gone' ? 'not_your_tab' : 'page_not_ready')
+  return r
 }
 
 async function ownTab(args: Record<string, unknown>): Promise<{ tabId: number; tab: Tab; rec: AgentTab }> {
@@ -195,21 +203,20 @@ async function act(cmd: WireCommand): Promise<unknown> {
       // Only the agent window is brought forward for a capture: the person's window stays as they left it.
       if (rec.handed && !tab.active) throw new AgentError('That tab is not on screen in the person\'s window: use snapshot, or ask them to show it.', 'tab_hidden')
       await checkPage(c.allow, tab.url ?? '')
-      const before = await pageCheck(tabId)
-      if (!before) throw new AgentError('The page is not ready (still loading, or a page the extension cannot reach): wait and try again.', 'page_not_ready')
+      const before = await reached(tabId)
       if (before.walnut) throw new AgentError('Agents never use Walnut\'s own pages in the browser.', 'walnut_page')
       await checkPage(c.allow, before.href)
       // Only a tab on screen in its window can be captured: bring it up there, in the agent window.
       await ext.tabs.update(tabId, { active: true })
       // A password the page shows as text (its "show" button) is drawn as dots for the capture.
-      const mask = await ext.tabs.sendMessage(tabId, { type: 'agent-mask', on: true }, { frameId: 0 }).catch(() => null) as { ok?: boolean } | null
+      const mask = await toPage<{ ok?: boolean }>(tabId, { type: 'agent-mask', on: true }, 5000)
       if (!mask?.ok) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
       await sleep(250)
       let image: string
       try {
         image = await ext.tabs.captureVisibleTab(tab.windowId!, { format: 'jpeg', quality: 70 })
       } finally {
-        await ext.tabs.sendMessage(tabId, { type: 'agent-mask', on: false }, { frameId: 0 }).catch(() => undefined)
+        await toPage(tabId, { type: 'agent-mask', on: false }, 5000)
       }
       // What was on screen must still be that tab on that page (not a window the page opened).
       const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
@@ -222,8 +229,13 @@ async function act(cmd: WireCommand): Promise<unknown> {
   if (PAGE_OPS.has(c.action)) {
     const { tabId, tab } = await ownTab(a)
     await checkPage(c.allow, tab.url ?? '')
-    const r = await ext.tabs.sendMessage(tabId, { type: 'agent', op: c.action, args: a, allow: c.allow }, { frameId: 0 }).catch(() => null) as { ok: boolean; result?: Record<string, unknown>; error?: { message: string; code: string; extra?: Record<string, unknown> } } | null
-    if (!r) throw new AgentError('The page is not ready (still loading, or a page the extension cannot reach): wait and try again.', 'page_not_ready')
+    await reached(tabId)
+    // Within the server's own limit for the command (hub.ts, 30 s; `wait` 40 s), reaching the page
+    // included: an answer after it would be an action the agent was already told failed.
+    const ms = c.action === 'wait' ? 31_000 : 20_000
+    type PageReply = { ok: boolean; result?: Record<string, unknown>; error?: { message: string; code: string; extra?: Record<string, unknown> } }
+    const r = await toPage<PageReply>(tabId, { type: 'agent', op: c.action, args: a, allow: c.allow }, ms)
+    if (!r) throw new AgentError('The page did not answer in time (it may be busy or frozen): try again.', 'page_not_ready')
     if (!r.ok) throw new AgentError(r.error?.message ?? 'The page could not do that.', r.error?.code ?? 'page_error', r.error?.extra ?? {})
     if (MAY_NAVIGATE.has(c.action)) await settled(tabId)
     return { ...r.result, ...(await where(tabId)) }
@@ -302,10 +314,14 @@ export async function adoptTab(tabId: number, task: string, who?: string): Promi
   const url = tab?.url ?? ''
   const site = siteKey(url)?.domain
   if (!tab || !/^https?:\/\//i.test(url) || !site) return { ok: false, error: 'Walnut acts in web pages only.' }
-  if (await isWalnutPage(url) || (await pageCheck(tabId))?.walnut) return { ok: false, error: 'Agents never use Walnut\'s own pages.' }
+  // The person's tab may be older than the extension (open before an install or an update): its script is put in now.
+  const page = await reachPage(tabId, false)
+  if (await isWalnutPage(url) || (page.ok && page.walnut)) return { ok: false, error: 'Agents never use Walnut\'s own pages.' }
   const owner = `task:${task}`
   const had = await agentTabs.get(tabId)
-  if (had && had.owner !== owner) return { ok: false, error: 'Another Walnut task is acting in this tab. Take it back first.' }
+  // A tab the person handed over is theirs to hand to another of their conversations (New chat in
+  // the panel); a tab an agent opened stays that agent's.
+  if (had && had.owner !== owner && !had.handed) return { ok: false, error: 'Another Walnut task is acting in this tab. Take it back first.' }
   const flight = { cancelled: false }
   handing.set(tabId, flight)
   try {

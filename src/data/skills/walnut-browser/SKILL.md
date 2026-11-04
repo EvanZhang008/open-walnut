@@ -32,9 +32,10 @@ walnut browser close                             # when you are done with the ta
   the page; a stale one answers `stale_ref`.
 - **`covered`** means something sits on top of the element (a cookie banner, a dialog): close
   it (snapshot names it) or scroll, then click again. Never click by coordinates to get past it.
-- **`needs_ok`**: the first time you open a site, the user is asked to approve it. The shell
-  command waits for the answer by itself; with the op, call the same action again with
-  `wait_ms: 25000`. Do not also ask them in chat. A link that leads to another site asks again.
+- Opening a site needs no approval: the user let agents use the browser when they turned it on.
+  **`needs_ok`** appears only for a user who chose "Ask me first" in Settings: the shell command
+  waits for the answer by itself; with the op, call the same action again with `wait_ms: 25000`.
+  Do not also ask them in chat.
 - **`site_denied`**: the user said no to that site. Do not try again or find another way to
   reach it unless they say so.
 - **`not_your_tab`**: the user took the tab back with Stop, or closed it. Do not reopen the

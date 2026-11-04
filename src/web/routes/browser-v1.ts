@@ -248,6 +248,7 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
     if (isWalnutAddress(await walnutAddresses(req), url)) throw new h.BrowserError('Agents never use Walnut\'s own pages in the browser.', 403, 'walnut_page')
     const owner = `task:${taskId}`
     h.ownTab(device, tab, owner)
+    handed.set(tabKey(device, tab), { owner, site })
     lastTab.set(owner, { device, tab })
     log.web.info('browser tab adopted', { device, tab, owner, site })
     return { ok: true, tab, site }
@@ -264,6 +265,13 @@ const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_00
 
 /** The tab each owner used last, so `tab` may be left out. */
 const lastTab = new Map<string, { device: string; tab: number }>()
+/**
+ * The tabs the person handed over from the side panel, and the site each was on: an agent may go
+ * on in that site in that tab with no ask (the extension allows it there alone too), while the
+ * tab is still the task's.
+ */
+const handed = new Map<string, { owner: string; site: string }>()
+const tabKey = (device: string, tab: number) => `${device}\0${tab}`
 /** A site an owner asked the person for, until it is decided. */
 const siteAsks = new Map<string, string>()
 /** A site the person refused an owner, until when. */
@@ -381,8 +389,12 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const own = await walnutAddresses(req)
     if ((action === 'open' || action === 'navigate') && typeof args.url === 'string') {
       if (isWalnutAddress(own, args.url)) throw new h.BrowserError('Agents never use Walnut\'s own pages in the browser: use Walnut\'s ops instead.', 403, 'walnut_page')
-      const g = await siteGate(req, owner, args.url, Math.min(25_000, left() - 45_000))
-      if (!g.ok) { res.status(g.status).json(g.body); return undefined }
+      const given = tab !== undefined ? handed.get(tabKey(c.device, tab)) : undefined
+      const inHanded = action === 'navigate' && given?.owner === owner && given.site === s.siteOf(args.url)
+      if (!inHanded) {
+        const g = await siteGate(req, owner, args.url, Math.min(25_000, left() - 45_000))
+        if (!g.ok) { res.status(g.status).json(g.body); return undefined }
+      }
     }
     if (action === 'open') { args.owner = owner; if (requester.taskTitle) args.who = requester.taskTitle.slice(0, 80) }
 
@@ -406,7 +418,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     }
     const r = (result ?? {}) as { tab?: number; tabs?: Array<{ id: number; owner?: string }>; released?: boolean }
     if (action === 'open' && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner)
-    if (action === 'close' && tab !== undefined) h.releaseTab(c.device, tab)
+    if (action === 'close' && tab !== undefined) { h.releaseTab(c.device, tab); handed.delete(tabKey(c.device, tab)) }
     const used = action === 'open' ? r.tab : tab
     if (typeof used === 'number' && action !== 'close') lastTab.set(owner, { device: c.device, tab: used })
     log.web.info('browser act', { action, device: c.device, owner, tab: used })
@@ -423,4 +435,5 @@ export function _resetBrowserRoutesForTesting(): void {
   lastTab.clear()
   siteAsks.clear()
   siteDenied.clear()
+  handed.clear()
 }

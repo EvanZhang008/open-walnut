@@ -10,6 +10,9 @@
  *                                    `text` is a custom hint)
  *   DELETE /hints/:kind            → { hint | null } (a built-in back to its default; a custom
  *                                    one removed)
+ *   POST   /hints/context          { name, text } → { id }: what a client says about the thing a
+ *                                    person asks about, for the `object-context` hint of a later
+ *                                    send (`hints: { "object-context": id }`; core/hints/hint-context.ts)
  *
  * Stored in config.yaml `session.hints`. Replica: reads only (writes answer 501).
  */
@@ -25,6 +28,7 @@ import {
 } from '../../core/hints/hint-registry.js'
 import { planHints, hintTargetOf } from '../../core/hints/hint-send.js'
 import type { MessageHintSettings } from '../../core/types.js'
+import { cleanHintContext, putHintContext } from '../../core/hints/hint-context.js'
 
 export const hintsV1Router = Router()
 
@@ -86,6 +90,12 @@ async function writeOverride(kind: string, change: (cur: MessageHintSettings | u
   })
   bus.emit(EventNames.CONFIG_CHANGED, { key: 'session' }, ['web-ui'], { source: 'api' })
 }
+
+hintsV1Router.post('/hints/context', (req: Request, res: Response) => {
+  const c = cleanHintContext(req.body)
+  if (!c) return sendError(res, 400, 'bad_request', 'text is required')
+  res.json({ id: putHintContext(c) })
+})
 
 hintsV1Router.put('/hints/:kind', async (req: Request, res: Response, next: NextFunction) => {
   try {

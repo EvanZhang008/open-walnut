@@ -1155,6 +1155,8 @@ export async function quickStartSession(opts: {
    *  workspace on the host, then starts the session in it. The answer says
    *  `preparing` and carries no sessionId. */
   workspace?: { provider: string; inputs?: Record<string, unknown> };
+  /** Message hints the first message asks for (`on_request`: the ask drawer's object-context). */
+  hints?: Record<string, { arg?: string }>;
   /** `sessionId` is present when the engine takes a preassigned id; an engine
    *  whose provider issues its own id (every ACP engine) omits it. */
 }): Promise<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }> {

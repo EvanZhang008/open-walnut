@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ImageAttachment } from '@/api/chat';
+import { apiPost } from '@/api/client';
 import { fetchSession, fetchSessionsForTask } from '@/api/sessions';
 import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
@@ -34,7 +35,7 @@ import { visibleInterval } from '@/utils/page-visibility';
 import { askLaunchBody, askTaskForLater } from './ask-object-draft';
 import { useAskObjectDraft } from './useAskObjectDraft';
 import {
-  askObjectFirstMessage, askSessionAsked, forgetAskSession, launchAskSession, readAskSession,
+  askSessionAsked, objectContextHints, storeObjectContext, forgetAskSession, launchAskSession, readAskSession,
   withAsked, writeAskSession, type AskSessionRecord, type AskSessionScope,
 } from './ask-object-session';
 import '@/styles/ask-object-drawer.css';
@@ -181,15 +182,28 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       }
       if (scopeRef.current !== scope) return false;
     }
-    const body = askLaunchBody({
-      draft: askDraft.draftRef.current,
-      agentId,
-      message: askObjectFirstMessage(name, block, question),
-      ...(images?.length ? { images } : {}),
-      tierKnown: askDraft.tierKnown,
-      catalog: getEngineCatalog(),
-    });
     setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}) });
+    // The object's context rides as a Walnut hint beside the question, never in the person's words.
+    let contextId = '';
+    try {
+      contextId = await storeObjectContext(name, block, (path, b) => apiPost<{ id: string }>(path, b));
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (scopeRef.current === scope) setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}), error: text });
+      return false;
+    }
+    if (scopeRef.current !== scope) return false;
+    const body = {
+      ...askLaunchBody({
+        draft: askDraft.draftRef.current,
+        agentId,
+        message: question,
+        ...(images?.length ? { images } : {}),
+        tierKnown: askDraft.tierKnown,
+        catalog: getEngineCatalog(),
+      }),
+      ...(contextId ? { hints: objectContextHints(contextId) } : {}),
+    };
     try {
       const { record, joined } = await launchAskSession(scope, body, fromPreset);
       log.info('ask-object', 'ask session launched', { objectKey: scope.key, taskId: record.taskId, sessionId: record.sessionId ?? null, joined });

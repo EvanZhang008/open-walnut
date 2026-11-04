@@ -5,7 +5,7 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean; status?: string }
+export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean; status?: string; discarded?: boolean }
 export interface Win { id?: number; tabs?: Tab[] }
 export interface Sender { tab?: Tab; frameId?: number; url?: string; origin?: string; id?: string }
 
@@ -30,13 +30,14 @@ export interface ExtApi {
     onChanged: Event<(changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area: string) => void>
   }
   tabs: {
-    query(q: { active?: boolean; currentWindow?: boolean; lastFocusedWindow?: boolean; windowId?: number }): Promise<Tab[]>
+    query(q: { active?: boolean; currentWindow?: boolean; lastFocusedWindow?: boolean; windowId?: number; url?: string | string[] }): Promise<Tab[]>
     get(tabId: number): Promise<Tab>
     sendMessage(tabId: number, msg: unknown, opts?: { frameId?: number }): Promise<any>
     create(o: { url: string; active?: boolean; windowId?: number }): Promise<Tab>
     update(tabId: number, o: { active?: boolean; url?: string }): Promise<Tab>
     remove(tabId: number): Promise<void>
     goBack(tabId: number): Promise<void>
+    reload(tabId: number): Promise<void>
     captureVisibleTab(windowId: number, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string>
     onRemoved: Event<(tabId: number) => void>
     onUpdated: Event<(tabId: number, change: { status?: string; url?: string; title?: string }, tab: Tab) => void>
@@ -52,6 +53,8 @@ export interface ExtApi {
     request(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
     contains(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
   }
+  /** Putting the content script into a tab that has none (page-reach.ts). */
+  scripting?: { executeScript(o: { target: { tabId: number; allFrames?: boolean; frameIds?: number[] }; files: string[] }): Promise<unknown[]> }
   /** getSelf needs no permission. */
   management?: { getSelf?(): Promise<{ installType?: string }> }
   alarms: { create(name: string, o: { periodInMinutes: number }): Promise<void> | void; onAlarm: Event<(a: { name: string }) => void> }

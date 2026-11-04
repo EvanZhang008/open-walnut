@@ -29,7 +29,7 @@ describe('extension manifests', () => {
   it('asks for storage, alarms, the context menu and web pages, and exposes only the two framed pages', () => {
     for (const b of ['chrome', 'firefox']) {
       const m = manifestFor(b)
-      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', ...(b === 'chrome' ? ['sidePanel'] : [])])
+      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', ...(b === 'chrome' ? ['sidePanel'] : [])])
       expect(m.host_permissions).toEqual(['<all_urls>'])
       expect(m.web_accessible_resources).toEqual([{ resources: ['menu.html', 'savebar.html'], matches: ['http://*/*', 'https://*/*'] }])
       expect(m.content_scripts[0].all_frames).toBe(true)

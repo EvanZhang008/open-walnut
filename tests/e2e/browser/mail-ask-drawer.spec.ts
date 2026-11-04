@@ -15,9 +15,8 @@
  *   4. ONE session per mail: the first question POSTs `/api/sessions/quick-start` once, and a second
  *      open lands in the same session.
  *   5. `Summarize` and `Draft a reply` start the session with their question at once. The launch
- *      carries the context block (From, Subject, Date, the Walnut link, the body quoted with `> `) as a
- *      leading `[Mail you are asking about]` block, which the session panel folds into one row so the
- *      bubble reads as the question. `Ask Walnut about this…` starts nothing until the person types.
+ *      carries the question alone; the context (From, Subject, Date, the Walnut link, the body quoted
+ *      with `> `) rides beside it as the `object-context` Walnut hint, so the bubble is the question. `Ask Walnut about this…` starts nothing until the person types.
  *   6. Identity is the PAIR. In a merged list two accounts can hold the same provider message id, and
  *      the dense fixture really does (`shared-8042`): the two rows must open two different sessions.
  *   7. Its session panel's Locate takes the person to that task on Home.
@@ -164,6 +163,7 @@ function sessionBody(page: Page): Locator {
 
 interface LaunchBody {
   message?: string
+  hints?: Record<string, { arg?: string }>
   walnutAgent?: boolean
   project?: string
   cwd?: string
@@ -198,9 +198,8 @@ function answers(page: Page, question: RegExp): Locator {
 }
 
 /**
- * A launch's answer, which opens on the canned question itself: the mock peels a WELL-FORMED leading
- * `[Mail you are asking about]` block off the echo (see S4-4), so nothing but that block rode in front
- * of the question. Where the block sits in the launch is pinned on the request body.
+ * A launch's answer, which opens on the canned question itself: the mock takes Walnut's hints off
+ * the echo, so nothing but the hint rode in front of the question.
  */
 const PEELED_ECHO = { summarize: /processed your message: Summarize this mail/ }
 
@@ -334,22 +333,16 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     expect(body.cwd).toBe('')
     // A new task starts in Focus, like every task a draft launches (More changes it).
     expect(body.taskMeta?.pinTier).toBe('focus')
-    // The headers a model cannot see on screen, inside the named block, then the question.
-    const message = body.message ?? ''
-    expect(message.startsWith('[Mail you are asking about]\n')).toBe(true)
-    expect(message).toContain('\n[/Mail you are asking about]\n\n')
-    expect(message).toContain('From: ')
-    expect(message).toContain('Subject: Quarterly keeper report')
-    expect(message).toContain('Date: ')
-    // The Walnut deep link back to THIS console, with both ids.
-    expect(message).toMatch(new RegExp(`Link: http://127\\.0\\.0\\.1:${port}/mail\\?`))
-    expect(message).toContain(encodeURIComponent(WRITER))
-    // The body, quoted line by line, which is what makes a hostile line harmless.
-    expect(message).toContain('> ')
-    expect(message.split('[/Mail you are asking about]')[1]).toMatch(/summarize this mail/i)
+    // The person's question alone: what Walnut knows of the mail rides beside it as a Walnut hint.
+    expect(body.message).toMatch(/summarize this mail/i)
+    expect(body.message).not.toContain('Subject: ')
+    expect(body.hints?.['object-context']?.arg).toMatch(/^hc-[0-9a-f]{16}$/)
 
     // On screen: the regular session panel, and the session answered the question it was started with.
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    // What the context says (From, Subject, Date, the link, the quoted body) is pinned by
+    // tests/web/mail-ask-context-block.test.ts; that it reaches the CLI as a hint beside the words,
+    // by tests/e2e/browser/extension-sidepanel.spec.ts (the mock echoes its raw input there).
     await expect(sessionBody(page).locator('.session-panel')).toBeVisible()
     // The echo opens on the QUESTION: the mock peels a leading `[Name]…[/Name]` block the way a model
     // reads one and never repeats it (`stripBanners` in tests/providers/mock-claude.mjs, since
@@ -364,7 +357,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await openWriterInbox(page)
     await ask(page, WRITER, LUNCH, DRAFT_REPLY)
     await expect.poll(() => launches.bodies.length, { timeout: 60_000 }).toBe(1)
-    const question = (launches.bodies[0].message ?? '').split('[/Mail you are asking about]')[1] ?? ''
+    const question = launches.bodies[0].message ?? ''
     expect(question).toMatch(/do not send/i)
     expect(question).toContain('mail_request_send')
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
@@ -499,10 +492,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     expect(body.project).toBe('marina-app')
     expect(body.projectFromFolder).toBe(true)
     expect(body.taskMeta?.pinTier).toBe('focus')
-    const message = body.message ?? ''
-    expect(message.startsWith('[Mail you are asking about]\n')).toBe(true)
-    expect(message).toContain('Subject: Quarterly keeper report')
-    expect(message.split('[/Mail you are asking about]')[1]?.trim()).toBe('Write the reply as a script in this repo')
+    expect(body.message?.trim()).toBe('Write the reply as a script in this repo')
+    expect(body.hints?.['object-context']?.arg).toBeTruthy()
 
     // The regular session panel, in the drawer, answering in that folder.
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })

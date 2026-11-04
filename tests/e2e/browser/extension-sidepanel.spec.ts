@@ -142,27 +142,49 @@ test('connect the extension, then open the panel beside a page with a selection'
   await expect(view().getByTestId('ask-object-quote')).toContainText('retries a failed upload three times', { timeout: 10_000 })
 })
 
-test('a question starts an ask about the page: a folded block, the page text in a file', async () => {
+/** The session's rows as history shows them: each user row's words, and the Walnut hints beside them. */
+async function rows(sid: string): Promise<Array<{ role: string; text: string; hints?: Array<{ kind: string; text: string }> }>> {
+  const r = await (await doc.request.get(`${base}/api/sessions/${sid}/history`)).json()
+  return (Array.isArray(r) ? r : r.messages ?? []) as Array<{ role: string; text: string; hints?: Array<{ kind: string; text: string }> }>
+}
+/**
+ * What the CLI received for the message with these words: the mock echoes its raw input for a
+ * message holding `echo-input` (tests/providers/mock-claude.mjs), Walnut's hints included.
+ */
+async function received(sid: string, words: string): Promise<string> {
+  let raw = ''
+  await expect.poll(async () => {
+    raw = (await rows(sid)).find((r) => r.role === 'assistant' && r.text.includes(words))?.text ?? ''
+    return raw.length > 0
+  }, { timeout: 30_000 }).toBe(true)
+  return raw
+}
+/** The object-context hint's words in a raw message. */
+const contextIn = (raw: string) => /<system-reminder>\s*Walnut \(object-context [^)]*\):([\s\S]*?)<\/system-reminder>/.exec(raw)?.[1] ?? ''
+
+test('a question starts an ask about the page: its words alone, the page beside them as a Walnut hint, its text in a file', async () => {
   test.setTimeout(120_000)
   const launch = panel.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start', { timeout: 60_000 })
   const composer = view().locator('.draft-session-panel textarea')
-  await composer.fill('What changed for uploads?')
+  await composer.fill('What changed for uploads? echo-input')
   await composer.press('Enter')
   const body = (await launch).postDataJSON() as { message: string; walnutAgent?: boolean }
   expect(body.walnutAgent).toBe(true)
-  const message = body.message
-  expect(message.startsWith('[Web page you are asking about]\n')).toBe(true)
-  expect(message).toContain(`Address: ${site('docs.example.test', '/notes')}`)
-  expect(message).toContain('> The sync engine now retries a failed upload three times before it gives up.')
-  expect(message.split('[/Web page you are asking about]')[1].trim()).toBe('What changed for uploads?')
-  expect(message).not.toContain('Dark mode follows') // the page's text is in the file, not the message
-  const file = /The page's text is in (\S+?): read it/.exec(message)?.[1] ?? ''
-  expect(file).toMatch(/browser-pages\/.+\.md$/)
-  expect(fs.readFileSync(file, 'utf8')).toContain('Dark mode follows the system setting on every page.')
+  // The person's words go as they typed them: Walnut's note on the page is a hint beside them.
+  expect(body.message).toBe('What changed for uploads? echo-input')
+  expect((body as { hints?: Record<string, { arg?: string }> }).hints?.['object-context']?.arg).toMatch(/^hc-[0-9a-f]{16}$/)
   const session = view().getByTestId('ask-object-session')
   await expect(session).toBeVisible({ timeout: 60_000 })
   askSession = (await session.getAttribute('data-session-id')) ?? ''
   expect(askSession).not.toBe('')
+  const raw = await received(askSession, 'What changed for uploads?')
+  const note = contextIn(raw)
+  expect(note).toContain(`Address: ${site('docs.example.test', '/notes')}`)
+  expect(note).toContain('> The sync engine now retries a failed upload three times before it gives up.')
+  expect(note).not.toContain('Dark mode follows') // the page's text is in the file, not the message
+  const file = /The page's text is in (\S+?): read it/.exec(note)?.[1] ?? ''
+  expect(file).toMatch(/browser-pages\/.+\.md$/)
+  expect(fs.readFileSync(file, 'utf8')).toContain('Dark mode follows the system setting on every page.')
   // The panel folds the page block into one row: the bubble reads as the question.
   await expect(view().getByText('What changed for uploads?').first()).toBeVisible({ timeout: 30_000 })
   // No agent acts in the person's tab until they say so.
@@ -176,9 +198,17 @@ test('the person lets the ask act in their tab: only it can read and act there',
   test.setTimeout(90_000)
   await view().getByTestId('ext-panel-act').check()
   await expect(view().getByTestId('ext-panel-act')).toBeChecked()
-  // The tab wears the agent frame, and the conversation's next message says it may act there.
+  // The tab wears the agent frame, and the conversation's next message carries a Walnut hint that it
+  // may act there: nothing is typed into the person's composer.
   await expect.poll(framed, { timeout: 20_000 }).toBe(true)
-  await expect(view().locator('.ask-object-session textarea')).toHaveValue(new RegExp(`You can act in this tab of my browser: tab ${docTab}`))
+  const composer = view().locator('.ask-object-session textarea')
+  await expect(composer).toHaveValue('')
+  await composer.fill('Fill in the feedback, please echo-input')
+  await composer.press('Enter')
+  const raw = await received(askSession, 'Fill in the feedback, please')
+  expect(contextIn(raw)).toContain(`They let you act in this tab: tab ${docTab} of their browser`)
+  // The person's own words are outside every Walnut block, as they typed them.
+  expect(raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')).toContain('Fill in the feedback, please echo-input')
   const snap = await act({ action: 'snapshot', tab: docTab }, askSession)
   expect(snap.status, JSON.stringify(snap.body)).toBe(200)
   expect(snap.body.snapshot).toContain('Release notes 4.2')
@@ -256,8 +286,9 @@ test('acting turned on before the first question: the new ask gets the tab once 
   const composer = view().locator('.draft-session-panel textarea')
   await composer.fill('Fill in the feedback for me')
   await composer.press('Enter')
-  const message = ((await launch).postDataJSON() as { message: string }).message
-  expect(message).toContain(`They let you act in this tab: tab ${docTab} of their browser`)
+  const launched = (await launch).postDataJSON() as { message: string; hints?: Record<string, { arg?: string }> }
+  expect(launched.message).toBe('Fill in the feedback for me')
+  expect(launched.hints?.['object-context']?.arg).toBeTruthy()
   const session = view().getByTestId('ask-object-session')
   await expect(session).toBeVisible({ timeout: 60_000 })
   const second = (await session.getAttribute('data-session-id')) ?? ''
@@ -269,12 +300,72 @@ test('acting turned on before the first question: the new ask gets the tab once 
   await expect(view().getByTestId('ext-panel-act')).toBeChecked()
 })
 
-test('a tab another conversation acts in is said so, never offered to this one; Take it back', async () => {
+test('New chat while the ask acts in the tab: the new conversation keeps the switch and gets the tab', async () => {
+  test.setTimeout(120_000)
+  const before = (await view().getByTestId('ask-object-session').getAttribute('data-session-id')) ?? ''
   await view().getByTestId('ext-panel-new').click()
   await expect(view().getByTestId('ask-object-compose')).toBeVisible({ timeout: 30_000 })
+  // No "another conversation is acting" for the person's own conversation: the switch stays on.
+  await expect(view().getByTestId('ext-panel-act')).toBeChecked()
+  await expect(view().getByTestId('ext-panel-other-owner')).toHaveCount(0)
+  const composer = view().locator('.draft-session-panel textarea')
+  await composer.fill('Read the feedback box for me')
+  await composer.press('Enter')
+  const session = view().getByTestId('ask-object-session')
+  await expect(session).toBeVisible({ timeout: 60_000 })
+  const third = (await session.getAttribute('data-session-id')) ?? ''
+  expect(third).not.toBe(before)
+  await expect.poll(async () => (await act({ action: 'snapshot', tab: docTab }, third)).status, { timeout: 20_000 }).toBe(200)
+  expect((await act({ action: 'snapshot', tab: docTab }, before)).status).toBe(403)
+  askSession = third
+})
+
+test('the page in a handed tab moves on (a link, a mail app opening a message): the same conversation, still acting', async () => {
+  test.setTimeout(90_000)
+  await doc.goto(site('docs.example.test', '/other'))
+  await expect(view().locator('.ext-panel-title')).toHaveText('Another page', { timeout: 30_000 })
+  await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession, { timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-other-owner')).toHaveCount(0)
+  await expect(view().getByTestId('ext-panel-act')).toBeChecked()
+  const snap = await act({ action: 'snapshot', tab: docTab }, askSession)
+  expect(snap.status, JSON.stringify(snap.body)).toBe(200)
+  expect(snap.body.snapshot).toContain('Another page')
+  await doc.goto(site('docs.example.test', '/notes'))
+  await expect(view().locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 30_000 })
+})
+
+test('a tab another task acts in is said so, never offered to this one; Take it back', async () => {
+  await sw().evaluate(async (tab: number) => {
+    const { agentTabs } = await chrome.storage.session.get('agentTabs')
+    await chrome.storage.session.set({ agentTabs: { ...(agentTabs ?? {}), [String(tab)]: { owner: 'task:someone-else', handed: 'example.test', history: [] } } })
+  }, docTab)
+  // Back in the panel: it asks the page again (its focus refresh).
+  const inner = panel.frames().find((f) => f !== panel.mainFrame())!
+  await inner.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(view().getByTestId('ext-panel-other-owner')).toBeVisible({ timeout: 15_000 })
   await expect(view().getByTestId('ext-panel-act')).toHaveCount(0)
   await view().getByTestId('ext-panel-take-back').click()
   await expect.poll(framed, { timeout: 15_000 }).toBe(false)
   await expect(view().getByTestId('ext-panel-act')).not.toBeChecked({ timeout: 15_000 })
+})
+
+test('the page script put in again (page-reach.ts, after an update) runs once and still answers', async () => {
+  // Mark the copy that runs now (the content scripts' own world, as page-reach.ts injects).
+  const mark = (tab: number) => chrome.scripting.executeScript({ target: { tabId: tab }, func: () => {
+    const g = globalThis as { __walnutContentLive?: unknown; __probe?: unknown }
+    g.__probe = g.__walnutContentLive
+    return typeof g.__walnutContentLive
+  } }).then((r) => r[0]?.result)
+  expect(await sw().evaluate(mark, docTab)).toBe('function')
+  for (let i = 0; i < 2; i++) await sw().evaluate(async (tab: number) => { await chrome.scripting.executeScript({ target: { tabId: tab, allFrames: true }, files: ['content.js'] }) }, docTab)
+  // No second copy started: the liveness check is still the first copy's.
+  const same = await sw().evaluate((tab: number) => chrome.scripting.executeScript({ target: { tabId: tab }, func: () => {
+    const g = globalThis as { __walnutContentLive?: unknown; __probe?: unknown }
+    return g.__probe === g.__walnutContentLive
+  } }).then((r) => r[0]?.result), docTab)
+  expect(same).toBe(true)
+  const r = await sw().evaluate(async (tab: number) => chrome.tabs.sendMessage(tab, { type: 'agent-check' }, { frameId: 0 }), docTab) as { ok?: boolean }
+  expect(r.ok).toBe(true)
+  // The page itself cannot see it (another world).
+  expect(await doc.evaluate(() => typeof (globalThis as { __walnutContentLive?: unknown }).__walnutContentLive)).toBe('undefined')
 })

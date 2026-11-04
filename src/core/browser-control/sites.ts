@@ -1,8 +1,10 @@
 /**
  * Which sites agents may use in the person's browser (`WALNUT_HOME/browser-control.json`).
- * `ask` (the default): a site is used only after the person approved it once (a Walnut
- * approval on their Mac or phone), and stays allowed until they remove it in Settings. `any`:
- * every site. Some pages are never an agent's, whatever the setting: Walnut itself and the
+ * `any` (the default since 2026-11-04: the person who turns agents on in the extension has
+ * already let them use the browser, and a second ask per site only got in the way): every site.
+ * `ask`, for whoever picks it in Settings: a site is used only after the person approved it once
+ * (a Walnut approval on their Mac or phone), and stays allowed until they remove it there. A file
+ * an older Walnut wrote keeps the mode it names. Some pages are never an agent's, whatever the setting: Walnut itself and the
  * browser's own pages (the extension refuses those too).
  *
  * A site is a registrable domain (url-match.ts siteKey), the same unit Passwords uses.
@@ -15,7 +17,8 @@ export interface SitesFile {
   sites: Array<{ site: string; addedAt: string; by: string }>
 }
 
-const EMPTY: SitesFile = { mode: 'ask', sites: [] }
+const EMPTY: SitesFile = { mode: 'any', sites: [] }
+const modeOf = (m: unknown): SitesFile['mode'] => (m === 'ask' ? 'ask' : 'any')
 
 async function file(): Promise<string> {
   const { WALNUT_HOME } = await import('../../constants.js')
@@ -25,13 +28,13 @@ async function file(): Promise<string> {
 export async function readSites(): Promise<SitesFile> {
   const { readJsonFile } = await import('../../utils/fs.js')
   const f = await readJsonFile<SitesFile>(await file(), EMPTY)
-  return { mode: f.mode === 'any' ? 'any' : 'ask', sites: Array.isArray(f.sites) ? f.sites.filter((s) => typeof s?.site === 'string') : [] }
+  return { mode: modeOf(f.mode), sites: Array.isArray(f.sites) ? f.sites.filter((s) => typeof s?.site === 'string') : [] }
 }
 
 async function update(mutate: (f: SitesFile) => void): Promise<SitesFile> {
   const { updateJsonFile } = await import('../../utils/fs.js')
   return updateJsonFile<SitesFile>(await file(), EMPTY, (f) => {
-    const next: SitesFile = { mode: f.mode === 'any' ? 'any' : 'ask', sites: Array.isArray(f.sites) ? [...f.sites] : [] }
+    const next: SitesFile = { mode: modeOf(f.mode), sites: Array.isArray(f.sites) ? [...f.sites] : [] }
     mutate(next)
     return next
   })

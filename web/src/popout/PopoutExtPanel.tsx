@@ -10,7 +10,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiPost } from '@/api/client';
 import { AskObjectDrawer, type AskObjectQuote } from '@/components/chat/AskObjectDrawer';
-import { forgetAskSession } from '@/components/chat/ask-object-session';
+import { forgetAskSession, objectContextHints, storeObjectContext } from '@/components/chat/ask-object-session';
+import { setPendingHints } from '@/utils/pending-hints';
 import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { NotificationToaster } from '@/components/common/NotificationToaster';
@@ -22,7 +23,7 @@ import { FocusBarProvider } from '@/contexts/FocusBarContext';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import {
-  CONTEXT_NAME, EXT_PANEL, actNote, hostOf, pageContextBlock, pageKey, readInbound, selectionQuote,
+  ACT_CONTEXT_NAME, CONTEXT_NAME, EXT_PANEL, actLine, conversationKey, handedOf, hostOf, otherOwnerOf, pageContextBlock, readInbound, rememberHanded, selectionQuote,
   type PanelContext,
 } from './ext-panel-model';
 import './ext-panel.css';
@@ -75,12 +76,19 @@ function ExtPanel() {
 
   const page = ctx?.page ?? null;
   const tab = ctx?.tab;
-  const key = page ? pageKey(page.url) : '';
+  const owner = ctx?.owner;
+  const handed = useMemo(() => handedOf(tab), [tab, owner]);
+  const key = page ? conversationKey(page.url, tab, owner, handed) : '';
+  /** New chat while this conversation acts in the tab: the new one gets the tab once it has a task. */
+  const carryAct = useRef(false);
   const scope = useMemo(() => ({ agentId: GENERAL_AGENT_ID, key }), [key]);
   const mine = record ? `task:${record.taskId}` : '';
 
   // Another page or tab is another conversation (its own, remembered), and nothing is asked for it yet.
-  useEffect(() => { setRecord(null); setActChoice(null); setActError(''); adoptedFor.current = ''; heldSelection.current = ''; }, [key, chat, tab]);
+  useEffect(() => {
+    setRecord(null); setActChoice(carryAct.current ? true : null); setActError(''); adoptedFor.current = ''; heldSelection.current = '';
+    carryAct.current = false;
+  }, [key, chat, tab]);
 
   useEffect(() => {
     const on = (e: MessageEvent) => {
@@ -123,8 +131,7 @@ function ExtPanel() {
     }
   }, [record?.sessionId]);
 
-  const owner = ctx?.owner;
-  const otherOwner = !!owner && owner !== mine;
+  const otherOwner = otherOwnerOf(owner, mine, handed, actChoice === true);
   const ownTab = !!owner && owner === mine;
   // Once the tab is as the person asked, its own state shows again (so Stop on the page shows too).
   useEffect(() => {
@@ -139,8 +146,9 @@ function ExtPanel() {
     const once = `${record.taskId}:${tab}`;
     if (adoptedFor.current === once) return;
     adoptedFor.current = once;
+    rememberHanded(tab, key, record.taskId);
     toParent({ type: 'adopt', tab, task: record.taskId, who: 'Ask Walnut' });
-  }, [actWanted, tab, record?.taskId]);
+  }, [actWanted, tab, record?.taskId, key]);
 
   const toggleAct = useCallback((on: boolean) => {
     setActError('');
@@ -155,9 +163,14 @@ function ExtPanel() {
     // Asked again (after Stop on the page, say): the tab is handed over again.
     adoptedFor.current = '';
     setActChoice(true);
-    // A conversation already going hears it with the person's next message.
+    // A conversation already going hears it with the person's next message, as a Walnut hint
+    // beside their words (never typed into them: it is not what they wrote).
     const sessionId = recordRef.current?.sessionId;
-    if (sessionId) insertInto(sessionId, actNote(t));
+    if (sessionId) {
+      void storeObjectContext(ACT_CONTEXT_NAME, actLine(t), (path, b) => apiPost<{ id: string }>(path, b))
+        .then((id) => { if (id) setPendingHints(sessionId, objectContextHints(id)); })
+        .catch((err) => log.warn('ext-panel', 'act note not stored', { sessionId, error: err instanceof Error ? err.message : String(err) }));
+    }
   }, []);
 
   const takeBack = useCallback(() => {
@@ -196,8 +209,9 @@ function ExtPanel() {
   const newChat = useCallback(() => {
     if (!key) return;
     forgetAskSession(scope);
+    carryAct.current = ownTab;
     setChat((n) => n + 1);
-  }, [key, scope]);
+  }, [key, scope, ownTab]);
 
   if (!ctx) {
     return <div className="ext-panel ext-panel-empty" data-testid="ext-panel">

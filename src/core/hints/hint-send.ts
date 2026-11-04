@@ -425,6 +425,23 @@ export async function prepareHintedSend(
 }
 
 /**
+ * A first message that has no session yet (a quick start): only the hints it asked for
+ * (`on_request`), rendered by the registry and composed the way every send composes them.
+ * Never throws: a failure leaves the message as it is.
+ */
+export async function requestedHintBlocks(message: string, requested: RequestedHints, opts: { config?: HintConfig } = {}): Promise<string> {
+  try {
+    const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
+    const plan = planHints({ hints: effectiveHints(config), target: { sessionId: '' }, record: null, config, requested, only: new Set(['on_request']) });
+    if (!plan.before.length && !plan.after.length) return message;
+    return composeHinted(message, { before: plan.before, after: plan.after });
+  } catch (err) {
+    log.session.warn('message hints: first message carries no requested hint', { error: err instanceof Error ? err.message : String(err) });
+    return message;
+  }
+}
+
+/**
  * Sources the queue composes hints for: turns nobody typed, whose replies the user
  * still reads (a trigger fire, another task's message, the wait_until clock,
  * Walnut's notices, a letter reply, an automatic continue or recovery), and a

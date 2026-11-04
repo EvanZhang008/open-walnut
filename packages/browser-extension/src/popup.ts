@@ -267,8 +267,8 @@ async function agentSection(): Promise<HTMLElement> {
   box.checked = !!st.on
   const note = h('p', { class: 'muted', style: 'margin:6px 4px 0;font-size:12px' },
     st.on
-      ? `On. Agents open their own tabs in a separate Walnut window${st.tabs ? ` (${st.tabs} open now)` : ''}, never yours. A site they have not used asks you first; manage sites in Walnut, Settings, Browser extension.`
-      : 'Your Walnut agents can open pages in this browser (signed in as you), read them, click and type. They use only tabs they open, in their own window, and ask you before each new site.')
+      ? `On. Agents open their own tabs in a separate Walnut window${st.tabs ? ` (${st.tabs} open now)` : ''}, never yours. They ask you before sending, buying, posting or deleting anything in your name. Which sites they may use: Walnut, Settings, Browser extension.`
+      : 'Turning this on lets your Walnut agents open web pages in this browser (signed in as you), read them, click and type, with no ask per site. They use only tabs they open, in their own window, and ask you before sending, buying, posting or deleting in your name.')
   const err = errLine()
   box.onchange = async () => {
     err.textContent = ''

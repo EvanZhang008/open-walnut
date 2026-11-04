@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { wsClient } from '@/api/ws';
+import { takePendingHints } from '@/utils/pending-hints';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { spillOversizedText } from '@/api/paste-spill';
 import { log } from '@/utils/log';
@@ -298,6 +299,9 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       return false;
     }
 
+    // Hints a surface asked for on this session's next send (utils/pending-hints.ts), under the send's own.
+    const hinted = takePendingHints(sessionId, opts?.hints);
+    if (hinted) opts = { ...(opts ?? {}), hints: hinted };
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('send', 'dispatching', { sessionId, queueId: tempId });
     const optimistic: OptimisticMessage = {
@@ -371,6 +375,9 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       return false;
     }
 
+    // Hints a surface asked for on this session's next send (utils/pending-hints.ts), under the send's own.
+    const hinted = takePendingHints(sessionId, opts?.hints);
+    if (hinted) opts = { ...(opts ?? {}), hints: hinted };
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('send', 'dispatching (interrupt)', { sessionId, queueId: tempId });
     const optimistic: OptimisticMessage = {

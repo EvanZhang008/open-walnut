@@ -57,6 +57,12 @@ export interface QuickStartParams {
    * empty launch or a slash command, which must reach the CLI byte-exact.
    */
   messageSuffix?: string;
+  /**
+   * The message hints the first message asks for (`on_request`, as on every later send: the
+   * side panel's `object-context`, what the person asks about). Rendered by the registry as
+   * Walnut blocks beside the words, never inside them (core/hints/hint-send.ts requestedHintBlocks).
+   */
+  hints?: import('../hints/hint-send.js').RequestedHints;
   cwd: string;
   host?: string;
   model?: string;
@@ -347,6 +353,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // Last of the human-side text, after the cards: a reply-style line is read
     // best nearest the end (the same placement the send path uses).
     if (params.messageSuffix && message.trim()) sessionMessage = `${sessionMessage}\n\n${params.messageSuffix}`;
+    if (params.hints) {
+      const { requestedHintBlocks } = await import('../hints/hint-send.js');
+      sessionMessage = await requestedHintBlocks(sessionMessage, params.hints);
+    }
   }
   if (messagePrefix) {
     sessionMessage = messagePrefix + sessionMessage;

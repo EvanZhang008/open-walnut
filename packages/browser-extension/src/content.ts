@@ -37,6 +37,16 @@ const SELF = (() => {
 })()
 const MAY_FILL = SELF !== 'other' && location.origin !== 'null' && /^https?:$/.test(location.protocol)
 
+/**
+ * This copy still talks to a running extension. One left behind by an update or a reload keeps
+ * running in the page with no extension behind it: it hides what it drew, and the build's
+ * wrapper lets a new copy start beside it (scripts/build-extension.mjs).
+ */
+const live = (): boolean => { try { return !!ext.runtime?.id } catch { return false } }
+;(globalThis as { __walnutContentLive?: () => boolean }).__walnutContentLive = live
+// What a copy left behind drew (its icon, menu, save bar, the agent frame) goes: this copy draws its own.
+for (const el of document.querySelectorAll('walnut-ext')) el.remove()
+
 /** Off until the background answers, and for good on Walnut's own pages. */
 let off = true
 const isWalnutApp = () => !!document.querySelector('meta[name="walnut-app"]')
@@ -255,6 +265,7 @@ function asFill<T>(work: () => T): T {
 async function onFocus(e: { target: EventTarget | null }): Promise<void> {
   const t = e.target
   if (off || !MAY_FILL || !(t instanceof HTMLInputElement)) return
+  if (!live()) { off = true; closeAll(); return }
   rescan()
   const hit = groupOfField(groups, t)
   if (!hit) return

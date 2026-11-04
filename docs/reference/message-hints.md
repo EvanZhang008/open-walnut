@@ -95,7 +95,7 @@ notices, letter replies, the clock, automatic continues and recoveries) and for 
 person's `task_send` from the CLI (`QUEUE_HINT_SOURCES`), and only escapes the
 rest. Every message counts toward `every_n_turns`, hint or not.
 
-Defaults: `question` and `voice-reply` on request; `rich-output` at session
+Defaults: `question`, `voice-reply` and `object-context` on request (`object-context`: what a client says about the thing the person asks about, a web page in the browser side panel, a mail, a tab they let the ask act in; the client stores it with `POST /api/v1/hints/context` and names its id on the send, the first one of a quick start included, so Walnut's note rides beside the person's words, never inside them: `src/core/hints/hint-context.ts`, guard `tests/web/walnut-words-are-hints.test.ts`); `rich-output` at session
 start, after a compaction, on a change, and its short reminder every 5 messages;
 `reply-language` on every message of every session (the user's own, in whatever language
 he types, a notice, another task's message or reply, a trigger, a host's own delivery), because the

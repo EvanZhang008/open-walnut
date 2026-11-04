@@ -4,7 +4,7 @@
  * address, and what the ask is told about the page.
  */
 import { describe, expect, it } from 'vitest'
-import { actLine, actNote, pageContextBlock, pageKey, readInbound, selectionQuote } from '../../web/src/popout/ext-panel-model'
+import { ACT_CONTEXT_NAME, actLine, conversationKey, handedOf, otherOwnerOf, pageContextBlock, pageKey, readInbound, rememberHanded, selectionQuote } from '../../web/src/popout/ext-panel-model'
 
 const EXT = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop'
 const ctx = (page: unknown, extra: Record<string, unknown> = {}) => ({ walnut: 'ext-panel', type: 'context', page, tab: 7, agents: true, ...extra })
@@ -82,9 +82,49 @@ describe('what the ask is told', () => {
     expect(block).not.toContain('act in this tab')
   })
 
-  it('a later selection and a later hand-over lead the next message', () => {
+  it('a later selection leads the next message; a later hand-over is a Walnut hint, never the person\'s words', () => {
     expect(selectionQuote('a\nb')).toBe('> a\n> b\n\n')
-    expect(actNote(3)).toMatch(/^You can act in this tab of my browser: tab 3 /)
-    expect(actNote(3).endsWith('\n\n')).toBe(true)
+    expect(actLine(3)).toMatch(/^They let you act in this tab: tab 3 /)
+    expect(ACT_CONTEXT_NAME).toBe('Browser tab you may act in')
+  })
+})
+
+describe('a tab handed to a conversation stays with it', () => {
+  const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v) } } }
+
+  it('the panel shows the conversation the tab was handed to, wherever the tab went since', () => {
+    const s = mem()
+    const first = pageKey('https://mail.example.test/mail/u/0/')
+    rememberHanded(7, first, 't1', s)
+    const h = handedOf(7, s)
+    expect(h).toMatchObject({ key: first, taskId: 't1' })
+    // The mail app moved to a message: same tab, same conversation, while t1 still acts there.
+    expect(conversationKey('https://mail.example.test/mail/u/0/?view=msg', 7, 'task:t1', h)).toBe(first)
+    // Taken back, or another task holds it: the page's own conversation.
+    expect(conversationKey('https://mail.example.test/mail/u/0/?view=msg', 7, undefined, h)).toBe(pageKey('https://mail.example.test/mail/u/0/?view=msg'))
+    expect(conversationKey('https://mail.example.test/x', 7, 'task:t2', h)).toBe(pageKey('https://mail.example.test/x'))
+    expect(handedOf(8, s)).toBeNull()
+    expect(handedOf(undefined, s)).toBeNull()
+  })
+
+  it('keeps the newest tabs only', () => {
+    const s = mem()
+    for (let i = 0; i < 60; i++) rememberHanded(i, `k${i}`, `t${i}`, s, 1000 + i)
+    expect(handedOf(0, s)).toBeNull()
+    expect(handedOf(59, s)).toMatchObject({ taskId: 't59' })
+  })
+
+  it('"another conversation acts here" only for one that is not this one', () => {
+    const h = { key: 'k', taskId: 't1', at: 1 }
+    expect(otherOwnerOf(undefined, '', h)).toBe(false)
+    expect(otherOwnerOf('task:t1', 'task:t1', h)).toBe(false)
+    // This conversation is still loading: the owner it was handed to is this one.
+    expect(otherOwnerOf('task:t1', '', h)).toBe(false)
+    expect(otherOwnerOf('task:t1', '', null)).toBe(true)
+    expect(otherOwnerOf('task:t9', '', h)).toBe(true)
+    expect(otherOwnerOf('task:t1', 'task:t2', h)).toBe(true)
+    // New chat with the tab: t2 asked for it and the hand-over is on the way.
+    expect(otherOwnerOf('task:t1', 'task:t2', h, true)).toBe(false)
+    expect(otherOwnerOf('task:t9', 'task:t2', h, true)).toBe(true)
   })
 })

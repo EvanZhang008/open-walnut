@@ -85,6 +85,60 @@ function cleanPage(raw: unknown): PanelPage | null {
   return { url, ...(title ? { title: title.replace(/\s+/g, ' ').trim() } : {}), ...(selection ? { selection } : {}), ...(text ? { text } : {}) };
 }
 
+/**
+ * The tabs this panel handed to one of its conversations, and the page key that conversation is
+ * remembered under. While the tab is still that conversation's, the panel stays in it whatever
+ * the tab shows now: a page that changes its address as the person reads (a mail app opening a
+ * message, a link followed) is the same conversation, never "another one acting in this tab"
+ * (2026-11-04, the person's Gmail with one conversation in the panel).
+ */
+export interface HandedTab { key: string; taskId: string; at: number }
+const HANDED_KEY = 'walnut.ext-panel.handed';
+const HANDED_MAX = 40;
+
+type HandedStore = Pick<Storage, 'getItem' | 'setItem'>;
+const store = (): HandedStore | null => { try { return window.localStorage; } catch { return null; } };
+
+function readHandedAll(s: HandedStore | null): Record<string, HandedTab> {
+  try {
+    const v = JSON.parse(s?.getItem(HANDED_KEY) ?? '{}') as Record<string, HandedTab>;
+    return v && typeof v === 'object' ? v : {};
+  } catch { return {}; }
+}
+
+export function handedOf(tab: number | undefined, s: HandedStore | null = store()): HandedTab | null {
+  if (tab === undefined) return null;
+  const h = readHandedAll(s)[String(tab)];
+  return h && typeof h.key === 'string' && typeof h.taskId === 'string' ? h : null;
+}
+
+export function rememberHanded(tab: number, key: string, taskId: string, s: HandedStore | null = store(), now = Date.now()): void {
+  const all = readHandedAll(s);
+  all[String(tab)] = { key, taskId, at: now };
+  const kept = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, HANDED_MAX);
+  try { s?.setItem(HANDED_KEY, JSON.stringify(Object.fromEntries(kept))); } catch { /* full or blocked: the page's own key is used */ }
+}
+
+/**
+ * The conversation the panel shows for this tab: the one the tab was handed to while it still
+ * acts there, else the page's own.
+ */
+export function conversationKey(url: string, tab: number | undefined, owner: string | undefined, handed: HandedTab | null): string {
+  if (handed && tab !== undefined && owner === `task:${handed.taskId}`) return handed.key;
+  return pageKey(url);
+}
+
+/**
+ * Someone other than this conversation acts in the tab. Not the conversation this panel handed
+ * it to while this one is still loading (it is this one), nor while this one asked for the tab
+ * and its hand-over is on the way (New chat: the earlier conversation holds it until then).
+ */
+export function otherOwnerOf(owner: string | undefined, mine: string, handed: HandedTab | null, askedForIt = false): boolean {
+  if (!owner || owner === mine) return false;
+  if (handed && owner === `task:${handed.taskId}` && (!mine || askedForIt)) return false;
+  return true;
+}
+
 /** One conversation per page: its address without the #part, so a jump inside the page keeps it. */
 export function pageKey(url: string): string {
   try {
@@ -124,11 +178,8 @@ export function actLine(tab: number): string {
     + 'Ask them before a step that sends, buys, posts or deletes something in their name.';
 }
 
-/** The same, in the person's own words, for a conversation already going (it leads their next message). */
-export function actNote(tab: number): string {
-  return `You can act in this tab of my browser: tab ${tab} (\`walnut browser snapshot --tab ${tab}\`, skill walnut-browser). `
-    + 'Ask me before a step that sends, buys, posts or deletes something in my name.\n\n';
-}
+/** The hint's name for the tab turned over in a conversation already going (it rides their next message). */
+export const ACT_CONTEXT_NAME = 'Browser tab you may act in';
 
 /** A selection asked about in a conversation already going: a quote in the composer, their question after it. */
 export function selectionQuote(text: string): string {

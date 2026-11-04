@@ -22,6 +22,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import * as hub from '../../src/core/browser-control/hub.js'
 import { siteKey } from '../../src/core/vault/url-match.js'
 import { createDevice } from '../../src/core/device-auth.js'
+import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { getPairingTargets } from '../../src/core/pairing-targets.js'
 
 let base = ''
@@ -113,7 +114,9 @@ describe('agents in the person\'s browser', () => {
     const r = await http('POST', '/browser/act', { action: 'tabs' }, AGENT)
     expect(r.status).toBe(409)
     expect(r.body.code).toBe('browser_not_connected')
-    expect((await http('GET', '/browser/status')).body).toMatchObject({ browsers: [], mode: 'ask', sites: [] })
+    // Agents may use any site unless the person asks to approve each one.
+    expect((await http('GET', '/browser/status')).body).toMatchObject({ browsers: [], mode: 'any', sites: [] })
+    expect((await http('PUT', '/browser/settings', { mode: 'ask' })).body.mode).toBe('ask')
   })
 
   it('only the extension polls, with its own device token', async () => {
@@ -301,6 +304,14 @@ describe('agents in the person\'s browser', () => {
     // Anyone else is refused the tab.
     ext.tabs.set(900, { url, owner: `task:${taskId}` })
     expect((await http('POST', '/browser/act', { action: 'snapshot', tab: 900 }, AGENT)).body.code).toBe('not_your_tab')
+    // The task itself goes on in that site in that tab with no ask (the person handed it over),
+    // and still asks for another site there.
+    const sid = '6f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b'
+    await createSessionRecord(sid, taskId, '')
+    const inSite = await http('POST', '/browser/act', { action: 'navigate', tab: 900, url: 'https://docs.panel.test/changelog' }, { 'x-walnut-caller-sid': sid })
+    expect(inSite.status, JSON.stringify(inSite.body)).toBe(200)
+    const offSite = await http('POST', '/browser/act', { action: 'navigate', tab: 900, url: 'https://news.other-site.test/' }, { 'x-walnut-caller-sid': sid })
+    expect(offSite.body.code).toBe('site_needs_ok')
   })
 
   it('the extension turning agents off disconnects it', async () => {

@@ -18,6 +18,7 @@ import type { FormKind } from './form-detect'
 import { tabStore } from './tab-store'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
+import { injectOpenTabs, reachPage, sleep, toPage } from './page-reach'
 
 type Reply = Record<string, unknown> & { ok: boolean }
 const fail = (err: unknown): Reply => err instanceof ApiError
@@ -188,6 +189,13 @@ async function fillFrames(tabId: number, frameId: number | undefined, creds: { u
   const origin = originOf(tab?.url ?? '')
   if (!origin || origin !== originOf(expected)) return false
   const msg = { type: 'fill', mode, origin, ...creds }
+  // A tab older than the extension has no page script yet (and so no frames known): put it in first.
+  if (frameId === undefined && !Object.keys((await frames.get(tabId)) ?? {}).length) {
+    // Its frames register as the script starts and finds the login fields: wait for them a little.
+    if ((await reachPage(tabId, false)).ok) {
+      for (let i = 0; i < 10 && !Object.keys((await frames.get(tabId)) ?? {}).length; i++) await sleep(200)
+    }
+  }
   const targets = frameId !== undefined
     ? [frameId]
     : Object.entries((await frames.get(tabId)) ?? {}).filter(([, f]) => f.origin === origin).map(([id]) => Number(id)).sort((a, b) => a - b)
@@ -298,7 +306,9 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const owner = await tabOwnerOf(id)
       const base = { ok: true, agents, ...(owner ? { owner } : {}) }
       if (!tab || !tab.url || !/^https?:/.test(tab.url) || await isWalnutPage(tab.url)) return { ...base, page: null }
-      const r = await ext.tabs.sendMessage(id!, { type: 'page-context', withText: msg.withText === true }, { frameId: 0 }).catch(() => null) as { ok?: boolean; walnut?: boolean; url?: string; title?: string; selection?: string; text?: string } | null
+      // A tab open since before the extension started gets its page script now (page-reach.ts).
+      await reachPage(id!, false, { quick: true })
+      const r = await toPage<{ ok?: boolean; walnut?: boolean; url?: string; title?: string; selection?: string; text?: string }>(id!, { type: 'page-context', withText: msg.withText === true }, 8000)
       // A page still loading (no content script yet) is named by its tab alone.
       if (!r?.ok) return { ...base, page: { url: tab.url, title: tab.title ?? '' } }
       if (r.walnut) return { ...base, page: null }
@@ -623,4 +633,6 @@ ext.contextMenus?.onClicked.addListener((info, tab) => {
 ext.runtime.onInstalled.addListener(() => {
   // Content scripts never read the vault session (Chrome's default; Firefox keeps session storage from them too).
   void ext.storage.session.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined)
+  // The browser puts the page script only into pages loaded from now on: the tabs already open get it now.
+  void injectOpenTabs()
 })
