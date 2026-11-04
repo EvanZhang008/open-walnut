@@ -7,10 +7,15 @@
  */
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { Task } from '@open-walnut/core';
+import { buildImageRefsPayload } from '@/api/image-upload';
 import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
+import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments } from '@/components/common/image-attachments';
 import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
 import { NotificationProvider } from '@/contexts/notifications';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { taskPath } from '@/utils/task-path';
@@ -29,7 +34,7 @@ function ExtTasks() {
   /** The save of the page the person is on now; a save of a page they left is never shown here. */
   const [save, setSave] = useState<{ url: string; state: 'busy' | 'done' | 'error'; id?: string; title?: string } | null>(null);
   const [open, setOpen] = useState('');
-  /** Each reply's words and its send, by task: a row moving between sections keeps them. */
+  /** Each reply's send, by task: a row moving between sections keeps it (the words are a draft). */
   const [replies, setReplies] = useState<Record<string, ReplyState>>({});
   const lists = useMemo(() => extTaskLists(tasks), [tasks]);
 
@@ -74,7 +79,7 @@ function ExtTasks() {
   </div>;
 }
 
-type ReplyState = { text: string; state: '' | 'sending' | 'sent' | 'error' };
+type ReplyState = { state: '' | 'sending' | 'sent' | 'error' };
 type Replies = { replies: Record<string, ReplyState>; setReplies: Dispatch<SetStateAction<Record<string, ReplyState>>> };
 
 function Section(p: { title: string; testid: string; rows: ExtTaskRow[]; empty: string; open: string; onOpen: (id: string) => void } & Replies) {
@@ -95,20 +100,26 @@ function TaskRow({ row, open, onToggle, replies, setReplies }: { row: ExtTaskRow
         <span className="ext-task-line">{row.line ? `${row.label} · ${row.line}` : row.label}</span>
       </span>
     </button>
-    {open && <TaskReply task={task} reply={replies[task.id] ?? { text: '', state: '' }} onChange={(r) => setReplies((all) => ({ ...all, [task.id]: { ...(all[task.id] ?? { text: '', state: '' }), ...r } }))} />}
+    {open && <TaskReply task={task} reply={replies[task.id] ?? { state: '' }} onChange={(r) => setReplies((all) => ({ ...all, [task.id]: { ...(all[task.id] ?? { state: '' }), ...r } }))} />}
   </div>;
 }
 
 function TaskReply({ task, reply, onChange }: { task: Task; reply: ReplyState; onChange: (r: Partial<ReplyState>) => void }) {
   const sessionId = resolveTaskSessionId(task);
-  const { text, state } = reply;
-  const send = async () => {
-    const message = text.trim();
-    if (!message || !sessionId || state === 'sending') return;
+  const { state } = reply;
+  // The words wait in the draft store and pictures go with them, as in the chat.
+  const draft = useDraft(sessionId ? draftKey('ext-task-reply', task.id) : null);
+  const pictures = useImageAttachments();
+  const send = async (words: string) => {
+    const message = words.trim();
+    const images = pictures.images;
+    if ((!message && images.length === 0) || !sessionId || state === 'sending') return;
     onChange({ state: 'sending' });
     try {
-      await wsClient.sendRpc('session:send', { sessionId, message });
-      onChange({ text: '', state: 'sent' });
+      await wsClient.sendRpc('session:send', { sessionId, message, ...(await buildImageRefsPayload(images)) });
+      draft.clear(draft.key, words);
+      pictures.clear();
+      onChange({ state: 'sent' });
     } catch (err) {
       onChange({ state: 'error' });
       log.warn('ext-tasks', 'reply not sent', { taskId: task.id, sessionId, error: err instanceof Error ? err.message : String(err) });
@@ -118,18 +129,12 @@ function TaskReply({ task, reply, onChange }: { task: Task; reply: ReplyState; o
   return <div className="ext-task-reply">
     {sessionId
       ? <>
-        <textarea className="ext-task-input" data-testid="ext-task-input" rows={2} value={text} placeholder={`Reply to ${task.title.slice(0, 40)}`}
-          onChange={(e) => onChange({ text: e.target.value, ...(state === 'sent' || state === 'error' ? { state: '' as const } : {}) })}
-          onKeyDown={(e) => {
-            // Enter that picks an input method's word is not a send.
-            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-            e.preventDefault();
-            void send();
-          }} />
+        {/* Walnut's answer box (common/AnswerBox.tsx): the mic inside, pictures, Enter sends (an input method's Enter does not). */}
+        <AnswerBox value={draft.text} onChange={(t) => { draft.setText(t); if (state === 'sent' || state === 'error') onChange({ state: '' }); }}
+          onSubmit={(t) => void send(t)} sendLabel="Send" sending={state === 'sending'} draftKey={draft.key}
+          placeholder={`Reply to ${task.title.slice(0, 40)}`} minRows={2} testId="ext-task-input" sendTestId="ext-task-send"
+          inputClassName="ext-task-input" pictures={pictures} />
         <div className="ext-task-actions">
-          <button type="button" className="btn btn-sm btn-primary" data-testid="ext-task-send" disabled={!text.trim() || state === 'sending'} onClick={() => void send()}>
-            {state === 'sending' ? 'Sending…' : 'Send'}
-          </button>
           <button type="button" className="btn btn-sm" onClick={openInWalnut}>Open in Walnut</button>
           {state === 'sent' && <span className="ext-tasks-note" data-testid="ext-task-sent">Sent</span>}
           {state === 'error' && <span className="ext-tasks-note ext-panel-error" role="alert">Not sent. Try again.</span>}
