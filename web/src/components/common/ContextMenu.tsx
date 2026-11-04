@@ -46,6 +46,7 @@ import {
   type ContextMenuItem,
   type PressSelection,
 } from '@/utils/context-menu';
+import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 
 export { normalizeContextMenuItems };
 export type { ContextMenuItem };
@@ -260,23 +261,24 @@ export function ContextMenu({
     // the menu AND left the full screen under it (2026-10-02, the chat column's tab list).
     // preventDefault only: `onKey` above still closes the menu and puts focus back.
     const claimEscape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing) e.preventDefault(); };
+    // Where the anchored row sat once the menu was up (a frame late: the gesture's own re-render can
+    // clamp its list's scrollTop first).
+    let anchor: RowAnchor | null = null;
     let scrollArmed = false;
-    const arm = requestAnimationFrame(() => { scrollArmed = true; });
+    const arm = requestAnimationFrame(() => { scrollArmed = true; anchor = rowAnchorOf(back.current); });
     const onScroll = (e: Event) => {
       if (!scrollArmed) return;
       if (menuRef.current?.contains(e.target as Node)) return;
-      // ONLY a scroller that CARRIES the anchored row. Closing on scroll exists because the row moves
-      // out from under the menu, and the only thing that can move it is a scroll container it sits
-      // inside. This listener is on `window` in the CAPTURE phase, so it also hears every unrelated
-      // pane: a folder list restoring its offset after a sync, a timeline following its own tail, a
-      // drawer opening. Each of those took the menu down under a hand that never moved — the
-      // "right-click disappears after about two seconds" report (2026-09-22), which no fixture could
-      // reproduce because nothing there scrolls on its own. With no anchor to reason about (a caller
-      // that passes no `returnFocus`), the old close-on-any-scroll behaviour stands.
-      const anchor = back.current;
-      const scrolled = e.target;
-      if (anchor?.isConnected && scrolled instanceof Node && !scrolled.contains(anchor)) return;
-      close();
+      // ONLY a scroll that MOVED the anchored row (cursor-menu-scroll.ts). Closing on scroll exists
+      // because the row moves out from under the menu. This listener is on `window` in the CAPTURE
+      // phase, so it also hears every unrelated pane: a folder list restoring its offset after a sync,
+      // a timeline following its own tail, a drawer opening. Each of those took the menu down under a
+      // hand that never moved: the "right-click disappears after about two seconds" report
+      // (2026-09-22). And the row's own list scrolls without moving it: a live update above the row
+      // (another task, project or tier changing) makes the browser's scroll anchoring shift scrollTop
+      // to keep the row in place (2026-11-04, the folder menu's Sprint picker on a shared CI fixture).
+      // With no anchor to reason about (a caller that passes no `returnFocus`), any scroll closes.
+      if (scrollMovedRow(anchor, e.target)) close();
     };
     window.addEventListener('keydown', claimEscape, true);
     window.addEventListener('keydown', onKey);

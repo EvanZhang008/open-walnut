@@ -123,21 +123,25 @@ test('another pane scrolling is not a dismissal, but the row\'s own scroller sti
     .toHaveCount(1)
 
   // And the rule it must not break: scrolling the list the row lives in DOES close the menu, because
-  // the row moves out from under it.
+  // the row moves out from under it. A scroll event that moved nothing is not that (a list's scroll
+  // anchoring shifts scrollTop and keeps the row in place: cursor-menu-scroll.ts), so the row moves.
   await page.evaluate(() => {
-    const anchored = document.querySelector('.mail-row[data-ctx-open="true"]')
-      ?? document.querySelector('.mail-row')
-    let node: HTMLElement | null = anchored?.parentElement ?? null
-    while (node) {
-      const style = getComputedStyle(node)
-      if (/(auto|scroll)/.test(`${style.overflowY}`) && node.scrollHeight > node.clientHeight) {
-        node.dispatchEvent(new Event('scroll', { bubbles: false }))
-        return
-      }
-      node = node.parentElement
+    const anchored = (document.querySelector('.mail-row[data-ctx-open="true"]')
+      ?? document.querySelector('.mail-row')) as HTMLElement | null
+    if (!anchored) return
+    let pane: HTMLElement | null = anchored.parentElement
+    while (pane) {
+      const style = getComputedStyle(pane)
+      if (/(auto|scroll)/.test(`${style.overflowY}`) && pane.scrollHeight > pane.clientHeight) break
+      pane = pane.parentElement
     }
-    // No overflowing ancestor in this small fixture list: the document is the scroller of record.
-    document.dispatchEvent(new Event('scroll', { bubbles: false }))
+    const before = anchored.getBoundingClientRect().top
+    if (pane) pane.scrollTop += 60
+    if (anchored.getBoundingClientRect().top !== before) return // a real scroll: its event follows
+    // This small fixture list may not overflow: stand in for the move the scroll would make, and
+    // fire the scroll on the scroller of record (the document when no ancestor overflows).
+    anchored.style.transform = 'translateY(40px)'
+    ;(pane ?? document).dispatchEvent(new Event('scroll', { bubbles: false }))
   })
   await expect(menu(page), 'the row\'s own scroller moving the row away still closes it')
     .toHaveCount(0, { timeout: 5_000 })

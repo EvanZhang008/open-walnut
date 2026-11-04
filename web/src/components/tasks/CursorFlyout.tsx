@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 
 export interface CursorPoint { x: number; y: number }
 
@@ -39,10 +40,12 @@ export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
   const origin = state?.origin ?? null;
 
   // The picker outlives the menu that opened it, so it owns its own dismissal. A scroll closes it:
-  // a cursor anchor is a frozen viewport point. With the row it was opened on known, only a scroller
-  // that carries that row does, the rule ContextMenu keeps (2026-09-22: a pane following its own
-  // tail took the menu down under a hand that never moved), and it arms a frame late, as there: the
-  // close of the menu re-renders the row and can clamp its list's scrollTop.
+  // a cursor anchor is a frozen viewport point. With the row it was opened on known, only a scroll
+  // that moved that row does, the rule ContextMenu keeps (cursor-menu-scroll.ts; 2026-09-22: a pane
+  // following its own tail took the menu down under a hand that never moved; 2026-11-04: scroll
+  // anchoring after a live update above the row shifted its list's scrollTop and left the row in
+  // place), and it arms a frame late, as there: the close of the menu re-renders the row and can
+  // clamp its list's scrollTop.
   useEffect(() => {
     if (!picking) return;
     const close = () => setState(null);
@@ -53,13 +56,12 @@ export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
       close();
       if (origin?.isConnected) origin.focus({ preventScroll: true });
     };
+    let row: RowAnchor | null = null;
     let armed = false;
-    const arm = requestAnimationFrame(() => { armed = true; });
+    const arm = requestAnimationFrame(() => { armed = true; row = rowAnchorOf(origin); });
     const onScroll = (e: Event) => {
       if (!armed || insideFlyout(e.target)) return;
-      const scrolled = e.target;
-      if (origin?.isConnected && scrolled instanceof Node && !scrolled.contains(origin)) return;
-      close();
+      if (scrollMovedRow(row, e.target)) close();
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);

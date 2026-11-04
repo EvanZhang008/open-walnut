@@ -8,6 +8,9 @@
  *   2. Project Pinned from a MIXED state: nothing is lit, a pick puts every task in one tier.
  *   3. Sprint on a folder: the field list and its options are mocked (no plugin in the fixture),
  *      the batch write is captured: ONE request naming exactly the open members.
+ *   3b. A live update above the folder row (a project added and removed while the menu, then its
+ *      picker, is open) leaves both open: the list's scroll anchoring keeps the row in place. A
+ *      scroll that moves the row closes each.
  *   4. The project's Project row moves the project into another one, after a confirm; Cancel
  *      changes nothing.
  *   5. A pick that touches 20+ tasks asks first; Cancel writes nothing.
@@ -312,6 +315,94 @@ test('Sprint on a folder writes one batch naming exactly its open tasks', async 
   await scrollAnUnrelatedPane(page)
   await expect(menu.getByRole('menuitem', { name: /^Sprint/ })).toContainText('S7')
   await page.keyboard.press('Escape')
+})
+
+test('a live update above the folder row leaves its menu and picker open; a scroll that moves the row closes each', async ({ page, browserName }) => {
+  const s = stamp()
+  const project = `GroupSprint${s}`
+  // `GroupSprin…` sorts just before `GroupSprint…` (localeCompare, no saved order): the fillers and the
+  // live update land right above the folder, and nowhere near the top rows other specs read.
+  const above = (name: string) => `GroupSprin${s}${name}`
+  const a = await createTask('sprint member a', project)
+  const b = await createTask('sprint member b', project)
+  const groupId = await createFolder([a, b], `Sprintable ${s}`)
+  for (let i = 0; i < 12; i++) await createTask(`filler ${i}`, above(`Fill${String(i).padStart(2, '0')}`))
+  const field = {
+    pluginId: 'demo-tracker', pluginName: 'Demo tracker', key: 'sprint', label: 'Sprint', type: 'enum',
+    optionsRoute: 'sprints', optionsUrl: '/api/test-mock/demo-tracker/sprints', coreField: 'sprint',
+  }
+  await page.route('**/api/integrations/task-fields', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ fields: [field] }) }))
+  await page.route('**/api/test-mock/demo-tracker/sprints', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ options: [{ value: 'S7' }, { value: 'S8' }] }) }))
+
+  await boot(page)
+  await openListProject(page, project)
+  const row = folderHeader(page, groupId)
+  await expect(row).toBeVisible({ timeout: 15_000 })
+
+  // The pane the row scrolls in, scrolled so the row sits mid-window: a change above it can then
+  // shift the content the row sits under (anchoring needs a scrollTop above 0).
+  const scrollRow = (by: number | 'center') => row.evaluate((el, delta) => {
+    let pane = el.parentElement
+    while (pane && !(pane.scrollHeight > pane.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(pane).overflowY))) pane = pane.parentElement
+    if (!pane) return { scrollTop: -1, rowTop: -1 }
+    if (delta === 'center') pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientHeight / 2
+    else pane.scrollTop += delta
+    return { scrollTop: pane.scrollTop, rowTop: Math.round(el.getBoundingClientRect().top) }
+  }, by)
+  expect((await scrollRow('center')).scrollTop).toBeGreaterThan(0)
+
+  // Every scroll of a pane that holds the row, and where the row sat then.
+  await row.evaluate((el) => {
+    const w = window as unknown as { __rowScrolls: number[] }
+    w.__rowScrolls = []
+    window.addEventListener('scroll', (e) => {
+      if ((e.target as Node).contains?.(el)) w.__rowScrolls.push(Math.round(el.getBoundingClientRect().top))
+    }, true)
+  })
+  const rowScrolls = () => page.evaluate(() => (window as unknown as { __rowScrolls: number[] }).__rowScrolls.splice(0))
+  const aboveHeader = (name: string) => page.locator('.todo-group-project-name').filter({ hasText: new RegExp(`^${name}$`) })
+  // Another session or spec adds a project above and removes it again: the list grows and shrinks
+  // above the row. Chromium's scroll anchoring then moves the pane's scrollTop to keep the row in
+  // place, a scroll of the row's own pane that moves nothing (WebKit has no scroll anchoring).
+  let updates = 0
+  const liveUpdateAbove = async () => {
+    const top = (await scrollRow(0)).rowTop
+    await rowScrolls()
+    const name = above(`Above${updates++}`)
+    const id = await createTask('above', name)
+    await expect(aboveHeader(name)).toHaveCount(1, { timeout: 15_000 })
+    await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' })
+    await expect(aboveHeader(name)).toHaveCount(0, { timeout: 15_000 })
+    const seen = await rowScrolls()
+    if (browserName === 'chromium') expect(seen.length).toBeGreaterThan(0)
+    expect(seen.filter((t) => Math.abs(t - top) > 1)).toEqual([])
+  }
+
+  let menu = await openMenu(page, row, 'folder-ctx-menu', /^Sprint/)
+  await liveUpdateAbove()
+  await expect(menu.getByRole('menuitem', { name: /^Sprint/ })).toBeVisible()
+
+  await menu.getByRole('menuitem', { name: /^Sprint/ }).click()
+  const flyout = page.locator('.plugin-field-flyout')
+  const s7 = flyout.locator('.task-kebab-project-opt', { hasText: /^S7$/ })
+  await expect(s7).toBeVisible()
+  await liveUpdateAbove()
+  await expect(s7).toBeVisible()
+
+  // A scroll that does move the row still closes the picker, and the menu: each anchors at a frozen point.
+  const moved = async () => {
+    const before = await scrollRow(0)
+    const after = await scrollRow(-120)
+    expect(after.rowTop).not.toBe(before.rowTop)
+  }
+  await moved()
+  await expect(flyout).toHaveCount(0)
+  menu = await openMenu(page, row, 'folder-ctx-menu', /^Sprint/)
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+  await moved()
+  await expect(menu).toHaveCount(0)
 })
 
 test('the Project row moves a project into another after a confirm, and Cancel changes nothing', async ({ page }) => {

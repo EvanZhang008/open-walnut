@@ -6,7 +6,13 @@
  * the project sat below the fold of the rail (org-main-and-chart.spec.ts on a dense CI fixture).
  *
  * The scan finds every component under web/src that keeps a cursor anchor of its own
- * (`setCursorAnchor`) and listens to scrolls: each one must judge a scroll with scrollMovedRow.
+ * (`setCursorAnchor`) and listens to scrolls: each one must judge a scroll with scrollMovedRow. The
+ * shared right-click menu (ContextMenu) and the picker its setting rows open (useCursorFlyout) judged
+ * a scroll by "the scrolled pane holds the row" alone, and the row's own list scrolls without moving
+ * it: a live update above the row makes the browser's scroll anchoring shift its scrollTop to keep
+ * the row in place (2026-11-04, the folder menu's Sprint picker closed under the click on a shared
+ * CI fixture while other specs added and removed projects). No scroll closer may decide by that
+ * rule alone again.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -14,6 +20,8 @@ import path from 'node:path';
 import { rowAnchorOf, scrollMovedRow } from '../../web/src/utils/cursor-menu-scroll';
 
 const ROOT = path.resolve(import.meta.dirname, '../../web/src');
+/** `if (… !scrolled.contains(anchor)) return; close();`: a scroll of the row's pane closes, moved or not. */
+const PANE_ONLY = /!\s*\w+\.contains\(\w+\)\)\s*return;?\s*close\w*\(\)/;
 
 function fakeRow(rect: { top: number; left: number }) {
   return {
@@ -70,12 +78,21 @@ function sources(dir: string): string[] {
 describe('every cursor-anchored menu judges a scroll by its row', () => {
   const menus = sources(ROOT)
     .map((file) => ({ rel: path.relative(ROOT, file), text: fs.readFileSync(file, 'utf8') }))
-    .filter(({ text }) => /setCursorAnchor\(\{/.test(text) && /addEventListener\('scroll'/.test(text));
+    .filter(({ text }) => /setCursorAnchor\(\{|rowAnchorOf\(/.test(text) && /addEventListener\('scroll'/.test(text));
 
   it('finds the menus', () => {
     expect(menus.map((m) => m.rel)).toEqual(expect.arrayContaining([
       'components/tasks/ProjectHeaderMenus.tsx', 'components/tasks/TaskKebabMenu.tsx', 'components/sessions/TaskQuickActions.tsx',
+      'components/common/ContextMenu.tsx', 'components/tasks/CursorFlyout.tsx',
     ]));
+  });
+
+  it('no scroll closer decides by "the scrolled pane holds the row" alone', () => {
+    const paneOnly = sources(ROOT)
+      .map((file) => ({ rel: path.relative(ROOT, file), text: fs.readFileSync(file, 'utf8') }))
+      .filter(({ text }) => /addEventListener\('scroll'/.test(text) && PANE_ONLY.test(text))
+      .map(({ rel }) => rel);
+    expect(paneOnly).toEqual([]);
   });
 
   it.each(menus.map((m) => [m.rel, m.text]))('%s closes on scroll only when the row moved', (_rel, text) => {
