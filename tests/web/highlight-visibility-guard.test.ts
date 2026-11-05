@@ -182,6 +182,8 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/git-glance.css :: .session-diff-refreshing.is-idle': CONTROL,
   'web/src/styles/session-plain-chat.css :: .session-panel.is-plain-chat:not(.draft-session-panel) > .session-panel-header': HEADER,
   'web/src/styles/walnut-agent.css :: .draft-header-tool-spacer': SLOT,
+  // Reserves the width of the other label (Show/Hide, Copy/Copied) so the button never resizes (8c4167e3b).
+  'web/src/styles/corner-stack.css :: :is(.notice-details-toggle, .notice-cmd-copy-words)::after': SLOT,
   'web/src/components/tasks/LinkHoverCard.tsx :: inline (1)': PLACING,
   'web/src/components/passwords/ItemEditor.tsx :: inline (1)': PLACING,
   'web/src/components/passwords/VaultBrowser.tsx :: inline (2)': PLACING,
