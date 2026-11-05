@@ -31,6 +31,7 @@ import { buildPackages, packPackages } from '../npm-packages.mjs'
 import { nextVersion, setManifestVersion } from '../release.mjs'
 import { TARGETS, assertVersion, builtName } from '../release-files.mjs'
 import { UPSTREAM } from './registry.mjs'
+import { outsideFetch } from './outside-fetch.mjs'
 import { compareVersions } from './version-order.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -50,8 +51,8 @@ export function fieldVersions(versions) {
 }
 
 /** The registry's dist-tags for open-walnut (`latest`, and `nightly` when there is one). */
-export async function publishedTags({ upstream = UPSTREAM, fetchImpl = fetch } = {}) {
-  const res = await fetchImpl(`${upstream}/-/package/open-walnut/dist-tags`, { signal: AbortSignal.timeout(30_000) })
+export async function publishedTags({ upstream = UPSTREAM, fetchImpl = fetch, waits } = {}) {
+  const res = await outsideFetch(`${upstream}/-/package/open-walnut/dist-tags`, {}, { timeoutMs: 30_000, fetchImpl, waits })
   if (!res.ok) throw new Error(`the registry answered HTTP ${res.status} for open-walnut's dist-tags`)
   const tags = await res.json()
   if (typeof tags?.latest !== 'string' || compareVersions(tags.latest, tags.latest) === null) throw new Error(`the registry names no latest open-walnut (${JSON.stringify(tags)})`)

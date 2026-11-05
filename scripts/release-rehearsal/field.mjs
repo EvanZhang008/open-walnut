@@ -75,6 +75,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { retryRegistryLag } from '../npm-registry-lag.mjs'
+import { outsideFetch } from './outside-fetch.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 import { readFieldJson } from './field-packs.mjs'
 import { PACKAGE, UPSTREAM, publishedVersion, startRegistry } from './registry.mjs'
@@ -130,8 +131,8 @@ export function startFrom(release, found, given = null) {
   return { points: kept, later }
 }
 
-export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch } = {}) {
-  const res = await fetchImpl(`${upstream}/${PACKAGE}`, { headers: { accept: 'application/vnd.npm.install-v1+json' }, signal: AbortSignal.timeout(60_000) })
+export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch, waits } = {}) {
+  const res = await outsideFetch(`${upstream}/${PACKAGE}`, { headers: { accept: 'application/vnd.npm.install-v1+json' } }, { timeoutMs: 60_000, fetchImpl, waits })
   if (!res.ok) throw new Error(`the registry answered HTTP ${res.status} for ${PACKAGE}`)
   return startPointsOf(await res.json())
 }
@@ -645,19 +646,12 @@ async function unscripted({ from, field, work, walnuts, opts }) {
   })
 }
 
-/** GET with three tries: one dropped connection to GitHub must not fail a rehearsal. */
+/** A GET from GitHub's release downloads; null for a file the release does not ship. */
 async function download(url) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(600_000) })
-      if (res.status === 404) return null
-      if (!res.ok) throw new Error(`GET ${url} answered HTTP ${res.status}`)
-      return Buffer.from(await res.arrayBuffer())
-    } catch (err) {
-      if (attempt >= 3) throw err
-      await new Promise((r) => setTimeout(r, attempt * 5000))
-    }
-  }
+  const res = await outsideFetch(url, { redirect: 'follow' }, { timeoutMs: 600_000 })
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`GET ${url} answered HTTP ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
 }
 
 /**

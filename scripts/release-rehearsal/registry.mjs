@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
+import { outsideFetch } from './outside-fetch.mjs'
 
 export const PACKAGE = 'open-walnut'
 export const UPSTREAM = 'https://registry.npmjs.org'
@@ -162,8 +163,8 @@ export async function startRegistry({ tarballs, distTags, upstream = UPSTREAM, p
 }
 
 /** One released version's document from the real registry, as `published` takes it. */
-export async function publishedVersion(version, { upstream = UPSTREAM, fetchImpl = fetch } = {}) {
-  const res = await fetchImpl(`${upstream}/${PACKAGE}/${encodeURIComponent(version)}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(60_000) })
+export async function publishedVersion(version, { upstream = UPSTREAM, fetchImpl = fetch, waits } = {}) {
+  const res = await outsideFetch(`${upstream}/${PACKAGE}/${encodeURIComponent(version)}`, { headers: { accept: 'application/json' } }, { timeoutMs: 60_000, fetchImpl, waits })
   if (!res.ok) throw new Error(`the registry answered HTTP ${res.status} for ${PACKAGE}@${version}`)
   const doc = await res.json()
   if (doc?.version !== version || !doc?.dist?.tarball) throw new Error(`the registry's ${PACKAGE}@${version} has no tarball`)

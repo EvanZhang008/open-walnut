@@ -203,7 +203,7 @@ async function finish(opts, work, title, expected) {
   for (const x of walnuts) await x.shutdown().catch(() => {})
   for (const r of failureLogs(results, walnuts)) {
     for (const x of r.walnuts) {
-      process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}) ──\n${tailOf(x.logFile)}\n`)
+      process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}${r.from ? `; made by ${r.from}` : ''}) ──\n${tailOf(x.logFile)}\n`)
       // The daemon spawns the sessions: a session that never answers is told here.
       for (const f of daemonLogs(x.daemonDir)) process.stdout.write(`\n── ${f} (tail) ──\n${tailOf(f, 60)}\n`)
     }

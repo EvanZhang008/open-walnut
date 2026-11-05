@@ -28,16 +28,26 @@ describe('release rehearsal · the logs a failure prints', () => {
     ])
   })
 
-  it('a scenario that made none prints every walnut, once, and ends the list', () => {
+  it('a scenario that made none prints the newest earlier maker\'s walnuts, named as its', () => {
+    // run.mjs: `update` reuses the walnut `install` made.
     const results = [
-      { name: 'install', ok: false, made: [a] },
+      { name: 'install', ok: true, made: [a] },
       { name: 'update', ok: false, made: [] },
-      { name: 'restart', ok: false },
     ]
-    expect(failureLogs(results, all)).toEqual([
-      { name: 'install', walnuts: [a] },
-      { name: 'update', walnuts: all },
-    ])
+    expect(failureLogs(results, all)).toEqual([{ name: 'update', walnuts: [a], from: 'install' }])
+    // 2026-11-05: field-archive failed on its download, before it made a walnut; every
+    // walnut of every scenario was printed under it.
+    const field = [
+      { name: 'field (0.6.25)', ok: true, made: [a] },
+      { name: 'field-unscripted (0.6.25)', ok: true, made: [b] },
+      { name: 'field-archive (0.6.25)', ok: false, made: [] },
+    ]
+    expect(failureLogs(field, all)).toEqual([{ name: 'field-archive (0.6.25)', walnuts: [b], from: 'field-unscripted (0.6.25)' }])
+  })
+
+  it('a failure before any walnut prints none; results that record nothing print every walnut', () => {
+    expect(failureLogs([{ name: 'first', ok: false, made: [] }], all)).toEqual([])
+    expect(failureLogs([{ name: 'old', ok: false }, { name: 'older', ok: false }], all)).toEqual([{ name: 'old', walnuts: all }])
   })
 
   it('prints at most a few failures, and nothing when all passed', () => {
@@ -52,6 +62,7 @@ describe('release rehearsal · the logs a failure prints', () => {
     expect(pushes.length).toBeGreaterThanOrEqual(2)
     for (const p of pushes) expect(p, p).toContain('made: walnuts.slice(mine)')
     expect(src).toMatch(/for \(const r of failureLogs\(results, walnuts\)\) \{\n {4}for \(const x of r\.walnuts\)/)
+    expect(src).toContain('made by ${r.from}')
     // Only failureLogs decides whose tail is printed.
     expect(src.match(/\(tail, for /g)).toHaveLength(1)
   })
