@@ -94,7 +94,7 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
     <>
     <span ref={anchorRef} className="kanban-toasts-anchor" hidden />
     {/* In the window's one notice corner (corner-stack.tsx), with every other notice. */}
-    <CornerSlot order={CORNER_ORDER.board}>
+    <CornerSlot order={CORNER_ORDER.board} className="corner-slot-board">
     <div
       className="kanban-toasts"
       data-testid="kanban-toasts"

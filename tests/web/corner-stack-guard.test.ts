@@ -156,15 +156,48 @@ describe('one corner for every notice', () => {
     expect(order('approvals')).toBeGreaterThan(Math.max(order('toasts'), order('board'), order('flash')));
   });
 
-  it('the stack sits bottom left on desktop and under the bar on the phone', () => {
+  it('over what the person works in, or over a chat, the corner takes its short form and keeps to that column', () => {
+    const src = read('web/src/components/common/corner-stack.tsx');
+    expect(src).toMatch(/if \(!workCovered && coversWork\(/);
+    expect(src).toMatch(/const compact = [^;]*workCovered/);
+    // Never hidden for want of room, except beside the open notification center, which lists the
+    // same news (an 800px window hid every toast: engine-matrix.spec.ts).
+    expect(src).toMatch(/toggle\('is-tucked', centerOpen && /);
+    // Lifted by the composer's own box (a tall note above it must not throw the stack to the top
+    // of an 800x600 window), never out of the window, and over the jump-to-newest button too.
+    expect(src).not.toMatch(/closest\('\.session-panel-input'\)/);
+    expect(src).toMatch(/COMPOSER_CONTROLS = '\.chat-input-container, \.scroll-to-bottom-btn, \.draft-composer-bar'/);
+    expect(src).toMatch(/bottom = Math\.min\(bottom, Math\.max\(floor \+ 16, Math\.round\(window\.innerHeight - tall - 8\)\)\)/);
+    // Lifted over a composer, never wider than the column the composer is in.
+    expect(src).toMatch(/if \(column >= MIN_BESIDE_PX - 40\) width = Math\.min\(width, column\)/);
+    // The short form keeps one line of why a toast is there (it is clamped, never hidden).
+    const css = read('web/src/styles/corner-stack.css');
+    expect(css).not.toMatch(/\.is-compact[^{]*notification-toast-body\s*\{\s*display:\s*none/);
+    expect(css).toMatch(/:is\(\.is-compact, \.has-approval\)[^{]*notification-toast-body\s*\{[^}]*-webkit-line-clamp:\s*1/);
+  });
+
+  it('the corner stays at the bottom left: only navigation columns push it right, and the count is a link', () => {
+    const src = read('web/src/components/common/corner-stack.tsx');
+    expect(src).toMatch(/const MAX_COLUMNS_PX = 440;/);
+    expect(src).toMatch(/if \(r\.right > sidebarRight \+ MAX_COLUMNS_PX\) continue;/);
+    // "N more" rides the top toast's title row instead of standing as a card of its own.
+    const toaster = read('web/src/components/common/NotificationToaster.tsx');
+    expect(toaster).toMatch(/className="notification-toast-more"/);
+    expect(toaster).toMatch(/older > 0 && !moreHost &&/);
+  });
+
+  it('the stack sits bottom left on desktop and at the bottom of the screen on the phone', () => {
     const stack = cssRules('web/src/styles/corner-stack.css').find((r) => r.selector === '.corner-stack')!;
     expect(stack.body).toMatch(/left:\s*var\(--corner-stack-left/);
     expect(stack.body).toMatch(/bottom:/);
     expect(has(stack.body, 'right')).toBe(false);
     expect(has(stack.body, 'top')).toBe(false);
     const phone = cssRules('web/src/styles/phone-layout.css').find((r) => r.selector === 'html body .corner-stack');
-    expect(phone?.body).toMatch(/top:\s*calc\(var\(--phone-bar-h\)/);
-    // The stack's height joins the bar's, so the page and every layer under the bar start below it.
-    expect(read('web/src/styles/phone-layout.css')).toMatch(/--phone-topbar-h:[^;]*var\(--corner-reserve-top/);
+    // At the bottom, as on a computer: the phone's bar (its search and buttons) stays clear.
+    expect(phone?.body).toMatch(/top:\s*auto/);
+    expect(phone?.body ?? '').not.toMatch(/bottom:\s*auto/);
+    expect(phone?.body ?? '').not.toMatch(/flex-direction:\s*column-reverse/);
+    // Nothing takes room under the bar for it: the page never jumps when a notice comes or goes.
+    expect(read('web/src/styles/phone-layout.css')).not.toMatch(/--phone-topbar-h:[^;]*corner/);
   });
 });

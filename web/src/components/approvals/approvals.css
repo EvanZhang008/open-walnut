@@ -397,7 +397,7 @@
 .approval-line-what { flex: 1 1 0; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Second line: how many and the time, then the buttons. */
 .approval-line-meta { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
-.approval-line-who { flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.approval-line-who { flex: 0 1 auto; min-width: 7ch; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .approval-line-meta .approval-clock { flex: none; }
 .approval-card-line .approval-actions { flex: none; margin-top: 4px; gap: 6px; }
 .approval-card-line .approval-actions .approval-btn { padding: 3px 10px; font-size: 12px; }
@@ -408,8 +408,34 @@
 .approval-card-line .approval-line-meta { margin-top: 4px; }
 
 
-/* The approval dialog shows the request: the corner's approval card steps aside, the rest stays. */
-.corner-stack.approval-dialog-open .corner-slot-approvals { display: none; }
+/* The approval dialog shows the request and waits on the person: the whole corner steps aside
+   until it closes (the toasts would sit dimmed under its mask, one more thing to read). */
+.corner-stack.approval-dialog-open { visibility: hidden; }
+
+/* Put aside: one small pill that opens the request; a newer request brings the card back whole. */
+.approval-aside {
+  pointer-events: auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  background: var(--card-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 14px 8px 12px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--corner-card-shadow);
+  cursor: pointer;
+}
+.approval-aside:hover { background: var(--bg-hover); }
+.approval-aside .approval-kicker { color: var(--accent); }
+.approval-aside .approval-aside-open { margin-left: auto; color: var(--fg-muted); font-weight: 500; }
+.approval-minimize svg { display: block; }
 
 button.approval-row { width: 100%; font: inherit; font-size: 13px; text-align: left; }
 .approval-row .approval-row-open { margin-left: auto; }

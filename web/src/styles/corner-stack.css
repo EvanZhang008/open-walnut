@@ -64,8 +64,23 @@
    green, amber and red a result. Plain news keeps a neutral mark, so it never reads as an ask. */
 .corner-stack .notification-toast--info { border-left-color: var(--fg-muted); }
 .corner-stack .notification-toast--info .notification-toast-title { color: var(--fg); }
+/* "N more ›" in the top toast's title row: a link to the notification center, not a card. */
+.corner-stack .notification-toast-more {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  margin: -2px 0 -2px 4px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.corner-stack .notification-toast-more:hover { background: var(--bg-hover); color: var(--fg); }
 /* "N more …" lines up with the cards' words. */
-.corner-stack .corner-more { padding-left: 14px; border-left: 3px solid var(--border-strong); }
+.corner-stack .corner-more { padding: 8px 14px 8px 14px; border-left: 3px solid var(--fg-muted); }
 .corner-stack .kanban-toast.is-error { border-color: var(--border-strong); border-left-color: var(--kc-red); }
 .corner-stack .kanban-toast-main { gap: 6px 6px; }
 .corner-stack .kanban-toast-text { flex: 1 0 100%; font-size: 13px; color: var(--fg); }
@@ -77,22 +92,47 @@
 
 /* Lifted over a chat (corner-stack.tsx is-compact): every notice in its shortest form, so it
    covers as little of the chat as it can. The approval card is its two short lines
-   (ApprovalPrompts), a toast its title and its buttons; a click on it opens the notification
-   center with the whole text. A toast over an approval card elsewhere keeps one line of what
-   happened (has-approval): the card is what waits. A permission prompt keeps its words, it is
+   (ApprovalPrompts), a toast its title, one line of what happened and its buttons; a click on it
+   opens the notification center with the whole text. A toast over an approval card elsewhere
+   keeps the same one line (has-approval): the card is what waits. A permission prompt keeps its words, it is
    answered from them. */
 .corner-stack.is-compact :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad-compact); }
-.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast) .notification-toast-body { display: none; }
-.corner-stack.has-approval:not(.is-compact) .notification-toast:not(.nfc-perm-toast) .notification-toast-body {
-  margin-bottom: 4px;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+/* (A computer's: the phone keeps a toast to one row, below.) Its words keep one line, so the
+   reason it is there ("401 unauthorized") still reads at a glance. */
+@media (min-width: 641px) {
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-body {
+    margin-bottom: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
 }
 .corner-stack.is-compact .notification-toast-header { margin-bottom: 4px; }
-.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast) .notification-toast-header { margin-bottom: 0; }
-.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast) .notification-toast-header ~ :not(.notification-toast-body) { margin-top: 6px; }
+/* Over a page's work or beside an approval card, a computer's: two rows, its title, then why
+   and its button side by side. */
+@media (min-width: 641px) {
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+  }
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-header { flex: 0 0 100%; }
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-body {
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-header ~ :not(.notification-toast-body) {
+    flex: none;
+    margin: 0 0 0 auto;
+  }
+}
 
 /* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
 [data-corner-room]::after {
@@ -131,15 +171,15 @@
 }
 .corner-more:hover { background: var(--bg-hover); }
 
-/* The phone: a toast covers the page under the top bar while it shows, so it keeps to two short lines. */
+/* The phone: a toast lies over the bottom of the page while it shows, so it keeps to one row. */
 @media (max-width: 640px) {
+  /* Close together over the page: no strip of it shows between two cards. */
+  .corner-stack { gap: 6px; }
   .corner-stack :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad-compact); }
   .corner-stack .corner-slot > * { box-sizing: border-box; max-width: 100%; }
-  .corner-stack .notification-toast-body {
-    margin-bottom: 4px;
-    display: -webkit-box;
-    -webkit-line-clamp: 1;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
+  /* One row (its mark, its title, its close) while it lies over the page at the bottom; a tap
+     opens the notification center with the whole text and its buttons. A permission prompt
+     keeps its words and buttons: it is answered from them. */
+  .corner-stack .notification-toast:not(.nfc-perm-toast) :is(.notification-toast-body, .notification-toast-action, .nfc-notice-actions, .nfc-card-actions) { display: none; }
+  .corner-stack .notification-toast:not(.nfc-perm-toast) .notification-toast-header { margin-bottom: 0; }
 }

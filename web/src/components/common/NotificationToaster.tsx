@@ -47,7 +47,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
 
-/** Upward travel that dismisses a toast on the phone. */
+/** Downward travel that dismisses a toast on the phone (it sits at the bottom of the screen). */
 const SWIPE_DISMISS_PX = 40;
 
 /**
@@ -63,25 +63,25 @@ export function phoneVisibleToasts<T extends { kind?: string; resolved?: unknown
   return first ? [first] : [];
 }
 
-/** Swipe up on a toast dismisses it (phone). */
-function useSwipeUpDismiss(enabled: boolean, onDismiss: () => void) {
+/** Swipe down on a toast dismisses it (phone): toward the edge it came from. */
+function useSwipeDownDismiss(enabled: boolean, onDismiss: () => void) {
   const start = useRef<{ id: number; y: number } | null>(null);
   if (!enabled) return {};
   return {
     onPointerDownCapture: (e: React.PointerEvent) => { start.current = { id: e.pointerId, y: e.clientY }; },
-    // Capture only once the finger moves up: the finger leaves the toast while
+    // Capture only once the finger moves down: the finger leaves the toast while
     // it swipes, so its pointerup must still land here. Capturing on down
     // would retarget a plain tap's click away from the x and the buttons.
     onPointerMoveCapture: (e: React.PointerEvent) => {
       const s0 = start.current;
       const el = e.currentTarget as HTMLElement;
-      if (!s0 || s0.id !== e.pointerId || e.clientY - s0.y > -8 || el.hasPointerCapture?.(e.pointerId)) return;
+      if (!s0 || s0.id !== e.pointerId || e.clientY - s0.y < 8 || el.hasPointerCapture?.(e.pointerId)) return;
       try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
     },
     onPointerUpCapture: (e: React.PointerEvent) => {
       const s0 = start.current;
       start.current = null;
-      if (s0 && s0.id === e.pointerId && e.clientY - s0.y <= -SWIPE_DISMISS_PX) onDismiss();
+      if (s0 && s0.id === e.pointerId && e.clientY - s0.y >= SWIPE_DISMISS_PX) onDismiss();
     },
     onPointerCancelCapture: () => { start.current = null; },
   };
@@ -113,30 +113,37 @@ export function NotificationToaster() {
   const phone = usePhoneLayout();
   usePhoneOverlayDepth(); // re-render when a session overlay opens or closes
   // Only while the approval card really shows: a Needs you line on screen lists them instead.
-  const { approvalsListed, compact } = useCornerState();
+  const { approvalsListed } = useCornerState();
   const approvalInCorner = pendingAt(useApprovals(), Date.now()).length > 0 && !approvalsListed;
-  // Over a chat (compact) one too, as every kind there keeps to its newest.
-  const shownCount = approvalInCorner || compact ? WITH_APPROVAL_SHOWN : window.innerHeight < SHORT_WINDOW_PX ? 1 : DESKTOP_TOASTS_SHOWN;
+  // Over a chat (compact) the toasts keep to their short form but not to fewer of them: two Undos
+  // from two columns closed back to back both stay in reach.
+  const shownCount = approvalInCorner ? WITH_APPROVAL_SHOWN : window.innerHeight < SHORT_WINDOW_PX ? 1 : DESKTOP_TOASTS_SHOWN;
   // A permission a session waits on stays in sight whatever the count; the rest fill what is left.
   const asking = (t: (typeof allToasts)[number]) => t.kind === 'permission' && !t.resolved;
   const kept = new Set(allToasts.filter((t) => !asking(t)).slice(-Math.max(0, shownCount - allToasts.filter(asking).length)));
   const toasts = phone
     ? phoneVisibleToasts(allToasts, (sid) => isPhoneOverlayOpen(`session:${sid}`))
     : allToasts.filter((t) => asking(t) || kept.has(t));
-  // The older ones stay in the notification center; one line says how many and opens it.
-  const older = phone ? 0 : allToasts.length - toasts.length;
+  // The older ones stay in the notification center (on the phone they also wait their turn); one
+  // line says how many and opens it.
+  const older = allToasts.length - toasts.length;
 
   if (toasts.length === 0) return null;
+  // The count rides the top toast's title row (a link, not a card of its own); only a stack of
+  // permission prompts, which have their own head, keeps it as a line above them.
+  const moreHost = toasts.find((t) => !(t.kind === 'permission' && !t.resolved))?.id;
+  const openCenter = () => window.dispatchEvent(new CustomEvent('notification:open-center'));
+  const moreWords = older === 1 ? '1 more ›' : `${older} more ›`;
 
   return (
     <CornerSlot order={CORNER_ORDER.toasts} className="corner-slot-toasts">
     <div className="notification-toaster" aria-live="polite">
-      {older > 0 && (
+      {older > 0 && !moreHost && (
         <button
           type="button"
           className="corner-more"
           data-testid="notification-toaster-more"
-          onClick={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
+          onClick={openCenter}
         >
           {older === 1 ? '1 more notification ›' : `${older} more notifications ›`}
         </button>
@@ -175,6 +182,17 @@ export function NotificationToaster() {
           <div className="notification-toast-header">
             <span className="notification-toast-icon">{SEVERITY_ICON[toast.severity]}</span>
             <span className="notification-toast-title">{toast.title}</span>
+            {older > 0 && toast.id === moreHost && (
+              <button
+                type="button"
+                className="notification-toast-more"
+                data-testid="notification-toaster-more"
+                title={older === 1 ? '1 more notification in the notification center' : `${older} more notifications in the notification center`}
+                onClick={(e) => { e.stopPropagation(); openCenter(); }}
+              >
+                {moreWords}
+              </button>
+            )}
             <button
               className="notification-toast-close"
               onClick={(e) => { e.stopPropagation(); dismissToast(toast.id); }}
@@ -238,9 +256,9 @@ export function NotificationToaster() {
  * another surface, turn died) — settle and dismiss instead of re-arming buttons
  * the user would click forever.
  */
-/** A wrapper that only adds the phone's swipe-up dismissal. */
+/** A wrapper that only adds the phone's swipe-down dismissal. */
 function SwipeToast({ phone, onDismiss, children }: { phone: boolean; onDismiss: () => void; children: ReactNode }) {
-  const swipe = useSwipeUpDismiss(phone, onDismiss);
+  const swipe = useSwipeDownDismiss(phone, onDismiss);
   if (!phone) return <>{children}</>;
   return <div className="notification-toast-swipe" {...swipe}>{children}</div>;
 }
@@ -323,7 +341,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
     onPin();
   }, [onPin]);
 
-  const swipe = useSwipeUpDismiss(phone, onDismiss);
+  const swipe = useSwipeDownDismiss(phone, onDismiss);
   const context = [sessionLabelOf(n), n.host].filter(Boolean).join(' · ');
   // A record with no session/requestId can't be answered from here (legacy or a
   // dropped field) — offer the deep link instead of dead buttons. An

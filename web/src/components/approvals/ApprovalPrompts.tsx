@@ -307,13 +307,18 @@ export function ApprovalPrompts() {
   // new one is not missed). Lifted over a chat (no free room in the corner) it is that one line
   // too, so it covers as little as it can.
   const [lineFor, setLineFor] = useState<{ id: string; n: number } | null>(null);
-  const { compact } = useCornerState();
+  const { compact, summaryInSight } = useCornerState();
   const cardHost = useHostDisplayLabel(card?.requester.host);
-  const asLine = !!card && (phone || compact || (lineFor?.id === card.id && waiting.length <= lineFor.n));
+  // A page that already lists the approvals in sight (Home's Needs you line): the corner keeps its short form.
+  const asLine = !!card && (phone || compact || summaryInSight || (lineFor?.id === card.id && waiting.length <= lineFor.n));
   // Opened full by a newer request (or another card in the corner): the choice to make it smaller
   // is spent, so the card stays whole until the person makes it smaller again.
   // (Set while rendering, React's way of adjusting state to what changed: no effect, no extra frame.)
   if (lineFor && (!card || card.id !== lineFor.id || waiting.length > lineFor.n)) setLineFor(null);
+  // Put aside to one small pill, over what the person works in: the same rule brings it back.
+  const [asideFor, setAsideFor] = useState<{ id: string; n: number } | null>(null);
+  if (asideFor && (!card || card.id !== asideFor.id || waiting.length > asideFor.n)) setAsideFor(null);
+  const aside = !!card && !phone && asideFor?.id === card.id;
   const lastSettled = holding ?? (card ? null : receipt);
   // A card that takes another's place answers no click for a moment: a second click meant for the
   // card just answered must not land on the next request's Approve.
@@ -341,7 +346,15 @@ export function ApprovalPrompts() {
               </div>
             </div>
           )}
-          {card && (
+          {card && aside && !holding && (
+            <button type="button" className="approval-aside" data-approval-id={card.id} data-testid="approval-aside"
+              title={`${card.what}: open the request`} onClick={() => openApproval(card.id)}>
+              <span className="approval-kicker">Approve?</span>
+              <span>{waitingWords(waiting.length)}</span>
+              <span className="approval-aside-open" aria-hidden="true">Open ›</span>
+            </button>
+          )}
+          {card && (!aside || holding) && (
             <div className="approval-card-place">
               {asLine ? (
                 // Two short lines: what waits, then how many, the time and the buttons (a phone opens
@@ -356,9 +369,15 @@ export function ApprovalPrompts() {
                     {phone && <span className="approval-row-open" aria-hidden="true">Open ›</span>}
                   </button>
                   {/* "+" where the whole card has its "–": the top right corner. */}
-                  {!phone && lineFor?.id === card.id && !compact && (
+                  {!phone && lineFor?.id === card.id && !compact && !summaryInSight && (
                     <button type="button" className="approval-minimize" aria-label="Show the whole card" title="Show the whole card" data-testid="approval-expand" onClick={() => setLineFor(null)}>
                       <span aria-hidden="true">+</span>
+                    </button>
+                  )}
+                  {/* "–" always makes it smaller: the whole card to these two lines, these to one. */}
+                  {!phone && (
+                    <button type="button" className="approval-minimize" aria-label="Make it smaller" title="Make it smaller: one line until another request comes" data-testid="approval-put-aside" onClick={() => setAsideFor({ id: card.id, n: waiting.length })}>
+                      <span aria-hidden="true">–</span>
                     </button>
                   )}
                   <span className="approval-line-break" aria-hidden="true" />

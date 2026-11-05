@@ -177,6 +177,7 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/settings-controls.css :: .settings-button-stack::before': SLOT,
   'web/src/styles/settings-controls.css :: .settings-button-stack::after': SLOT,
   'web/src/styles/corner-stack.css :: .corner-stack.is-tucked, .corner-stack.under-drawer': 'the notice corner (toasts, the approval card): a portal of its own that no painter searches or marks',
+  'web/src/components/approvals/approvals.css :: .corner-stack.approval-dialog-open': 'the notice corner (toasts, the approval card): a portal of its own that no painter searches or marks',
   'web/src/styles/git-glance.css :: .session-chip-count.is-pending': CONTROL,
   'web/src/styles/git-glance.css :: .session-diff-refreshing.is-idle': CONTROL,
   'web/src/styles/session-plain-chat.css :: .session-panel.is-plain-chat:not(.draft-session-panel) > .session-panel-header': HEADER,

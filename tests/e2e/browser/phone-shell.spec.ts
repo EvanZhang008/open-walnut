@@ -156,7 +156,7 @@ function agentErrorEvent(agentId: string, error: string): string {
   return JSON.stringify({ type: 'event', name: 'agent:error', data: { agentId, error }, seq: -1 })
 }
 
-test('toasts stay inside the screen under the bar, one at a time, with a 44 px close and swipe up', async ({ page }, info) => {
+test('toasts stay inside the screen at its bottom, one at a time, with a 44 px close and swipe down', async ({ page }, info) => {
   const sock = await routeSocket(page)
   await bootHome(page)
   await expect.poll(() => sock() !== null).toBe(true)
@@ -168,13 +168,17 @@ test('toasts stay inside the screen under the bar, one at a time, with a 44 px c
   sock()!.send(agentErrorEvent('agent-two', '401 unauthorized (second test notice)'))
   const toasts = page.locator('.notification-toaster .notification-toast')
   await expect(toasts).toHaveCount(1, { timeout: 10_000 })
+  // The one waiting its turn is counted, not silent.
+  await expect(page.getByTestId('notification-toaster-more')).toHaveText('1 more ›')
   const vp = page.viewportSize()!
   // Measured once its entrance has settled.
   await expect.poll(async () => (await toasts.first().evaluate((el) => el.getAnimations().length))).toBe(0)
   const t = (await toasts.first().boundingBox())!
   expect(t.x).toBeGreaterThanOrEqual(8 - 0.5)
   expect(t.x + t.width).toBeLessThanOrEqual(vp.width - 8 + 0.5)
-  expect(t.y).toBeGreaterThanOrEqual(44 + 8 - 0.5)
+  // At the bottom, clear of the bar's search and buttons.
+  expect(t.y).toBeGreaterThan(vp.height / 2)
+  expect(t.y + t.height).toBeLessThanOrEqual(vp.height - 8 + 0.5)
   const close = (await toasts.first().locator('.notification-toast-close').boundingBox())!
   expect(close.width).toBeGreaterThanOrEqual(44)
   expect(close.height).toBeGreaterThanOrEqual(44)
@@ -185,13 +189,13 @@ test('toasts stay inside the screen under the bar, one at a time, with a 44 px c
   await toasts.first().locator('.notification-toast-close').click()
   await expect(toasts).toHaveCount(1)
   await expect(toasts.first()).toContainText('second test notice')
-  // Swipe up dismisses the next one.
+  // Swipe down dismisses the next one.
   await expect.poll(async () => (await toasts.first().evaluate((el) => el.getAnimations().length))).toBe(0)
   const t2 = (await toasts.first().boundingBox())!
   const cx = t2.x + t2.width / 2
   await page.mouse.move(cx, t2.y + 20)
   await page.mouse.down()
-  await page.mouse.move(cx, t2.y - 40, { steps: 5 })
+  await page.mouse.move(cx, t2.y + 70, { steps: 5 })
   await page.mouse.up()
   await expect(toasts).toHaveCount(0)
 })

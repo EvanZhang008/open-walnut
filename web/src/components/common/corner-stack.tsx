@@ -6,8 +6,8 @@
  * Every notice that pops up by itself goes through <CornerSlot order={...}>: it portals into one
  * fixed stack, so notices never cover one another, never cover the sidebar's bottom row (the
  * bell, the update dock, plugin status rows), and share one width, gap and order. A higher
- * `order` sits nearer the corner. On the phone the same stack sits under the top bar
- * (phone-layout.css), as its toasts always did.
+ * `order` sits nearer the corner. On the phone the same stack spans the bottom of the screen
+ * (phone-layout.css), clear of the top bar's search and buttons.
  *
  * tests/web/corner-stack-guard.test.ts fails on a notice that places itself in a corner of the
  * window instead of coming here.
@@ -34,11 +34,11 @@ const STACK_CLASS = 'corner-stack';
 
 /** What the corner knows that its notices draw by: lifted over a chat (short forms), and whether the
  *  open notification center lists the approvals (the approval card steps aside for it). */
-export interface CornerState { compact: boolean; approvalsListed: boolean }
-let cornerState: CornerState = { compact: false, approvalsListed: false };
+export interface CornerState { compact: boolean; approvalsListed: boolean; summaryInSight: boolean }
+let cornerState: CornerState = { compact: false, approvalsListed: false, summaryInSight: false };
 const stateListeners = new Set<() => void>();
 function setCornerState(next: CornerState): void {
-  if (next.compact === cornerState.compact && next.approvalsListed === cornerState.approvalsListed) return;
+  if (next.compact === cornerState.compact && next.approvalsListed === cornerState.approvalsListed && next.summaryInSight === cornerState.summaryInSight) return;
   cornerState = next;
   for (const l of stateListeners) l();
 }
@@ -82,6 +82,12 @@ function inSight(el: Element): boolean {
 /** Narrowest the stack gets to stay beside a composer instead of rising over it. */
 const MIN_BESIDE_PX = 280;
 const FULL_WIDTH_PX = 380;
+/** The most of a page's left columns the corner keeps right of: it stays at the bottom left. */
+const MAX_COLUMNS_PX = 440;
+/** A window this short keeps the corner to its short forms as soon as two kinds show. */
+const SHORT_WINDOW_PX = 720;
+/** What the stack never lies over at the bottom of a chat: the composer and the controls on it. */
+const COMPOSER_CONTROLS = '.chat-input-container, .scroll-to-bottom-btn, .draft-composer-bar';
 /** Where a page's own content lives: the app's main area, or a full-screen sheet over it. */
 const PAGE_AREA = '.main-content, .open-walnut-fullscreen';
 
@@ -91,6 +97,7 @@ const PAGE_AREA = '.main-content, .open-walnut-fullscreen';
  *  aside while that is open: the dialog shows the same request). */
 function syncAround(columnRight: number): void {
   if (!stack) return;
+  // One gap, 16px, from whatever it sits beside, on every page.
   let left = columnRight + 16;
   let floor = 0;
   let right = window.innerWidth;
@@ -114,30 +121,51 @@ function syncAround(columnRight: number): void {
   stack.classList.toggle('beside-center', centerOpen);
   let width = Math.min(FULL_WIDTH_PX, right - left - 16);
   let bottom = floor + 16;
-  for (const el of document.querySelectorAll('.chat-input-container')) {
+  // A chat's composer, and the controls that sit just above one (its jump to the newest line, a
+  // new session's folder and project row).
+  for (const el of document.querySelectorAll(COMPOSER_CONTROLS)) {
     // A composer under a full-screen sheet is not on the page now.
     if (!shown(el) || (sheet && !sheet.contains(el))) continue;
-    // The composer with what sits on it (a session's note line above the box): one block.
-    const r = (el.closest('.session-panel-input') ?? el).getBoundingClientRect();
-    // Only a composer that really sits under the stack's column, at the bottom of the window.
+    // The box itself: a note above it (a cache notice) is chat the stack may lie over.
+    const r = el.getBoundingClientRect();
+    // Only one that really sits under the stack's column, near the bottom of the window.
     if (r.right <= left || r.left >= left + width || r.bottom < window.innerHeight - 240) continue;
     const beside = Math.floor(r.left - left - 12);
     if (beside >= MIN_BESIDE_PX) width = Math.min(width, beside);
     else {
       bottom = Math.max(bottom, Math.round(window.innerHeight - r.top + 8));
-      // Over the composer, the box's own left edge is the stack's: one column with what it sits on.
-      const box = el.getBoundingClientRect();
-      if (box.left > left - 16 && box.left < left) left = Math.round(box.left);
+      // No wider than the column it sits over (a narrow chat beside another keeps it to itself),
+      // unless that column is too narrow to read in: then readable wins.
+      const column = Math.floor(r.right) - left;
+      if (column >= MIN_BESIDE_PX - 40) width = Math.min(width, column);
     }
   }
+  // Never lifted out of the window: its top stays on screen, over the composer if it must.
+  const tall = stack.getBoundingClientRect().height;
+  if (tall > 0) bottom = Math.min(bottom, Math.max(floor + 16, Math.round(window.innerHeight - tall - 8)));
   stack.style.setProperty('--corner-stack-left', `${left}px`);
   stack.style.setProperty('--corner-stack-width', `${Math.max(0, width)}px`);
   stack.style.setProperty('--corner-stack-bottom', `${bottom}px`);
   // No free room: lifted over a chat. Toasts go to short lines too (the phone has its own rules).
+  // So does a crowded corner: every kind at once, or two in a short window, would stand over a
+  // third of the page. Counted by the kinds shown, never by the stack's own height, so the short
+  // forms do not undo the very reason for them.
   const phone = window.matchMedia(PHONE_LAYOUT_QUERY).matches;
-  const compact = bottom > floor + 16 && !phone;
+  const kinds = ['.corner-slot-toasts', '.corner-slot-board', '.corner-slot-approvals']
+    .filter((sel) => { const el = stack!.querySelector(sel); return !!el && el.childElementCount > 0 && shown(el); }).length;
+  const crowded = kinds >= 3 || (kinds >= 2 && window.innerHeight < SHORT_WINDOW_PX);
+  // Over a page's work it stays short for as long as that page shows: scrolling a note to its
+  // blank end must not grow the card back, moving its buttons under the pointer.
+  // Per page and window size: a resize lays the page out anew.
+  const here = `${location.pathname}${location.search} ${window.innerWidth}x${window.innerHeight}`;
+  if (workPage !== here) { workPage = here; workCovered = false; }
+  if (!workCovered && coversWork(left, width, bottom)) workCovered = true;
+  const compact = !phone && (bottom > floor + 16 || crowded || workCovered);
   stack.classList.toggle('is-compact', compact);
-  setCornerState({ compact, approvalsListed });
+  // A page's own list of the approvals in sight (Home's Needs you line, the Org page's): the card
+  // there keeps its short form, so one request does not show twice at full size.
+  const summaryInSight = !approvalsListed && [...document.querySelectorAll(`${PAGE_AREA.split(', ').map((a) => `${a} [data-testid="approval-summary"]`).join(', ')}`)].some(inSight);
+  setCornerState({ compact, approvalsListed, summaryInSight });
   // The phone's drawer is a layer over the page: the corner waits under it until it closes.
   stack.classList.toggle('under-drawer', phone && !!document.querySelector('.main-content[inert]'));
   const dialog = document.querySelector('.approval-dialog-overlay');
@@ -145,15 +173,39 @@ function syncAround(columnRight: number): void {
   stack.classList.toggle('approval-dialog-open', dialogOpen);
   // An approval card in sight: the toasts above it keep to their title and buttons.
   stack.classList.toggle('has-approval', !approvalsListed && !dialogOpen && !!stack.querySelector('.corner-slot-approvals [data-testid="approval-card"]'));
-  // A wide notification center can leave no room right of it; it lists the same news then.
-  stack.classList.toggle('is-tucked', width < MIN_BESIDE_PX - 40);
+  // A wide notification center can leave no room right of it; it lists the same news then. Only
+  // then: anywhere else a notice that cannot be seen is a notice lost.
+  stack.classList.toggle('is-tucked', centerOpen && width < MIN_BESIDE_PX - 40);
+}
+
+/**
+ * Whether the corner stands over what the person works in (a note's text, a board's lanes, a
+ * calendar's hours, a list's rows) rather than a pane's empty floor: looked up just above the
+ * corner's bottom, where even its short form sits, so the answer does not depend on that form.
+ * Something smaller than a quarter of the window there, or anything one types in, is work.
+ */
+let workPage: string | null = null;
+let workCovered = false;
+function coversWork(left: number, width: number, bottom: number): boolean {
+  if (width <= 0) return false;
+  const y = window.innerHeight - bottom - 24;
+  const big = window.innerWidth * window.innerHeight * 0.25;
+  for (const x of [left + 40, left + width / 2, left + width - 40]) {
+    const hit = document.elementsFromPoint(x, y).find((el) => !stack?.contains(el));
+    if (!hit || !hit.closest(PAGE_AREA)) continue;
+    if (hit.closest('input, textarea, [contenteditable="true"], .cm-editor')) return true;
+    const r = hit.getBoundingClientRect();
+    if (r.width * r.height < big) return true;
+  }
+  return false;
 }
 
 /**
  * The page's own left columns beside the sidebar (Home's task panel, the Org list, the Settings
- * nav, Calendar's rail, the Notes tree, Mail's folders and its message list, a plugin's list):
+ * nav, the Tasks projects, Mail's folders, a plugin's list; a wide one, a notes tree or a
+ * calendar's rail, is page content the corner lies over, its end scrolling clear):
  * full-height panes that start at the sidebar's edge or at the previous column's, together no
- * wider than half the window, each leaving the stack its full width on its right. Their bottom
+ * wider than MAX_COLUMNS_PX, each leaving the stack a readable width on its right. Their bottom
  * rows are what the person works in, so the stack sits right of them. Read from the layout, so a
  * new page's column needs no listing here.
  */
@@ -167,7 +219,11 @@ function leftColumnRight(sidebarRight: number): number {
       const r = el.getBoundingClientRect();
       // From the edge before it, or just past a page's own margin (Calendar's rail starts 28px in).
       if (r.left > from + 40 || r.left < from - 8 || r.width < 120 || r.width > window.innerWidth * 0.45) continue;
-      if (r.right > window.innerWidth - FULL_WIDTH_PX - 32 || (step > 0 && r.right > window.innerWidth * 0.5)) continue;
+      // It leaves the stack a readable width on its right (a narrower stack than 380 is fine there).
+      if (r.right > window.innerWidth - (MIN_BESIDE_PX - 40) - 32 || (step > 0 && r.right > window.innerWidth * 0.5)) continue;
+      // A navigation column, not a page's content: past MAX_COLUMNS_PX right of the sidebar the
+      // corner would sit mid-page (a notes tree, a mail list), so those it lies over instead.
+      if (r.right > sidebarRight + MAX_COLUMNS_PX) continue;
       if (r.height < window.innerHeight * 0.85) continue;
       right = Math.max(right, Math.round(r.right));
     }
@@ -177,11 +233,11 @@ function leftColumnRight(sidebarRight: number): number {
 }
 
 /**
- * Room for the stack in what it covers, so it never hides the end of a page. On a computer: the
- * scrolling area under it (a chat's timeline, a note) gets that much more room at its end (an
- * ::after spacer, corner-stack.css, so no inline style another hook writes is touched), and its
- * last line scrolls clear above the stack. On the phone: the stack's height joins the bar's
- * (--phone-topbar-h), so the page and every layer start below it.
+ * Room for the stack in what it covers, so it never hides the end of a page: the scrolling area
+ * under it (a chat's timeline, a list, a note) gets that much more room at its end (an ::after
+ * spacer, corner-stack.css, so no inline style another hook writes is touched), and its last line
+ * scrolls clear above the stack. Only at the end, so the page never jumps under the reader's
+ * finger when a notice comes or goes (on the phone too).
  */
 let reserved: HTMLElement | null = null;
 
@@ -215,17 +271,7 @@ function syncRoom(): void {
   if (!stack) return;
   const r = stack.getBoundingClientRect();
   const visible = stack.childElementCount > 0 && !stack.classList.contains('is-tucked') && !stack.classList.contains('under-drawer') && r.height > 0;
-  const phone = window.matchMedia(PHONE_LAYOUT_QUERY).matches;
-  // The phone: the approval line, which stays until it is answered, takes room under the bar, so it
-  // never covers the page's first controls. A toast comes and goes by itself: it lies over the page
-  // below that line, so the page does not jump down and back under the reader's finger.
-  const kept = phone && visible ? stack.querySelector('.corner-slot-approvals') : null;
-  const keptBox = kept && shown(kept) ? kept.getBoundingClientRect() : null;
-  const top = keptBox ? Math.round(keptBox.bottom - r.top) + 16 : 0;
-  if (document.documentElement.style.getPropertyValue('--corner-reserve-top') !== `${top}px`) {
-    document.documentElement.style.setProperty('--corner-reserve-top', `${top}px`);
-  }
-  const scroller = !phone && visible ? scrollerUnder(r.left + 24, r.top + 4) : null;
+  const scroller = visible ? scrollerUnder(r.left + 24, r.top + 4) : null;
   if (!scroller) { release(); return; }
   if (reserved !== scroller) release();
   // While the stack holds something the room only grows: a notice leaving (a toast's own time
@@ -247,7 +293,10 @@ function syncLeft(): void {
   if (!stack) return;
   const sidebar = inFlowSidebar();
   const sidebarRight = sidebar ? Math.max(0, Math.round(sidebar.getBoundingClientRect().right)) : 0;
-  syncAround(leftColumnRight(sidebarRight));
+  // A window too narrow for the stack right of the page's left column: it sits over that
+  // column's bottom instead, right of the sidebar.
+  const column = leftColumnRight(sidebarRight);
+  syncAround(window.innerWidth - column - 32 >= MIN_BESIDE_PX - 40 ? column : sidebarRight);
   syncRoom();
   if (sidebar !== watched) {
     observer?.disconnect();
@@ -285,7 +334,11 @@ export function cornerStackElement(): HTMLDivElement {
     // opens or closes, the notification center comes and goes (a few rect reads, no layout writes).
     window.setInterval(() => {
       if (stack && stack.childElementCount > 0) syncLeft();
-      else if (reserved || document.documentElement.style.getPropertyValue('--corner-reserve-top') !== '0px') syncRoom();
+      else {
+        // Empty: the next notice looks at the page afresh.
+        workPage = null;
+        if (reserved) syncRoom();
+      }
     }, 500);
   }
   syncLeft();

@@ -39,13 +39,16 @@ async function offHome(page: Page) {
 }
 
 // The fixture server is shared: a request another file or an earlier run left waiting would take
-// the corner (it shows the first) and the Home summary line, so each test starts with none.
-test.beforeEach(async ({ request }) => {
+// the corner (it shows the first) and the Home summary line, so each test starts with none, and
+// ends with none, so a failed test leaves no card beside another file's toasts.
+async function denyAllWaiting(request: APIRequestContext) {
   const res = await request.get('/api/v1/approvals')
   if (!res.ok()) return
   const { approvals } = await res.json() as { approvals: { id: string }[] }
   for (const a of approvals) await request.post(`/api/v1/approvals/${a.id}/answer`, { data: { decision: 'deny' } })
-})
+}
+test.beforeEach(async ({ request }) => { await denyAllWaiting(request) })
+test.afterEach(async ({ request }) => { await denyAllWaiting(request) })
 
 async function waitFor(request: APIRequestContext, id: string, token: string) {
   const res = await request.post(`/api/v1/approvals/${id}/wait`, { data: { token, wait_ms: 5_000 } })
@@ -137,12 +140,15 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await expect(summary).not.toContainText('Release notes')
   expect(Number(await page.getByTestId('status-section-needs-count').innerText())).toBeGreaterThanOrEqual(1)
   expect((await summary.boundingBox())!.height).toBeLessThanOrEqual(40)
-  await expect(page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)).toBeVisible()
+  const homeCard = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
+  await expect(homeCard).toBeVisible()
+  // The line in sight lists it already: the card keeps its short form, so it never shows twice at full size.
+  await expect(homeCard).toHaveClass(/approval-card-line/)
   await summary.click()
   await expect(dialog.locator('.approval-what')).toContainText('Release notes')
   await expect(dialog.locator('.approval-detail pre')).toContainText('notes: 4 lines')
-  // The open request is the dialog's alone: the corner's approval card steps aside while it is open.
-  await expect(page.locator('[data-testid="corner-stack"] [data-testid="approval-card"]')).toHaveCount(0)
+  // The open request is the dialog's alone: the whole corner steps aside while it is open.
+  await expect(page.locator('[data-testid="corner-stack"] [data-testid="approval-card"]')).toBeHidden()
   await dialog.getByRole('button', { name: 'Approve', exact: true }).click()
   await expect(page.getByTestId('approval-dialog-settled')).toContainText('Approved')
   expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
@@ -287,6 +293,14 @@ test('the corner: a toast and an approval card share the bottom left, right of t
     return Math.round(b.x - (n.x + n.width))
   }).toBe(16)
   await page.locator('.sidebar-collapse-btn').first().click()
+  // A narrow window with the sidebar open: still right of the page's left column, narrower.
+  await page.setViewportSize({ width: 800, height: 600 })
+  await expect.poll(async () => {
+    const n = (await page.locator('.settings-nav').boundingBox())!
+    const b = (await card.boundingBox())!
+    return Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 240
+  }).toBe(true)
+  await page.setViewportSize(vp)
 
   // The notification center open: it lists the approval (and the toast) itself, so the corner's
   // card and toast step aside; the stack moves just right of it for anything else.
@@ -346,7 +360,7 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   // The answer shows in the card's place a moment before anything else takes it.
   await expect(stack.locator(`[data-testid="approval-settled"][data-approval-id="${second.id}"]`)).toContainText('Denied')
 
-  // The phone has no free corner: the request is one line under the bar, a tap opens it.
+  // The phone has no free corner: the request is one line at the bottom, a tap opens it.
   const res3 = await request.post('/api/v1/approvals', { data: { cwd: '/work/site', command: 'release.sh', what: `Phone line ${Date.now().toString(36)}` } })
   const { approval: third, waitToken: thirdToken } = await res3.json() as { approval: { id: string }; waitToken: string }
   const card3 = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${third.id}"]`)
@@ -371,17 +385,47 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await expect(card3).toHaveClass(/approval-card-line/)
   // The one line keeps its buttons on a computer.
   await expect(card3.getByRole('button', { name: 'Deny' })).toBeVisible()
+  // A short window with two kinds in the corner: every notice takes its shortest form (a toast its
+  // title, one line of why and its buttons), so the corner never stands over a third of the page.
+  await page.setViewportSize({ width: 1280, height: 640 })
+  sock()!.send(agentErrorEvent('agent-short', '401 unauthorized (short window notice)'))
+  const shortToast = stack.locator('.notification-toast').first()
+  await expect(shortToast).toBeVisible()
+  await expect(stack).toHaveClass(/is-compact/)
+  await expect(shortToast.locator('.notification-toast-body')).toBeVisible()
+  expect((await shortToast.locator('.notification-toast-body').boundingBox())!.height).toBeLessThanOrEqual(22)
+  // In its short form the card can be put aside to one small pill, which opens the request; a newer
+  // request brings the card back.
+  await card3.getByTestId('approval-put-aside').click()
+  const pill = stack.getByTestId('approval-aside')
+  await expect(pill).toContainText('1 approval waiting')
+  await expect(card3).toHaveCount(0)
+  expect((await pill.boundingBox())!.height).toBeLessThanOrEqual(40)
+  const res5 = await request.post('/api/v1/approvals', { data: { cwd: '/work/site', command: 'release.sh', what: `Fifth ${Date.now().toString(36)}` } })
+  const fifth = (await res5.json() as { approval: { id: string } }).approval
+  await expect(card3).toBeVisible({ timeout: 15_000 })
+  await expect(pill).toHaveCount(0)
+  await request.post(`/api/v1/approvals/${fifth.id}/answer`, { data: { decision: 'deny' } })
+  await expect(card3.getByTestId('approval-count')).toHaveCount(0, { timeout: 15_000 })
   await page.setViewportSize({ width: 390, height: 844 })
   // On the phone: two short lines that open the request (its buttons are in the dialog).
   await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(64)
   await expect(card3.getByRole('button', { name: 'Deny' })).toHaveCount(0)
   await expect(card3.getByText('Approve?')).toBeVisible()
-  // The page starts below that line: it covers none of the page's own controls.
+  // It sits at the bottom of the screen, as on a computer: the bar's search and buttons stay clear.
   await expect.poll(async () => {
     const line = (await card3.boundingBox())!
-    const area = (await page.locator('.main-content > .app-content-area').boundingBox())!
-    return area.y >= line.y + line.height
+    return line.y > 844 / 2 && line.y + line.height <= 844
   }).toBe(true)
+  // A toast on the phone is one row above it for its few seconds (a tap opens the center), and the
+  // page under the bar does not move.
+  const areaTop = (await page.locator('.main-content > .app-content-area').boundingBox())!.y
+  sock()!.send(agentErrorEvent('agent-phone', '401 unauthorized (phone notice)'))
+  const phoneToast = stack.locator('.notification-toast').first()
+  await expect(phoneToast).toBeVisible()
+  await expect.poll(async () => Math.round((await phoneToast.boundingBox())!.height)).toBeLessThanOrEqual(48)
+  expect((await phoneToast.boundingBox())!.y).toBeGreaterThan(844 / 2)
+  expect((await page.locator('.main-content > .app-content-area').boundingBox())!.y).toBe(areaTop)
   await card3.locator('.approval-line-open').click()
   await dialog.getByRole('button', { name: 'Deny' }).click()
   expect((await waitFor(request, third.id, thirdToken)).approval.status).toBe('denied')

@@ -43,10 +43,13 @@ that host's daemon to your Mac, so the request shows which host asked.
     opens the whole request (the folder and the detail too) in a dialog that lists every request
     waiting by its title, the one shown marked, and shows another at a click. Its "–" puts it down to two short lines (what is
     asked; how many, the time left and the buttons) until another request comes, and its "+"
-    shows it whole again; above a chat's composer it is those two lines by itself. On a phone it
-    is those two lines under the top bar, and a tap opens the dialog. It pops up on every page, Home and the Org page included; only
-    while the notification center is open, which lists the approvals itself, the card steps
-    aside.
+    shows it whole again; above a chat's composer, over a page's work (a note, a task list, a
+    calendar) and beside Home's Needs you line it is those two lines by itself. There its "–"
+    puts it down once more, to one line that opens the request, until another request comes. On
+    a phone it is those two lines at the bottom of the screen, and a tap opens the dialog. It
+    pops up on every page, Home and the Org page included; while the notification center is
+    open, which lists the approvals itself, the card steps aside, and while the dialog is open
+    the whole corner does.
   The web side is `web/src/components/approvals/` (one store, `approvals-store.ts`, for all of
   them); the Mac app's notification is `desktop/NotificationBridge.swift`.
 - **The iPhone app**: a push with Approve and Deny on the banner for a plain
