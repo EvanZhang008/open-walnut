@@ -322,7 +322,9 @@ async function nameSplitPickInFailure(err: unknown, pick: { engine: SessionEngin
   const failed = resolveEngine(pick.engine);
   const other = splitBuilders(await getConfig().catch(() => undefined)).map((b) => resolveEngine(b.engine)).find((e) => e !== failed)
     ?? (failed === 'claude' ? undefined : 'claude');
-  const hint = other ? `retry with engine "${other}" (or another) to choose a different one` : 'retry with engine to choose a different one';
+  // Every entry on the same engine (Claude Code on two models): another model is the way out.
+  const hint = other ? `retry with engine "${other}" (or another) to choose a different one`
+    : 'retry with model, for example "opus", or with another engine, to run it differently';
   try { err.message += ` (This start ran on ${builderLabel(pick)}, the engine split's pick for this task, and a retry uses it again: if that engine is what failed, ${hint}.)`; } catch { /* a read-only message */ }
 }
 

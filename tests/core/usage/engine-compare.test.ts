@@ -200,8 +200,8 @@ describe('aggregateEngineCompare', () => {
     // All tasks: both under Claude, where the cost went; the move counts under Codex, the column the split assigned (none here).
     expect(all.rows.map((r) => [r.key, r.done, r.switched])).toEqual([['claude|Claude', 2, 0]]);
     const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
-    expect(Object.fromEntries(fair.rows.map((r) => [r.key, [r.done, r.switched]]))).toEqual({ 'codex|GPT': [1, 1], 'claude|Claude': [1, 0] });
-    expect(fair.tasks.find((t) => t.taskId === 'rescued')).toMatchObject({ key: 'codex|GPT', switched: true });
+    expect(Object.fromEntries(fair.rows.map((r) => [r.key, [r.done, r.switched]]))).toEqual({ 'split:codex': [1, 1], 'split:claude': [1, 0] });
+    expect(fair.tasks.find((t) => t.taskId === 'rescued')).toMatchObject({ key: 'split:codex', switched: true });
   });
 
   it('a start that failed before its engine named a session still counts, as an error, under the engine it was given', () => {
@@ -248,8 +248,8 @@ describe('aggregateEngineCompare', () => {
     const pick = { key: 'claude', engine: 'claude' as const, at: '2026-11-02T00:00:00.000Z' };
     const inp = input([done('later', 1, { engine_pick: pick })], { later: { costUsd: 8, engine: 'claude', model: 'gpt-6.1-sol' } });
     const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
-    expect(fair.rows.map((r) => [r.key, r.switched])).toEqual([['claude|Claude', 1]]);
-    expect(fair.tasks[0]).toMatchObject({ key: 'claude|Claude', switched: true });
+    expect(fair.rows.map((r) => [r.key, r.switched])).toEqual([['split:claude', 1]]);
+    expect(fair.tasks[0]).toMatchObject({ key: 'split:claude', switched: true });
   });
 
   it('reports the split as configured', () => {
@@ -275,6 +275,14 @@ describe('round-6 counting', () => {
     expect(out.tasks.find((t) => t.taskId === 'p')?.reviews).toBe(1);
   });
 
+  it('a task started long ago, finished in the period and reopened stays in the period (by its first completion)', () => {
+    const tasks = [done('kept', 1), task({ id: 'reo', session_id: 's-reo', phase: 'IN_PROGRESS', reopens: 1, created_at: '2026-09-20T00:00:00.000Z', first_completed_at: '2026-11-02T05:00:00.000Z' })];
+    const inp = input(tasks, {}, { range: { start: '2026-11-01', end: '2026-11-07' } });
+    (inp.sessions as Map<string, object>).set('s-reo', { startedAt: '2026-09-20T00:00:00.000Z' });
+    const row = aggregateEngineCompare(inp).rows[0];
+    expect(row).toMatchObject({ done: 1, open: 1, reopenedShare: 0.5 });
+  });
+
   it('a task reopened and being worked on again still counts as reopened', () => {
     const tasks = [done('a', 1), task({ id: 'again', session_id: 's-again', phase: 'IN_PROGRESS', reopens: 1, first_completed_at: '2026-11-02T03:00:00.000Z' })];
     expect(aggregateEngineCompare(input(tasks, {})).rows[0].reopenedShare).toBe(0.5);
@@ -289,7 +297,37 @@ describe('placeholder model ids', () => {
     const inp = input([done('ph', 1, { engine_pick: pick })], { ph: { model: 'unknown', unknown: 4, tokens: 10 } });
     (inp.sessions as Map<string, object>).set('s-ph', { startedAt: '2026-11-02T00:00:00.000Z', cliModel: 'claude-opus-5-5' });
     const out = aggregateEngineCompare({ ...inp, splitOnly: true });
-    expect(out.tasks[0]).toMatchObject({ key: 'claude|Claude', switched: false });
+    expect(out.tasks[0]).toMatchObject({ key: 'split:claude', switched: false });
+  });
+});
+
+describe('round-7 counting', () => {
+  it('two split entries of one engine and family are two columns in the fair view, one in All', () => {
+    const cfg = { config: { defaults: { engine_split: ['claude', { engine: 'claude', model: 'sonnet' }] } } };
+    const at = '2026-11-02T00:00:00.000Z';
+    const tasks = [done('o', 1, { engine_pick: { key: 'claude', engine: 'claude', at } }),
+      done('s', 1, { engine_pick: { key: 'claude:sonnet', engine: 'claude', model: 'sonnet', at } })];
+    const inp = input(tasks, { o: { costUsd: 1 }, s: { costUsd: 2, model: 'claude-sonnet-5-5' } }, cfg);
+    const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
+    expect(fair.rows.map((r) => [r.key, r.label, r.done]).sort()).toEqual([
+      ['split:claude', 'Claude Code · Claude', 1], ['split:claude:sonnet', 'Claude Code · Claude (sonnet)', 1]]);
+    expect(fair.rows.every((r) => r.switched === 0)).toBe(true);
+    expect(aggregateEngineCompare(inp).rows.map((r) => [r.key, r.done])).toEqual([['claude|Claude', 2]]);
+  });
+
+  it('a task closed after a start that never ran a session is not finished work, has no time, and is an error', () => {
+    const at = '2026-11-02T00:00:00.000Z';
+    const closed = task({ id: 'nr', phase: 'COMPLETE', completed_at: '2026-11-02T00:01:00.000Z', start_failures: 1,
+      engine_pick: { key: 'codex', engine: 'codex', at }, last_start: { id: 'x', at, state: 'failed', engine: 'codex' } });
+    const row = aggregateEngineCompare(input([closed], {})).rows[0];
+    expect(row).toMatchObject({ done: 0, open: 0, notStarted: 1, errored: 1, medianHours: null });
+  });
+
+  it('a finished task with no usage is left out of the median, which stays ranked (not a floor)', () => {
+    const tasks = [...Array.from({ length: 5 }, (_, i) => done(`k${i}`, 1)), done('nu', 1)];
+    const spend = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`k${i}`, { costUsd: 3, tokens: 50 }]));
+    const row = aggregateEngineCompare(input(tasks, spend)).rows[0];
+    expect(row).toMatchObject({ noUsageDone: 1, partialCostDone: 0, partialTokensDone: 0, medianCostUsd: 3 });
   });
 });
 

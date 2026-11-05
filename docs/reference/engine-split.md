@@ -32,7 +32,7 @@ behind or ahead, so an entry added later, or one a host could not run for a whil
 up with a short run of a few starts and then takes turns. Only entries that can run where
 the start goes are offered: an ACP engine the launch host has not reported installed is
 skipped (Claude Code always can). Reviewer subtasks (a subtask whose title starts with
-"Review" or names a reviewer) take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
+"Review" or "Reviewer") take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
 
 The pick is kept on the task (`engine_pick`) and in `WALNUT_HOME/cache/engine-split.json`,
 and the start's outcome names it with the shares it saw. A start that waited (the queue, a
@@ -45,14 +45,20 @@ start refused after it (a host that went away) still took its turn.
 Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&project&split`):
 per engine and model family, the tasks finished in the period, still open, assigned by the
 split, median time to done, median and total cost, median tokens, review subtasks per task
-(subtasks with "review" in the title; a top-level task so named is work of its own), the
+(subtasks whose title starts with "Review" or "Reviewer"; a top-level task so named is work of its own), the
 user's messages per task, reopens after completion, and tasks whose session had an error. A
 task counts under the engine and model family that carried most of its cost (dollars first,
 tokens only for a tie); counting only the split's tasks, it counts under the engine the split
 assigned it, and "Moved to another engine" counts those whose cost mostly ran elsewhere. A
 task with no usage recorded (or only requests with no token counts) has an unknown cost and
 tokens, never a zero, and a start that failed counts as an error even after a later start
-succeeded.
+succeeded. A task counts in the period of the day it finished; a reopened one, still open
+again, in the period it first finished, so its rework stays with the work it reopened.
+
+In that view each split entry is its own column, so two entries of one engine and family
+(Claude Code and Claude Code on Sonnet) are compared side by side. A closed task that never
+ran a session (its start failed) is neither finished nor open: it counts as not started, and
+as an error.
 
 `split=1` counts only the tasks the split assigned, the fair test (a lead may have picked an
 engine by hand for the rest). `split=auto`, the card's default, does so while the split is on

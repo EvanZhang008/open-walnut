@@ -94,9 +94,13 @@ export interface EngineCompareRow {
   noUsage: number;
   /** Tasks whose tokens leave out requests with no token counts (noUsage ones included). */
   partialTokens: number;
-  /** Of the finished tasks (the medians'), those whose cost or tokens are a floor. */
+  /** Of the finished tasks with usage (the medians'), those whose cost or tokens are a floor. */
   partialCostDone: number;
   partialTokensDone: number;
+  /** Finished tasks with no usage recorded: left out of the medians. */
+  noUsageDone: number;
+  /** Closed tasks that never ran a session (their start failed): neither finished nor open. */
+  notStarted: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched: number;
   medianCostUsd: number | null;
@@ -164,6 +168,12 @@ function usageUnknown(spend: TaskSpend | undefined): boolean {
   return !spend || (spend.unknown > 0 && spend.tokens === 0 && spend.costUsd === 0);
 }
 
+/** A split entry's name, as its column is named in the fair view: "Claude Code · Claude (sonnet)". */
+function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
+  const fam = modelFamily(b.model) ?? ENGINE_FAMILY[resolveEngine(b.engine)] ?? 'Other';
+  return `${builderLabel({ engine: b.engine })} · ${fam}${b.model ? ` (${b.model})` : ''}`;
+}
+
 function median(xs: number[]): number | null {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -214,28 +224,36 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
     if (!spend || spend.unpriced > 0 || spend.unknown > 0) reviewPartial.add(t.parent_task_id);
   }
-  type Group = { key: string; engine: string; family: ModelFamily };
-  type Candidate = EngineCompareTask & { finishedAt: string; byCost: Group; byPick: Group | null; everDone: boolean };
+  // A column: `key` names it; `familyKey` is the engine + model family it belongs to (the All view's columns).
+  type Group = { key: string; familyKey: string; engine: string; family: ModelFamily; label: string };
+  type Candidate = EngineCompareTask & { finishedAt: string; byCost: Group; byPick: Group | null; everDone: boolean; notStarted: boolean };
+  const entryLabel = new Map(splitBuilders(input.config).map((b) => [b.key, entryLabelOf(b)]));
   const candidates: Candidate[] = [];
   for (const t of input.tasks) {
     // A reviewer subtask counts toward its parent; a top-level task titled "Review ..." is work of its own.
     if (!counted(t) || (t.parent_task_id && REVIEW_RE.test(t.title))) continue;
     const sid = taskSessionId(t);
     const session = sid ? input.sessions.get(sid) : undefined;
-    const done = t.phase === 'COMPLETE' && !!t.completed_at;
+    // Never ran a session (its start failed before one, and it was closed): not work the engine finished.
+    const closed = t.phase === 'COMPLETE' && !!t.completed_at;
+    const notStarted = closed && !sid && !firstStart(t, input.sessions);
+    const done = closed && !notStarted;
     // From its first session's start (a restart, an engine switch or a recovery starts another)
     // to its first completion (a reopen adds the idle time before it otherwise).
-    // No session start known (an old task whose records are gone): no time, rather than its age.
-    const sessionStart = firstStart(t, input.sessions) ?? t.engine_pick?.at;
-    const startedAt = sessionStart ?? t.created_at;
+    // No session start known (an old task whose records are gone, a start that never ran): no time, rather than its age.
+    const sessionStart = firstStart(t, input.sessions);
+    const startedAt = sessionStart ?? t.engine_pick?.at ?? t.created_at;
     const finishedAt = t.first_completed_at && t.completed_at && t.first_completed_at < t.completed_at ? t.first_completed_at : t.completed_at;
-    const day = input.dayOf(done ? t.completed_at! : startedAt);
+    // Finished: the day it finished. Reopened and open again: the day it first finished, so the
+    // rework stays in the period of the work it reopened. Never finished: the day it started.
+    const day = input.dayOf(done ? t.completed_at! : t.first_completed_at ?? startedAt);
     if (!inRange(day, input.range)) continue;
     const spend = input.spend.get(t.id);
     const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine ?? t.last_start?.engine);
     const family = modelFamily(spend?.model) ?? modelFamily(session?.acpModel ?? session?.cliModel ?? session?.model)
       ?? modelFamily(t.engine_pick?.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
-    const byCost: Group = { key: `${engine}|${family}`, engine, family };
+    const familyKey = `${engine}|${family}`;
+    const byCost: Group = { key: familyKey, familyKey, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}` };
     // Where the split put it: the fair test keeps a task in that column even when it was rescued elsewhere.
     let byPick: Group | null = null;
     if (t.engine_pick) {
@@ -243,7 +261,10 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // Fixed at assignment: the model the entry names, else the engine's own default family, never
       // read back from where the cost went (a task moved to another model in the same engine is a move).
       const pf = modelFamily(t.engine_pick.model) ?? ENGINE_FAMILY[pe] ?? (pe === engine ? family : 'Other');
-      byPick = { key: `${pe}|${pf}`, engine: pe, family: pf };
+      // One column per split entry: two entries of one engine and family (Claude Code and Claude Code
+      // on Sonnet) are what the fair test compares, so they never merge.
+      byPick = { key: `split:${t.engine_pick.key}`, familyKey: `${pe}|${pf}`, engine: pe, family: pf,
+        label: entryLabel.get(t.engine_pick.key) ?? entryLabelOf({ engine: pe as SessionEngine, model: t.engine_pick.model }) };
     }
     const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
     // Any session it held: a task that failed on one engine and finished on another still had the error.
@@ -257,14 +278,10 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       costUsd: spend?.costUsd ?? 0, partialCost: !spend || spend.unpriced > 0 || spend.unknown > 0, noUsage: usageUnknown(spend),
       partialTokens: !spend || spend.unknown > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
-      switched: !!byPick && byPick.key !== byCost.key, everDone: done || !!t.first_completed_at, finishedAt: done ? t.completed_at! : '',
+      switched: !!byPick && byPick.familyKey !== byCost.familyKey, everDone: !notStarted && (done || !!t.first_completed_at), notStarted, finishedAt: done ? t.completed_at! : '',
     });
   }
-  // Named like the columns ("Claude Code · GPT"), with the model an entry names.
-  const entries = splitBuilders(input.config).map((b) => {
-    const fam = modelFamily(b.model) ?? ENGINE_FAMILY[resolveEngine(b.engine)] ?? 'Other';
-    return { key: b.key, label: `${builderLabel({ engine: b.engine })} · ${fam}${b.model ? ` (${b.model})` : ''}`, weight: b.weight };
-  });
+  const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: entryLabelOf(b), weight: b.weight }));
   const splitOn = entries.length >= 2;
   const inProject = (c: Candidate) => input.project === undefined || c.project === input.project;
   const splitTasks = candidates.filter((c) => c.split && inProject(c)).length;
@@ -280,22 +297,26 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     return { ...c, key: g.key, group: g };
   });
   const meta = new Map(picked.map((p) => [p.key, p.group]));
+  const splitView = splitOnly;
   const rows: EngineCompareRow[] = [];
-  for (const [key, { engine, family }] of meta) {
+  for (const [key, { engine, family, label }] of meta) {
     const all = picked.filter((p) => p.key === key);
     const done = all.filter((p) => p.done);
     const known = done.filter((p) => !p.noUsage);
     const everDone = all.filter((p) => p.everDone);
     const per = (f: (p: EngineCompareTask) => number) => done.length ? done.reduce((a, p) => a + f(p), 0) / done.length : null;
     rows.push({
-      key, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}`,
-      done: done.length, open: all.length - done.length, split: all.filter((p) => p.split).length,
+      key, engine, family, label,
+      done: done.length, open: all.filter((p) => !p.done && !p.notStarted).length, notStarted: all.filter((p) => p.notStarted).length,
+      split: all.filter((p) => p.split).length,
       medianHours: median(done.map((p) => p.hours).filter((h): h is number => h !== null)),
       costUsd: all.reduce((a, p) => a + p.costUsd, 0), partialCost: all.filter((p) => p.partialCost).length,
       // The medians are of finished tasks: only those can make them a floor (a task that just started cannot).
-      partialCostDone: done.filter((p) => p.partialCost).length, partialTokensDone: done.filter((p) => p.partialTokens).length,
+      // A finished task with no usage at all is left out of the medians (noUsageDone), not a floor of them.
+      partialCostDone: known.filter((p) => p.partialCost).length, partialTokensDone: known.filter((p) => p.partialTokens).length,
+      noUsageDone: done.length - known.length,
       // Under the column the split assigned, in either view.
-      noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && p.byPick?.key === key).length,
+      noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && (splitView ? p.byPick?.key : p.byPick?.familyKey) === key).length,
       // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
@@ -310,7 +331,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const tasks = [...picked]
     .sort((a, b) => Number(b.done) - Number(a.done) || b.finishedAt.localeCompare(a.finishedAt))
     .slice(0, TASKS_MAX)
-    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, ...t }) => t);
+    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, notStarted: _n, ...t }) => t);
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,
     projects: [...projects].sort((a, b) => b[1] - a[1]).map(([project, n]) => ({ project, tasks: n })),

@@ -165,7 +165,8 @@ const RESERVE_MS = 120_000;
 /** Tests only. */
 export function _resetSplitReservations(): void { reserved.length = 0; }
 
-type Recent = { counts: Map<string, number>; tasks: Set<string>; sequence: string[] };
+/** `tasks`: the entry the file holds for each task. */
+type Recent = { counts: Map<string, number>; tasks: Map<string, string>; sequence: string[] };
 
 /** Adds this process's picks the file does not hold yet. Synchronous on purpose (see pickSplitEngine). */
 function withReserved(file: Recent, nowMs: number): Recent {
@@ -173,7 +174,8 @@ function withReserved(file: Recent, nowMs: number): Recent {
   const counts = new Map(file.counts);
   const sequence = [...file.sequence];
   for (const r of reserved) {
-    if (file.tasks.has(r.taskId)) continue;
+    // The file already holds this pick; a task picked again (its old entry was removed) still counts its new one.
+    if (file.tasks.get(r.taskId) === r.key) continue;
     counts.set(r.key, (counts.get(r.key) ?? 0) + 1);
     sequence.push(r.key);
   }
@@ -188,11 +190,11 @@ export async function recentPickCounts(nowMs = Date.now()): Promise<Map<string, 
 async function filePicks(nowMs: number): Promise<Recent> {
   const file = normalizePicks(await readJsonFile<unknown>(picksFile(), null));
   const counts = new Map<string, number>();
-  const tasks = new Set<string>();
+  const tasks = new Map<string, string>();
   const recent = file.picks.filter((p) => nowMs - Date.parse(p.at) <= SPLIT_WINDOW_MS).sort((a, b) => a.at.localeCompare(b.at));
   for (const p of recent) {
     counts.set(p.key, (counts.get(p.key) ?? 0) + 1);
-    tasks.add(p.taskId);
+    tasks.set(p.taskId, p.key);
   }
   return { counts, tasks, sequence: recent.map((p) => p.key) };
 }

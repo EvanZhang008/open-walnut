@@ -49,7 +49,14 @@ interface Metric {
   partial?: (r: EngineCompareRow) => number;
   /** The tooltip of such a value, given that count. */
   partialNote?: (n: number) => string;
+  /** For a median: what it leaves out entirely (finished tasks with no usage recorded), as a tooltip. */
+  excluded?: (r: EngineCompareRow) => string | undefined;
+  /** Shown only when some column has it (a row that is all zeros says nothing). */
+  onlyWhenAny?: boolean;
 }
+
+const leftOutOfMedian = (r: EngineCompareRow) => (r.noUsageDone ?? 0) > 0
+  ? `${finishedWord(r.noUsageDone ?? 0)} with no usage recorded ${(r.noUsageDone ?? 0) === 1 ? 'is' : 'are'} left out of this median` : undefined;
 
 const noUsage = (r: EngineCompareRow) => r.noUsage ?? 0;
 /** None of a column's tasks has usage recorded: its cost is unknown, not $0. */
@@ -72,14 +79,15 @@ function taskCostNote(t: EngineCompareTask): string | undefined {
 const METRICS: Metric[] = [
   { id: 'done', label: 'Tasks finished', help: 'Completed in the period, counted under the engine and model that carried most of their cost (only the split\'s tasks: the engine it assigned).', value: (r) => r.done, show: (n) => String(n ?? 0) },
   { id: 'open', label: 'Still open', value: (r) => r.open, show: (n) => String(n ?? 0) },
+  { id: 'notstarted', label: 'Never started', help: 'Closed after a start that failed before any session ran: counted as an error, not as finished work.', value: (r) => r.notStarted ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
   { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true },
   { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: medianCostPartial,
-    partialNote: (n) => `${finishedWord(n)} leave out ${LEFT_OUT}: the median is a floor` },
+    partialNote: (n) => `${finishedWord(n)} leave out ${LEFT_OUT}: the median is a floor`, excluded: leftOutOfMedian },
   { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => (allUnknown(r) ? null : r.costUsd), show: (n) => (n === null ? '-' : money(n)), partial: totalPartial,
     partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
-    partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out` },
+    partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian },
   { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review" or "Reviewer"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
@@ -181,12 +189,12 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                   </tr>
                 </thead>
                 <tbody>
-                  {METRICS.map((m) => (
+                  {METRICS.filter((m) => !m.onlyWhenAny || data.rows.some((r) => (m.value(r) ?? 0) > 0)).map((m) => (
                     <tr key={m.id} data-metric={m.id}>
                       <td title={m.help}>{m.label}</td>
                       {data.rows.map((r) => (
                         <td key={r.key} className="num" data-best={best.get(m.id) === r.key || undefined}
-                          data-partial={(m.partial && m.partial(r) > 0) || undefined} title={m.partial && m.partial(r) > 0 ? m.partialNote?.(m.partial(r)) : undefined}>
+                          data-partial={(m.partial && m.partial(r) > 0) || undefined} title={(m.partial && m.partial(r) > 0 ? m.partialNote?.(m.partial(r)) : undefined) ?? m.excluded?.(r)}>
                           {m.show(m.value(r), r)}{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
                         </td>
                       ))}
@@ -196,7 +204,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
               </table>
             </div>
             <p className="usage-bd-foot">
-              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} Finished tasks count by the day they finished, open ones by the day they started. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
+              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} Finished tasks count by the day they finished, reopened ones by the day they first finished, open ones by the day they started. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
             </p>
             {!data.splitOnly && split?.on && (
               <p className="usage-bd-foot" data-testid="usage-engines-bias">Counting every task: a lead may have picked an engine by hand for some of them, so this is not a fair test. "Assigned by the split" is.</p>

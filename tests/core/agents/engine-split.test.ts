@@ -135,4 +135,14 @@ describe('picks', () => {
     // b never records (its start failed): three minutes on, only the recorded pick counts.
     expect(Object.fromEntries(await recentPickCounts(now + 180_000))).toEqual({ [a!.key]: 1 });
   });
+
+  it('a task picked again (its old entry was removed) counts its new pick before it is recorded', async () => {
+    const now = Date.now();
+    const yes = async () => true;
+    // The file still holds the task's old pick of an entry the split no longer lists.
+    await recordPick('claude:retired', 'again', new Date(now - 1000).toISOString(), now);
+    const first = await pickSplitEngine(two, yes, now, 'again');
+    const second = await pickSplitEngine(two, yes, now, 'other');
+    expect(second?.key).not.toBe(first?.key);
+  });
 });

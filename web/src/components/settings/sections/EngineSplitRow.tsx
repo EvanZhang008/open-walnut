@@ -37,7 +37,7 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
       <SettingsRow
         label="Share new tasks"
         help={on
-          ? 'Any task start that names no engine takes turns between these (not the chat composer, Main, leads, asks or routines). Usage & Costs compares them.'
+          ? 'Any task start that names no engine takes turns between these (not the chat composer, Main, leads, asks, routines, plugin tasks or reviewer subtasks). Usage & Costs compares them.'
           : 'Check two or more engines to spread new tasks between them; until then they all run on the default engine.'}
         error={pick.error}
         data-testid="engine-split-row"

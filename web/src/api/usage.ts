@@ -221,6 +221,10 @@ export interface EngineCompareRow {
   /** Of the finished tasks (the medians'), those whose cost or tokens are a floor. */
   partialCostDone?: number;
   partialTokensDone?: number;
+  /** Finished tasks with no usage recorded, left out of the medians. */
+  noUsageDone?: number;
+  /** Closed tasks that never ran a session. */
+  notStarted?: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched?: number;
   medianCostUsd: number | null;

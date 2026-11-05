@@ -118,8 +118,8 @@ describe('the engine split', () => {
     daemon.injectStartFault('mkfifo failed: injected')
     try {
       await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false }))
-        .rejects.toThrow(/the engine split's pick for this task.*retry with engine/)
-      // Both entries are Claude Code here, so it names no other engine to try.
+        // Both entries are Claude Code here, so it suggests another model rather than another engine.
+        .rejects.toThrow(/the engine split's pick for this task.*retry with model/)
     } finally { daemon.injectStartFault(null) }
     const first = (await task(placeholder.id)).engine_pick
     expect(first?.key).toBeTruthy()
