@@ -12,7 +12,8 @@
  * it the same way (2026-11-05 review: Edit opened it at the window's foot, the focus left on Edit
  * and the pinned Save across its first row): Edit opens it under the secret's own row, Add at the
  * list's end; its start lands right below the page bar, the focus on its first control, and Save
- * and Cancel sit at its own end, never pinned over a row of it.
+ * and Cancel sit at its own end, never pinned over a row of it. While a Save runs, Escape does what
+ * the disabled Cancel does (nothing), and a save's answer acts only on the edit it was made for.
  */
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FleetSecret, SecretChange } from '@/api/secrets';
@@ -94,6 +95,9 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(draftOf(null));
   const [busy, setBusy] = useState(false);
+  // Which edit is open: a save's answer closes or refuses only the edit it was made for
+  // (2026-11-05 review: a late answer closed, and emptied, a form opened after it began).
+  const editSeq = useRef(0);
   const [error, setErrorState] = useState<{ field: Field; text: string } | null>(null);
   const [deleting, setDeleting] = useState<{ name: string; busy: boolean } | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -148,10 +152,21 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   const isNew = editing === '';
   const serverHosts = isNew ? [] : state.secrets.find((s) => s.name === editing && !s.deletedAt)?.hosts ?? draft.opened;
   const shownHosts = isNew ? draft.hosts : mergeSecretHosts(serverHosts, draft.opened, draft.hosts);
-  const tick = (h: string, on: boolean) => setDraft({ ...draft, hosts: tickSecretHost(shownHosts, h, on), opened: [...serverHosts] });
+  // A refusal under a field goes as soon as the field is put right (or says the field's new
+  // reason); a refusal of the save itself stays, and the focus never moves (2026-11-05 review: a
+  // pasted value kept "Paste the value." and its red border until the next Save).
+  const edit = (next: Draft) => {
+    setDraft(next);
+    if (!error || error.field === 'form') return;
+    const now = secretRefusal(next, isNew, (n) => state.secrets.some((s) => s.name === n && !s.deletedAt));
+    if (now?.field === error.field) { if (now.text !== error.text) setErrorState(now); }
+    else setErrorState(null);
+  };
+  const tick = (h: string, on: boolean) => edit({ ...draft, hosts: tickSecretHost(shownHosts, h, on), opened: [...serverHosts] });
   // A host no longer configured but still ticked stays in the list, so it can be unticked.
   const hostKeys = [...new Set([LOCAL, ...Object.keys(hostLabels), ...shownHosts])];
   const open = (s: FleetSecret | null) => {
+    editSeq.current += 1;
     setEditing(s ? s.name : '');
     setDraft(draftOf(s));
     setError(null);
@@ -161,6 +176,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   // of the group after Cancel); the focus goes back to where the edit began.
   const close = (back = true) => {
     const was = editing;
+    editSeq.current += 1;
     setEditing(null);
     setDraft(draftOf(null));
     setError(null);
@@ -181,11 +197,12 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     };
     setBusy(true);
     setError(null);
+    const seq = editSeq.current;
     try {
       await data.save(name, change);
-      close();
+      if (seq === editSeq.current) close();
     } catch (err) {
-      setError(`Could not save: ${err instanceof Error ? err.message : String(err)}`);
+      if (seq === editSeq.current) setError(`Could not save: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -216,20 +233,20 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
       className="fleet-secret-editor"
       data-testid="secret-editor"
       ref={root}
-      onKeyDown={(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); close(); } }}
+      onKeyDown={(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); if (!busy) close(); } }}
     >
       {isNew && (
         <SettingsRow label="Name" htmlFor="secret-name" help="Lower case, like github-read: sessions find it at $WALNUT_SECRETS_DIR/<name>." error={error?.field === 'name' ? error.text : undefined} control={
           <input id="secret-name" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
-            aria-invalid={invalid('name')} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} data-testid="secret-name" />
+            aria-invalid={invalid('name')} value={draft.name} onChange={(e) => edit({ ...draft, name: e.target.value })} data-testid="secret-name" />
         } />
       )}
       <SettingsRow label={isNew ? 'Value' : `Value of ${editing}`} help={isNew ? 'Pasted once; Walnut never shows it again.' : 'Replace to rotate: every host gets the new value.'} error={error?.field === 'value' ? error.text : undefined} control={
-        <SecretInput value={draft.value} onChange={(v) => setDraft({ ...draft, value: v })} saved={!isNew} aria-label="Secret value" aria-invalid={invalid('value')} data-testid="secret-value" />
+        <SecretInput value={draft.value} onChange={(v) => edit({ ...draft, value: v })} saved={!isNew} aria-label="Secret value" aria-invalid={invalid('value')} data-testid="secret-value" />
       } />
       <SettingsRow label="What it is" htmlFor="secret-description" help="Sessions read this to know when to use it." control={
         <input id="secret-description" type="text" data-no-draft="secret" className="settings-input settings-input--short" value={draft.description}
-          onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="GitHub, read only" data-testid="secret-description" />
+          onChange={(e) => edit({ ...draft, description: e.target.value })} placeholder="GitHub, read only" data-testid="secret-description" />
       } />
       <SettingsRow label="Who gets it" help="Sessions on the hosts ticked here can use it; unticking one removes its copy there." />
       {hostKeys.map((h) => (
@@ -238,10 +255,10 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
       ))}
       <SettingsRow label="Environment name" htmlFor="secret-env" help="Optional: the variable a session on those hosts gets it as." error={error?.field === 'env' ? error.text : undefined} control={
         <input id="secret-env" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
-          aria-invalid={invalid('env')} value={draft.env} onChange={(e) => setDraft({ ...draft, env: e.target.value.toUpperCase() })} placeholder="GH_TOKEN" data-testid="secret-env" />
+          aria-invalid={invalid('env')} value={draft.env} onChange={(e) => edit({ ...draft, env: e.target.value.toUpperCase() })} placeholder="GH_TOKEN" data-testid="secret-env" />
       } />
       <SettingsCheckbox checked={draft.sessions} label="Give it to every new session on those hosts" data-testid="secret-sessions"
-        onChange={(on) => setDraft({ ...draft, sessions: on })} />
+        onChange={(on) => edit({ ...draft, sessions: on })} />
       <SettingsRow className="secret-editor-actions" error={error?.field === 'form' ? error.text : undefined} control={
         <>
           <SettingsButton variant="text" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>

@@ -169,3 +169,73 @@ test('secrets: add with hosts and env, the value never shown again, rotate, unti
   await group.screenshot({ path: `${SHOTS}/${engine}-2-after.png`, scale: 'css' })
   expect(errors).toEqual([])
 })
+
+test('secrets: a save that runs keeps its form, and a field put right drops its refusal', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  let secrets: Secret[] = []
+  const puts: string[] = []
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => { release = r })
+  await page.route('**/api/v1/secrets', (route) => route.fulfill({ json: { active: true, secrets } }))
+  await page.route('**/api/v1/secrets/*', async (route) => {
+    const name = decodeURIComponent(route.request().url().split('/').pop()!)
+    const body = route.request().postDataJSON() as Record<string, any>
+    puts.push(name)
+    await held
+    const next: Secret = { name, description: body.description, hosts: body.hosts, sessions: body.sessions, version: 1, createdAt: NOW, updatedAt: NOW, copies: {} }
+    secrets = [...secrets, next]
+    await route.fulfill({ json: { secret: next } })
+  })
+  await openRemoteHosts(page)
+  const group = page.getByTestId('fleet-secrets')
+  const editor = group.getByTestId('secret-editor')
+
+  // A refused Save says why under Value; pasting a value drops the refusal and its red border at
+  // once, with no Save, and the focus stays where the person is.
+  await group.getByTestId('secret-add').click()
+  await editor.getByTestId('secret-name').fill('first-one')
+  await editor.getByTestId('secret-save').click()
+  const value = editor.getByTestId('secret-value')
+  await expect(value).toHaveAttribute('aria-invalid', 'true')
+  await expect(editor).toContainText('Paste the value.')
+  await value.fill(VALUE)
+  await expect(value).not.toHaveAttribute('aria-invalid', 'true')
+  await expect(editor).not.toContainText('Paste the value.')
+  await expect(value).toBeFocused()
+  expect(puts).toEqual([])
+  // A name put wrong again after a refusal of Name says the new reason, still with no Save.
+  await editor.getByTestId('secret-name').fill('')
+  await editor.getByTestId('secret-save').click()
+  await expect(editor).toContainText('Give it a name, like github-read.')
+  await editor.getByTestId('secret-name').fill('Bad Name')
+  await expect(editor).toContainText('A name is lower case letters')
+  await editor.getByTestId('secret-name').fill('first-one')
+  await expect(editor).not.toContainText('A name is lower case letters')
+  await expect(editor.getByTestId('secret-name')).toBeFocused()
+
+  // Save is slow: Cancel is off, and Escape does what Cancel does (nothing); the form stays.
+  await editor.getByTestId('secret-save').click()
+  await expect(editor.getByTestId('secret-save')).toHaveText('Saving...')
+  await expect(editor.getByTestId('secret-cancel')).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
+  await expect(editor).toHaveCount(1)
+  await expect(editor.getByTestId('secret-name')).toHaveValue('first-one')
+  await expect(group.getByTestId('secret-add')).toHaveCount(0)
+  // The answer comes: the form closes, the secret is listed, and Add opens a fresh form that no
+  // late answer touches.
+  release()
+  await expect(editor).toHaveCount(0)
+  await expect(group.locator('[data-secret-name="first-one"]')).toBeVisible()
+  await group.getByTestId('secret-add').click()
+  await editor.getByTestId('secret-name').fill('second-one')
+  await page.waitForTimeout(500)
+  await expect(editor.getByTestId('secret-name')).toHaveValue('second-one')
+  await expect(editor.getByTestId('secret-save')).toHaveText('Save')
+  expect(puts).toEqual(['first-one'])
+  mkdirSync(SHOTS, { recursive: true })
+  await group.screenshot({ path: `${SHOTS}/slow-save-second-draft.png`, scale: 'css' })
+  expect(errors).toEqual([])
+})
