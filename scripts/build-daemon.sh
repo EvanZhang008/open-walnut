@@ -201,6 +201,7 @@ SOURCES=(
   src/lib/git-env.ts
   src/providers/path-ref-parse.ts
   src/providers/host-runtime-types.ts
+  src/providers/codex-outside-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

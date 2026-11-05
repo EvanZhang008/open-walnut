@@ -22,6 +22,8 @@ const ALLOWED: Record<string, string> = {
   // Hands the row to its host's attachments line (user-row-attachments.ts): only the browser side
   // panel answers, with the page selection the person attached, never a hint's own words.
   'components/sessions/SessionMessage.tsx': 'the side panel draws the selection the person attached',
+  // A mail rule's own hints (its matcher's notes per row, whenOfRows), not a message's.
+  'components/settings/sections/MailRuleEditor.tsx': 'mail rule hints, a local of whenOfRows',
 }
 
 /** The code of a file, its comments taken out (a comment may name `.hints`). */
