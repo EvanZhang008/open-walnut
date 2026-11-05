@@ -24,6 +24,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  ResolvedImage,
   resolveImageSrc,
   rebaseImageSrc,
   resolveImageCandidates,
@@ -95,6 +96,19 @@ describe('every image form a vault note can hold paints a fetchable src', () => 
   it('a src in another scheme is not a file to fetch', () => {
     expect(resolveImageSrc('obsidian://open?file=x', VAULT)).toBe('obsidian://open?file=x');
   });
+});
+
+it('the HTML form of a resolved picture sets loading before src (WebKit loads at src)', () => {
+  // 2026-11-05, macOS WebKit: TipTap builds this HTML in the page's document, and
+  // a missing picture was asked again on every note switch.
+  const render = (ResolvedImage.config.renderHTML as (this: unknown, p: { HTMLAttributes: Record<string, unknown> }) => [string, Record<string, unknown>])
+    .bind({ options: { HTMLAttributes: {}, notePath: NOTE }, storage: {}, editor: undefined });
+  const [tag, attrs] = render({ HTMLAttributes: { src: 'photo.jpeg', alt: 'p' } });
+  expect(tag).toBe('img');
+  const keys = Object.keys(attrs);
+  expect(keys.indexOf('loading')).toBeGreaterThanOrEqual(0);
+  expect(keys.indexOf('loading')).toBeLessThan(keys.indexOf('src'));
+  expect(attrs.src).toBe(resolveImageSrc('photo.jpeg', VAULT));
 });
 
 describe('a copied vault image pastes back as the path it was written with', () => {

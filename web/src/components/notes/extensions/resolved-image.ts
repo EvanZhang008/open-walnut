@@ -631,6 +631,10 @@ export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageSto
     // attributes (keeps parity with proxyImageSrcs, which also only marks the
     // images it actually rewrote).
     if (resolved === src) return ['img', attrs];
-    return ['img', { ...attrs, src: resolved, loading: 'lazy', 'data-lightbox-src': resolved }];
+    // `loading` before `src`: this is the clipboard / HTML form, built with the
+    // page's own document before it moves into an inert one, and WebKit starts
+    // loading the moment `src` is set (2026-11-05: a missing picture was asked
+    // again on every note switch). Lazy, it never loads off screen.
+    return ['img', { loading: 'lazy', ...attrs, src: resolved, 'data-lightbox-src': resolved }];
   },
 });
