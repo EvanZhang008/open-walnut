@@ -629,6 +629,9 @@ describe('ACP session record primitives', () => {
       project: 'Project',
       cwd: tmpDir,
       mode: 'default',
+      // The session chose Full Access in the adapter (its record's acpConfig.mode). The
+      // adapter's live value alone never allows all (acp-permission-posture.ts).
+      acpConfig: { mode: 'agent-full-access' },
       providerSessionId: 'provider-full-access',
       runtimeId: 'runtime-full-access',
     })

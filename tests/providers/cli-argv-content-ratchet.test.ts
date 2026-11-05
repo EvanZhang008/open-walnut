@@ -53,6 +53,7 @@ const READERS: Record<string, string> = {
   'src/core/sessions/spawn-prefix.ts': 'reads the inline prompt back from the registry args',
   'src/providers/daemon-source.ts': 'the smoke check of the rewrite it inlines',
   'src/providers/daemon-standalone.ts': 'reads the inline --settings env to pick the session PATH (walnutThroughGateway)',
+  'src/core/sessions/request-tag.ts': "adds the tag to a one-shot's inline --settings env inside startOneShot; that argv's spawn (oneshot-core) rewrites it to a file",
 }
 
 describe('every content flag in an argv reaches the CLI as a file', () => {
