@@ -10,7 +10,7 @@
  * entity refs in assistant messages.
  */
 import { test, expect } from '@playwright/test'
-import { openChatContent } from './chat-content-helpers'
+import { openChatContent, scrollChatToFirstReply } from './chat-content-helpers'
 
 test.describe('entity references in chat', () => {
   test('task-ref renders the CURRENT task title, not the AI label', async ({ page }) => {
@@ -88,10 +88,12 @@ test.describe('entity references in chat', () => {
   })
 
   test('clicking session pill opens the session in a home-page session column', async ({ page }) => {
-    await openChatContent(page)
+    const chat = await openChatContent(page)
 
-    const sessionPill = page.locator('a.session-link', { hasText: 'Plan: investigate auth module' })
+    const sessionPill = chat.locator('a.session-link', { hasText: 'Plan: investigate auth module' })
     await expect(sessionPill).toBeVisible({ timeout: 15_000 })
+    // The reply naming it is the first one, under the header's glass at the chat's end.
+    await scrollChatToFirstReply(page, chat, sessionPill)
 
     // Click the session pill. The dedicated /sessions page was removed:
     // on MainPage the ref opens the session panel inline; a /sessions?id=
@@ -132,10 +134,7 @@ test.describe('a task reference opened from chat keeps the task panel on its tab
       // The reply naming the task is the first one: scroll the chat back so it sits clear of the
       // panel's header, then click it as a user would.
       const pill = chat.locator('a.task-link[data-task-id="pw-task-001"]').first()
-      const hist = (await chat.locator('.session-history').boundingBox())!
-      await page.mouse.move(hist.x + hist.width / 2, hist.y + hist.height / 2)
-      for (let i = 0; i < 10; i++) await page.mouse.wheel(0, -1500)
-      await expect(pill).toBeVisible()
+      await scrollChatToFirstReply(page, chat, pill)
       await pill.click()
       const note = nav.getByTestId('todo-offview-note')
       await expect(note).toBeVisible()

@@ -19,3 +19,22 @@ export async function openChatContent(page: Page): Promise<Locator> {
   await expect(panel.locator('.session-history')).toContainText('Video recorded and delivered', { timeout: 20_000 })
   return panel
 }
+
+/**
+ * Scroll the chat back to its first reply with the mouse wheel, as a reader does, and wait
+ * until `target` sits clear of the panel's header. The header is glass over the top of the
+ * scroller: opened at its end, the first reply is partly under it, where a click lands on the
+ * header. A click's own scroll-into-view cannot bring it out: the chat follows its end, and
+ * a scroll no wheel, touch or key made is taken back to the end (SessionChatHistory's echo
+ * guard), so only the reader's input moves it.
+ */
+export async function scrollChatToFirstReply(page: Page, chat: Locator, target: Locator): Promise<void> {
+  const hist = (await chat.locator('.session-history').boundingBox())!
+  await page.mouse.move(hist.x + hist.width / 2, hist.y + hist.height / 2)
+  for (let i = 0; i < 10; i++) await page.mouse.wheel(0, -1500)
+  const header = chat.locator(':scope > .session-panel-header')
+  await expect.poll(async () => {
+    const [pill, head] = await Promise.all([target.boundingBox(), header.boundingBox()])
+    return !!pill && !!head && pill.y >= head.y + head.height
+  }, { timeout: 10_000 }).toBe(true)
+}
