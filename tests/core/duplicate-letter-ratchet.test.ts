@@ -31,6 +31,7 @@ const DIRECT_SENDS: Record<string, string> = {
   'src/core/usage/session-budget.ts': 'Walnut\'s budget notice, once by opKey',
   'src/core/hosts/host-exec-grant.ts': 'Walnut\'s host grant ask, external sender',
   'src/core/hosts/host-auth-alert.ts': 'Walnut\'s sign-in alert, once by opKey',
+  'src/core/hosts/ssh-cert-expiry-alert.ts': 'Walnut\'s SSH certificate alert, once by opKey',
   'src/core/hosts/local-network-alert.ts': 'Walnut\'s local network alert, once by opKey',
   'src/integrations/git-sync-secrets.ts': 'Walnut\'s secret-held notice, once by opKey',
 };
@@ -41,6 +42,7 @@ const REPLIES: Record<string, 'guarded' | string> = {
   'src/core/human-inbox/relay.ts': 'guarded',
   'src/core/human-inbox/away-thread.ts': 'a fold of a session\'s send: guarded when the send is (refuseDuplicate from the caller)',
   'src/core/plugins/server-api.ts': 'a plugin\'s reply in its own letter',
+  'src/core/hosts/ssh-cert-expiry-alert.ts': 'Walnut\'s one expired turn in its own certificate letter, once (expiredTold)',
 };
 
 function sources(dir: string): string[] {

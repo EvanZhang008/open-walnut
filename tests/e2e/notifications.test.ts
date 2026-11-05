@@ -276,6 +276,28 @@ describe('Notification feed API', () => {
     expect(JSON.stringify(history.messages)).not.toContain(error);
   });
 
+  it('a message held by an expired sign-in has no card of its own: the sign-in letter is the one card', async () => {
+    // 2026-11-05: one expired SSH certificate made 21 "Message couldn't be delivered" cards,
+    // one per session, beside the sign-in letter that already said what to do.
+    const loginIds = ['sess-login-expired-1', 'sess-login-expired-2']
+    for (const sessionId of loginIds) {
+      bus.emit(EventNames.SESSION_ERROR, {
+        sessionId,
+        error: 'Connection to devbox failed 42s ago: me@devbox: Permission denied\u2026 [walnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-11-05 03:04)]',
+        errorKind: 'delivery_failed' as const,
+      }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+    }
+    // Any other delivery failure still has its card (it also proves the events were handled).
+    const otherId = 'sess-delivery-other-e2e'
+    bus.emit(EventNames.SESSION_ERROR, {
+      sessionId: otherId, error: 'DaemonConnection not connected to devbox', errorKind: 'delivery_failed' as const,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === `error:session:${otherId}:delivery`))
+    await delay(100)
+    const feed = await getFeed()
+    for (const sessionId of loginIds) expect(feed.feed.some((n) => n.sessionId === sessionId)).toBe(false)
+  });
+
   it('folds repeated session errors into ONE record; the count grows only when the cause comes back', async () => {
     const sessionId = 'sess-runtime-error-e2e';
     // A runtime session error has no in-memory suppression window (unlike

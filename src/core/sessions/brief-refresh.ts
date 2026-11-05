@@ -17,8 +17,8 @@
  *    team is not stopped and it is not snoozed;
  *  - the request is not a test run on the real Walnut (the route answers those itself).
  * Its turn updates the Brief itself (brief_write) and tells the user in the chat only the Needs you
- * items that changed since the last refresh told it (new, reworded, gone; `told` on the record);
- * with none, it ends with the agent-ack line, so his chat does not repeat an unchanged list. The
+ * items that changed since the last refresh told it (new, asking something else, gone; `told` on
+ * the record; an ask in other words is no change); with none, it ends with the agent-ack line, so his chat does not repeat an unchanged list. The
  * page says "Updating" until the new letter lands (briefUpdating), never after a failed send. A
  * parked node comes back to its wait at that turn's end, clock included (task-wait-resume.ts).
  */
@@ -27,6 +27,7 @@ import type { Task } from '../types.js';
 import { agoWords, needsLineText, storedUserState } from '../user-status.js';
 import { briefFreshness, type BriefFreshness, type BriefRefreshRecord } from './brief-fresh.js';
 import { briefNeedsAsks } from './brief.js';
+import { sameAskReworded } from '../same-ask.js';
 
 /** At most one refresh turn per node in this long. */
 export const BRIEF_REFRESH_GAP_MS = 15 * 60_000;
@@ -82,24 +83,27 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
     ...(fresh.newAsks.length > 8 ? [`- and ${fresh.newAsks.length - 8} more new asks`] : []),
     ...needsLines(changes, name),
     changes.length
-      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, reworded, no longer needed), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
+      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, now asking something else, no longer needed), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
       : 'Nothing that needs the user changed since you last told him: do not repeat his Needs you list. Check what you must (task_get on a task above), update your Brief with brief_write, and end the turn with only the agent-ack line, <walnut-turn status="agent-ack"/>, so nothing new shows in his chat. This is a refresh: act on something only when it is yours to act on now.',
+    // 2026-11-04: three VPs each told the user "nothing changed, only reworded" at a refresh.
+    'When your Brief has no real change for the user (an ask in other words is no change), the agent-ack line is your whole answer: never tell him "no change" or "only reworded".',
   ];
   return lines.join('\n');
 }
 
-export interface NeedsChange { id: string; kind: 'new' | 'reworded' | 'gone'; ask: string }
+export interface NeedsChange { id: string; kind: 'new' | 'changed' | 'gone'; ask: string }
 
 /**
  * What needs the user changed since the last refresh told the node (2026-11-02 org review: a lead
  * repeated the same three asks at three refreshes with nothing changed). With no earlier note,
- * every ask is new. Pure.
+ * every ask is new. The same ask in other words is no change (sameAskReworded; 2026-11-04: three
+ * VPs each told the user "nothing changed, only reworded"). Pure.
  */
 export function needsChanges(now: Record<string, string>, told: Record<string, string> | undefined): NeedsChange[] {
   const out: NeedsChange[] = [];
   for (const [id, ask] of Object.entries(now)) {
     if (!told || !(id in told)) out.push({ id, kind: 'new', ask });
-    else if (told[id] !== ask) out.push({ id, kind: 'reworded', ask });
+    else if (told[id] !== ask && !sameAskReworded(told[id], ask)) out.push({ id, kind: 'changed', ask });
   }
   for (const [id, ask] of Object.entries(told ?? {})) if (!(id in now)) out.push({ id, kind: 'gone', ask });
   return out;
@@ -107,7 +111,7 @@ export function needsChanges(now: Record<string, string>, told: Record<string, s
 
 function needsLines(changes: readonly NeedsChange[], name: (id: string) => string): string[] {
   if (!changes.length) return [];
-  const word = { new: 'new', reworded: 'reworded', gone: 'no longer needs him' } as const;
+  const word = { new: 'new', changed: 'now asks something else', gone: 'no longer needs him' } as const;
   return [
     'Needs you, changed since you last told him:',
     ...changes.slice(0, 12).map((c) => `- ${name(c.id)}: ${word[c.kind]}${c.kind === 'gone' ? '' : `: "${c.ask}"`}`),

@@ -85,6 +85,7 @@ describe('every write that asks the user is checked', () => {
       'src/core/hosts/host-auth-alert.ts': 'Walnut\'s own letter: SSH sign-in expired, no task asks it',
       'src/core/hosts/host-exec-grant.ts': 'Walnut\'s own approval of a host command, no task\'s decision',
       'src/core/hosts/local-network-alert.ts': 'Walnut\'s own letter: macOS blocks the local network',
+      'src/core/hosts/ssh-cert-expiry-alert.ts': 'Walnut\'s own letter: the SSH certificate runs out, no task asks it',
       'src/core/org/morning-report.ts': 'a report the user asked for, not a decision',
       'src/core/plugins/server-api.ts': 'a plugin\'s letter (a plugin sender is never a task)',
       'src/core/usage/session-budget.ts': 'Walnut\'s own budget alert',

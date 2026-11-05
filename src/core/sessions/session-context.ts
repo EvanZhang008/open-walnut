@@ -227,6 +227,7 @@ export const BRIEF_LINE =
   + 'your teams did changes what the user should know, update it then with brief_write (edits for a few lines, content for '
   + 'the whole letter; brief_read shows it, what moved since and your team\'s live lists). Walnut reminds you every few '
   + 'messages and when your team moved since you wrote it; never write the Brief into your replies. '
+  + 'When a Brief refresh or reminder brings no real change (an ask in other words is none), answer with the agent-ack line only: never tell the user "no change". '
   + 'Three sections, always all three, in this order: "### Needs you" (what the user must decide or do), "### Working" (in progress) '
   + 'and "### Waiting / snoozed"; each task goes in the section of its own live status. '
   + 'One thing per line, each line starting with the <task-ref/> of the task it is about (your own task for your own work; '

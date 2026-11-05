@@ -18,7 +18,7 @@ import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory, actionOf,
-  systemIssueCount, errorsBadgeCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
+  systemIssueCount, errorsBadgeCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount, mergeLoadedFeed,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -888,5 +888,46 @@ describe('actionOf (wire record → card button)', () => {
       action: { label: 'Sign in', kind: 'navigate', to: '/settings#plugin-store' },
     });
     expect(linkTargetOf(card)).toBe('/settings#plugin-store');
+  });
+});
+
+describe('mergeLoadedFeed: a feed load drops the error cards the server let go', () => {
+  // 2026-11-05: the server trimmed 21 delivery cards off its store; the page kept the copies
+  // it was sent live, and nothing could ever clear them.
+  const err = (key: string, over: Partial<Notification> = {}) => n({ kind: 'operation-error', severity: 'error', dedupKey: key, persistent: true, fromServer: true, ...over });
+  const none = new Set<string>();
+  const held = (...entries: Notification[]) => new Map(entries.map((e) => [e.dedupKey, e] as const));
+
+  it('a server card the page held when the load began and the server no longer has is gone', () => {
+    const gone = err('error:gone');
+    const kept = err('error:kept');
+    const out = mergeLoadedFeed([gone, kept], [err('error:kept')], { heldAtStart: held(gone, kept), dismissed: none });
+    expect(out.map(x => x.dedupKey)).toEqual(['error:kept']);
+  });
+
+  it('a card that arrived, or came back, while the load was in flight stays (the snapshot may predate it)', () => {
+    expect(mergeLoadedFeed([err('error:new')], [], { heldAtStart: held(), dismissed: none }).map(x => x.dedupKey)).toEqual(['error:new']);
+    // Held at the start, then the host failed again under the same key: a new entry, kept.
+    const before = err('error:host', { timestamp: 1 });
+    const again = err('error:host', { timestamp: 1, lastTimestamp: 3 });
+    expect(mergeLoadedFeed([again], [], { heldAtStart: held(before), dismissed: none }).map(x => x.dedupKey)).toEqual(['error:host']);
+  });
+
+  it('an offline copy (the companion while the Mac is away) proves nothing gone', () => {
+    const card = err('error:live');
+    expect(mergeLoadedFeed([card], [], { heldAtStart: held(card), dismissed: none, offline: true }).map(x => x.dedupKey)).toEqual(['error:live']);
+  });
+
+  it("a card this page made itself, and the server's other kinds, stay", () => {
+    const local = err('local-failure', { fromServer: undefined });
+    const perm = n({ kind: 'permission', dedupKey: 'perm:r1', persistent: true, fromServer: true });
+    const out = mergeLoadedFeed([local, perm], [], { heldAtStart: held(local, perm), dismissed: none });
+    expect(out.map(x => x.dedupKey).sort()).toEqual(['local-failure', 'perm:r1']);
+  });
+
+  it('read stays sticky and a dismissed key stays out, as before', () => {
+    const a = err('error:a', { read: false });
+    const out = mergeLoadedFeed([a], [err('error:a', { read: true }), err('error:b')], { heldAtStart: held(a), dismissed: new Set(['error:b']) });
+    expect(out.map(x => [x.dedupKey, x.read])).toEqual([['error:a', true]]);
   });
 });

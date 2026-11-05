@@ -34,7 +34,9 @@ import {
   overdueOpenRequests,
   overdueRequests,
   reminderDueAt,
+  requestWaitMs,
   settleNotified,
+  waitWhileActive,
   withdrawRequest,
   type NoticeLastMessage,
   type SessionRequest,
@@ -158,6 +160,100 @@ export interface FallbackContext {
   handedOn?: EnvelopeHandedOn[];
   /** The message never reached the target, for this reason (its row was parked): said instead of any quote. */
   notDelivered?: string;
+  /** Collects the notices instead of sending each (the deadline sweep: one message per asker, NoticeBatch). */
+  batch?: NoticeBatch;
+}
+
+/** One notice the sweep collected: where it goes, its text, and whether it rides the asker's next message. */
+interface BatchedNotice {
+  origin: import('../types.js').SessionRecord;
+  text: string;
+  hold: boolean;
+  requestIds: string[];
+}
+
+/**
+ * The notices of one sweep, sent per asker as ONE message (2026-11-04: a VP read a separate
+ * "has not replied by your deadline" notice per task, several due in the same minute).
+ */
+export class NoticeBatch {
+  private readonly items: BatchedNotice[] = [];
+  add(item: BatchedNotice): void { this.items.push(item); }
+
+  /** Send what was collected: one message per asker session. Returns how many went out. */
+  async flush(): Promise<number> {
+    const bySession = new Map<string, BatchedNotice[]>();
+    for (const i of this.items) bySession.set(i.origin.claudeSessionId, [...(bySession.get(i.origin.claudeSessionId) ?? []), i]);
+    this.items.length = 0;
+    let sent = 0;
+    for (const [sid, group] of bySession) {
+      const ids = group.flatMap((g) => g.requestIds);
+      const text = group.map((g) => g.text).join('\n\n');
+      try {
+        if (group.every((g) => g.hold)) {
+          // Past its deadline nothing came back: background, riding the asker's next message (held-notices.ts).
+          const { holdNotice } = await import('./held-notices.js');
+          holdNotice(sid, `request-timeout:${ids.join(',')}`, text, {
+            validIf: async () => (await Promise.all(ids.map(requestStillOpen))).some(Boolean),
+          });
+        } else {
+          const { deliverToSession } = await import('./session-send-core.js');
+          await deliverToSession(group[0].origin, {
+            busText: text, enqueueText: text, source: 'walnut-notify', taskId: group[0].origin.taskId, endsWait: true,
+          });
+        }
+        sent++;
+        log.session.info('request deadline notices sent as one message', {
+          toSessionId: sid, requestIds: ids, notices: group.length, held: group.every((g) => g.hold),
+        });
+      } catch (err) {
+        log.session.error('request deadline notices failed after settle', {
+          toSessionId: sid, requestIds: ids, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return sent;
+  }
+}
+
+/** Why a target counts as at work on an overdue request ({@link targetAtWork}). */
+export type TargetAtWork = 'a turn running' | 'an answer just sent' | 'a status report of working';
+
+/**
+ * Whether the target of an overdue request is plainly at work, within its last wait (2026-11-04:
+ * a VP read about ten "has not replied by your deadline, check its progress" notices overnight
+ * about tasks in the middle of their work, and acked each). A turn running now, an answer it sent
+ * any asker, or a status report of working since then. A task that is COMPLETE, or a turn stopped
+ * on a permission prompt, is not at work. Never throws: unknown is not at work, so the asker hears.
+ */
+export async function targetAtWork(
+  r: SessionRequest, rows: readonly SessionRequest[], now = Date.now(),
+): Promise<TargetAtWork | null> {
+  try {
+    const since = Math.max(Date.parse(r.createdAt) || 0, now - requestWaitMs(r));
+    let task: { phase?: string; session_id?: string | null; status_report?: { state?: string; at?: string } } | undefined;
+    if (r.toTaskId) {
+      const { listTasksByIds } = await import('../task-manager.js');
+      task = (await listTasksByIds([r.toTaskId]).catch(() => []))[0];
+      if (task?.phase === 'COMPLETE') return null;
+    }
+    const sid = r.toSessionId ?? task?.session_id ?? undefined;
+    if (sid) {
+      const { getSessionByClaudeId } = await import('../session-tracker.js');
+      const rec = await getSessionByClaudeId(sid).catch(() => null);
+      // Stopped on a permission prompt: it waits on a person, whatever it did before.
+      if (rec?.pendingPermission) return null;
+      if (rec?.process_status === 'running') return 'a turn running';
+    }
+    const answered = rows.some((x) => x.id !== r.id && x.status === 'replied' && !!x.settledAt && Date.parse(x.settledAt) >= since
+      && ((!!r.toTaskId && x.toTaskId === r.toTaskId) || (!!r.toSessionId && x.toSessionId === r.toSessionId)));
+    if (answered) return 'an answer just sent';
+    const report = task?.status_report;
+    if (report?.state === 'working' && !!report.at && Date.parse(report.at) >= since) return 'a status report of working';
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -364,6 +460,10 @@ async function deliverSettled(
       const text = buildUndeliveredNotification(settled, {
         title: targetTitle, sessionId: request.toSessionId, taskId: request.toTaskId,
       }, undelivered.why, undelivered.stillQueued, alsoUnanswered);
+      if (context.batch) {
+        context.batch.add({ origin, text, hold: false, requestIds: [request.id, ...also.map((r) => r.id)] });
+        return true;
+      }
       const { deliverToSession } = await import('./session-send-core.js');
       const { delivery } = await deliverToSession(origin, {
         busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true,
@@ -400,6 +500,10 @@ async function deliverSettled(
     // Every other outcome is the answer the asker waits for.
     const askerParked = outcome === 'timeout' && !!origin.taskId
       && (await (await import('../task-manager.js')).getTask(origin.taskId).catch(() => null))?.phase === 'WAITING';
+    if (context.batch) {
+      context.batch.add({ origin, text, hold: outcome === 'timeout' && !askerParked, requestIds: [request.id, ...also.map((r) => r.id)] });
+      return true;
+    }
     if (outcome === 'timeout' && !askerParked) {
       const { holdNotice } = await import('./held-notices.js');
       holdNotice(origin.claudeSessionId, `request-timeout:${request.id}`, text, { validIf: () => requestStillOpen(request.id) });
@@ -441,11 +545,35 @@ let sweeping: Promise<number> | undefined;
 export function sweepSessionRequests(): Promise<number> {
   sweeping ??= (async () => {
     try {
-      const overdue = await overdueRequests();
-      let notified = 0;
+      const now = Date.now();
+      const overdue = await overdueRequests(now);
+      const { listAllSessionRequests } = await import('../session-requests.js');
+      const rows = overdue.length ? await listAllSessionRequests().catch(() => overdue) : overdue;
+      // A target plainly at work waits one more of its waits instead of being chased.
+      const due: SessionRequest[] = [];
       for (const request of overdue) {
-        if (await notifyRequesterFallback(request, 'timeout')) notified++;
+        const why = await targetAtWork(request, rows, now);
+        const moved = why ? await waitWhileActive(request.id, why, now) : null;
+        if (moved) {
+          log.session.info('request past its deadline, target at work: waits longer, asker not told', {
+            requestId: request.id, toTaskId: request.toTaskId, why, until: new Date(moved.deadlineAt).toISOString(), times: moved.activeWaits,
+          });
+          continue;
+        }
+        due.push(request);
       }
+      // One message per asker: its requests grouped by target (one notice each), sent together.
+      let notified = 0;
+      const batch = new NoticeBatch();
+      const groups = new Map<string, SessionRequest[]>();
+      for (const r of due) {
+        const key = `${r.fromSessionId}\u0000${r.toTaskId ?? r.toSessionId ?? r.id}`;
+        groups.set(key, [...(groups.get(key) ?? []), r]);
+      }
+      for (const group of groups.values()) {
+        if (await notifyRequesterGroup(group, 'timeout', { batch })) notified += group.length;
+      }
+      await batch.flush();
       await remindOverdue().catch((err) => log.session.warn('overdue reminders failed', {
         error: err instanceof Error ? err.message : String(err),
       }));
@@ -474,6 +602,8 @@ export async function remindOverdue(now = Date.now()): Promise<number> {
     && (!IS_EPHEMERAL || Date.parse(r.overdueAt) >= PROCESS_STARTED_AT));
   const byAsker = new Map<string, SessionRequest[]>();
   for (const r of due) byAsker.set(r.fromSessionId, [...(byAsker.get(r.fromSessionId) ?? []), r]);
+  const { listAllSessionRequests } = await import('../session-requests.js');
+  const allRows = due.length ? await listAllSessionRequests().catch(() => due) : due;
   let sent = 0;
   for (const [askerSid, rows] of byAsker) {
     if (await askerTaskIsComplete(askerSid)) continue;
@@ -492,6 +622,8 @@ export async function remindOverdue(now = Date.now()): Promise<number> {
         } catch { /* named generically */ }
       }
       if (target?.phase === 'COMPLETE') continue;
+      // Its target is at work: the reminder waits for a quiet sweep (or the retention ends it).
+      if (await targetAtWork(request, allRows, now)) continue;
       const claimed = await claimReminder(request.id, now);
       if (!claimed) continue;
       items.push({ request: claimed, target: {

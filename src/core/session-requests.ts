@@ -16,7 +16,7 @@
  * the notifications.json pattern: one bounded JSON file under WALNUT_HOME.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
@@ -48,6 +48,28 @@ export const IMPLICIT_REPLY_TIMEOUT_SECS = 6 * 60 * 60;
 /** Deadline bounds — a sweep tick is 60s, so sub-minute deadlines are noise. */
 export const MIN_REPLY_TIMEOUT_SECS = 60;
 export const MAX_REPLY_TIMEOUT_SECS = 24 * 60 * 60;
+
+/**
+ * What kind of work a request asks for, which sets its default deadline (2026-11-04, the org
+ * reflection: of 40 overdue notices a VP got in a day, most were 6h fuses on "read your task and
+ * do it end to end" starts and on asks to leads, whose answers take a whole job or a team's round):
+ *   - 'send': a message to a task about work it is doing (1h asked, 6h by default);
+ *   - 'lead': a message to a lead or Main, whose answer waits on its teams;
+ *   - 'start': starting a task, whose answer is the whole task done.
+ */
+export type ReplyKind = 'send' | 'lead' | 'start';
+export const REPLY_TIMEOUT_BY_KIND: Readonly<Record<ReplyKind, { asked: number; implicit: number }>> = {
+  send: { asked: DEFAULT_REPLY_TIMEOUT_SECS, implicit: IMPLICIT_REPLY_TIMEOUT_SECS },
+  lead: { asked: 2 * 60 * 60, implicit: 12 * 60 * 60 },
+  start: { asked: 12 * 60 * 60, implicit: 12 * 60 * 60 },
+};
+
+/**
+ * An overdue request whose target is plainly at work (a turn running, an answer it just sent,
+ * a report of working) waits one more of its own waits instead of telling its asker to check,
+ * up to this many of its waits from the ask (and never past MAX_REPLY_TIMEOUT_SECS).
+ */
+export const ACTIVE_WAIT_FACTOR = 4;
 
 export type SessionRequestStatus =
   | 'pending'
@@ -113,6 +135,52 @@ export interface SessionRequest {
   /** The target queue row (`qm-…`) the asked message went out as, so a read of the request can
    *  say whether it still waits to go in and a sender can send it now (additive, 2026-10). */
   messageId?: string;
+  /** The wait it was asked with (ms), kept once an active target moved its deadline (waitWhileActive). */
+  waitMs?: number;
+  /** How many times its deadline moved because its target was at work, and the last reason. */
+  activeWaits?: number;
+  activeWhy?: string;
+  /**
+   * The answer that settled it, as a fingerprint (answerDigest), and the asker session it was
+   * delivered to: a later answer with the same words from the same task to the same asker is
+   * the same answer, delivered once (2026-11-04: a worker answered its lead's two open requests
+   * with one text each round, and the lead read every answer twice). Additive, 2026-11.
+   */
+  answerDigest?: string;
+  deliveredTo?: string;
+  /** When that answer went out (ISO): the window SAME_ANSWER_WINDOW_MS counts from it. */
+  answeredAt?: string;
+  /** Settled by an answer already delivered for this request (sameAnswerOf): its asker read it once. */
+  sameAnswerAs?: string;
+}
+
+/** How long an answer already delivered makes the same words to the same asker a repeat: one
+ *  round of answers (the 2026-11-04 pairs came seconds apart), not the same short words hours later. */
+export const SAME_ANSWER_WINDOW_MS = 30 * 60 * 1000;
+
+/** The fingerprint of an answer's words: spacing does not make two answers different. */
+export function answerDigest(text: string): string {
+  return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 24);
+}
+
+/** An answer about to settle a request: its fingerprint, where it goes, and who gives it. */
+export interface AnswerStamp {
+  digest: string;
+  deliveredTo: string;
+  by: { sessionId: string; taskId?: string };
+}
+
+/**
+ * The request an answer with these words already went to this asker for, from the same task,
+ * within SAME_ANSWER_WINDOW_MS (the row itself counts: an answer repeated on one request).
+ * Undefined when the answer is new.
+ */
+export function sameAnswerOf(rows: readonly SessionRequest[], stamp: AnswerStamp, now = Date.now()): SessionRequest | undefined {
+  // Any status: a late answer to a request a turn end already settled (notified) went out too.
+  return rows.find((r) => !r.forwardedTo && !r.sameAnswerAs
+    && r.answerDigest === stamp.digest && r.deliveredTo === stamp.deliveredTo
+    && (r.toSessionId === stamp.by.sessionId || (!!stamp.by.taskId && r.toTaskId === stamp.by.taskId))
+    && !!r.answeredAt && now - Date.parse(r.answeredAt) <= SAME_ANSWER_WINDOW_MS);
 }
 
 /** After the work a request was handed on to comes back, the asker's wait lasts this much longer. */
@@ -312,9 +380,10 @@ function prune(requests: SessionRequest[]): SessionRequest[] {
  * not because anyone asked. It changes nothing but the fallback fuse; a caller
  * that names its own timeout is honoured either way.
  */
-export function clampReplyTimeoutSecs(secs: number | undefined, implicit = false): number {
+export function clampReplyTimeoutSecs(secs: number | undefined, implicit = false, kind: ReplyKind = 'send'): number {
   if (typeof secs !== 'number' || !Number.isFinite(secs)) {
-    return implicit ? IMPLICIT_REPLY_TIMEOUT_SECS : DEFAULT_REPLY_TIMEOUT_SECS;
+    const by = REPLY_TIMEOUT_BY_KIND[kind] ?? REPLY_TIMEOUT_BY_KIND.send;
+    return implicit ? by.implicit : by.asked;
   }
   return Math.min(MAX_REPLY_TIMEOUT_SECS, Math.max(MIN_REPLY_TIMEOUT_SECS, Math.floor(secs)));
 }
@@ -333,6 +402,8 @@ export async function createSessionRequest(input: {
   fromTaskId?: string;
   /** Requests the asker owes and hands on with this one (`hands_on`, linkHandoffs). */
   handsOn?: readonly string[];
+  /** What it asks for: sets the default deadline (REPLY_TIMEOUT_BY_KIND). */
+  kind?: ReplyKind;
 }): Promise<SessionRequest & { handOnRefused?: HandOnRefusal[] }> {
   const request: SessionRequest = {
     id: `rq-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -342,7 +413,7 @@ export async function createSessionRequest(input: {
     preview: kit.requestPreview(input.text),
     status: 'pending',
     createdAt: new Date().toISOString(),
-    deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit) * 1000,
+    deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit, input.kind) * 1000,
   };
   let stored = request;
   let refused: HandOnRefusal[] = [];
@@ -399,6 +470,7 @@ async function settle(
   outcome?: SessionRequestOutcome,
   reply?: SessionRequest['reply'],
   forwardedTo?: string,
+  answer?: AnswerStamp,
 ): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
@@ -413,6 +485,7 @@ async function settle(
       ...(reply ? { reply } : {}),
       ...(forwardedTo ? { forwardedTo } : {}),
       ...(status === 'expired' ? { overdueAt: new Date().toISOString() } : {}),
+      ...stampAnswer(requests, id, answer),
     };
     requests[idx] = settled;
     // A request this one carried has its work back: its wait shrinks to its target's own answer.
@@ -422,21 +495,47 @@ async function settle(
   return settled;
 }
 
-export async function settleReplied(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string): Promise<SessionRequest | null> {
-  return settle(id, 'replied', undefined, reply ?? undefined, forwardedTo);
+/** The answer fields of a row it settles: its fingerprint, and the earlier request it repeats, checked in the same write. */
+function stampAnswer(requests: readonly SessionRequest[], id: string, answer: AnswerStamp | undefined): Partial<SessionRequest> {
+  if (!answer) return {};
+  const same = sameAnswerOf(requests.filter((r) => r.id !== id), answer);
+  // The answer's own fingerprint only once it went out (noteAnswerDelivered): a failed delivery
+  // retried with the same words must still be delivered, not taken for a repeat.
+  return same ? { sameAnswerAs: same.id } : {};
+}
+
+/**
+ * The answer to `id` with these words reached its asker's session (performReply, after the
+ * delivery), whatever settled the request: a later answer with the same words is a repeat of it.
+ */
+export async function noteAnswerDelivered(id: string, stamp: Pick<AnswerStamp, 'digest' | 'deliveredTo'>, now = Date.now()): Promise<void> {
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1) return undefined;
+    requests[idx] = { ...requests[idx], answerDigest: stamp.digest, deliveredTo: stamp.deliveredTo, answeredAt: new Date(now).toISOString() };
+    return { requests };
+  });
+}
+
+export async function settleReplied(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp): Promise<SessionRequest | null> {
+  return settle(id, 'replied', undefined, reply ?? undefined, forwardedTo, answer);
 }
 
 /**
  * A reply to an OVERDUE request (status 'expired'): it is answered now, so it leaves every
  * "overdue, still open" list. Exactly once, like settle: null when it was not overdue.
  */
-export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string): Promise<SessionRequest | null> {
+export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
     if (idx === -1 || requests[idx].status !== 'expired') return undefined;
-    settled = { ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: 'expired', ...(reply ? { reply } : {}), ...(forwardedTo ? { forwardedTo } : {}) };
+    settled = {
+      ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: 'expired',
+      ...(reply ? { reply } : {}), ...(forwardedTo ? { forwardedTo } : {}), ...stampAnswer(requests, id, answer),
+    };
     requests[idx] = settled;
     return { requests };
   });
@@ -455,6 +554,8 @@ export async function overdueOpenRequests(now = Date.now()): Promise<SessionRequ
 /** When an overdue request's one reminder is due: twice its own wait, counted from the ask. */
 export function reminderDueAt(r: SessionRequest): number {
   const asked = Date.parse(r.createdAt);
+  // A wait its active target moved counts as it ended: the reminder is one more wait after it went overdue.
+  if (r.activeWaits && r.overdueAt) return Date.parse(r.overdueAt) + requestWaitMs(r);
   const wait = (r.ownDeadlineAt ?? r.deadlineAt) - asked;
   return asked + 2 * Math.max(wait, MIN_REPLY_TIMEOUT_SECS * 1000);
 }
@@ -655,6 +756,38 @@ export async function importOfflineRequest(row: SessionRequest): Promise<boolean
     return { requests: prune(requests) };
   });
   return changed;
+}
+
+/** The wait a request was asked with (ms): before any hand-off or active target moved it. */
+export function requestWaitMs(r: SessionRequest): number {
+  if (typeof r.waitMs === 'number' && r.waitMs > 0) return r.waitMs;
+  const asked = Date.parse(r.createdAt);
+  return Math.max(MIN_REPLY_TIMEOUT_SECS * 1000, (r.ownDeadlineAt ?? r.deadlineAt) - (Number.isFinite(asked) ? asked : 0));
+}
+
+/**
+ * Its target is at work (`why`): a pending request past its deadline waits one more of its own
+ * waits, at most ACTIVE_WAIT_FACTOR of them from the ask and never past MAX_REPLY_TIMEOUT_SECS.
+ * Atomic; returns the row with its new deadline, or null when it is no longer pending or the
+ * longest wait is reached (then its asker hears, as before).
+ */
+export async function waitWhileActive(id: string, why: string, now = Date.now()): Promise<SessionRequest | null> {
+  let moved: SessionRequest | null = null;
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    const r = requests[idx];
+    if (!r || r.status !== 'pending' || r.deadlineAt > now) return undefined;
+    const wait = requestWaitMs(r);
+    const asked = Date.parse(r.createdAt);
+    const cap = (Number.isFinite(asked) ? asked : now) + Math.min(MAX_REPLY_TIMEOUT_SECS * 1000, ACTIVE_WAIT_FACTOR * wait);
+    const next = Math.min(now + wait, cap);
+    if (next <= now) return undefined;
+    moved = { ...r, deadlineAt: next, waitMs: wait, activeWaits: (r.activeWaits ?? 0) + 1, activeWhy: why };
+    requests[idx] = moved;
+    return { requests };
+  });
+  return moved;
 }
 
 /** Pending requests past their deadline (the sweeper's query). */

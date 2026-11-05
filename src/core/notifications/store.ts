@@ -303,25 +303,42 @@ async function readStoreOrNull(): Promise<NotificationsStore | null> {
 }
 
 /**
- * Trim the feed to MAX_NOTIFICATIONS, evicting ordinary records before letters.
+ * Open error cards kept however many letters the feed holds (the newest ones; more than
+ * this many open at once is a storm, and the rest of a storm is ordinary).
+ */
+export const OPEN_ERROR_RESERVE = 50;
+
+/**
+ * Trim the feed to MAX_NOTIFICATIONS, evicting ordinary records before letters,
+ * and letters before the open error cards.
  *
  * Plain notifications are EVENTS: losing the 201st cron line off the tail is the
  * point of a bounded feed. A letter envelope points at a document the human is
  * expected to read, and an error storm can produce 200 records in minutes — with
  * a flat tail-slice that storm would silently push the human's inbox rows out of
- * the feed. So letters are kept while any ordinary record is still droppable;
- * only letters overflowing the cap ON THEIR OWN fall back to the tail rule.
- * (With no letters in the feed this is byte-for-byte the old `slice(-MAX)`.)
+ * the feed. So letters are kept while any ordinary record is still droppable.
+ *
+ * An OPEN error card (operation-error, not resolved) is a condition, not an event:
+ * its recovery finds it here and retires it. 2026-11-05: the feed held 200 letter
+ * envelopes, every new error card was trimmed off in the same write that added it,
+ * the browser kept the copy it was sent live, and no recovery could ever reach it
+ * (21 "Message couldn't be delivered" cards stayed after the hosts were back). So the
+ * newest OPEN_ERROR_RESERVE open cards are kept ahead of letters; only letters past
+ * what is left fall back to the tail rule.
+ * (With no letters and no open errors this is byte-for-byte the old `slice(-MAX)`.)
  */
 function capNotifications(records: NotificationRecord[]): NotificationRecord[] {
+  const isOpenError = (n: NotificationRecord) => n.kind === 'operation-error' && !n.resolved;
+  const reserved = new Set(records.filter(isOpenError).slice(-OPEN_ERROR_RESERVE));
   const letters = records.filter(n => n.kind === 'letter');
-  if (letters.length === 0) return records.slice(-MAX_NOTIFICATIONS);
-  const keepOthers = Math.max(0, MAX_NOTIFICATIONS - letters.length);
-  const others = records.filter(n => n.kind !== 'letter');
-  // slice(-0) returns the WHOLE array, so the zero case has to be explicit.
-  const kept = new Set(keepOthers === 0 ? [] : others.slice(-keepOthers));
-  const trimmed = records.filter(n => n.kind === 'letter' || kept.has(n));
-  return trimmed.length > MAX_NOTIFICATIONS ? trimmed.slice(-MAX_NOTIFICATIONS) : trimmed;
+  if (letters.length === 0 && reserved.size === 0) return records.slice(-MAX_NOTIFICATIONS);
+  const keepLetters = Math.min(letters.length, MAX_NOTIFICATIONS - reserved.size);
+  // slice(-0) returns the WHOLE array, so the zero cases have to be explicit.
+  const kept = new Set([...reserved, ...(keepLetters === 0 ? [] : letters.slice(-keepLetters))]);
+  const keepOthers = MAX_NOTIFICATIONS - kept.size;
+  const others = records.filter(n => !kept.has(n) && n.kind !== 'letter');
+  for (const n of keepOthers <= 0 ? [] : others.slice(-keepOthers)) kept.add(n);
+  return records.filter(n => kept.has(n));
 }
 
 const storeWritten = new Set<() => void>();

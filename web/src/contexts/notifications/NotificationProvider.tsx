@@ -34,7 +34,7 @@ import {
   type Notification, type NotificationInput,
   TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
-import { effectiveTs, attentionBadgeCount, actionOf } from './notification-model';
+import { attentionBadgeCount, actionOf, mergeLoadedFeed } from './notification-model';
 import { wireActionsOf } from './notification-actions';
 import { useQuietState } from './quiet';
 import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-model';
@@ -388,41 +388,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEvent('_ws:reconnected', () => setFeedEpoch((e) => e + 1));
   useEffect(() => {
     const ac = new AbortController();
+    // What the page holds as the load begins: a card of it the server no longer has is gone there.
+    const heldAtStart = new Map(feedRef.current.map(n => [n.dedupKey, n] as const));
     fetch('/api/notifications', { signal: ac.signal })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((data: { feed: FeedRecord[]; unreadCount: number }) => {
+      .then((data: { feed: FeedRecord[]; unreadCount: number; offline?: boolean }) => {
         const loaded: Notification[] = (data.feed ?? []).map(r => ({
           id: r.id, kind: r.kind, severity: r.severity, title: r.title,
-          body: r.body, timestamp: r.timestamp, persistent: true, read: r.read,
+          body: r.body, timestamp: r.timestamp, persistent: true, read: r.read, fromServer: true,
           dedupKey: r.dedupKey, sessionId: r.sessionId, taskId: r.taskId,
           resolved: r.resolved,
           ...(actionOf(r) ? { action: actionOf(r) } : {}),
           ...enrichmentOf(r),
         }));
-        // Merge with anything that arrived live before the fetch resolved. Live
-        // entries (prev) win on identity so a stale server snapshot can't stomp a
-        // fresh one — but read=true must be sticky: a live entry always carries
-        // read=false, so if the server already marked this key read (e.g. another
-        // tab opened the panel), OR it together so we don't resurrect the unread
-        // badge for something already seen. Keys dismissed while the fetch was in
-        // flight stay dismissed (the server delete may have landed after this
-        // snapshot was taken).
-        setFeed(prev => {
-          const byKey = new Map<string, Notification>();
-          for (const n of loaded) byKey.set(n.dedupKey, n);
-          for (const n of prev) {
-            const server = byKey.get(n.dedupKey);
-            // A prompt answered elsewhere while this tab slept: the server's stamp wins.
-            const resolved = n.resolved ?? server?.resolved;
-            byKey.set(n.dedupKey, server ? { ...n, read: n.read || (server.read ?? false), ...(resolved ? { resolved } : {}) } : n);
-          }
-          return [...byKey.values()]
-            .filter(n => !dismissedKeys.current.has(n.dedupKey))
-            // effectiveTs, not timestamp: a folded recurring error keeps its
-            // first-seen timestamp, so sorting on that would sink a still-firing
-            // error below entries that stopped happening hours ago.
-            .sort((a, b) => effectiveTs(a) - effectiveTs(b));
-        });
+        // Merged with what arrived live meanwhile (mergeLoadedFeed says how).
+        setFeed(prev => mergeLoadedFeed(prev, loaded, { heldAtStart, dismissed: dismissedKeys.current, offline: data.offline === true }));
         setLoaded(true);
       })
       .catch(err => {
@@ -524,6 +504,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       body: r.body,
       dedupKey: r.dedupKey,
       persistent: true,
+      fromServer: true,
       ...(r.timestamp ? { timestamp: r.timestamp } : {}),
       ...(r.sessionId ? { sessionId: r.sessionId } : {}),
       ...(r.taskId ? { taskId: r.taskId } : {}),
@@ -568,6 +549,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...(r.body !== undefined ? { body: r.body } : {}),
       timestamp: r.timestamp ?? base?.timestamp ?? Date.now(),
       persistent: true,
+      fromServer: true,
       dedupKey: r.dedupKey,
       ...(r.sessionId ? { sessionId: r.sessionId } : {}),
       ...(r.taskId ? { taskId: r.taskId } : {}),

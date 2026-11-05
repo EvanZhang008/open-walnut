@@ -208,6 +208,48 @@ export async function gatherSshCredentialEvidence(sshTarget: string, deps: Evide
   return { tag: 'agent-missing', detail: 'SSH_AUTH_SOCK is not set for Walnut' }
 }
 
+/**
+ * When this machine's SSH certificate for a host stops being valid, in ms (ssh-keygen's local
+ * time): the latest valid-until of the host's own certificates (its certificatefile, or when it names none the
+ * `-cert.pub` beside each identityfile, which ssh loads by itself), or of the agent's
+ * when the host names none (a renewed one next to an expired one is what ssh uses). Infinity for a
+ * certificate valid forever, null when the host signs in with no certificate (or none is readable).
+ * Read ahead of time, so the user hears before it expires (hosts/ssh-cert-expiry-alert.ts):
+ * config and local files only, no network, async child processes with short timeouts.
+ */
+export async function sshCertificateExpiry(sshTarget: string, deps: EvidenceDeps = {}): Promise<number | null> {
+  const env = deps.env ?? process.env
+  const run = deps.run ?? defaultRun
+  const readFile = deps.readFile ?? ((p: string) => fs.readFile(p, 'utf-8'))
+  const home = env.HOME || os.homedir()
+  const own: string[] = []
+  try {
+    const g = await run('ssh', ['-G', sshTarget])
+    const readAll = async (files: string[]) => {
+      for (const file of [...new Set(files)].slice(0, MAX_ITEMS)) {
+        try { own.push(...certLines(await readFile(file))) } catch { /* configured but absent */ }
+      }
+    }
+    // The certificate the host names is the one it signs in with; only when it names none does the
+    // `<identityfile>-cert.pub` ssh loads beside an identity file count (an old one there that
+    // never expires must not hide the named one running out, nor stand in for one not readable).
+    const named = certificateFilesFromSshG(g.stdout, home)
+    await readAll(named.length ? named : identityFilesFromSshG(g.stdout, home).map((f) => `${f}-cert.pub`))
+  } catch { /* ssh -G unavailable */ }
+  let lines = own.slice(0, MAX_ITEMS)
+  if (!lines.length && env.SSH_AUTH_SOCK) {
+    const listed = await run('ssh-add', ['-L']).catch(() => null)
+    if (listed?.code === 0) lines = certLines(listed.stdout).slice(0, MAX_ITEMS)
+  }
+  let latest: number | null = null
+  for (const line of lines) {
+    // `-f -`: see gatherSshCredentialEvidence.
+    const until = certValidUntil((await run('ssh-keygen', ['-L', '-f', '-'], line + '\n')).stdout)
+    if (until !== null) latest = Math.max(latest ?? -Infinity, until)
+  }
+  return latest
+}
+
 export function formatSshEvidence(e: SshEvidence): string {
   return `${SSH_EVIDENCE_PREFIX} ${e.tag} (${e.detail})`
 }

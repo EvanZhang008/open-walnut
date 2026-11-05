@@ -12,7 +12,8 @@
  *    turn (sessions/brief-refresh.ts), so its chat and its Brief are rewritten from the live state.
  *
  * "Moved" compares each named task's Brief mark (briefMark: whether it asks the user and what, or
- * finished) with the mark Walnut stored beside the letter when it was written (briefSnapshot). A
+ * finished) with the mark Walnut stored beside the letter when it was written (briefSnapshot); an
+ * ask that only changed its wording is no move (lineMoved). A
  * move between Working and Waiting is no news for the letter: every turn of a worker flips it
  * (Working is a turn running now), and the page puts each line under its live section anyway. A
  * letter stored before marks existed is read by its sections the same way: a line that left or
@@ -20,6 +21,7 @@
  */
 import { fallbackUserState, needsLineText, type BriefSectionTask, type TaskBrief, type UserState } from '../user-status.js';
 import { briefAskScope, briefSectionOf, headingSection, type BriefSectionKey } from './brief-structure.js';
+import { askShape, sameAskShape } from '../same-ask.js';
 
 const WORDS_MAX = 160;
 const REF_RE = /<task-ref\b[^>]*\bid="([^"]+)"/;
@@ -54,6 +56,58 @@ export function briefMark(task: MarkTask): string {
   // A node's Thread waiting on the user is his own request, no move of the letter (2026-11-03).
   if (state === 'needs' && task.user_status?.source === 'thread') return 'open';
   return state === 'needs' ? `needs|${clip(task.user_status?.ask)}` : state === 'done' ? 'done' : 'open';
+}
+
+/**
+ * What an ask asks of the user, apart from its words: where it lives (a session's question, a
+ * letter, a Board choice and which one, a prompt, an error) and how he answers it (yes or no, a
+ * choice among which options, his own words). The same identity in other words is the same ask.
+ */
+function askIdentity(task: MarkTask): string {
+  const s = task.user_status;
+  const form = s?.askForm;
+  return [
+    s?.source ?? '',
+    s?.choice ? `${s.choice.board}/${s.choice.id}` : '',
+    form?.kind ?? '',
+    (form?.options ?? []).map((o) => o.id).sort().join(','),
+  ].join('|');
+}
+
+/** The prefix of a Needs you line's stored mark that keeps its ask's words (briefLineMark). */
+const NEEDS_MARK = 'n1:';
+const MARK_WORDS_MAX = 40;
+
+/**
+ * The mark Walnut stores for a named line. A line that asks the user keeps what it asks and its
+ * content words, hashed (NEEDS_MARK), so a later read tells a new ask from the same ask reworded
+ * (2026-11-04: three VPs each told the user "nothing changed, only reworded" after a refresh named
+ * a reworded ask as moved). Any other line keeps briefMark's hash.
+ */
+export function briefLineMark(task: MarkTask): string {
+  const mark = briefMark(task);
+  if (!mark.startsWith('needs|')) return markHash(mark);
+  // The ask's shape, its words hashed in order (numbers stay `#3`): sameAskShape compares them.
+  const shape = askShape(task.user_status?.ask, markHash);
+  return `${NEEDS_MARK}${markHash(askIdentity(task))}:${shape.neg ? 1 : 0}:${shape.words.slice(0, MARK_WORDS_MAX).join('.')}:${(shape.links ?? []).join('.')}`;
+}
+
+/**
+ * Whether a named line moved since its mark was stored. A Needs you line still asking the same
+ * thing (same identity, and sameAskShape) did not, whatever its wording; a mark stored before
+ * NEEDS_MARK compares as it was written.
+ */
+export function lineMoved(stored: string, task: MarkTask): boolean {
+  if (!stored.startsWith(NEEDS_MARK)) return markHash(briefMark(task)) !== stored;
+  const now = briefLineMark(task);
+  if (!now.startsWith(NEEDS_MARK)) return true;
+  const read = (mark: string) => {
+    const [id, neg, words = '', links] = mark.slice(NEEDS_MARK.length).split(':');
+    return { id, shape: { neg: neg === '1', words: words.split('.').filter(Boolean), ...(links !== undefined ? { links: links.split('.').filter(Boolean) } : {}) } };
+  };
+  const was = read(stored);
+  const is = read(now);
+  return was.id !== is.id || !sameAskShape(was.shape, is.shape);
 }
 
 /** A short stable hash of a mark, so a letter stores a few bytes per task (FNV-1a, 32 bit). */
@@ -97,7 +151,7 @@ export function briefSnapshot(
   const marks: Record<string, string> = {};
   for (const { id } of briefLineTasks(text, owner.id)) {
     const t = byId.get(id);
-    if (t && settled(t)) marks[id] = markHash(briefMark(t));
+    if (t && settled(t)) marks[id] = briefLineMark(t);
   }
   const asks = briefAskScope(owner, tasks).filter((t) => briefSectionOf(t) === 'needs').map((t) => t.id);
   return { marks, asks };
@@ -161,7 +215,7 @@ export function briefFreshness(owner: BriefSectionTask & { brief?: TaskBrief }, 
     const now = briefSectionOf(t);
     const hasMoved = legacy || was === undefined
       ? section !== null && (now === null || (now === 'needs') !== (section === 'needs'))
-      : markHash(briefMark(t)) !== was;
+      : lineMoved(was, t);
     if (!hasMoved) continue;
     if (now === null) finished.push(id);
     else moved.push({ id, state: stateOf(t), words: liveWords(t) });

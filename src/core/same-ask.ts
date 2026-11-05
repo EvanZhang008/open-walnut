@@ -101,6 +101,139 @@ export function sameAskText(a: string | undefined | null, b: string | undefined 
   return wa.length >= SAME_ASK_MIN_WORDS && wa.join(' ') === askWords(b).join(' ');
 }
 
+/**
+ * Whether two asks of ONE task ask the user the same thing in other words (2026-11-04: three VPs
+ * each told the user "nothing changed, only reworded" when a task's session rewrote its ask). Looser
+ * than sameAskText on purpose, and only for one task's ask over time (askShape, sameAskShape): added
+ * detail, a reordered clause or a synonym is the same ask; a new decision with new words, other
+ * numbers, a "not" one has and the other lacks, two words swapped around ("from staging to
+ * production"), another word after "from" or "to", or one or two words replaced and nothing else
+ * changed ("the staging account database" for "the production customer database") is not. An ask of fewer than SAME_ASK_MIN_WORDS content words is the same only word
+ * for word.
+ */
+export function sameAskReworded(a: string | undefined | null, b: string | undefined | null): boolean {
+  return sameAskShape(askShape(a), askShape(b));
+}
+
+/**
+ * What sameAskShape compares: the ask's content words in order, once each (`#3` for a number),
+ * whether it says no, and where it points (`links`: a direction word with the word after it,
+ * "from>staging", "to>production"; absent on a shape stored without them).
+ */
+export interface AskShape { words: string[]; neg: boolean; links?: string[] }
+
+/** Words that say where an ask points ("from X to Y", "into Y", "instead of Y"); CJK ones become their English twin. */
+const DIRECTIONS = new Set(['from', 'to', 'into', 'onto', 'toward', 'towards', 'than', 'instead', 'versus', 'vs']);
+const CJK_DIRECTIONS: Array<[RegExp, string]> = [
+  [/\u4ece/gu, ' from '], [/\u5230|\u81f3/gu, ' to '], [/\u5411/gu, ' toward '],
+  [/\u6539\u6210|\u6362\u6210|\u6539\u4e3a|\u53d8\u6210/gu, ' into '], [/\u800c\u4e0d\u662f|\u4ee3\u66ff/gu, ' instead '],
+];
+
+/** Content words of a direction target kept per link ("from the old staging database": old, staging, database). */
+const LINK_WORDS_MAX = 4;
+
+/**
+ * The direction links of an ask (AskShape.links): each direction word with the content words after
+ * it, up to the next direction word or the end of the clause, each through `token` and joined by
+ * `+` ("from>old+staging+database").
+ */
+function directionLinks(text: string | undefined | null, token: (w: string) => string): string[] {
+  let norm = normalizeText(text ?? '');
+  for (const [re, en] of CJK_DIRECTIONS) norm = norm.replace(re, en);
+  const out = new Set<string>();
+  for (const clause of norm.split(/[,.;:!?\u3001\uff0c\u3002\uff1b\uff1a\uff01\uff1f]+/u)) {
+    const words = clause.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    for (let i = 0; i < words.length; i++) {
+      if (!DIRECTIONS.has(words[i]!)) continue;
+      const target: string[] = [];
+      for (const w of words.slice(i + 1)) {
+        if (DIRECTIONS.has(w) || target.length >= LINK_WORDS_MAX) break;
+        if (FRAME_WORDS.has(w)) continue;
+        // A CJK run is one "word" here: its first two characters stand for it, as askWords' bigrams do.
+        target.push(CJK_PIECE.test(w) ? token([...w].slice(0, 2).join('')) : /^\d+$/.test(w) ? numberMarked(w) : token(stem(w)));
+      }
+      if (target.length) out.add(`${words[i]}>${target.join('+')}`);
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * Whether two asks point the same way: for each direction word both use, every target of one has
+ * a target of the other with the same words or a part of them ("from staging" and "from the
+ * staging environment" agree; "from the old staging database" and "from the old production
+ * database" do not).
+ */
+function sameDirections(a: readonly string[], b: readonly string[]): boolean {
+  const targets = (links: readonly string[]) => {
+    const by = new Map<string, Array<Set<string>>>();
+    for (const l of links) {
+      const [dir = '', to = ''] = l.split('>');
+      by.set(dir, [...(by.get(dir) ?? []), new Set(to.split('+').filter(Boolean))]);
+    }
+    return by;
+  };
+  const within = (x: Set<string>, y: Set<string>) => [...x].every((w) => y.has(w));
+  const agree = (x: Set<string>, y: Set<string>) => within(x, y) || within(y, x);
+  const ta = targets(a);
+  const tb = targets(b);
+  for (const [dir, xs] of ta) {
+    const ys = tb.get(dir);
+    if (!ys) continue;
+    if (!xs.every((x) => ys.some((y) => agree(x, y))) || !ys.every((y) => xs.some((x) => agree(x, y)))) return false;
+  }
+  return true;
+}
+
+/** Latin and CJK words that turn an ask around ("do not", and the CJK words for "not" and "don't"). */
+const NEGATIONS = new Set(['not', 'no', 'never', 'don', 'doesn', 'didn', 'won', 'cannot', 'nor']);
+const CJK_NEGATION = /[\u4e0d\u522b\u52ff\u6ca1\u65e0\u672a]/u;
+
+/** An ask's shape; `token` maps each content word (a brief mark keeps hashes, numbers as `#3`). */
+export function askShape(text: string | undefined | null, token: (w: string) => string = (w) => w): AskShape {
+  const raw = askWords(text);
+  const neg = raw.some((w) => NEGATIONS.has(w) || CJK_NEGATION.test(w));
+  const words = [...new Set(raw.filter((w) => !NEGATIONS.has(w)).map((w) => (/^\d+$/.test(w) ? numberMarked(w) : token(w))))];
+  return { words, neg, links: directionLinks(text, token) };
+}
+
+/** A number as sameAskShape tells it apart (`#3`); any other word as given. */
+export function numberMarked(w: string): string {
+  return /^\d+$/.test(w) ? `#${w}` : w;
+}
+
+/** The rule of sameAskReworded on two shapes (numbers marked `#`). */
+export function sameAskShape(a: AskShape, b: AskShape): boolean {
+  if (a.neg !== b.neg) return false;
+  if (a.words.length < SAME_ASK_MIN_WORDS || b.words.length < SAME_ASK_MIN_WORDS) return a.words.join(' ') === b.words.join(' ');
+  const nums = (s: readonly string[]) => s.filter((w) => w.startsWith('#')).sort().join(' ');
+  if (nums(a.words) !== nums(b.words)) return false;
+  // Pointing elsewhere: a direction word both asks use, followed by another word ("from staging"
+  // against "from production"), however long the rest of the ask is.
+  if (a.links && b.links && !sameDirections(a.links, b.links)) return false;
+  const inB = new Set(b.words);
+  const shared = a.words.filter((w) => inB.has(w));
+  const union = a.words.length + b.words.length - shared.length;
+  if (shared.length / Math.min(a.words.length, b.words.length) < 0.5 || shared.length / union < 0.3) return false;
+  // The shared words in another order: "staging to production" against "production to staging".
+  const at = new Map(b.words.map((w, i) => [w, i] as const));
+  let pairs = 0;
+  let swapped = 0;
+  for (let i = 0; i < shared.length; i++) {
+    for (let j = i + 1; j < shared.length; j++) {
+      pairs++;
+      if (at.get(shared[i]!)! > at.get(shared[j]!)!) swapped++;
+    }
+  }
+  if (pairs > 0 && swapped / pairs > 0.1) return false;
+  // One or two words replaced and nothing else changed: another target ("the staging account
+  // database" for "the production customer database"), not other words, however long the ask.
+  const onlyA = a.words.length - shared.length;
+  const onlyB = b.words.length - shared.length;
+  if (onlyA >= 1 && onlyB >= 1 && Math.max(onlyA, onlyB) <= 2) return false;
+  return true;
+}
+
 /** The fold an ancestor's status carries: whose ask it is shown as, and what it remembers. */
 export interface SameAskFold {
   /** The task that asks it (the deepest owner, or the teammate that asked first). */

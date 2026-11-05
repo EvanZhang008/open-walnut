@@ -62,7 +62,7 @@ defineOp({
       'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
     text: z.string().min(1).optional().describe(`Message text: the detail behind the title. Required, except on an answer (in_reply_to) that gives \`result\`. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when a session sends down or across; false when it reports up (to its own leader, its VP, or Main). Pass true to ask a question up, false for fire-and-forget'),
-    reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
+    reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 1h when you ask for a reply, 6h otherwise; 2h and 12h to a lead or Main)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
     hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it'),
     answers_ask: z.boolean().optional().describe(
@@ -100,6 +100,11 @@ defineOp({
       + (typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
         : args.in_reply_to ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED)
+        + (typeof b.sameAnswerAs === 'string' && b.sameAnswerAs
+          ? (b.sameAnswerAs === b.repliedTo
+            ? ` These are the same words you already answered ${b.repliedTo} with: they were not delivered again.`
+            : ` These are the same words as your answer to ${b.sameAnswerAs}, which its asker already has: ${b.repliedTo} is settled by it too, and the asker read one line naming it, not the answer twice.`)
+          : '')
         + (Array.isArray(b.answeredFor) && b.answeredFor.length
           ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
           : '')

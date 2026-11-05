@@ -55,6 +55,8 @@ export interface Notification {
   persistent: boolean;
   /** feed-only; whether the user has seen it. */
   read?: boolean;
+  /** The server's store holds it (a feed load or its broadcast): a later load without it means the server let it go. */
+  fromServer?: true;
   /** stable identity for de-dup (perm:<requestId>, cron:<job>:<ts>, …). */
   dedupKey: string;
   sessionId?: string;

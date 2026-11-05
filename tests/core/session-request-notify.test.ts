@@ -484,6 +484,126 @@ describe('sweepSessionRequests', () => {
   });
 });
 
+/** Rewrites a row's fields in place (an ask made hours ago, with its deadline). */
+function rewriteRow(id: string, patch: Partial<SessionRequest>): void {
+  const store = JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf-8')) as { requests: SessionRequest[] };
+  Object.assign(store.requests.find((r) => r.id === id)!, patch);
+  fs.writeFileSync(REQUESTS_FILE, `${JSON.stringify(store, null, 2)}\n`, 'utf-8');
+}
+
+/**
+ * No "has not replied by your deadline, check its progress" about a task plainly at work
+ * (2026-11-04: a VP read about ten overnight, each about a task in the middle of its work, and
+ * acked them all). A target with a turn running, an answer it just sent or a status report of
+ * working waits one more of its waits; past ACTIVE_WAIT_FACTOR of them its asker hears as before.
+ */
+describe('sweepSessionRequests — a target at work is not chased', () => {
+  const HOUR = 3_600_000;
+  /** An ask made `agoH` hours ago with a `waitH` wait, now past its deadline. */
+  async function overdueAsk(agoH = 1, waitH = 1, over: Partial<Parameters<typeof createSessionRequest>[0]> = {}): Promise<SessionRequest> {
+    const rq = await arm(over);
+    const created = Date.now() - agoH * HOUR;
+    rewriteRow(rq.id, { createdAt: new Date(created).toISOString(), deadlineAt: created + waitH * HOUR });
+    return rq;
+  }
+  const working = (patch: Partial<SessionRecord> = {}) => {
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET ? { ...s, process_status: 'running', ...patch } : s);
+  };
+
+  it('a turn running: the deadline moves one wait on, nobody is told; the asker hears once it is quiet', async () => {
+    const rq = await overdueAsk();
+    working();
+    expect(await sweepSessionRequests()).toBe(0);
+    const row = await getSessionRequest(rq.id);
+    expect(row?.status).toBe('pending');
+    expect(row?.activeWaits).toBe(1);
+    expect(row?.activeWhy).toBe('a turn running');
+    expect(row!.deadlineAt).toBeGreaterThan(Date.now() + 0.9 * HOUR);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // Its turn ended without a word and the moved deadline passed: now the asker hears.
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET ? { ...s, process_status: 'idle' } : s);
+    rewriteRow(rq.id, { deadlineAt: Date.now() - 1_000 });
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(rq.id))?.status).toBe('expired');
+  });
+
+  it('never past ACTIVE_WAIT_FACTOR of its waits from the ask: a turn running for ever still reaches the asker', async () => {
+    const rq = await overdueAsk(5, 1);
+    working();
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(rq.id))?.status).toBe('expired');
+  });
+
+  it('a turn stopped on a permission prompt, or a COMPLETE task, is not at work', async () => {
+    const first = await overdueAsk();
+    working({ pendingPermission: { requestId: 'perm-1' } as SessionRecord['pendingPermission'] });
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(first.id))?.status).toBe('expired');
+    const second = await overdueAsk();
+    working({ pendingPermission: undefined });
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'COMPLETE' }]);
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(second.id))?.status).toBe('expired');
+  });
+
+  it('a turn on a permission prompt is not at work, whatever it reported or answered before', async () => {
+    const rq = await overdueAsk();
+    working({ pendingPermission: { requestId: 'perm-1' } as SessionRecord['pendingPermission'] });
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'IN_PROGRESS', status_report: { state: 'working', at: new Date(Date.now() - 60_000).toISOString() } }]);
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(rq.id))?.status).toBe('expired');
+  });
+
+  it('an answer it sent another asker within the wait counts as at work; one before the ask does not', async () => {
+    const rq = await overdueAsk();
+    const other = await createSessionRequest({ fromSessionId: 'sess-other', toSessionId: TARGET, toTaskId: 'task-77', text: 'status?' });
+    await settleReplied(other.id);
+    expect(await sweepSessionRequests()).toBe(0);
+    expect((await getSessionRequest(rq.id))?.activeWhy).toBe('an answer just sent');
+    rewriteRow(other.id, { settledAt: new Date(Date.now() - 3 * 3_600_000).toISOString() });
+    rewriteRow(rq.id, { deadlineAt: Date.now() - 1_000 });
+    expect(await sweepSessionRequests()).toBe(1);
+  });
+
+  it('a status report of working since the ask counts; an older one does not', async () => {
+    const rq = await overdueAsk();
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'IN_PROGRESS', status_report: { state: 'working', at: new Date(Date.now() - 10 * 60_000).toISOString() } }]);
+    expect(await sweepSessionRequests()).toBe(0);
+    expect((await getSessionRequest(rq.id))?.activeWhy).toBe('a status report of working');
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'IN_PROGRESS', status_report: { state: 'working', at: new Date(Date.now() - 3 * HOUR).toISOString() } }]);
+    rewriteRow(rq.id, { deadlineAt: Date.now() - 1_000 });
+    expect(await sweepSessionRequests()).toBe(1);
+  });
+
+  it('several due at once for one asker are ONE message, each request named', async () => {
+    sessions.push(rec('sess-target-2', { title: 'Second', taskId: 'task-88' }));
+    listTasksByIds.mockImplementation(async (ids: string[]) => [
+      { id: 'task-77', title: 'Run the migration', phase: 'IN_PROGRESS' }, { id: 'task-88', title: 'Fix login timeout', phase: 'IN_PROGRESS' },
+    ].filter((t) => ids.includes(t.id)));
+    const a = await overdueAsk(1, 1, { text: 'first question' });
+    const b = await overdueAsk(1, 1, { text: 'second question', toSessionId: 'sess-target-2', toTaskId: 'task-88' });
+    const c = await overdueAsk(1, 1, { text: 'third question' });
+    expect(await sweepSessionRequests()).toBe(3);
+    // The asker is parked on its replies (WAITING): woken once, not three times.
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    const text = deliveredText();
+    for (const rq of [a, b, c]) expect(text).toContain(rq.id);
+  });
+});
+
+describe('createSessionRequest — the default deadline goes by what is asked', () => {
+  const waitOf = (r: SessionRequest) => Math.round((r.deadlineAt - Date.parse(r.createdAt)) / 3_600_000);
+  it('an ask 1h, an implicit one 6h, to a lead 2h and 12h, a task start 12h; a named timeout wins', async () => {
+    expect(waitOf(await arm())).toBe(1);
+    expect(waitOf(await arm({ implicit: true }))).toBe(6);
+    expect(waitOf(await arm({ kind: 'lead' }))).toBe(2);
+    expect(waitOf(await arm({ kind: 'lead', implicit: true }))).toBe(12);
+    expect(waitOf(await arm({ kind: 'start', implicit: true }))).toBe(12);
+    expect(waitOf(await arm({ kind: 'start' }))).toBe(12);
+    expect(waitOf(await arm({ kind: 'start', replyTimeoutSecs: 7_200 }))).toBe(2);
+  });
+});
+
 describe('sessionRequestWatchHook — outcome selection at the turn-end edge', () => {
   async function fire(payload = phasePayload()): Promise<void> {
     await sessionRequestWatchHook.handler!(payload);

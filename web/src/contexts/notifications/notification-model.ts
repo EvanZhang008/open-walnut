@@ -224,6 +224,44 @@ export function errorsBadgeCount(flags: {
   return Math.max(0, flags.feedErrors) + Math.max(0, flags.problemHosts ?? 0) + (flags.localClaude ? 1 : 0);
 }
 
+/**
+ * The feed after a load from the server: the server's snapshot merged with what this
+ * page already holds. Live entries win on identity so a stale snapshot can't stomp a
+ * fresh one, but read=true is sticky (a live entry always carries read=false) and a
+ * resolved stamp from either side stays. Keys dismissed meanwhile stay out.
+ *
+ * An error card from the server (`fromServer`) the page already had when the load began
+ * (`heldAtStart`) and the server no longer holds is gone there (trimmed, dismissed elsewhere, retired and dropped):
+ * kept, it would sit in the list with nothing that could ever clear it (2026-11-05:
+ * 21 delivery cards stayed for hours after their hosts were back). A card that arrived or
+ * changed while the load was in flight is kept: the snapshot may predate it. So is every
+ * card when the answer is an `offline` copy (the cloud companion's, while the Mac is away). A card this page made
+ * itself (a failed click) was never on the server and stays.
+ */
+export function mergeLoadedFeed(
+  prev: readonly Notification[],
+  loaded: readonly Notification[],
+  opts: { heldAtStart: ReadonlyMap<string, Notification>; dismissed: ReadonlySet<string>; offline?: boolean },
+): Notification[] {
+  const byKey = new Map<string, Notification>();
+  for (const n of loaded) byKey.set(n.dedupKey, n);
+  for (const n of prev) {
+    const server = byKey.get(n.dedupKey);
+    // The very entry held at the start (an update or a new occurrence is a new object), and the
+    // snapshot is the server's own: a copy answered while the Mac is away proves nothing gone.
+    if (!server && !opts.offline && n.kind === 'operation-error' && n.fromServer && opts.heldAtStart.get(n.dedupKey) === n) continue;
+    // A prompt answered elsewhere while this tab slept: the server's stamp wins.
+    const resolved = n.resolved ?? server?.resolved;
+    byKey.set(n.dedupKey, server ? { ...n, read: n.read || (server.read ?? false), ...(resolved ? { resolved } : {}) } : n);
+  }
+  return [...byKey.values()]
+    .filter(n => !opts.dismissed.has(n.dedupKey))
+    // effectiveTs, not timestamp: a folded recurring error keeps its
+    // first-seen timestamp, so sorting on that would sink a still-firing
+    // error below entries that stopped happening hours ago.
+    .sort((a, b) => effectiveTs(a) - effectiveTs(b));
+}
+
 /** Sort/display timestamp: the latest occurrence for a folded record. */
 export function effectiveTs(n: Notification): number {
   return n.lastTimestamp ?? n.timestamp;

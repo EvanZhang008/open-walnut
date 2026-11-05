@@ -23,7 +23,8 @@ export function briefHintStateOf(owner: Task, tasks: readonly Task[]): BriefHint
   if (!owner.brief?.text) return { at: null, stale: true, words: '', key: 'none' };
   const f = briefFreshness(owner, tasks);
   if (!f) return null;
-  const key = [...f.moved.map((m) => `${m.id}:${m.state === 'needs' ? `needs:${m.words}` : 'open'}`), ...f.finished.map((id) => `${id}:done`), ...f.newAsks.map((id) => `${id}:ask`)].join(',');
+  // A moved line's words are not part of it: a line reworded again is no new thing to say.
+  const key = [...f.moved.map((m) => `${m.id}:${m.state === 'needs' ? 'needs' : 'open'}`), ...f.finished.map((id) => `${id}:done`), ...f.newAsks.map((id) => `${id}:ask`)].join(',');
   return { at: owner.brief.at, stale: f.stale, words: freshnessWords(f), key: key || 'fresh' };
 }
 

@@ -37,6 +37,10 @@ import {
   settleLateReply,
   withdrawRequest,
   listAllSessionRequests,
+  answerDigest,
+  noteAnswerDelivered,
+  sameAnswerOf,
+  type AnswerStamp,
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
@@ -81,6 +85,8 @@ export interface SessionSendInput {
   expectReply?: boolean;
   /** Seconds until the no-reply fallback notification (clamped 60s..24h, default 1h). */
   replyTimeoutSecs?: number;
+  /** What the request asks for, when the caller knows better than the target (a task start): its default deadline. */
+  replyKind?: import('../session-requests.js').ReplyKind;
   /** rq-… id — this send IS the reply; `to` may be omitted (routes to the asker). */
   inReplyTo?: string;
   /** rq-… id of a request the caller owes and hands to the target with this ask: its asker
@@ -136,6 +142,8 @@ export interface SessionSendResult {
   repliedTo?: string;
   /** The requests the answered one carried, answered by it too: the answer went to the outermost one's asker. */
   answeredFor?: string[];
+  /** The request whose answer, already delivered with the same words, settled this one: nothing was delivered again. */
+  sameAnswerAs?: string;
   messageId?: string;
 }
 
@@ -523,6 +531,24 @@ async function callerLeads(caller: CallerIdentity, taskId: string | undefined): 
   return !!task?.parent_task_id && caller.record.taskId.startsWith(task.parent_task_id);
 }
 
+/** Whether a task is an org node (a lead or Main). Unknown counts as not. */
+async function targetIsLead(taskId: string | undefined): Promise<boolean> {
+  if (!taskId) return false;
+  const { getTask } = await import('../task-manager.js');
+  return !!(await getTask(taskId).catch(() => undefined))?.org_role;
+}
+
+/** The answers being delivered now, by asker, words and replier (performReply's single flight). */
+const answering = new Map<string, Promise<void>>();
+
+/** Wait for an answer with the same key in flight, then hold the key; the returned call releases it. */
+async function holdAnswer(key: string): Promise<() => void> {
+  while (answering.has(key)) await answering.get(key)!.catch(() => {});
+  let release!: () => void;
+  answering.set(key, new Promise<void>((resolve) => { release = resolve; }));
+  return () => { answering.delete(key); release(); };
+}
+
 /** The one send entry point (route + gateway both land here). */
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
   if (!input.answersAsk) return performPlainSend(input);
@@ -658,6 +684,8 @@ async function performPlainSend(input: SessionSendInput): Promise<SessionSendRes
         // Nobody asked for this one — the default did. Longer fallback fuse, so
         // routine session→session notes don't each become a "no reply" notice.
         implicit: input.expectReply === undefined,
+        // A lead's or Main's answer waits on its teams: a longer default deadline.
+        kind: input.replyKind ?? (await targetIsLead(target.taskId ?? target.session.taskId) ? 'lead' : 'send'),
         ...(input.handsOn ? { handsOn: [input.handsOn] } : {}),
       });
     }
@@ -808,44 +836,92 @@ async function performReply(
   // Settles one request with this answer, pending or overdue; `fwd` marks one whose asker the answer went past.
   const settleOpen = async (rid: string, fwd?: string) =>
     (await settleReplied(rid, fields, fwd).catch(() => null)) ?? await settleLateReply(rid, fields, fwd).catch(() => null);
-  if (onward) {
-    // Settled once the answer is delivered: a failed delivery leaves the whole chain open.
-  } else if (request.status !== 'pending') {
-    // Late but honest: the asker was already notified (turn end / timeout), yet
-    // a real answer beats a status notice — deliver it anyway, marked late.
-    log.session.info('session reply after settle — delivering late', { requestId: id, status: request.status });
-    // An overdue request was still open: this answer closes it.
-    if (request.status === 'expired') await settleLateReply(id, fields).catch(() => null);
-  } else {
-    const settled = await settleReplied(id, fields);
-    if (!settled) {
-      log.session.info('session reply lost the settle race — delivering late', { requestId: id });
-    }
-  }
+  // The same words from this task already reached this asker for another (or this) request:
+  // this one settles with it, and the asker reads one line instead of the answer again.
+  const stamp: AnswerStamp = {
+    digest: answerDigest(replyBody), deliveredTo: origin.claudeSessionId,
+    by: { sessionId: caller.record.claudeSessionId, ...(caller.record.taskId ? { taskId: caller.record.taskId } : {}) },
+  };
+  let sameAs: string | undefined;
+  // One answer at a time per asker and words: a second task_send with the same text waits until
+  // the first is delivered (or failed), then reads it as a repeat (or as the answer, if it failed).
   const answeredFor = onward?.final ?? request;
-  // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
-  if (caller.record.taskId) {
-    await noteResultReport(caller.record.taskId, {
-      via: 'reply', request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
-    }, fields);
+  let replierTitle = '';
+  let delivery: 'queued' | 'deferred' = 'queued';
+  let messageId: string | undefined;
+  const releaseAnswer = onward ? () => {} : await holdAnswer(`${stamp.deliveredTo}\u0000${stamp.digest}\u0000${stamp.by.taskId ?? stamp.by.sessionId}`);
+  try {
+    // Read again once the key is held: a send of the same words to the same request that waited
+    // behind it finds the request settled by the first one, and reads itself as its repeat.
+    const status = onward ? request.status : ((await getSessionRequest(id).catch(() => null)) ?? request).status;
+    if (onward) {
+      // Settled once the answer is delivered: a failed delivery leaves the whole chain open.
+    } else if (status !== 'pending') {
+      // Late but honest: the asker was already notified (turn end / timeout), yet
+      // a real answer beats a status notice — deliver it anyway, marked late.
+      log.session.info('session reply after settle — delivering late', { requestId: id, status });
+      // An overdue request was still open: this answer closes it.
+      if (status === 'expired') sameAs = (await settleLateReply(id, fields, undefined, stamp).catch(() => null))?.sameAnswerAs;
+      // Answered already, and these are the words it got then (or another request got).
+      else sameAs = sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
+    } else {
+      const settled = await settleReplied(id, fields, undefined, stamp);
+      if (!settled) {
+        log.session.info('session reply lost the settle race — delivering late', { requestId: id });
+      }
+      // Lost the race to another answer: these may be the very words it delivered.
+      sameAs = settled ? settled.sameAnswerAs : sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
+    }
+    // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
+    if (caller.record.taskId) {
+      await noteResultReport(caller.record.taskId, {
+        via: 'reply', request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
+      }, fields);
+    }
+
+    replierTitle = await senderTitleOf(caller.record);
+    if (sameAs) {
+      // Delivered once: the asker reads which requests the answer it already has settles.
+      const who = replierTitle ? `"${replierTitle}"${caller.record.taskId ? ` (${caller.record.taskId})` : ''}` : (caller.record.taskId ?? 'The task');
+      const line = sameAs === id
+        ? `${who} sent its answer to ${id} again, word for word: you already have it, so it was not delivered twice.`
+        : `${who} answered ${id} with the same words as its answer to ${sameAs}, which you already have: ${id} is settled by it too, not delivered twice.`;
+      const { getTask } = await import('../task-manager.js');
+      if (origin.taskId && (await getTask(origin.taskId).catch(() => null))?.phase === 'WAITING') {
+        // Parked on this answer since the first one: the line is what ends its wait.
+        const { statusText } = await import('./status-push.js');
+        const text = statusText([line]);
+        ({ delivery, messageId } = await deliverToSession(origin, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true }));
+      } else {
+        // Read with its next message (or now, mid-turn): the answer itself is already there.
+        const { tellOrRide } = await import('./status-push.js');
+        await tellOrRide(origin.claudeSessionId, `same-answer-${id}`, line);
+      }
+      log.session.info('session reply was the same answer already delivered — not delivered again', {
+        requestId: id, sameAnswerAs: sameAs, fromSessionId: caller.record.claudeSessionId, toSessionId: origin.claudeSessionId,
+      });
+    } else {
+      const wrapped = buildReplyDeliveryText(answeredFor, {
+        // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
+        title: replierTitle,
+        shortId: shortId(caller.record.claudeSessionId),
+        sessionId: caller.record.claudeSessionId,
+        taskId: caller.record.taskId,
+        host: displayHost(caller.record.host),
+      }, replyBody, { title: input.title });
+
+      ({ delivery, messageId } = await deliverToSession(origin, {
+        busText: replyBody, enqueueText: wrapped, source: 'peer', endsWait: true,
+        taskId: origin.taskId, messageId: input.messageId,
+        fromLeader: await callerLeads(caller, origin.taskId),
+      }));
+    }
+
+    // A later answer with these words to this asker is a repeat of this one (sameAnswerOf).
+    if (!onward && !sameAs) await noteAnswerDelivered(id, stamp).catch(() => {});
+  } finally {
+    releaseAnswer();
   }
-
-  const replierTitle = await senderTitleOf(caller.record);
-  const wrapped = buildReplyDeliveryText(answeredFor, {
-    // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
-    title: replierTitle,
-    shortId: shortId(caller.record.claudeSessionId),
-    sessionId: caller.record.claudeSessionId,
-    taskId: caller.record.taskId,
-    host: displayHost(caller.record.host),
-  }, replyBody, { title: input.title });
-
-  const { delivery, messageId } = await deliverToSession(origin, {
-    busText: replyBody, enqueueText: wrapped, source: 'peer', endsWait: true,
-    taskId: origin.taskId, messageId: input.messageId,
-    fromLeader: await callerLeads(caller, origin.taskId),
-  });
-
   const originSid = origin.claudeSessionId;
   // The asks this answer went past: the chain below the outermost one, or the asks that handed
   // `request` on to the task answering it directly. Each settles, and its asker reads one line.
@@ -894,6 +970,7 @@ async function performReply(
     },
     repliedTo: id,
     ...(onward ? { answeredFor: onward.chain.map((r) => r.id) } : {}),
+    ...(sameAs ? { sameAnswerAs: sameAs } : {}),
     ...(messageId ? { messageId } : {}),
   };
 }

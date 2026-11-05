@@ -2929,7 +2929,12 @@ ledger. Both end up in the same persistent message queue.
     (`rq-…`), and the delivered message gets a Walnut trailer naming the exact
     answer command. Session callers only: without a caller session there is
     nowhere to route the answer (`400 bad_request`). `reply_timeout` is in
-    seconds, clamped to 60..86400, default 3600.
+    seconds, clamped to 60..86400; its default goes by what is asked: 3600 for
+    an explicit ask (21600 when the request only comes from the default),
+    7200 and 43200 to a lead or Main, 43200 for a task start. Past it, a
+    target with a turn running, an answer just sent or a status report of
+    working waits one more of its waits (at most four from the ask) before
+    the asker hears it is overdue.
   - `in_reply_to: "rq-…"` IS the answer: `to` may be omitted because the
     request routes it back to the asker. Only the session the request was
     addressed to may close it (`403 not_request_target`); an unknown id is

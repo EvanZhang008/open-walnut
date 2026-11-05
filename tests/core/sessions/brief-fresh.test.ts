@@ -12,6 +12,7 @@ import {
   BRIEF_UPDATING_SHOW_MS,
 } from '../../../src/core/sessions/brief-fresh.js'
 import { seenOf } from '../../../src/core/sessions/status-push.js'
+import * as SAME from '../../../src/core/same-ask.js'
 
 const T0 = '2026-10-31T13:03:02.720Z'
 const lead = (brief?: Task['brief']): Task => ({
@@ -115,6 +116,76 @@ describe('briefFreshness', () => {
     // Written while d already asked (left out of the letter): not new.
     const owner2 = lead({ text: LETTER, at: T0, ...briefSnapshot(LETTER, lead(), now) })
     expect(briefFreshness(owner2, now)!.stale).toBe(false)
+  })
+
+  // 2026-11-04: three VPs each told the user "nothing changed, only reworded" after a refresh named
+  // a reworded ask as moved. The same ask in other words is no move; another ask, or the same words
+  // asked another way (a Board choice, a yes/no), is.
+  it('an ask in other words is no move; another ask, more numbers or another way to answer is', () => {
+    const { owner, tasks } = written()
+    const ask = (s: Partial<NonNullable<Task['user_status']>>) => tasks.map((t) => t.id === 'a' ? task('a', { state: 'needs', source: 'session', ask: 'Review section 3', ...s }) : t)
+    expect(briefFreshness(owner, ask({ ask: 'Please review section 3 when you can' }))!.stale).toBe(false)
+    expect(briefFreshness(owner, ask({ ask: 'Could you review section 3?' }))!.stale).toBe(false)
+    expect(briefFreshness(owner, ask({ ask: 'Approve the production deploy plan' }))!.moved.map((m) => m.id)).toEqual(['a'])
+    expect(briefFreshness(owner, ask({ ask: 'Review sections 3 and 4' }))!.moved.map((m) => m.id)).toEqual(['a'])
+    expect(briefFreshness(owner, ask({ source: 'choice', choice: { board: 'lead', id: 'c1' } }))!.moved.map((m) => m.id)).toEqual(['a'])
+    expect(briefFreshness(owner, ask({ askForm: { summary: 'Review section 3', kind: 'yes_no' } }))!.moved.map((m) => m.id)).toEqual(['a'])
+  })
+
+  // 2026-11-05 review: overlap alone called these the same ask.
+  it('another target, the other direction or a "not" is a move, however many words stay', () => {
+    const { owner } = (() => {
+      const tasks = [task('a', { state: 'needs', source: 'session', ask: 'Approve deleting the staging database' }), ...world().slice(1)]
+      return { owner: lead({ text: LETTER, at: T0, ...briefSnapshot(LETTER, lead(), tasks) }) }
+    })()
+    const now = (ask: string) => [task('a', { state: 'needs', source: 'session', ask }), ...world().slice(1)]
+    expect(briefFreshness(owner, now('Approve deleting the production database'))!.stale).toBe(true)
+    expect(briefFreshness(owner, now('Do not approve deleting the staging database'))!.stale).toBe(true)
+    expect(briefFreshness(owner, now('Please approve deleting the staging database now'))!.stale).toBe(false)
+    const { sameAskReworded } = SAME
+    expect(sameAskReworded('Approve migrating staging to production', 'Approve migrating production to staging')).toBe(false)
+    expect(sameAskReworded('Approve publishing the release', 'Do not approve publishing the release')).toBe(false)
+    expect(sameAskReworded('Approve publishing the 2.4 release to the store', 'Can you approve publishing the 2.4 release to the store today?')).toBe(true)
+  })
+
+  // 2026-11-05 review, round 2: a long ask diluted the swap, and a two-word swap passed.
+  it('a direction or target change in a long ask is a move too, through the stored mark', () => {
+    const start = (ask: string) => {
+      const tasks = [task('a', { state: 'needs', source: 'session', ask }), ...world().slice(1)]
+      return lead({ text: LETTER, at: T0, ...briefSnapshot(LETTER, lead(), tasks) })
+    }
+    const now = (ask: string) => [task('a', { state: 'needs', source: 'session', ask }), ...world().slice(1)]
+    const migrate = start('Approve migrating account records from staging to production')
+    expect(briefFreshness(migrate, now('Approve migrating account records from production to staging'))!.stale).toBe(true)
+    expect(briefFreshness(migrate, now('Can we migrate the account records from staging to production, after the backup finishes?'))!.stale).toBe(false)
+    // Round 3: the targets share their first words ("the old ... database").
+    const long = start('Approve carefully migrating customer account records from the old staging database to the old production database')
+    expect(briefFreshness(long, now('Approve carefully migrating customer account records from the old production database to the old staging database'))!.stale).toBe(true)
+    expect(briefFreshness(long, now('Please approve carefully migrating the customer account records from the old staging database to the old production database tonight'))!.stale).toBe(false)
+    const drop = start('Approve deleting the staging account database')
+    expect(briefFreshness(drop, now('Approve deleting the production customer database'))!.stale).toBe(true)
+    const { sameAskReworded } = SAME
+    // "Move the data from the test environment to production" against the other way round.
+    expect(sameAskReworded('\u8bf7\u628a\u6570\u636e\u4ece\u6d4b\u8bd5\u73af\u5883\u8fc1\u79fb\u5230\u751f\u4ea7\u73af\u5883\uff0c\u53ef\u4ee5\u5417\uff1f',
+      '\u8bf7\u628a\u6570\u636e\u4ece\u751f\u4ea7\u73af\u5883\u8fc1\u79fb\u5230\u6d4b\u8bd5\u73af\u5883\uff0c\u53ef\u4ee5\u5417\uff1f')).toBe(false)
+  })
+
+  it('Chinese asks: the same ask reworded is no move, a different one is', () => {
+    const zh = (ask: string) => [task('a', { state: 'needs', source: 'session', ask }), ...world().slice(1)]
+    const before = zh('\u0058 \u4e0a\u7684\u5e16\u5b50\u4ee5\u540e\u7531\u6211\u4eec\u5199\u8349\u7a3f\uff0c\u4f60\u4eb2\u624b\u5728\u624b\u673a\u4e0a\u53d1\u51fa\u53bb\uff0c\u884c\u5417\uff1f')
+    const owner = lead({ text: LETTER, at: T0, ...briefSnapshot(LETTER, lead(), before) })
+    // Same ask, other words: "drafts by us, you post them by hand on the phone".
+    expect(briefFreshness(owner, zh('\u0058 \u4e0a\u7684\u5e16\u5b50\u548c\u56de\u590d\u4ee5\u540e\u7531\u6211\u4eec\u5199\u8349\u7a3f\uff0c\u4f60\u4eb2\u624b\u5728\u624b\u673a\u4e0a\u6253\u5b57\u53d1\u51fa\u53bb\uff0c\u884c\u5417\uff1f'))!.stale).toBe(false)
+    // Another ask: "scan the QR code once to sign in".
+    expect(briefFreshness(owner, zh('\u8bf7\u7528\u624b\u673a\u626b\u4e00\u6b21\u4e8c\u7ef4\u7801\u767b\u5f55\u5c0f\u7ea2\u4e66'))!.stale).toBe(true)
+  })
+
+  it('a letter whose marks were stored before the reword rule compares them as written', () => {
+    const tasks = world()
+    const marks = { a: markHash('needs|Review section 3'), b: markHash('open'), c: markHash('open') }
+    const owner = lead({ text: LETTER, at: T0, marks, asks: ['a'] })
+    expect(briefFreshness(owner, tasks)!.stale).toBe(false)
+    expect(briefFreshness(owner, tasks.map((t) => t.id === 'a' ? task('a', { state: 'needs', source: 'session', ask: 'Please review section 3' }) : t))!.stale).toBe(true)
   })
 
   it('a task between its turn end and its report is not judged yet', () => {

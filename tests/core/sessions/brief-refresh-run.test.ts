@@ -105,7 +105,7 @@ describe('a refresh restates only the Needs you items that changed', () => {
   }) as Task
   const look = (n: number) => requestBriefRefresh('L', 'web', NOW + n * (BRIEF_REFRESH_GAP_MS + 1))
 
-  it('new, then unchanged (agent-ack, no list), then reworded, then gone', async () => {
+  it('new, then unchanged (agent-ack, no list), then reworded (no change), then another ask, then gone', async () => {
     seed('lead', false)
     const letter = LETTER.replace('### Working\n- None', '### Working\n- <task-ref id="w2" label="Build"/>: building.')
     // Each look finds the Brief stale through w2 alone: written with w2 open, then w2 finished.
@@ -128,17 +128,41 @@ describe('a refresh restates only the Needs you items that changed', () => {
     expect(sends[1]!.text).toContain('do not repeat his Needs you list')
     expect(sends[1]!.text).toContain('<walnut-turn status="agent-ack"/>')
 
+    // 2026-11-04: three VPs each told the user "nothing changed, only reworded". The same ask in
+    // other words is no change: agent-ack, never "no change" said to the user.
+    stale()
+    tasks.set('w1', worker('Please review section 3 of the doc'))
+    expect((await look(2)).sent).toBe(true)
+    expect(sends[2]!.text).not.toContain('Needs you, changed')
+    expect(sends[2]!.text).toContain('<walnut-turn status="agent-ack"/>')
+    expect(sends[2]!.text).toContain('never tell him "no change"')
+
+    // Asking more (another section) is a change.
     stale()
     tasks.set('w1', worker('Review sections 3 and 4'))
-    expect((await look(2)).sent).toBe(true)
-    expect(sends[2]!.text).toContain('(w1): reworded: "Review sections 3 and 4"')
-    expect(sends[2]!.text).toContain('only the Needs you changes above')
+    expect((await look(3)).sent).toBe(true)
+    expect(sends[3]!.text).toContain('(w1): now asks something else: "Review sections 3 and 4"')
+    expect(sends[3]!.text).toContain('only the Needs you changes above')
 
     stale()
     tasks.set('w1', worker())
-    expect((await look(3)).sent).toBe(true)
-    expect(sends[3]!.text).toContain('(w1): no longer needs him')
+    expect((await look(4)).sent).toBe(true)
+    expect(sends[4]!.text).toContain('(w1): no longer needs him')
     expect(tasks.get('L')!.brief_refresh?.told).toEqual({})
+  })
+
+  // The real chain of 2026-11-05 01:41 to 06:35 UTC (a VP was told "reworded" four times): one
+  // task's ask in four wordings, then a different ask. Chinese text as \\u escapes.
+  it('the four wordings of one real ask are no change; a different ask is', async () => {
+    const { needsChanges } = await import('../../../src/core/sessions/brief-refresh.js')
+    const chain = [
+      'X \u4e0a\u7684\u5e16\u5b50\u548c\u56de\u590d\u4ee5\u540e\u7531\u6211\u4eec\u5199\u8349\u7a3f\uff0c\u4f60\u4eb2\u624b\u5728\u624b\u673a\u4e0a\u6253\u5b57\u53d1\u51fa\u53bb\uff0c\u884c\u5417\uff1f',
+      '\u4ee5\u540e X \u4e0a\u7684\u5e16\u5b50\u548c\u56de\u590d\u7531\u6211\u4eec\u5199\u597d\u8349\u7a3f\uff0c\u4f60\u81ea\u5df1\u5728\u624b\u673a\u4e0a\u6253\u5b57\u53d1\u51fa\u53bb\uff0c\u884c\u5417\uff1f',
+      'X \u4e0a\u7684\u5e16\u5b50\u548c\u56de\u590d\u6539\u6210\u6211\u4eec\u5199\u8349\u7a3f\u3001\u4f60\u81ea\u5df1\u624b\u6253\u53d1\u51fa\u53bb\uff0c\u884c\u5417\uff1f',
+      '\u4ee5\u540e X \u4e0a\u7684\u5e16\u5b50\u548c\u56de\u590d\u6539\u6210\u6211\u4eec\u5199\u8349\u7a3f\u3001\u4f60\u4eb2\u624b\u6253\u5b57\u53d1\u51fa\u53bb\uff0c\u884c\u5417\uff1f',
+    ]
+    for (let i = 0; i + 1 < chain.length; i++) expect(needsChanges({ x: chain[i + 1]! }, { x: chain[i]! })).toEqual([])
+    expect(needsChanges({ x: '\u8bf7\u7528\u624b\u673a\u626b\u4e00\u6b21\u4e8c\u7ef4\u7801\u767b\u5f55\u5c0f\u7ea2\u4e66' }, { x: chain[3]! })).toEqual([{ id: 'x', kind: 'changed', ask: '\u8bf7\u7528\u624b\u673a\u626b\u4e00\u6b21\u4e8c\u7ef4\u7801\u767b\u5f55\u5c0f\u7ea2\u4e66' }])
   })
 
   it('a note that never arrived keeps the earlier list, so the next one still names the change', async () => {
@@ -147,7 +171,7 @@ describe('a refresh restates only the Needs you items that changed', () => {
     tasks.set('L', { ...letterOwner, brief_refresh: { at: new Date(NOW - 2 * BRIEF_REFRESH_GAP_MS).toISOString(), by: 'web', moved: 0, told: { w1: 'Review section 3' } } } as Task)
     tasks.set('w1', worker('Review sections 3 and 4'))
     const { needsChanges } = await import('../../../src/core/sessions/brief-refresh.js')
-    expect(needsChanges({ w1: 'Review sections 3 and 4' }, tasks.get('L')!.brief_refresh!.told)).toEqual([{ id: 'w1', kind: 'reworded', ask: 'Review sections 3 and 4' }])
+    expect(needsChanges({ w1: 'Review sections 3 and 4' }, tasks.get('L')!.brief_refresh!.told)).toEqual([{ id: 'w1', kind: 'changed', ask: 'Review sections 3 and 4' }])
     expect(needsChanges({ w1: 'a' }, { w1: 'a' })).toEqual([])
     expect(needsChanges({ w1: 'a' }, undefined)).toEqual([{ id: 'w1', kind: 'new', ask: 'a' }])
   })

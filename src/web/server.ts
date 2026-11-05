@@ -4444,6 +4444,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const offLocalNetworkAlert = await startLocalNetworkAlert({ enabled: !hostFixtureMode() })
     const offBeforeLocalNetwork = unsubscribeHostPhase
     unsubscribeHostPhase = () => { offBeforeLocalNetwork?.(); offLocalNetworkAlert() }
+    // This machine's SSH certificate running out: ONE letter a few hours ahead, the same thread at expiry.
+    const { startCertExpiryAlert } = await import('../core/hosts/ssh-cert-expiry-alert.js')
+    const offCertExpiryAlert = await startCertExpiryAlert({ enabled: !hostFixtureMode() && (!isEphemeral || process.env.WALNUT_SSH_CERT_LETTER === '1') })
+    const offBeforeCertExpiry = unsubscribeHostPhase
+    unsubscribeHostPhase = () => { offBeforeCertExpiry?.(); offCertExpiryAlert() }
 
     const warmupGate = hostWarmupGateReason({
       cloudMode: isCompanion(), ephemeral: isEphemeral, env: process.env, config: await getConfig(),
@@ -5510,6 +5515,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // A send the host did not answer in time goes out again by itself, and its
       // bubble says so: nothing for the user to do, so no card.
       if (isDeliveryFailure && retryAt) shouldPublish = false
+      // A sign-in only the user can renew (an expired certificate, an empty agent, a proxy
+      // login): the sign-in letter is its one card (hosts/host-auth-alert.ts), and the
+      // message stays pending and goes out by itself once the host connects again.
+      if (isDeliveryFailure && shouldPublish) {
+        const { isLoginFailure } = await import('../core/hosts/host-auth-alert.js')
+        if (isLoginFailure(error)) shouldPublish = false
+      }
 
       // delivery_failed = connectivity status, not a turn outcome. The session is
       // still valid and the message batch is safely back in 'pending'. Avoid

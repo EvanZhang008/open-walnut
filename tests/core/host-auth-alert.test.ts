@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  createHostAuthAlert, frameVerdict, signInLetter, GENERIC_LOGIN_HINT, type AlertFrame, type HostAuthAlertDeps,
+  createHostAuthAlert, frameVerdict, isLoginFailure, signInLetter, GENERIC_LOGIN_HINT, type AlertFrame, type HostAuthAlertDeps,
 } from '../../src/core/hosts/host-auth-alert.js'
 
 const CERT = 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)'
@@ -21,6 +21,17 @@ const reconnecting = (host: string, lastKind: string, lastError = 'ssh: connect 
 const connected = (host: string): AlertFrame => ({ host, label: host.toUpperCase(), connected: true, phase: 'connected' })
 const dialing = (host: string): AlertFrame => ({ host, connected: false, phase: 'ssh' })
 const removed = (host: string): AlertFrame => ({ host, removed: true })
+
+describe('isLoginFailure', () => {
+  it('names the failures only the sign-in letter speaks for', () => {
+    expect(isLoginFailure('Connection to devbox failed 42s ago: me@devbox: Permission denied [walnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-11-05 03:04)]')).toBe(true)
+    expect(isLoginFailure('Permission denied (publickey).\nwalnut-ssh-evidence: agent-missing (no key in the agent)')).toBe(true)
+    expect(isLoginFailure('Permission denied (publickey).')).toBe(false)
+    expect(isLoginFailure('DaemonConnection not connected to devbox')).toBe(false)
+    expect(isLoginFailure('No active session found for session ID: s1')).toBe(false)
+    expect(isLoginFailure(undefined)).toBe(false)
+  })
+})
 
 describe('frameVerdict', () => {
   it.each<[string, AlertFrame, string]>([

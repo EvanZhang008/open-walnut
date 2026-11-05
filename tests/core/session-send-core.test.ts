@@ -737,6 +737,143 @@ describe('performSessionSend — in_reply_to', () => {
     expect(err.message).toContain('sess-ask');
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
+
+  /**
+   * One answer is delivered once (2026-11-04: a worker answered its lead's two open requests
+   * with the same text, one task_send each, and the lead read every answer twice, ten times
+   * overnight). Any repeat of words already delivered to the same asker by the same task
+   * settles with them and is not delivered again, whatever request it names.
+   */
+  describe('the same answer to the same asker is delivered once', () => {
+    const ANSWER = 'CI run 41: all green, pushed 9b20c406a.';
+
+    it('two open requests answered with one text: one delivery, both settled, the asker reads one line naming the second', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      const first = await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const second = await performSessionSend({ text: `${ANSWER}\n`, inReplyTo: b.id, callerSid: TARGET });
+      expect(first.sameAnswerAs).toBeUndefined();
+      expect(second).toMatchObject({ repliedTo: b.id, sameAnswerAs: a.id, targetSessionId: ASKER });
+      // Only the first went into the asker's session as an answer.
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      expect((await getSessionRequest(a.id))?.status).toBe('replied');
+      const rowB = await getSessionRequest(b.id);
+      expect(rowB?.status).toBe('replied');
+      expect(rowB?.sameAnswerAs).toBe(a.id);
+      const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+      const note = pendingStatusNote(ASKER)?.text ?? '';
+      expect(note).toContain(b.id);
+      expect(note).toContain(a.id);
+    });
+
+    it('the same words sent again on one request are not delivered twice', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const again = await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      expect(again.sameAnswerAs).toBe(a.id);
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('different words are a different answer: both delivered', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const second = await performSessionSend({ text: 'The iOS failure is not mine: handed to the iOS team.', inReplyTo: b.id, callerSid: TARGET });
+      expect(second.sameAnswerAs).toBeUndefined();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('a delivery that failed is no answer delivered: the same words retried go out', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      sendMessageToSession.mockRejectedValueOnce(new Error('queue write failed'));
+      await expect(performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET })).rejects.toThrow();
+      const retry = await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      expect(retry.sameAnswerAs).toBeUndefined();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('an asker parked on its replies is woken by the line naming the settled request, not left waiting', async () => {
+      tasks = [{ id: 'task-asker', title: 'Asker', phase: 'WAITING' }];
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      await performSessionSend({ text: ANSWER, inReplyTo: b.id, callerSid: TARGET });
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+      expect(dispatched(1).sid).toBe(ASKER);
+      expect(deliveredText(1)).toContain(`answered ${b.id} with the same words as its answer to ${a.id}`);
+      expect(deliveredText(1)).not.toContain(ANSWER);
+    });
+
+    it('the same words long after (past SAME_ANSWER_WINDOW_MS) are a new answer', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const store = JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf-8')) as { requests: Array<{ id: string; answeredAt?: string }> };
+      store.requests.find((r) => r.id === a.id)!.answeredAt = new Date(Date.now() - 31 * 60_000).toISOString();
+      fs.writeFileSync(REQUESTS_FILE, JSON.stringify(store), 'utf-8');
+      const second = await performSessionSend({ text: ANSWER, inReplyTo: b.id, callerSid: TARGET });
+      expect(second.sameAnswerAs).toBeUndefined();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('the same words sent twice at once are still delivered once', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      // The first answer is still being delivered when the second one comes in.
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const deliver = sendMessageToSession.getMockImplementation();
+      sendMessageToSession.mockImplementationOnce(async (...args: unknown[]) => { await gate; return deliver?.(...args); });
+      const firstP = performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      await vi.waitFor(() => expect(sendMessageToSession).toHaveBeenCalledTimes(1));
+      const secondP = performSessionSend({ text: ANSWER, inReplyTo: b.id, callerSid: TARGET });
+      await new Promise((r) => setTimeout(r, 50));
+      release();
+      const [first, second] = await Promise.all([firstP, secondP]);
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      expect([first.sameAnswerAs, second.sameAnswerAs].filter(Boolean)).toHaveLength(1);
+    });
+
+    it('the same words sent twice at once to ONE request are delivered once', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const deliver = sendMessageToSession.getMockImplementation();
+      sendMessageToSession.mockImplementationOnce(async (...args: unknown[]) => { await gate; return deliver?.(...args); });
+      const firstP = performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      await vi.waitFor(() => expect(sendMessageToSession).toHaveBeenCalledTimes(1));
+      const secondP = performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      await new Promise((r) => setTimeout(r, 50));
+      release();
+      const [first, second] = await Promise.all([firstP, secondP]);
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      expect(first.sameAnswerAs).toBeUndefined();
+      expect(second.sameAnswerAs).toBe(a.id);
+    });
+
+    it('a late answer to a request a turn end already settled is delivered once too', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      await settleNotified(a.id, 'completed');
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const again = await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      expect(again.sameAnswerAs).toBe(a.id);
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      // The turn end's verdict stays on the row.
+      expect((await getSessionRequest(a.id))?.status).toBe('notified');
+    });
+
+    it('the same words to another asker are its own answer', async () => {
+      sessions.push(rec('sess-asker-2', { title: 'Asker two', taskId: 'task-asker-2' }));
+      const { createSessionRequest } = await import('../../src/core/session-requests.js');
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const other = await createSessionRequest({ fromSessionId: 'sess-asker-2', toSessionId: TARGET, toTaskId: 'task-target', text: 'status?' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const second = await performSessionSend({ text: ANSWER, inReplyTo: other.id, callerSid: TARGET });
+      expect(second.sameAnswerAs).toBeUndefined();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+      expect(dispatched(1).sid).toBe('sess-asker-2');
+    });
+  });
 });
 
 /**
@@ -912,7 +1049,8 @@ describe('performSessionSend — an answer to a handed-on request goes to the or
     tasks = tasks.map((t) => (t.id === 'task-main' ? { ...t, phase: 'IN_PROGRESS' } : t));
     const second = await chain();
     sessions = sessions.filter((s) => s.claudeSessionId !== MAIN);
-    await performSessionSend({ text: 'Done.', inReplyTo: second.b.id, callerSid: WORKER });
+    // Each chain gets its own words: the same words again to the same asker are one answer (below).
+    await performSessionSend({ text: 'Done: the second half.', inReplyTo: second.b.id, callerSid: WORKER });
     expect(dispatched().sid).toBe(LEAD);
 
     sendMessageToSession.mockClear();
@@ -920,7 +1058,7 @@ describe('performSessionSend — an answer to a handed-on request goes to the or
     const third = await chain();
     await performSessionSend({ text: 'I have it already.', inReplyTo: third.a.id, callerSid: LEAD });
     sendMessageToSession.mockClear();
-    const late = await performSessionSend({ text: 'Done.', inReplyTo: third.b.id, callerSid: WORKER });
+    const late = await performSessionSend({ text: 'Done: the third part.', inReplyTo: third.b.id, callerSid: WORKER });
     expect(dispatched().sid).toBe(LEAD);
     expect(late.answeredFor).toBeUndefined();
   });

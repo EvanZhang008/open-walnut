@@ -442,7 +442,11 @@ export function createEnvelopeKit(): EnvelopeKit {
         .map((h) => `  walnut tools call task_get '{"id":"${h.taskId}"}'          # the task it handed your request on to`),
     ];
     const handed = handedOnLine(target.handedOn);
-    const also = alsoLine(target.alsoUnanswered);
+    // Past their deadlines together, not ended by one stop (the deadline sweep groups them).
+    const also = outcome === 'timeout' && target.alsoUnanswered?.length
+      ? [`${target.alsoUnanswered.length === 1 ? 'Another request' : `${target.alsoUnanswered.length} other requests`} of yours to this task passed ${target.alsoUnanswered.length === 1 ? 'its' : 'their'} deadline with no reply too:`,
+        ...target.alsoUnanswered.map((a) => `- ${a.id}: "${a.preview}"`)].join('\n')
+      : alsoLine(target.alsoUnanswered);
     return buildWalnutMessage({
       kind: 'notification',
       attrs: {

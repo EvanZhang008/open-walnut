@@ -228,6 +228,60 @@ describe('notification store', () => {
   });
 });
 
+describe('the bound keeps open error cards', () => {
+  // 2026-11-05: the feed held 200 letter envelopes; every new error card was trimmed off
+  // in the same write that added it, so no recovery could reach it.
+  async function fillWithLetters(n: number) {
+    for (let i = 0; i < n; i++) {
+      await addNotification({ kind: 'letter', severity: 'info', title: `letter ${i}`, dedupKey: `letter:l${i}`, letterId: `l${i}` });
+    }
+  }
+
+  it('a full feed of letters still keeps a new open error card, and its recovery reaches it', async () => {
+    await fillWithLetters(200);
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: "Message couldn't be delivered",
+      dedupKey: 'error:session:s1:delivery', recoveryKey: 'session:s1', causeKey: 'host:devbox',
+    });
+    let { feed } = await listNotifications();
+    expect(feed).toHaveLength(200);
+    expect(feed.some(n => n.dedupKey === 'error:session:s1:delivery')).toBe(true);
+    // The oldest letter made room.
+    expect(feed.some(n => n.dedupKey === 'letter:l0')).toBe(false);
+    expect(feed.some(n => n.dedupKey === 'letter:l199')).toBe(true);
+    const { recovered } = await recoverNotifications(['host:devbox']);
+    expect(recovered.map(n => n.dedupKey)).toEqual(['error:session:s1:delivery']);
+  });
+
+  it('ordinary records, then letters, go before open error cards; a settled card is ordinary', async () => {
+    await upsertNotification({ kind: 'operation-error', severity: 'error', title: 'settled', dedupKey: 'error:old', recoveryKey: 'git' });
+    await recoverNotifications(['git']);
+    await upsertNotification({ kind: 'operation-error', severity: 'error', title: 'open', dedupKey: 'error:open' });
+    await addNotification({ kind: 'cron', severity: 'info', title: 'tick', dedupKey: 'cron:1' });
+    await fillWithLetters(199);
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(200);
+    expect(feed.some(n => n.dedupKey === 'error:open')).toBe(true);
+    expect(feed.some(n => n.dedupKey === 'error:old')).toBe(false);
+    expect(feed.some(n => n.dedupKey === 'cron:1')).toBe(false);
+    expect(feed.filter(n => n.kind === 'letter')).toHaveLength(199);
+  });
+
+  it('only OPEN_ERROR_RESERVE open cards are kept ahead of letters', async () => {
+    const { OPEN_ERROR_RESERVE } = await import('../../../src/core/notifications/store.js');
+    await fillWithLetters(200);
+    for (let i = 0; i < OPEN_ERROR_RESERVE + 10; i++) {
+      await upsertNotification({ kind: 'operation-error', severity: 'error', title: `e${i}`, dedupKey: `error:e${i}` });
+    }
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(200);
+    expect(feed.filter(n => n.kind === 'operation-error')).toHaveLength(OPEN_ERROR_RESERVE);
+    expect(feed.filter(n => n.kind === 'letter')).toHaveLength(200 - OPEN_ERROR_RESERVE);
+    expect(feed.some(n => n.dedupKey === `error:e${OPEN_ERROR_RESERVE + 9}`)).toBe(true);
+    expect(feed.some(n => n.dedupKey === 'error:e0')).toBe(false);
+  });
+});
+
 describe('upsertNotification', () => {
   it('inserts on a fresh dedupKey, exactly like addNotification', async () => {
     const { record, outcome } = await upsertNotification({

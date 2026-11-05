@@ -384,7 +384,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
           const request = await createSessionRequest({
             fromSessionId: callerSessionId, ...(callerTaskId ? { fromTaskId: callerTaskId } : {}), ...(sid ? { toSessionId: sid } : {}),
             toTaskId: task.id, text: launch.message, replyTimeoutSecs: params.replyTimeoutSecs,
-            implicit: params.expectReply === undefined,
+            implicit: params.expectReply === undefined, kind: 'start',
             ...(params.handsOn ? { handsOn: [params.handsOn] } : {}),
           });
           const { noteRequestDelivering } = await import('./undelivered-requests.js');

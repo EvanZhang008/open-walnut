@@ -87,6 +87,8 @@ export async function continueTaskConversation(
     ...(opts.source ? { source: opts.source } : {}),
     expectReply: opts.expectReply,
     replyTimeoutSecs: opts.replyTimeoutSecs,
+    // Starting the task again: its answer is the whole task done (REPLY_TIMEOUT_BY_KIND).
+    replyKind: 'start',
     ...(opts.handsOn ? { handsOn: opts.handsOn } : {}),
     force: true,
     reason: 'The task was started again; its one conversation continues here.',

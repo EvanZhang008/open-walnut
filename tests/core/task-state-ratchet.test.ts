@@ -114,6 +114,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/sessions/report-phase.ts': 4,
   'src/core/sessions/restart-loss.ts': 2,
   'src/core/sessions/session-request-notify.ts': 1,
+  // a repeated answer's one line wakes an asker parked on its replies (WAITING), as a real answer would
+  'src/core/sessions/session-send-core.ts': 1,
   'src/core/sessions/team-stop.ts': 3,
   // the one wake about an ask the task owes the user skips a task that parked itself (WAITING), like request-progress
   'src/core/sessions/user-asks.ts': 1,

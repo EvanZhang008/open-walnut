@@ -40,11 +40,22 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { CLOUD_BOX_HOST_ALIAS } from './cloud-box-host.js'
+import { classifyHostConnectError } from '../sessions/host-connect-hint.js'
 import { HOST_SIGN_IN, genericSignInStep } from '../human-inbox/walnut-letters/host-sign-in.js'
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js'
 
 /** Failure kinds (host-connect-hint.ts) that mean this machine's own login is not usable. */
 export const LOGIN_FAILURE_KINDS: ReadonlySet<string> = new Set(['cert_expired', 'agent_missing', 'proxy_login'])
+
+/**
+ * True when an error says this machine's own login is not usable (LOGIN_FAILURE_KINDS):
+ * the one sign-in letter speaks for it, so a message that failed for it has no card of
+ * its own (web/server.ts session:error). 2026-11-05: one expired certificate made 21
+ * "Message couldn't be delivered" cards, one per session, beside the sign-in letter.
+ */
+export function isLoginFailure(error: string | undefined): boolean {
+  return !!error && LOGIN_FAILURE_KINDS.has(classifyHostConnectError(error, '').kind)
+}
 
 /** How long a sign-in failure stands before the letter goes out. */
 export const DEFAULT_GRACE_MS = 60_000
@@ -91,6 +102,8 @@ interface Episode {
   hosts: string[]
   /** A host of the episode connected again since it opened. */
   recovered?: boolean
+  /** Its letter is the certificate letter (joinLetter): ssh-cert-expiry-alert.ts archives it, on a renewal. */
+  joined?: true
 }
 
 interface EpisodeFile { version: 1; episodes: Episode[] }
@@ -122,6 +135,11 @@ export interface HostAuthAlertDeps {
   knownHosts: () => Set<string>
   /** Connected right now (read once at start, for a login fixed while the server was down). */
   isConnected?: (host: string) => boolean
+  /**
+   * A letter already open about this login running out (ssh-cert-expiry-alert.ts joinLetter): a
+   * login episode joins it (its id) instead of sending a second letter, so one expiry is one thread.
+   */
+  joinLetter?: (hosts: string[], error?: string) => Promise<string | null>
   statePath?: string
   graceMs?: number
   now?: () => number
@@ -173,6 +191,9 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
   async function close(ep: Episode, why: string): Promise<void> {
     episodes.delete(ep.key)
     await save()
+    // A joined letter is the certificate's: a host connecting over a connection opened before the
+    // expiry proves no renewal, so only the certificate alert archives it.
+    if (ep.joined) { log.session.info('host sign-in episode closed; its joined certificate letter stays', { letterId: ep.letterId, why }); return }
     try { await deps.archive({ ...(ep.letterId ? { letterId: ep.letterId } : {}), opKey: ep.opKey }) } catch (err) {
       log.session.warn('host sign-in letter could not be archived', { letterId: ep.letterId, opKey: ep.opKey, error: err instanceof Error ? err.message : String(err) })
     }
@@ -200,6 +221,7 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
         hosts: ep.hosts.filter((h): h is string => typeof h === 'string'),
         ...(typeof ep.letterId === 'string' && ep.letterId ? { letterId: ep.letterId } : {}),
         ...(ep.recovered ? { recovered: true } : {}),
+        ...(ep.joined ? { joined: true as const } : {}),
       })
     }
   })()
@@ -220,6 +242,16 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     for (const [h] of hosts) if (!ep.hosts.includes(h)) ep.hosts.push(h)
     episodes.set(key, ep)
     await save()
+    if (key === 'login' && deps.joinLetter) {
+      const joined = await deps.joinLetter(ep.hosts, hosts.find(([, f]) => f.error)?.[1].error).catch(() => null)
+      if (joined) {
+        ep.letterId = joined
+        ep.joined = true
+        await save()
+        log.session.warn('host sign-in failed: joined the certificate letter already open', { episode: key, letterId: joined, hosts: ep.hosts })
+        return
+      }
+    }
     const letter = signInLetter(
       hosts.map(([, f]) => ({ label: f.label, ...(f.error ? { error: f.error } : {}) })),
       await deps.loginHint().catch(() => undefined),
@@ -354,6 +386,10 @@ export async function startHostAuthAlert(opts: { knownHosts: () => Set<string>; 
     language: walnutLetterLanguage,
     knownHosts: opts.knownHosts,
     isConnected: (host) => isDaemonConnected(host),
+    joinLetter: async (hosts, error) => {
+      const { runningCertExpiryAlert } = await import('./ssh-cert-expiry-alert.js')
+      return (await runningCertExpiryAlert()?.joinLetter(hosts, error)) ?? null
+    },
     ...(process.env.WALNUT_HOST_SIGN_IN_LETTER_GRACE_MS && Number.isFinite(graceEnv) && graceEnv >= 0 ? { graceMs: graceEnv } : {}),
   })
   alert.configure({ enabled: opts.enabled !== false && process.env.WALNUT_HOST_SIGN_IN_LETTER !== '0' })
