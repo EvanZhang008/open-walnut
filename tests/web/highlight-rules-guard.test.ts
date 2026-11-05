@@ -20,7 +20,6 @@ import { THREAD_HUES } from '@/utils/thread-tree';
 import { HL_SEARCH, HL_SEARCH_ACTIVE, HL_SELMATCH } from '@/utils/dom-text-search';
 import { HL_COMMENT, HL_COMMENT_SENT, HL_HELD_QUOTE, HL_PIN, HL_PIN_FLASH } from '@/utils/pin-highlights';
 import { HL_FIND, HL_FIND_ACTIVE, HL_PAGE_SELMATCH } from '@/utils/page-find';
-import { HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT } from '@/components/common/doc-comments-dom';
 
 const WEB_SRC = path.resolve(__dirname, '../../web/src');
 const SHEET = path.join(WEB_SRC, 'styles/highlights.css');
@@ -220,7 +219,8 @@ describe('ratchets', () => {
   // Every file that paints into a highlight registry, with the names it paints in
   // THIS document. A new one fails here until its names have rules in highlights.css
   // and it is listed. Frame documents (an HTML preview's own page) bring their own
-  // small sheet and are listed with none.
+  // small sheet; since previews run in a sandboxed origin, the console no longer reaches one:
+  // the preview's injected bridge script paints its marks itself (src/web/preview-bridge-script.ts).
   const PAINTERS: Record<string, readonly string[]> = {
     'hooks/useThreadMarks.ts': [
       ...THREAD_HUES.flatMap((h) => [markHighlightName(h, false), markHighlightName(h, true), markHighlightName(h, false, false, true)]),
@@ -230,9 +230,7 @@ describe('ratchets', () => {
     'utils/dom-text-search.ts': [HL_SEARCH, HL_SEARCH_ACTIVE, HL_SELMATCH],
     'utils/pin-highlights.ts': [HL_PIN, HL_PIN_FLASH, HL_HELD_QUOTE, HL_COMMENT, HL_COMMENT_SENT],
     'utils/page-find.ts': [HL_FIND, HL_FIND_ACTIVE, HL_PAGE_SELMATCH],
-    'components/common/doc-comments-dom.ts': [HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT],
     'components/sessions/EngineSettingsPopoverBody.tsx': ['engine-settings-help-match'],
-    'components/common/FileThreadLayer.tsx': [],
     // Mentions only (a comment, the pins' consumer, the gate itself).
     'hooks/useQuotePinPaint.ts': [],
     'components/sessions/SessionDiffView.tsx': [],

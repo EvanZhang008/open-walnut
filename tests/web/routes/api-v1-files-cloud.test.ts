@@ -11,6 +11,7 @@
  * the PRIMARY ('__local__'). WRITES still never ride the bridge.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { withPreviewBridge } from '../../../src/web/preview-bridge.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import http from 'node:http'
@@ -132,7 +133,8 @@ describe('file-content bounded relay on a REPLICA', () => {
     const res = await request(createApp()).get('/api/v1/file-content?path=/tmp/x/index.html&host=devbox&raw=1')
     expect(res.status).toBe(200)
     expect(res.headers['content-type']).toContain('text/html')
-    expect(res.text).toBe(html)
+    // An HTML preview carries the bridge script that stands in for the same-origin access it lost.
+    expect(res.text).toBe(withPreviewBridge(html))
   })
 
   it("'' / absent host targets the PRIMARY ('__local__') daemon", async () => {
@@ -311,7 +313,8 @@ describe('path-shaped file-raw is served in place on a REPLICA (no redirect)', (
       expect(res.status).toBe(200)
       expect(res.headers.location).toBeUndefined()
       expect(res.headers['content-type']).toContain('text/html')
-      expect(res.text).toBe(html)
+      // An HTML preview carries the bridge script that stands in for the same-origin access it lost.
+    expect(res.text).toBe(withPreviewBridge(html))
       expect(bridgeRequestMock).toHaveBeenCalledWith(c.host, 'fs.readBounded', { path: c.path }, expect.any(Number))
     })
   }

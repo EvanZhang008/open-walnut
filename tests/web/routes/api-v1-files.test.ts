@@ -8,6 +8,7 @@
  * api-v1-files-cloud.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { withPreviewBridge } from '../../../src/web/preview-bridge.js'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -170,7 +171,8 @@ describe('GET /api/v1/file-content?raw=1', () => {
       .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, 'page.html'))}&raw=1`)
     expect(res.status).toBe(200)
     expect(res.headers['content-type']).toContain('text/html')
-    expect(res.text).toBe(html)
+    // An HTML preview carries the bridge script that stands in for the same-origin access it lost.
+    expect(res.text).toBe(withPreviewBridge(html))
   })
 
   it('serves non-HTML text as text/plain (no sniffing surprises)', async () => {
