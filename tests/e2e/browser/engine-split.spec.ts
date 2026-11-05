@@ -37,7 +37,7 @@ function engines(project: string | null) {
     row('codex|GPT', 'Codex · GPT', 6, { partialCost: 0,  medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, reviewCostPerTask: 6.5, followUpsPerTask: 0.6, split: 6, switched: 2, errored: 3, erroredShare: 0.38 }),
     row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 1.5, followUpsPerTask: 2 }),
     // A fourth engine whose model has no price: its cost is a floor and never "cheapest".
-    row('opencode|Other', 'OpenCode · Other', 7, { medianCostUsd: 0, medianTokens: 0, partialCost: 7, noUsage: 7, medianHours: 2.5, reviewsPerTask: 2.9, erroredShare: 0.1 }),
+    row('opencode|Other', 'OpenCode · Other', 7, { medianCostUsd: null, medianTokens: null, partialCost: 7, noUsage: 7, medianHours: 2.5, reviewsPerTask: 2.9, erroredShare: 0.1 }),
   ]
   const tasks = Array.from({ length: 60 }, (_, i) => ({
     taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : `Task number ${i}`,
@@ -45,7 +45,7 @@ function engines(project: string | null) {
     costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0,
   }))
   return { range: { start: null, end: null }, rows, tasks, taskCount: 75, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
-    split: { on: true, entries: [{ key: 'claude', label: 'Claude Code', weight: 1 }, { key: 'codex', label: 'Codex', weight: 1 }] } }
+    split: { on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 1 }] } }
 }
 
 async function openUsage(page: Page) {
@@ -94,7 +94,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
     const mode = url.searchParams.get('split')
     splitAsked.push(mode)
     // The server's 'auto': the split is on and assigned 11 tasks here, so it counts only those.
-    const json = { ...engines(project), splitOnly: mode === '1' || mode === 'auto', splitTasks: 11 }
+    const json = { ...engines(project), splitOnly: mode === '1' || mode === 'auto', splitTasks: 11, auto: true }
     return route.fulfill({ json: onlyOne ? { ...json, projects: [{ project: 'Walnut', tasks: 40 }] } : json })
   })
   // Update now asks the server to collect; here it answers at once, as a finished collection.
@@ -102,7 +102,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await openUsage(page)
   const card = page.getByTestId('usage-engines')
   await card.scrollIntoViewIfNeeded()
-  await expect(card.getByTestId('usage-engines-split')).toContainText('New tasks are shared: Claude Code 1 : Codex 1')
+  await expect(card.getByTestId('usage-engines-split')).toContainText('New tasks are shared: Claude Code · Claude 1 : Codex · GPT 1')
   // The split assigned 11 tasks here (two columns' worth): the card counts only those, a fair test.
   await expect.poll(() => splitAsked.at(-1)).toBe('auto')
   await expect(card.getByTestId('usage-engines-split-only')).toHaveAttribute('aria-checked', 'true')
@@ -118,10 +118,10 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('time', 2)).toHaveAttribute('data-best', 'true')
   await expect(cell('cost', 2)).toHaveText('$12.50')
   await expect(cell('cost', 2)).toHaveAttribute('data-best', 'true')
-  await expect(cell('cost', 4)).toHaveText('$0.00+?')
+  await expect(cell('cost', 4)).toHaveText('-')
   await expect(cell('cost', 4)).toHaveAttribute('data-partial', 'true')
   // No usage recorded for it: its tokens are unknown too, never the "best" zero.
-  await expect(cell('tokens', 4)).toHaveText('0+?')
+  await expect(cell('tokens', 4)).toHaveText('-')
   await expect(cell('tokens', 4)).toHaveAttribute('title', '7 tasks had no usage recorded: their tokens are unknown')
   await expect(cell('tokens', 4)).not.toHaveAttribute('data-best', 'true')
   await expect(cell('switched', 2)).toHaveText('2')
@@ -159,6 +159,9 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   const before = asked.length
   await page.locator('.usage-refresh-btn').click()
   await expect.poll(() => asked.length).toBeGreaterThan(before)
+  // Back to what 'auto' gives (the split's own tasks here): the card follows 'auto' again, not a fixed choice.
+  await card.getByTestId('usage-engines-split-only').click()
+  await expect.poll(() => splitAsked.at(-1)).toBe('auto')
   await card.getByTestId('usage-engines-defs').locator('summary').click()
   await expect(card.getByTestId('usage-engines-defs')).toContainText('From its first session starting to its first completion.')
   expect(errors).toEqual([])
@@ -171,7 +174,7 @@ test('Engines compared with the split turned off: its tasks can still be counted
     const mode = new URL(route.request().url()).searchParams.get('split')
     modes.push(mode)
     // Off now, so the server's 'auto' counts every task; 11 tasks it assigned while it was on remain.
-    return route.fulfill({ json: { ...engines(null), split: { on: false, entries: [] }, splitOnly: mode === '1', splitTasks: 11 } })
+    return route.fulfill({ json: { ...engines(null), split: { on: false, entries: [] }, splitOnly: mode === '1', splitTasks: 11, auto: false } })
   })
   await openUsage(page)
   const card = page.getByTestId('usage-engines')

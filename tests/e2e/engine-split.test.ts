@@ -105,7 +105,9 @@ describe('the engine split', () => {
 
   it('a start that failed before a turn is retried on the engine the split gave it', async () => {
     const placeholder = await op('task_create', { title: 'Failed first start', project: 'Marina', record_only: true })
-    await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: path.join(WALNUT_HOME, 'missing'), message: 'Ready', expectReply: false })).rejects.toThrow()
+    // The failure names the split's pick and the way to choose another engine.
+    await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: path.join(WALNUT_HOME, 'missing'), message: 'Ready', expectReply: false }))
+      .rejects.toThrow(/the engine split's pick for this task.*retry with engine/)
     const first = (await task(placeholder.id)).engine_pick
     expect(first?.key).toBeTruthy()
     const retried = await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })

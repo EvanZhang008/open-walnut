@@ -264,6 +264,8 @@ export interface EngineCompare {
   splitOnly?: boolean;
   /** Tasks in the period (and project) the split assigned, whichever tasks are counted. */
   splitTasks?: number;
+  /** What 'auto' counts in this period: true = only the split's tasks. */
+  auto?: boolean;
 }
 
 /**

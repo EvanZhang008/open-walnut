@@ -197,15 +197,48 @@ describe('aggregateEngineCompare', () => {
     const tasks = [done('rescued', 2, { engine_pick: pick }), done('stayed', 1, { engine_pick: { ...pick, key: 'claude', engine: 'claude' as const } })];
     const inp = input(tasks, { rescued: { costUsd: 9, engine: 'claude' }, stayed: { costUsd: 3 } });
     const all = aggregateEngineCompare(inp);
-    expect(all.rows.map((r) => [r.key, r.done, r.switched])).toEqual([['claude|Claude', 2, 1]]);
+    // All tasks: both under Claude, where the cost went; the move counts under Codex, the column the split assigned (none here).
+    expect(all.rows.map((r) => [r.key, r.done, r.switched])).toEqual([['claude|Claude', 2, 0]]);
     const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
     expect(Object.fromEntries(fair.rows.map((r) => [r.key, [r.done, r.switched]]))).toEqual({ 'codex|GPT': [1, 1], 'claude|Claude': [1, 0] });
     expect(fair.tasks.find((t) => t.taskId === 'rescued')).toMatchObject({ key: 'codex|GPT', switched: true });
   });
 
+  it('a start that failed before its engine named a session still counts, as an error, under the engine it was given', () => {
+    const at = '2026-11-02T00:00:00.000Z';
+    const failed = task({ id: 'acpfail', engine_pick: { key: 'codex', engine: 'codex', at }, last_start: { id: 'ls', at, state: 'failed', engine: 'codex', error: 'boom' } });
+    const out = aggregateEngineCompare(input([failed], {}));
+    expect(out.rows.map((r) => [r.key, r.open, r.errored])).toEqual([['codex|GPT', 1, 1]]);
+  });
+
+  it('counts a move under the column the split assigned in either view, and medians only known usage', () => {
+    const pick = { key: 'codex', engine: 'codex' as const, at: '2026-11-02T00:00:00.000Z' };
+    const tasks = [done('mv', 1, { engine_pick: pick }), ...Array.from({ length: 2 }, (_, i) => done(`cx${i}`, 1, { engine_pick: pick }))];
+    const inp = input(tasks, { mv: { costUsd: 9, engine: 'claude' }, cx0: { costUsd: 4, engine: 'codex', model: 'gpt-6.1-sol' } });
+    const all = aggregateEngineCompare(inp);
+    const byKey = Object.fromEntries(all.rows.map((r) => [r.key, r]));
+    expect(byKey['codex|GPT']).toMatchObject({ switched: 1, noUsage: 1, medianCostUsd: 4 });
+    expect(byKey['claude|Claude'].switched).toBe(0);
+    // No usage known at all: no median, never a zero.
+    const none = aggregateEngineCompare(input([done('u1', 1), done('u2', 1)], {}));
+    expect(none.rows[0]).toMatchObject({ medianCostUsd: null, medianTokens: null, noUsage: 2 });
+  });
+
+  it("'auto' is decided on the whole period, so a project filter never flips it", () => {
+    const pick = { key: 'claude', engine: 'claude' as const, at: '2026-11-02T00:00:00.000Z' };
+    const tasks = Array.from({ length: 10 }, (_, i) => done(`a${i}`, 1, { engine_pick: pick, project: i < 3 ? 'Idea' : 'Walnut' }));
+    const on = { config: { defaults: { engine_split: ['claude', 'codex'] } }, splitOnly: 'auto' as const };
+    expect(aggregateEngineCompare(input(tasks, {}, { ...on, project: 'Idea' }))).toMatchObject({ auto: true, splitOnly: true, taskCount: 3, splitTasks: 3 });
+  });
+
+  it('names split entries like the columns they land in', () => {
+    const on = aggregateEngineCompare(input([], {}, { config: { defaults: { engine_split: ['claude', { engine: 'claude', model: 'gpt-6.1-sol' }] } } }));
+    expect(on.split.entries.map((e) => e.label)).toEqual(['Claude Code · Claude', 'Claude Code · GPT (gpt-6.1-sol)']);
+  });
+
   it('reports the split as configured', () => {
     expect(aggregateEngineCompare(input([], {})).split).toEqual({ on: false, entries: [] });
     const on = aggregateEngineCompare(input([], {}, { config: { defaults: { engine_split: ['claude', { engine: 'codex', weight: 2 }] } } }));
-    expect(on.split).toEqual({ on: true, entries: [{ key: 'claude', label: 'Claude Code', weight: 1 }, { key: 'codex', label: 'Codex', weight: 2 }] });
+    expect(on.split).toEqual({ on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 2 }] });
   });
 });

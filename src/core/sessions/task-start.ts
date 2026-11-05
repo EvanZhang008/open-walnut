@@ -255,7 +255,9 @@ async function splitPick(task: Task, params: SessionStartParams) {
   const { hostEnginesAvailability } = await import('../agents/host-engines.js');
   let answer: Awaited<ReturnType<typeof hostEnginesAvailability>> | undefined;
   const pick = await pickSplitEngine(builders, async (id) => {
-    answer ??= await hostEnginesAvailability(host || '__local__', { dial: false });
+    // Dialed (still bounded by its 4 s deadline, then cached): a remote host with no cached answer would
+    // otherwise leave every ACP entry out of the split.
+    answer ??= await hostEnginesAvailability(host || '__local__');
     const row = answer[id];
     return row ? row.installed : null;
   }, Date.now(), task.id);
@@ -298,11 +300,24 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       throw new HostsFullError(`Task ${d.taskId} did not start: ${why}.${where} Retry task_start with this id once one of your running `
         + `tasks ends; when the user asked for it now, pass user_request with their words, which starts it at once.`, d);
     }
+    await nameSplitPickInFailure(err, params);
     throw err;
   }
   const { clearStartQueue } = await import('./start-queue.js');
   await clearStartQueue(result.taskId, 'started');
   return result;
+}
+
+/**
+ * A failed start that ran on the split's pick says so, and how to pick another: a retry reuses the
+ * pick, so an engine that keeps failing would otherwise be retried forever.
+ */
+async function nameSplitPickInFailure(err: unknown, params: SessionStartParams): Promise<void> {
+  if (!(err instanceof Error) || params.engine !== undefined || !params.taskIdPrefix) return;
+  const pick = await getTask(params.taskIdPrefix).then((t) => t.engine_pick, () => undefined);
+  if (!pick || err.message.includes('engine split')) return;
+  const { builderLabel } = await import('../agents/engine-split.js');
+  try { err.message += ` (It was to run on ${builderLabel(pick)}, the engine split's pick for this task; a retry uses it again, so if that engine keeps failing, retry with engine, for example "claude", to choose another.)`; } catch { /* a read-only message */ }
 }
 
 /** A start no host had room for, as the task's last start (unless another start is under way). */

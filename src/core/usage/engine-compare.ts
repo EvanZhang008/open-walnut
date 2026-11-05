@@ -119,6 +119,8 @@ export interface EngineCompare {
   splitOnly: boolean;
   /** Tasks in the period (and project) the split assigned, whichever tasks are counted. */
   splitTasks: number;
+  /** What 'auto' counts in this period: true = only the split's tasks. */
+  auto: boolean;
 }
 
 /** 'auto' counts only the split's tasks once it assigned this many: two columns of five finished. */
@@ -160,7 +162,8 @@ export function taskSessionId(t: Pick<Task, 'session_id' | 'exec_session_id' | '
 }
 
 function counted(t: Task): boolean {
-  if (!taskSessionId(t) || t.org_role || t.walnut_agent || t.routine_start || t.plugin_only) return false;
+  // A start that failed before its engine named a session (an ACP engine names it late) still counts, as an error.
+  if ((!taskSessionId(t) && !t.engine_pick && !t.last_start) || t.org_role || t.walnut_agent || t.routine_start || t.plugin_only) return false;
   return !/^ask /i.test((t.project ?? '').trim());
 }
 
@@ -202,7 +205,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   for (const t of input.tasks) {
     // A reviewer subtask counts toward its parent; a top-level task titled "Review ..." is work of its own.
     if (!counted(t) || (t.parent_task_id && REVIEW_RE.test(t.title))) continue;
-    const session = input.sessions.get(taskSessionId(t)!);
+    const sid = taskSessionId(t);
+    const session = sid ? input.sessions.get(sid) : undefined;
     const done = t.phase === 'COMPLETE' && !!t.completed_at;
     // From its first session's start (a restart, an engine switch or a recovery starts another)
     // to its first completion (a reopen adds the idle time before it otherwise).
@@ -213,7 +217,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const day = input.dayOf(done ? t.completed_at! : startedAt);
     if (!inRange(day, input.range)) continue;
     const spend = input.spend.get(t.id);
-    const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine);
+    const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine ?? t.last_start?.engine);
     const family = modelFamily(spend?.model) ?? modelFamily(session?.acpModel ?? session?.cliModel ?? session?.model)
       ?? modelFamily(t.engine_pick?.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
     const byCost: Group = { key: `${engine}|${family}`, engine, family };
@@ -238,12 +242,18 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       switched: !!byPick && byPick.key !== byCost.key, finishedAt: done ? t.completed_at! : '',
     });
   }
-  const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: builderLabel(b), weight: b.weight }));
+  // Named like the columns ("Claude Code · GPT"), with the model an entry names.
+  const entries = splitBuilders(input.config).map((b) => {
+    const fam = modelFamily(b.model) ?? ENGINE_FAMILY[resolveEngine(b.engine)] ?? 'Other';
+    return { key: b.key, label: `${builderLabel({ engine: b.engine })} · ${fam}${b.model ? ` (${b.model})` : ''}`, weight: b.weight };
+  });
   const splitOn = entries.length >= 2;
   const inProject = (c: Candidate) => input.project === undefined || c.project === input.project;
   const splitTasks = candidates.filter((c) => c.split && inProject(c)).length;
-  // 'auto': the split's own tasks once it is on and assigned enough to compare, else every task.
-  const splitOnly = input.splitOnly === 'auto' ? splitOn && splitTasks >= AUTO_SPLIT_MIN : !!input.splitOnly;
+  // 'auto': the split's own tasks once it is on and assigned enough in the period to compare, else every task.
+  // Decided on the whole period, so choosing a project never flips which tasks count.
+  const auto = splitOn && candidates.filter((c) => c.split).length >= AUTO_SPLIT_MIN;
+  const splitOnly = input.splitOnly === 'auto' ? auto : !!input.splitOnly;
   const scoped = splitOnly ? candidates.filter((c) => c.split) : candidates;
   const projects = new Map<string, number>();
   for (const c of scoped) projects.set(c.project, (projects.get(c.project) ?? 0) + 1);
@@ -256,14 +266,18 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   for (const [key, { engine, family }] of meta) {
     const all = picked.filter((p) => p.key === key);
     const done = all.filter((p) => p.done);
+    const known = done.filter((p) => !p.noUsage);
     const per = (f: (p: EngineCompareTask) => number) => done.length ? done.reduce((a, p) => a + f(p), 0) / done.length : null;
     rows.push({
       key, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}`,
       done: done.length, open: all.length - done.length, split: all.filter((p) => p.split).length,
       medianHours: median(done.map((p) => p.hours).filter((h): h is number => h !== null)),
       costUsd: all.reduce((a, p) => a + p.costUsd, 0), partialCost: all.filter((p) => p.partialCost).length,
-      noUsage: all.filter((p) => p.noUsage).length, switched: all.filter((p) => p.switched).length, medianCostUsd: median(done.map((p) => p.costUsd)),
-      tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(done.map((p) => p.tokens)),
+      // Under the column the split assigned, in either view.
+      noUsage: all.filter((p) => p.noUsage).length, switched: picked.filter((p) => p.switched && p.byPick?.key === key).length,
+      // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").
+      medianCostUsd: median(known.map((p) => p.costUsd)),
+      tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
       reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: all.filter((p) => p.reviewPartialCost).length, followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
       reopenedShare: per((p) => (p.reopens > 0 ? 1 : 0)),
@@ -278,7 +292,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,
     projects: [...projects].sort((a, b) => b[1] - a[1]).map(([project, n]) => ({ project, tasks: n })),
-    split: { on: splitOn, entries }, taskCount: picked.length, splitOnly, splitTasks,
+    split: { on: splitOn, entries }, taskCount: picked.length, splitOnly, splitTasks, auto,
   };
 }
 

@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SettingsGroup, SettingsLoadingRow, SettingsEmpty, SettingsNotice } from '@/components/settings/SettingsSection';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
-import { fetchEngineCompare, type EngineCompare, type EngineCompareRow } from '@/api/usage';
+import { fetchEngineCompare, type EngineCompare, type EngineCompareRow, type EngineCompareTask } from '@/api/usage';
 import { usePageView } from '@/utils/view-memory';
 import { openTaskOnHome } from '@/utils/open-session';
 import { formatTokens } from '@/utils/format';
@@ -53,6 +53,13 @@ const ownPartial = (r: EngineCompareRow) => r.partialCost;
 const reviewPartial = (r: EngineCompareRow) => r.reviewPartialCost ?? 0;
 const noUsage = (r: EngineCompareRow) => r.noUsage ?? 0;
 const tasksWord = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
+/** The tooltip of one task's cost: why it is unknown or a floor. */
+function taskCostNote(t: EngineCompareTask): string | undefined {
+  if (t.noUsage) return 'No usage of this task was recorded (an engine Walnut does not read usage from)';
+  if (t.partialCost || t.reviewPartialCost) return 'Some requests (its own or a reviewer\'s) used a model with no price: left out of this cost';
+  return undefined;
+}
+
 /** The tooltip of a value that is a floor: which of its tasks it leaves out, and why. */
 function partialNote(m: Metric, r: EngineCompareRow): string {
   const none = noUsage(r);
@@ -75,7 +82,7 @@ const METRICS: Metric[] = [
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of its finished tasks that were reopened.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
-  { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counting only the split\'s tasks, a task stays in the column it was assigned to.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
+  { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counted in the column the split assigned; counting only the split\'s tasks, the task itself stays there too.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
 ];
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
@@ -127,7 +134,9 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
           {/* Shown whenever the choice changes anything: a split since turned off still has its tasks to count. */}
           {(split?.on || splitOnly || (data?.splitTasks ?? 0) > 0) && (
             <span className="usage-ec-which">
-              <SegmentedControl<'all' | 'split'> aria-label="Which tasks" value={splitOnly ? 'split' : 'all'} onChange={(v) => setWhich(v)}
+              {/* Picking what 'auto' gives now keeps 'auto', so the card follows the split again once it has enough. */}
+              <SegmentedControl<'all' | 'split'> aria-label="Which tasks" value={splitOnly ? 'split' : 'all'}
+                onChange={(v) => setWhich(data?.auto !== undefined && (v === 'split') === data.auto ? 'auto' : v)}
                 options={[{ value: 'all', label: 'All tasks', testId: 'usage-engines-all' }, { value: 'split', label: 'Assigned by the split', testId: 'usage-engines-split-only' }]} />
             </span>
           )}
@@ -199,8 +208,8 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>
-                      <td className="num usage-line-cost" title={t.partialCost || t.reviewPartialCost ? 'Some requests (its own or a reviewer\'s) used a model with no price: left out of this cost' : undefined}>
-                        {money(t.costUsd)}{(t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}
+                      <td className="num usage-line-cost" title={taskCostNote(t)}>
+                        {t.noUsage ? 'unknown' : money(t.costUsd)}{!t.noUsage && (t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}
                       </td>
                     </tr>
                   ))}
