@@ -198,6 +198,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/session-hooks/derive/session.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/sessions/lane-turn-gate.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/sessions/lane-turn.ts': 'a session:result: an intermediate result is no turn end',
+  'src/core/sessions/context-full-recovery.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/sessions/thread-takeaway.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/sessions/thread-title.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/time-tracking/agent-time.ts': 'a session:result: an intermediate result is no turn end',
