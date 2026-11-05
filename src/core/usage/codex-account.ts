@@ -23,14 +23,6 @@ export function codexAccount(provider: string | undefined | null): CodexAccount 
   return { key, label: KNOWN_LABEL[key] ?? (proxy ? `Proxy: ${key}` : key), direct: !proxy };
 }
 
-/**
- * Whether a bill brought in from outside (the cloud account's usage bill) can hold this provider's
- * requests: every provider but a direct OpenAI account goes through that cloud account.
- */
-export function inCloudBill(provider: string | undefined | null): boolean {
-  return !/^openai/i.test((provider ?? '').trim());
-}
-
 /** `…/open-walnut/tasks/<id>/…` is a Walnut task's working directory: the run belongs to that task. */
 export function taskIdOfCwd(cwd: string): string | undefined {
   return /\/open-walnut\/tasks\/([A-Za-z0-9][A-Za-z0-9-]{5,63})(?:\/|$)/.exec(cwd.replace(/\\/g, '/'))?.[1];

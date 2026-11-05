@@ -293,6 +293,9 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // usage.codexOutside (codex-outside-core.ts): the Codex runs no Walnut session started, read
   // host-side from Codex's own rollout files, in time-budgeted pages. Sidecar-gated in the source twin.
   'codex-outside-v1',
+  // usage.scan with `outside: true` (claude-outside-core.ts): also reads the Claude Code sessions Walnut
+  // has no record of, and says how each one was started. Sidecar-gated in the source twin.
+  'claude-outside-v1',
   // Session budgets on the owning host (usage-budget-runtime.ts): spend priced from the
   // engine's own usage with the server's pushed price list; paused at the limit or on
   // an unpriced request; usage.budget.list for the server's pause notices.

@@ -23,6 +23,14 @@ export interface RollupRow {
 }
 
 /** One day of one model's tokens from a source outside Walnut's own records. */
+/**
+ * A bill brought in from outside is the cloud account's whole spend for the days it covers, so any other
+ * row on those days (a run read later, a session imported later) is already in it and is left out of every
+ * sum, whichever came first. A run on a direct OpenAI account is not in a cloud bill and stays.
+ */
+const BILLED_DAY_CLAUSE = `NOT (source != 'import' AND date IN (SELECT date FROM usage_rollup WHERE source = 'import')
+  AND NOT EXISTS (SELECT 1 FROM usage_rollup_origin o WHERE o.host = usage_rollup.host AND o.session_id = usage_rollup.session_id AND o.provider LIKE 'openai%'))`;
+
 export interface ImportRow {
   date: string; model: string; band?: number;
   input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number;
@@ -107,14 +115,6 @@ export class CostRollup {
   }
   setOutsideMisses(host: string, misses: Record<string, number>): void { this.setMeta(`outside_misses:${host}`, JSON.stringify(misses)); }
 
-  /** Forgets that any host's outside runs were read, so the next collection reads them all again (a bill changed what they add to). */
-  resetOutsideScans(): void {
-    this.db.prepare("DELETE FROM usage_rollup_meta WHERE key LIKE 'outside_at:%' OR key LIKE 'outside_resume:%'").run();
-    this.setMeta('outside_gen', String(Number(this.meta('outside_gen') ?? '0') + 1));
-  }
-  /** Counts the resets: a pass that started under another number must not mark its hosts as read. */
-  outsideGeneration(): string { return this.meta('outside_gen') ?? '0'; }
-
   /** Where a pass a time budget cut short goes on from (absent: none is half done). */
   outsideResume(host: string): OutsideResume | undefined {
     const raw = this.meta(`outside_resume:${host}`);
@@ -132,6 +132,19 @@ export class CostRollup {
     if (known?.stored) return false;
     return !!this.db.prepare('SELECT 1 FROM usage_rollup WHERE session_id=? AND engine=? LIMIT 1').get(sessionId, engine);
   }
+
+  originOf(host: string, sessionId: string): RunOrigin | undefined {
+    const r = this.db.prepare('SELECT originator, provider, cwd, outside, stored, first_at first_day, last_at last_day FROM usage_rollup_origin WHERE host=? AND session_id=?').get(host, sessionId) as
+      { originator: string; provider: string; cwd: string; outside: number; stored: number; first_day: string; last_day: string } | undefined;
+    return r && { host, sessionId, originator: r.originator, provider: r.provider, cwd: r.cwd, outside: !!r.outside, stored: !!r.stored, firstAt: r.first_day, lastAt: r.last_day };
+  }
+
+  /** Whether a host's Claude Code sessions outside Walnut were ever read in full (an incremental pass only sees new ones). */
+  claudeOutsideBuilt(host: string): boolean { return this.meta(`claude_outside_built:${host}`) === '1'; }
+  markClaudeOutsideBuilt(host: string): void { this.setMeta(`claude_outside_built:${host}`, '1'); }
+  /** Full reads that left a file unreadable, in a row: a file that stays unreadable stops holding the full read back after a few. */
+  claudeOutsideTries(host: string): number { return Number(this.meta(`claude_outside_tries:${host}`) ?? 0) || 0; }
+  setClaudeOutsideTries(host: string, tries: number): void { this.setMeta(`claude_outside_tries:${host}`, String(tries)); }
 
   recordOrigins(rows: RunOrigin[]): void {
     const put = this.db.prepare('INSERT OR REPLACE INTO usage_rollup_origin VALUES (?,?,?,?,?,?,?,?,?)');
@@ -245,7 +258,7 @@ export class CostRollup {
 
   /** Sums grouped by the given columns plus model and band, for a date range and set of sources. */
   query(opts: { start?: string; end?: string; sources: string[]; by: RollupColumn[] }): (RollupRow & Record<string, unknown>)[] {
-    const clauses = [`source IN (${opts.sources.map(() => '?').join(',')})`];
+    const clauses = [`source IN (${opts.sources.map(() => '?').join(',')})`, BILLED_DAY_CLAUSE];
     const args: unknown[] = [...opts.sources];
     if (opts.start) { clauses.push('date >= ?'); args.push(opts.start); }
     if (opts.end) { clauses.push('date <= ?'); args.push(opts.end); }
@@ -256,17 +269,17 @@ export class CostRollup {
       FROM usage_rollup WHERE ${clauses.join(' AND ')} GROUP BY ${cols.map(c => c.sql).join(', ')}`).all(...args)) as (RollupRow & Record<string, unknown>)[];
   }
 
+  /** The days an import covers: anything else counted on them is already in the bill. */
+  billedDays(): Set<string> {
+    return new Set((this.db.prepare("SELECT DISTINCT date FROM usage_rollup WHERE source = 'import'").all() as { date: string }[]).map(r => r.date));
+  }
+
   /** Each host's first and last stored day; an import is listed as a host of its own, flagged. */
   hostBounds(): { host: string; from: string; to: string; imported?: true }[] {
     // Plain aliases: `from` and `to` in double quotes are an error in the macOS build's SQLite.
     const rows = this.db.prepare(`SELECT host, MIN(date) first_day, MAX(date) last_day, source='import' imported FROM usage_rollup
       GROUP BY host, source='import' ORDER BY source='import', host`).all() as { host: string; first_day: string; last_day: string; imported: number }[];
     return rows.map(r => ({ host: r.host, from: r.first_day, to: r.last_day, ...(r.imported ? { imported: true as const } : {}) }));
-  }
-
-  /** The days an import covers: each is the account's whole bill, so runs read later for those days are not added again. */
-  importedDays(): Set<string> {
-    return new Set((this.db.prepare("SELECT DISTINCT date d FROM usage_rollup WHERE source = 'import'").all() as { d: string }[]).map(r => r.d));
   }
 
   /** The first day usage Walnut recorded itself is stored (an import stops short of it, so no day is counted twice). */
@@ -298,8 +311,6 @@ export class CostRollup {
       this.db.prepare("DELETE FROM usage_rollup WHERE source='import' AND host=?").run(label);
       const all = [...sums.values()];
       await this.writeRows(all);
-      // The days a bill covers decide which outside runs are added: they are read again against the new ones.
-      this.resetOutsideScans();
       const days = all.map(r => r.date).sort();
       return { stored: all.length, skipped, from: days[0] ?? null, to: days[days.length - 1] ?? null };
     });

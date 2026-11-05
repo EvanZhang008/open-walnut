@@ -54,6 +54,11 @@ export class ResponseUsageStore {
     this.rollup = new CostRollup(this.db);
   }
 
+  /** True when any response is stored for the session. */
+  hasSession(sessionId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM response_usage WHERE session_id=? LIMIT 1').get(sessionId);
+  }
+
   /** The live usage table (tracker.ts) in the same file, for Walnut's own calls. */
   get database(): DatabaseType { return this.db; }
 

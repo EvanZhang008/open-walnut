@@ -5,6 +5,7 @@ import { scanCanonicalUsageIndexed, usageIndexPath } from './usage-scan-index.js
 import { scanProxyUsage, reconcileUsageAsync } from './usage-reconcile-core.js';
 import { setImmediate } from 'node:timers/promises';
 import { priceUsage } from '../core/usage/pricing.js';
+import { claudeSessionMetas, outsideSessionIds, WALNUT_SESSION_ENTRYPOINT, type ClaudeSessionMeta } from './claude-outside-core.js';
 
 export interface UsageScanRequest {
   projectsDir: string;
@@ -15,6 +16,8 @@ export interface UsageScanRequest {
   lifetime?: boolean;
   /** Where the host keeps its transcript file index (usage-scan-index.ts); unset: read every file. */
   indexDir?: string;
+  /** Also read the sessions Walnut has no record of (claude-outside-v1), and say how each one was started. */
+  outside?: boolean;
 }
 
 const NEAR_MS = 10 * 60_000;
@@ -38,7 +41,11 @@ export async function scanHostUsage(request: UsageScanRequest) {
       }
     } catch { /* Missing evidence stays unverified. */ }
   }
-  const upstream = await scanProxyUsage({ files, sessionIds: request.sessionIds });
+  // Sessions Walnut did not start: their ids join the ones asked for (the proxy evidence too), and the page says how each began.
+  const metas = request.outside ? await claudeSessionMetas(request.projectsDir, request.indexDir) : undefined;
+  // (No session list at all already reads every session.)
+  const sessionIds = metas && request.sessionIds ? [...new Set([...request.sessionIds, ...outsideSessionIds(metas)])] : request.sessionIds;
+  const upstream = await scanProxyUsage({ files, sessionIds });
   // Requests ten minutes or more outside the window cannot compete for one of its
   // responses; keeping them would stretch the transcript read back by days.
   if (since !== undefined && !request.lifetime) {
@@ -56,10 +63,13 @@ export async function scanHostUsage(request: UsageScanRequest) {
     since: request.lifetime || retainedSince === undefined ? undefined : new Date(retainedSince),
     until: request.lifetime ? undefined : Number.isFinite(retainedEnd.getTime()) ? retainedEnd : undefined,
   };
+  window.sessionIds = sessionIds;
   const indexed = request.indexDir && !request.lifetime
     ? await scanCanonicalUsageIndexed({ ...window, indexPath: usageIndexPath(request.indexDir, request.projectsDir) })
     : undefined;
-  const canonical = indexed ?? await scanCanonicalUsage(window);
+  const scanned = indexed ?? await scanCanonicalUsage(window);
+  // A transcript whose first lines could not be read is an unreadable file of this pass, so the server reads it in full again.
+  const canonical = metas?.unreadable ? { ...scanned, diagnostics: { ...scanned.diagnostics, unreadable_files: scanned.diagnostics.unreadable_files + metas.unreadable } } : scanned;
   const scoped = await reconcileUsageAsync(canonical.records, upstream.records, request.lifetime ? {} : { since, until });
   const used = new Set<typeof upstream.records[number]>();
   for (const [index, record] of scoped.records.entries()) {
@@ -71,8 +81,19 @@ export async function scanHostUsage(request: UsageScanRequest) {
     if (request.lifetime || used.has(record) || ((since === undefined || record.startedMs >= since) && record.startedMs < until)) inWindow.push(record);
     if (index % 100 === 99) await setImmediate();
   }
+  // How each session that is not a Walnut session (or was started outside one) began, kept for the pages to carry.
+  let outsideMeta: Map<string, ClaudeSessionMeta> | undefined;
+  if (metas) {
+    outsideMeta = new Map();
+    const asked = new Set(request.sessionIds ?? []);
+    for (const [index, record] of scoped.records.entries()) {
+      const meta = outsideMeta.has(record.sessionId) ? undefined : metas.get(record.sessionId);
+      if (meta && (!asked.has(meta.sessionId) || meta.entrypoint !== WALNUT_SESSION_ENTRYPOINT)) outsideMeta.set(meta.sessionId, meta);
+      if (index % 1000 === 999) await setImmediate();
+    }
+  }
   return { canonical: { ...canonical, records: scoped.records }, upstream: { ...upstream, records: inWindow },
-    reconciliation: scoped, until: request.until, ...(indexed ? { scan: indexed.scan } : {}) };
+    reconciliation: scoped, until: request.until, ...(indexed ? { scan: indexed.scan } : {}), ...(outsideMeta ? { outsideMeta } : {}) };
 }
 
 export function createUsagePages() {
@@ -83,9 +104,12 @@ export function createUsagePages() {
     const result = jobs.get(key)?.result;
     if (!result) throw new Error('Usage collection expired; check sources again.');
     const records = result.reconciliation.records.slice(offset, offset + 500);
+    // The sessions whose records this page carries, and how each began (outside runs only; absent on a plain scan).
+    const { outsideMeta, ...rest } = result as typeof result & { outsideMeta?: Map<string, ClaudeSessionMeta> };
+    const outsideSessions = outsideMeta ? [...new Set(records.map(r => r.sessionId))].flatMap(id => outsideMeta.get(id) ?? []) : undefined;
     const end = offset + records.length;
     const done = end >= result.reconciliation.records.length;
-    const evidence = { ...result, canonical: { ...result.canonical, records: [], costStates: [] }, upstream: { ...result.upstream, records: [],
+    const evidence = { ...rest, ...(outsideSessions ? { outsideSessions } : {}), canonical: { ...result.canonical, records: [], costStates: [] }, upstream: { ...result.upstream, records: [],
       recordCount: result.upstream.records.length }, reconciliation: { ...result.reconciliation, records,
       upstreamUnmatched: [], unmatchedCount: result.reconciliation.upstreamUnmatched.length,
       responseCount: result.reconciliation.records.length,
@@ -107,5 +131,6 @@ export function createUsagePages() {
 export { scanCostState, priceUsage };
 export { scanSessionCost, SESSION_COST_DAY_SPLIT } from './session-cost-core.js';
 export { scanCodexOutside, CODEX_OUTSIDE_SCAN } from './codex-outside-core.js';
+export { CLAUDE_OUTSIDE } from './claude-outside-core.js';
 export { createUsageBudgetRuntime } from './usage-budget-runtime.js';
 export { createBudgetControl } from './usage-budget-control.js';

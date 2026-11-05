@@ -228,7 +228,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -13383,6 +13383,7 @@ function daemonCapabilities() {
   if (usageCore && typeof usageCore.scanSessionCost === 'function') caps.push('session-cost-v1');
   if (usageCore && typeof usageCore.scanSessionCost === 'function' && usageCore.SESSION_COST_DAY_SPLIT === true) caps.push('session-cost-day-v1');
   if (usageCore && typeof usageCore.scanCodexOutside === 'function' && usageCore.CODEX_OUTSIDE_SCAN === true) caps.push('codex-outside-v1');
+  if (usageCore && usageCore.CLAUDE_OUTSIDE === true) caps.push('claude-outside-v1');
   if (usageBudget && budgetControl) caps.push('budget-v2');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
@@ -13717,6 +13718,7 @@ async function cmdUsageScan(ws, id, cmd) {
     projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
     ...(typeof cmd.proxyLogDir === 'string' ? { proxyLogDir: cmd.proxyLogDir } : {}),
     ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}), until, sessionIds,
+    ...(cmd.outside === true ? { outside: true } : {}),
     // The transcript file index: a scan reads only what the files gained since the last one.
     indexDir: path.join(DAEMON_DIR, 'usage-scan-index'),
   }));

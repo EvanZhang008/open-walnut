@@ -12,7 +12,7 @@
 import { log } from '../../logging/index.js';
 import type { CodexOutsideScan } from '../../providers/codex-outside-core.js';
 import type { CostRollup, DayBucket, RunOrigin } from './cost-rollup.js';
-import { inCloudBill, taskIdOfCwd } from './codex-account.js';
+import { taskIdOfCwd } from './codex-account.js';
 
 const PAGE_BUDGET_MS = 20_000;
 const PAGE_TIMEOUT_MS = 45_000;
@@ -40,8 +40,6 @@ export async function collectOutsideCodex(opts: {
   const { rollup } = opts;
   // The bands this whole call reads with: a change meanwhile leaves the host marked as read with the old ones.
   const key = rollup.key;
-  // A bill imported or removed while this call runs changes what its pages should have stored: it marks nothing as read then.
-  const generation = rollup.outsideGeneration();
   const thresholds = JSON.parse(key || '[]') as number[];
   let runs = 0, skipped = 0, failed = 0, done = 0;
   for (const host of opts.hosts) {
@@ -75,7 +73,6 @@ export async function collectOutsideCodex(opts: {
       log.usage.warn('outside codex read failed', { host, error: String(error) });
       continue;
     }
-    if (rollup.outsideGeneration() !== generation) { log.usage.info('outside codex pass superseded by an import change', { host }); continue; }
     if (complete) {
       // A file that could not be read keeps the watermark where it was, so the next pass reads it again; a file that
       // fails MAX_RETRY_PASSES passes in a row (counted per file) is left behind.
@@ -98,8 +95,6 @@ export async function collectOutsideCodex(opts: {
 }
 
 async function storePage(rollup: CostRollup, host: string, scan: CodexOutsideScan): Promise<{ runs: number; skipped: number }> {
-  // Days a bill brought in from outside covers are the cloud account's whole spend: a run on that account read later for those days is already in it.
-  const billed = rollup.importedDays();
   const dateOf = new Intl.DateTimeFormat('en-CA', { timeZone: scan.byDay.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
   const origins: RunOrigin[] = [];
   const writes: { entry: CodexOutsideScan['entries'][number] }[] = [];
@@ -118,7 +113,7 @@ async function storePage(rollup: CostRollup, host: string, scan: CodexOutsideSca
   for (const { entry: e } of writes) {
     const buckets: DayBucket[] = (e.buckets ?? []).flatMap(b => {
       const day = b.day ?? (b.lastAt ? dateOf.format(Date.parse(b.lastAt)) : undefined);
-      return day && !(billed.has(day) && inCloudBill(e.provider)) ? [{ day, model: b.model, band: b.band, responses: b.responses, input: b.input, output: b.output, cacheRead: b.cacheRead,
+      return day ? [{ day, model: b.model, band: b.band, responses: b.responses, input: b.input, output: b.output, cacheRead: b.cacheRead,
         cacheWrite5m: b.cacheWrite5m, cacheWrite1h: b.cacheWrite1h, cacheWrite: b.cacheWrite }] : [];
     });
     await rollup.replaceSession({ sessionId: e.sessionId, host, engine: 'codex', taskId: taskIdOfCwd(e.cwd) ?? null, source: 'session' }, buckets, { byDay: true });

@@ -9,6 +9,8 @@ import type { UsageFilter } from './types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import type { DayBucket } from './cost-rollup.js';
 import { outsideHosts } from './outside-codex.js';
+import { classifyClaudeOutside } from './outside-claude.js';
+import type { ClaudeSessionMeta } from '../../providers/claude-outside-core.js';
 import type { SessionCostScan } from '../../providers/session-cost-core.js';
 
 let store: ResponseUsageStore | undefined;
@@ -81,14 +83,45 @@ async function collect(since: string | undefined, until: string) {
       title: session.title, project: session.project, lane: session.lane });
     hosts.set(host, owners);
   }
+  // Every host Walnut knows is read for Claude Code sessions it did not start, one machine once (a Mac reached two ways is two
+  // rows in config.hosts); one with no Claude session record of Walnut's is skipped quietly when it cannot be read or cannot do it.
+  const { joinedAliasOf, pickableHosts } = await import('../hosts/joined-twins.js');
+  const asJoined = joinedAliasOf(config.hosts ?? {}, config.net);
+  // The machine's own name reads the sessions outside Walnut, whichever of its names a session record uses, so what that read stores
+  // (rows, origins, the full-read mark) never moves to another name. A name added only for that is skipped quietly when it cannot be read.
+  const extraHosts = new Set<string>();
+  const addMachine = (alias: string) => {
+    const machine = asJoined(alias);
+    if (!hosts.has(machine)) { hosts.set(machine, []); extraHosts.add(machine); }
+  };
+  for (const host of [...hosts.keys()]) addMachine(host);
+  for (const [alias] of pickableHosts(config.hosts ?? {}, config.net)) addMachine(alias);
+  // Sessions Walnut has a record of, by machine, each with the name its record uses: another name's sessions are stored by that name's own read.
+  const ownerNames = new Map<string, Map<string, string>>();
+  for (const [host, owners] of hosts) {
+    const byId = ownerNames.get(asJoined(host)) ?? new Map<string, string>();
+    for (const o of owners) byId.set(o.sessionId, host);
+    ownerNames.set(asJoined(host), byId);
+  }
   const results = [];
   for (const [host, owners] of hosts) {
     try {
       const conn = await link(host);
       await conn.connect();
-      if (!conn.hasCapability('usage-scan-v1')) throw new Error('This host needs the usage collector daemon upgrade.');
-      let reply = await conn.send('usage.scan', { since: sinceFor(host), until, sessionIds: owners.map(o => o.sessionId),
-        proxyLogDir: config.usage?.proxy_log_dirs?.[host] }, 30 * 60_000);
+      if (!conn.hasCapability('usage-scan-v1') || (extraHosts.has(host) && !conn.hasCapability('claude-outside-v1'))) {
+        if (extraHosts.has(host)) continue;
+        throw new Error('This host needs the usage collector daemon upgrade.');
+      }
+      // Sessions Walnut did not start are read too (a daemon that can). Until they were read in full once, the whole history is.
+      const machine = asJoined(host);
+      const outsideScan = conn.hasCapability('claude-outside-v1') && host === machine;
+      const fullOutside = outsideScan && !rollup.claudeOutsideBuilt(host) && (since === undefined || since === INCREMENTAL);
+      const requestSince = fullOutside ? undefined : sinceFor(host);
+      const known = ownerNames.get(machine) ?? new Map<string, string>();
+      const foreign = new Set([...known].filter(([, name]) => name !== host).map(([id]) => id));
+      let unreadable = 0;
+      let reply = await conn.send('usage.scan', { since: requestSince, until, sessionIds: owners.map(o => o.sessionId),
+        ...(outsideScan ? { outside: true } : {}), proxyLogDir: config.usage?.proxy_log_dirs?.[host] }, 30 * 60_000);
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
       let logged = false;
@@ -96,15 +129,30 @@ async function collect(since: string | undefined, until: string) {
         if (!reply.ok || !reply.result) throw new Error(String(reply.error ?? 'No usage evidence returned.'));
         const scan = (reply.result as { scan?: unknown }).scan;
         if (scan && !logged) { logged = true; log.usage.info('usage scan read', { host, scan }); }
-        const imported = await responseUsageStore().importHost(host, reply.result as UsageEvidence, owners);
+        const evidence = reply.result as UsageEvidence & { outsideSessions?: ClaudeSessionMeta[] };
+        unreadable += (evidence.canonical?.diagnostics as { unreadable_files?: number } | undefined)?.unreadable_files ?? 0;
+        // A session another name of this machine owns is stored by that name's own read.
+        if (outsideScan && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
+        // Who started each outside session is noted before its responses are stored.
+        const extra = evidence.outsideSessions?.length
+          ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];
+        const imported = await responseUsageStore().importHost(host, evidence, extra.length ? [...owners, ...extra] : owners);
         responses += imported.responses; verified += imported.verified; unverified += imported.unverified;
         checks = imported.checks;
         if (reply.done !== false) break;
         reply = await conn.send('usage.scan', { key: reply.key, offset: reply.offset }, 30_000);
       }
       responseUsageStore().finishHost(host, until, checks);
+      // Only a read from the beginning counts as the full one; a pass with a start (a manual window) leaves it for the next.
+      // A file that could not be read keeps the full read for the next pass, a few times at most.
+      if (outsideScan && requestSince === undefined) {
+        const tries = unreadable > 0 ? rollup.claudeOutsideTries(host) + 1 : 0;
+        rollup.setClaudeOutsideTries(host, tries);
+        if (tries === 0 || tries >= 3) rollup.markClaudeOutsideBuilt(host);
+      }
       results.push({ host, responses, verified, unverified });
     } catch (error) {
+      if (extraHosts.has(host)) { log.usage.debug('claude outside read skipped', { host, error: String(error) }); continue; }
       responseUsageStore().markHostUnavailable(host, String(error));
       results.push({ host, status: 'unverified', detail: String(error) });
     }
@@ -114,8 +162,6 @@ async function collect(since: string | undefined, until: string) {
   const engines = await collectEngineSessions(sessions, sinceFor);
   // Every host Walnut knows, whatever engine its sessions use: a host with only terminal Codex runs counts too.
   // One machine once: a Mac reached two ways (found over ssh, joined over the host network) is two rows in config.hosts.
-  const { joinedAliasOf, pickableHosts } = await import('../hosts/joined-twins.js');
-  const asJoined = joinedAliasOf(config.hosts ?? {}, config.net);
   const outsideList = outsideHosts(hosts.keys(), sessions.map(s => s.host ?? '__local__'), pickableHosts(config.hosts ?? {}, config.net).map(([alias]) => alias))
     .map(host => asJoined(host));
   const outside = await collectOutside(sessions, [...new Set(outsideList)]).catch((error) => {

@@ -3666,3 +3666,35 @@ describe('codex outside usage parity (codex-outside-v1)', () => {
     expect(core).not.toMatch(/writeFile|appendFile|unlink|rename\(|rm\(|mkdir|O_WRONLY|O_RDWR|O_CREAT/)
   })
 })
+
+// usage.scan with `outside` (claude-outside-v1): both twins pass the flag to the shared scan, and the
+// source twin advertises the capability only when its sidecar carries the listing.
+describe('claude outside usage parity (claude-outside-v1)', () => {
+  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8')
+  const capsSrc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-capabilities.ts'), 'utf8')
+
+  it("'claude-outside-v1' is advertised, not required, and sidecar-gated on the core's marker in the source twin", () => {
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES')
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart))).not.toMatch(/'claude-outside-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart))).toMatch(/'claude-outside-v1'/)
+    expect(template).toMatch(/SIDECAR_GATED_CAPABILITIES = new Set\(\[[^\]]*'claude-outside-v1'/)
+    expect(template).toMatch(/usageCore\.CLAUDE_OUTSIDE === true\) caps\.push\('claude-outside-v1'\)/)
+  })
+
+  it('both twins hand the outside flag, and only a true one, to the shared usage scan', () => {
+    for (const source of [standalone, template]) {
+      expect(source).toMatch(/cmd\.outside === true \? \{ outside: true \} : \{\}/)
+    }
+  })
+
+  it('the listing reads transcripts and writes only its own cache, never a Claude file', () => {
+    const core = fs.readFileSync(path.join(ROOT, 'src/providers/claude-outside-core.ts'), 'utf8')
+    expect(core).toMatch(/O_RDONLY/)
+    expect(core).not.toMatch(/appendFile|unlink|rm\(|O_WRONLY|O_RDWR|O_CREAT/)
+    // The one write is the cache beside the usage scan index.
+    expect(core.match(/writeFile\(/g)?.length).toBe(1)
+    expect(core).toMatch(/writeFile\(tmp, JSON\.stringify\(cache\)\)/)
+  })
+})

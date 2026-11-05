@@ -198,18 +198,6 @@ describe('runs that change after they were first stored', () => {
     expect(report.totals.costUsd).toBeCloseTo(10 + 2, 9);
   });
 
-  it('does not mark a host as read when an import changed while its pass ran', async () => {
-    rollout('exec1', [meta('exec1'), ctx, count(1_000, 1 * M, 0, 0, '2026-11-04T18:00:00.000Z')]);
-    const changing: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => {
-      const scan = await scanCodexOutside({ ...p, codexHome: home });
-      store.rollup.resetOutsideScans(); // a bill was imported or removed while this page was read
-      return scan;
-    } });
-    expect(await collect({ reader: changing })).toMatchObject({ hosts: 0 });
-    expect(store.rollup.outsideScan('__local__').at).toBe('');
-    expect(await collect()).toMatchObject({ hosts: 1 }); // the next pass reads everything again
-  });
-
   it('reads a file again that could not be read, until it fails three passes in a row', async () => {
     rollout('exec1', [meta('exec1'), ctx, count(1_000, 1 * M, 0, 0, '2026-11-04T18:00:00.000Z')]);
     const flaky: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => ({ ...(await scanCodexOutside({ ...p, codexHome: home })), failed: ['rollout-x.jsonl'] }) });
@@ -275,7 +263,7 @@ describe('days a bill covers and files a pass could not read', () => {
     expect(seen[0]).not.toHaveProperty('since'); // read in full again with the new bands
   });
 
-  it('reads the runs again after a bill changed, since the days it covers decide what they add', async () => {
+  it('shows the runs on days a bill no longer covers, with no new read', async () => {
     await store.rollup.backfill();
     const bill = (date: string) => ({ date, model: 'gpt-6.1-sol', input: 5 * M, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 });
     await store.rollup.replaceImport('Cloud usage bill', [bill('2026-10-01')]);
@@ -283,9 +271,7 @@ describe('days a bill covers and files a pass could not read', () => {
     await collect();
     expect((await buildCostReport('all', {}, deps())).totals.costUsd).toBeCloseTo(10, 9); // the bill's day only
     await store.rollup.replaceImport('Cloud usage bill', []); // the bill no longer covers that day
-    expect(store.rollup.outsideScan('__local__').at).toBe('');
-    await collect();
-    expect((await buildCostReport('all', {}, deps())).totals.costUsd).toBeCloseTo(2, 9); // the run is there now
+    expect((await buildCostReport('all', {}, deps())).totals.costUsd).toBeCloseTo(2, 9); // the run was stored all along
   });
 
   it('writes a run\'s origin before its rows, so a crash between them leaves a run the next pass still updates', async () => {

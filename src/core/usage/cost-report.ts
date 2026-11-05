@@ -300,7 +300,10 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
       count(r.date, p, walnutInto(r.model, 'chat', featureLabel('chat'), r.host as string), 'walnut', [r.model, featureLabel('chat')]);
     }
-    for (const r of trackerRows(deps.db, thresholds, range.start, range.end, deps.timeZone)) {
+    // A helper call on a day a bill covers is inside that bill (they go through the same cloud account; the rare one made on a direct
+    // OpenAI account carries no provider in this table, so it is left out with them).
+    const billed = deps.rollup.billedDays();
+    for (const r of trackerRows(deps.db, thresholds, range.start, range.end, deps.timeZone).filter(r => !billed.has(r.date))) {
       let p = pricer.price(r.model, r.band, r, r.recorded > 0);
       // No list price (an internal model), or only an alias whose model then may be older than
       // today's: the cost the call itself reported, when it reported one.
@@ -431,6 +434,12 @@ export function shortModel(model: string): string {
 export function originatorLabel(originator: string): string {
   if (originator === 'codex_exec') return 'Codex exec';
   if (originator === 'codex-tui' || originator === 'codex_cli_rs') return 'Codex terminal';
+  // Claude Code sessions: the entrypoint the transcript names.
+  if (originator === 'cli') return 'Claude Code terminal';
+  if (originator === 'sdk-cli') return 'Claude Code (claude -p)';
+  if (originator === 'sdk-ts' || originator === 'sdk-py') return 'Claude SDK';
+  if (originator === 'claude-desktop') return 'Claude desktop';
+  if (originator.startsWith('claude-')) return `Claude Code (${originator.slice('claude-'.length)})`;
   return originator || 'Codex';
 }
 
