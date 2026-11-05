@@ -4,7 +4,9 @@
  * user's words and after the rich-output block, in either output mode. It goes out
  * at session start, after a compaction, when the setting changes, and after a
  * reply drifted into another script (`on_drift`, hints/hint-drift.ts); NOT on
- * every message (2026-10-27, the user: the hints showed constantly). Unset or
+ * every message (2026-10-27, the user: the hints showed constantly; 2026-11-05, again,
+ * after rules had put it back on every message: "don't do this every round"), whoever
+ * wrote the message, and with no words of Walnut's in the user's language. Unset or
  * empty adds nothing, so the message stays byte-identical.
  *
  * Why it exists: long sessions and compactions drifted into the wrong language,
@@ -12,7 +14,8 @@
  * session loses.
  *
  * Would-fail-if-reverted: drop the reply-language hint from the registry and every
- * "on" assertion breaks; drop `on_drift` from its triggers and the drift
+ * "on" assertion breaks; send it on every message again and the "later sends carry
+ * nothing" assertions break; drop `on_drift` from its triggers and the drift
  * assertions break; drop the block parse from either display path and the
  * history and client assertions break.
  *
@@ -57,7 +60,7 @@ import {
 } from '../../../src/core/sessions/output-mode.js'
 import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
 import { REPLY_LANGUAGE_SCOPE } from '../../../src/core/hints/hint-registry.js'
-import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js'
+import { replyLanguageCorrection } from '../../../src/core/hints/hint-origin.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js'
@@ -68,9 +71,6 @@ const TEXT = 'why did the deploy guard refuse?'
 const RULE = 'Talk to the user in Chinese; code, commits, UI strings and repo docs stay English.'
 // The hint is the user's sentence, then Walnut's own clause on what it covers.
 const LANG = renderHintBlock('reply-language', `${RULE} ${REPLY_LANGUAGE_SCOPE}`)
-// A message in English (8 letters or more) gets the line in Chinese first (reply-language-lines.ts).
-const ZH = REPLY_LANGUAGE_LINES.zh
-const LANG_EN = renderHintBlock('reply-language', `${ZH.reply} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)
 const ON = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
 const REMIND = renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)
 /** The pre-registry line old transcripts still hold. */
@@ -142,16 +142,16 @@ describe('replyLanguageText', () => {
 })
 
 describe('session:send', () => {
-  // A person's own message carries the rule every time (hint-registry.ts everyPersonTurn, 2026-11-01);
-  // the once-only schedule below is for messages nobody typed (turns nobody typed, further down).
-  it('on: every message he sends carries it; off: the text is byte-identical', async () => {
+  // A person's own message is no reason of its own (2026-11-05): his first message carries it
+  // (session start), the later ones nothing, an English one included.
+  it('on: his first message carries it, the later ones nothing; off: the text is byte-identical', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: TEXT })
-    expect(await drain(sid)).toBe(after(TEXT, LANG_EN))
+    expect(await drain(sid)).toBe(after(TEXT, LANG))
     for (let n = 0; n < 6; n++) {
-      await callSend({ sessionId: sid, message: `again ${n}` })
-      expect(await drain(sid)).toBe(after(`again ${n}`, LANG))
+      await callSend({ sessionId: sid, message: `again, an English message ${n}` })
+      expect(await drain(sid)).toBe(`again, an English message ${n}`)
     }
 
     // The config is read live: clearing it says nothing on the very next send.
@@ -170,7 +170,7 @@ describe('session:send', () => {
     await callSend({ sessionId: sid, message: 'two' })
     expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `Answer in French. ${REPLY_LANGUAGE_SCOPE}`)))
     await callSend({ sessionId: sid, message: 'three' })
-    expect(await drain(sid)).toBe(after('three', renderHintBlock('reply-language', `Answer in French. ${REPLY_LANGUAGE_SCOPE}`)))
+    expect(await drain(sid)).toBe('three')
   })
 
   it('after a compaction it is said again', async () => {
@@ -182,7 +182,7 @@ describe('session:send', () => {
     await callSend({ sessionId: sid, message: 'two' })
     expect(await drain(sid)).toBe(after('two', LANG))
     await callSend({ sessionId: sid, message: 'three' })
-    expect(await drain(sid)).toBe(after('three', LANG))
+    expect(await drain(sid)).toBe('three')
   })
 
   it('a reply that drifted is named on the next send, once', async () => {
@@ -197,11 +197,11 @@ describe('session:send', () => {
       hintState: { ...rec!.hintState!, drift: { 'reply-language': driftAt } },
     })
     await callSend({ sessionId: sid, message: 'two' })
-    // The next message names the drifted turn before the rule (reply-language-correction.test.ts).
-    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `${ZH.drifted} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)))
+    // The next message names the drifted turn, in Walnut's English, before the rule (reply-language-correction.test.ts).
+    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `${replyLanguageCorrection(driftAt)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)))
     expect((await getSessionByClaudeId(sid))?.hintState?.drift).toBeUndefined()
     await callSend({ sessionId: sid, message: 'three' })
-    expect(await drain(sid)).toBe(after('three', LANG))
+    expect(await drain(sid)).toBe('three')
   })
 
   it('rich: it rides after the instruction; the reminder later comes alone', async () => {
@@ -211,10 +211,10 @@ describe('session:send', () => {
     expect(await drain(sid)).toBe(after('one', ON, LANG))
     for (const n of [2, 3, 4, 5]) {
       await callSend({ sessionId: sid, message: `msg ${n}` })
-      expect(await drain(sid)).toBe(after(`msg ${n}`, LANG))
+      expect(await drain(sid)).toBe(`msg ${n}`)
     }
     await callSend({ sessionId: sid, message: 'msg 6' })
-    expect(await drain(sid)).toBe(after('msg 6', REMIND, LANG))
+    expect(await drain(sid)).toBe(after('msg 6', REMIND))
   })
 
   it('a slash command stays byte-exact', async () => {
@@ -233,14 +233,16 @@ describe('session:send', () => {
 })
 
 describe('turns nobody typed', () => {
-  // 2026-11-02, the org review: an English peer note started a worker's English lines, so every
-  // message carries it, with the line in his language under an English one.
-  it('a trigger, another task, a notice and the clock each carry it, every time', async () => {
+  // 2026-11-05, the user: never on every message. An automated message starts the session's
+  // schedule like any other: the first carries it, the rest nothing, until a drift or a change.
+  it('a trigger, another task, a notice and the clock: the first carries it, the rest nothing', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
+    let first = true
     for (const source of ['routine-trigger', 'peer', 'walnut-notify', 'wait-until', 'peer']) {
       await sendMessageToSession(sid, `from ${source}`, { source })
-      expect(await drain(sid)).toBe(after(sent(`from ${source}`, source), LANG_EN))
+      expect(await drain(sid), source).toBe(first ? after(sent(`from ${source}`, source), LANG) : sent(`from ${source}`, source))
+      first = false
     }
   })
 
@@ -248,7 +250,7 @@ describe('turns nobody typed', () => {
     await setSession({ output_mode: 'rich', reply_language: RULE })
     const sid = await newSession()
     await sendMessageToSession(sid, 'peer says hi', { source: 'peer' })
-    expect(await drain(sid)).toBe(after(sent('peer says hi', 'peer'), ON, LANG_EN))
+    expect(await drain(sid)).toBe(after(sent('peer says hi', 'peer'), ON, LANG))
     // Human paths compose before they enqueue; the queue leaves their text alone.
     const fresh = await newSession()
     await sendMessageToSession(fresh, 'plan step', { source: 'web-api' })

@@ -10664,15 +10664,19 @@ export class SessionRunner {
             throw err
           }
           try {
+            // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
+            const { prepareStartHints } = await import('../core/hints/hint-send.js')
+            const started = await prepareStartHints(startData)
             if (isAcpEngine(startData.engine)) {
               log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
-              await this.handleAcpStart(startData)
+              void started.commit((await this.handleAcpStart(started.data)).claudeSessionId)
             } else if (this.sdkClient?.connected) {
               log.session.info('session routing', { taskId: startData.taskId, type: 'sdk' })
-              await this.handleStartSdk(startData)
+              void started.commit((await this.handleStartSdk(started.data)).claudeSessionId)
             } else {
               log.session.info('session routing', { taskId: startData.taskId, type: 'cli' })
-              await this.handleStart(startData)
+              const { sessionReady } = await this.handleStart(started.data)
+              void sessionReady.then((sid) => started.commit(sid), () => {})
             }
           } catch (err) {
             await this.failUnspawnedStart(startData, err)
@@ -11428,17 +11432,26 @@ export class SessionRunner {
     // Text no caller attributed is framed as Walnut's before any engine reads it (sessions/send-frame.ts).
     data = frameStartData(data, framedBy)
     await this.assertStartRouting(data)
+    // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
+    const { prepareStartHints } = await import('../core/hints/hint-send.js')
+    const started = await prepareStartHints(data)
+    data = started.data
     if (isAcpEngine(data.engine)) {
-      return this.handleAcpStart(data)
+      const r = await this.handleAcpStart(data)
+      void started.commit(r.claudeSessionId)
+      return r
     }
 
     // Route to SDK session server when available and connected
     if (this.sdkClient?.connected) {
-      return this.handleStartSdk(data)
+      const r = await this.handleStartSdk(data)
+      void started.commit(r.claudeSessionId)
+      return r
     }
 
     const startTs = Date.now()
     const { sessionReady, title } = await this.handleStart(data)
+    void sessionReady.then((sid) => started.commit(sid), () => {})
     const handleStartMs = Date.now() - startTs
     if (handleStartMs > 2000) {
       log.session.warn('handleStart took unexpectedly long', {

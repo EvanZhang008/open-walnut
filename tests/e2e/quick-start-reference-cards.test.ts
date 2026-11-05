@@ -23,6 +23,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { REFERENCE_CARDS_CLOSE, REFERENCE_CARDS_OPEN } from '../../src/core/sessions/reference-cards.js'
+import { parseHinted } from '../../src/core/hints/hint-format.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -125,6 +126,18 @@ describe('quick-start with a reference in the launch message', () => {
     const res = await post<{ sessionId?: string; error?: string }>('/api/sessions/quick-start', { cwd, message })
     expect(res.status, res.json.error).toBe(200)
     const start = await waitFor(() => daemon.getCommandHistoryFor('start').find((c) => c.payload.sid === res.json.sessionId))
-    expect(start.payload.message).toBe(message)
+    // The words reach the CLI as typed, with no card; the start hints ride after them
+    // (hints/hint-send.ts prepareStartHints: rich output is the default mode).
+    const parsed = parseHinted(start.payload.message as string)
+    expect(parsed.text).toBe(message)
+    expect(start.payload.message).not.toContain(REFERENCE_CARDS_OPEN)
+    expect((start.payload.message as string).startsWith(`${message}\n\n`)).toBe(true)
+    expect(parsed.hints.map((h) => h.kind)).toEqual(['rich-output'])
+    // Recorded as told once the CLI named the session, so the second message does not repeat it.
+    let told: { hash: string } | undefined
+    for (const end = Date.now() + 15_000; !told && Date.now() < end; await new Promise((r) => setTimeout(r, 50))) {
+      told = (await getSessionByClaudeId(res.json.sessionId!))?.hintState?.told?.['rich-output']
+    }
+    expect(told?.hash).toBe('rich')
   })
 })

@@ -6,7 +6,9 @@
  * correction, sent mid-turn right at the tool call that follows it, quoting the line with its
  * rewrite in his language; again after every two more lines off, at most three times a turn, in
  * any turn of a native Claude Code session whoever started it (2026-11-02: a worker's turn a
- * notice started was English throughout and never corrected).
+ * notice started was English throughout and never corrected). The correction's own words are
+ * Walnut's English, followed by the user's rule (2026-11-05, the user: no language of Walnut's
+ * own in the product), whatever language the rule names.
  *
  * Would fail if reverted: without the live module no correction goes out in the turn.
  */
@@ -32,7 +34,6 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({
 }));
 
 import { bus, EventNames } from '../../../src/core/event-bus.js';
-import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js';
 import { LIVE_LATE_LINE, _setRewriteForTest, acceptRewrite, _settledForTest, liveCorrectionText, quoteLine, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
 import { hintDriftHook } from '../../../src/core/hints/hint-drift.js';
 
@@ -83,13 +84,12 @@ describe('a person\'s turn with an English progress line', () => {
     await replay('w1', TURN.slice(0, 3), false);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]).toMatchObject({ sid: 'w1', source: 'walnut-notify' });
-    // Written in his language (reply-language-lines.ts), quoting the line and its rewrite; the late-turn line in English.
-    expect(delivered[0].text).toContain(REPLY_LANGUAGE_LINES.zh.live(quoteLine(TURN[2]), REWRITE));
-    expect(delivered[0].text).toContain(`「${quoteLine(TURN[2])}」`);
-    expect(delivered[0].text).toContain(`「${REWRITE}」`);
-    expect(delivered[0].text).toContain(LIVE_LATE_LINE);
-    expect(delivered[0].text).not.toContain(liveCorrectionText(quoteLine(TURN[2])));
-    expect(delivered[0].text).toContain(RULE);
+    // Walnut's English correction quoting the line and its rewrite, then his rule, then the late-turn line.
+    expect(delivered[0].text).toContain(`${liveCorrectionText(quoteLine(TURN[2]), REWRITE)} ${RULE}\n${LIVE_LATE_LINE}`);
+    expect(delivered[0].text).toContain(`"${quoteLine(TURN[2])}"`);
+    expect(delivered[0].text).toContain(`"${REWRITE}"`);
+    // Walnut adds no words of its own in his language: the only non-ASCII is the model's rewrite.
+    expect(delivered[0].text.replace(REWRITE, '')).toMatch(/^[\x00-\x7f]*$/);
     expect(delivered[0].text).toMatch(/<walnut-message kind="notification" from="Walnut" outcome="reply-language"/);
     // One more English line: still one correction.
     await replay('w1', TURN.slice(3, 5), false, null);
@@ -97,7 +97,7 @@ describe('a person\'s turn with an English progress line', () => {
     // A second line still off after it (2026-11-02: one correction did not hold): the second, quoting that line.
     await replay('w1', [TURN[5]], false, null);
     expect(delivered).toHaveLength(2);
-    expect(delivered[1].text).toContain(`「${quoteLine(TURN[5])}」`);
+    expect(delivered[1].text).toContain(`"${quoteLine(TURN[5])}"`);
     await replay('w1', [TURN[6]], false, null);
     expect(delivered).toHaveLength(2);
     await replay('w1', [TURN[5]], false, null);
@@ -123,11 +123,11 @@ describe('a person\'s turn with an English progress line', () => {
     _setRewriteForTest(async () => null);
     session('w11');
     await replay('w11', TURN.slice(0, 3), false);
-    expect(delivered[0].text).toContain(REPLY_LANGUAGE_LINES.zh.live(quoteLine(TURN[2])));
-    expect(delivered[0].text).not.toContain('用中文应该这样写');
+    expect(delivered[0].text).toContain(`${liveCorrectionText(quoteLine(TURN[2]))} ${RULE}`);
+    expect(delivered[0].text).not.toContain('In it: "');
   });
 
-  it('a rule in a language Walnut has no words for gets the English correction, quoting too', () => {
+  it('any rule gets the English correction, quoting too', () => {
     expect(liveCorrectionText('Ich teste jetzt.', 'Je teste maintenant.')).toContain('"Ich teste jetzt."');
   });
 

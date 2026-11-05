@@ -18,8 +18,8 @@
  * How: the main lane's text deltas are kept per message id; a message is complete when a tool
  * call follows it, and only then judged (languageDrift, the turn-end sensor's own test). The
  * correction goes at the first line off, again after every two more lines off, at most
- * LIVE_MAX times a turn, written in his language when Walnut has its words
- * (reply-language-lines.ts), through the mid-turn path (deliverToSession, source walnut-notify): a native Claude Code session reads it
+ * LIVE_MAX times a turn, in Walnut's English with the user's own rule after it (2026-11-05, the
+ * user: no language of its own may be written into the product), through the mid-turn path (deliverToSession, source walnut-notify): a native Claude Code session reads it
  * with the tool result. ACP engines take one prompt per turn, so a correction there would start
  * a turn of its own; they keep the turn-end correction only. If the turn ends before the line is
  * read (its last tool was quick), the CLI runs it as a turn of its own: the line asks for the
@@ -29,8 +29,7 @@
  */
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
-import { LIVE_MIN_LETTERS, languageDrift, ruleLanguage } from './hint-drift-detect.js';
-import { replyLanguageLines } from './reply-language-lines.js';
+import { LIVE_MIN_LETTERS, languageDrift } from './hint-drift-detect.js';
 import { findHint } from './hint-registry.js';
 import { replyLanguageText } from '../sessions/output-mode.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
@@ -69,7 +68,7 @@ const turns = new Map<string, LiveTurn>();
 /** A finished turn's outcome (a promise: its last lines may still be judged), until the sensor reads it. */
 const finished = new Map<string, Promise<{ driftAfter: boolean }>>();
 
-/** The correction's words when the rule's language has none of its own (reply-language-lines.ts). */
+/** The correction's words; the user's rule follows them. */
 export function liveCorrectionText(said: string, example?: string): string {
   return `Correction: your progress line just now was not in the user's language: "${said}". `
     + (example ? `In it: "${example}". ` : '')
@@ -86,16 +85,14 @@ export function quoteLine(line: string): string {
 }
 
 /**
- * Written in the user's language when Walnut has its words (2026-11-02: an English correction got
- * an English "I will"), quoting the line and, when there is one, its rewrite in his language.
+ * Quoting the line and, when there is one, its rewrite in his language (the fast model's, from his
+ * own rule), then his rule itself.
  */
 export function liveCorrectionMessage(rule: string, said: string, example?: string): string {
-  const lines = replyLanguageLines(ruleLanguage(rule));
-  const quote = quoteLine(said);
   return buildWalnutMessage({
     kind: 'notification',
     attrs: { from: 'Walnut', outcome: 'reply-language', note: 'a correction of this turn, not a work request' },
-    body: `${lines ? lines.live(quote, example) : liveCorrectionText(quote, example)} ${rule}\n${LIVE_LATE_LINE}`,
+    body: `${liveCorrectionText(quoteLine(said), example)} ${rule}\n${LIVE_LATE_LINE}`,
   });
 }
 

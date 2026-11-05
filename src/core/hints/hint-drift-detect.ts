@@ -1,6 +1,7 @@
 /**
  * Did a reply drift off the reply-language rule? Pure and cheap: it runs on every
- * turn end of a session whose last message came from a person (hint-drift.ts).
+ * turn end the chat shows (hint-drift.ts) and on each progress line inside a turn
+ * (hint-drift-live.ts).
  *
  * The rule is the user's own sentence ("Talk to the user in Chinese; code ...
  * stays English"), so the language it asks for is read from the language names it
@@ -27,7 +28,7 @@ export function expectedScript(rule: string): Script | null {
   return firstNamed(rule)?.script ?? null;
 }
 
-/** The language the rule asks for, as reply-language-lines.ts keys it (null: a Latin-script one, or none). */
+/** The language the rule asks for, by its code (null: a Latin-script one, or none). */
 export function ruleLanguage(rule: string): string | null {
   return firstNamed(rule)?.lang ?? null;
 }
@@ -92,5 +93,3 @@ export function languageDrift(rule: string, reply: string, minLetters = MIN_LETT
 
 /** Letters a progress line needs to be judged inside a turn (hint-drift-live.ts). */
 export const LIVE_MIN_LETTERS = 12;
-/** Letters a message of the user needs before its language is told apart ("chinse, I don't know"). */
-export const MESSAGE_MIN_LETTERS = 8;

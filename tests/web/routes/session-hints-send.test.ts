@@ -70,8 +70,9 @@ afterEach(async () => {
 })
 
 describe('session:send through the hint pipeline', () => {
-  // A person's message carries the reply language every time (hint-registry.ts everyPersonTurn).
-  it('first send: full rich and language; then the language each time; fifth after: the reminder too', async () => {
+  // A person's message is no reason of its own for the reply language (2026-11-05, the user: "don't
+  // do this every round"): only its triggers send it, so it rides the first send alone.
+  it('first send: full rich and language; then nothing; fifth after: the rich reminder alone', async () => {
     const sid = await newSession()
     const got: string[][] = []
     for (let i = 0; i < 6; i++) {
@@ -80,7 +81,7 @@ describe('session:send through the hint pipeline', () => {
       expect(parseHinted(text).text).toBe(`msg ${i}`)
       got.push(kinds(text))
     }
-    expect(got).toEqual([['rich-output', 'reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['rich-output', 'reply-language']])
+    expect(got).toEqual([['rich-output', 'reply-language'], [], [], [], [], ['rich-output']])
     const rec = await getSessionByClaudeId(sid)
     expect(rec?.hintState?.sends).toBe(6)
     expect(rec?.output_mode_injected).toBe('rich')
@@ -159,8 +160,8 @@ describe('session:send through the hint pipeline', () => {
       await sendMessageToSession(sid, `peer ${i}`, { source: 'peer' })
       got.push(kinds(await drain(sid)))
     }
-    // The reply language rides every message (2026-11-02: an English peer note started a worker's English lines).
-    expect(got).toEqual([['rich-output', 'reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['rich-output', 'reply-language']])
+    // The reply language goes out by its own triggers only, never on every peer message (2026-11-05).
+    expect(got).toEqual([['rich-output', 'reply-language'], [], [], [], [], ['rich-output']])
   })
 
   it('a source the queue does not compose for is still escaped, and gets no hint', async () => {

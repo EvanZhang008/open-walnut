@@ -17,7 +17,7 @@
  */
 
 import { REFERENCE_CARDS_OPEN } from '../sessions/reference-cards.js';
-import type { Config, MessageHintRole, SessionHintState, SessionRecord, Task } from '../types.js';
+import type { Config, MessageHintRole, MessageHintTrigger, SessionHintState, SessionRecord, Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedHint } from './hint-format.js';
 import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, type HintTarget } from './hint-registry.js';
@@ -42,6 +42,8 @@ export interface HintPlan {
   carried: CarriedHint[];
   /** Kind → identity, for each hint this message tells. */
   told: Record<string, string>;
+  /** Kind → the triggers that sent it: always some of that hint's own (tests/core/hints/hint-triggers-only.test.ts). */
+  reasons: Record<string, MessageHintTrigger[]>;
 }
 
 /** The role and agent the audience rules see, from the session's task. */
@@ -102,9 +104,9 @@ export function planHints(input: {
   skip?: ReadonlySet<string>;
   /** The post-compaction hook: every hint with `after_compaction` is due, whatever was told. */
   afterCompaction?: boolean;
-  /** Who wrote this message; absent = not a person (a host's peer note). */
+  /** Who wrote this message; absent = not a person (a host's peer note). Never changes which hints are due. */
   sentBy?: 'person' | 'agent';
-  /** The message's own words: in another language they get the ask in his own (reply-language); absent on a host's tail. */
+  /** The message's own words (a question's name is read from them); absent on a host's tail. */
   message?: string;
   /** Main's or a lead's chat: the user's presence there (org/user-away.ts). */
   away?: { away: boolean; lastSeenAt: number | null } | null;
@@ -119,7 +121,7 @@ export function planHints(input: {
 }): HintPlan {
   const state = seededState(input.record);
   const send = state.sends + 1;
-  const plan: HintPlan = { before: [], after: [], carried: [], told: {} };
+  const plan: HintPlan = { before: [], after: [], carried: [], told: {}, reasons: {} };
   for (const hint of input.hints) {
     if (!hint.enabled || input.skip?.has(hint.kind) || !hintApplies(hint, input.target)) continue;
     const request = input.requested?.[hint.kind];
@@ -128,7 +130,7 @@ export function planHints(input: {
     const away = input.inChat && input.away ? { away: false, lastSeenAt: Date.now() } : input.away;
     const content = {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
-      // The message's own words decide the line in his language, never the cards Walnut adds to them.
+      // The message's own words, never the cards Walnut adds to them.
       ...(input.message !== undefined ? { message: input.message.split(REFERENCE_CARDS_OPEN)[0] } : {}),
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
@@ -137,19 +139,15 @@ export function planHints(input: {
     };
     const identity = hint.identity(content);
     if (identity === null) continue;
+    // Only the hint's own triggers send it, whoever wrote the message and whatever the session's
+    // role (2026-11-05: rules here added every_turn for every role and every person's message, so
+    // the reply language rode every message though its triggers did not say so).
     let reasons = input.afterCompaction
       ? (hint.triggers.includes('after_compaction') ? ['after_compaction' as const] : [])
       : dueReasons({
         triggers: hint.triggers, everyTurns: hint.everyTurns, told, send, identity,
         compactUuid: input.record?.lastCompactUuid, driftAt: state.drift?.[hint.kind], requested: !!request,
       });
-    // A role whose chat the user reads gets it on every turn, the user's own included (hint-registry.ts everyTurnRoles).
-    // A session with no task reads as 'other'.
-    if (!input.afterCompaction && hint.everyTurnRoles.includes(input.target.role ?? 'other')
-      && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
-    // A person's own message carries it in any session (hint-registry.ts everyPersonTurn).
-    if (!input.afterCompaction && input.sentBy === 'person' && hint.everyPersonTurn
-      && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
     if (input.only) reasons = reasons.filter((r) => input.only!.has(r));
     if (!reasons.length) continue;
     const rendered = hint.render(content, new Set(reasons));
@@ -158,6 +156,7 @@ export function planHints(input: {
     (hint.placement === 'before' ? plan.before : plan.after).push(block);
     plan.carried.push({ kind: hint.kind, ...(rendered.arg ? { arg: rendered.arg } : {}), text: rendered.text });
     plan.told[hint.kind] = identity;
+    plan.reasons[hint.kind] = reasons;
   }
   return plan;
 }
@@ -441,6 +440,61 @@ export async function requestedHintBlocks(message: string, requested: RequestedH
   }
 }
 
+/** A start that opens a NEW conversation (not a fork, a rewind or a transfer's resume). */
+export interface StartHintData {
+  taskId?: string;
+  message: string;
+  preassignedSessionId?: string;
+  forkedFromSessionId?: string;
+  resumeFile?: string;
+  resumeSessionAtMessageUuid?: string;
+  attributed?: true;
+}
+
+/**
+ * The first message of a new conversation, from any launcher (task_start, a quick start, a
+ * routine, a restart into a fresh conversation): the hints its triggers make due at the start
+ * (`session_start` above all), placed around what the launcher composed, and recorded as told
+ * once the session has its id. Without it a session's start hints went out on its SECOND message
+ * (2026-11-05 review: a worker that finished in one turn never got the reply language). The
+ * launcher's own text is left exactly as it built it (no second escape), and a kind it already
+ * carries (a requested voice or question block) is not added twice. A fork, a rewind and a
+ * transfer resume an old conversation and keep its state. Never throws.
+ */
+export async function prepareStartHints<T extends StartHintData>(data: T, opts: { config?: HintConfig; now?: () => number } = {}): Promise<{ data: T; commit(sessionId: string): Promise<void> }> {
+  const none = { data, commit: async () => {} };
+  if (!data.message || data.message.startsWith('/') || data.forkedFromSessionId || data.resumeFile || data.resumeSessionAtMessageUuid) return none;
+  try {
+    const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
+    const hints = effectiveHints(config);
+    const carried = new Set(parseHinted(data.message).hints.map((h) => h.kind));
+    // A new conversation was told nothing, whatever a pre-seeded record holds.
+    const record: HintRecord = { ...(data.taskId ? { taskId: data.taskId } : {}) } as HintRecord;
+    const sid = data.preassignedSessionId ?? '';
+    const { target, away, brief, threadsTidy } = await targetFor(sid, record, hints);
+    const plan = planHints({
+      hints, target, record, config, away, brief, threadsTidy, skip: carried,
+      ...(data.attributed ? { sentBy: 'person' as const, inChat: true } : { sentBy: 'agent' as const }),
+      message: parseHinted(data.message).text,
+    });
+    if (!plan.carried.length) return none;
+    const message = [...(plan.before.length ? [plan.before.join('\n')] : []), data.message, ...(plan.after.length ? [plan.after.join('\n')] : [])].join('\n\n');
+    const now = opts.now ?? Date.now;
+    return {
+      data: { ...data, message },
+      async commit(sessionId: string): Promise<void> {
+        await writeHintState(sessionId, (cur) => ({
+          hintState: advanceHintState(cur.hintState, cur, plan.told, { now: now(), sentBy: data.attributed ? 'person' : 'agent' }),
+          ...(plan.told['rich-output'] ? { output_mode_injected: plan.told['rich-output'] === 'rich' ? 'rich' : 'markdown' } : {}),
+        }));
+      },
+    };
+  } catch (err) {
+    log.session.warn('message hints: first message carries no start hint', { taskId: data.taskId, error: err instanceof Error ? err.message : String(err) });
+    return none;
+  }
+}
+
 /**
  * Sources the queue composes hints for: turns nobody typed, whose replies the user
  * still reads (a trigger fire, another task's message, the wait_until clock,
@@ -555,8 +609,8 @@ const HOST_TRIGGERS: ReadonlySet<string> = new Set(['every_turn', 'session_start
  * The blocks a session's HOST appends to a message it delivers itself (a peer note
  * between two sessions on that host never reaches the server's queue; host-slice.ts
  * ships this as `replyTail`, offline-host-core.ts appends it): every after-placed
- * hint that is owed right now (an every-message hint, a reply that drifted, a
- * change not yet told). The host cannot count messages or record what it told, so
+ * hint that is owed right now (one whose triggers say every_turn, a reply that
+ * drifted, a change not yet told). The host cannot count messages or record what it told, so
  * `every_n_turns` waits for the server's next send, and an owed hint rides the
  * host's deliveries until the server tells it and the slice moves on. Usually
  * nothing is owed and the field is left out. Null when empty.

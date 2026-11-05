@@ -241,8 +241,8 @@ export const BRIEF_LINE =
 
 /**
  * Main's and every lead's chat is read by the user (the Org page, the phone) whoever started the
- * turn (2026-10-29: leads answered Walnut notices in English there). The reply-language hint rides
- * every turn there, the user's own included (hints/hint-registry.ts everyTurnRoles).
+ * turn (2026-10-29: leads answered Walnut notices in English there). The reply-language hint goes
+ * out only by its own triggers (hints/hint-registry.ts); a reply off it is corrected (hints/hint-drift.ts).
  */
 export const ORG_REPLY_LANGUAGE_LINE =
   'The user reads your chat (the Org page, the phone), so every reply you write here is to them, whoever started '

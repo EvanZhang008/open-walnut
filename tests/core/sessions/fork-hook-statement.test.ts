@@ -68,8 +68,8 @@ describe('a fork\'s compaction tells the main conversation nothing', () => {
   })
 
   it('message hints: a fork\'s statement of a changed hint leaves it owed to the main conversation', () => {
-    // The hint's scheduled triggers (by default it rides every message, which would hide what is owed).
-    const cfg = (lang: string) => ({ session: { reply_language: lang, hints: { 'reply-language': { triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'] } } } }) as unknown as Pick<Config, 'session'>
+    // The default triggers (session_start, after_compaction, on_change, on_drift): never every message.
+    const cfg = (lang: string) => ({ session: { reply_language: lang } }) as unknown as Pick<Config, 'session'>
     const rec: { claudeSessionId: string; hintState?: SessionHintState; lastCompactUuid?: string; lastCompactAt?: string } =
       { claudeSessionId: 's-lead', lastCompactUuid: 'c0', lastCompactAt: longBefore }
     const send = (config: Pick<Config, 'session'>, opts: { afterCompaction?: boolean; byHook?: boolean; now: number }) => {

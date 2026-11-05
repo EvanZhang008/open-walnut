@@ -12,7 +12,6 @@ import { effectiveHints, HINT_TRIGGERS, describeHint } from '../../../src/core/h
 import {
   BUILT_IN_HINT_KINDS, REPLY_LANGUAGE_SCOPE, hintTextParts, replyLanguageCorrection,
 } from '../../../src/core/hints/hint-origin.js'
-import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js'
 import type { MessageHintTrigger } from '../../../src/core/types.js'
 
 const MARK = 'ZQMARK'
@@ -44,7 +43,7 @@ describe('hint origin', () => {
       { config: markedConfig, record: null, brief: { at: null, stale: true, words: 'two lines moved', key: 'k' } },
       { config: markedConfig, record: null, thread: { threadId: 'th-1', title: 'Fix the hints', created: true, followUp: false, duplicate: false, open: [{ id: 'th-2', title: 'Other', state: 'open' as never }], closed: [] } },
     ]
-    // A rule naming a language Walnut has lines for (reply-language-lines.ts), under a message in another.
+    // A rule naming a non-Latin language, under a message in another: Walnut adds no words of its own for it.
     const zhConfig = { session: { reply_language: `${MARK} Talk to the user in Chinese.` } } as never
     inputs.push(
       { config: zhConfig, record: null, message: "chinse, I don't know what happened" } as never,
@@ -77,12 +76,20 @@ describe('hint origin', () => {
     const fix = replyLanguageCorrection('2026-11-01T08:00:00.000Z')
     expect(hintTextParts({ kind: 'reply-language', text: `${fix} ${rule} ${REPLY_LANGUAGE_SCOPE}` }).map((p) => p.from))
       .toEqual(['walnut', 'user', 'walnut'])
-    // Walnut's lines in his language (reply-language-lines.ts) are Walnut's, the ask and the correction.
-    const zh = REPLY_LANGUAGE_LINES.zh
-    expect(hintTextParts({ kind: 'reply-language', text: `${zh.reply} ${zh.drifted} ${rule} ${REPLY_LANGUAGE_SCOPE}` })).toEqual([
-      { text: zh.reply, from: 'walnut' },
-      { text: zh.drifted, from: 'walnut' },
-      { text: rule, from: 'user', setting: 'Reply language' },
+    // 2026-11-05: Walnut writes no lines of its own in the user's language. Under an English
+    // message to a rule naming Chinese, the rendered hint is the rule and the scope, and a
+    // correction (on_drift) is Walnut's English sentence in front of them.
+    const zhRule = 'Talk to the user in Chinese.'
+    const hint = effectiveHints({ session: { reply_language: zhRule } } as never).find((h) => h.kind === 'reply-language')!
+    const plain = hint.render({ config: { session: { reply_language: zhRule } }, record: null, message: 'why is this not local?' } as never, new Set(['on_change']))!
+    expect(plain.text).toBe(`${zhRule} ${REPLY_LANGUAGE_SCOPE}`)
+    const driftAt = '2026-11-01T08:00:00.000Z'
+    const drifted = hint.render({ config: { session: { reply_language: zhRule } }, record: { hintState: { drift: { 'reply-language': driftAt } } }, message: 'why is this not local?' } as never, new Set(['on_drift']))!
+    expect(drifted.text).toBe(`${replyLanguageCorrection(driftAt)} ${zhRule} ${REPLY_LANGUAGE_SCOPE}`)
+    expect(drifted.text).toMatch(/^[\x00-\x7f]*$/)
+    expect(hintTextParts({ kind: 'reply-language', text: drifted.text })).toEqual([
+      { text: replyLanguageCorrection(driftAt), from: 'walnut' },
+      { text: zhRule, from: 'user', setting: 'Reply language' },
       { text: REPLY_LANGUAGE_SCOPE, from: 'walnut' },
     ])
     // An old message from before the scope clause: all of it was the setting.

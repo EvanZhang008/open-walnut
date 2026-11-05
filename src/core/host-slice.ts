@@ -350,7 +350,7 @@ export function ensureHostSliceSync(): void {
           .catch((err) => log.session.warn('host slice: re-push failed', { error: err instanceof Error ? err.message : String(err) }));
       }, PUSH_DEBOUNCE_MS);
       timer.unref?.();
-    // config:changed: the every-message hints each session's replyTail carries.
+    // config:changed: the hints each session's replyTail carries.
     }, { global: true, interest: ['task:', 'session:started', 'session:status-changed', 'session:renamed', 'session-request:', 'board:changed', 'config:changed'] });
   });
 }

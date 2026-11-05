@@ -1,12 +1,14 @@
 /**
  * A lead answering the user in English though his reply language is Chinese (2026-10-31: the
- * Walnut lead's chat, 12 of 45 visible replies, every one sent with the reply-language hint on the
- * message, most started by a worker's notice). Two gaps closed here, each pinned on the pattern of
- * that transcript (wording invented):
+ * Walnut lead's chat, 12 of 45 visible replies, most started by a worker's notice). Two gaps
+ * closed here, each pinned on the pattern of that transcript (wording invented):
  *  - the drift sensor read only the turn's final reply, so an English progress line between two
  *    tool calls (the user reads those in the chat too) was never judged;
- *  - after a drift the next message carried the same reminder it always carried, nothing saying
- *    the last reply broke it. Now it leads with a correction, once.
+ *  - after a drift the next message said nothing about the last reply breaking the rule. Now it
+ *    carries the rule led by a correction, once.
+ * 2026-11-05, the user ("I said don't do this every round"): the rule is never sent on every
+ * message, whoever wrote it, and Walnut writes no lines of its own in the user's language; the
+ * correction is Walnut's English sentence in front of the user's own rule.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { SessionRecord } from '../../../src/core/types.js';
@@ -26,7 +28,7 @@ import { EventNames } from '../../../src/core/event-bus.js';
 import { deriveSessionHookPoints, type SessionState } from '../../../src/core/session-hooks/derive/session.js';
 import { hintDriftHook } from '../../../src/core/hints/hint-drift.js';
 import { effectiveHints, replyLanguageCorrection } from '../../../src/core/hints/hint-registry.js';
-import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js';
+import { REPLY_LANGUAGE_SCOPE } from '../../../src/core/hints/hint-origin.js';
 import { advanceHintState, planHints } from '../../../src/core/hints/hint-send.js';
 
 // The shapes of the lead's turn: a Chinese line, then an English one between two tool calls, then
@@ -129,100 +131,89 @@ describe('the next message leads with a correction, once', () => {
     return p.carried.filter((h) => h.kind === 'reply-language').map((h) => h.text);
   };
 
-  it('a worker notice after a drifted turn says so; the one after carries the rule alone', () => {
+  it('a worker notice after a drifted turn says so in English; the ones before and after carry nothing', () => {
     const rec: Rec = { claudeSessionId: 'lead-c', output_mode: 'markdown' };
-    const [plain] = send(rec);
-    // No message to read here (a host's tail is the same): the line in his language leads it.
-    expect(plain.startsWith(`${REPLY_LANGUAGE_LINES.zh.reply} Talk to the user in Chinese`)).toBe(true);
+    // At start: the user's rule and Walnut's scope, nothing in front of it.
+    expect(send(rec)).toEqual([`${RULE} ${REPLY_LANGUAGE_SCOPE}`]);
+    // A later plain message: nothing (2026-11-05: never on every message).
+    expect(send(rec)).toEqual([]);
     // The sensor marks the turn that just ended.
     const at = new Date(Date.now() + 1000).toISOString();
     rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': at } } as never;
-    const [corrected] = send(rec);
-    // Written in his language (reply-language-lines.ts).
-    expect(corrected).toBe(plain.replace(`${REPLY_LANGUAGE_LINES.zh.reply} `, `${REPLY_LANGUAGE_LINES.zh.reply} ${REPLY_LANGUAGE_LINES.zh.drifted} `));
-    expect(send(rec)).toEqual([plain]);
+    expect(send(rec)).toEqual([`${replyLanguageCorrection(at)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`]);
+    expect(send(rec)).toEqual([]);
   });
 
-  it('a language Walnut has no lines for keeps the English correction naming the turn', () => {
-    const fr = { session: { reply_language: 'Answer in French.' } } as never;
-    const rec: Rec = { claudeSessionId: 'lead-fr', output_mode: 'markdown' };
-    const plan = () => planHints({ hints: effectiveHints(fr), target: { sessionId: rec.claudeSessionId, role: 'lead' }, record: rec as never, config: fr, sentBy: 'agent' });
-    rec.hintState = advanceHintState(undefined, rec as never, plan().told, { now: Date.now(), sentBy: 'agent' }) as never;
-    const at = new Date(Date.now() + 1000).toISOString();
-    rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': at } } as never;
-    const [text] = plan().carried.filter((h) => h.kind === 'reply-language').map((h) => h.text);
-    expect(text.startsWith(replyLanguageCorrection(at))).toBe(true);
-    expect(text).toContain('also when the message you answer, a tool result or your own notes are in English');
+  it('every language gets the same English correction naming the turn', () => {
+    for (const rule of ['Answer in French.', 'Reply in Japanese.', 'Reply in Korean.', 'Reply in Russian.']) {
+      const cfg = { session: { reply_language: rule } } as never;
+      const rec: Rec = { claudeSessionId: `lead-${rule}`, output_mode: 'markdown' };
+      const plan = () => planHints({ hints: effectiveHints(cfg), target: { sessionId: rec.claudeSessionId, role: 'lead' }, record: rec as never, config: cfg, sentBy: 'agent' });
+      rec.hintState = advanceHintState(undefined, rec as never, plan().told, { now: Date.now(), sentBy: 'agent' }) as never;
+      const at = new Date(Date.now() + 1000).toISOString();
+      rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': at } } as never;
+      const [text] = plan().carried.filter((h) => h.kind === 'reply-language').map((h) => h.text);
+      expect(text, rule).toBe(`${replyLanguageCorrection(at)} ${rule} ${REPLY_LANGUAGE_SCOPE}`);
+      expect(text).toContain('also when the message you answer, a tool result or your own notes are in English');
+    }
   });
 
   it('the user\'s own message after a drift carries it too', () => {
     const rec: Rec = { claudeSessionId: 'lead-p', output_mode: 'markdown' };
     send(rec);
-    rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': new Date(Date.now() + 1000).toISOString() } } as never;
-    expect(send(rec, 'person')[0].startsWith(`${REPLY_LANGUAGE_LINES.zh.reply} ${REPLY_LANGUAGE_LINES.zh.drifted}`)).toBe(true);
+    const at = new Date(Date.now() + 1000).toISOString();
+    rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': at } } as never;
+    expect(send(rec, 'person')).toEqual([`${replyLanguageCorrection(at)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`]);
   });
 });
 
-describe('a person\'s own message carries the rule in any session', () => {
-  // 2026-11-01: in a worker's chat the user typed "what the hack?"; the message carried no
-  // reminder (a worker hears it only at its start and after a drift) and the turn after it was English.
+describe('a person\'s own message does not carry the rule by itself', () => {
+  // 2026-11-05, the user: the block under every message of his is gone. Only the hint's own
+  // triggers send it (start, compaction, a change, a drift), in a worker's chat as in a lead's.
   type Rec = { claudeSessionId: string; output_mode: 'markdown'; hintState?: never };
   const config = { session: { reply_language: RULE } } as never;
-  const send = (rec: Rec, sentBy: 'agent' | 'person') => {
-    const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role: 'worker' }, record: rec as never, config, sentBy });
+  const send = (rec: Rec, sentBy: 'agent' | 'person', cfg: never = config) => {
+    const p = planHints({ hints: effectiveHints(cfg), target: { sessionId: rec.claudeSessionId, role: 'worker' }, record: rec as never, config: cfg, sentBy });
     rec.hintState = advanceHintState(rec.hintState, rec as never, p.told, { now: Date.now(), sentBy }) as never;
     return p.carried.some((h) => h.kind === 'reply-language');
   };
-  it('a worker: every message, his and another task\'s alike (2026-11-02)', () => {
+  it('a worker: at start only, then neither his messages nor another task\'s', () => {
     const rec: Rec = { claudeSessionId: 'worker-p', output_mode: 'markdown' };
-    for (const by of ['agent', 'agent', 'person', 'person', 'agent'] as const) expect(send(rec, by)).toBe(true);
+    expect(send(rec, 'person')).toBe(true);
+    for (const by of ['agent', 'agent', 'person', 'person', 'agent'] as const) expect(send(rec, by)).toBe(false);
   });
-  it('triggers set by hand decide alone', () => {
+  it('triggers set by hand decide alone: every_turn sends it every time, session_start once', () => {
+    const every = { session: { reply_language: RULE, hints: { 'reply-language': { triggers: ['every_turn'] } } } } as never;
+    const rec: Rec = { claudeSessionId: 'worker-e', output_mode: 'markdown' };
+    for (const by of ['person', 'agent', 'person'] as const) expect(send(rec, by, every)).toBe(true);
     const own = { session: { reply_language: RULE, hints: { 'reply-language': { triggers: ['session_start'] } } } } as never;
-    const rec: Rec = { claudeSessionId: 'worker-o', output_mode: 'markdown' };
-    const plan = () => planHints({ hints: effectiveHints(own), target: { sessionId: rec.claudeSessionId, role: 'worker' }, record: rec as never, config: own, sentBy: 'person' });
-    const first = plan();
-    rec.hintState = advanceHintState(undefined, rec as never, first.told, { now: Date.now(), sentBy: 'person' }) as never;
-    expect(plan().carried.some((h) => h.kind === 'reply-language')).toBe(false);
+    const once: Rec = { claudeSessionId: 'worker-o', output_mode: 'markdown' };
+    expect(send(once, 'person', own)).toBe(true);
+    expect(send(once, 'person', own)).toBe(false);
   });
 });
 
-describe('a message of his in another language gets the ask in his own', () => {
-  // 2026-11-02, the user's org review: he wrote "chinse, I don't know what happened" in English and the
-  // task answered in English; the model follows the language of the message it answers.
-  type Rec = { claudeSessionId: string; output_mode: 'markdown'; hintState?: never };
-  const config = { session: { reply_language: RULE } } as never;
-  const text = (message: string) => planHints({ hints: effectiveHints(config), target: { sessionId: 'w-msg', role: 'worker' }, record: { claudeSessionId: 'w-msg', output_mode: 'markdown' } as never, config, sentBy: 'person', message })
-    .carried.find((h) => h.kind === 'reply-language')!.text;
-  it('his English line gets the line in Chinese first, under his words', () => {
-    expect(text("chinse, I don't know what happened").startsWith(`${REPLY_LANGUAGE_LINES.zh.reply} ${RULE}`)).toBe(true);
-  });
-  it('another task\'s English message gets it too, and Walnut\'s reference cards are not words of the message', () => {
-    // 2026-11-02, the org review: an English peer note started a worker's English progress lines.
-    const of = (message: string, sentBy: 'agent' | 'person') => planHints({ hints: effectiveHints(config), target: { sessionId: 'w-msg', role: 'lead' }, record: { claudeSessionId: 'w-msg', output_mode: 'markdown' } as never, config, sentBy, message })
+describe('a message of his in another language gets no line of Walnut\'s own', () => {
+  // 2026-11-02 Walnut put a line in the user's language (Chinese, Japanese, Korean, Russian) in
+  // front of the rule under a message in another language; 2026-11-05 the user removed it: no
+  // official Walnut product writes its own words in his language. The rule is his setting, as is.
+  const text = (rule: string, message: string, sentBy: 'agent' | 'person' = 'person') => {
+    const config = { session: { reply_language: rule } } as never;
+    return planHints({ hints: effectiveHints(config), target: { sessionId: 'w-msg', role: 'worker' }, record: { claudeSessionId: 'w-msg', output_mode: 'markdown' } as never, config, sentBy, message })
       .carried.find((h) => h.kind === 'reply-language')!.text;
-    expect(of('Team update: a worker finished its review and is waiting on CI.', 'agent').startsWith(REPLY_LANGUAGE_LINES.zh.reply)).toBe(true);
-    expect(of('团队更新：一个任务做完了评审，正在等 CI。', 'agent').startsWith(RULE)).toBe(true);
-    const cards = '\n\n---walnut-refs---\n[task] Fix the reply language lines for every engine and send path\n---/walnut-refs---';
-    expect(of(`看看这个${cards}`, 'person').startsWith(RULE)).toBe(true);
-    expect(of(`look at this one please${cards}`, 'person').startsWith(REPLY_LANGUAGE_LINES.zh.reply)).toBe(true);
-  });
-  it('every language with lines gets its own; one without keeps the rule alone', () => {
-    const rules: Record<string, string> = { ja: 'Reply in Japanese.', ko: 'Reply in Korean.', ru: 'Reply in Russian.' };
-    for (const [lang, rule] of Object.entries(rules)) {
-      const cfg = { session: { reply_language: rule } } as never;
-      const t = planHints({ hints: effectiveHints(cfg), target: { sessionId: `w-${lang}`, role: 'worker' }, record: { claudeSessionId: `w-${lang}`, output_mode: 'markdown' } as never, config: cfg, sentBy: 'person', message: "chinse, I don't know what happened" })
-        .carried.find((h) => h.kind === 'reply-language')!.text;
-      expect(t.startsWith(`${REPLY_LANGUAGE_LINES[lang].reply} ${rule}`), lang).toBe(true);
+  };
+  it('an English message from him or another task: the rule and the scope, in ASCII only', () => {
+    for (const rule of [RULE, 'Reply in Japanese.', 'Reply in Korean.', 'Reply in Russian.', 'Answer in French.']) {
+      for (const [message, by] of [["chinse, I don't know what happened", 'person'], ['Team update: a worker finished its review and is waiting on CI.', 'agent']] as const) {
+        const t = text(rule, message, by);
+        expect(t, `${rule} / ${message}`).toBe(`${rule} ${REPLY_LANGUAGE_SCOPE}`);
+        expect(t).toMatch(/^[\x00-\x7f]*$/);
+      }
     }
-    const fr = { session: { reply_language: 'Answer in French.' } } as never;
-    const t = planHints({ hints: effectiveHints(fr), target: { sessionId: 'w-fr', role: 'worker' }, record: { claudeSessionId: 'w-fr', output_mode: 'markdown' } as never, config: fr, sentBy: 'person', message: 'what happened here today' })
-      .carried.find((h) => h.kind === 'reply-language')!.text;
-    expect(t.startsWith('Answer in French.')).toBe(true);
   });
-  it('a Chinese message, a short one or a command-like one does not', () => {
-    for (const m of ['为什么新项目默认不是本地的？', 'ok', 'go', '`bun run test`']) {
-      expect(text(m).startsWith(RULE)).toBe(true);
-    }
+  it('a Chinese message gets the same text', () => {
+    // Test data: "why is a new project not local by default?" in Chinese.
+    const zh = '\u4e3a\u4ec0\u4e48\u65b0\u9879\u76ee\u9ed8\u8ba4\u4e0d\u662f\u672c\u5730\u7684\uff1f';
+    expect(text(RULE, zh)).toBe(`${RULE} ${REPLY_LANGUAGE_SCOPE}`);
   });
 });

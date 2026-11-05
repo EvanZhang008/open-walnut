@@ -31,8 +31,7 @@ import {
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { getHintContext, hintContextText } from './hint-context.js';
 import { ASK_THREAD_RE, askHintText, askNameOf } from '../sessions/ask-thread.js';
-import { MESSAGE_MIN_LETTERS, languageDrift, ruleLanguage } from './hint-drift-detect.js';
-import { replyLanguageLines } from './reply-language-lines.js';
+import { languageDrift } from './hint-drift-detect.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
@@ -61,7 +60,7 @@ export interface HintContentInput {
   request?: { arg?: string };
   /** The identity this session was last told, if any. */
   toldHash?: string;
-  /** The words of the message the hint rides (its language may differ from the asked one). */
+  /** The words of the message the hint rides. */
   message?: string;
   /** Main's or a lead's chat: is the user away from it (org/user-away.ts)? Absent elsewhere. */
   away?: { away: boolean; lastSeenAt: number | null } | null;
@@ -90,20 +89,6 @@ interface HintSpec {
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
   /** Did this reply break the hint's rule? (`on_drift`; null = it cannot tell) */
   drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
-  /**
-   * Roles that get it on every message, while its triggers are the default: the user reads
-   * their chat whoever started the turn, and a setting is not guessed from the message
-   * (2026-10-30: the user typed English into a lead's chat, the hint stayed off, and the lead
-   * answered in English though his reply language is Chinese).
-   */
-  everyTurnRoles?: readonly MessageHintRole[];
-  /**
-   * Every message a person sends carries it, in any session, while its triggers are the default:
-   * he reads the answer to his own message, whatever language he typed it in (2026-11-01: a
-   * worker's chat, the user's English "what the hack?" carried no reminder, and the long turn after
-   * it was English throughout).
-   */
-  everyPersonTurn?: boolean;
 }
 
 const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request');
@@ -152,33 +137,24 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'reply-language',
     label: 'Reply language',
-    description: 'The language to answer the user in (Settings, Reply language). Every session gets it on every message (the user\'s own in whatever language he types, a notice, another task\'s message or reply, a trigger), because the user reads every chat whoever started the turn.',
+    description: 'The language to answer the user in, in the words of your Reply language setting (Settings); nothing is sent while it is empty. At session start, after a compaction, when the setting changes, and on the message after a reply that was not in it.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'], placement: 'after' },
-    // 2026-10-29: leads answered Walnut notices in English in the chats the user reads on the Org page.
-    // 2026-11-02, the org review: workers did the same after another task's English message, so
-    // every session carries it on every message.
-    everyTurnRoles: ['main', 'lead', 'worker', 'ask', 'other'],
-    everyPersonTurn: true,
+    // Only its triggers send it (2026-11-05, the user, of this block under every message of his:
+    // "I said don't do this every round remove thies, this alsoshoudln't be in any official walnut
+    // product"). Rules that forced it onto every message of a role or of a person, and lines Walnut
+    // wrote in a few languages of its own, are gone: the words are the user's setting, and a reply
+    // off it is corrected by on_drift (hint-drift.ts) and inside the turn (hint-drift-live.ts).
     identity: (i) => replyLanguageText(i.config),
     // 2026-10-29: after the user wrote Chinese, a worker's progress lines between its tool calls
     // stayed English; the rule covers every line the user reads, not only the final reply.
-    // A reply that broke it is named first (hint-drift.ts): the same reminder on every message
-    // did not hold a lead whose context was mostly English agent traffic (2026-10-31).
-    // 2026-11-02: a model follows the language of the message it answers, and an English rule
-    // about Chinese did not hold after his English message; the lines in the language itself
-    // (reply-language-lines.ts) lead the block: under a message in another language (his, or
-    // another task's: an English peer note started a worker's English lines), one asking for his
-    // language, and a correction written in it. A host's own delivery has no message to read
-    // here (hostReplyTail): the line rides it too, those are other tasks' messages.
+    // A reply that broke it is named first (hint-drift.ts).
     render: (i, reasons) => {
       const text = replyLanguageText(i.config);
       if (!text) return null;
-      const lines = replyLanguageLines(ruleLanguage(text));
       const driftAt = reasons.has('on_drift') ? i.record?.hintState?.drift?.['reply-language'] : undefined;
-      const correction = driftAt ? `${lines ? lines.drifted : replyLanguageCorrection(driftAt)} ` : '';
-      const other = !!lines && (i.message === undefined || languageDrift(text, i.message, MESSAGE_MIN_LETTERS) === true);
-      return { text: `${other ? `${lines!.reply} ` : ''}${correction}${text} ${REPLY_LANGUAGE_SCOPE}` };
+      const correction = driftAt ? `${replyLanguageCorrection(driftAt)} ` : '';
+      return { text: `${correction}${text} ${REPLY_LANGUAGE_SCOPE}` };
     },
     drifted: (config, reply) => {
       const rule = replyLanguageText(config);
@@ -312,9 +288,6 @@ export interface EffectiveHint {
   identity(input: HintContentInput): string | null;
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
   drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
-  /** Roles that get it on every message, the user's own included (empty once its triggers are overridden). */
-  everyTurnRoles: MessageHintRole[];
-  everyPersonTurn: boolean;
 }
 
 /** The strings of a list from config.yaml, which a person may have hand-edited into any shape. */
@@ -382,9 +355,6 @@ export function effectiveHints(config: Pick<Config, 'session'> | null | undefine
       identity: spec.identity,
       render: spec.render,
       ...(spec.drifted ? { drifted: spec.drifted } : {}),
-      // A person who set the triggers decides when it goes out.
-      everyTurnRoles: o?.triggers === undefined && spec.allowed.includes('every_turn') ? [...(spec.everyTurnRoles ?? [])] : [],
-      everyPersonTurn: o?.triggers === undefined && spec.allowed.includes('every_turn') && spec.everyPersonTurn === true,
     };
   });
 }
@@ -411,7 +381,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on'));
 }
 
 export class HintSettingsError extends Error {

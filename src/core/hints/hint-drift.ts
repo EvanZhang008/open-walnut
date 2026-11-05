@@ -4,9 +4,9 @@
  * progress lines between tool calls too, `replies`, not only the final `result`),
  * and one that broke the hint's rule marks it on the session's hint state. The next
  * message carries the hint again with a correction (hint-schedule.ts, the render's
- * `on_drift` reason), so the rule comes back exactly when it was lost. 2026-10-31: a
- * lead that had the reply-language hint on every message still answered the user in
- * English in 12 of 45 replies, two of them mid-turn lines the final-reply check never saw.
+ * `on_drift` reason), so the rule comes back exactly when it was lost, and only then
+ * (2026-11-05, the user: never on every message). 2026-10-31: a lead still answered the
+ * user in English in 12 of 45 replies, two of them mid-turn lines the final-reply check never saw.
  *
  * Every turn the chat shows is judged whole, in every session, whoever started it: the user
  * reads a worker's chat too, and asks every agent's every line in his language (2026-11-02, the

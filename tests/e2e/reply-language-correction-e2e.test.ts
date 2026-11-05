@@ -3,7 +3,9 @@
  * user in English though every message carried the reminder). A lead's turn streams a Chinese
  * line, an English progress line between tool calls and a Chinese final reply, the way the CLI's
  * events reach the bus; the server's own hook pipeline marks the drift, and the next message to the
- * lead (a worker's notice, nobody typing) leads its reply-language hint with the correction.
+ * lead (a worker's notice, nobody typing) carries the reply-language hint led by the correction.
+ * 2026-11-05, the user: the hint never rides every message (only at start, after a compaction, on a
+ * change and after a drift), and every correction is Walnut's English followed by his own rule.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs/promises';
@@ -19,9 +21,8 @@ import { getQueue, markProcessing, removeProcessed, sendMessageToSession } from 
 import { updateConfig } from '../../src/core/config-manager.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js';
-import { REPLY_LANGUAGE_LINES } from '../../src/core/hints/reply-language-lines.js';
-import { quoteLine } from '../../src/core/hints/hint-drift-live.js';
-const ZH = REPLY_LANGUAGE_LINES.zh;
+import { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection } from '../../src/core/hints/hint-origin.js';
+import { liveCorrectionText, quoteLine } from '../../src/core/hints/hint-drift-live.js';
 
 const SID = 'correction-lead-session';
 let leadId = '';
@@ -51,11 +52,14 @@ afterAll(async () => { await stopServer(); await fs.rm(WALNUT_HOME, { recursive:
 
 describe('a lead\'s English progress line', () => {
   it('is caught at the turn end, and the next notice opens with the correction, once', async () => {
-    // First message: the rule alone.
+    // First message: the rule alone, nothing of Walnut's in front of it.
     const first = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: a worker finished.', { sentBy: 'agent' });
-    // An English message, whoever wrote it, gets the line in his language first (2026-11-02).
-    expect(first.enqueueText).toContain(`Walnut (reply-language): ${ZH.reply} ${RULE}`);
+    expect(first.enqueueText).toContain(`Walnut (reply-language): ${RULE} ${REPLY_LANGUAGE_SCOPE}`);
     await first.commit();
+    // A later plain notice carries nothing (2026-11-05: never on every message).
+    const plain = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: a review started.', { sentBy: 'agent' });
+    expect(plain.enqueueText).not.toContain('Walnut (reply-language)');
+    await plain.commit();
 
     emit(EventNames.SESSION_SEND, { message: 'Team update: a worker finished.' });
     emit(EventNames.SESSION_TEXT_DELTA, { delta: '日志和其余 9 个文件都是 0 命中，所以审计报的是一个误报。下面整理失败日志。', msgId: 'msg_a' });
@@ -69,30 +73,29 @@ describe('a lead\'s English progress line', () => {
     expect(Date.parse(driftAt)).toBeGreaterThan(0);
 
     const next = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: another worker is waiting on CI.', { sentBy: 'agent' });
-    expect(next.enqueueText).toContain(`Walnut (reply-language): ${ZH.reply} ${ZH.drifted} ${RULE}`);
-    expect(next.enqueueText).toContain(RULE);
+    expect(next.enqueueText).toContain(`Walnut (reply-language): ${replyLanguageCorrection(driftAt)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`);
     await next.commit();
     expect((await getSessionByClaudeId(SID))?.hintState?.drift).toBeUndefined();
 
     const after = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: nothing new.', { sentBy: 'agent' });
-    expect(after.enqueueText).toContain(`Walnut (reply-language): ${ZH.reply} ${RULE}`);
-    expect(after.enqueueText).not.toContain(ZH.drifted);
+    expect(after.enqueueText).not.toContain('Walnut (reply-language)');
   });
 });
 
 describe('a person\'s turn in a worker\'s session (2026-11-01, the user\'s "what the hack?")', () => {
   const WSID = 'correction-worker-session';
-  it('his message carries the rule; the first English progress line is corrected mid-turn, once', async () => {
+  it('only his first message carries the rule; the first English progress line is corrected mid-turn, once', async () => {
     const worker = (await addTask({ title: 'A worker', project: 'Walnut', source: 'local', parent_task_id: leadId } as never)).task;
     await createSessionRecord(WSID, worker.id, 'Walnut');
     // His messages, typed in the web app the way session:send sends them (web/routes/session-chat.ts):
-    // hinted as a person's, queued with source ui. Each carries the rule.
-    for (const text of ['Look into it.', 'what the hack?']) {
+    // hinted as a person's, queued with source ui. The first (session start) carries the rule, the
+    // second does not (2026-11-05: a person's message is no reason of its own).
+    for (const [text, carries] of [['Look into it.', true], ['what the hack?', false]] as const) {
       const hinted = await prepareHintedSend(WSID, await getSessionByClaudeId(WSID), text, { sentBy: 'person' });
       await sendMessageToSession(WSID, text, { source: 'ui', enqueueMessage: hinted.enqueueText, hinted: true });
       await hinted.commit();
       const batch = await markProcessing(WSID);
-      expect(batch.map((q) => q.message).join('\n')).toContain(RULE);
+      expect(batch.map((q) => q.message).join('\n').includes(RULE), text).toBe(carries);
       await removeProcessed(WSID, batch.map((q) => q.id));
     }
     await updateSessionRecord(WSID, { process_status: 'running' } as never);
@@ -103,8 +106,8 @@ describe('a person\'s turn in a worker\'s session (2026-11-01, the user\'s "what
     w(EventNames.SESSION_TEXT_DELTA, { delta: "The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:", msgId: 'w2' });
     w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b2', input: {} });
     const row = await until(async () => (await getQueue(WSID)).find((q) => q.message.includes('outcome="reply-language"')));
-    // Written in his language (reply-language-lines.ts), quoting the line (no fast model in tests: no rewrite).
-    expect(row.message).toContain(ZH.live(quoteLine("The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:")));
+    // Walnut's English correction quoting the line (no fast model in tests: no rewrite), then his rule.
+    expect(row.message).toContain(`${liveCorrectionText(quoteLine("The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:"))} ${RULE}`);
     w(EventNames.SESSION_TEXT_DELTA, { delta: 'Under the same load the old version takes about half a second per click, the new one more than one.', msgId: 'w3' });
     w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b3', input: {} });
     await new Promise((r) => setTimeout(r, 500));

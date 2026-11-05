@@ -95,44 +95,43 @@ notices, letter replies, the clock, automatic continues and recoveries) and for 
 person's `task_send` from the CLI (`QUEUE_HINT_SOURCES`), and only escapes the
 rest. Every message counts toward `every_n_turns`, hint or not.
 
+A new conversation's first message, from any launcher (`task_start`, a quick start, a routine, a
+restart into a fresh conversation), gets the hints due at its start from the session runner's two
+start paths (`prepareStartHints` in `hint-send.ts`, called in `providers/claude-code-session.ts`):
+added around what the launcher built, never re-escaping it, skipping a kind it already carries,
+and recorded as told once the CLI names its session. A fork, a rewind and a transfer resume an old
+conversation and get none. Before 2026-11-05 a session's `session_start` hints went out on its
+second message, which a one-turn worker never received.
+
 Defaults: `question`, `voice-reply` and `object-context` on request (`object-context`: what a client says about the thing the person asks about, a web page in the browser side panel, a mail, a tab they let the ask act in; the client stores it with `POST /api/v1/hints/context` and names its id on the send, the first one of a quick start included, so Walnut's note rides beside the person's words, never inside them: `src/core/hints/hint-context.ts`, guard `tests/web/walnut-words-are-hints.test.ts`); `rich-output` at session
 start, after a compaction, on a change, and its short reminder every 5 messages;
-`reply-language` on every message of every session (the user's own, in whatever language
-he types, a notice, another task's message or reply, a trigger, a host's own delivery), because the
-user reads every chat whoever started the turn and his reply language is a setting, not a guess from
-the message (Main and the leads 2026-10-29 and 2026-10-30, every session 2026-11-02 after an English
-peer note started a worker's English lines; dropped once the triggers are set by hand, which leaves
-session start, compaction, change and drift). A lead's reply to
-such a turn is judged for drift like Main's. Walnut adds one clause after the user's sentence: it covers every
-line the user reads, the short progress lines between tool calls included.
+`reply-language` only by its own triggers: at session start, after a compaction, when the
+setting changes, and on the message after a reply that was not in it (`on_drift`). Never on every
+message, for any role and for a person's own message alike (2026-11-05, the user: "I said don't do
+this every round remove thies, this alsoshoudln't be in any official walnut product"; rules that
+forced it onto every message of Main, the leads, every session and every person's message, from
+2026-10-29 to 2026-11-02, are gone, and `tests/core/hints/hint-triggers-only.test.ts` fails when a
+send carries a hint for a reason that is not one of its triggers). Its words are the user's own
+`session.reply_language` sentence; while that is empty nothing is sent, so a fresh install sends
+none. Walnut adds one clause after the sentence: it covers every line the user reads, the short
+progress lines between tool calls included. Walnut writes no text of its own in any language but
+English (lines in Chinese, Japanese, Korean and Russian it once had are gone).
 Drift is judged on every message of the turn the user saw (`replies` on the turn-end hook,
 the progress lines between tool calls too, not only the final reply), and the next message after
-a drifted turn leads the hint with a correction (`replyLanguageCorrection` names that turn; the lines below, in the user's language, do not):
-the same reminder on every message did not hold a lead whose context was mostly English agent
-traffic (2026-10-31, 12 of 45 replies). The server's next message tells it once; a host's own
-deliveries carry it until then or until a later turn is in the language again, which clears the
-mark. A turn the chat hides (something else started it and it ended on the no-action line) is
-not judged. Every message a person sends carries the reply language, in any session (`everyPersonTurn`,
-2026-11-01: the user's English "what the hack?" in a worker's chat carried no reminder, and the long turn
-after it was English throughout). Inside any turn, whoever started it, the first progress line in the
-wrong language is corrected at once (`src/core/hints/hint-drift-live.ts`): when the tool call after it
-starts, an `outcome="reply-language"` notice goes mid-turn, so a native Claude Code session reads it with
-that tool's result; the turn end then judges only what came after the last one. The notice quotes the
-line and shows it rewritten in the user's language by the fast model (12 seconds at most; without an
-answer it quotes alone), since two corrections that only named the rule left a worker writing 15 more
-English lines (2026-11-02). ACP engines take one prompt per turn,
-so they keep the correction on the next message.
-The model follows the language of the message it answers, and an English rule about the language
-got an English "I will" back (2026-11-02, the user's org review: "chinse, I don't know what happened",
-and English lines after two English corrections). So, for a rule that names a language Walnut has
-words for (`src/core/hints/reply-language-lines.ts`: Chinese, Japanese, Korean, Russian), three lines
-are written in that language itself: the one under a message of 8 or more letters in another script,
-whoever wrote it, and on a host's own delivery (Walnut's reference cards not counted)
-(for Chinese, a parenthesised line asking for Chinese replies, short progress lines included, before the rule), the mid-turn correction, and the drifted turn's
-correction on the next message. Any other rule keeps the English words. Inside a turn a progress line
-is judged from 12 letters (`LIVE_MIN_LETTERS`: "Chromium 34/34. Now WebKit."), and the next correction
-goes out when two more lines after the last are still off, at most three a turn. Every turn the chat
-shows is judged whole at its end, in every session.
+a drifted turn carries the hint again, led by a correction (`replyLanguageCorrection` names that
+turn). The server's next message tells it once; a host's own deliveries carry it until then or
+until a later turn is in the language again, which clears the mark. A turn the chat hides
+(something else started it and it ended on the no-action line) is not judged. Inside any turn,
+whoever started it, the first progress line in the wrong language is corrected at once
+(`src/core/hints/hint-drift-live.ts`): when the tool call after it starts, an
+`outcome="reply-language"` notice goes mid-turn, so a native Claude Code session reads it with that
+tool's result; the turn end then judges only what came after the last one. The notice quotes the
+line, shows it rewritten by the fast model from the user's own rule (8 seconds at most; without an
+answer it quotes alone), and ends with the rule. ACP engines take one prompt per turn, so they keep
+the correction on the next message. Inside a turn a progress line is judged from 12 letters
+(`LIVE_MIN_LETTERS`: "Chromium 34/34. Now WebKit."), and the next correction goes out when two more
+lines after the last are still off, at most three a turn. Every turn the chat shows is judged whole
+at its end, in every session.
 `brief` (Main and the leads only) at session start, after a compaction, every 3 messages and
 when the node's team moved since its Brief was written (`src/core/sessions/brief-hint.ts`): how
 old the Brief is, what moved, and to update it with `brief_write`; a node with no Brief hears to
@@ -185,7 +184,7 @@ the session's task), by agent id, or by session id; empty means everyone.
 
 A peer message between two sessions on one host is delivered by that host's
 daemon and never passes the server's queue. The host slice ships `replyTail`:
-the after-placed hints owed right now (an every-message hint, a drifted reply
+the after-placed hints owed right now (one whose triggers say `every_turn`, a drifted reply
 language, a change not yet told). A daemon appends it to such a message; an older
 daemon's line logic still appends the block (with blank lines inside it, which
 the parser tolerates). By default nothing is owed and `replyTail` is absent.
@@ -226,7 +225,7 @@ audience or place) or "Yours", and a built-in that sends a setting says what it
 sends, the setting apart from Walnut's sentence (`user_setting` on its
 `/api/v1/hints` row). Today that is Reply language: the user's
 `session.reply_language` sentence, then `REPLY_LANGUAGE_SCOPE`, after a
-correction line when a reply drifted, and after Walnut's lines in the user's own language
+correction line when a reply drifted
 (`hintTextParts` cuts a hint's text into Walnut's words and the user's). A new built-in that sends a setting of the user's
 adds it to `HINT_USER_SETTINGS`; `tests/core/hints/hint-origin.test.ts`
 renders every built-in from a config whose settings are all markers and fails
