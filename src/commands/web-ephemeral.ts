@@ -4,8 +4,12 @@
  *   1. Launcher (parent): copies ~/.open-walnut/ to /tmp/open-walnut-{PPID}-{random}/,
  *      spawns a detached child, polls for port, prints JSON, exits.
  *   2. Child (--_ephemeral-child): runs the real server on a random port,
- *      writes ephemeral.json, self-destructs after 10 min of idle (WALNUT_EPHEMERAL_IDLE_MINUTES).
+ *      writes ephemeral.json, self-destructs after 10 min of idle (WALNUT_EPHEMERAL_IDLE_MINUTES)
+ *      or once the process it works for is gone (ephemeral-owner.ts).
  */
+
+/** Written by the launcher into the snapshot: the process the server works for. */
+export const EPHEMERAL_OWNER_FILE = 'ephemeral-owner.json'
 
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -23,6 +27,7 @@ import {
   EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
 import { ephemeralIdleTtlMs } from './ephemeral-idle.js'
+import { resolveEphemeralOwner, startOwnerWatch, type EphemeralOwner } from './ephemeral-owner.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
 /** Auto-shutdown after this long with no HTTP request (WALNUT_EPHEMERAL_IDLE_MINUTES, default 10). */
@@ -102,6 +107,10 @@ export async function runEphemeralLauncher(): Promise<void> {
     return
   }
 
+  // Who the server works for: it ends when that process does (ephemeral-owner.ts). Read
+  // before the copy, while this launcher's parent is surely still the one that asked.
+  const owner = await resolveEphemeralOwner()
+
   // 4. Ensure WALNUT_HOME exists (first run on a fresh machine)
   fs.mkdirSync(WALNUT_HOME, { recursive: true })
 
@@ -111,8 +120,22 @@ export async function runEphemeralLauncher(): Promise<void> {
   const registryFile = registryPath(WALNUT_HOME)
   registerEphemeralDir(registryFile, tmpDir)
 
-  // 5. Copy data snapshot (skip large/lockable files, and the private health store)
-  copyDataSnapshot(WALNUT_HOME, tmpDir)
+  // 5. Copy data snapshot (skip large/lockable files, and the private health store):
+  // copy-on-write where the volume can, else a real copy under a size cap.
+  let snapshot: ReturnType<typeof copyDataSnapshot>
+  try {
+    snapshot = copyDataSnapshot(WALNUT_HOME, tmpDir)
+  } catch (err) {
+    process.stderr.write(`ephemeral: could not write the snapshot: ${err instanceof Error ? err.message : String(err)}\n`)
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
+    unregisterEphemeralDir(registryFile, tmpDir)
+    process.exit(1)
+    return
+  }
+  if (owner) {
+    try { fs.writeFileSync(path.join(tmpDir, EPHEMERAL_OWNER_FILE), JSON.stringify(owner)) } catch { /* the idle timer still ends it */ }
+  }
 
   // The copied automations and phone registrations belong to the real Walnut.
   const pausedCronJobs = pauseSnapshotCronJobs(tmpDir)
@@ -186,7 +209,7 @@ export async function runEphemeralLauncher(): Promise<void> {
     ])
     // 7. Print JSON to stdout (exec tool captures this). daemonDir holds this
     // server's own daemon and logs (open-walnut-<date>.log).
-    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, pausedCronJobs, removedPushTokens, stoppedTunnels, stoppedTriage, droppedQueuedMessages }))
+    console.log(JSON.stringify({ ...data, daemonDir: runtimeDir, owner, snapshot, pausedCronJobs, removedPushTokens, stoppedTunnels, stoppedTriage, droppedQueuedMessages }))
     process.exit(0)
   } catch (err) {
     process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)
@@ -266,17 +289,21 @@ export async function runEphemeralChild(): Promise<void> {
     return
   }
 
-  // Write control file so the launcher (and agents) can discover us
+  let owner: EphemeralOwner | null = null
+  try { owner = JSON.parse(fs.readFileSync(path.join(tmpDir, EPHEMERAL_OWNER_FILE), 'utf-8')) as EphemeralOwner } catch { /* none named */ }
+
+  // Write control file so the launcher (and agents) can discover us. `heartbeat`
+  // says its mtime is touched every OWNER_CHECK_MS, which the reaper reads.
+  const controlFile = path.join(tmpDir, 'ephemeral.json')
   const controlData = {
     pid: process.pid,
     port,
     tmpDir,
     startedAt: new Date().toISOString(),
+    heartbeat: true,
+    ...(owner ? { owner } : {}),
   }
-  fs.writeFileSync(
-    path.join(tmpDir, 'ephemeral.json'),
-    JSON.stringify(controlData, null, 2),
-  )
+  fs.writeFileSync(controlFile, JSON.stringify(controlData, null, 2))
 
   // Idle timeout: reset on every HTTP request
   let lastActivity = Date.now()
@@ -291,6 +318,9 @@ export async function runEphemeralChild(): Promise<void> {
   }, IDLE_CHECK_INTERVAL_MS)
   idleChecker.unref()
 
+  // Heartbeat and owner: touch the control file, and end once the owner is surely gone.
+  const stopOwnerWatch = startOwnerWatch(controlFile, owner, (reason) => { void cleanup(reason) })
+
   let cleaningUp = false
   async function cleanup(reason: string): Promise<void> {
     if (cleaningUp) return
@@ -298,6 +328,7 @@ export async function runEphemeralChild(): Promise<void> {
 
     process.stderr.write(`ephemeral child: shutting down (${reason})\n`)
     clearInterval(idleChecker)
+    stopOwnerWatch()
 
     // This server's own daemon dir (set by the launcher; see ephemeralRuntimeDir).
     const runtimeDir = process.env.WALNUT_DAEMON_DIR

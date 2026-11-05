@@ -41,6 +41,7 @@ import {
   ephemeralRuntimeDirs,
   removeEphemeralRuntimeDirs,
   EPHEMERAL_SERVER_PID_FILE,
+  OWNER_GONE_GRACE_MS,
 } from '../../src/commands/ephemeral-registry.js'
 
 let home: string
@@ -444,5 +445,56 @@ describe('ephemeralRuntimeRoot', () => {
     } finally {
       fs.rmSync(own, { recursive: true, force: true })
     }
+  })
+})
+
+// 2026-11-04: a test server whose owner had gone kept its 6.15 GB snapshot. A server of
+// this build heartbeats (touches ephemeral.json every 30 s) and names its owner; the
+// reaper takes a snapshot whose beat stopped even though its pid answers.
+describe('reapStaleEphemeralDirs: heartbeat and owner', () => {
+  function beating(name: string, extra: Record<string, unknown>, beatAgeMs: number): string {
+    const dir = makeSnapshot(elsewhere, name)
+    const control = path.join(dir, 'ephemeral.json')
+    fs.writeFileSync(control, JSON.stringify({ pid: process.pid, port: 1, tmpDir: dir, heartbeat: true, ...extra }))
+    const t = (Date.now() - beatAgeMs) / 1000
+    fs.utimesSync(control, t, t)
+    registerEphemeralDir(registryPath(home), dir)
+    return dir
+  }
+
+  it('a stale beat alone keeps it: timers stop while the Mac sleeps, and its owner still lives', () => {
+    const none = beating('open-walnut-444-beatGo', {}, 6 * 3600_000)
+    const live = beating('open-walnut-450-ownSlp', { owner: { pid: process.pid } }, 6 * 3600_000)
+    expect(countLiveEphemeralServers(home, { tmpBase: scanBase })).toBe(1) // one pid, two rows
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+    expect(fs.existsSync(none)).toBe(true)
+    expect(fs.existsSync(live)).toBe(true)
+  })
+
+  it('a fresh heartbeat keeps it, owner or not', () => {
+    const a = beating('open-walnut-445-beatOk', {}, 5_000)
+    const b = beating('open-walnut-446-ownLiv', { owner: { pid: process.pid } }, OWNER_GONE_GRACE_MS + 60_000)
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+    expect(fs.existsSync(a)).toBe(true)
+    expect(fs.existsSync(b)).toBe(true)
+  })
+
+  it('owner gone: reaped once the beat is a few minutes old, kept while the server may still be ending itself', () => {
+    const stale = beating('open-walnut-447-ownDed', { owner: { pid: DEAD_PID } }, OWNER_GONE_GRACE_MS + 30_000)
+    const ending = beating('open-walnut-448-ownEnd', { owner: { pid: DEAD_PID } }, 30_000)
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+    expect(fs.existsSync(stale)).toBe(false)
+    expect(fs.existsSync(ending)).toBe(true)
+  })
+
+  it('a server of an older build writes no heartbeat: judged by its pid alone, however old the file', () => {
+    const dir = makeSnapshot(elsewhere, 'open-walnut-449-oldBld', { pid: process.pid })
+    // Even naming a dead owner: without `heartbeat: true` the file's mtime is not a beat.
+    fs.writeFileSync(path.join(dir, 'ephemeral.json'), JSON.stringify({ pid: process.pid, port: 1, tmpDir: dir, owner: { pid: DEAD_PID } }))
+    const t = (Date.now() - 6 * 3600_000) / 1000
+    fs.utimesSync(path.join(dir, 'ephemeral.json'), t, t)
+    registerEphemeralDir(registryPath(home), dir)
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+    expect(fs.existsSync(dir)).toBe(true)
   })
 })

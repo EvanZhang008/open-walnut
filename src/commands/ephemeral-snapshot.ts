@@ -15,6 +15,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import yaml from 'js-yaml'
+import { copySnapshotTree, type SnapshotCopyOptions, type SnapshotReport } from './ephemeral-snapshot-copy.js'
+
+export type { SnapshotCopyOptions, SnapshotReport } from './ephemeral-snapshot-copy.js'
 
 /**
  * Top-level WALNUT_HOME entries the ephemeral snapshot does not copy because
@@ -35,80 +38,78 @@ export const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache', '
  * and session stores are copied apart (snapshotStoreDatabases). This is the
  * launcher's one copy step, and the tests run this very function on a real tree.
  */
-export function copyDataSnapshot(home: string, dest: string): void {
-  fs.cpSync(home, dest, {
-    recursive: true,
-    // NOTE: do not bother passing mode: COPYFILE_FICLONE here hoping for a
-    // copy-on-write snapshot. Measured on macOS 15 / APFS with Node 25: cloning
-    // works on this volume (/bin/cp -c duplicates a 2G file for 0 bytes) but Node
-    // never uses clonefile(2) — both fs.cpSync and fs.copyFileSync with
-    // COPYFILE_FICLONE consumed the full 2G. Getting CoW here would mean shelling
-    // out to `cp -Rc` (macOS) / `cp -R --reflink=auto` (Linux), which cannot honour
-    // the filter below, so the snapshot stays a real copy and we keep it small by
-    // excluding regenerable data instead.
-    // Keep relative symlinks RELATIVE. The default rewrites them to absolute
-    // paths into the LIVE data dir (measured: notes/CLAUDE.md -> AGENTS.md became
-    // an absolute link back into ~/.open-walnut), so the "isolated" snapshot
-    // silently read and wrote production notes through them.
-    verbatimSymlinks: true,
-    filter: (src: string) => {
-      // Skip raw SQLite files (a copy of a live WAL file can be torn); the task
-      // and session stores are copied consistently after this pass.
-      if (/\.sqlite(-wal|-shm)?$/.test(src)) return false
-      // Skip session stream files (large, not needed)
-      if (src.includes(path.join('sessions', 'streams'))) return false
-      // Skip the runtime tmp dir — since streams moved to ~/.open-walnut/tmp/
-      // it holds live FIFO .pipe files, and cpSync on a FIFO dies with
-      // ERR_INTERNAL_ASSERTION "Unreachable code" (cp-sync getStats).
-      // Anchored to WALNUT_HOME/tmp: a substring test for "/tmp/" matched EVERY
-      // path of a data dir that itself lives under /tmp (a sandbox home, a test
-      // source dir), so that snapshot came out empty. Other FIFOs and sockets
-      // are caught by the file-type check below.
-      if (path.relative(home, src).split(path.sep)[0] === 'tmp') return false
-      // Skip images dir (can be large)
-      if (src.includes(path.join(path.sep, 'images', path.sep)) ||
-          src.endsWith(path.join(path.sep, 'images'))) return false
-      // Skip regenerable TOP-LEVEL dirs: .git (2.7G of data-dir history — git-sync
-      // checks isRepo() and re-inits when absent, so the snapshot self-heals into
-      // a fresh repo), .smart-env (1.2G embeddings store), cache (1.5G derived,
-      // 1.4G of it cache/history). All three are already classified as
-      // regenerable by their owners: backup/scan.ts excludes them and git-sync
-      // gitignores them. Sizes measured against a 17G home on 2026-08-27.
-      //
-      // Anchored to the FIRST path segment under WALNUT_HOME on purpose. A
-      // substring test like includes('/cache/') would also drop a note folder the
-      // user happens to have named "cache", or a nested repo inside notes/ —
-      // silently thinning the snapshot the tests then trust.
-      const rel = path.relative(home, src)
-      if (rel && SNAPSHOT_SKIP_TOP_LEVEL.has(rel.split(path.sep)[0])) return false
-      // Skip lock files
-      if (src.endsWith('.lock')) return false
-      // Skip the single-instance lock — a snapshot carrying the LIVE server's
-      // server.lock.json makes the child refuse its own fresh dir (the lock
-      // names a pid that really is alive: the production server).
-      if (src.endsWith('server.lock.json')) return false
-      // Skip anything that isn't a plain file/dir/symlink — cpSync dies on
-      // sockets and FIFOs (ERR_INTERNAL_ASSERTION "Unreachable code" during a
-      // directory walk; typed ERR_FS_CP_SOCKET/ERR_FS_CP_FIFO_PIPE when hit
-      // directly). The tmp/ rule above catches the known FIFOs by path; this
-      // catches the rest by TYPE (e.g. code-server/data/code-server-ipc.sock,
-      // which killed every `web --ephemeral` launch while an embedded VS Code
-      // was running). Symlinks are safe to pass ONLY because cpSync runs with
-      // the default dereference:false (it recreates the link, never stats the
-      // target) — don't add dereference:true without revisiting this.
-      try {
-        const st = fs.lstatSync(src)
-        if (!st.isFile() && !st.isDirectory() && !st.isSymbolicLink()) return false
-      } catch (err) {
-        // Excluding on lstat failure trades a loud cpSync abort for a quietly
-        // incomplete snapshot (a directory here drops its whole subtree) — say so.
-        process.stderr.write(`ephemeral: skipping unstatable ${src}: ${err instanceof Error ? err.message : String(err)}\n`)
-        return false
-      }
-      return true
-    },
-  })
+export function copyDataSnapshot(home: string, dest: string, opts: SnapshotCopyOptions = {}): SnapshotReport {
+  const report = copySnapshotTree(home, dest, snapshotFilter(home), opts)
   snapshotStoreDatabases(home, dest)
+  return report
+}
+
+/**
+ * What the snapshot leaves out, one path at a time. Copy-on-write and the size cap
+ * are copySnapshotTree's (ephemeral-snapshot-copy.ts); this says only what never
+ * belongs in a test server's data dir.
+ */
+export function snapshotFilter(home: string): (src: string) => boolean {
+  // Relative symlinks stay RELATIVE (verbatimSymlinks in copySnapshotTree). The
+  // default rewrites them to absolute paths into the LIVE data dir (measured:
+  // notes/CLAUDE.md -> AGENTS.md became an absolute link back into ~/.open-walnut),
+  // so the "isolated" snapshot silently read and wrote production notes through them.
+  return (src: string) => {
+    // Skip raw SQLite files (a copy of a live WAL file can be torn); the task
+    // and session stores are copied consistently after this pass.
+    if (/\.sqlite(-wal|-shm)?$/.test(src)) return false
+    // Skip session stream files (large, not needed)
+    if (src.includes(path.join('sessions', 'streams'))) return false
+    // Skip the runtime tmp dir — since streams moved to ~/.open-walnut/tmp/
+    // it holds live FIFO .pipe files, and cpSync on a FIFO dies with
+    // ERR_INTERNAL_ASSERTION "Unreachable code" (cp-sync getStats).
+    // Anchored to WALNUT_HOME/tmp: a substring test for "/tmp/" matched EVERY
+    // path of a data dir that itself lives under /tmp (a sandbox home, a test
+    // source dir), so that snapshot came out empty. Other FIFOs and sockets
+    // are caught by the file-type check below.
+    if (path.relative(home, src).split(path.sep)[0] === 'tmp') return false
+    // Skip images dir (can be large)
+    if (src.includes(path.join(path.sep, 'images', path.sep)) ||
+        src.endsWith(path.join(path.sep, 'images'))) return false
+    // Skip regenerable TOP-LEVEL dirs: .git (2.7G of data-dir history — git-sync
+    // checks isRepo() and re-inits when absent, so the snapshot self-heals into
+    // a fresh repo), .smart-env (1.2G embeddings store), cache (1.5G derived,
+    // 1.4G of it cache/history). All three are already classified as
+    // regenerable by their owners: backup/scan.ts excludes them and git-sync
+    // gitignores them. Sizes measured against a 17G home on 2026-08-27.
+    //
+    // Anchored to the FIRST path segment under WALNUT_HOME on purpose. A
+    // substring test like includes('/cache/') would also drop a note folder the
+    // user happens to have named "cache", or a nested repo inside notes/ —
+    // silently thinning the snapshot the tests then trust.
+    const rel = path.relative(home, src)
+    if (rel && SNAPSHOT_SKIP_TOP_LEVEL.has(rel.split(path.sep)[0])) return false
+    // Skip lock files
+    if (src.endsWith('.lock')) return false
+    // Skip the single-instance lock — a snapshot carrying the LIVE server's
+    // server.lock.json makes the child refuse its own fresh dir (the lock
+    // names a pid that really is alive: the production server).
+    if (src.endsWith('server.lock.json')) return false
+    // Skip anything that isn't a plain file/dir/symlink — cpSync dies on
+    // sockets and FIFOs (ERR_INTERNAL_ASSERTION "Unreachable code" during a
+    // directory walk; typed ERR_FS_CP_SOCKET/ERR_FS_CP_FIFO_PIPE when hit
+    // directly). The tmp/ rule above catches the known FIFOs by path; this
+    // catches the rest by TYPE (e.g. code-server/data/code-server-ipc.sock,
+    // which killed every `web --ephemeral` launch while an embedded VS Code
+    // was running). Symlinks are safe to pass ONLY because cpSync runs with
+    // the default dereference:false (it recreates the link, never stats the
+    // target) — don't add dereference:true without revisiting this.
+    try {
+      const st = fs.lstatSync(src)
+      if (!st.isFile() && !st.isDirectory() && !st.isSymbolicLink()) return false
+    } catch (err) {
+      // Excluding on lstat failure trades a loud cpSync abort for a quietly
+      // incomplete snapshot (a directory here drops its whole subtree) — say so.
+      process.stderr.write(`ephemeral: skipping unstatable ${src}: ${err instanceof Error ? err.message : String(err)}\n`)
+      return false
+    }
+    return true
+  }
 }
 
 /**

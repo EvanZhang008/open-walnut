@@ -169,7 +169,15 @@ there, as `tests/e2e/test-run-objects.test.ts` does.
 The launcher prints `{pid, port, tmpDir, daemonDir, pausedCronJobs, removedPushTokens}`. The
 server is isolated by construction, so nothing it does reaches the real Walnut:
 
-- its own data copy and its own local daemon in `daemonDir` (its logs are there too);
+- its own data copy and its own local daemon in `daemonDir` (its logs are there too); the copy is
+  copy-on-write where the volume clones (APFS: notes and plugin data cost nothing until changed),
+  else a real copy that leaves the largest folders a test does not need empty to stay under
+  `WALNUT_EPHEMERAL_COPY_CAP_MB` (2048, `0` = all) and says which (`snapshot` in the printed
+  JSON; `src/commands/ephemeral-snapshot-copy.ts`; 2026-11-04: a 6.15 GB full copy filled the
+  Mac's disk). The server ends with the process it works for (`owner`: the first ancestor that
+  is not a shell or script runner, the agent CLI as a rule; `WALNUT_EPHEMERAL_OWNER_PID`, `0` =
+  none) as well as on its idle timer, and the reaper takes a snapshot whose server stopped
+  heartbeating (`src/commands/ephemeral-owner.ts`);
 - its own op executor and every local session it launches talk to it, never the :3456 default
   (`OPEN_WALNUT_API_URL`, see `src/lib/self-api-root.ts`);
 - the copied cron jobs are paused (jobs created there still run) and Inbox Triage is off in the

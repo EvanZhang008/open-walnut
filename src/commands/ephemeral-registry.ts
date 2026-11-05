@@ -36,6 +36,31 @@ export const REGISTRY_MAX_ROWS = 200
 export const NO_CONTROL_FILE_GRACE_MS = 60 * 60 * 1000
 
 /**
+ * A server that heartbeats (`heartbeat: true` in ephemeral.json: it touches the file
+ * every 30 s) and names an owner that is gone should have ended itself within a
+ * minute; a beat this old with its owner gone means it did not (a reused pid, a
+ * wedged server). A stale beat alone proves nothing (timers stop while the Mac
+ * sleeps), so an owner that lives keeps the snapshot.
+ */
+export const OWNER_GONE_GRACE_MS = 3 * 60 * 1000
+
+type ControlData = { pid?: number, heartbeat?: boolean, owner?: { pid?: number } }
+
+/**
+ * True when a snapshot whose pid is alive is not a live server of ours: it heartbeats,
+ * its owner is gone, and the beat stopped OWNER_GONE_GRACE_MS ago. A server from an
+ * older build writes no heartbeat and is judged by its pid alone.
+ */
+export function heartbeatLost(dir: string, data: ControlData, now: number = Date.now()): boolean {
+  if (data.heartbeat !== true) return false
+  let age: number
+  try { age = now - fs.statSync(path.join(dir, 'ephemeral.json')).mtimeMs } catch { return false }
+  const ownerPid = data.owner?.pid
+  const ownerDead = typeof ownerPid === 'number' && ownerPid > 1 && !isProcessAlive(ownerPid)
+  return ownerDead && age > OWNER_GONE_GRACE_MS
+}
+
+/**
  * The ONE directory shape this launcher creates: `open-walnut-<ppid>-` plus the
  * six random characters mkdtemp appends. The reaper deletes nothing that does
  * not have this exact shape, whether it came from the tmpdir scan or from a
@@ -301,9 +326,10 @@ function candidateDirs(walnutHome: string, tmpBase: string): Set<string> {
 /**
  * Reap dead ephemeral snapshot dirs.
  *
- * A dir dies when its ephemeral.json names a pid that is gone, or when it never
- * got a control file and is past the grace period — that second case is the
- * launcher-was-killed-mid-copy case, which is what stranded 9.8G.
+ * A dir dies when its ephemeral.json names a pid that is gone, when its server's
+ * heartbeat stopped after its owner went (heartbeatLost: a server that did not end itself), or when it never got a control file and is past the grace
+ * period — that last case is the launcher-was-killed-mid-copy case, which is what
+ * stranded 9.8G.
  *
  * Input floor: a candidate whose basename is not an ephemeral snapshot shape is
  * never deleted, however it got into the set (a registry row is a hint written
@@ -328,8 +354,8 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
 
     let removed = false
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, 'ephemeral.json'), 'utf-8'))
-      if (data.pid && !isProcessAlive(data.pid)) {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, 'ephemeral.json'), 'utf-8')) as ControlData
+      if (data.pid && (!isProcessAlive(data.pid) || heartbeatLost(dir, data))) {
         fs.rmSync(dir, { recursive: true, force: true })
         removed = true
       } else if (data.pid) {
@@ -373,7 +399,7 @@ export function countLiveEphemeralServers(walnutHome: string, opts: ReapOptions 
     try {
       const data = JSON.parse(fs.readFileSync(path.join(dir, 'ephemeral.json'), 'utf-8'))
       // Dedupe by pid: the registry and the tmpdir scan can name the same server.
-      if (data.pid && isProcessAlive(data.pid)) livePids.add(data.pid)
+      if (data.pid && isProcessAlive(data.pid) && !heartbeatLost(dir, data)) livePids.add(data.pid)
     } catch {
       // No control file or can't parse — not a live server
     }
