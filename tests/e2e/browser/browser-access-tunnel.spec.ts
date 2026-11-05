@@ -338,8 +338,9 @@ test.describe('Open from a browser', () => {
   // cookie only the renewal path gets, which Safari's 7-day rules never reach.
   test('a phone stays signed in: it renews by itself, and after Safari cleared its storage the refresh cookie signs it back in', async ({ page, browser }) => {
     // PW_VIDEO=1: the phone's own window is recorded too, with a line saying each step.
-    const context = await browser.newContext({ ...phoneDevice(), ...(process.env.PW_VIDEO ? { recordVideo: { dir: test.info().outputPath('phone'), size: { width: 390, height: 844 } } } : {}) })
-    const phone = await context.newPage()
+    const recorded = process.env.PW_VIDEO ? { recordVideo: { dir: test.info().outputPath('phone'), size: { width: 390, height: 844 } } } : {}
+    let context = await browser.newContext({ ...phoneDevice(), ...recorded })
+    let phone = await context.newPage()
     const say = (text: string) => process.env.PW_VIDEO ? demoCaption(phone, text) : Promise.resolve()
     await phone.goto(tunnelUrl)
     await say('A phone opens Walnut through the tunnel: not signed in yet')
@@ -368,6 +369,26 @@ test.describe('Open from a browser', () => {
     // Nothing else of the site gets it.
     expect((await context.cookies(`${tunnelUrl}/api/tasks`)).some((c) => c.name.startsWith('walnut_refresh'))).toBe(false)
     expect(await phone.evaluate(() => document.cookie)).not.toContain('walnut_refresh')
+    // Beside it, its mark: the page can see it has a refresh cookie, and it holds no secret.
+    const mark = (await context.cookies(tunnelUrl)).find((c) => c.name.startsWith('walnut_renews'))!
+    expect(mark.value).toBe('1')
+    expect(mark.httpOnly).toBe(false)
+    expect(await phone.evaluate(() => document.cookie)).toContain(`${mark.name}=1`)
+
+    // Safari quit and opened again (or the phone restarted): it keeps its storage and its
+    // cookies, and the page opens signed in, with no code and nothing to renew yet.
+    const kept = await context.storageState()
+    await context.close()
+    context = await browser.newContext({ ...phoneDevice(), ...recorded, storageState: kept })
+    phone = await context.newPage()
+    let renewals = 0
+    phone.on('request', (r) => { if (new URL(r.url()).pathname === '/api/auth/browser/refresh') renewals += 1 })
+    await phone.goto(tunnelUrl)
+    await say('Safari quit and opened again: still signed in, no code')
+    await settleSignedIn(phone)
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
+    expect((await stored()).token).toBe(first.token)
+    expect(renewals).toBe(0)
 
     // 20 hours on: the token is due, and the page renews it by itself when it comes back.
     await phone.evaluate(() => localStorage.setItem('walnut.deviceTokenUntil', String(Date.now() - 60_000)))
