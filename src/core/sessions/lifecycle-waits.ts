@@ -167,4 +167,5 @@ export const TURN_END_OBSERVERS: Readonly<Record<string, string>> = {
   'src/core/hints/hint-drift-live.ts': 'reads a turn\'s lines for the reply-language correction; ends with the turn',
   'src/core/sessions/turn-end-wait.ts': 'the shared wait itself',
   'src/core/user-status-sync.ts': 'derives the user status from the session\'s status on each change; waits for nothing',
+  'src/core/sessions/queue-after-turn.ts': 'releases the messages held for a turn\'s end; its sweep releases them once it finds the session idle (a crash, a reap, a restart), so no hold outlives its turn',
 };
