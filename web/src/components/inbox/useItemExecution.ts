@@ -3,6 +3,7 @@ import { executeItem, prepareItem, itemError, type InboxItemPlan, type InboxLett
 import { getLeaderPresence } from '@/api/leader-presence';
 import { getItemSnapshot, ingestItem, itemKey, mergeItemReceipts, mergeItemResponse, noteItemUnconfirmed,
   refreshItem, setItemSubmitting, subscribeItem, watchItem } from './item-store';
+import { randomId } from '@/utils/random-id';
 
 export function useItemExecution(letterId: string, item: InboxLetterItem) {
   const key = itemKey(letterId, item.id);
@@ -20,7 +21,7 @@ export function useItemExecution(letterId: string, item: InboxLetterItem) {
     if (!getLeaderPresence().answers) throw new Error('Last saved status. Connect to the primary Walnut to act.');
     if (getItemSnapshot(key).uncertain[lane]) throw new Error('Status unconfirmed. Check status before trying again.');
     if (!setItemSubmitting(key, lane, true)) return;
-    const requestId = `iw-${crypto.randomUUID()}`;
+    const requestId = `iw-${randomId()}`;
     try {
       const result = await executeItem(letterId, item.id,
         { actionId: plan.actionId, requestId, confirmed: true, planId: plan.id, planVersion: plan.version });

@@ -16,6 +16,7 @@ import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
 import { isPluginOnlyTask } from '@open-walnut/org-tree';
 import { forThisWindow } from '@/api/test-run';
+import { randomId } from '@/utils/random-id';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -1020,7 +1021,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const create = useCallback(async (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => {
     // Optimistic local-first insert: show the task immediately under a temp id,
     // then reconcile with the server's real task (or roll back on failure).
-    const tmpId = `tmp-${crypto.randomUUID()}`;
+    const tmpId = `tmp-${randomId()}`;
     const now = new Date().toISOString();
     const optimistic = {
       id: tmpId,
@@ -1039,7 +1040,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // Focus tier) renders the card in the same frame — React 19 batches both.
     hooks?.onOptimistic?.(tmpId);
     // Correlates the task:created broadcast with THIS create (see inflightCreates).
-    const clientRequestId = crypto.randomUUID();
+    const clientRequestId = randomId();
     const inflight: { tmpId: string; hooks?: CreateHooks; real?: Task } = { tmpId, hooks };
     inflightCreates.current.set(clientRequestId, inflight);
     try {

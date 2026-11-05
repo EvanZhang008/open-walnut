@@ -42,6 +42,7 @@ import { armChime, playChime } from '@/utils/chime';
 // The context lives in a module of its own, so a component can read it without this provider.
 import { NotificationContext } from './notification-context';
 import { pendingAt, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
+import { randomId } from '@/utils/random-id';
 
 export interface NotificationContextValue {
   /** Current top-right toast stack. */
@@ -278,7 +279,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (causeKey) causeToastAt.current.set(causeKey, Date.now());
     }
 
-    const id = input.id ?? `notif-${crypto.randomUUID()}`;
+    const id = input.id ?? `notif-${randomId()}`;
     const notification: Notification = {
       ...input,
       id,
@@ -560,7 +561,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (dismissedKeys.current.has(r.dedupKey)) return;
     const patch = (base?: Notification): Notification => ({
       ...base,
-      id: base?.id ?? r.id ?? `notif-${crypto.randomUUID()}`,
+      id: base?.id ?? r.id ?? `notif-${randomId()}`,
       kind: r.kind ?? base?.kind ?? 'operation-error',
       severity: r.severity ?? base?.severity ?? 'error',
       title: r.title,
