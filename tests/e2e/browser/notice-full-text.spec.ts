@@ -208,3 +208,39 @@ test.describe('on a phone', () => {
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-phone.png` })
   })
 })
+
+// 2026-11-05, the user (a screenshot circling the empty bottom of the left column beside the bell):
+// "the notification should be here not on the big right". Home's task panel and the Org list.
+test('the corner sits next to the sidebar, over the page left column, never out over the big pane', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const sock = await routeSocket(page)
+  await boot(page, sock)
+  const sidebar = page.locator('.app-shell > .sidebar')
+  const check = async (column: Locator, pane: Locator, shot: string) => {
+    sock()!.send(noticeEvent(`left-${shot}`, { body: BODY }))
+    const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' }).last()
+    await expect(toast).toBeVisible()
+    await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
+    const s = (await sidebar.boundingBox())!
+    const c = (await column.boundingBox())!
+    const p = (await pane.boundingBox())!
+    // Polled as its numbers, so a failure says where the toast and the column really were.
+    await expect.poll(async () => {
+      const t = (await toast.boundingBox())!
+      const ok = Math.round(t.x) === Math.round(s.x + s.width) + 16 && t.x + t.width <= c.x + c.width - 15 && t.x + t.width <= p.x + 1
+      return ok ? 'inside' : `toast x${Math.round(t.x)} w${Math.round(t.width)}; sidebar r${Math.round(s.x + s.width)}; column r${Math.round(c.x + c.width)}; pane x${Math.round(p.x)}`
+    }).toBe('inside')
+    await expectInside(toast)
+    await page.screenshot({ path: `${SHOTS}/${info.project.name}-left-${shot}.png` })
+    await toast.locator('.notification-toast-close').click()
+    await expect(toast).toBeHidden()
+  }
+  const todo = page.locator('.main-page-todo')
+  await expect(todo).toBeVisible()
+  await check(todo, page.locator('.main-page-right'), 'home')
+  await page.getByTestId('sidebar-org').click()
+  const list = page.locator('.org-list')
+  await expect(list).toBeVisible({ timeout: 30_000 })
+  // The Org page: its list on the left, the node's page beside it.
+  await check(list, page.locator('.org-list + *').first(), 'org')
+})

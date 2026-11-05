@@ -82,7 +82,9 @@ function inSight(el: Element): boolean {
 /** Narrowest the stack gets to stay beside a composer instead of rising over it. */
 const MIN_BESIDE_PX = 280;
 const FULL_WIDTH_PX = 380;
-/** The most of a page's left columns the corner keeps right of: it stays at the bottom left. */
+/** The narrowest the stack keeps to inside the page's left column; a narrower one it reaches past. */
+const MIN_INSIDE_PX = 200;
+/** The most of a page's left columns the corner keeps inside: past it the columns are page content. */
 const MAX_COLUMNS_PX = 440;
 /** A window this short keeps the corner to its short forms as soon as two kinds show. */
 const SHORT_WINDOW_PX = 720;
@@ -95,10 +97,12 @@ const PAGE_AREA = '.main-content, .open-walnut-fullscreen';
  *  notification center (it moves to its right), a chat's composer under it (it stays at the bottom, narrower, when there is room left
  *  of the composer, else it sits just above it), and the approval dialog (its approval card steps
  *  aside while that is open: the dialog shows the same request). */
-function syncAround(columnRight: number): void {
+function syncAround(sidebarRight: number, columnRight: number): void {
   if (!stack) return;
-  // One gap, 16px, from whatever it sits beside, on every page.
-  let left = columnRight + 16;
+  // Next to the sidebar (its bell), one gap of 16px, on every page: over the bottom of the page's
+  // left column when it has one, never out over the big pane beside it (2026-11-05, the user:
+  // "the notification should be here not on the big right").
+  let left = sidebarRight + 16;
   let floor = 0;
   let right = window.innerWidth;
   // A full-screen sheet (a session or board opened full screen) is the page now: its bottom left.
@@ -120,6 +124,9 @@ function syncAround(columnRight: number): void {
   // The center lists every toast already; beside it the stack keeps only what it does not list.
   stack.classList.toggle('beside-center', centerOpen);
   let width = Math.min(FULL_WIDTH_PX, right - left - 16);
+  // Kept inside that column while it leaves a readable width; a narrow nav it reaches past.
+  const inside = columnRight - left - 16;
+  if (!sheet && !centerOpen && columnRight > sidebarRight && inside >= MIN_INSIDE_PX) width = Math.min(width, inside);
   let bottom = floor + 16;
   // A chat's composer, and the controls that sit just above one (its jump to the newest line, a
   // new session's folder and project row).
@@ -159,7 +166,7 @@ function syncAround(columnRight: number): void {
   // Per page and window size: a resize lays the page out anew.
   const here = `${location.pathname}${location.search} ${window.innerWidth}x${window.innerHeight}`;
   if (workPage !== here) { workPage = here; workCovered = false; }
-  if (!workCovered && coversWork(left, width, bottom)) workCovered = true;
+  if (!workCovered && coversWork(left, width, bottom, columnRight)) workCovered = true;
   const compact = !phone && (bottom > floor + 16 || crowded || workCovered);
   stack.classList.toggle('is-compact', compact);
   // A page's own list of the approvals in sight (Home's Needs you line, the Org page's): the card
@@ -186,11 +193,13 @@ function syncAround(columnRight: number): void {
  */
 let workPage: string | null = null;
 let workCovered = false;
-function coversWork(left: number, width: number, bottom: number): boolean {
+function coversWork(left: number, width: number, bottom: number, columnRight: number): boolean {
   if (width <= 0) return false;
   const y = window.innerHeight - bottom - 24;
   const big = window.innerWidth * window.innerHeight * 0.25;
   for (const x of [left + 40, left + width / 2, left + width - 40]) {
+    // The page's left column is the corner's own place: its list gets room at its end instead.
+    if (x < columnRight) continue;
     const hit = document.elementsFromPoint(x, y).find((el) => !stack?.contains(el));
     if (!hit || !hit.closest(PAGE_AREA)) continue;
     if (hit.closest('input, textarea, [contenteditable="true"], .cm-editor')) return true;
@@ -206,7 +215,7 @@ function coversWork(left: number, width: number, bottom: number): boolean {
  * calendar's rail, is page content the corner lies over, its end scrolling clear):
  * full-height panes that start at the sidebar's edge or at the previous column's, together no
  * wider than MAX_COLUMNS_PX, each leaving the stack a readable width on its right. Their bottom
- * rows are what the person works in, so the stack sits right of them. Read from the layout, so a
+ * rows end clear of the stack (syncRoom), which keeps inside them. Read from the layout, so a
  * new page's column needs no listing here.
  */
 function leftColumnRight(sidebarRight: number): number {
@@ -293,10 +302,7 @@ function syncLeft(): void {
   if (!stack) return;
   const sidebar = inFlowSidebar();
   const sidebarRight = sidebar ? Math.max(0, Math.round(sidebar.getBoundingClientRect().right)) : 0;
-  // A window too narrow for the stack right of the page's left column: it sits over that
-  // column's bottom instead, right of the sidebar.
-  const column = leftColumnRight(sidebarRight);
-  syncAround(window.innerWidth - column - 32 >= MIN_BESIDE_PX - 40 ? column : sidebarRight);
+  syncAround(sidebarRight, leftColumnRight(sidebarRight));
   syncRoom();
   if (sidebar !== watched) {
     observer?.disconnect();

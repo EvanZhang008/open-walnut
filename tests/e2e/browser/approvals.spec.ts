@@ -10,7 +10,7 @@
  *    opens the dialog in the order the requests came, the corner card on every page holding the
  *    buttons and staying until it is answered, and
  *    Main's Needs you on the Org page listing it;
- *  - the corner: a card and a toast share the bottom left, right of the sidebar.
+ *  - the corner: a card and a toast share the bottom left, next to the sidebar.
  *
  * The fixture server marks no test objects, while this automated window has a test-run label,
  * so this also pins that a live card shows there (the window re-reads the server's list).
@@ -267,17 +267,17 @@ test('the corner: a toast and an approval card share the bottom left, right of t
 
   const vp = page.viewportSize()!
   const sidebar = (await page.locator('.app-shell > .sidebar').boundingBox())!
-  // Settings has its own left column (its nav) beside the sidebar: the stack sits right of it.
-  const nav = (await page.locator('.settings-nav').boundingBox())!
+  // Settings has its own left column (its nav) beside the sidebar: the stack sits next to the
+  // sidebar over the nav's bottom (2026-11-05, the user: "not on the big right"), reaching past a
+  // nav too narrow to read in.
   const c = (await card.boundingBox())!
   const t = (await toast.boundingBox())!
   await page.screenshot({ path: test.info().outputPath('corner.png') })
 
   for (const [name, b] of [['card', c], ['toast', t]] as const) {
-    expect(b.x, `${name} starts right of the page's left column`).toBe(Math.round(nav.x + nav.width) + 16)
+    expect(b.x, `${name} starts next to the sidebar`).toBe(Math.round(sidebar.x + sidebar.width) + 16)
     expect(b.x, `${name} is on the left`).toBeLessThan(vp.width / 2)
     expect(overlaps(b, sidebar), `${name} covers no part of the sidebar`).toBe(false)
-    expect(overlaps(b, nav), `${name} covers no part of the page's left column`).toBe(false)
   }
   expect(vp.height - (c.y + c.height), 'the card sits at the bottom').toBeLessThanOrEqual(20)
   expect(c.y, 'the approval is nearest the corner, the toast above it').toBeGreaterThanOrEqual(t.y + t.height - 1)
@@ -288,16 +288,16 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await page.locator('.sidebar-collapse-btn').first().click()
   await expect.poll(async () => Math.round((await page.locator('.app-shell > .sidebar').boundingBox())!.width)).not.toBe(Math.round(sidebar.width))
   await expect.poll(async () => {
-    const n = (await page.locator('.settings-nav').boundingBox())!
+    const n = (await page.locator('.app-shell > .sidebar').boundingBox())!
     const b = (await card.boundingBox())!
     return Math.round(b.x - (n.x + n.width))
   }).toBe(16)
   await page.locator('.sidebar-collapse-btn').first().click()
-  // A narrow window with the sidebar open: still right of the page's left column, narrower.
+  // A narrow window with the sidebar open: still next to the sidebar, inside the window.
   await page.setViewportSize({ width: 800, height: 600 })
   // Polled as its numbers, so a failure says where the card and the column really were.
   await expect.poll(async () => {
-    const n = (await page.locator('.settings-nav').boundingBox())!
+    const n = (await page.locator('.app-shell > .sidebar').boundingBox())!
     const b = (await card.boundingBox())!
     const fits = Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 240
     return fits ? 'fits' : `card x${Math.round(b.x)} w${Math.round(b.width)}; nav x${Math.round(n.x)} w${Math.round(n.width)} h${Math.round(n.height)}; stack ${await page.getByTestId('corner-stack').getAttribute('class')}`

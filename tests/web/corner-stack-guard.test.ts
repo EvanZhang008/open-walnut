@@ -6,7 +6,7 @@
  * bottom right).
  *
  * This fails when a NEW notice places itself instead of going through <CornerSlot>:
- *  - any CSS rule in web/src that pins an element to a corner of the window (position: fixed
+ *  - any CSS rule in web/src or plugin-store that pins an element to a corner of the window (position: fixed
  *    with both a top/bottom and a left/right offset) and is not listed below with why;
  *  - any CSS rule for a toast, toaster, snackbar, notice, undo bar or approval stack that
  *    positions itself (fixed or absolute) and is not listed below with why;
@@ -94,7 +94,9 @@ const namedViolations = (rules: Rule[]) => rules.filter((r) =>
   && subjects(r.selector).some((s) => NOTICE_NAME.test(s))
   && !allowed(r.selector, { ...NAMED_ALLOWED, ...CORNER_ALLOWED }));
 
-const CSS = listed(['web/src/**/*.css']);
+// The web app and the plugins this repository ships (a plugin's notice goes through
+// walnut.notifications into the same corner, never a box of its own).
+const CSS = listed(['web/src/**/*.css', 'plugin-store/**/*.css']);
 
 describe('one corner for every notice', () => {
   it('no CSS rule pins something else to a corner of the window', () => {
@@ -122,7 +124,7 @@ describe('one corner for every notice', () => {
 
   it('no inline style pins position: fixed to a literal corner', () => {
     // `:(glob)` so `**/` also matches no directory at all (web/src/App.tsx, main.tsx).
-    const files = listed([':(glob)web/src/**/*.ts', ':(glob)web/src/**/*.tsx']);
+    const files = listed([':(glob)web/src/**/*.ts', ':(glob)web/src/**/*.tsx', ':(glob)plugin-store/**/*.ts', ':(glob)plugin-store/**/*.tsx']);
     expect(files).toContain('web/src/App.tsx');
     const bad: string[] = [];
     for (const f of files) {
@@ -176,8 +178,14 @@ describe('one corner for every notice', () => {
     expect(css).toMatch(/:is\(\.is-compact, \.has-approval\)[^{]*notification-toast-body\s*\{[^}]*-webkit-line-clamp:\s*1/);
   });
 
-  it('the corner stays at the bottom left: only navigation columns push it right, and the count is a link', () => {
+  it('the corner stays at the bottom left next to the sidebar, inside the page left column, and the count is a link', () => {
     const src = read('web/src/components/common/corner-stack.tsx');
+    // 2026-11-05, the user: "the notification should be here not on the big right".
+    expect(src).toMatch(/let left = sidebarRight \+ 16;/);
+    expect(src).not.toMatch(/let left = columnRight \+ 16;/);
+    expect(src).toMatch(/inside >= MIN_INSIDE_PX\) width = Math\.min\(width, inside\)/);
+    // Over that column it keeps its whole form: the column's list makes room at its end.
+    expect(src).toMatch(/if \(x < columnRight\) continue;/);
     expect(src).toMatch(/const MAX_COLUMNS_PX = 440;/);
     expect(src).toMatch(/if \(r\.right > sidebarRight \+ MAX_COLUMNS_PX\) continue;/);
     // "N more" rides the top toast's title row instead of standing as a card of its own.
