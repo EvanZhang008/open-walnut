@@ -252,6 +252,13 @@ for (const size of SIZES) {
     await title.tap()
     expect(await page.evaluate(() => window.visualViewport?.scale ?? 1)).toBe(1)
     await title.evaluate((el) => (el as HTMLElement).blur())
+    // Every mic the detail draws is on screen before the scan, so the scan judges each kind:
+    // the description's and the note's rich editor mic (EditorMic) and the note box's (BoxMic).
+    // They load after the detail opens; a scan that ran first saw the note box's alone and passed
+    // on a fast machine while the editors' mics were 28 px wide (2026-11-05 CI).
+    const detail = page.locator('.task-detail-modal-overlay')
+    await expect(detail.locator('.editor-mic-dock .mic-btn')).toHaveCount(2, { timeout: 20_000 })
+    await expect(detail.locator('.box-mic .mic-btn')).toHaveCount(1)
     await scan(page, '.task-detail-modal-overlay', `detail-${size.width}`)
     expect(errors).toEqual([])
   })

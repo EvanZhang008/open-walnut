@@ -415,10 +415,34 @@
     min-height: 44px;
   }
 
-  html body .is-phone-layer .task-watch-btn,
-  html body .is-phone-layer .mic-btn {
+  html body .is-phone-layer .task-watch-btn {
     min-width: 44px;
     justify-content: center;
+  }
+
+  /* Every mic is a 44 x 44 box, whichever box it sits in. Each kind of mic sizes its
+     button with a rule of three classes (.editor-mic-dock .editor-mic .mic-btn in the
+     description and notes editors, .settings-mic-field .mic-field-mic .mic-btn), which
+     outranked a plain .mic-btn here: their min-width of 28 px won (min-height, which
+     beats any height, still applied). The wrapper MicButton always draws makes
+     this rule outrank every one of them. */
+  html body .is-phone-layer .mic-btn-wrapper .mic-btn {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  /* Room for the larger mic, so the last line of a note or a box's text never runs under it. */
+  html body .is-phone-layer :has(> .editor-mic-dock) .ProseMirror {
+    padding-bottom: 52px;
+  }
+
+  html body .is-phone-layer .mic-field-area > textarea {
+    padding-right: 62px;
+  }
+
+  html body .is-phone-layer .mic-field-inline > :is(input, textarea) {
+    padding-right: 52px;
   }
 
   html body .is-phone-layer .tag-editor-input {
