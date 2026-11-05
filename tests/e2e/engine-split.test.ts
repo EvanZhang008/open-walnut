@@ -103,6 +103,21 @@ describe('the engine split', () => {
     await expect.poll(async () => (await getSessionsForTask(placeholder.id))[0]?.cliModel ?? '', { timeout: 20_000 }).toMatch(/sonnet/i)
   }, 60_000)
 
+  it('two starts of one task at once keep one pick, the one its session runs on', async () => {
+    const placeholder = await op('task_create', { title: 'Double start', project: 'Marina', record_only: true })
+    const both = await Promise.allSettled([
+      startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false }),
+      startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false }),
+    ])
+    const started = both.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof startSessionForTask>>>[]
+    expect(started.length).toBeGreaterThanOrEqual(1)
+    const kept = (await task(placeholder.id)).engine_pick
+    expect(kept?.key).toBe(started[0].value.enginePick?.key)
+    await expect.poll(async () => (await getSessionsForTask(placeholder.id)).length, { timeout: 20_000 }).toBeGreaterThan(0)
+    const [record] = await getSessionsForTask(placeholder.id)
+    expect(/sonnet/i.test(record?.cliModel ?? '')).toBe(kept?.key === 'claude:sonnet')
+  }, 60_000)
+
   it('counts a reopen of a completed task and compares the work on GET /api/usage/engines', async () => {
     const done = await op('task_create', { title: 'Finish and reopen', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
     expect((await api('PATCH', `/api/tasks/${done.id}`, { phase: 'COMPLETE' })).status).toBe(200)
@@ -120,7 +135,11 @@ describe('the engine split', () => {
     expect(finished).toMatchObject({ done: true, reopens: 1, reviews: 1, split: true })
     const row = r.body.rows.find((x: { key: string }) => x.key === finished.key)
     expect(row).toMatchObject({ engine: 'claude', done: 1, reopens: 1, reviewsPerTask: 1 })
-    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(7)
+    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(8)
+    expect(r.body.taskCount).toBe(8)
+    // Only the split's own picks: the starts that named an engine or a model drop out.
+    const fair = await api('GET', '/api/usage/engines?project=Marina&split=1')
+    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 6 })
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
     expect(r.body.projects).toEqual([{ project: 'Marina', tasks: expect.any(Number) }])
   }, 60_000)

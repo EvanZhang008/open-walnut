@@ -134,6 +134,28 @@ describe('aggregateEngineCompare', () => {
     expect(out.rows[0]).toMatchObject({ errored: 1, partialCost: 1 });
   });
 
+  it('counts only the tasks the split assigned when asked, and gives no time to a task with no known start', () => {
+    const tasks = [done('picked', 2, { engine_pick: { key: 'claude', engine: 'claude', at: '2026-11-02T00:00:00.000Z' } }), done('byhand', 3),
+      done('old', 4, { session_id: 's-gone' })];
+    const inp = input(tasks, {});
+    (inp.sessions as Map<string, object>).delete('s-gone');
+    const all = aggregateEngineCompare(inp);
+    expect(all.taskCount).toBe(3);
+    expect(all.tasks.find((t) => t.taskId === 'old')?.hours).toBeNull();
+    const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
+    expect(fair).toMatchObject({ splitOnly: true, taskCount: 1 });
+    expect(fair.tasks.map((t) => t.taskId)).toEqual(['picked']);
+  });
+
+  it('marks a review cost that leaves out unpriced reviewer requests, and remembers an error past the last ten moves', () => {
+    const tasks = [done('p2', 1), task({ id: 'rv2', parent_task_id: 'p2', title: 'Review the fix', session_id: 's-rv2' })];
+    const inp = input(tasks, { p2: { costUsd: 2 }, rv2: { costUsd: 0, tokens: 1e6, unpriced: 10 } });
+    (inp.sessions as Map<string, object>).set('s-p2', { startedAt: '2026-11-02T00:00:00.000Z', errorCount: 1, status_history: [{ process_status: 'idle' }] });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks[0]).toMatchObject({ reviewPartialCost: true, partialCost: false, errored: true });
+    expect(out.rows[0]).toMatchObject({ reviewPartialCost: 1, partialCost: 0, errored: 1 });
+  });
+
   it('gives an engine its usual model family when nothing names one', () => {
     const inp = input([done('cx', 1)], {});
     (inp.sessions as Map<string, object>).set('s-cx', { startedAt: '2026-11-02T00:00:00.000Z', engine: 'codex' });

@@ -55,6 +55,8 @@ export interface EngineCompareTask {
   reviews: number;
   /** What its reviewer subtasks cost. */
   reviewCostUsd: number;
+  /** A reviewer used a model with no price, so reviewCostUsd is a floor. */
+  reviewPartialCost: boolean;
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -82,6 +84,8 @@ export interface EngineCompareRow {
   reviewsPerTask: number | null;
   /** What those reviewers cost, per finished task. */
   reviewCostPerTask: number | null;
+  /** Tasks whose review cost leaves out unpriced requests. */
+  reviewPartialCost: number;
   /** The user's messages per finished task. */
   followUpsPerTask: number | null;
   reopens: number;
@@ -99,6 +103,10 @@ export interface EngineCompare {
   tasks: EngineCompareTask[];
   projects: { project: string; tasks: number }[];
   split: { on: boolean; entries: { key: string; label: string; weight: number }[] };
+  /** How many tasks the rows count (the list holds the latest TASKS_MAX of them). */
+  taskCount: number;
+  /** Only tasks the engine split assigned were counted. */
+  splitOnly: boolean;
 }
 
 export const TASKS_MAX = 60;
@@ -112,11 +120,13 @@ export interface CompareInput {
   tasks: readonly Task[];
   /** By session id: what Walnut's record says. */
   sessions: ReadonlyMap<string, { engine?: SessionEngine; startedAt?: string; model?: string; cliModel?: string; acpModel?: string;
-    process_status?: string; status_history?: { process_status?: string }[] }>;
+    process_status?: string; status_history?: { process_status?: string }[]; errorCount?: number }>;
   spend: ReadonlyMap<string, TaskSpend>;
   followUps: (taskId: string) => number;
   range: { start?: string; end?: string };
   project?: string;
+  /** Count only tasks the engine split assigned (a fair test: no engine was picked by hand). */
+  splitOnly?: boolean;
   config?: { defaults?: { engine_split?: unknown } } | null;
   /** YYYY-MM-DD of an ISO time in the report's time zone. */
   dayOf: (iso: string) => string;
@@ -163,10 +173,13 @@ function inRange(day: string, range: { start?: string; end?: string }): boolean 
 export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const reviewsOf = new Map<string, number>();
   const reviewCostOf = new Map<string, number>();
+  const reviewPartial = new Set<string>();
   for (const t of input.tasks) {
     if (!t.parent_task_id || !REVIEW_RE.test(t.title)) continue;
+    const spend = input.spend.get(t.id);
     reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
-    reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (input.spend.get(t.id)?.costUsd ?? 0));
+    reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
+    if ((spend?.unpriced ?? 0) > 0) reviewPartial.add(t.parent_task_id);
   }
   const projects = new Map<string, number>();
   const picked: (EngineCompareTask & { finishedAt: string })[] = [];
@@ -177,28 +190,31 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const done = t.phase === 'COMPLETE' && !!t.completed_at;
     // From its first session's start (a restart, an engine switch or a recovery starts another)
     // to its first completion (a reopen adds the idle time before it otherwise).
-    const startedAt = firstStart(t, input.sessions) ?? t.engine_pick?.at ?? t.created_at;
+    // No session start known (an old task whose records are gone): no time, rather than its age.
+    const sessionStart = firstStart(t, input.sessions) ?? t.engine_pick?.at;
+    const startedAt = sessionStart ?? t.created_at;
     const finishedAt = t.first_completed_at && t.completed_at && t.first_completed_at < t.completed_at ? t.first_completed_at : t.completed_at;
     const day = input.dayOf(done ? t.completed_at! : startedAt);
     if (!inRange(day, input.range)) continue;
     projects.set(t.project ?? '', (projects.get(t.project ?? '') ?? 0) + 1);
     if (input.project !== undefined && (t.project ?? '') !== input.project) continue;
+    if (input.splitOnly && !t.engine_pick) continue;
     const spend = input.spend.get(t.id);
     const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine);
     const family = modelFamily(spend?.model) ?? modelFamily(session?.acpModel ?? session?.cliModel ?? session?.model)
       ?? modelFamily(t.engine_pick?.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
     const key = `${engine}|${family}`;
     meta.set(key, { engine, family });
-    const hours = done ? (Date.parse(finishedAt!) - Date.parse(startedAt)) / 3600_000 : null;
+    const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
     // Any session it held: a task that failed on one engine and finished on another still had the error.
     const errored = sessionsOf(t).some((id) => {
       const s = input.sessions.get(id);
-      return s?.process_status === 'error' || !!s?.status_history?.some((h) => h.process_status === 'error');
+      return s?.process_status === 'error' || (s?.errorCount ?? 0) > 0 || !!s?.status_history?.some((h) => h.process_status === 'error');
     }) || t.last_start?.state === 'failed';
     picked.push({
       taskId: t.id, title: t.title, project: t.project ?? '', key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
-      costUsd: spend?.costUsd ?? 0, partialCost: (spend?.unpriced ?? 0) > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0,
+      costUsd: spend?.costUsd ?? 0, partialCost: (spend?.unpriced ?? 0) > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
       finishedAt: done ? t.completed_at! : '',
     });
@@ -214,7 +230,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       medianHours: median(done.map((p) => p.hours).filter((h): h is number => h !== null)),
       costUsd: all.reduce((a, p) => a + p.costUsd, 0), partialCost: all.filter((p) => p.partialCost).length, medianCostUsd: median(done.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(done.map((p) => p.tokens)),
-      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), followUpsPerTask: per((p) => p.followUps),
+      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: all.filter((p) => p.reviewPartialCost).length, followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
       reopenedShare: per((p) => (p.reopens > 0 ? 1 : 0)),
       erroredShare: all.length ? all.filter((p) => p.errored).length / all.length : null,
@@ -229,7 +245,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,
     projects: [...projects].sort((a, b) => b[1] - a[1]).map(([project, n]) => ({ project, tasks: n })),
-    split: { on: entries.length >= 2, entries },
+    split: { on: entries.length >= 2, entries }, taskCount: picked.length, splitOnly: !!input.splitOnly,
   };
 }
 
@@ -237,6 +253,18 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
  * Every task's whole spend (all time: a task finished this week may have started last month),
  * priced the way the Usage & Costs page prices it, with the engine and model that carried most of it.
  */
+/** One computed spend map, reused for a minute: the page asks again on every period or project change. */
+let spendCache: { at: number; key: string; value: Map<string, TaskSpend> } | null = null;
+const SPEND_CACHE_MS = 60_000;
+
+/** `key` names the usage it was read from (a finished collection changes it), so new usage is never served stale. */
+export async function cachedTaskSpend(key: string, ...args: Parameters<typeof taskSpend>): Promise<Map<string, TaskSpend>> {
+  if (spendCache && spendCache.key === key && Date.now() - spendCache.at < SPEND_CACHE_MS) return spendCache.value;
+  const value = await taskSpend(...args);
+  spendCache = { at: Date.now(), key, value };
+  return value;
+}
+
 export async function taskSpend(rollup: CostRollup, overrides: Record<string, UserPriceRates> | undefined,
   sessionTask: (sid: string) => string | undefined): Promise<Map<string, TaskSpend>> {
   await ensurePriceBook();

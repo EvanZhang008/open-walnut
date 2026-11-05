@@ -3696,6 +3696,8 @@ export interface SessionRecord {
   status_changed_by?: StatusChangedBy;
   /** Recent status transitions, newest first. Max 10 entries. */
   status_history?: StatusTransition[];
+  /** How many times the session entered 'error', kept past status_history's last ten moves. */
+  errorCount?: number;
   /** Monotonic version of the canonical SessionStatusSnapshot projection. */
   statusRevision?: number;
   /** ISO timestamp at which statusRevision last changed. */

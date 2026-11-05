@@ -68,10 +68,12 @@ export function UsageSection() {
   const [origin, setOrigin] = usePersistentState<CostOrigin>('walnut-usage-origin', 'all', isOrigin);
   const { report, current, keptAt, loading, error, refresh, range } = useUsageCosts('all', time, 'all', origin);
   const [updating, setUpdating] = useState(false);
+  // Bumped by Update now: the engine comparison reads its own route and must read it again too.
+  const [refreshed, setRefreshed] = useState(0);
   const [updateError, setUpdateError] = useState('');
   const update = async () => {
     setUpdating(true); setUpdateError('');
-    try { await collectUsage(); await refresh(); }
+    try { await collectUsage(); await refresh(); setRefreshed((n) => n + 1); }
     catch (err) { setUpdateError(err instanceof Error ? err.message : String(err)); }
     finally { setUpdating(false); }
   };
@@ -145,7 +147,8 @@ export function UsageSection() {
             </>
           )}
           {/* Its own read: tasks finished or started in the period, with or without counted usage yet. */}
-          <EngineCompareCard range={range} />
+          <EngineCompareCard range={range} ready={shown.ready}
+            refreshKey={`${refreshed}|${shown.ready}|${shown.collection?.finishedAt ?? ''}|${shown.collection?.running ? 1 : 0}`} />
           <HowCounted report={shown} />
         </div>
       )}

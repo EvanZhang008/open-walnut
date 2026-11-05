@@ -128,3 +128,7 @@
 .usage-ec-open:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; border-radius: 3px; }
 .usage-ec-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted); }
 .usage-ec-partial { margin-left: 3px; font-size: 10px; color: var(--fg-muted); font-weight: 500; }
+.usage-ec-which { display: inline-flex; }
+.usage-ec-defs { margin: 6px 0 0; display: grid; gap: 6px; font-size: 12px; }
+.usage-ec-defs dt { font-weight: 600; color: var(--fg); }
+.usage-ec-defs dd { margin: 0; color: var(--fg-muted); }

@@ -54,11 +54,11 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
   } catch (err) { next(err) }
 })
 
-// GET /api/usage/engines?start&end&project: engines compared on finished work (engine-compare.ts).
+// GET /api/usage/engines?start&end&project&split=1: engines compared on finished work (engine-compare.ts).
 // Local reads only (tasks, sessions, the per-day sums, the user-asks files), no host round trip.
 usageRouter.get('/engines', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const [{ aggregateEngineCompare, taskSpend }, { getConfig }, { listTasks }, { listSessions }, { readUserAsks }] = await Promise.all([
+    const [{ aggregateEngineCompare, cachedTaskSpend }, { getConfig }, { listTasks }, { listSessions }, { readUserAsks }] = await Promise.all([
       import('../../core/usage/engine-compare.js'), import('../../core/config-manager.js'),
       import('../../core/task-manager.js'), import('../../core/session-tracker.js'), import('../../core/sessions/user-asks.js'),
     ])
@@ -66,7 +66,8 @@ usageRouter.get('/engines', async (req: Request, res: Response, next: NextFuncti
     const config = await getConfig()
     const [tasks, sessions] = await Promise.all([listTasks(), listSessions()])
     const byId = new Map(sessions.map(s => [s.claudeSessionId, s]))
-    const spend = await taskSpend(store.rollup, config.usage?.prices, (sid) => byId.get(sid)?.taskId || undefined)
+    const state = collectionState() as { running?: boolean; finishedAt?: string; until?: string }
+    const spend = await cachedTaskSpend(`${state.finishedAt ?? ''}|${state.running ? 1 : 0}|${store.rollup.isReady() ? 1 : 0}`, store.rollup, config.usage?.prices, (sid) => byId.get(sid)?.taskId || undefined)
     // The user's messages, read only for the tasks that have a file of them.
     const fs = await import('node:fs/promises'), path = await import('node:path'), { WALNUT_HOME } = await import('../../constants.js')
     const withAsks = new Set((await fs.readdir(path.join(WALNUT_HOME, 'user-asks')).catch(() => [] as string[]))
@@ -81,7 +82,7 @@ usageRouter.get('/engines', async (req: Request, res: Response, next: NextFuncti
     const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: store.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
     const project = typeof req.query.project === 'string' && req.query.project !== '*' ? req.query.project : undefined
     res.json(aggregateEngineCompare({
-      tasks, sessions: byId, spend, followUps: (id) => followUps.get(id) ?? 0, config, project,
+      tasks, sessions: byId, spend, followUps: (id) => followUps.get(id) ?? 0, config, project, splitOnly: req.query.split === '1',
       range: { start: parseDate(req.query.start), end: parseDate(req.query.end) },
       dayOf: (iso) => { const d = new Date(iso); return Number.isFinite(d.getTime()) ? fmt.format(d) : '' },
     }))

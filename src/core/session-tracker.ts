@@ -2147,6 +2147,8 @@ function applyUpdateToSession(
       transition,
       ...(session.status_history ?? []),
     ].slice(0, MAX_STATUS_HISTORY);
+    // The history keeps ten moves; a count of errors outlives it (usage/engine-compare.ts reads it).
+    if (updates.process_status === 'error') session.errorCount = (session.errorCount ?? 0) + 1;
   }
 
   // Terminal-state PID clear. Prevents stale PID orphan kills when OS recycles PIDs.

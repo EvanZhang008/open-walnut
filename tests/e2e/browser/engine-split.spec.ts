@@ -44,7 +44,7 @@ function engines(project: string | null) {
     project: i % 3 ? 'Walnut' : 'Walnut Idea', key: rows[i % 3].key, done: i % 7 !== 0, hours: i % 7 ? 1 + i / 4 : null,
     costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0,
   }))
-  return { range: { start: null, end: null }, rows, tasks, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
+  return { range: { start: null, end: null }, rows, tasks, taskCount: 75, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
     split: { on: true, entries: [{ key: 'claude', label: 'Claude Code', weight: 1 }, { key: 'codex', label: 'Codex', weight: 1 }] } }
 }
 
@@ -86,16 +86,28 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await routeCosts(page)
   const asked: (string | null)[] = []
   let onlyOne = false
+  const splitAsked: boolean[] = []
   await page.route('**/api/usage/engines**', (route) => {
-    const project = new URL(route.request().url()).searchParams.get('project')
+    const url = new URL(route.request().url())
+    const project = url.searchParams.get('project')
     asked.push(project)
-    const json = engines(project)
+    splitAsked.push(url.searchParams.get('split') === '1')
+    const json = { ...engines(project), splitOnly: url.searchParams.get('split') === '1' }
     return route.fulfill({ json: onlyOne ? { ...json, projects: [{ project: 'Walnut', tasks: 40 }] } : json })
   })
+  // Update now asks the server to collect; here it answers at once, as a finished collection.
+  await page.route('**/api/usage/collect', (route) => route.fulfill({ status: 202, json: { running: false } }))
   await openUsage(page)
   const card = page.getByTestId('usage-engines')
   await card.scrollIntoViewIfNeeded()
   await expect(card.getByTestId('usage-engines-split')).toContainText('New tasks are shared: Claude Code 1 : Codex 1')
+  // The split assigned 11 tasks here (two columns' worth): the card counts only those, a fair test.
+  await expect.poll(() => splitAsked.at(-1)).toBe(true)
+  await expect(card.getByTestId('usage-engines-split-only')).toHaveAttribute('aria-checked', 'true')
+  await expect(card.getByTestId('usage-engines-bias')).toHaveCount(0)
+  await card.getByTestId('usage-engines-all').click()
+  await expect.poll(() => splitAsked.at(-1)).toBe(false)
+  await expect(card.getByTestId('usage-engines-bias')).toBeVisible()
   const table = card.getByTestId('usage-engines-table')
   await expect(table.locator('thead th')).toHaveText(['', 'Claude Code · Claude', 'Codex · GPT', 'Claude Code · GPTfew', 'OpenCode · Other'])
   const cell = (metric: string, col: number) => table.locator(`tr[data-metric="${metric}"] td`).nth(col)
@@ -128,6 +140,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   onlyOne = false
 
   const tasks = card.getByTestId('usage-engines-tasks')
+  await expect(tasks.locator('summary')).toHaveText('The latest 60 of the 75 tasks behind these numbers')
   await tasks.locator('summary').click()
   await expect(tasks.locator('tr')).toHaveCount(60)
   await expect(tasks.locator('tr').first()).toContainText('Settings: share new tasks')
@@ -135,5 +148,11 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   // A task row opens its task from the keyboard too.
   await tasks.locator('tr').first().getByRole('button').focus()
   await expect(tasks.locator('tr').first().getByRole('button')).toBeFocused()
+  // Update now reads the comparison again, not only the cost report.
+  const before = asked.length
+  await page.locator('.usage-refresh-btn').click()
+  await expect.poll(() => asked.length).toBeGreaterThan(before)
+  await card.getByTestId('usage-engines-defs').locator('summary').click()
+  await expect(card.getByTestId('usage-engines-defs')).toContainText('From its first session starting to its first completion.')
   expect(errors).toEqual([])
 })

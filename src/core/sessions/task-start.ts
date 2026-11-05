@@ -240,6 +240,8 @@ async function splitPick(task: Task, params: SessionStartParams) {
   if (task.session_id || task.exec_session_id || task.session_ids?.length) return null;
   const { splitApplies, splitBuilders, pickSplitEngine, recordPick } = await import('../agents/engine-split.js');
   const named = params.engine !== undefined || !!params.effort || (!!params.model && params.model !== 'default');
+  // A second start of a task already starting is refused just after this (alreadyStarted): it never picks.
+  if (pendingStarts.has(task.id)) return null;
   if (task.engine_pick && !named) return { ...task.engine_pick, reused: true };
   if (!splitApplies(task, params)) return null;
   const { getConfig } = await import('../config-manager.js');
@@ -257,7 +259,12 @@ async function splitPick(task: Task, params: SessionStartParams) {
   if (!pick) return null;
   const kept = { key: pick.key, engine: pick.engine, ...(pick.model ? { model: pick.model } : {}), at: pick.at };
   try {
-    await updateTaskRaw(task.id, { engine_pick: kept }, { source: 'task-start' });
+    // Written only while the task has none: of two starts at once, the first pick stands.
+    const wrote = await updateTaskRaw(task.id, { engine_pick: kept }, { source: 'task-start', shouldUpdate: (current) => !current.engine_pick });
+    if (!wrote.changed) {
+      const current = await getTask(task.id);
+      if (current.engine_pick) return { ...current.engine_pick, reused: true };
+    }
     await recordPick(pick.key, task.id, pick.at);
   } catch (err) {
     log.session.warn('engine split: could not keep the pick', { taskId: task.id, error: String(err) });

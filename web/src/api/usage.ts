@@ -219,6 +219,7 @@ export interface EngineCompareRow {
   medianTokens: number | null;
   reviewsPerTask: number | null;
   reviewCostPerTask: number | null;
+  reviewPartialCost?: number;
   followUpsPerTask: number | null;
   reopens: number;
   errored: number;
@@ -238,6 +239,7 @@ export interface EngineCompareTask {
   tokens: number;
   reviews: number;
   reviewCostUsd: number;
+  reviewPartialCost?: boolean;
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -250,11 +252,15 @@ export interface EngineCompare {
   tasks: EngineCompareTask[];
   projects: { project: string; tasks: number }[];
   split: { on: boolean; entries: { key: string; label: string; weight: number }[] };
+  /** How many tasks the rows count (an older server leaves it out). */
+  taskCount?: number;
+  splitOnly?: boolean;
 }
 
-/** `project`: one project's tasks ('' = Inbox); absent counts every project. */
-export function fetchEngineCompare(range: { start?: string; end?: string }, project?: string): Promise<EngineCompare> {
+/** `project`: one project's tasks ('' = Inbox); absent counts every project. `splitOnly`: only tasks the split assigned. */
+export function fetchEngineCompare(range: { start?: string; end?: string }, project?: string, splitOnly = false): Promise<EngineCompare> {
   const q: Record<string, string> = {};
+  if (splitOnly) q.split = '1';
   if (range.start) q.start = range.start;
   if (range.end) q.end = range.end;
   if (project !== undefined) q.project = project;
