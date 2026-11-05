@@ -47,9 +47,13 @@ function startSites(): Promise<void> {
 
 async function session(page: Page): Promise<string> {
   const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const r = st.setUp
-    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
+  const go = () => st.setUp
+    ? page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
+    : page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
+  let r = await go()
+  // Another spec on the shared fixture may be unlocking at the same moment.
+  for (let i = 0; i < 10 && r.status() === 429; i++) { await page.waitForTimeout(1000); r = await go() }
+  for (let i = 0; i < 10 && !r.ok() && /unlock_busy/.test(await r.text()); i++) { await page.waitForTimeout(1000); r = await go() }
   expect(r.ok(), await r.text()).toBe(true)
   return (await r.json()).session.token
 }
@@ -218,6 +222,48 @@ test('one type scale: 13 px text, never under 12 px, in every view (Chrome\'s 75
   await p.close()
 })
 
+test('a copy says when it is cleared, and is cleared 30 s after the latest copy, not an earlier one', async () => {
+  const p = await ctx.newPage()
+  await p.setViewportSize({ width: 360, height: 600 })
+  await p.clock.install()
+  await p.goto(`chrome-extension://${extId}/popup.html`)
+  await expect(p.getByLabel('Search Walnut')).toBeVisible({ timeout: 20_000 })
+  await p.getByLabel('Search Walnut').fill(`Look Work ${stamp}`)
+  const row = p.getByTestId('popup-item').filter({ hasText: `Look Work ${stamp}` })
+  const clip = () => p.evaluate(() => navigator.clipboard.readText())
+  // When the page told the background of its latest copy (it resets its own timer in the same step).
+  const copiedAt = () => sw().evaluate(() => chrome.storage.session.get('clipboardCopied').then((r) => (r.clipboardCopied as { at?: number } | undefined)?.at ?? 0))
+  await row.hover()
+  await row.getByTestId('copy-password').click()
+  await expect(p.locator('.toast')).toHaveText('Password copied, cleared in 30 s')
+  await shot(p, '21-copied-toast')
+  await expect.poll(clip).toBe(`Work-pw-${stamp}`)
+  await expect.poll(copiedAt).toBeGreaterThan(0)
+  const first = await copiedAt()
+  // The same password again 20 s later: the first copy's 30 s must not clear it at 30 s.
+  await p.clock.fastForward(20_000)
+  await row.hover()
+  await row.getByTestId('copy-password').click()
+  // The clipboard already holds it, so wait for this copy itself (it asks the background first).
+  await expect.poll(copiedAt, { timeout: 15_000 }).toBeGreaterThan(first)
+  await expect.poll(clip).toBe(`Work-pw-${stamp}`)
+  await p.clock.fastForward(11_000)
+  await p.waitForTimeout(300)
+  expect(await clip()).toBe(`Work-pw-${stamp}`)
+  await p.clock.fastForward(20_000)
+  await expect.poll(clip).toBe('')
+  await p.close()
+})
+
+test('the generator says what happens on a sign-up page: a strong password suggested, the save asked', async () => {
+  const p = await popup()
+  await expect(p.getByLabel('Search Walnut')).toBeVisible({ timeout: 20_000 })
+  await p.getByTestId('popup-generator').click()
+  await expect(p.getByText('When you send the form, it asks whether to save the login.', { exact: false })).toBeVisible()
+  await expect(p.getByText(/saves it when you send/)).toHaveCount(0)
+  await p.close()
+})
+
 test('a real Back button: its icon and the word, and every icon-only button is named and shows its name on hover', async () => {
   const p = await popup()
   await expect(p.getByLabel('Search Walnut')).toBeVisible({ timeout: 20_000 })
@@ -291,13 +337,25 @@ test('a login opens its detail view: each field copied in one click, the passwor
   if (await detail.isVisible()) await panel.getByTestId('popup-back').click()
   await expect(row).toBeVisible({ timeout: 20_000 })
 
-  // In the side panel the list shows a password whole too.
+  // In the side panel the list shows a password whole too, on a line of its own: the row's
+  // first line, its buttons and Fill, stay exactly where they were.
   await row.hover()
-  await row.getByTestId('reveal-password').click()
+  const eye = row.getByTestId('reveal-password')
+  const place = async () => Promise.all([eye, row.getByTestId('popup-fill'), row.locator('.row-title')].map(async (l) => {
+    const b = (await l.boundingBox())!
+    return [Math.round(b.x), Math.round(b.y)]
+  }))
+  const before = await place()
+  await eye.click()
   const sub = row.locator('.row-sub')
   await expect(sub).toHaveText(LONG_PW)
+  await panel.waitForTimeout(300)
+  expect(await place()).toEqual(before)
   expect(await sub.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
   await shot(panel, '12-panel-list-shown')
+  await eye.click()
+  await expect(sub).toHaveText('lena@look.test')
+  expect(await place()).toEqual(before)
   await panel.close()
   await w.page.close()
 })
@@ -388,7 +446,19 @@ test('the connect page wears the extension\'s colour and key; disconnected, the 
   const p = await popup()
   await expect(p.getByLabel('Search Walnut')).toBeVisible({ timeout: 20_000 })
   await p.getByTestId('popup-settings').click()
+  // Asked once more, saying what stops; Cancel keeps it connected.
   await p.getByTestId('popup-disconnect').click()
+  const confirm = p.getByRole('alertdialog', { name: 'Disconnect this browser?' })
+  await expect(confirm).toContainText('stops filling and saving passwords here, and your Walnut agents can no longer use this browser')
+  await shot(p, '20-disconnect-confirm')
+  await p.getByTestId('popup-disconnect-cancel').click()
+  await expect(confirm).toHaveCount(0)
+  // Still connected: the list is still there behind Back.
+  await p.getByTestId('popup-back').click()
+  await expect(p.getByLabel('Search Walnut')).toBeVisible()
+  await p.getByTestId('popup-settings').click()
+  await p.getByTestId('popup-disconnect').click()
+  await p.getByTestId('popup-disconnect-confirm').click()
   await expect(p.getByRole('heading', { name: 'Connect to Walnut' })).toBeVisible({ timeout: 20_000 })
   // The same key tile as the connect page, not a plug.
   await expect(p.locator('.big-icon svg path[d="M10.85 12.15 19 4"]')).toHaveCount(1)

@@ -233,20 +233,47 @@ test('Tasks opened again: the lists of last time while it loads, never a false "
 })
 
 test('the page is named at once even when it does not answer the panel', async () => {
-  test.setTimeout(90_000)
+  test.setTimeout(150_000)
   await panel.close()
-  // A page whose content script is gone (an extension reload): the panel names it by its tab.
-  await sw(lab).evaluate(async () => {
-    const [t] = await chrome.tabs.query({ active: true, url: 'http://docs.example.test/*' })
-    await chrome.scripting.executeScript({ target: { tabId: t!.id! }, world: 'ISOLATED', func: () => {
-      // Every message to the page goes unanswered from here on.
-      chrome.runtime.onMessage.addListener(() => { while (Date.now() < Date.now() + 1) break; return true })
-      const g = globalThis as { __walnutContentLive?: unknown }
-      g.__walnutContentLive = undefined
-    } })
+  // A page that answers nothing (a frozen renderer, a content script gone after an extension
+  // reload): every message the background sends a tab goes unanswered, whatever script it injects.
+  const frozen = await sw(lab).evaluate(() => {
+    const tabs = chrome.tabs as unknown as { sendMessage: unknown; __realSend?: unknown }
+    tabs.__realSend = tabs.sendMessage
+    Object.defineProperty(tabs, 'sendMessage', { value: () => new Promise(() => undefined), configurable: true, writable: true })
+    return tabs.sendMessage !== tabs.__realSend
   })
-  const { panel: p, t0 } = await openPanel(lab, 'ask')
-  panel = p
-  await expect(askView(panel).locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 30_000 })
-  expect(Date.now() - t0).toBeLessThan(6000)
+  expect(frozen, 'the background now reaches no page').toBe(true)
+  // What the Ask view hears, in its own clock: every page it is told, with when.
+  await lab.ctx.addInitScript(() => {
+    if (!location.search.includes('view=ext-panel')) return
+    const log: Array<{ at: number; title: string }> = []
+    ;(window as unknown as { __told: typeof log }).__told = log
+    window.addEventListener('message', (e) => {
+      const d = e.data as { walnut?: string; type?: string; page?: { title?: string } | null } | null
+      if (d?.walnut === 'ext-panel' && d.type === 'context') log.push({ at: performance.now(), title: d.page?.title ?? '' })
+    })
+  })
+  ;({ panel } = await openPanel(lab, 'ask'))
+  await expect(askView(panel).locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 60_000 })
+  // The same tab moves to a new address while the view is up: the panel names it by its tab at
+  // once, and the page's own answer (it never comes, so the background gives up after its wait)
+  // follows seconds later. Measured between those two messages in the view's own clock, so a
+  // loaded machine that starts the frame or the panel late does not change the result.
+  await lab.doc.evaluate(() => { document.title = 'Release notes 4.3'; history.pushState({}, '', '/notes?v=2') })
+  await expect(askView(panel).locator('.ext-panel-title')).toHaveText('Release notes 4.3', { timeout: 30_000 })
+  const frame = panel.frames().find((f) => f.url().includes('view=ext-panel'))!
+  const told = () => frame.evaluate(() => (window as unknown as { __told?: Array<{ at: number; title: string }> }).__told ?? [])
+  const named = (await told()).find((m) => m.title === 'Release notes 4.3')
+  expect(named, 'the view was told the new address by its tab').toBeTruthy()
+  // The background gives up on the page after its wait (8 s at least); the name came well before
+  // that (2 s of slack for a slow first word on a loaded machine; a name that waited for the page
+  // has no gap at all).
+  const late = () => told().then((l) => l.some((m) => m.title === 'Release notes 4.3' && m.at - named!.at > 2000))
+  await expect.poll(late, { timeout: 45_000, message: 'the page answer came after the name' }).toBe(true)
+    .catch(async (e: Error) => { throw new Error(`${e.message}\ntold: ${JSON.stringify(await told())}`) })
+  await sw(lab).evaluate(() => {
+    const tabs = chrome.tabs as unknown as { sendMessage: unknown; __realSend?: unknown }
+    Object.defineProperty(tabs, 'sendMessage', { value: tabs.__realSend, configurable: true, writable: true })
+  })
 })

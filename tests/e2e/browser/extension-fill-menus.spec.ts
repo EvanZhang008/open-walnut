@@ -38,6 +38,8 @@ form{display:grid;gap:10px;max-width:360px}label{display:grid;gap:4px}input,sele
 button{padding:9px 14px;font:inherit;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer}`
 const page = (title: string, body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>${css}</style></head><body>
 <nav><a href="/">Home</a></nav><h1>${title}</h1>${body}</body></html>`
+const signinPage = page('Sign in to Lab Shop', `<form method="post" action="/signed-in"><label>Email <input name="email" type="email" autocomplete="username"></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password"></label><button>Sign in</button></form>`)
 const SITES: Record<string, Record<string, string>> = {
   'shop.a2lab.test': {
     '/signin': page('Sign in to Lab Shop', `<form method="post" action="/signed-in"><label>Email <input name="email" type="email" autocomplete="username"></label>
@@ -52,6 +54,9 @@ const SITES: Record<string, Record<string, string>> = {
       <script>document.querySelector('form').addEventListener('submit',e=>e.preventDefault())</script>`),
     '/frame': page('Sign in (framed)', `<p>The sign-in form below is inside a frame from the same site.</p><iframe id="fr" src="/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
   },
+  // A site with no login saved anywhere on it, and another part of a2lab.test with none of its own.
+  'solo.a2site.test': { '/signin': signinPage },
+  'blog.a2lab.test': { '/signin': signinPage },
   'accounts.a2lab.test': {
     '/email': page('Sign in: step 1 of 3', `<form method="get" action="/password"><label>Email <input name="identifier" type="email" autocomplete="username"></label><button>Next</button></form>`),
     '/password': page('Sign in: step 2 of 3', `<form method="get" action="/code"><label>Password <input name="password" type="password" autocomplete="current-password"></label><button>Next</button></form>`),
@@ -110,8 +115,14 @@ async function menuBox(p: Page): Promise<{ x: number; y: number; width: number; 
   const el = await f?.frameElement().catch(() => null)
   return el ? el.boundingBox() : null
 }
-const overlaps = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
-  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+/** The menu is drawn right under the field, aligned with its left edge (as Chrome and 1Password draw theirs). */
+async function expectUnder(p: Page, field: import('@playwright/test').Locator): Promise<void> {
+  const f = (await field.boundingBox())!
+  await expect.poll(async () => {
+    const b = await menuBox(p)
+    return !!b && Math.abs(b.y - (f.y + f.height + 4)) <= 2 && Math.abs(b.x - f.x) <= 2
+  }).toBe(true)
+}
 
 /** Every name in the page's accessibility tree, closed shadow roots included (the toast is in one). */
 async function axText(p: Page): Promise<string> {
@@ -138,7 +149,7 @@ test.beforeAll(async ({}, info) => {
     args: [
       `--disable-extensions-except=${path.join(dir, 'chrome')}`,
       `--load-extension=${path.join(dir, 'chrome')}`,
-      '--host-resolver-rules=MAP *.a2lab.test 127.0.0.1',
+      '--host-resolver-rules=MAP *.a2lab.test 127.0.0.1, MAP solo.a2site.test 127.0.0.1',
     ],
   })
   let worker = ctx.serviceWorkers()[0]
@@ -259,16 +270,15 @@ test('a login inside a same-site frame: the menu fits inside the frame, and a pi
   await p.close()
 })
 
-test('two-step sign in: ArrowDown and Enter fill the email and close the menu, the menu never covers Next, and the password step offers its login', async () => {
+test('two-step sign in: the menu sits under the field, ArrowDown and Enter fill the email and close it, and the password step offers its login', async () => {
   const p = await ctx.newPage()
   await p.goto(site('accounts.a2lab.test', '/email'))
   const email = p.getByLabel('Email')
   await email.click()
   await menuOf(p, false)
   await p.waitForTimeout(500)
-  // The menu sits clear of the form's own button.
-  const next = (await p.getByRole('button', { name: 'Next' }).boundingBox())!
-  await expect.poll(async () => { const b = await menuBox(p); return !!b && !overlaps(b, next) }).toBe(true)
+  // Where it always is: right under the field.
+  await expectUnder(p, email)
   await shot(p, 'two-step-email-menu')
   await p.keyboard.press('ArrowDown')
   await p.keyboard.press('Enter')
@@ -283,6 +293,20 @@ test('two-step sign in: ArrowDown and Enter fill the email and close the menu, t
   await shot(p, 'two-step-password-menu')
   await menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` }).click()
   await expect(pw).toHaveValue('Accounts-Pass-7710!')
+  await p.close()
+})
+
+test('the menu open, ArrowDown twice and Enter at normal speed: the second login is picked and filled', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('shop.a2lab.test', '/signin'))
+  await p.getByLabel('Email').click()
+  const menu = await menuOf(p)
+  const second = menu.locator('[data-testid=menu-item]:not([data-tier="2"])').nth(1)
+  const want = (await second.textContent()) ?? ''
+  await p.keyboard.press('ArrowDown')
+  await p.keyboard.press('ArrowDown')
+  await p.keyboard.press('Enter')
+  await expect(p.getByLabel('Email')).toHaveValue(want.includes('work') ? 'alex.work@a2lab.test' : 'alex@a2lab.test', { timeout: 5000 })
   await p.close()
 })
 
@@ -307,7 +331,7 @@ test('ArrowDown and Enter typed at once, before the menu has loaded: the form is
   await p.close()
 })
 
-test('the code page: the menu waits for the person to be in the field, then sits clear of Verify', async () => {
+test('the code page: the menu waits for the person to be in the field, then sits under it', async () => {
   const p = await ctx.newPage()
   // A sign in Walnut knows, so the code page that follows has the code to offer.
   await p.goto(site('accounts.a2lab.test', '/password'))
@@ -320,8 +344,7 @@ test('the code page: the menu waits for the person to be in the field, then sits
   await p.getByLabel('Code').click()
   const menu = await menuOf(p)
   await expect(menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` })).toBeVisible()
-  const verify = (await p.getByRole('button', { name: 'Verify' }).boundingBox())!
-  expect(overlaps((await menuBox(p))!, verify)).toBe(false)
+  await expectUnder(p, p.getByLabel('Code'))
   await shot(p, 'code-menu')
   await menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` }).click()
   await expect(p.getByLabel('Code')).toHaveValue(/^\d{6}$/)
@@ -361,6 +384,34 @@ test('the menu closes on a click outside, on Escape and on a submit; typing afte
   await p.close()
 })
 
+/** Click the Walnut icon in a field (it is in a closed shadow root: by where it is drawn). */
+async function clickIcon(p: Page, field: import('@playwright/test').Locator): Promise<void> {
+  await field.click()
+  await p.waitForTimeout(400)
+  const b = (await field.boundingBox())!
+  await p.mouse.click(b.x + b.width - 15, b.y + b.height / 2)
+}
+
+test('empty menus say one short, complete sentence; a part of the site with only other parts\' logins shows just their heading', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('solo.a2site.test', '/signin'))
+  await clickIcon(p, p.getByLabel('Email'))
+  let menu = await menuOf(p, false)
+  const empty = menu.getByTestId('menu-empty')
+  await expect(empty).toHaveText('No login saved for solo.a2site.test yet. Walnut offers to save one when you sign in.')
+  // Wrapped, never cut with an ellipsis.
+  expect(await empty.locator('p').evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis')).toBe(true)
+  await expectUnder(p, p.getByLabel('Email'))
+  await shot(p, 'empty-sentence')
+  await p.goto(site('blog.a2lab.test', '/signin'))
+  await clickIcon(p, p.getByLabel('Email'))
+  menu = await menuOf(p, false)
+  await expect(menu.getByText('Saved for other parts of a2lab.test')).toBeVisible()
+  await expect(menu.getByTestId('menu-empty')).toHaveCount(0)
+  await shot(p, 'tier2-only')
+  await p.close()
+})
+
 test('logins saved for another part of the site are listed under their own heading, with the host each is for', async () => {
   const p = await ctx.newPage()
   await seed(p, { type: 'login', title: `Blog ${stamp}`, username: 'writer@a2lab.test', password: 'Blog-Pass-1!', urls: [site('blog.a2lab.test', '/')] })
@@ -380,8 +431,11 @@ test('logins saved for another part of the site are listed under their own headi
   await p.close()
 })
 
-test('the save bar: an underscore in a revealed password shows, and the confirmation leaves no empty frame', async () => {
+test('the save bar: a name that tells the new login apart, an underscore in a revealed password shows, and a compact confirmation naming it', async () => {
   const p = await ctx.newPage()
+  // The site already has a login under the name the bar would suggest.
+  await seed(p, { type: 'login', title: 'Lab Shop', username: 'first@a2lab.test', password: 'First-Pass-1!', urls: [site('shop.a2lab.test', '/')] })
+  await p.waitForTimeout(5500) // the background keeps the item list 5 s
   await p.goto(site('shop.a2lab.test', '/signin'))
   await p.getByLabel('Email').click()
   await p.keyboard.press('Escape')
@@ -406,10 +460,35 @@ test('the save bar: an underscore in a revealed password shows, and the confirma
     return { lh, fs, client: el.clientHeight }
   })
   expect(fits.lh === 0 || fits.lh >= fits.fs * 1.15).toBe(true)
+  await expect(bar!.locator('#title')).toHaveValue('Lab Shop (new_user@a2lab.test)')
+  await shot(p, 'savebar-new-name')
   await bar!.getByTestId('savebar-save').click()
-  await expect(bar!.getByText('Saved to Walnut')).toBeVisible()
+  await expect(bar!.getByText('Saved to Walnut: Lab Shop (new_user@a2lab.test)')).toBeVisible()
   // The frame shrinks to the confirmation (or, at the least, shows nothing outside it).
-  await expect.poll(async () => (await bar!.frameElement().then((e) => e.boundingBox()))?.height ?? 0, { timeout: 5000 }).toBeLessThan(130)
+  await expect.poll(async () => (await bar!.frameElement().then((e) => e.boundingBox()))?.height ?? 0, { timeout: 5000 }).toBeLessThan(110)
   await shot(p, 'savebar-saved')
+  await p.close()
+})
+
+test('"Never for this site" says so in the bar, with Undo, then closes', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('solo.a2site.test', '/signin'))
+  await p.getByLabel('Email').pressSequentially('never@a2site.test')
+  await p.getByLabel('Password').pressSequentially('Never-Pass-1!')
+  await p.getByRole('button', { name: 'Sign in' }).click()
+  await p.waitForURL(/signed-in/)
+  let bar: Frame | undefined
+  await expect.poll(() => { bar = p.frames().find((x) => x.url().includes('/savebar.html') && !x.isDetached()); return !!bar }, { timeout: 10_000 }).toBe(true)
+  await p.waitForTimeout(700)
+  await bar!.getByRole('button', { name: 'Never for this site' }).click()
+  await expect(bar!.getByText('Walnut won\u2019t offer to save logins on solo.a2site.test.')).toBeVisible()
+  await expect.poll(() => sw().evaluate(() => chrome.storage.local.get('neverSave').then((r) => r.neverSave))).toContain('solo.a2site.test')
+  await shot(p, 'never-note')
+  await p.waitForTimeout(650)
+  await bar!.getByTestId('savebar-undo').click()
+  await expect(bar!.getByText('Walnut will offer to save logins on solo.a2site.test again.')).toBeVisible()
+  await expect.poll(() => sw().evaluate(() => chrome.storage.local.get('neverSave').then((r) => r.neverSave ?? []))).not.toContain('solo.a2site.test')
+  // And the bar goes by itself.
+  await expect.poll(() => p.frames().some((x) => x.url().includes('/savebar.html') && !x.isDetached()), { timeout: 10_000 }).toBe(false)
   await p.close()
 })

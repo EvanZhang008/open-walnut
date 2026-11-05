@@ -5,6 +5,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { noBrowserLine, type GoneBrowser } from './gone-words.js'
 
 export const BROWSER_USAGE = [
   'usage: walnut browser status',
@@ -31,7 +32,7 @@ export const BROWSER_USAGE = [
   '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
   '  Refs: e12 in the page, f3:e12 inside a frame. --json prints the whole result. A site agents have not used yet waits for the',
   '  person only when they chose "Ask me first" in Settings. Real input (--trusted, dialog, evaluate) needs the person to turn it on in the extension.',
-  'Exit: 0 done; 1 refused (the person said no, not your tab); 2 no answer in time; 3 an error.',
+  'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message lists them); 2 no answer in time; 3 an error.',
 ].join('\n')
 
 export const BROWSER_EXIT = { ok: 0, refused: 1, timeout: 2, error: 3 } as const
@@ -48,7 +49,12 @@ export interface BrowserIo {
 
 export type ParsedBrowser =
   | { ok: true; op: 'browser' | 'browser_status'; args: Record<string, unknown>; json: boolean; file?: string; upload?: string[] }
-  | { ok: false; error: string }
+  | { ok: false; error: string; help?: true }
+
+/** What a front end prints for a parse that did not give an action: help to stdout (exit 0), an error with the usage to stderr. */
+export function browserParseOutcome(p: Extract<ParsedBrowser, { ok: false }>): { stdout?: string; stderr?: string; code: number } {
+  return p.help ? { stdout: `${BROWSER_USAGE}\n`, code: BROWSER_EXIT.ok } : { stderr: `walnut browser: ${p.error}\n${BROWSER_USAGE}\n`, code: BROWSER_EXIT.error }
+}
 
 const REFS = /^(f\d+:)?e\d+$/
 /** What an upload may carry in all: the server's own cap (act-args.ts), kept apart so the CLI loads no server code. */
@@ -62,6 +68,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
     const w = argv[i]
     const val = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${w} needs a value`); return v }
     try {
+      if (w === '--help' || w === '-h' || (w === 'help' && !words.length)) return { ok: false, error: 'help', help: true }
       if (w === '--json') json = true
       else if (w === '--tab') { const n = Number(val()); if (!Number.isInteger(n)) return { ok: false, error: '--tab takes a tab id' }; args.tab = n }
       else if (w === '--clear') args.clear = true
@@ -268,7 +275,7 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
       .map((x) => ({ ...x, label: x.caps?.includes('handed-tabs-only') ? `${x.label} (only the tab the person handed over)` : x.label }))
     const sites = (b.sites as Array<{ site: string }> | undefined) ?? []
     return [
-      browsers.length ? `Connected: ${browsers.map((x) => x.label).join(', ')}` : 'No browser lets agents in now (the Walnut extension popup, Settings, turns it on).',
+      browsers.length ? `Connected: ${browsers.map((x) => x.label).join(', ')}` : noBrowserLine(b.gone as GoneBrowser | undefined),
       b.mode === 'any' ? 'Sites: any' : `Sites: a new one asks the person first; allowed: ${sites.map((s) => s.site).join(', ') || 'none yet'}`,
     ].join('\n')
   }

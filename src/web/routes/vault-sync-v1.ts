@@ -1,6 +1,6 @@
 /**
- * Passwords: Bitwarden sync and the keychain unlock (core/vault/bitwarden-sync.ts,
- * bitwarden-run.ts, keychain-unlock.ts; docs/reference/passwords.md). Mounted by vault-agent-v1.ts.
+ * Passwords: Bitwarden sync and the keychain unlock (core/vault/sources/bitwarden/sync.ts,
+ * run.ts, keychain-unlock.ts; docs/reference/passwords.md). Mounted by vault-agent-v1.ts.
  *
  *   POST   /api/v1/vault/sync/bitwarden            { export, allowMassTrash? } → report   person, vault session
  *   POST   /api/v1/vault/sync/bitwarden/run        { allowMassTrash? } → report  any caller: Walnut runs bw itself
@@ -52,6 +52,8 @@ function personShape(req: Request): boolean {
 }
 
 async function hasSession(req: Request): Promise<boolean> {
+  // Right after a restart the kept sessions are still being restored: wait, never answer 401.
+  await (await import('../../core/vault/session-store.js')).sessionsRestored()
   const s = await import('../../core/vault/sessions.js')
   const { deviceOf } = await import('./vault-v1.js')
   return !!s.useSession(header(req, s.SESSION_HEADER), true, deviceOf(req))
@@ -115,7 +117,7 @@ vaultSyncV1Router.post('/vault/sync/bitwarden', async (req, res, next) => {
     const text = typeof body.export === 'string' ? body.export : typeof body.text === 'string' ? body.text : ''
     const { VaultError } = await import('../../core/vault/store.js')
     if (!text) throw new VaultError('export (the text of `bw export --format json --raw`) is required', 400, 'bad_import')
-    const { syncFromBitwarden, syncSummary } = await import('../../core/vault/bitwarden-sync.js')
+    const { syncFromBitwarden, syncSummary } = await import('../../core/vault/sources/bitwarden/sync.js')
     const report = await syncFromBitwarden(text, 'person', { allowMassTrash: allowMassTrashOf(req) })
     return { report, summary: syncSummary(report) }
   })
@@ -127,8 +129,8 @@ vaultSyncV1Router.post('/vault/sync/bitwarden/run', async (req, res, next) => {
   if (!here(res)) return
   await run(res, next, async () => {
     const asPerson = await asPersonWithSession(req)
-    const { runBitwardenSync } = await import('../../core/vault/bitwarden-run.js')
-    const { syncSummary } = await import('../../core/vault/bitwarden-sync.js')
+    const { runBitwardenSync } = await import('../../core/vault/sources/bitwarden/run.js')
+    const { syncSummary } = await import('../../core/vault/sources/bitwarden/sync.js')
     if (asPerson) {
       const report = await runBitwardenSync('person', { allowMassTrash: allowMassTrashOf(req) })
       return { report, summary: syncSummary(report) }
@@ -150,9 +152,12 @@ vaultSyncV1Router.get('/vault/sync/bitwarden', async (req, res, next) => {
   if (!here(res) || !(await person(req, res, true))) return
   await run(res, next, async () => {
     const { getConfig } = await import('../../core/config-manager.js')
-    const { lastSyncReport, syncSummary } = await import('../../core/vault/bitwarden-sync.js')
+    const { lastSyncReport, syncSummary } = await import('../../core/vault/sources/bitwarden/sync.js')
+    const { sourceAdded } = await import('../../core/vault/sources/index.js')
     const last = await lastSyncReport()
-    return { daily: (await getConfig()).passwords?.bitwarden_daily === true, last, ...(last ? { summary: syncSummary(last) } : {}) }
+    const cfg = (await getConfig()).passwords
+    // `added`: Settings shows this source only to a person who added it (or already synced from it).
+    return { added: sourceAdded(cfg, 'bitwarden', last !== null), daily: cfg?.bitwarden_daily === true, last, ...(last ? { summary: syncSummary(last) } : {}) }
   })
 })
 

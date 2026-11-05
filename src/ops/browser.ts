@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { noBrowserLine, type GoneBrowser } from '../core/browser-control/gone-words.js';
 
 /**
  * The person's own browser, through the Walnut browser extension (routes/browser-v1.ts). One op
@@ -73,7 +74,7 @@ defineOp({
     + 'Real input (off unless the user turned it on in the extension: trusted_off): trusted: true on click, hover, type, press, upload {paths on the browser\'s machine}; '
     + 'dialog {accept, text?} answers an alert, confirm or prompt; evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
     + '`tab` may be left out after you used one. A site agents have not used yet may ask the user first (needs_ok): call the same action again (wait_ms up to 25000 holds for the answer). '
-    + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), site_denied, not_your_tab, person_is_here, trusted_off, test_run. '
+    + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off, test_run. '
     + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
     + 'only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. The ask does not judge evaluate, the page\'s own scripts '
@@ -136,12 +137,13 @@ defineOp({
   input: {},
   bind: { method: 'GET', path: '/browser/status' },
   mapResult: ({ body }) => {
-    const b = (body ?? {}) as { browsers?: Array<{ label: string; caps?: string[] }>; mode?: string; sites?: Array<{ site: string }> }
+    const b = (body ?? {}) as { browsers?: Array<{ label: string; caps?: string[] }>; mode?: string; sites?: Array<{ site: string }>; gone?: GoneBrowser }
     // A browser whose agents switch is off but where the person handed over a tab from the side panel.
     const names = (b.browsers ?? []).map((x) => (x.caps?.includes('handed-tabs-only') ? `${x.label} (only the tab the person handed over)` : x.label))
     return withOutcome(b as Record<string, unknown>,
-      names.length ? `Connected: ${names.join(', ')}. ${b.mode === 'any' ? 'Any site.' : `A new site asks the person; allowed: ${(b.sites ?? []).map((s) => s.site).join(', ') || 'none yet'}.`}` : 'No browser lets agents in now.',
-      names.length ? 'browser with action open to start.' : 'Ask the user to turn on "Let Walnut agents use this browser" in the Walnut extension popup, Settings.')
+      names.length ? `Connected: ${names.join(', ')}. ${b.mode === 'any' ? 'Any site.' : `A new site asks the person; allowed: ${(b.sites ?? []).map((s) => s.site).join(', ') || 'none yet'}.`}` : noBrowserLine(b.gone),
+      names.length ? 'browser with action open to start.' : b.gone?.why === 'disconnected' ? 'Ask the user to connect the Walnut extension again (its popup, Connect).'
+        : 'Ask the user to turn on "Let Walnut agents use this browser" in the Walnut extension popup, Settings.')
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });

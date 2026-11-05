@@ -105,6 +105,11 @@ await fs.writeFile(path.join(tmpBase, 'notes', 'Chat links.md'), `# Chat links\n
 
 const sessionCwd = path.join(tmpBase, 'project')
 await fs.mkdir(sessionCwd, { recursive: true })
+// An HTML report with the links, for the Files tab's preview (its page runs in an origin of its
+// own and reaches the link handlers through its bridge, web/src/components/common/preview-frame.ts).
+await fs.writeFile(path.join(sessionCwd, 'links.html'), `<!doctype html><html><head><title>Links</title></head><body>
+<h1>Report links</h1><p><a id="handled" href="${LINKS.permalink}">the permalink</a> and <a id="plain" href="${LINKS.plain}">plain site</a></p>
+</body></html>`)
 const jsonlDir = path.join(tmpBase, '.claude', 'projects', sessionCwd.replace(/[^a-zA-Z0-9]/g, '-'))
 await fs.mkdir(jsonlDir, { recursive: true })
 const startedAt = Date.now() - 60 * 60_000

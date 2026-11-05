@@ -20,13 +20,27 @@ function rowOf(task: Task): ExtTaskRow {
 
 const newest = (a: Task, b: Task) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? ''));
 
-export function extTaskLists(tasks: readonly Task[]): { needs: ExtTaskRow[]; focus: ExtTaskRow[] } {
+/**
+ * `kept`: tasks the person answered from this panel. Once answered a task usually needs them no
+ * more, yet the row stays where they left it (with its new state) until the panel closes, so the
+ * answer does not make it vanish from under them.
+ */
+export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> = new Set()): { needs: ExtTaskRow[]; focus: ExtTaskRow[] } {
   const open = tasks.filter((t) => taskUserState(t) !== 'done' && !t.plugin_only);
-  const needs = open.filter((t) => shownState(taskUserState(t)) === 'needs').sort(newest);
+  const needs = open.filter((t) => shownState(taskUserState(t)) === 'needs' || kept.has(t.id)).sort(newest);
   const seen = new Set(needs.map((t) => t.id));
   const focus = open.filter((t) => !seen.has(t.id) && t.pinned && t.focus_tier === 'focus').sort(newest);
   return { needs: needs.slice(0, EXT_TASKS_MAX).map(rowOf), focus: focus.slice(0, EXT_TASKS_MAX).map(rowOf) };
 }
+
+/** The row's status line under a section: the section already says "Needs you", so a row there leaves it out. */
+export function rowLine(row: Pick<ExtTaskRow, 'label' | 'line'>, section: 'focus' | 'needs'): string {
+  const label = section === 'needs' && row.label === 'Needs you' ? '' : row.label;
+  return [label, row.line].filter(Boolean).join(' · ');
+}
+
+/** In the person's Focus already (the board's Focus tier). */
+export const inFocus = (t: Task): boolean => !!t.pinned && t.focus_tier === 'focus';
 
 /** A task for later, made from the page the person is on: its title, and the address to come back to. */
 export function pageTaskInput(page: { url: string; title?: string }): { title: string; description: string } {

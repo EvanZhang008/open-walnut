@@ -46,6 +46,8 @@ let wantFocus: 'first' | 'last' | null = null
 let codeTimer = 0
 /** An Enter that came before the keys were handed over: when, so it still counts a moment later. */
 let pendingPick = 0
+/** Arrow keys pressed in the menu before the keys were handed over (menu-focus): the rows to move once they are. */
+let early = 0
 /** What the person typed in the field (content-ui.ts): only the rows that fit it show. */
 let filterText = ''
 
@@ -93,9 +95,9 @@ function option(id: string, onPick: () => void, ...children: Array<Node | null>)
   return el
 }
 
-function emptyRow(title: string, sub: string): HTMLElement {
-  return h('div', { class: 'menu-state' }, h('span', { class: 'logo' }, icon('key')),
-    h('div', { class: 'row-text' }, h('span', { class: 'row-title' }, title), h('span', { class: 'row-sub' }, sub)))
+/** Nothing to offer: one short, complete sentence, wrapped (never cut with an ellipsis). */
+function emptyRow(text: string): HTMLElement {
+  return h('div', { class: 'menu-state', 'data-testid': 'menu-empty' }, h('span', { class: 'logo' }, icon('key')), h('p', { class: 'menu-empty' }, text))
 }
 
 async function render(): Promise<void> {
@@ -123,7 +125,8 @@ async function render(): Promise<void> {
     if (more.length) section(list, 'Other logins', more.map((it) => itemRow(d, it)))
     if (far.length) section(list, `Saved for other parts of ${d.othersDomain || domainOf(d.site)}`, far.map((it) => itemRow(d, it)))
     rows = [...list.querySelectorAll<HTMLElement>('[role=option]')]
-    if (!near.length && !more.length && d.role !== 'new-password') list.prepend(far.length ? emptyRow(`No login saved for ${d.site}`, 'These are saved for other parts of this site:') : emptyFor(d))
+    // Only logins of other parts of the site: their heading says it all, no empty line above it.
+    if (!near.length && !more.length && !far.length && d.role !== 'new-password') list.prepend(emptyFor(d))
     const head = d.role === 'card' ? 'Walnut · Cards' : d.role === 'identity' ? 'Walnut · Identities' : `Walnut · ${d.site ?? ''}`
     root.append(h('div', { class: 'menu-head' }, icon('key'), head), list)
     scheduleCodes(d, items)
@@ -163,12 +166,12 @@ function applyFilter(text: string, resize = true): void {
 }
 
 function emptyFor(d: Data): HTMLElement {
-  if (d.role === 'totp') return emptyRow('No one-time code saved', `for ${d.site}`)
-  if (d.role === 'card') return emptyRow('No card saved', 'Add one in Walnut, Passwords.')
-  if (d.role === 'identity') return emptyRow('No identity saved', 'Add one in Walnut, Passwords.')
+  if (d.role === 'totp') return emptyRow(`No one-time code saved for ${d.site}.`)
+  if (d.role === 'card') return emptyRow('No card saved yet. Add one in Walnut, under Passwords.')
+  if (d.role === 'identity') return emptyRow('No identity saved yet. Add one in Walnut, under Passwords.')
   // A plain http page and a login saved for https: say so, rather than "nothing saved".
-  if (d.insecure) return emptyRow('Not offered on this page', `${d.site} is not secure (http). Your login is saved for its https address, so Walnut does not fill it here.`)
-  return emptyRow('No saved login', `for ${d.site}. Walnut offers to save it when you sign in.`)
+  if (d.insecure) return emptyRow(`Not offered on this page: ${d.site} is not secure (http), and your login is saved for its https address.`)
+  return emptyRow(`No login saved for ${d.site} yet. Walnut offers to save one when you sign in.`)
 }
 
 function suggestionRow(value: string): HTMLElement {
@@ -231,7 +234,9 @@ function focusList(where: 'first' | 'last'): void {
   wantFocus = null
   if (!list || !rows.length) { list?.focus(); return }
   list.focus()
-  setCurrent(where === 'last' ? rows.length - 1 : 0)
+  // Arrow keys that came before the keys were handed over count from the row the hand-over picks.
+  setCurrent((where === 'last' ? rows.length - 1 : 0) + early)
+  early = 0
 }
 
 /**
@@ -262,6 +267,9 @@ document.addEventListener('keydown', (e) => {
   if (!e.isTrusted) return
   // Closed when the key comes up, so the whole key press stays in this frame.
   if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); closing = e.key; return }
+  // The keyboard came here (the field's ArrowDown) before the background said so (menu-focus): a
+  // second ArrowDown typed at once is kept and counted from the first row, never lost to it.
+  if (!armed && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); early += e.key === 'ArrowDown' ? 1 : -1; return }
   if (e.key === 'Enter' && !rows.length) { e.preventDefault(); pendingPick = Date.now(); return }
   if (!rows.length) return
   if (e.key === 'ArrowDown') { e.preventDefault(); setCurrent(current + 1) }
@@ -281,7 +289,7 @@ document.addEventListener('keyup', (e) => {
   void ask({ type: 'menu-close', refocus: true })
 })
 // A click in the menu is the person's own: keys may act from then on.
-document.addEventListener('pointerdown', (e) => { if (e.isTrusted) armed = true })
+document.addEventListener('pointerdown', (e) => { if (e.isTrusted) { armed = true; early = 0 } })
 addEventListener('blur', () => { armed = false })
 
 // The page script moved the person's keys here (through the background, so a page cannot).

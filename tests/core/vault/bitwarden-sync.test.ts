@@ -1,5 +1,5 @@
 /**
- * The Bitwarden sync (src/core/vault/bitwarden-sync.ts, bitwarden-run.ts) over a real vault in a
+ * The Bitwarden sync (src/core/vault/sources/bitwarden/sync.ts, run.ts) over a real vault in a
  * temp dir, with fake exports: an earlier plain import adopted rather than duplicated, a new item
  * added, a changed one updated (keeping what only Walnut has), a change on both sides kept twice
  * with the Walnut copy tagged conflict, a deleted one moved to the trash, counts per type; and
@@ -12,8 +12,8 @@ import path from 'node:path'
 import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
 import { allItems, closeVault, createItems, getItem, isOpen, resetVaultForTest, setupVault, unlockVault, updateItem } from '../../../src/core/vault/store.js'
 import { parseImport } from '../../../src/core/vault/import.js'
-import { CONFLICT_TAG, lastSyncReport, syncFromBitwarden, syncSummary } from '../../../src/core/vault/bitwarden-sync.js'
-import { msUntilNextRun, runBitwardenSync } from '../../../src/core/vault/bitwarden-run.js'
+import { CONFLICT_TAG, lastSyncReport, syncFromBitwarden, syncSummary } from '../../../src/core/vault/sources/bitwarden/sync.js'
+import { msUntilNextRun, runBitwardenSync } from '../../../src/core/vault/sources/bitwarden/run.js'
 import { setVaultRunnerForTest } from '../../../src/core/vault/child-run.js'
 import type { VaultItem } from '../../../src/core/vault/types.js'
 

@@ -277,7 +277,7 @@ test('the toolbar badge counts the logins of the tab; a never login is none', as
 })
 
 test('a login with a one-time code: its code is copied as it fills, the code page offers it once the person is in the field, six boxes take one digit each, the clipboard is cleared after 30 s', async () => {
-  test.setTimeout(120_000)
+  test.setTimeout(180_000)
   const page = await ctx.newPage()
   await page.goto(site('login.mfa.test', '/login'))
   await page.locator('#user').click()
@@ -306,12 +306,11 @@ test('a login with a one-time code: its code is copied as it fills, the code pag
   await expect.poll(() => page.evaluate(() => [1, 2, 3, 4, 5, 6].map((i) => (document.getElementById(`c${i}`) as HTMLInputElement).value).join(''))).toBe(code)
   expect(await page.evaluate(() => (document.getElementById('c3') as HTMLInputElement).value.length)).toBe(1)
 
-  // One field with autocomplete="one-time-code", from its menu.
+  // One field with autocomplete="one-time-code", from its menu once the person is in it (waiting
+  // for a menu that never opens by itself spent 10 s of the 30 s this test checks on a busy runner).
   await page.goto(site('login.mfa.test', '/code1'))
-  await frameOf(page, 'menu.html').then((m) => m.getByTestId('menu-item').first().click()).catch(async () => {
-    await page.locator('#otp').click()
-    await (await frameOf(page, 'menu.html')).getByTestId('menu-item').first().click()
-  })
+  await page.locator('#otp').click()
+  await (await frameOf(page, 'menu.html')).getByTestId('menu-item').first().click()
   await expect(page.locator('#otp')).toHaveValue(/^\d{6}$/)
 
   // The popup shows the code with its countdown too.

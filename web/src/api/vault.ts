@@ -1,7 +1,9 @@
 /**
  * Passwords client (server: src/web/routes/vault-v1.ts). Every item call carries this
  * window's vault session (x-walnut-vault-session), which only the master password buys;
- * the token is kept for this tab only (sessionStorage) and dropped on Lock or a 401.
+ * the token is kept in localStorage, so every tab and window of this Walnut (and a reload, the
+ * Mac app's page recycle) shares one unlock, and dropped on Lock or a 401. Its key is not one
+ * ui-prefs mirrors to the server (ui-prefs-sync.ts `syncable`).
  *
  * The master password never leaves the page when WebCrypto is here: the page derives the
  * password key (PBKDF2, the vault's own parameters) and sends that. A page on plain http
@@ -35,6 +37,8 @@ export interface VaultStatus {
   hasRecovery?: boolean
   /** The newest recovery kit was never confirmed saved. */
   recoveryUnsaved?: boolean
+  /** The master password hint (shown on the unlock screen); absent when none, or from an older Walnut. */
+  hint?: string
 }
 
 /** What a recovery kit holds. */
@@ -70,7 +74,7 @@ export interface BitwardenSyncReport {
   at: string; ok: boolean; trigger: string; counts: SyncCounts; byType: Record<string, SyncCounts>
   bitwarden: Record<string, number>; linked: Record<string, number>; error?: string
 }
-export interface BitwardenSyncStatus { daily: boolean; last: BitwardenSyncReport | null; summary?: string }
+export interface BitwardenSyncStatus { /** The person added Bitwarden as a source (or synced from it before). Absent from an older server. */ added?: boolean; daily: boolean; last: BitwardenSyncReport | null; summary?: string }
 
 export interface ImportReport {
   format: string
@@ -97,29 +101,60 @@ export function isLockedError(err: unknown): boolean {
 const TOKEN_KEY = 'walnut.vault.session'
 const listeners = new Set<() => void>()
 
+// Storage off (a private window's quota, a policy): the session lives as long as the page.
+let memoryToken: string | null = null
+
 export function vaultSession(): string | null {
-  try { return sessionStorage.getItem(TOKEN_KEY) } catch { return null }
+  try {
+    let t = localStorage.getItem(TOKEN_KEY)
+    // A tab an older Walnut unlocked kept its token in sessionStorage: carried over once.
+    const old = sessionStorage.getItem(TOKEN_KEY)
+    if (old) {
+      sessionStorage.removeItem(TOKEN_KEY)
+      if (!t) { localStorage.setItem(TOKEN_KEY, old); t = old }
+    }
+    return t
+  } catch { return memoryToken }
 }
 
 function setSession(token: string | null): void {
+  memoryToken = token
   try {
-    if (token) sessionStorage.setItem(TOKEN_KEY, token)
-    else sessionStorage.removeItem(TOKEN_KEY)
-  } catch { /* storage off: the session lives as long as the page */ }
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch { /* storage off: memoryToken holds it */ }
   for (const l of listeners) l()
 }
 
-/** Called when this window's unlock ends (Lock, auto-lock, a 401). */
+/** Drop `token` when it is still the one stored (a newer unlock in another tab stays). */
+function dropSession(token: string | null): void {
+  let cur: string | null = memoryToken
+  try { cur = localStorage.getItem(TOKEN_KEY) } catch { /* memory only */ }
+  if (!token || cur === token) setSession(null)
+  else for (const l of listeners) l()
+}
+
+/** Called when this window's unlock changes (Lock, auto-lock, a 401, an unlock or Lock in another tab). */
 export function onVaultSessionChange(fn: () => void): () => void {
   listeners.add(fn)
   return () => { listeners.delete(fn) }
 }
 
-async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 20_000): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+// Another tab or window of this Walnut unlocked or locked: this one follows without a reload.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== TOKEN_KEY && e.key !== null) return
+    for (const l of listeners) l()
+  })
+}
+
+/** `used` learns the unlock the request went with, so a dead one is dropped and never a newer one. */
+async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 20_000, extra: Record<string, string> = {}, used?: { token: string | null }): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra }
   const device = getDeviceToken()
   if (device) headers.Authorization = `Bearer ${device}`
   const s = vaultSession()
+  if (used) used.token = s
   if (s) headers['x-walnut-vault-session'] = s
   const res = await fetch(`/api/v1${path}`, {
     method, headers, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs),
@@ -128,7 +163,7 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
   const data = await res.json().catch(() => ({})) as Record<string, unknown>
   if (!res.ok) {
     // A closed vault (a restart, Lock all elsewhere) ends this window's unlock as a lapsed session does.
-    if (s && ((res.status === 401 && data.code === 'vault_session_needed') || (res.status === 423 && data.code === 'vault_locked'))) setSession(null)
+    if (s && ((res.status === 401 && data.code === 'vault_session_needed') || (res.status === 423 && data.code === 'vault_locked'))) dropSession(s)
     throw new VaultApiError(res.status, String(data.error ?? `HTTP ${res.status}`), typeof data.code === 'string' ? data.code : undefined, typeof data.waitMs === 'number' ? data.waitMs : undefined)
   }
   return data as T
@@ -158,22 +193,29 @@ function newKdf(): KdfParams | undefined {
 const CLIENT = 'Walnut web'
 
 export const vaultApi = {
-  status: () => call<VaultStatus>('GET', '/vault/status'),
+  /** `quiet`: a check the page makes by itself (is this window still unlocked?), which is no use of the vault. */
+  /** The vault's state for this window: an unlock the server no longer knows is dropped here. */
+  async status(opts: { quiet?: boolean } = {}): Promise<VaultStatus> {
+    const used = { token: null as string | null }
+    const st = await call<VaultStatus>('GET', '/vault/status', undefined, 20_000, opts.quiet ? { 'x-walnut-vault-quiet': '1' } : {}, used)
+    if (!st.unlocked && used.token) dropSession(used.token)
+    return st
+  },
 
-  async setup(password: string): Promise<RecoveryKit> {
+  async setup(password: string, hint = ''): Promise<RecoveryKit> {
     const kdf = newKdf()
     const r = await call<RecoveryKit & { session: { token: string } }>('POST', '/vault/setup', {
-      ...(await proof(password, kdf)), ...(kdf ? { kdf } : {}), agentsWhileAway: false, client: CLIENT,
+      ...(await proof(password, kdf)), ...(kdf ? { kdf } : {}), agentsWhileAway: false, client: CLIENT, ...(hint ? { hint } : {}),
     }, 60_000)
     setSession(r.session.token)
     return { secretKey: r.secretKey, recoveryCode: r.recoveryCode }
   },
 
   /** A forgotten master password: the recovery code sets a new one and returns the new kit. */
-  async recover(recoveryCode: string, newPassword: string, secretKey?: string): Promise<RecoveryKit> {
+  async recover(recoveryCode: string, newPassword: string, secretKey?: string, hint = ''): Promise<RecoveryKit> {
     const kdf = newKdf()
     const r = await call<RecoveryKit & { session: { token: string } }>('POST', '/vault/recover', {
-      recoveryCode, ...(secretKey ? { secretKey } : {}), ...(await proof(newPassword, kdf, 'newPassword')), ...(kdf ? { kdf } : {}), client: CLIENT,
+      recoveryCode, ...(secretKey ? { secretKey } : {}), ...(await proof(newPassword, kdf, 'newPassword')), ...(kdf ? { kdf } : {}), client: CLIENT, hint,
     }, 60_000)
     setSession(r.session.token)
     return { secretKey: r.secretKey, recoveryCode: r.recoveryCode }
@@ -200,12 +242,19 @@ export const vaultApi = {
     }
   },
 
+  /** The person's Lock: every window and the browser extension lock (`all`: and every agent grant ends). */
   async lock(all = false): Promise<void> {
-    try { await call('POST', '/vault/lock', all ? { all: true } : {}) } finally { setSession(null) }
+    try { await call('POST', '/vault/lock', all ? { all: true } : { everywhere: true }) } finally { setSession(null) }
   },
 
-  /** Forget this window's unlock without asking the server (it already ended it). */
-  forget: () => setSession(null),
+  /** An auto-lock: only this browser's unlock ends (every tab of it shares one). */
+  async lockThisBrowser(): Promise<void> {
+    const s = vaultSession()
+    try { await call('POST', '/vault/lock', {}) } finally { dropSession(s) }
+  },
+
+  /** Forget the unlock `token` names without asking the server (it already ended it); a newer one stays. */
+  forget: (token: string | null) => { if (token) dropSession(token) },
 
   list: () => call<{ items: VaultItemSummary[] }>('GET', '/vault/items').then((r) => r.items),
   get: (id: string) => call<{ item: VaultItem }>('GET', `/vault/items/${encodeURIComponent(id)}`).then((r) => r.item),
@@ -241,16 +290,26 @@ export const vaultApi = {
   confirmRecoveryKit: () => call('POST', '/vault/recovery-kit/confirm'),
 
   /** A new recovery kit (a new recovery code; the old one stops working). Needs the master password. */
+  /** The vault's Secret Key, to set up another device (the iPhone app) by pasting it there once. */
+  async revealSecretKey(password: string, kdf: KdfParams | undefined): Promise<string> {
+    return (await call<{ secretKey: string }>('POST', '/vault/secret-key', { ...(await proof(password, kdf)) }, 60_000)).secretKey
+  },
+
   async newRecoveryKit(password: string, kdf: KdfParams | undefined): Promise<RecoveryKit> {
     return call<RecoveryKit>('POST', '/vault/recovery-kit', { ...(await proof(password, kdf)) }, 60_000)
   },
 
   /** A new master password; the vault's recovery code changes with it (the new kit comes back). */
-  async changePassword(oldPassword: string, newPassword: string, kdf: KdfParams | undefined): Promise<{ recoveryKit?: RecoveryKit }> {
+  async changePassword(oldPassword: string, newPassword: string, kdf: KdfParams | undefined, hint = ''): Promise<{ recoveryKit?: RecoveryKit }> {
     const next = newKdf()
     return call<{ recoveryKit?: RecoveryKit }>('POST', '/vault/password', {
-      ...(await proof(oldPassword, kdf, 'oldPassword')), ...(await proof(newPassword, next, 'newPassword')), ...(next ? { kdf: next } : {}),
+      ...(await proof(oldPassword, kdf, 'oldPassword')), ...(await proof(newPassword, next, 'newPassword')), ...(next ? { kdf: next } : {}), hint,
     }, 60_000)
+  },
+
+  /** A new master password hint (checked against the master password), or '' to remove it (no password needed). */
+  async setHint(hint: string, password: string, kdf: KdfParams | undefined): Promise<void> {
+    await call('PUT', '/vault/hint', { hint, ...(hint ? await proof(password, kdf) : {}) }, 60_000)
   },
 
   async exportAll(password: string, kdf: KdfParams | undefined, format: 'csv' | 'json'): Promise<{ fileName: string; text: string }> {

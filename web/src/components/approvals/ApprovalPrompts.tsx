@@ -29,8 +29,9 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
-  startTouchId, useApprovals, type ApprovalsState,
+  openUnlock, startTouchId, unlockApproves, useApprovals, type ApprovalsState,
 } from './approvals-store';
+import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
 import { ApprovalContextRows, AskerLink, detailText } from './approval-context';
 import './approvals.css';
@@ -54,7 +55,8 @@ export function timeLeft(expiresAt: string, now: number): string {
 export function requesterText(a: Approval, hostName: string): string {
   const r = a.requester;
   const who = r.taskTitle ? `Task "${r.taskTitle}"` : r.command ? r.command : 'A script';
-  return `${who} on ${hostName}`;
+  // This machine is "this computer": its host name (a container's is a hash) tells the person nothing.
+  return `${who} on ${r.local ? 'this computer' : hostName}`;
 }
 
 /** The time left, said as such; the last minute is marked (a warning colour). */
@@ -83,12 +85,20 @@ export function settledWord(a: Approval): string {
 export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
   const working = s.busy[a.id];
   const kind = approveKind(s, a);
+  // Locked here: unlock in place, then Approve shows (a row opens the dialog to hold the form).
+  if (!compact && s.unlockId === a.id && unlockApproves(s, a)) return <ApprovalUnlock onCancel={() => openUnlock(null)} />;
   return (
     <div className="approval-actions">
       <button type="button" className="approval-btn approval-btn-deny" disabled={!!working}
         onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny', false); }}>
         {working === 'deny' ? 'Denying…' : 'Deny'}
       </button>
+      {!kind && unlockApproves(s, a) && (
+        <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-unlock-to-approve" disabled={!!working}
+          onClick={(e) => { e.stopPropagation(); openUnlock(a.id); }}>
+          Unlock to approve
+        </button>
+      )}
       {kind && (
         <button type="button" className="approval-btn approval-btn-approve" disabled={!!working}
           onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'approve', kind === 'touch-id'); }}>

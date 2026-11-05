@@ -1,7 +1,10 @@
 /**
- * Locks the extension's vault session after the time the person chose with no use of it, and
- * when the computer locks (or goes idle that long), through chrome.idle where the `idle`
- * permission is granted. Walnut's own auto-lock (Settings in Walnut) still applies on top.
+ * Locks the extension's vault session after the time the person chose with no use of it, when
+ * the computer locks (or goes idle that long), through chrome.idle where the `idle` permission is
+ * granted, and at browser start (walnut-api.ts vaultSession: a token a previous browser run left
+ * counts only with "Walnut's setting").
+ * The default, "Walnut's setting", does none of these: Walnut's own length (Settings in Walnut)
+ * ends it, and it applies on top of every other choice too.
  * "Use" is the person working with Walnut here: the popup, the menu, a fill or a save, never a
  * page loading in the background.
  */
@@ -46,7 +49,7 @@ export function initAutoLock(lock: () => Promise<void>): void {
     void (async () => {
       if (state === 'active' || !(await vaultSession())) return
       const choice = (await getSettings()).autoLock
-      if (choice === 'never') return
+      if (choice === 'never' || choice === 'walnut') return
       // The computer locked: always. Idle as long as the chosen time: only a timed choice.
       if (state === 'locked' || lockMinutes(choice) !== null) await lock()
     })()

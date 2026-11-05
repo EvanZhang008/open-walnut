@@ -2,10 +2,10 @@
  * Passwords (core/vault/, docs/reference/passwords.md): a person's own use of the vault.
  *
  *   GET    /api/v1/vault/status                    → status (+ `unlocked` for this request's session)
- *   POST   /api/v1/vault/setup                     { passwordKey | password, kdf, agentsWhileAway } → { secretKey, recoveryCode, session }
+ *   POST   /api/v1/vault/setup                     { passwordKey | password, kdf, agentsWhileAway, hint? } → { secretKey, recoveryCode, session }
  *   POST   /api/v1/vault/unlock                    { passwordKey | password, secretKey?, client? } → { session }
- *   POST   /api/v1/vault/recover                   { recoveryCode, secretKey?, newPasswordKey | newPassword, kdf } → { secretKey, recoveryCode, session }
- *   POST   /api/v1/vault/lock                      { all? } → { ended }
+ *   POST   /api/v1/vault/recover                   { recoveryCode, secretKey?, newPasswordKey | newPassword, kdf, hint? } → { secretKey, recoveryCode, session }
+ *   POST   /api/v1/vault/lock                      { all? | everywhere? } → { ended }  (none: this window; everywhere: every window; all: and every agent grant)
  *   GET    /api/v1/vault/items                     → { items: summaries }       (session)
  *   POST   /api/v1/vault/items                     { item } → { item }          (session)
  *   GET    /api/v1/vault/items/:id                 → { item }                   (session)
@@ -22,7 +22,8 @@
  *   POST   /api/v1/vault/secret-key                { passwordKey | password } → { secretKey } (session)
  *   POST   /api/v1/vault/recovery-kit              { passwordKey | password } → { secretKey, recoveryCode } (session; a new code)
  *   POST   /api/v1/vault/recovery-kit/confirm      → { ok } (session; the person saved the newest kit)
- *   POST   /api/v1/vault/password                  { oldPasswordKey, newPasswordKey, kdf } → { ok, recoveryKit? } (session)
+ *   POST   /api/v1/vault/password                  { oldPasswordKey, newPasswordKey, kdf, hint? } → { ok, recoveryKit? } (session)
+ *   PUT    /api/v1/vault/hint                      { hint, passwordKey | password } → { ok, hint? } (session; hint "" removes it, no password)
  *   POST   /api/v1/vault/export                    { passwordKey | password, format: csv|json } (session)
  *
  * Who: a person only (no session caller, no CLI automation mark, this machine or a paired
@@ -89,7 +90,12 @@ async function sessions() {
     expiryHooked = true
     // The last window idling out closes the vault as a Lock would.
     s.onSessionsExpired(() => { void closeIfNobody().catch(() => undefined) })
+    // A changed "Keep Passwords unlocked" applies to the windows open now (a shorter one may lock them).
+    const { onConfigWritten } = await import('../../core/config-store.js')
+    onConfigWritten(() => { void unlockLength().then((u) => s.retimeSessions(u.limits)).catch(() => undefined) })
   }
+  // The windows a Walnut restart kept are back before any of them is read (core/vault/session-store.ts).
+  await (await import('../../core/vault/session-store.js')).sessionsRestored()
   return s
 }
 
@@ -176,6 +182,21 @@ async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; passwo
     return toB64(await derivePasswordKey(body.password, kdf))
   }
   throw new VaultError('passwordKey (or password) is required', 400, 'bad_password_key')
+}
+
+/**
+ * The master password hint sent with a password (core/vault/hint.ts), refused (400 bad_hint) when
+ * it gives the password away. Undefined or '' means none. With only the key, the server can tell
+ * just a hint that IS the password; the page that has the password checks the rest first.
+ */
+async function checkedHint(raw: unknown, password: unknown, passwordKey: string, kdf: KdfParams): Promise<string | undefined> {
+  const { readHint, hintProblem, hintIsPasswordKey } = await import('../../core/vault/hint.js')
+  const hint = readHint(raw)
+  if (!hint) return hint
+  const problem = hintProblem(hint, typeof password === 'string' ? password : undefined)
+    ?? (await hintIsPasswordKey(hint, passwordKey, kdf) ? hintProblem(hint, hint) : null)
+  if (problem) throw new (await store()).VaultError(problem, 400, 'bad_hint')
+  return hint
 }
 
 /**
@@ -287,7 +308,8 @@ vaultV1Router.get('/vault/status', async (req, res, next) => {
   if (!gate(req, res, true)) return
   await run(res, next, async () => {
     const s = await sessions()
-    const unlocked = !!s.useSession(header(req, s.SESSION_HEADER), true, deviceOf(req))
+    // A status a client reads by itself (x-walnut-vault-quiet: a page checking it is still unlocked) is no use.
+    const unlocked = !!s.useSession(header(req, s.SESSION_HEADER), header(req, 'x-walnut-vault-quiet') !== '1', deviceOf(req))
     await closeIfNobody()
     const st = await (await store()).vaultStatus()
     const u = await unlockLength(st.agentsWhileAway)
@@ -299,13 +321,14 @@ vaultV1Router.post('/vault/setup', async (req, res, next) => {
   if (!gate(req, res)) return
   await run(res, next, async () => {
     const st = await store()
-    const body = (req.body ?? {}) as { kdf?: KdfParams; agentsWhileAway?: boolean }
+    const body = (req.body ?? {}) as { kdf?: KdfParams; agentsWhileAway?: boolean; hint?: unknown; password?: unknown }
     const kdf = body.kdf ?? st.defaultKdf()
     st.checkKdf(kdf)
     const s = await sessions()
     const r = await attempt(res, async () => {
       const passwordKey = await passwordKeyOf(req, req.body ?? {}, kdf)
-      const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true })
+      const hint = await checkedHint(body.hint, body.password, passwordKey, kdf)
+      const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true, hint })
       await writeNewVaultUnlockLength()
       const minutes = (await unlockLength()).limits
       return { ...made, session: s.createSession(clientName(req), minutes, deviceOf(req)) }
@@ -342,13 +365,20 @@ vaultV1Router.post('/vault/lock', async (req, res, next) => {
   await run(res, next, async () => {
     const s = await sessions()
     let ended = 1
-    if ((req.body as { all?: boolean } | undefined)?.all) {
+    const body = (req.body ?? {}) as { all?: boolean; everywhere?: boolean }
+    if (body.all) {
       ended = s.endAllSessions()
       // Lock all also ends every agent grant and withdraws the asks still waiting.
       const { endAllGrants } = await import('../../core/vault/agent.js')
       const { endAgentAccess } = await import('./vault-agent-v1.js')
       await endAgentAccess(endAllGrants())
+    } else if (body.everywhere) {
+      // A person's Lock (a window's Lock button): every window and the extension lock with it.
+      // No body is one window only, what an older client (and an auto-lock) means by it.
+      ended = s.endAllSessions()
     } else s.endSession(header(req, s.SESSION_HEADER))
+    // Written before the answer: a restart right after a Lock must not bring the windows back.
+    await (await import('../../core/vault/session-store.js')).saveSessionsNow()
     await closeIfNobody()
     return { ended }
   })
@@ -485,6 +515,10 @@ vaultV1Router.post('/vault/settings', async (req, res, next) => {
       const r = await attempt(res, async () => st.setAgentsWhileAway(body.agentsWhileAway!, await passwordKeyOf(req, req.body ?? {}, status.kdf)))
       if (!r) return SENT
       kit = r.value.kit
+      // The limits the machine key gave may be gone, and the kept windows are sealed under the new vault key now.
+      const s = await sessions()
+      s.retimeSessions((await unlockLength()).limits)
+      await (await import('../../core/vault/session-store.js')).saveSessionsNow()
     }
     // A new vault key came with a new recovery code: the person must get the new kit now.
     return { ...(await st.vaultStatus()), ...(kit ? { recoveryKit: kit } : {}) }
@@ -496,13 +530,14 @@ vaultV1Router.post('/vault/password', async (req, res, next) => {
   await run(res, next, async () => {
     const st = await store()
     const status = await st.vaultStatus()
-    const body = (req.body ?? {}) as { oldPasswordKey?: string; oldPassword?: string; newPasswordKey?: string; newPassword?: string; kdf?: KdfParams }
+    const body = (req.body ?? {}) as { oldPasswordKey?: string; oldPassword?: string; newPasswordKey?: string; newPassword?: string; kdf?: KdfParams; hint?: unknown }
     const kdf = body.kdf ?? st.defaultKdf()
     st.checkKdf(kdf)
     const r = await attempt(res, async () => {
       const oldPasswordKey = await passwordKeyOf(req, { passwordKey: body.oldPasswordKey, password: body.oldPassword }, status.kdf)
       const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
-      return st.changeMasterPassword({ oldPasswordKey, newPasswordKey, kdf })
+      const hint = await checkedHint(body.hint, body.newPassword, newPasswordKey, kdf)
+      return st.changeMasterPassword({ oldPasswordKey, newPasswordKey, kdf, hint })
     })
     if (!r) return SENT
     const s = await sessions()
@@ -536,7 +571,7 @@ vaultV1Router.post('/vault/recover', async (req, res, next) => {
   if (!gate(req, res)) return
   await run(res, next, async () => {
     const st = await store()
-    const body = (req.body ?? {}) as { recoveryCode?: unknown; secretKey?: unknown; newPasswordKey?: string; newPassword?: string; kdf?: KdfParams }
+    const body = (req.body ?? {}) as { recoveryCode?: unknown; secretKey?: unknown; newPasswordKey?: string; newPassword?: string; kdf?: KdfParams; hint?: unknown }
     const kdf = body.kdf ?? st.defaultKdf()
     st.checkKdf(kdf)
     if (typeof body.recoveryCode !== 'string' || !body.recoveryCode.trim()) throw new st.VaultError('recoveryCode (from your recovery kit) is required', 400, 'bad_recovery_code')
@@ -546,8 +581,9 @@ vaultV1Router.post('/vault/recover', async (req, res, next) => {
     const minutes = (await unlockLength()).limits
     const r = await attempt(res, async () => {
       const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
+      const hint = await checkedHint(body.hint, body.newPassword, newPasswordKey, kdf)
       const kit = await st.recoverVault({
-        recoveryCode: body.recoveryCode as string, newPasswordKey, kdf,
+        recoveryCode: body.recoveryCode as string, newPasswordKey, kdf, hint,
         ...(typeof body.secretKey === 'string' && body.secretKey.trim() ? { secretKey: body.secretKey.trim() } : {}),
       })
       // Inside the attempt, as unlock does: closeIfNobody must not close the vault before this window holds its session.
@@ -587,5 +623,27 @@ vaultV1Router.post('/vault/secret-key', async (req, res, next) => {
     const status = await st.vaultStatus()
     const r = await attempt(res, async () => st.revealSecretKey(await passwordKeyOf(req, req.body ?? {}, status.kdf)))
     return r ? { secretKey: r.value } : SENT
+  })
+})
+
+/** Change the master password hint (the master password again, so it can be checked against it), or remove it. */
+vaultV1Router.put('/vault/hint', async (req, res, next) => {
+  if (!gate(req, res) || !(await needSession(req, res))) return
+  await run(res, next, async () => {
+    const st = await store()
+    const { readHint } = await import('../../core/vault/hint.js')
+    const body = (req.body ?? {}) as { hint?: unknown; password?: unknown }
+    const hint = readHint(body.hint)
+    if (hint === undefined) throw new st.VaultError('hint is required ("" removes it)', 400, 'bad_hint')
+    if (hint) {
+      const status = await st.vaultStatus()
+      const r = await attempt(res, async () => {
+        const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
+        await st.revealSecretKey(passwordKey)
+        await st.setVaultHint((await checkedHint(hint, body.password, passwordKey, status.kdf!))!)
+      })
+      if (!r) return SENT
+    } else await st.setVaultHint('')
+    return { ok: true, ...(hint ? { hint } : {}) }
   })
 })

@@ -1,5 +1,5 @@
 /**
- * The Bitwarden sync's guards (src/core/vault/bitwarden-sync.ts): an export item that does not
+ * The Bitwarden sync's guards (src/core/vault/sources/bitwarden/sync.ts): an export item that does not
  * read never trashes its linked copy, a sync that would trash many linked items is refused unless
  * a person allows it, an ambiguous adoption adds instead, and adoption keeps the Walnut item's own
  * agent access and sensitive mark. A real vault in a temp dir, fake data only.
@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
 import { allItems, createItems, getItem, resetVaultForTest, setupVault } from '../../../src/core/vault/store.js'
-import { syncFromBitwarden } from '../../../src/core/vault/bitwarden-sync.js'
+import { syncFromBitwarden } from '../../../src/core/vault/sources/bitwarden/sync.js'
 import type { VaultItem } from '../../../src/core/vault/types.js'
 
 let dir = ''

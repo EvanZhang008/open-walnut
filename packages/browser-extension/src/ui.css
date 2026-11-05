@@ -80,6 +80,10 @@ body.sidepanel { overflow: hidden; }
 .top { display: flex; align-items: center; gap: 10px; min-height: 53px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--line); }
 .top h1 { font-size: 15px; margin: 0; flex: 1; }
 .top-tools { display: flex; gap: 2px; }
+/* The Passwords tab of the side panel (popup.ts embed=panel): the panel's tab bar is the one header,
+   so the brand row keeps only its tools, as a slim line over the search; a sub view keeps its title. */
+html.in-panel .top:not(.top-sub) { min-height: 0; padding: 4px 8px 0; border-bottom: 0; justify-content: flex-end; }
+html.in-panel .top:not(.top-sub) > .logo, html.in-panel .top:not(.top-sub) > h1 { display: none; }
 /* A view below the list: Back on the left, its title in the middle. */
 .top-sub { display: grid; grid-template-columns: 1fr auto 1fr; padding-left: 6px; }
 .top-sub h1 { flex: none; font-size: 14px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
@@ -109,6 +113,8 @@ body.sidepanel { overflow: hidden; }
 body.popup [data-tip] { position: relative; }
 body.popup [data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; padding: 4px 8px; border-radius: 6px; background: var(--fg); color: var(--bg); font-size: 12px; font-weight: 500; line-height: 1.3; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .1s; }
 body.popup [data-tip]:hover::after, body.popup [data-tip]:focus-visible::after { opacity: 1; transition-delay: .25s; }
+/* In a row, above the button: below it would cover the row's own shown password. */
+body.popup .item [data-tip]::after { top: auto; bottom: calc(100% + 4px); }
 .row-open { color: var(--muted); width: 26px; }
 .item { gap: 8px; }
 .item .row-text { min-width: 64px; }
@@ -117,13 +123,16 @@ body.popup [data-tip]:hover::after, body.popup [data-tip]:focus-visible::after {
 /* Hovered or picked with the keys, a row trades its code chip for its buttons. */
 .item:hover .totp-chip, .item:focus-within .totp-chip { display: none; }
 .totp-chip { white-space: nowrap; flex: none; }
-/* A password shown in a row takes the row's whole width; its buttons (Hide among them) stay on
-   the line below while it shows. */
-.item:has(.revealed) { flex-wrap: wrap; row-gap: 4px; }
-.item:has(.revealed) .row-text { flex: 1 0 calc(100% - 40px); }
-.item:has(.revealed) .item-actions { display: flex; margin-left: auto; }
+/* A password shown in a row opens a line of its own under the row, the row's whole width: the
+   first line (title, buttons, Fill) stays exactly where it was, its buttons still shown. */
+.item:has(.revealed) { flex-wrap: wrap; row-gap: 0; }
+.item:has(.revealed) .row-text { display: contents; }
+.item:has(.revealed) .row-title { flex: 1; min-width: 64px; min-height: 35px; display: flex; align-items: center; }
+.item:has(.revealed) .row-sub.revealed { order: 10; flex: 0 0 100%; padding: 2px 4px 2px 38px; animation: reveal-in .14s ease-out; }
+.item:has(.revealed) .item-actions { display: flex; }
 .item:has(.revealed) .totp-chip { display: none; }
 .item:has(.revealed) .fill-pill { display: inline-flex; align-items: center; }
+@keyframes reveal-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .fill-pill { display: none; height: 26px; padding: 0 11px; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; flex: none; }
 .fill-pill:hover { background: var(--accent-hover); }
 .item:hover .fill-pill, .item:focus-within .fill-pill { display: inline-flex; align-items: center; }
@@ -134,6 +143,7 @@ body.popup [data-tip]:hover::after, body.popup [data-tip]:focus-visible::after {
 .gen-out { font-size: 16px; padding: 12px; border-radius: 10px; background: var(--bg2); word-break: break-all; min-height: 48px; }
 .toast { position: fixed; left: 50%; bottom: 58px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 12px; border-radius: 8px; font-size: 12px; opacity: 0; transition: opacity .15s; pointer-events: none; }
 .toast.on { opacity: 1; }
+body.popup .toast { white-space: nowrap; }
 .empty { text-align: center; color: var(--muted); padding: 20px 16px; line-height: 1.5; }
 details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 14px; }
 
@@ -209,7 +219,15 @@ input[type=checkbox], input[type=range] { accent-color: var(--accent); }
 .found.miss { color: var(--fg2); }
 .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 500; }
 .link-btn:hover { text-decoration: underline; }
+.hint-line { margin: 6px 0 0; font-size: 12px; }
+.hint-line .link-btn { font-size: 12px; }
+.hint-shown { margin: 0; color: var(--fg2); overflow-wrap: anywhere; }
 .btn-danger { color: var(--bad); }
+.btn-danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn-danger-solid:hover:not(:disabled) { filter: brightness(.92); }
+.confirm-box { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--bg2); }
+.confirm-box p { margin: 4px 0 10px; color: var(--fg2); font-size: 12px; line-height: 1.45; }
+.confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .foot .btn { min-width: 0; }
 .btn.icon-only { width: 36px; padding: 0; }
 .gen-out { line-height: 1.5; }
@@ -221,12 +239,19 @@ body.menu .menu-list { overscroll-behavior: contain; }
 /* A heading inside the list ("Other logins", "Saved for other parts of lab.test"): no row, the keys skip it. */
 .menu-sub { padding: 8px 10px 3px; margin-top: 2px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--muted); }
 .err.wrap { white-space: normal; margin: 2px 0 0; }
+/* An empty menu: one sentence, wrapped, beside the key. */
+.menu-empty { margin: 0; flex: 1; min-width: 0; color: var(--fg2); line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
 /* The save bar draws itself (corners, shadow) inside its frame's margin, on #root: a body background
    would be painted over the whole frame (the root's canvas takes it), so a frame taller than the bar
    (its confirmation) would show a white box. */
 body.bar { margin: 16px 16px 24px; background: transparent; border: 0; border-radius: 0; }
 /* The shadow stays inside that margin (blur 14, drop 6): a wider one is cut at the frame's edge. */
 body.bar > #root { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 14px rgba(0,0,0,.16), 0 1px 3px rgba(0,0,0,.08); }
+/* What the bar did ("Saved “Lab Shop (newuser@lab.test)” to Walnut"): one compact line. */
+.bar-done { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 14px; min-height: 48px; }
+.bar-done .logo { width: 22px; height: 22px; border-radius: 6px; font-size: 12px; }
+.bar-done-text { flex: 1; min-width: 0; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.bar-undo { flex: none; color: var(--accent); font-weight: 600; }
 /* A revealed password: every character drawn whole (an underscore sat below the clipped line box). */
 .pw-wrap .input.mono { line-height: normal; padding-top: 0; padding-bottom: 0; }
 
@@ -238,11 +263,17 @@ body.bar > #root { background: var(--bg); border: 1px solid var(--line); border-
 .panel-snap-host { font-size: 12px; color: var(--muted); }
 .panel-snap-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; padding: 12px 16px; overflow: hidden; }
 .panel-snap-msg { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
-.panel-snap-msg.is-user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 16px; background: #007aff; color: #fff; }
+.panel-snap-msg.is-user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 16px; background: #8a5a2b; color: #fff; }
 .panel-snap-msg.is-assistant { align-self: stretch; }
 .panel-snap-composer { flex: none; margin: 0 12px 12px; padding: 12px; min-height: 64px; border: 1px solid var(--line); border-radius: 14px; color: var(--muted); }
-.panel-snap-tasks { padding: 4px 6px 12px; }
-.panel-snap-tasks h3 { margin: 12px 6px 4px; font-size: 12px; color: var(--muted); }
+/* Tasks: the same places as the view (web/src/popout/ext-panel.css: its 16 px frame, save row, sections). */
+.panel-snap-tasks { padding: 16px 16px 12px; }
+.panel-snap-save { padding: 10px 12px; border-bottom: 1px solid var(--line); flex: none; }
+.panel-snap-btn { display: inline-block; padding: 4px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--fg); }
+.panel-snap-tasks section { padding: 6px 0; }
+.panel-snap-tasks h3 { margin: 6px 12px 4px; font-size: 12px; color: var(--muted); }
+.panel-snap-empty { margin: 2px 12px 6px; font-size: 12px; color: var(--muted); }
+.panel-snap-tasks .panel-snap-task { margin: 0 6px; }
 .panel-snap-count { font-weight: 400; }
 .panel-snap-task { display: flex; gap: 8px; padding: 7px 8px; }
 .panel-snap-dot { flex: 0 0 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--muted); }

@@ -76,14 +76,11 @@ import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import {
   DomSearchController, collectTextMatches,
-  ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, SYMBOL_RE,
+  wordAtPoint, claimSearchOwner, onSearchOwnerLost, SYMBOL_RE,
 } from '@/utils/dom-text-search';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
-import { classifyPreviewLink, classifyPreviewNavigation } from '@/utils/html-preview-links';
-import { findLinkHandler, openWithHandler } from '@/plugins/link-handlers';
-import { showLinkMenu } from '@/plugins/LinkCaptureHost';
-import { createPressSelectionKeeper } from '@/plugins/link-menu-selection';
+import { usePreviewFrame } from '@/components/common/preview-frame';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import '@/styles/live-edit.css';
@@ -1565,11 +1562,17 @@ export function FileContentView({
   // ...and as the quote its Ask here asks about, taken at the same moment: by the
   // click the DOM those words were in may have been re-rendered (a range into it
   // then points at nothing), while a quote is text, found again in the new DOM.
+  // (The HTML preview's selection is the page's, as its bridge last reported it.)
   const pillQuoteRef = useRef<SessionPinnedQuote | null>(null);
   const threadLayerRef = useRef<FileThreadLayerHandle>(null);
   const keepPillQuote = useCallback((range: Range | null, inFrame: boolean) => {
-    pillQuoteRef.current = range && !range.collapsed ? threadLayerRef.current?.quoteOf({ inFrame, range }) ?? null : null;
+    const layer = threadLayerRef.current;
+    pillQuoteRef.current = !layer ? null
+      : inFrame ? layer.quoteOf({ inFrame: true })
+        : range && !range.collapsed ? layer.quoteOf({ inFrame: false, range }) : null;
   }, []);
+  // The HTML preview's "clear the page's selection" (set below, once its frame hook exists).
+  const clearFrameSelectionRef = useRef<(() => void) | null>(null);
 
   // The anchor is the POINTER at release: the pill hugs the cursor (below the
   // selection after a downward drag, above after an upward one) — the side is
@@ -1616,10 +1619,8 @@ export function FileContentView({
     setFullscreen(false);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
-    // An HTML-preview selection lives in the iframe's document — clear it there.
-    if (selection.inHtml) {
-      try { htmlFrameRef.current?.contentDocument?.getSelection()?.removeAllRanges(); } catch { /* cross-origin */ }
-    }
+    // An HTML-preview selection lives in the page: it clears it itself (preview-frame.ts).
+    if (selection.inHtml) clearFrameSelectionRef.current?.();
   }, [selection, onSelectCode, filePath]);
 
   // WYSIWYG "Ask": the bubble menu already scopes to a real selection, so it
@@ -1698,275 +1699,47 @@ export function FileContentView({
     const range = pillRangeRef.current;
     docCommentsRef.current?.commentOn({
       ...(range ? { range } : {}), ...(selection?.text ? { text: selection.text } : {}), offsets: pillOffsetsRef.current,
+      ...(selection?.inHtml ? { inFrame: true } : {}),
     });
     setSelection(null);
   }, [selection]);
   const docTextNow = useCallback(() => editorRef.current?.getValue() ?? data?.content ?? null, [data?.content]);
 
-  // HTML preview: the rendered page lives in a same-origin IFRAME, so the
-  // outer mouseup handler never sees selections made inside it. Listen inside
-  // the iframe's own document and translate its selection rect to top-viewport
-  // coords (iframe box offset). Line is unknowable in rendered HTML — the
-  // prefill degrades to a file-level reference, same as the WYSIWYG path.
+  // HTML preview: the page runs sandboxed in an origin of its own, so the console
+  // cannot reach into its document; its selection, text, scroll position, link clicks,
+  // marks, find and Esc go through the bridge Walnut puts into it (preview-frame.ts).
+  // Line is unknowable in rendered HTML: the prefill degrades to a file-level
+  // reference, as the WYSIWYG path does.
   const htmlFrameRef = useRef<HTMLIFrameElement | null>(null);
   const htmlPreviewLive = !loading && !showSource && isHtml;
-  useEffect(() => {
-    if (!onSelectCode || !htmlPreviewLive) return;
-    const frame = htmlFrameRef.current;
-    if (!frame) return;
-    let doc: Document | null = null;
-    const onFrameMouseUp = (e: MouseEvent) => {
-      if (!doc) return;
-      const sel = doc.getSelection();
-      const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString().trim() : '';
-      if (!text) { setSelection((prev) => (prev?.inHtml ? null : prev)); return; }
-      pillRangeRef.current = sel!.getRangeAt(0).cloneRange();
-      keepPillQuote(pillRangeRef.current, true);
-      // Anchor = the pointer at release, translated from iframe to top-viewport
-      // coords — the pill hugs the cursor (side decided by SelectionAskPill).
-      const box = frame.getBoundingClientRect();
-      setSelection({ x: box.left + e.clientX, y: box.top + e.clientY, text, inHtml: true });
-    };
-    const attach = () => {
-      // A cross-origin navigation inside the preview throws here — no pill then.
-      try { doc = frame.contentDocument; } catch { doc = null; }
-      doc?.addEventListener('mouseup', onFrameMouseUp);
-    };
-    // The document is replaced on every load (including the first, which may
-    // not have happened yet) — (re)attach each time.
-    frame.addEventListener('load', attach);
-    if (frame.contentDocument?.readyState === 'complete') attach();
-    return () => {
-      frame.removeEventListener('load', attach);
-      doc?.removeEventListener('mouseup', onFrameMouseUp);
-    };
-  }, [onSelectCode, htmlPreviewLive, filePath, keepPillQuote]);
-
-  // ── HTML preview scroll memory ─────────────────────────────────────────────
-  // The HTML preview scrolls inside its IFRAME's own document, so the parent-
-  // document capture listener above never hears it and the chase can't reach its
-  // scroller — HTML files were the one text kind that never remembered their
-  // position. The frame is same-origin by construction (we serve the bytes), so
-  // save/restore happen inside the frame itself. Restore re-runs on EVERY load
-  // (unlike the md latch): each load is a fresh document parked at the top, so
-  // re-applying the offset is a resume, not a mid-read yank. PDFs stay out —
-  // the browser's PDF viewer document is a closed plugin, not scriptable.
-  useEffect(() => {
-    if (!htmlPreviewLive) return;
-    const frame = htmlFrameRef.current;
-    if (!frame) return;
-    const key = `${host ?? 'local'} ${filePath}`;
-    let win: Window | null = null;
-    let raf = 0;
-    let saveTimer: ReturnType<typeof setTimeout> | undefined;
-    let chaseTop: number | null = null;
-    let lastSetTop = -1;
-    let chaseDeadline = 0;
-
-    const onFrameScroll = () => {
-      if (!win) return;
-      const top = win.scrollY;
-      // A scroll that isn't the echo of our own set = the user took over.
-      if (chaseTop != null && Math.abs(top - lastSetTop) > 1) chaseTop = null;
-      lastSeenRef.current = { key, top };
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        const seen = lastSeenRef.current;
-        if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
-      }, 250);
-    };
-
-    // Chase across frames, same reason as the outer restore: the page may still
-    // be laying out (scripts, images) so a one-shot set clamps against a
-    // fraction of the final height and long pages "resume" near the top.
-    const tick = () => {
-      if (chaseTop != null && win) {
-        const doc = win.document.scrollingElement ?? win.document.documentElement;
-        if (doc) {
-          const max = doc.scrollHeight - win.innerHeight;
-          const top = Math.max(0, Math.min(chaseTop, max));
-          if (Math.abs(win.scrollY - top) > 1) {
-            lastSetTop = top;
-            win.scrollTo(0, top);
-            lastSeenRef.current = { key, top };
-          }
-          if (max >= chaseTop) chaseTop = null;
-        }
-      }
-      if (chaseTop != null && Date.now() < chaseDeadline) raf = requestAnimationFrame(tick);
-    };
-
-    const attach = () => {
-      // Cross-origin navigation inside the preview throws — no memory then.
-      // (contentWindow itself is readable; touching the window is what throws.)
-      try {
-        win = frame.contentWindow;
-        if (!win) return;
-        win.removeEventListener('scroll', onFrameScroll); // load+readyState can both fire
-        win.addEventListener('scroll', onFrameScroll, { passive: true });
-      } catch { win = null; return; }
-      const saved = line ? null : loadFileScroll(host, filePath);
-      if (saved && saved.top > 0) {
-        chaseTop = saved.top;
-        chaseDeadline = Date.now() + 5000;
-        cancelAnimationFrame(raf);
-        raf = requestAnimationFrame(tick);
-      }
-    };
-    frame.addEventListener('load', attach);
-    if (frame.contentDocument?.readyState === 'complete') attach();
-    return () => {
-      frame.removeEventListener('load', attach);
-      try { win?.removeEventListener('scroll', onFrameScroll); } catch { /* frame gone */ }
-      cancelAnimationFrame(raf);
-      clearTimeout(saveTimer);
-      // Flush the last LIVE value — the debounce would drop the final position
-      // when the panel closes (and the detached frame reads 0 by then).
-      const seen = lastSeenRef.current;
-      if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
-    };
-  }, [htmlPreviewLive, filePath, host, line]);
-
-  // ── HTML preview: links go to the panel, not the frame ─────────────────────
-  // A report links to the files it produced (`/tmp/report/video.webm`, a sibling
-  // `details.html`). Left to the frame, such a click navigates INSIDE the
-  // iframe: the tree, the ‹ › history and the viewer never hear of it, so there
-  // is no way back except clicking some other file first (2026-09-11 report),
-  // and a root-absolute path did not even resolve. So clicks are classified in
-  // the frame's own document: another file on this host → the container opens
-  // it like a tree click (onOpenPath); another website → a new tab; anchors,
-  // downloads and modified clicks stay with the browser. The listener runs in
-  // the BUBBLE phase, after the page's own handlers, so an `onclick="…; return
-  // false"` tab switcher keeps working. Navigation the click handler cannot see
-  // (a script setting location, a meta refresh, a container without onOpenPath)
-  // is caught on load instead and reported as `strayed`: a strip offering the
-  // way back and, when the frame landed on another file of this host, a way to
-  // open that file in the panel. Deliberately NOT automatic — two pages that
-  // redirect to each other would otherwise ping-pong the panel forever.
-  const [strayed, setStrayed] = useState<{ path?: string } | null>(null);
+  const onFrameSelection = useCallback((sel: { x: number; y: number; text: string } | null) => {
+    if (!sel) { setSelection((prev) => (prev?.inHtml ? null : prev)); return; }
+    pillRangeRef.current = null; // the range lives in the page; a comment keeps its words
+    keepPillQuote(null, true);
+    setSelection({ ...sel, inHtml: true });
+  }, [keepPillQuote]);
+  // ⌘F inside the page and its find results (the search bar is set up below).
+  const frameFindRef = useRef<{ open: () => void; result: (r: { count: number; index: number }) => void } | null>(null);
+  const preview = usePreviewFrame({
+    // The URL version a "Back to" strip returns to: the file as it is now.
+    frameRef: htmlFrameRef, live: htmlPreviewLive, filePath, host, line, reloadToken: reloadToken + diskVersion, lastSeenRef,
+    onSelection: onSelectCode ? onFrameSelection : undefined, onOpenPath,
+    onFindKey: () => frameFindRef.current?.open(),
+    onFindResult: (r) => frameFindRef.current?.result(r),
+  });
+  const { strayed, setStrayed, returnToFile, selectionRect: frameSelectionRect } = preview;
+  clearFrameSelectionRef.current = preview.clearSelection;
   // The preview's URL version. Frozen while the reader has followed a link away
   // from the file: a write to the file must not pull them back on its own.
   const previewRevRef = useRef(0);
   if (!strayed) previewRevRef.current = reloadToken + diskVersion;
-  const onOpenPathRef = useRef(onOpenPath);
-  onOpenPathRef.current = onOpenPath;
-  useEffect(() => {
-    setStrayed(null);
-    if (!htmlPreviewLive) return;
-    const frame = htmlFrameRef.current;
-    if (!frame) return;
-    let doc: Document | null = null;
-    let docHref = '';
-    const current = { host, path: filePath };
-
-    const onFrameClick = (e: MouseEvent) => {
-      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      const el = e.target as Element | null;
-      const a = el?.closest?.('a[href]') as HTMLAnchorElement | null;
-      if (!a || a.hasAttribute('download')) return;
-      // A link a plugin handles opens there whatever its target (link-handlers.ts).
-      const handled = findLinkHandler(a.href);
-      if (handled) {
-        e.preventDefault();
-        openWithHandler(handled.handler, handled.url, 'click');
-        return;
-      }
-      const target = (a.getAttribute('target') || '').toLowerCase();
-      if (target && target !== '_self') return;
-      const verdict = classifyPreviewLink(a.href, docHref, current);
-      if (verdict.kind === 'external') {
-        e.preventDefault();
-        window.open(verdict.url, '_blank', 'noopener,noreferrer');
-      } else if (verdict.kind === 'file' && onOpenPathRef.current) {
-        e.preventDefault();
-        log.info('file-view', 'html preview link opens file in panel', { from: filePath, path: verdict.path, host });
-        onOpenPathRef.current(verdict.path);
-      }
-    };
-
-    // Esc pressed while the reader is in the page (a click into it gave the frame
-    // focus) never reaches this document, so the panel's Esc (leave fullscreen,
-    // close a drawer) was dead until a click outside (2026-10-03). Handed on as
-    // the same key from the frame element, after the page's own handlers.
-    const onFrameKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
-      frame.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-    };
-
-    // The console's link menu for a link a plugin handles, as on the page around it.
-    const keeper = createPressSelectionKeeper(() => doc?.getSelection() ?? null);
-    const onFramePress = (e: PointerEvent) => keeper.press(e);
-    const onFrameMenu = (e: MouseEvent) => {
-      if (e.defaultPrevented) return;
-      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
-      if (!a || !findLinkHandler(a.href)) return;
-      const box = frame.getBoundingClientRect();
-      if (showLinkMenu(a.href, { x: box.left + e.clientX, y: box.top + e.clientY })) {
-        e.preventDefault();
-        keeper.settle(); // the word WebKit selected under the press
-      }
-    };
-
-    const attach = (fromLoad: boolean) => {
-      doc?.removeEventListener('pointerdown', onFramePress, true);
-      doc?.removeEventListener('contextmenu', onFrameMenu);
-      doc?.removeEventListener('click', onFrameClick);
-      doc?.removeEventListener('keydown', onFrameKey);
-      doc = null;
-      try { docHref = frame.contentWindow?.location.href ?? ''; } catch {
-        // Another origin now owns the frame; nothing of ours is reachable inside.
-        if (fromLoad) setStrayed({});
-        return;
-      }
-      const nav = classifyPreviewNavigation(docHref, current);
-      if (nav === 'same-file') {
-        setStrayed(null);
-        try { doc = frame.contentDocument; } catch { doc = null; }
-        doc?.addEventListener('click', onFrameClick);
-        doc?.addEventListener('pointerdown', onFramePress, true);
-        doc?.addEventListener('contextmenu', onFrameMenu);
-        doc?.addEventListener('keydown', onFrameKey);
-        return;
-      }
-      // Only a real load is a navigation. Before `src` has loaded the frame
-      // still holds its initial empty document (about:blank, or the parent's URL
-      // on some engines), which is not the frame having gone anywhere.
-      if (!fromLoad) return;
-      setStrayed({ path: nav ? nav.path : undefined });
-    };
-    const onLoad = () => attach(true);
-    frame.addEventListener('load', onLoad);
-    if (frame.contentDocument?.readyState === 'complete') attach(false);
-    return () => {
-      frame.removeEventListener('load', onLoad);
-      doc?.removeEventListener('pointerdown', onFramePress, true);
-      doc?.removeEventListener('contextmenu', onFrameMenu);
-      doc?.removeEventListener('click', onFrameClick);
-      doc?.removeEventListener('keydown', onFrameKey);
-    };
-  }, [htmlPreviewLive, filePath, host]);
-
-  /** The "Back to <file>" strip: point the frame back at the file. Assigning the
-   *  same `src` re-navigates (unlike React's prop diff, which would see no change). */
-  const returnToFile = useCallback(() => {
-    const frame = htmlFrameRef.current;
-    if (frame) frame.src = rawFileContentUrl(filePath, host, reloadToken + diskVersion);
-    setStrayed(null);
-  }, [filePath, host, reloadToken, diskVersion]);
 
   // Live selection rect for the pill, translated to top-viewport coords when
   // the selection lives inside the HTML preview iframe.
   const resolveSelectionRect = useCallback((): DOMRect | null => {
     if (!selection?.inHtml) return selectionClientRect();
-    const frame = htmlFrameRef.current;
-    let doc: Document | null = null;
-    try { doc = frame?.contentDocument ?? null; } catch { return null; }
-    if (!frame || !doc) return null;
-    const rect = selectionClientRect(doc);
-    if (!rect) return null;
-    const box = frame.getBoundingClientRect();
-    return new DOMRect(box.left + rect.left, box.top + rect.top, rect.width, rect.height);
-  }, [selection?.inHtml]);
+    return frameSelectionRect();
+  }, [selection?.inHtml, frameSelectionRect]);
 
   // Drop a stale pill when the file changes.
   useEffect(() => { setSelection(null); }, [filePath]);
@@ -1974,9 +1747,10 @@ export function FileContentView({
   // ── In-file search (⌘F) ────────────────────────────────────────────────────
   // ONE search bar for every render mode. The CodeMirror surface searches via
   // the editor handle (decorations); every DOM surface (markdown preview,
-  // WYSIWYG, read-only <pre>, HTML iframe) via DomSearchController, which
-  // paints with the CSS Custom Highlight API — no DOM mutation, so refractor
-  // spans and the live TipTap doc are never corrupted.
+  // WYSIWYG, read-only <pre>) via DomSearchController, which paints with the CSS
+  // Custom Highlight API — no DOM mutation, so refractor spans and the live
+  // TipTap doc are never corrupted. The HTML preview's page finds and paints
+  // itself (its bridge, the same rules), answering with its count.
   const [searchOpen, setSearchOpen] = useState(false);
   // Identity for the single-owner arbitration of the global highlight registry.
   const searchTokenRef = useRef(`fv-${Math.random().toString(36).slice(2)}`);
@@ -1989,17 +1763,7 @@ export function FileContentView({
   const resolveDomSearchTarget = useCallback((): { root: HTMLElement; win: Window; scrollWindow: boolean } | null => {
     const rootEl = contentRef.current;
     if (!rootEl) return null;
-    if (!loading && !showSource && isHtml) {
-      const frame = htmlFrameRef.current;
-      let doc: Document | null = null;
-      try { doc = frame?.contentDocument ?? null; } catch { doc = null; }
-      const win = frame?.contentWindow;
-      if (doc?.body && win) {
-        ensureHighlightStyles(doc);
-        return { root: doc.body, win, scrollWindow: true };
-      }
-      return null;
-    }
+    if (!loading && !showSource && isHtml) return null; // the page's own (findInPage)
     const body = rootEl.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code');
     return body ? { root: body, win: window, scrollWindow: false } : null;
   }, [loading, showSource, isHtml]);
@@ -2014,6 +1778,9 @@ export function FileContentView({
     return domSearchRef.current.ctrl;
   }, [resolveDomSearchTarget]);
 
+  const pageChannel = preview.channel;
+  /** The HTML preview finds in its page: the answer comes back as a message (frameFindRef). */
+  const findInPage = htmlPreviewLive;
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchQuery('');
@@ -2021,7 +1788,8 @@ export function FileContentView({
     editorRef.current?.searchClose?.();
     domSearchRef.current?.ctrl.close();
     domSearchRef.current = null;
-  }, []);
+    pageChannel.send({ type: 'find-close' });
+  }, [pageChannel]);
 
   /** Open the bar and claim the highlight registry (closing any other one). */
   const openSearch = useCallback(() => {
@@ -2035,6 +1803,7 @@ export function FileContentView({
   // either's searchOpen commits — an open-gated listener would miss the loss
   // and leave two bars fighting over the one highlight registry.
   useEffect(() => onSearchOwnerLost(searchTokenRef.current, closeSearch), [closeSearch]);
+  frameFindRef.current = { open: openSearch, result: setSearchStatus };
 
   // Re-run the search when the query/case/surface changes. Debounced: the DOM
   // pass re-walks every text node, which a fast typist shouldn't pay per key.
@@ -2043,22 +1812,26 @@ export function FileContentView({
     const timer = setTimeout(() => {
       if (editingSource) {
         setSearchStatus(editorRef.current?.searchUpdate?.(searchQuery, searchCase) ?? { count: 0, index: 0 });
+      } else if (findInPage) {
+        pageChannel.send({ type: 'find', query: searchQuery.slice(0, 1000), caseSensitive: searchCase });
       } else {
         const ctrl = domSearchCtrl();
         setSearchStatus(ctrl ? ctrl.update(searchQuery, searchCase) : { count: 0, index: 0 });
       }
     }, 120);
     return () => clearTimeout(timer);
-  }, [searchOpen, searchQuery, searchCase, editingSource, domSearchCtrl, data]);
+  }, [searchOpen, searchQuery, searchCase, editingSource, domSearchCtrl, data, findInPage, pageChannel]);
 
   const handleSearchNav = useCallback((dir: 1 | -1) => {
     if (editingSource) {
       setSearchStatus(editorRef.current?.searchNav?.(dir) ?? { count: 0, index: 0 });
+    } else if (findInPage) {
+      pageChannel.send({ type: 'find-nav', dir });
     } else {
       const ctrl = domSearchCtrl();
       setSearchStatus(ctrl ? ctrl.nav(dir) : { count: 0, index: 0 });
     }
-  }, [editingSource, domSearchCtrl]);
+  }, [editingSource, domSearchCtrl, findInPage, pageChannel]);
 
   // Search state belongs to the FILE — switching files drops it.
   useEffect(() => () => { closeSearch(); }, [filePath, closeSearch]);
@@ -2874,9 +2647,11 @@ export function FileContentView({
           className="fv-html-preview"
           // `src` (not `srcDoc`) so the page has its OWN document URL — in-page
           // anchors, relative links and scripts resolve against the file itself
-          // instead of navigating the Walnut SPA. Files the user explicitly opened
-          // are trusted; allow scripts/forms/popups so the page is interactive.
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
+          // instead of navigating the Walnut SPA. Interactive (scripts, forms,
+          // popups), but NEVER allow-same-origin: on Walnut's origin a page's script
+          // reads the Passwords unlock and the device token (the server's CSP
+          // sandbox, src/web/untrusted-doc.ts, says the same).
+          sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
           // reloadToken rides the URL: same-src iframes are never re-navigated,
           // which made Refresh a silent no-op on the rendered HTML preview. So
           // does the disk version: a save shows in the page it saved.
@@ -2979,7 +2754,7 @@ export function FileContentView({
           filePath={filePath}
           sessionId={sessionId!}
           rootRef={contentRef}
-          frameRef={htmlFrameRef}
+          channel={htmlPreviewLive ? preview.channel : null}
           surface={threadSurface}
           surfaceNonce={`${filePath}:${baseHash ?? ''}:${seedNonce}:${reloadToken}:${threadSurface}:${data.content?.length ?? 0}`}
         />
@@ -2993,7 +2768,7 @@ export function FileContentView({
           rootRef={contentRef}
           surfaceNonce={`${filePath}:${baseHash ?? ''}:${seedNonce}:${reloadToken}:${threadSurface}:${data.content?.length ?? 0}`}
           surface={threadSurface}
-          frameRef={htmlFrameRef}
+          channel={htmlPreviewLive ? preview.channel : null}
           editor={editorRef}
           getDocText={docTextNow}
         />
@@ -3007,7 +2782,7 @@ export function FileContentView({
           onComment={canDocComment ? commentFromSelection : undefined}
           onDismiss={() => setSelection(null)}
           resolveRect={resolveSelectionRect}
-          listenTo={selection.inHtml ? htmlFrameRef.current?.contentDocument : undefined}
+          listenTo={selection.inHtml ? preview.scrollEvents : undefined}
         />
       )}
       {ctxTarget && (

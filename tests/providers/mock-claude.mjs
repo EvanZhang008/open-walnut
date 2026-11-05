@@ -74,21 +74,33 @@ function persistMockCompactBoundary(sessionId, metadata, uuid, commandUuid, root
  * (searched one level deep, so a realpath'd cwd cannot miss it), chained onto
  * its last line, with the user line's pre-assigned uuid the way the real CLI
  * files it. Lets a browser spec reload and find what it sent (N37).
+ * MOCK_CLAUDE_PERSIST_ALL=1 does it for every session, starting a transcript for a new one (the
+ * review lab and the side panel's reload spec: the product's own reload path, not a stand-in).
  */
 let lastInputUserUuid = null;
 function persistFileOf(sid) {
   const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
   const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
+  const all = process.env.MOCK_CLAUDE_PERSIST_ALL === '1';
   if (!root || !sid) return null;
   try {
     for (const d of fs.readdirSync(root)) {
       const f = path.join(root, d, `${sid}.jsonl`);
       if (!fs.existsSync(f)) continue;
       // Listed, or a session a big-context-turn began (its later plain turns stay on reload too).
-      if (allow.includes(sid) || fs.readFileSync(f, 'utf8').includes('"msg_big_context_')) return f;
+      if (allow.includes(sid) || all || fs.readFileSync(f, 'utf8').includes('"msg_big_context_')) return f;
     }
   } catch { /* no transcript dir */ }
-  return null;
+  if (!all) return null;
+  // Every session (MOCK_CLAUDE_PERSIST_ALL=1): a new one gets its transcript where the real CLI
+  // starts it, the project dir named by its folder, so a reload reads what was sent.
+  try {
+    const dir = path.join(root, process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, `${sid}.jsonl`);
+    if (!fs.existsSync(f)) fs.writeFileSync(f, '');
+    return f;
+  } catch { return null; }
 }
 // The user line of the turn in flight, once written (persistPlainUser).
 let persistedUser = null;

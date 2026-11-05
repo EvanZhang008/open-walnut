@@ -2,12 +2,13 @@
  * The vault's own background work on the primary (server.ts starts it): at start, when the
  * person keeps Passwords unlocked "until restart" or "forever", Walnut unlocks itself from this
  * Mac's keychain (keychain-unlock.ts) so a restart does not leave agents locked out; and the
- * daily Bitwarden sync timer (bitwarden-run.ts). Nothing here runs on a throwaway server (an
+ * daily timers of the sync sources the person added (sources/index.ts). Nothing here runs on a throwaway server (an
  * ephemeral one, a test runner, a vault kept in the data home), which never has the real vault.
  */
 import path from 'node:path'
 
-async function realVault(): Promise<boolean> {
+/** The person's real vault (not a throwaway server's): only it may be opened from this Mac's keychain. */
+export async function realVault(): Promise<boolean> {
   if (process.env.VITEST || process.env.WALNUT_VAULT_BACKGROUND === '0') return false
   const [{ vaultDir }, { IS_EPHEMERAL, WALNUT_HOME }] = await Promise.all([import('./paths.js'), import('../../constants.js')])
   if (IS_EPHEMERAL) return false
@@ -42,12 +43,14 @@ export function startVaultBackground(): { stop: () => void } {
   void (async () => {
     if (!(await realVault()) || stopped) return
     const { log } = await import('../../logging/index.js')
+    // The windows a restart kept come back first (session-store.ts): they may reopen the vault already.
+    await (await import('./session-store.js')).sessionsRestored()
     const r = await unlockAtStart()
     if (r === 'unlocked') log.web.info('passwords unlocked from this Mac\'s keychain at start')
     else if (r !== 'skipped' && r !== 'open') log.web.warn('passwords keychain unlock at start did not unlock', { outcome: r })
     if (stopped) return
-    const { startDailyBitwardenSync } = await import('./bitwarden-run.js')
-    daily = startDailyBitwardenSync()
+    const { startSourceTimers } = await import('./sources/index.js')
+    daily = await startSourceTimers()
   })().catch(() => undefined)
   return { stop: () => { stopped = true; daily?.stop() } }
 }

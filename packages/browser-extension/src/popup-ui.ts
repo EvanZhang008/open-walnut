@@ -28,13 +28,19 @@ export function iconButton(content: Node, label: string, onClick: (e: Event) => 
   return h('button', { class: 'icon-btn', type: 'button', 'aria-label': label, 'data-tip': label, ...attrs, onclick: (e: Event) => { e.stopPropagation(); onClick(e) } }, content) as HTMLButtonElement
 }
 
-export function toast(text: string): void {
+let toastTimer: ReturnType<typeof setTimeout> | undefined
+export function toast(text: string, ms = 1600): void {
   let t = document.querySelector<HTMLElement>('.toast')
   if (!t) { t = h('div', { class: 'toast', role: 'status' }); document.body.append(t) }
   t.textContent = text
   t.classList.add('on')
-  setTimeout(() => t!.classList.remove('on'), 1600)
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => t!.classList.remove('on'), ms)
 }
+
+/** "Cleared in 30 s": what every copy of a secret says, from the one clearing time. */
+export const CLEARED_IN = `cleared in ${Math.round(CLEAR_MS / 1000)} s`
+let clearTimer: ReturnType<typeof setTimeout> | undefined
 
 export function errLine(text?: string): HTMLElement {
   return h('p', { class: 'err', role: 'alert' }, text ?? '')
@@ -47,9 +53,12 @@ export function errLine(text?: string): HTMLElement {
  */
 export async function copySecret(value: string, what: string): Promise<void> {
   try { await navigator.clipboard.writeText(value) } catch { toast('Could not copy.'); return }
-  toast(`${what} copied`)
+  toast(`${what} copied, ${CLEARED_IN}`, 2600)
   void ask({ type: 'copied', value })
-  setTimeout(() => {
+  // Timed from the latest copy: a timer of an earlier copy of the same value would clear this
+  // one early (copied at 0 s and again at 23 s, gone at 30 s).
+  clearTimeout(clearTimer)
+  clearTimer = setTimeout(() => {
     void navigator.clipboard.readText().then((now) => { if (now === value) return navigator.clipboard.writeText('') }).catch(() => undefined)
   }, CLEAR_MS)
 }

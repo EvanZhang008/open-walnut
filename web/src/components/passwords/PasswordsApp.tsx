@@ -1,7 +1,7 @@
 /**
  * The Passwords app (left rail): setup the first time, the lock screen, then the vault.
- * Its state follows this window's vault session: Lock, auto-lock or a 401 anywhere
- * drops the opened items and shows the lock screen again.
+ * Its state follows the browser's vault session (shared by every tab): Lock, auto-lock or a 401
+ * anywhere drops the opened items and shows the lock screen again.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { onVaultSessionChange, vaultApi, VaultApiError, type VaultStatus } from '@/api/vault'
@@ -29,8 +29,23 @@ export function PasswordsApp() {
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => { if (status && !status.setUp) setSettingUp(true) }, [status])
   useEffect(() => onVaultSessionChange(() => { void refresh() }), [refresh])
+  // A Lock elsewhere (the extension, another browser) shows here without a reload: a quiet check
+  // (no use of the vault) when the page comes back into view, and every minute while it is seen.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== 'visible') return
+      void vaultApi.status({ quiet: true }).then((st) => {
+        // A dead unlock was dropped by status() (the listener refreshes).
+        setStatus((cur) => (cur && cur.unlocked === st.unlocked && cur.setUp === st.setUp ? cur : st))
+      }).catch(() => {})
+    }
+    const t = window.setInterval(check, 60_000)
+    document.addEventListener('visibilitychange', check)
+    return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', check) }
+  }, [])
 
-  const locked = useCallback(() => { vaultApi.forget(); void refresh() }, [refresh])
+  // The failed request already dropped the unlock it went with (api/vault.ts call()), never a newer one.
+  const locked = useCallback(() => { void refresh() }, [refresh])
 
   if (error) return <div className="pw-gate"><div className="pw-gate-card"><h1>Passwords</h1><p className="pw-hint pw-hint-bad" role="alert">{error}</p></div></div>
   if (kit) return <KitScreen {...kit} onDone={() => { setKit(null); setSettingUp(false); void refresh() }} />

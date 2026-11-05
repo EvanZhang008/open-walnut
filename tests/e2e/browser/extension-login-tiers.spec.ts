@@ -205,7 +205,9 @@ test('Never for this site covers the host it was said on, not its sibling', asyn
   await page.locator('#go').click()
   const bar = await frameOf(page, 'savebar.html')
   await bar.getByRole('button', { name: 'Never for this site' }).click()
-  expect(await sw().evaluate(() => chrome.storage.local.get('neverSave').then((r) => r.neverSave))).toEqual(['evil.a1.test'])
+  // The bar answers with a note (and Undo) once the background stored it.
+  await expect(bar.getByTestId('savebar-undo')).toBeVisible()
+  await expect.poll(() => sw().evaluate(() => chrome.storage.local.get('neverSave').then((r) => r.neverSave))).toEqual(['evil.a1.test'])
   // Still never there.
   await page.goto(site('evil.a1.test', '/login'))
   await page.locator('#user').fill(`eve-${stamp}`)

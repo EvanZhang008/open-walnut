@@ -71,7 +71,20 @@ const pending = new Map<string, Pending>()
 /** `${device}:${tabId}` → the owner key (task or session) that opened it. */
 const tabOwners = new Map<string, string>()
 const tabSetAt = new Map<string, number>()
+/**
+ * Tabs a report of their browser has listed. One of them missing from a later report is gone (closed,
+ * or one the extension let go of, such as Walnut's own page), at once; only a tab known from an
+ * action's answer alone waits out the grace, since a report may have been read before that answer.
+ */
+const tabReported = new Set<string>()
 const TAB_REPORT_GRACE_MS = 60_000
+/**
+ * Browsers that left on purpose (agents turned off, or the person disconnected the extension), so
+ * a command fails at once saying which, instead of waiting for a poll that never comes.
+ */
+type GoneWhy = 'off' | 'disconnected'
+const gone = new Map<string, { label: string; at: number; why: GoneWhy }>()
+const GONE_MS = 30 * 60_000
 
 /** The extension asks for work: the queued commands, or wait for one up to `waitMs`. */
 export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCommand[]> {
@@ -79,6 +92,7 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
   const { tabs: _tabs, ...rest } = info
   Object.assign(c, rest, { lastSeen: Date.now() })
   controllers.set(info.device, c)
+  gone.delete(info.device)
   if (info.tabs) {
     // The report was read before the request left: a tab an open just gave (its result may
     // arrive first) is kept until a report a while later still lacks it.
@@ -88,9 +102,11 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
       const k = `${info.device}:${t.id}`
       reported.add(k)
       if (tabOwners.get(k) !== t.owner) { tabOwners.set(k, t.owner); tabSetAt.set(k, Date.now()) }
+      tabReported.add(k)
     }
     for (const k of [...tabOwners.keys()]) {
-      if (k.startsWith(`${info.device}:`) && !reported.has(k) && Date.now() - (tabSetAt.get(k) ?? 0) > TAB_REPORT_GRACE_MS) { tabOwners.delete(k); tabSetAt.delete(k) }
+      if (!k.startsWith(`${info.device}:`) || reported.has(k)) continue
+      if (tabReported.has(k) || Date.now() - (tabSetAt.get(k) ?? 0) > TAB_REPORT_GRACE_MS) forgetTab(k)
     }
   }
   // A second poll (the background restarted) takes over: the first one gets nothing.
@@ -127,18 +143,43 @@ export function answer(device: string, id: string, ok: boolean, result: unknown,
   return true
 }
 
-/** The browser stopped (the person turned agents off, or the extension went away): nothing waits on it. */
-export function disconnect(device: string): void {
+const DISCONNECTED = 'The person disconnected this browser from Walnut: nothing reaches it until they connect it again '
+  + '(the Walnut extension\'s popup, Connect). Ask them to, if the work needs their browser.'
+const OFF = 'The person turned agents off in this browser (the Walnut extension\'s popup, Settings, "Let Walnut agents use this browser").'
+
+/** Why the browser left, as the agent hears it. */
+function goneError(why: GoneWhy): BrowserError {
+  return why === 'disconnected' ? new BrowserError(DISCONNECTED, 409, 'browser_disconnected') : new BrowserError(OFF, 409, 'browser_off')
+}
+
+/**
+ * The browser stopped (the person turned agents off, `off`; disconnected the extension or its
+ * device was removed, `disconnected`): nothing waits on it, and the next command hears why.
+ */
+export function disconnect(device: string, why: GoneWhy = 'off'): void {
   const c = controllers.get(device)
   if (c?.waiter) { clearTimeout(c.waiter.timer); c.waiter.resolve([]); c.waiter = undefined }
+  const before = gone.get(device)
+  if (c || before) gone.set(device, { label: c?.label ?? before!.label, at: Date.now(), why: before?.why === 'disconnected' ? 'disconnected' : why })
   controllers.delete(device)
   for (const [id, p] of pending) {
     if (p.device !== device) continue
     pending.delete(id)
     clearTimeout(p.timer)
-    p.reject(new BrowserError('The browser stopped letting agents in.', 409, 'browser_off'))
+    p.reject(goneError(why))
   }
-  for (const k of [...tabOwners.keys()]) if (k.startsWith(`${device}:`)) { tabOwners.delete(k); tabSetAt.delete(k) }
+  for (const k of [...tabOwners.keys()]) if (k.startsWith(`${device}:`)) forgetTab(k)
+}
+
+/** With no browser connected, the one that left on purpose most recently (the last half hour), for the words. */
+export function lastGone(now = Date.now()): { label: string; at: number; why: GoneWhy } | undefined {
+  if (connected(now).length) return undefined
+  let best: { label: string; at: number; why: GoneWhy } | undefined
+  for (const [d, g] of gone) {
+    if (now - g.at > GONE_MS) { gone.delete(d); continue }
+    if (!best || g.at > best.at) best = g
+  }
+  return best
 }
 
 /** The browsers that let agents in now. Which tab is whose stays here: it is no one else's to read. */
@@ -189,6 +230,8 @@ export function deviceForTab(owner: string, tab?: number): string | undefined {
  * started again) polls within a second or two, and a command sent in that gap should not fail.
  */
 export async function waitConnected(ms: number): Promise<void> {
+  // A browser the person disconnected does not come back by itself: no wait.
+  if (lastGone()?.why === 'disconnected') return
   const until = Date.now() + ms
   while (!connected().length && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
 }
@@ -202,6 +245,8 @@ export function pickController(device?: string): ControllerInfo {
     return c
   }
   if (!live.length) {
+    const left = lastGone()
+    if (left) throw goneError(left.why)
     throw new BrowserError(
       'No browser lets agents in now: the person turns it on in the Walnut extension (popup, Settings, "Let Walnut agents use this browser").',
       409, 'browser_not_connected')
@@ -230,14 +275,22 @@ export function send(device: string, action: string, args: Record<string, unknow
 
 // ── tabs ──
 
+function forgetTab(k: string): void {
+  tabOwners.delete(k)
+  tabSetAt.delete(k)
+  tabReported.delete(k)
+}
+
 export function ownTab(device: string, tabId: number, owner: string): void {
-  tabOwners.set(`${device}:${tabId}`, owner)
-  tabSetAt.set(`${device}:${tabId}`, Date.now())
+  const k = `${device}:${tabId}`
+  tabOwners.set(k, owner)
+  tabSetAt.set(k, Date.now())
+  // Known from this answer: a report read before it may still lack the tab.
+  tabReported.delete(k)
 }
 
 export function releaseTab(device: string, tabId: number): void {
-  tabOwners.delete(`${device}:${tabId}`)
-  tabSetAt.delete(`${device}:${tabId}`)
+  forgetTab(`${device}:${tabId}`)
 }
 
 export function tabOwner(device: string, tabId: number): string | undefined {
@@ -257,4 +310,6 @@ export function _resetBrowserHubForTesting(): void {
   pending.clear()
   tabOwners.clear()
   tabSetAt.clear()
+  tabReported.clear()
+  gone.clear()
 }

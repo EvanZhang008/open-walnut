@@ -658,6 +658,8 @@ test('turning agents off in the popup disconnects the browser', async () => {
   await p.getByText('Let Walnut agents use this browser').click()
   await expect(p.getByTestId('popup-agents')).not.toBeChecked()
   await expect.poll(async () => (await (await p.request.get(`${base}/api/v1/browser/status`)).json()).browsers.length, { timeout: 10_000 }).toBe(0)
+  // The person turned it off a moment ago: the command says so (hub.ts lastGone), at once.
   const r = await act(p, { action: 'tabs' })
-  expect(r.body.code).toBe('browser_not_connected')
+  expect(r.body.code).toBe('browser_off')
+  expect(r.body.error).toContain('turned agents off')
 })

@@ -52,6 +52,35 @@ describe('browser hub', () => {
     hub.disconnect('extension-aaaaaa')
     await expect(done).rejects.toMatchObject({ code: 'browser_off' })
     expect(hub.connected()).toEqual([])
+    // It left on purpose: the next command says so at once.
+    expect(() => hub.pickController()).toThrow(/turned agents off/)
+  })
+
+  it('a browser the person disconnected: what waits fails, the next command fails at once and says so', async () => {
+    const polled = hub.poll(info(), 5000)
+    const done = hub.send('extension-aaaaaa', 'text', { tab: 3 }, ALLOW)
+    await polled
+    hub.disconnect('extension-aaaaaa', 'disconnected')
+    await expect(done).rejects.toMatchObject({ code: 'browser_disconnected' })
+    expect(hub.lastGone()).toMatchObject({ label: 'Walnut extension (Chrome on Mac)', why: 'disconnected' })
+    let err: unknown
+    try { hub.pickController() } catch (e) { err = e }
+    expect(err).toMatchObject({ code: 'browser_disconnected', status: 409 })
+    expect((err as Error).message).toContain('disconnected this browser from Walnut')
+    // No wait for a poll that will not come.
+    const t = Date.now()
+    await hub.waitConnected(3000)
+    expect(Date.now() - t).toBeLessThan(500)
+    // Connected again: nothing of it is left.
+    void hub.poll(info(), 10)
+    expect(hub.lastGone()).toBeUndefined()
+    expect(hub.pickController().device).toBe('extension-aaaaaa')
+  })
+
+  it('a browser never connected is not named as gone', () => {
+    expect(hub.lastGone()).toBeUndefined()
+    hub.disconnect('extension-never')
+    expect(hub.lastGone()).toBeUndefined()
     expect(() => hub.pickController()).toThrow(/turns it on/)
   })
 
@@ -77,6 +106,25 @@ describe('browser hub', () => {
     await vi.advanceTimersByTimeAsync(61_000)
     void hub.poll(info('extension-aaaaaa', { tabs: [] }), 10)
     expect(hub.tabOwner('extension-aaaaaa', 9)).toBeUndefined()
+  })
+
+  it('a tab a report listed and a later report lacks is gone at once, not after the grace', async () => {
+    // The extension took a tab and let go of it (Walnut's own page): its next report lacks it. An
+    // agent's next step with no tab must not be asked "which tab" between the one left and that one.
+    vi.useFakeTimers()
+    void hub.poll(info('extension-aaaaaa', { tabs: [{ id: 1, owner: 'agent' }, { id: 2, owner: 'agent' }] }), 10)
+    expect(hub.tabsOf('extension-aaaaaa', 'agent').sort()).toEqual([1, 2])
+    await vi.advanceTimersByTimeAsync(1_000)
+    void hub.poll(info('extension-aaaaaa', { tabs: [{ id: 1, owner: 'agent' }] }), 10)
+    expect(hub.tabsOf('extension-aaaaaa', 'agent')).toEqual([1])
+    // A tab known from an open's answer alone still waits out the grace.
+    hub.ownTab('extension-aaaaaa', 3, 'agent')
+    void hub.poll(info('extension-aaaaaa', { tabs: [{ id: 1, owner: 'agent' }] }), 10)
+    expect(hub.tabsOf('extension-aaaaaa', 'agent').sort()).toEqual([1, 3])
+    // Once a report has listed it, the same rule holds for it.
+    void hub.poll(info('extension-aaaaaa', { tabs: [{ id: 1, owner: 'agent' }, { id: 3, owner: 'agent' }] }), 10)
+    void hub.poll(info('extension-aaaaaa', { tabs: [{ id: 1, owner: 'agent' }] }), 10)
+    expect(hub.tabsOf('extension-aaaaaa', 'agent')).toEqual([1])
   })
 
   it('the extension saying a tab is not the agent\'s any more releases it', async () => {

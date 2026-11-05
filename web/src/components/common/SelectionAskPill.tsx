@@ -65,7 +65,7 @@ interface SelectionAskPillProps {
   /**
    * Extra scroll source to track. The window-level capture listener sees every
    * scroll in THIS document, but not scrolls inside an iframe's document —
-   * the HTML preview passes its contentDocument here.
+   * the HTML preview passes the events its page's scroll reports raise here.
    */
   listenTo?: EventTarget | null;
 }

@@ -9,9 +9,8 @@
  * Enter typed right after that ArrowDown, before the menu loaded, is the menu's (`pick`), never
  * the page form's.
  *
- * Where it is drawn: under the field, unless it would cover the button that sends the form (then
- * beside the field, or above it), and always inside this frame's own viewport, so a frame never
- * cuts it (a short frame gets a shorter menu whose list scrolls).
+ * Where it is drawn: under the field, above it only when there is no room under it, and always
+ * inside this frame's own viewport, so a frame never cuts it (content-place.ts).
  */
 import { ask } from './ext'
 import { groupOfField } from './form-detect'
@@ -40,21 +39,6 @@ const px = (n: number) => `${Math.round(n)}px`
 /** The menu's width: its usual 320 px, or this frame's width when that is narrower. */
 const menuWidth = () => Math.max(200, Math.min(MENU_WIDTH, innerWidth - 8))
 
-const SEND_WORDS = /log.?in|sign.?in|sign.?up|log on|continue|next|submit|create|register|join|save|change|update|verify|confirm|pay|place|order|buy|send/i
-
-/** The buttons that send the field's form, which the menu keeps clear of when there is room. */
-function sendButtons(field: HTMLInputElement): DOMRect[] {
-  const root = field.form ?? cs.active?.group?.root ?? cs.active?.wallet?.root
-  if (!root) return []
-  return Array.from(root.querySelectorAll('button, input[type=submit], input[type=image], [role=button]'))
-    .filter((b) => field.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-    .filter((b) => (b instanceof HTMLButtonElement && b.type === 'submit') || (b instanceof HTMLInputElement && b.type !== 'button')
-      || SEND_WORDS.test(`${b instanceof HTMLInputElement ? b.value : b.textContent ?? ''} ${b.getAttribute('aria-label') ?? ''}`))
-    .map((b) => b.getBoundingClientRect())
-    .filter((r) => r.width > 0 && r.height > 0)
-    .slice(0, 6)
-}
-
 function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height = 0): void {
   const r = field.getBoundingClientRect()
   if (where === 'icon') {
@@ -68,7 +52,7 @@ function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height 
     return
   }
   const width = menuWidth()
-  const spot = menuSpot(r, height, width, { w: innerWidth, h: innerHeight }, sendButtons(field))
+  const spot = menuSpot(r, height, width, { w: innerWidth, h: innerHeight })
   hostStyle(h, `z-index: 2147483647 !important; top: ${px(spot.top)} !important; left: ${px(spot.left)} !important;${menu?.hidden ? ' display: none !important;' : ''}`)
   if (menu && menu.host === h) {
     menu.frame.style.width = `${width}px`

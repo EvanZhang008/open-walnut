@@ -17,9 +17,10 @@ ephemeral server, a data home in a temp or task dir, a fake HOME) keeps its own 
 
 | File | Holds |
 | --- | --- |
-| `vault.json` | ciphertext only: the KDF parameters, the wrapped vault key, every item sealed |
+| `vault.json` | ciphertext, except the KDF parameters and the master password hint: the wrapped vault key, every item sealed |
 | `machine.json` (0600) | the Secret Key, and the machine key while "agents may ask while you are away" is on |
 | `backups/vault-<date>.json` | the previous `vault.json`, one per day, newest 14 |
+| `sessions.json` (0600) | the open windows a Walnut restart keeps: token hashes, limits, the boot, an HMAC (Unlocking) |
 
 ## Keys
 
@@ -102,19 +103,58 @@ one reads it as none (above), so the lock screen and Settings ask for a new kit.
 
 The vault being open on the server is not a person's unlock. Every item read or write
 through the API carries a vault session (`x-walnut-vault-session`) that only the master
-password buys (`POST /api/v1/vault/unlock`). Sessions live in memory: a restart locks every
-window. How long a session lasts is the person's choice, "Keep Passwords unlocked" in Settings →
-Passwords (`passwords.unlock_for`, `src/core/vault/unlock-length.ts`): 15 minutes unused (with a
-12-hour cap), 1 hour, 12 hours, 48 hours, until Walnut restarts, or forever. Forever
-is the machine key (the vault reopens by itself after a restart, below); moving to or from it asks
-for the master password. A new vault's setup writes 48 hours into config (unless a choice is
-already there). A config with no choice reads the old 15-minute idle lock, so an install that had
-a vault before this setting keeps the lock it had; the person picks 48 hours in Settings if they
-want it. A config an older Walnut wrote with only `auto_lock_minutes` reads as the
-idle choice with those minutes. The status answers `unlockFor`, `lockAfterIdleMinutes` (null when
-there is no idle clock) and `autoLockMinutes`, a number for older clients (2880 for until restart
-and forever). Lock and Lock all end a session whatever the choice; the one-time code refreshing
-by itself does not count as use. Wrong passwords: five free, then each try waits twice as long as the last
+password buys (`POST /api/v1/vault/unlock`). How long a session lasts is the person's choice,
+"Keep Passwords unlocked" in Settings → Passwords (`passwords.unlock_for`,
+`src/core/vault/unlock-length.ts`): 15 minutes unused (with a 12-hour cap), 1 hour, 12 hours
+(each from the unlock), 48 hours after the last use (renewed by every use, no cap), until Walnut
+restarts, or forever. Forever is the machine key (the vault reopens by itself after a restart,
+below); moving to or from it asks for the master password. A config with no choice reads 48 hours,
+and a new vault's setup writes it down. An install that already had a vault and no choice written
+kept the 15-minute idle lock, so the first start of this version writes `unlock_for: idle` for it
+once (`src/core/vault/unlock-migrate.ts`): nobody's lock gets longer by an upgrade. A config an
+older Walnut wrote with only `auto_lock_minutes` is that person's choice and reads as the idle
+choice with those minutes. A change of the limits (the choice, the idle minutes, the machine key
+turned off) only ever shortens the windows open now (`retimeSessions`, on every config write, an
+edit of config.yaml outside Walnut included): each keeps the shorter idle time and length of the
+two, so a shorter one may lock them at once, and a longer one applies from the next unlock. The status
+answers `unlockFor`, `lockAfterIdleMinutes` (null when no window counts its own idle time; 48
+hours is ended by the server's own idle clock, so one tab left untouched while another is used
+never locks both) and `autoLockMinutes`, a number for older clients (2880 for 48 hours, until
+restart and forever). The one-time code refreshing by itself and a status read marked
+`x-walnut-vault-quiet: 1` (a page checking it is still unlocked) do not count as use.
+
+**A Walnut restart keeps the windows** (`src/core/vault/session-store.ts`), every choice but until
+restart: `sessions.json` (0600) beside `vault.json` holds each open session as the sha256 of its
+token (the token itself is only in the client), its client, device, limits and times, which boot of
+this computer wrote it (the boot time from `os.uptime`, and Linux's boot id), and an HMAC under a
+key derived from the vault key. It is written on every unlock and end, and at most once a minute
+for use. At start every vault route waits for the restore: sessions past their clock go; a file
+from another boot restores nothing (a restart of the Mac locks every window); if live ones remain,
+the vault reopens without the person when it can (the machine key, or this Mac's keychain on the
+person's real Walnut, never on a throwaway server), the HMAC is checked and they come back, else
+all are dropped and the windows show Unlock. A shorter choice made while Walnut was down applies to
+the restored windows, and when it ends every one the vault closes again. Walnut's own keychain
+unlocks (the daily Bitwarden sync, the unlock at start) are not kept: a restart unlocks again.
+Turning agents-while-away off seals the file again under the new vault key at once, so a restart
+right after it still restores. So a stolen `sessions.json` opens nothing (no token
+in it), a session written in by something that cannot open the vault is refused, and a new master
+password (a new vault key) ends every window the file still names except the one that changed
+it. An older Walnut never reads the file: going back a version locks the windows as before, and a
+Lock made there is not seen by it, so a newer Walnut started again on the same boot may bring back
+a window the older one locked while its token is still in that browser.
+
+**Lock.** A window's Lock (`POST /api/v1/vault/lock {everywhere: true}`, the Passwords page's and
+the extension popup's Lock button) ends every window's session and the extension's; the other tabs
+show the lock screen at once (a `storage` event), another browser or the extension at its next
+read or within a minute (a quiet status check while the page is shown). A lock with no body ends
+only the caller's own session: what an older client's Lock meant, and what an auto-lock (a tab's
+idle time, the extension's own timer, its browser start) sends. Lock all also ends every agent
+grant. A Lock answers only after `sessions.json` is written without the ended sessions; when that
+write fails the file is removed, so a restart never brings a locked window back. The web app keeps its token in localStorage (`walnut.vault.session`, never mirrored by
+ui-prefs), shared by every tab and window of that browser, a reload and the Mac app's page recycle;
+a token an older page left in sessionStorage is carried over once. A dead token is dropped only
+while it is still the one stored, so a tab's 401 never drops a newer unlock another tab made. With
+the idle choice, the tabs share one idle clock (`walnut.vault.active`). Wrong passwords: five free, then each try waits twice as long as the last
 (30 s up to an hour). Every check of the master password counts (unlock, export, a new
 password, the Secret Key, a new recovery kit, the machine key switch) and so does a recovery
 code, and only one runs at a time, so a burst of
@@ -132,6 +172,60 @@ When the last window's session runs out by itself, the vault closes as if it had
 (with the machine key off). Known limit: Lock all is a person's call that needs no session, so
 any page on a link the gate accepts can end every window's unlock; it never opens anything.
 
+Known limit: the token itself is on disk in the client, in the browser profile (the web app's
+localStorage, the extension's IndexedDB), as a session cookie would be. A process running as the
+same user on that computer can read it there, and is outside what this protects against: it can
+read the master password from the keychain item too. What keeps a page from reading it is the
+origin: nothing but Walnut's own pages runs on Walnut's origin. A document Walnut serves from a
+file (an agent's HTML report, an SVG in a repo, previewed in Files or opened raw) is sent with a
+CSP `sandbox` that gives it an origin of its own (`src/web/untrusted-doc.ts`), and the preview
+frame has no `allow-same-origin`, so a script in it cannot read this origin's storage.
+
+The console cannot reach into such a page either, so what the Files preview did inside it goes
+through a small script Walnut puts into every previewed HTML document (`src/web/preview-bridge-script.ts`,
+the console's side in `web/src/components/common/preview-frame.ts`): the selection (with Ask here
+and Comment), the page's text, the question and comment marks (located by the console in that
+text, painted and hit-tested by the page), find, link clicks, the plugin link menu on a
+right-click, the scroll position and Esc. Each side takes only the named messages, from the
+other window only, each checked for its fields and sizes; nothing the console sends is run,
+written as markup or navigated to. The console loads into the frame only a file it resolved
+itself, and a plugin acts on a link (a click, or its menu on a right-click) only right after a
+real press on that same link in the page, with the browser reporting the user's activation (a
+browser that reports none counts as no press).
+
+Known limits of the isolated preview: from a remote browser (another device, a tunnel), Chromium
+sends no cookie with the page's subresource requests (images, stylesheets, scripts), so they get
+`401` and the page renders without them; WebKit sends the cookie and is not affected. Chromium
+also sends no `Referer` from the page, so a root-absolute reference (`/tmp/report/x.png`) is not
+redirected onto the file route there (`src/web/file-raw-referer.ts`); relative references work
+in both. A module script, and a `fetch()` or XHR to any Walnut URL (the page's own folder
+included), comes from the page's opaque origin (`Origin: null`), which the origin check refuses, so
+those do not work in a preview: open such a page through a server of its own.
+
+### Master password hint
+
+Setup, a new master password (Settings) and a recovery each take an optional hint (`hint`, at
+most 100 characters, `src/core/vault/hint.ts`). It is kept in plain text in `vault.json` (no
+key opens a locked vault, so a sealed hint could not be shown) and `GET /api/v1/vault/status`
+returns it while locked (`hint`, absent when there is none). Every unlock screen (the Passwords
+page, the extension's popup, its unlock window and the side panel's Passwords tab) shows a
+"Show hint" link under the password field, and the hint at once after a wrong password. The
+person is told it is readable by anyone who opens the unlock screen.
+
+A hint may not give the password away: it is refused (`400 bad_hint`) when it contains the
+password (compared in lower case, NFKC, and again with all spaces removed) or, at 4 characters
+or more, is part of it. The page checks all of this before sending. The server checks again
+fully only when it got the typed password; from a page that sends only the derived password key
+(the usual case) it can tell only a hint equal to the password, by deriving the key from the hint
+as typed, without spaces and in lower case (four derivations at most) and comparing it with the key
+sent. A hint that contains the password or is part of it is caught by the page alone.
+Settings → Passwords → "Master password hint" changes it (`PUT /api/v1/vault/hint`, the
+master password again so it can be checked, under the same brake) or removes it (`hint: ""`, a
+session only). A new master password takes the hint sent with it; one sent without (an older
+client) drops the old hint, which was about the old password. An older Walnut opens such a
+vault as before, keeps the field when it writes the file (it clones what it read) and never shows
+it; a new master password set there leaves the old hint in place.
+
 ### Unlock with this Mac's keychain
 
 On macOS a person may keep the master password in the login keychain (generic password, service
@@ -139,7 +233,9 @@ On macOS a person may keep the master password in the login keychain (generic pa
 (`src/core/vault/keychain-unlock.ts`). There is no HTTP route for it: a request that could open
 the vault with no password typed would open it for anything that can reach the server. Walnut
 uses it only itself: at server start when the choice is until restart or forever and the vault is
-not open yet (`src/core/vault/background.ts`; never on an ephemeral or test server), and in the
+not open yet (`src/core/vault/background.ts`; never on an ephemeral or test server), at server
+start to reopen the vault for the windows a restart kept (`session-store.ts`, only when some are
+live, opening no session of its own), and in the
 daily Bitwarden sync when the vault is locked, ending that session afterwards. It reads the item
 with `security find-generic-password -s walnut-vault-master -a <user> -w` in a child process with
 a timeout (never a sync call on the event loop), and unlocks exactly as a typed password does: the
@@ -228,8 +324,14 @@ machine or a Tailscale address: plain http to another computer would carry every
 readable, so the extension refuses it.
 
 **Unlocking.** The extension is a window like any other: the master password buys it a vault
-session, kept in `storage.session` (memory only, gone when the browser quits, closed to
-content scripts). It derives the password key with WebCrypto, after checking the KDF the
+session, kept in its IndexedDB beside the device token (closed to content scripts; storage.session
+holds only a mark that changes with it, which its pages follow), so a service worker restart and a
+browser restart keep it. Its own auto-lock (Settings in the popup) defaults to "Walnut's setting":
+no clock of its own, Walnut's length ends it, and the popup says that length in words. A time picked
+there (or When the browser closes, Never while the browser is open) also locks at every browser
+start, as the memory-only session of an older extension did; an older extension's saved default of
+15 minutes reads as Walnut's setting, since it was written with every setting change. A session an
+older extension kept in storage.session is carried over once. It derives the password key with WebCrypto, after checking the KDF the
 server names against the same floor the server holds (PBKDF2-SHA256, 600,000 iterations or
 more, a 16-byte salt), and sends that, never the password. The server takes a derived key, like
 a typed password, only over a private link: https, this machine (a loopback connection with no
@@ -245,8 +347,8 @@ the vault as an auto-lock would. The reads the extension makes by itself carry
 `x-walnut-vault-quiet: 1`, so browsing, and opening the popup, never keep the vault unlocked;
 a fill or a copy does. Disconnect locks its session and removes its device.
 
-**What lives where.** The background holds the device token (its IndexedDB, which content
-scripts cannot open), the vault session and, for 5 s while unlocked, the item summaries (so a
+**What lives where.** The background holds the device token and the vault session (its
+IndexedDB, which content scripts cannot open) and, for 5 s while unlocked, the item summaries (so a
 Lock elsewhere shows within seconds); a content script holds neither. Each kind of message is accepted only from the page that may
 send it (the popup, the menu, the save bar, a content script). A fill fetches the item and
 sends its username and password only to frames on the top page's origin that reported a login
@@ -469,7 +571,7 @@ withdraws the ask. Exit codes before the command runs: 1 denied or refused, 2 no
 
 ## Sync from Bitwarden
 
-Code: `src/core/vault/bitwarden-sync.ts` (the merge), `bitwarden-run.ts` (running `bw`, the daily
+Code: `src/core/vault/sources/bitwarden/sync.ts` (the merge), `run.ts` (running `bw`, the daily
 timer), `src/web/routes/vault-sync-v1.ts`. One way: Bitwarden is the source, Walnut follows.
 
 Input is an unencrypted Bitwarden JSON export, held in memory only: Walnut never writes it to disk

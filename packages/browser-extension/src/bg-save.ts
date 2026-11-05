@@ -9,7 +9,7 @@ import { ApiError, api, connection, vaultSession } from './walnut-api'
 import { displayHost } from '../../../src/core/vault/url-match'
 import { touch } from './bg-autolock'
 import { COVERED, openUnlock, stillShown } from './bg-fill'
-import { CODE_PAGE_MS, PENDING_MS, forget, isWalnutPage, matchesFor, nonce, originOf, siteOf, state, stores, summaries, type Choice, type Pending, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, forget, isWalnutPage, matchesFor, nonce, originOf, pendingAlive, siteOf, state, stores, summaries, type Choice, type Pending, type Reply } from './bg-vault'
 import { defaultLoginName, neverCovers, neverEntry, pickUpdate, type UpdateCandidate } from './login-pick'
 
 /** A pending login shows on another site's page only right after it was sent (a sign-in that lands elsewhere). */
@@ -28,7 +28,7 @@ export async function neverSites(): Promise<string[]> {
 interface Sent { username?: string; password: string; current?: string; siteName?: string; title?: string }
 
 /** A login sent on a page: offer to save it, or to update a saved one whose password differs. */
-async function seenLogin(tabId: number, url: string, sent: Sent, keep?: { at: number; nonce: string; title?: string }): Promise<Pending | null> {
+async function seenLogin(tabId: number, url: string, sent: Sent, keep?: { at: number; nonce: string; title?: string; shownAt?: number }): Promise<Pending | null> {
   const { seenUsername, pendingSave, lastLogin } = stores
   if (!(await connection())) return null
   if (neverCovers(await neverSites(), url)) return null
@@ -38,7 +38,13 @@ async function seenLogin(tabId: number, url: string, sent: Sent, keep?: { at: nu
   if (step && Date.now() - step.at > PENDING_MS) await seenUsername.sweep((x) => Date.now() - x.at > PENDING_MS)
   if (!username && step && Date.now() - step.at < PENDING_MS && siteOf(step.url) === siteOf(url)) username = step.username
   const title = keep?.title ?? defaultLoginName({ url, metaName: sent.siteName, title: sent.title })
-  let p: Pending = { url, ...(username ? { username } : {}), password, kind: 'save', title, at: keep?.at ?? Date.now(), checked: false, nonce: keep?.nonce ?? nonce() }
+  const before = keep ? undefined : await pendingSave.get(tabId)
+  // The same login sent again (a click and the form's submit, a page that posts twice): the bar
+  // already offering it stays as it is, nonce and all.
+  if (before && pendingAlive(before) && before.password === password && (before.username ?? '') === (username ?? '') && siteOf(before.url) === siteOf(url)) return before
+  // Another login replaces one whose bar is on screen: that bar still acts on the login it shows.
+  if (before?.shownAt && pendingAlive(before)) await stores.pendingPrev.set(tabId, before)
+  let p: Pending = { url, ...(username ? { username } : {}), password, kind: 'save', title, at: keep?.at ?? Date.now(), checked: false, nonce: keep?.nonce ?? nonce(), ...(keep?.shownAt ? { shownAt: keep.shownAt } : {}) }
   if (current) p.current = current
   if (await vaultSession()) {
     try {
@@ -86,12 +92,29 @@ export async function showSaveBar(tabId: number): Promise<void> {
   await ext.tabs.sendMessage(tabId, { type: 'show-savebar', nonce: p.nonce }, { frameId: 0 }).catch(() => undefined)
 }
 
-async function pendingOf(tabId: number | undefined, msg: Record<string, unknown>): Promise<Pending | undefined> {
-  const { pendingSave } = stores
-  const p = tabId !== undefined ? await pendingSave.get(tabId) : undefined
-  if (p && Date.now() - p.at > PENDING_MS) { await pendingSave.sweep((x) => Date.now() - x.at > PENDING_MS); return undefined }
-  return p && typeof msg.nonce === 'string' && msg.nonce === p.nonce ? p : undefined
+/** The login a bar's message is about, by the bar's nonce: the tab's latest, or the one a newer login replaced while its bar showed. */
+async function pendingOf(tabId: number | undefined, msg: Record<string, unknown>): Promise<{ p: Pending; prev: boolean } | undefined> {
+  if (tabId === undefined || typeof msg.nonce !== 'string' || !msg.nonce) return undefined
+  const { pendingSave, pendingPrev } = stores
+  for (const [store, prev] of [[pendingSave, false], [pendingPrev, true]] as const) {
+    const p = await store.get(tabId)
+    if (!p || p.nonce !== msg.nonce) continue
+    if (!pendingAlive(p)) { await store.sweep((x) => !pendingAlive(x)); return undefined }
+    return { p, prev }
+  }
+  return undefined
 }
+
+/** Said in the bar when its login no longer waits (too long ago, the tab moved on): never a silent close. */
+const GONE = { ok: false, code: 'gone', error: 'This login is no longer waiting. Save it from the Walnut popup.' }
+/** A bar told its login is gone still grows to show that, this long. */
+const GONE_SIZE_MS = 60_000
+const goneBars = new Map<number, { nonce: string; until: number }>()
+function gone(tabId: number, n: unknown): typeof GONE {
+  if (typeof n === 'string' && n) goneBars.set(tabId, { nonce: n, until: Date.now() + GONE_SIZE_MS })
+  return GONE
+}
+const goneBar = (tabId: number, n: unknown) => { const g = goneBars.get(tabId); return !!g && g.nonce === n && Date.now() < g.until }
 
 /** The top page of a tab with a login waiting gets the save bar's nonce, to show it. */
 export async function barNonceFor(tabId: number, page: string): Promise<string | undefined> {
@@ -101,8 +124,11 @@ export async function barNonceFor(tabId: number, page: string): Promise<string |
 
 /** A bar that just saved or updated still shows its confirmation and resizes for it, this long. */
 const DONE_MS = 8_000
-const doneBars = new Map<number, { nonce: string; until: number }>()
-const doneBar = (tabId: number, n: unknown) => { const d = doneBars.get(tabId); return !!d && d.nonce === n && Date.now() < d.until }
+/** After "Never for this site" the bar says so with an Undo, this long. */
+const NEVER_UNDO_MS = 10_000
+const doneBars = new Map<number, { nonce: string; until: number; never?: string }>()
+const doneOf = (tabId: number, n: unknown) => { const d = doneBars.get(tabId); return d && d.nonce === n && Date.now() < d.until ? d : undefined }
+const doneBar = (tabId: number, n: unknown) => !!doneOf(tabId, n)
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : undefined)
 
@@ -137,12 +163,17 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       return { ok: true }
     }
     case 'savebar-data': {
-      let p = await pendingOf(tabId, msg)
-      if (tabId === undefined || !p) return { ok: false }
+      const found = await pendingOf(tabId, msg)
+      if (tabId === undefined) return GONE
+      if (!found) return gone(tabId, msg.nonce)
+      let { p } = found
+      const store = found.prev ? stores.pendingPrev : pendingSave
+      // On screen now: it waits for the person's answer as long as a bar may stay.
+      if (!p.shownAt) { p = { ...p, shownAt: Date.now() }; await store.set(tabId, p) }
       const st = await state()
-      if (st.unlocked && !p.checked) {
+      if (st.unlocked && !p.checked && !found.prev) {
         // Seen while locked: now that it is open, is it new, a changed password, or one already saved?
-        const again = await seenLogin(tabId, p.url, { ...(p.username ? { username: p.username } : {}), password: p.password, ...(p.current ? { current: p.current } : {}) }, { at: p.at, nonce: p.nonce, ...(p.title ? { title: p.title } : {}) })
+        const again = await seenLogin(tabId, p.url, { ...(p.username ? { username: p.username } : {}), password: p.password, ...(p.current ? { current: p.current } : {}) }, { at: p.at, nonce: p.nonce, ...(p.title ? { title: p.title } : {}), ...(p.shownAt ? { shownAt: p.shownAt } : {}) })
         if (!again) { await pendingSave.delete(tabId); return { ok: false } }
         p = again
       }
@@ -154,10 +185,25 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       if (tabId === undefined) return { ok: false }
       const action = String(msg.action)
       const hide = () => ext.tabs.sendMessage(tabId, { type: 'hide-savebar' }, { frameId: 0 }).catch(() => undefined)
-      const p = await pendingOf(tabId, msg)
+      const found = await pendingOf(tabId, msg)
+      const p = found?.p
+      const store = found?.prev ? stores.pendingPrev : pendingSave
       if (action === 'close') { await hide(); return { ok: true } }
-      if (!p) { await hide(); return { ok: false } }
+      if (action === 'undo-never') {
+        // The pending login is gone by now: only the entry this bar's Never just added comes off.
+        const d = doneOf(tabId, msg.nonce)
+        if (!d?.never || msg.entry !== d.never) return { ok: false, error: 'Nothing to undo.' }
+        if (!(await stillShown(tabId, 0, 'bar'))) return COVERED
+        await ext.storage.local.set({ neverSave: (await neverSites()).filter((e) => e !== d.never) })
+        doneBars.delete(tabId)
+        return { ok: true }
+      }
       if (action === 'unlock') { await openUnlock(); return { ok: true } }
+      if (!p) {
+        // "Not now" on a login already gone just closes; the rest say why nothing happened.
+        if (action === 'later') { await hide(); return { ok: true } }
+        return gone(tabId, msg.nonce)
+      }
       // "Not now" needs no check: it only drops the login.
       if (action !== 'later' && !(await stillShown(tabId, 0, 'bar'))) return COVERED
       void touch()
@@ -168,7 +214,14 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
         const list = await neverSites()
         // This host only: a sibling part of the site keeps its offers.
         const entry = neverEntry(p.url)
-        if (entry) await ext.storage.local.set({ neverSave: [...new Set([...list, entry])] })
+        if (!entry) { await store.delete(tabId); await hide(); return { ok: true } }
+        // Only an entry this Never added may be undone (one the list already had stays).
+        const added = !list.includes(entry)
+        if (added) await ext.storage.local.set({ neverSave: [...list, entry] })
+        await store.delete(tabId)
+        // The bar stays to say so, with an Undo, and closes itself.
+        doneBars.set(tabId, { nonce: p.nonce, until: Date.now() + NEVER_UNDO_MS, ...(added ? { never: entry } : {}) })
+        return { ok: true, never: entry }
       } else if (action === 'save') {
         await api.create({ type: 'login', title: String(msg.title || p.title || displayHost(p.url)).slice(0, 200), ...(username ? { username } : {}), password, urls: [originOf(p.url)] })
         forget()
@@ -181,14 +234,14 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
         await api.update(item.id, { ...rest, ...(username ? { username } : {}), password }, updatedAt)
         forget()
       }
-      await pendingSave.delete(tabId)
+      await store.delete(tabId)
       // A save or an update shows its confirmation, then closes itself; the rest close now.
       if (action !== 'save' && action !== 'update') await hide()
       else doneBars.set(tabId, { nonce: p.nonce, until: Date.now() + DONE_MS })
       return { ok: true }
     }
     case 'savebar-size': {
-      if (tabId !== undefined && (doneBar(tabId, msg.nonce) || await pendingOf(tabId, msg))) await ext.tabs.sendMessage(tabId, { type: 'savebar-size', height: msg.height }, { frameId: 0 }).catch(() => undefined)
+      if (tabId !== undefined && (doneBar(tabId, msg.nonce) || goneBar(tabId, msg.nonce) || await pendingOf(tabId, msg))) await ext.tabs.sendMessage(tabId, { type: 'savebar-size', height: msg.height }, { frameId: 0 }).catch(() => undefined)
       return { ok: true }
     }
   }

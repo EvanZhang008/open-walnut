@@ -1212,11 +1212,13 @@ async function runPassViaGateway(socketPath: string, sid: string, argv: string[]
 
 /** `walnut browser` on a host: the shared loop, its ops through this daemon's gateway to the Mac. */
 async function runBrowserViaGateway(socketPath: string, sid: string, argv: string[]): Promise<number> {
-  const { BROWSER_EXIT, BROWSER_USAGE, parseBrowserArgv, runBrowser } = await import('../core/browser-control/browser-cli.js')
+  const { browserParseOutcome, parseBrowserArgv, runBrowser } = await import('../core/browser-control/browser-cli.js')
   const parsed = parseBrowserArgv(argv)
   if (!parsed.ok) {
-    process.stderr.write(`walnut browser: ${parsed.error}\n${BROWSER_USAGE}\n`)
-    return BROWSER_EXIT.error
+    const o = browserParseOutcome(parsed)
+    if (o.stdout) process.stdout.write(o.stdout)
+    if (o.stderr) process.stderr.write(o.stderr)
+    return o.code
   }
   return runBrowser(parsed, {
     call: gatewayOpCall(socketPath, sid),

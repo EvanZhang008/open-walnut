@@ -10,7 +10,7 @@
  * An approval covers this task for the person's grant length (`--once`: this use only; `--task`
  * is the default now and kept for older scripts). `get` reveals the plaintext (logged so);
  * `run` never shows it. `sync-bitwarden` asks Walnut to run the Bitwarden sync now (Walnut runs
- * `bw` itself, bitwarden-run.ts); it takes no export: only a person's unlocked window may hand
+ * `bw` itself, sources/bitwarden/run.ts); it takes no export: only a person's unlocked window may hand
  * Walnut export text.
  *
  * `run` gives the command its secrets as environment variables and replaces every one of them

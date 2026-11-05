@@ -8,6 +8,7 @@ import { ask as askBackground } from './ext'
 import { avatar, h, icon } from './dom'
 import { frameGuard } from './frame-guard'
 import { currentNonce, onNonce, onUnlockChange } from './nonce'
+import { distinctName } from './savebar-name'
 
 /** The nonce the content script hands this frame (nonce.ts): every message carries it. */
 const ask = <T = Record<string, unknown>>(msg: { type: string; [k: string]: unknown }) => askBackground<T>({ ...msg, nonce: currentNonce() })
@@ -24,19 +25,36 @@ function size(): void {
   void ask({ type: 'savebar-size', height: Math.ceil(document.body.getBoundingClientRect().height + parseFloat(b.marginTop) + parseFloat(b.marginBottom)) + 2 })
 }
 
-async function act(action: string, extra: Record<string, unknown> = {}): Promise<void> {
-  const r = await ask({ type: 'savebar-action', action, ...extra })
+/** The bar becomes one short line (what was done), then closes itself. */
+function done(text: string, ms: number, ...extra: HTMLElement[]): void {
+  root.replaceChildren(h('div', { class: 'bar-done', role: 'status' },
+    h('span', { class: 'logo' }, '✓'), h('span', { class: 'bar-done-text' }, text), ...extra))
+  size()
+  setTimeout(() => void ask({ type: 'savebar-action', action: 'close' }), ms)
+}
+
+async function act(action: string, extra: Record<string, unknown> = {}, label = ''): Promise<void> {
+  const r = await ask<{ never?: string }>({ type: 'savebar-action', action, ...extra })
   if (!r.ok) {
     root.querySelector('.err')?.remove()
     root.querySelector('.bar-in')?.append(h('p', { class: 'err', role: 'alert' }, r.error ?? 'That did not work.'))
     size()
     return
   }
-  if (action === 'save' || action === 'update') {
-    root.replaceChildren(h('div', { class: 'bar-in' }, h('div', { class: 'bar-head' },
-      h('span', { class: 'logo' }, '✓'), h('span', { class: 'bar-title ok' }, action === 'save' ? 'Saved to Walnut' : 'Password updated in Walnut'))))
-    size()
-    setTimeout(() => void ask({ type: 'savebar-action', action: 'close' }), 1400)
+  if (action === 'save') done(label ? `Saved to Walnut: ${label}` : 'Saved to Walnut', 2200)
+  else if (action === 'update') done(label ? `Password updated in Walnut: ${label}` : 'Password updated in Walnut', 2200)
+  else if (action === 'never' && typeof r.never === 'string' && r.never) {
+    // Said, with a way back: the entry also stays in Settings, where it can be removed later.
+    const entry = r.never
+    const undo = h('button', { class: 'btn btn-quiet bar-undo', type: 'button', 'data-testid': 'savebar-undo' }, 'Undo') as HTMLButtonElement
+    undo.onclick = guard.wrap(() => {
+      undo.disabled = true
+      void ask({ type: 'savebar-action', action: 'undo-never', entry }).then((u) => {
+        if (u.ok) done(`Walnut will offer to save logins on ${entry} again.`, 1800)
+        else undo.disabled = false
+      })
+    })
+    done(`Walnut won\u2019t offer to save logins on ${entry}. Settings lists it.`, 6000, undo)
   }
 }
 
@@ -55,7 +73,19 @@ function passwordField(value: string): { wrap: HTMLElement; input: HTMLInputElem
 
 async function render(): Promise<void> {
   const d = await ask<Data>({ type: 'savebar-data' })
-  if (!d.ok) { void ask({ type: 'savebar-action', action: 'close' }); return }
+  if (!d.ok) {
+    // A bar reloaded after its login was dropped says so, never vanishes silently; any other refusal
+    // (nothing left to save) just closes.
+    const r = d as { code?: string; error?: string }
+    if (r.code === 'gone' && r.error) {
+      root.replaceChildren(h('div', { class: 'bar-in' }, h('p', { class: 'err', role: 'alert' }, r.error)))
+      size()
+      setTimeout(() => void ask({ type: 'savebar-action', action: 'close' }), 8_000)
+      return
+    }
+    void ask({ type: 'savebar-action', action: 'close' })
+    return
+  }
   const sub = d.username ? `${d.username} · ${d.site}` : d.site
   const head = (title: string | HTMLElement) => h('div', { class: 'bar-head' }, avatar(d.site),
     h('div', { class: 'row-text' }, typeof title === 'string' ? h('span', { class: 'bar-title' }, title) : title, h('span', { class: 'row-sub' }, sub)))
@@ -72,7 +102,10 @@ async function render(): Promise<void> {
   const choices = d.choices ?? []
   const user = h('input', { class: 'input', id: 'username', value: d.username, 'aria-label': 'Username', autocomplete: 'off', spellcheck: 'false' })
   const pw = passwordField(d.password ?? '')
-  const title = h('input', { class: 'input', id: 'title', value: d.title, 'aria-label': 'Name' })
+  // A name that tells this login apart from the site's others ("Lab Shop (newuser@lab.test)").
+  const named = (user: string) => distinctName(d.title, user, choices.map((c) => c.title))
+  let suggested = named(d.username)
+  const title = h('input', { class: 'input', id: 'title', value: suggested, 'aria-label': 'Name' })
   // Which login this goes to: a saved one of this site (update), or a new one (save).
   const target = h('select', { class: 'select', id: 'target', 'aria-label': 'Save to', 'data-testid': 'savebar-target' },
     ...choices.map((c) => h('option', { value: c.id }, c.username ? `${c.title} · ${c.username}` : c.title)),
@@ -96,11 +129,13 @@ async function render(): Promise<void> {
   }
   const hint = h('p', { class: 'muted', style: 'margin:6px 0 0;font-size:12px' }, 'The old password stays in its history.')
   target.onchange = sync
+  // A corrected username changes the suggested name too, until the person edits the name themself.
+  user.addEventListener('input', () => { if (title.value === suggested) { suggested = named(user.value.trim()); title.value = suggested } })
   go.onclick = guard.wrap(() => {
     const fields = { username: user.value.trim(), password: pw.input.value }
     if (!fields.password) { pw.input.focus(); return }
-    if (target.value === NEW) void act('save', { ...fields, title: title.value.trim() })
-    else void act('update', { ...fields, itemId: target.value })
+    if (target.value === NEW) void act('save', { ...fields, title: title.value.trim() }, title.value.trim() || d.title)
+    else void act('update', { ...fields, itemId: target.value }, choices.find((c) => c.id === target.value)?.title ?? '')
   })
   body = h('div', { class: 'bar-in' },
     head(heading),

@@ -24,8 +24,8 @@ agents use this browser").
   (`person_is_here`), never Walnut's or the browser's own pages. A taken tab wears the same
   frame and Stop as a handed one, keeps the normal site rules, and `close` gives it back
   instead of closing it.
-- **Frames too.** A snapshot, the page text, `find` and `form_values` also read the frames in the
-  page, of the same origin or another, each under its own heading; a ref inside a frame carries
+- **Frames too.** A snapshot, the page text, `find`, `form_values` and `wait` for text also read
+  the frames in the page, of the same origin or another, each under its own heading; a ref inside a frame carries
   the frame (`f3:e12`) and an action on it goes there. Each frame's own site is checked: a frame
   on a site agents may not use is left out and named.
 - **Tabs belong to the task that opened them.** Another task's commands are refused there, and
@@ -35,7 +35,7 @@ agents use this browser").
 - **Any site, or only sites you allowed.** Turning agents on in the extension is the permission:
   by default agents may open any web page (Settings, Browser extension, "Allow any site"). Pick
   "Ask me first" there and the first time an agent opens a site Walnut asks you (a notification
-  on your Mac and phone, like any Walnut approval). Approve, and agents may use that site until
+  in Walnut, and on your iPhone when it signs approvals, like any Walnut approval). Approve, and agents may use that site until
   you remove it; deny, and that task is refused there and not asked again for an hour. A page
   that moves to another site (a link, a redirect) asks the same way, and so does taking one of
   your tabs on a new site. A tab you hand over from the
@@ -46,11 +46,15 @@ agents use this browser").
   details, on the submit of a form holding a message (a textarea or an editable box with text), or
   Enter in a box holding a message (also Control+Enter or Meta+Enter, and a chat box with no form).
   Enter or Space on a focused button or link counts as clicking it, and typed text that submits or
-  holds a newline counts as Enter. Walnut asks you as for a site (a notification on your Mac and
-  phone, open 10 minutes); the step runs once you approve, and only that step on that page. An
-  agent cannot answer for you: approving needs Face ID on your iPhone, Touch ID in the Mac app, or
-  Passwords unlocked in the window you approve from (a plain Approve from this machine is refused,
-  `proof_needed`). Opening, reading, typing, searching, filtering, Next, signing in and Add to cart
+  holds a newline counts as Enter. Walnut asks you as for a site (open 10 minutes); the card says
+  who asks (the task's name, else "a Walnut agent"), the button, the site, for a send the message
+  it sends and for an order the total the page shows, and the step runs once you approve, only
+  that step on that page with that message or total. An agent cannot answer for you: approving
+  needs Face ID on your iPhone or Touch ID in the Mac app when you have one that signs approvals,
+  or Passwords unlocked in the window you approve from (a plain Approve from this machine is
+  refused, `proof_needed`). With Passwords locked there, the card offers **Unlock to approve**:
+  your master password in place, then Approve (also on a Needs you row and in the side panel).
+  The card and the words an agent reads name only the devices you have. Opening, reading, typing, searching, filtering, Next, signing in and Add to cart
   never ask (Add to cart: nothing leaves your hands until the order is placed, and that step asks).
   The rules are in `packages/browser-extension/src/page-agent-outward.ts`.
   **What this does not cover:** the ask judges only an agent's own click, key or typed text. It
@@ -175,7 +179,11 @@ walnut browser close                          # closes a tab it opened, gives ba
 person could act on with its ref, role, name and state (`[e12] button "Place order"`,
 `[e7] textbox "Search" value="rye"`), then the page's visible text, then each frame's own
 elements and text (`[f3:e2] button "Pay"`); a ref holds while the
-element is on the page, so snapshot again after the page changes. A click on an element that
+element is on the page, so snapshot again after the page changes. Refs follow the page's own
+order, not the order actions read it: snapshot, `form_values`, `find` and `fill_form` name a
+field the same way, and the same page loaded again gets the same refs. `open` and `navigate`
+take an address as you would type it (`example.com` opens `https://example.com`, `localhost:3000`
+`http://localhost:3000`); a word that is no address is refused with `not_a_web_page`. A click on an element that
 something else covers (a cookie banner, a dialog) is refused with `covered`, naming what is on
 top, rather than clicking through it.
 
@@ -189,8 +197,12 @@ A site waiting for your approval answers `needs_ok` (HTTP 202): call the same ac
 answers `needs_ok` with `code: "outward_needs_ok"`, `request`, `what` and `waitsMinutes`: call
 the same action with the same arguments and `request`; approved, it runs (once), denied answers
 `denied`, unanswered `outward_expired`. The shell command waits by itself, up to 10 minutes, and
-says what it waits for. Exit codes: 0 done, 1 refused (`site_denied`, `not_your_tab`, `test_run`,
-`which_tab`, `person_is_here`, `trusted_off`, `which_login`, `denied`, `agents_tab_only`), 2 no
+says what it waits for. After you disconnect the extension (its popup, Settings, Disconnect this
+browser), `walnut browser status` says so at once and every command fails at once with
+`browser_disconnected` ("the person disconnected this browser from Walnut"); turning agents off
+answers `browser_off`. `walnut browser --help` prints the usage. Exit codes: 0 done, 1 refused or a
+choice to make (`site_denied`, `not_your_tab`, `test_run`, `which_tab`, `person_is_here`,
+`trusted_off`, `which_login`, `denied`, `agents_tab_only`; a choice lists its options), 2 no
 answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minutes), 3 any other
 error. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
 under `.jpg`, and it says so.

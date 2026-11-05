@@ -7,9 +7,10 @@
  * the Secret Key from machine.json, and a session of the person's "Keep Passwords unlocked"
  * length. The password is never logged, returned or written anywhere.
  *
- * Used by POST /vault/unlock-from-keychain (a person's window), at server start when the choice
- * is "until restart" or "forever" (startup), and by the daily Bitwarden sync when the vault is
- * locked. macOS and the primary only; elsewhere every call answers `unavailable`.
+ * Used at server start when the choice is "until restart" or "forever" (background.ts), to reopen
+ * the vault for the windows a restart kept (session-store.ts, reopenFromKeychain: no session of
+ * its own), and by the daily Bitwarden sync when the vault is locked. macOS and the primary only;
+ * elsewhere every call answers `unavailable`.
  */
 import os from 'node:os'
 import { runVaultHelper } from './child-run.js'
@@ -24,6 +25,11 @@ let platformOverride: string | null = null
 export function setKeychainPlatformForTest(p: string | null): void {
   platformOverride = p
   presentCache = null
+}
+
+/** Tests forced a platform (so a throwaway server may read the stubbed keychain). */
+export function keychainForcedForTest(): boolean {
+  return platformOverride !== null
 }
 
 export function keychainAvailable(): boolean {
@@ -68,6 +74,28 @@ export type KeychainUnlock =
  * window, or "this Mac" for a start-up or sync unlock nobody holds a token for).
  */
 export async function unlockFromKeychain(opts: { client: string; device?: string }): Promise<KeychainUnlock> {
+  const r = await keychainOpen(async (status) => {
+    const { getConfig } = await import('../config-manager.js')
+    const { unlockChoice } = await import('./unlock-length.js')
+    const choice = unlockChoice((await getConfig()).passwords, status.agentsWhileAway)
+    const s = await import('./sessions.js')
+    // Walnut's own unlock (a sync, the start): a restart unlocks again, so none is kept for one.
+    const session = s.createSession(opts.client, { ...choice.limits, survivesRestart: false }, opts.device)
+    return { token: session.token, expiresAt: session.expiresAt }
+  })
+  return r.ok ? { ok: true, session: r.value } : r
+}
+
+/**
+ * Reopen the vault with the keychain's master password, then run `then` while the check still
+ * holds the brake's slot, so no close (closeIfNobody waits on a running check) falls between the
+ * open and what `then` puts in place. No session of its own.
+ */
+export async function reopenFromKeychain<T>(then: () => Promise<T>): Promise<{ ok: true; value: T } | Extract<KeychainUnlock, { ok: false }>> {
+  return keychainOpen(() => then())
+}
+
+async function keychainOpen<T>(then: (status: { agentsWhileAway: boolean }) => Promise<T>): Promise<{ ok: true; value: T } | Extract<KeychainUnlock, { ok: false }>> {
   if (!keychainAvailable()) return { ok: false, code: 'unavailable', message: 'Unlocking from the keychain works on a Mac only.' }
   const st = await import('./store.js')
   const status = await st.vaultStatus()
@@ -90,13 +118,10 @@ export async function unlockFromKeychain(opts: { client: string; device?: string
       }
       throw err
     }
-    const { getConfig } = await import('../config-manager.js')
-    const { unlockChoice } = await import('./unlock-length.js')
-    const choice = unlockChoice((await getConfig()).passwords, status.agentsWhileAway)
     // Inside the attempt, as a typed unlock: no close can run between the open and the session.
-    const session = s.createSession(opts.client, choice.limits, opts.device)
+    const value = await then(status)
     outcome = 'ok'
-    return { ok: true, session: { token: session.token, expiresAt: session.expiresAt } }
+    return { ok: true, value }
   } finally {
     s.endAttempt(outcome)
   }

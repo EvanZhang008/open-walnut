@@ -5,7 +5,7 @@
  */
 import * as pa from './page-agent'
 import * as forms from './page-agent-forms'
-import { clickFacts, clickTarget, enterFacts, judgeOutward, outwardHold, pressFacts } from './page-agent-outward'
+import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTotal, outwardHold, pressFacts } from './page-agent-outward'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -98,7 +98,10 @@ function held(args: Record<string, unknown>, how: How, el: Element | null): Reco
   if (!o) return null
   const shown = 'click' in how || el.matches('button, a[href], [role=button], [role=link]') ? clickTarget(el) : el
   const verb = 'click' in how ? 'click' : `press ${'key' in how ? how.key : 'Enter'} in`
-  const hold = outwardHold(o, `${verb} ${pa.roleOf(shown)} "${pa.clip(pa.nameOf(shown), 60)}"`)
+  // For the person: the message a send carries, the total an order comes to (when the page shows it).
+  const message = o.kind === 'send' ? messageOf('click' in how ? clickTarget(el) : el, 'enter' in how ? how.typing : undefined) : undefined
+  const total = o.kind === 'buy' ? orderTotal(document.body?.innerText ?? '') : undefined
+  const hold = outwardHold(o, `${verb} ${pa.roleOf(shown)} "${pa.clip(pa.nameOf(shown), 60)}"`, { message, total })
   return args.outward_ok === hold.sig ? null : { hold }
 }
 
@@ -131,6 +134,7 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'press': return held(args, { key: String(args.key ?? '') }, document.activeElement) ?? pa.press(args)
     case 'scroll': return pa.scroll(args)
     case 'wait': return pa.wait(args)
+    case 'has_text': return pa.hasText(args)
     case 'find': return forms.find(args)
     case 'form_values': return forms.formValues(args)
     case 'fill_form': return forms.fillForm(args)

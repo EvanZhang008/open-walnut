@@ -71,6 +71,18 @@ describe('only while connected', () => {
   })
 })
 
+describe('drawn in the view\'s own layout', () => {
+  it('Tasks: its save row on top, then the sections; an empty Focus says so as the view does', async () => {
+    await keepSnap('tasks', { sections: [{ title: 'Focus', rows: [] }, { title: 'Needs you', rows: [{ title: 'Pick a design', line: 'Decide: A or B?', state: 'needs' }] }] }, { counts: [0, 1] }, 1)
+    const t = drawSnap('tasks', (local.panelSnaps as any).tasks)
+    expect(t.firstElementChild?.className).toBe('panel-snap-save')
+    expect(t.querySelector('.panel-snap-save')?.textContent).toBe('Save this page as a task')
+    expect(t.querySelector('.panel-snap-empty')?.textContent).toBe('No Focus tasks.')
+    expect(t.querySelectorAll('section')).toHaveLength(2)
+    expect(t.querySelector('.panel-snap-task-line')?.textContent).toBe('Decide: A or B?')
+  })
+})
+
 describe('drawn as text', () => {
   it('markup in the words stays words, and a state that is not a word is dropped from the class', async () => {
     await keepSnap('ask', { title: '<img src=x onerror=alert(1)>', host: 'h', messages: [{ role: 'user', text: '<b>hi</b>' }] }, { key: 'web:x' }, 1)

@@ -1,4 +1,10 @@
+/* The side panel wears the extension's brand colour (packages/browser-extension/src/ui.css), not
+   the web app's blue: the person's bubble, Send and the Tasks reply button. */
 .ext-panel {
+  --accent: #8a5a2b;
+  --accent-hover: #74481f;
+  --accent-subtle: rgba(138, 90, 43, 0.1);
+  --accent-text: #74481f;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -94,6 +100,18 @@
 
 /* ── the Tasks tab (PopoutExtTasks) ── */
 .ext-tasks-save { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+/* A save that cannot go (the front tab is no web page): plainly off, with the reason beside it. */
+.ext-tasks-save .btn:disabled { opacity: 0.45; cursor: not-allowed; background: var(--bg-secondary); }
+.ext-tasks-save-why { flex-basis: 100%; }
+/* The row's head with its Add to Focus, which shows on hover or keyboard focus. */
+.ext-task-headrow { display: flex; align-items: center; gap: 4px; }
+.ext-task-headrow > .ext-task-head { flex: 1; min-width: 0; }
+.ext-task-focus.is-row { flex: none; margin-right: 6px; opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
+.ext-task-headrow:hover .ext-task-focus.is-row, .ext-task-focus.is-row:focus-visible, .ext-task.is-open .ext-task-focus.is-row { opacity: 1; pointer-events: auto; }
+.ext-task.is-open .ext-task-focus.is-row { display: none; }
+.ext-task-infocus { flex: none; margin-right: 10px; font-size: 11px; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+.ext-task-replied { font-size: 11.5px; color: var(--fg-secondary, var(--fg)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-tasks-section .approval-rows { margin: 0 6px 4px; }
 .ext-tasks-note { font-size: 12px; color: var(--fg-muted); }
 .ext-tasks-lists { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 12px; }
 .ext-tasks-section { padding: 6px 0; }
@@ -131,3 +149,8 @@
 .ext-panel-attached { margin: 8px 0 0; padding: 6px 9px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); color: inherit; font-size: 12px; line-height: 1.45; text-align: left; }
 .ext-panel-attached figcaption { font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 2px; }
 .ext-panel-attached blockquote { margin: 0; padding: 0 0 0 8px; border-left: 2px solid rgba(255, 255, 255, 0.55); opacity: 0.95; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+
+:root[data-theme="dark"] .ext-panel { --accent: #a8733f; --accent-hover: #bb8650; --accent-subtle: rgba(216, 162, 106, 0.14); --accent-text: #d8a26a; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .ext-panel { --accent: #a8733f; --accent-hover: #bb8650; --accent-subtle: rgba(216, 162, 106, 0.14); --accent-text: #d8a26a; }
+}

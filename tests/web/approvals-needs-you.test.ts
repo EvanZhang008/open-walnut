@@ -38,6 +38,8 @@ vi.mock('@/hooks/useHostStatus', () => ({ getHostStatus: () => (api.hostLabel ? 
 
 const posts: Array<Record<string, unknown>> = [];
 (globalThis as unknown as { window: unknown }).window = {
+  // The vault client follows other tabs' unlocks through `storage` events (web/src/api/vault.ts).
+  addEventListener: () => undefined,
   webkit: { messageHandlers: { walnutNotify: { postMessage: async (b: Record<string, unknown>) => { posts.push(b); return { posted: true }; } } } },
 };
 
@@ -218,3 +220,35 @@ describe('the system notice', () => {
 });
 
 const snapshot = () => store.approvalsSnapshot();
+
+describe('a guarded approval while Passwords is locked here: Unlock to approve, words for the devices the person has', () => {
+  const guarded = (over: Partial<Approval> = {}) => approval({ guard: 'person', what: 'Let a Walnut agent click button "Place order" on shop.example.test?', ...over } as Partial<Approval>);
+  it('no Approve, but an unlock in place; the reason names no device the person lacks', () => {
+    const s = snapshot();
+    const a = guarded();
+    expect(store.approveKind(s, a)).toBeNull();
+    expect(store.unlockApproves(s, a)).toBe(true);
+    expect(store.noApproveReason(s, a)).toBe('Unlock Passwords in this window to approve.');
+    store.openUnlock(a.id);
+    expect(snapshot().unlockId).toBe(a.id);
+    store.openUnlock(null);
+    expect(snapshot().unlockId).toBeNull();
+  });
+
+  it('with an iPhone that signs, the reason names it too', () => {
+    const s = { ...snapshot(), keys: [{ id: 'k1', name: 'iPhone', kind: 'iphone', status: 'active' }] } as unknown as ReturnType<typeof snapshot>;
+    expect(store.noApproveReason(s, guarded({ mode: 'biometric' }))).toBe('Approve it on your iPhone with Face ID, or unlock Passwords in this window.');
+  });
+
+  it('an item that needs Face ID itself offers no unlock; a plain tap approval needs none', () => {
+    const s = snapshot();
+    expect(store.unlockApproves(s, approval({ guard: 'vault-sensitive', mode: 'biometric' } as Partial<Approval>))).toBe(false);
+    expect(store.unlockApproves(s, approval())).toBe(false);
+  });
+
+  it('an ask from this computer says "this computer", never its host name', () => {
+    const a = approval({ requester: { host: '2d34e77b685c', local: true } });
+    expect(notify.approvalNoticeText(a, '2d34e77b685c').body).toContain('A script on this computer is waiting');
+    expect(notify.approvalNoticeText(a, '2d34e77b685c').body).not.toContain('2d34e77b685c');
+  });
+});

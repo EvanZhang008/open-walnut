@@ -112,6 +112,39 @@ async function waitUrl(tabId: number, pattern: string, ms: unknown): Promise<Rec
   throw new AgentError(`The address did not match ${pattern} within ${Math.round(limit / 1000)} s.`, 'wait_timeout')
 }
 
+/**
+ * `wait {text}` / `{textGone}`: the top frame and every frame an agent may read (the frames a
+ * snapshot shows), asked a few times a second; a frame that loads meanwhile is asked too.
+ */
+async function waitText(c: WireCommand, tabId: number): Promise<Record<string, unknown>> {
+  const want = typeof c.args.text === 'string' && c.args.text ? c.args.text : undefined
+  const gone = !want && typeof c.args.textGone === 'string' && c.args.textGone ? c.args.textGone : undefined
+  const text = (want ?? gone)!
+  const until = Date.now() + 30_000
+  let frames: Frame[] = []
+  let framesAt = 0
+  for (;;) {
+    if (Date.now() - framesAt > 2000) {
+      const all = await framesOf(tabId)
+      const ok: Frame[] = []
+      for (const f of all) if (!(await frameBar(c.allow, f))) ok.push(f)
+      frames = ok
+      framesAt = Date.now()
+    }
+    const seen: string[] = []
+    for (const id of [0, ...frames.map((f) => f.frameId)]) {
+      const r = await frameOp(tabId, id, 'has_text', { text }, c.allow, 3000).catch(() => (id === 0 ? null : { has: false }))
+      if (r === null) continue
+      if (r.has) seen.push(id ? `frame f${id}` : 'the page')
+    }
+    if (want && seen.length) return { waited: `"${want}" is on ${seen[0] === 'the page' ? 'the page' : `the page, in ${seen[0]}`}` }
+    if (gone && !seen.length) return { waited: `"${gone}" is gone from the page${frames.length ? ' and its frames' : ''}` }
+    if (Date.now() >= until) break
+    await sleep(300)
+  }
+  throw new AgentError(want ? `"${want}" did not show within 30 s (the page and its frames were looked at).` : `"${gone}" was still on the page after 30 s.`, 'wait_timeout')
+}
+
 /** The page held a step for the person's yes (page-ops.ts held). */
 export function outwardHeld(hold: unknown): AgentError {
   const h = (hold ?? {}) as { what?: string; why?: string }
@@ -202,6 +235,8 @@ async function openLink(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, 
 export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
   const a = c.args
   if (c.action === 'wait' && typeof a.url === 'string' && a.url) return { ...(await waitUrl(tabId, a.url, a.ms)), ...(await where(tabId)) }
+  // Text in the whole tab, frames too (a ref names no frame for a wait).
+  if (c.action === 'wait' && ((typeof a.text === 'string' && a.text) || (typeof a.textGone === 'string' && a.textGone))) return { ...(await waitText(c, tabId)), ...(await where(tabId)) }
   const frameId = frameOfCommand(a)
   if (frameId) {
     const f = (await framesOf(tabId)).find((x) => x.frameId === frameId)

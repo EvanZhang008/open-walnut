@@ -7,7 +7,7 @@ import { ask, ext } from './ext'
 import { h, icon } from './dom'
 import { AUTO_LOCKS, getSettings, setSettings, type AutoLock } from './settings'
 import { errLine, iconButton, switchRow, topBar } from './popup-ui'
-import { rememberServer } from './popup-connect'
+import { disconnectControl } from './popup-disconnect'
 import { setTrustedInput, trustedInputState } from './trusted-switch'
 
 /** Agents in this browser: off until the person turns it on here. */
@@ -85,16 +85,18 @@ async function neverSection(): Promise<HTMLElement> {
 
 export async function settingsView(root: HTMLElement, st: { serverUrl?: string; device?: string }, back: () => void): Promise<void> {
   const settings = await getSettings()
-  const off = h('button', { class: 'btn btn-danger', type: 'button', 'data-testid': 'popup-disconnect' }, 'Disconnect this browser')
-  off.onclick = async () => {
-    // Offered again on the connect view.
-    if (st.serverUrl) rememberServer(st.serverUrl)
-    await ask({ type: 'disconnect' }); back()
-  }
+  const off = disconnectControl(st, back)
   const lock = h('select', { class: 'select', id: 'autolock', 'aria-label': 'Lock Walnut', 'data-testid': 'popup-autolock' },
     ...AUTO_LOCKS.map((a) => h('option', { value: a.value }, a.label))) as HTMLSelectElement
   lock.value = settings.autoLock
-  lock.onchange = () => void setSettings({ autoLock: lock.value as AutoLock })
+  // How long it stays unlocked, in plain words: Walnut's own length, or the time picked here.
+  const lockSub = h('span', { class: 'row-sub', 'data-testid': 'popup-autolock-help' }, lockHelp(lock.value as AutoLock, undefined))
+  let walnutSt: WalnutLength | undefined
+  lock.onchange = () => { void setSettings({ autoLock: lock.value as AutoLock, autoLockChosen: true }); lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt) }
+  void ask({ type: 'vault-status' }).then((r) => {
+    walnutSt = (r as { status?: WalnutLength } | undefined)?.status
+    lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt)
+  }).catch(() => undefined)
   root.replaceChildren(h('div', {},
     topBar('Settings', back),
     h('div', { class: 'pane' },
@@ -103,7 +105,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
         h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ? hostOf(st.serverUrl) : ''), h('span', { class: 'row-sub' }, st.device ?? '')))),
       h('div', { class: 'section-label' }, 'Lock'),
       h('div', { class: 'group' }, h('div', { class: 'setting' }, h('label', { class: 'row-text', for: 'autolock' }, h('span', { class: 'row-title' }, 'Lock Walnut'),
-        h('span', { class: 'row-sub' }, 'With no use, and when the computer locks.')), lock)),
+        lockSub), lock)),
       h('div', { class: 'section-label' }, 'Filling'),
       h('div', { class: 'group' }, switchRow('copytotp', 'Copy the one-time code after filling', 'Its code is then on the clipboard for the next page.', settings.copyTotp,
         (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
@@ -112,6 +114,30 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
       h('div', { class: 'section-label' }, 'Fill shortcut'),
       h('p', { class: 'group-note', style: 'margin-top:0' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page, or opens the menu when there are several. In a field, the arrow keys open the menu and move through it.'),
       h('div', { style: 'height:18px' }), off)))
+}
+
+/** Walnut's "Keep Passwords unlocked" (src/core/vault/unlock-length.ts), as its own Settings words it. */
+interface WalnutLength { unlockFor?: string; lockAfterIdleMinutes?: number | null; autoLockMinutes?: number }
+
+function walnutLength(st: WalnutLength | undefined): string {
+  switch (st?.unlockFor) {
+    case 'idle': return `Locks after ${st.lockAfterIdleMinutes ?? st.autoLockMinutes ?? 15} minutes unused.`
+    case '1h': return 'Stays unlocked for 1 hour.'
+    case '12h': return 'Stays unlocked for 12 hours.'
+    case 'restart': return 'Stays unlocked until Walnut restarts.'
+    case 'always': return 'Stays unlocked; agents can use it while you are away.'
+    case '48h': return 'Stays unlocked for 48 hours after you last use it, until you lock it or restart the Mac.'
+    default:
+      // Not read yet, or an older Walnut that names only its idle minutes.
+      return st?.autoLockMinutes ? `Locks after ${st.autoLockMinutes} minutes unused.` : 'Stays unlocked as long as Walnut keeps Passwords unlocked.'
+  }
+}
+
+function lockHelp(choice: AutoLock, st: WalnutLength | undefined): string {
+  if (choice === 'walnut') return `${walnutLength(st)} Change it in Walnut, Settings, Passwords.`
+  if (choice === 'never') return 'Locks when the browser closes, or as Walnut is set if sooner.'
+  if (choice === 'browser') return 'Locks when the browser closes or the computer locks, or as Walnut is set if sooner.'
+  return 'Locks after this long with no use, when the computer locks, and when the browser closes.'
 }
 
 function hostOf(url: string): string {

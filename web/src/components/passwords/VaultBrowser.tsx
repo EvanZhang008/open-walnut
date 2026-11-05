@@ -172,17 +172,26 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
     })
   }, [selectedId, section, onLocked, setSelectedId])
 
-  // Auto-lock: after the configured minutes with no key or pointer in this page. A length with no
-  // idle lock (1 h, 12 h, 48 h, until restart, forever) is ended by the server, never here.
+  // Auto-lock: after the configured minutes with no key or pointer in any tab of this browser (they
+  // share one unlock, and the last use is kept in localStorage). A length with no idle lock (1 h,
+  // 12 h, 48 h, until restart, forever) is ended by the server, never here.
   const idleMinutes = status.unlockFor ? status.lockAfterIdleMinutes ?? null : status.autoLockMinutes
   useEffect(() => {
     if (!idleMinutes) return
+    const KEY = 'walnut.vault.active'
     let last = Date.now()
-    const touch = () => { last = Date.now() }
+    const shared = () => { try { return Number(localStorage.getItem(KEY)) || 0 } catch { return 0 } }
+    const touch = () => {
+      const now = Date.now()
+      if (now - last < 5_000 && shared() >= last) return
+      last = now
+      try { localStorage.setItem(KEY, String(now)) } catch { /* this tab's own clock still counts */ }
+    }
+    touch()
     const t = window.setInterval(() => {
-      if (Date.now() - last > idleMinutes * 60_000) {
+      if (Date.now() - Math.max(last, shared()) > idleMinutes * 60_000) {
         log.info('passwords', 'auto-lock after idle', { minutes: idleMinutes })
-        void vaultApi.lock().finally(onLocked)
+        void vaultApi.lockThisBrowser().finally(onLocked)
       }
     }, 15_000)
     window.addEventListener('pointerdown', touch, true)

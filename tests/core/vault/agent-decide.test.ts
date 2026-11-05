@@ -87,31 +87,39 @@ describe('grant lengths', () => {
 })
 
 describe('Keep Passwords unlocked', () => {
-  it('no choice in config keeps the old 15-minute idle lock (an existing install); a new vault\'s setup writes 48 hours', () => {
-    expect(unlockChoice(undefined, false)).toMatchObject({ unlockFor: 'idle', lockAfterIdleMinutes: 15, autoLockMinutes: 15, limits: { idleMs: 15 * 60_000, maxMs: 12 * 3_600_000 } })
-    expect(unlockChoice({}, false).unlockFor).toBe('idle')
+  it('no choice in config reads 48 hours after the last use, renewed by use with no cap, kept across a restart', () => {
+    const want = { unlockFor: '48h', lockAfterIdleMinutes: null, autoLockMinutes: 2880, limits: { idleMs: 48 * 3_600_000, maxMs: Infinity, choice: '48h', survivesRestart: true } }
+    expect(unlockChoice(undefined, false)).toMatchObject(want)
+    expect(unlockChoice({}, false)).toMatchObject(want)
+    expect(unlockChoice({ bitwarden_daily: true } as never, false)).toMatchObject(want)
+    // A new vault's setup writes the same choice down.
     expect(NEW_VAULT_UNLOCK_FOR).toBe('48h')
-    const c = unlockChoice({ unlock_for: NEW_VAULT_UNLOCK_FOR }, false)
-    expect(c).toMatchObject({ unlockFor: '48h', lockAfterIdleMinutes: null, autoLockMinutes: 2880, limits: { idleMs: 48 * 3_600_000, maxMs: 48 * 3_600_000 } })
+    expect(unlockChoice({ unlock_for: NEW_VAULT_UNLOCK_FOR }, false)).toMatchObject(want)
   })
 
   it('a config an older Walnut wrote (only auto_lock_minutes) keeps its idle minutes and the 12-hour cap', () => {
     expect(unlockChoice({ auto_lock_minutes: 30 }, false)).toMatchObject({ unlockFor: 'idle', lockAfterIdleMinutes: 30, autoLockMinutes: 30, limits: { idleMs: 30 * 60_000, maxMs: 12 * 3_600_000 } })
     expect(unlockChoice({ auto_lock_minutes: 15, unlock_for: 'idle' }, false).limits.idleMs).toBe(15 * 60_000)
+    // An explicit choice wins over old minutes; a zero or junk minutes value is no choice.
+    expect(unlockChoice({ auto_lock_minutes: 30, unlock_for: '12h' }, false).unlockFor).toBe('12h')
+    expect(unlockChoice({ auto_lock_minutes: 0 }, false).unlockFor).toBe('48h')
+    expect(unlockChoice({ auto_lock_minutes: '30' }, false).unlockFor).toBe('48h')
   })
 
   it('1 h and 12 h are lengths from the unlock', () => {
-    expect(unlockChoice({ unlock_for: '1h' }, false)).toMatchObject({ autoLockMinutes: 60, limits: { idleMs: 3_600_000, maxMs: 3_600_000 } })
-    expect(unlockChoice({ unlock_for: '12h' }, false)).toMatchObject({ autoLockMinutes: 720, limits: { idleMs: 43_200_000, maxMs: 43_200_000 } })
+    expect(unlockChoice({ unlock_for: '1h' }, false)).toMatchObject({ autoLockMinutes: 60, limits: { idleMs: 3_600_000, maxMs: 3_600_000, survivesRestart: true } })
+    expect(unlockChoice({ unlock_for: '12h' }, false)).toMatchObject({ autoLockMinutes: 720, limits: { idleMs: 43_200_000, maxMs: 43_200_000, survivesRestart: true } })
   })
 
   it('until restart has no clock; Forever is the machine key, and without it reads until restart', () => {
-    expect(unlockChoice({ unlock_for: 'restart' }, false)).toMatchObject({ unlockFor: 'restart', limits: { idleMs: Infinity, maxMs: Infinity } })
+    // Until restart is the one choice a Walnut restart ends.
+    expect(unlockChoice({ unlock_for: 'restart' }, false)).toMatchObject({ unlockFor: 'restart', limits: { idleMs: Infinity, maxMs: Infinity, survivesRestart: false } })
+    expect(unlockChoice({ unlock_for: '1h' }, true).limits.survivesRestart).toBe(true)
     expect(typeof unlockChoice({ unlock_for: 'restart' }, false).autoLockMinutes).toBe('number')
     expect(unlockChoice({ unlock_for: 'always' }, false).unlockFor).toBe('restart')
     // The machine key on: Forever, whatever the config says.
     expect(unlockChoice({ unlock_for: '1h' }, true).unlockFor).toBe('always')
-    expect(unlockChoice({ unlock_for: 'bogus' }, false).unlockFor).toBe('idle')
+    expect(unlockChoice({ unlock_for: 'bogus' }, false).unlockFor).toBe('48h')
     expect(unlocksAtStart('restart')).toBe(true)
     expect(unlocksAtStart('always')).toBe(true)
     expect(unlocksAtStart('48h')).toBe(false)

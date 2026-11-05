@@ -84,8 +84,6 @@ describe('every highlight registry Walnut paints in is patched', () => {
     'components/sessions/EngineSettingsPopoverBody.tsx': MAIN,
     'components/sessions/SessionDiffView.tsx': MAIN,
     'utils/dom-text-search.ts': FRAME,
-    'components/common/FileThreadLayer.tsx': FRAME,
-    'components/common/doc-comments-dom.ts': FRAME,
   };
 
   it('lists every file that paints, with its registry', () => {
@@ -101,5 +99,14 @@ describe('every highlight registry Walnut paints in is patched', () => {
     const rules = painters.find((p) => p.file === 'utils/highlight-rules.ts')!.text;
     expect(rules).toMatch(/keepHighlightRepaints\(registry\)/);
     expect(fs.readFileSync(path.join(ROOT, 'main.tsx'), 'utf8')).toMatch(/installHighlightRules\(\)/);
+  });
+
+  it('the HTML preview\'s page paints in its own registry, through one setter that empties first', () => {
+    // The page runs in an origin of its own: the bridge Walnut puts into it paints there
+    // (src/web/preview-bridge-script.ts), and every set or delete goes through setHl.
+    const bridge = fs.readFileSync(path.resolve(__dirname, '../../src/web/preview-bridge-script.ts'), 'utf8');
+    expect(bridge).toMatch(/function setHl\(r, name, ranges, p\)\{\s*var old = r\.get\(name\); if \(old && old\.clear\) old\.clear\(\);/);
+    const direct = bridge.split('\n').filter((l) => /\br\.(set|delete)\(/.test(l) && !/function setHl|r\.delete\(name\)|r\.set\(name, h\)/.test(l));
+    expect(direct).toEqual([]);
   });
 });

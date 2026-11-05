@@ -1841,7 +1841,6 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const threadsApi = useSessionThreadsApi();
   const canAskHere = threadsApi.canAsk;
   const diffWrapRef = useRef<HTMLDivElement>(null);
-  const noFrameRef = useRef<HTMLIFrameElement>(null);
   const diffLayerRef = useRef<FileThreadLayerHandle>(null);
 
   // Session-base lists ship LIGHT (no before/after) + SWR (cached list paints
@@ -3257,7 +3256,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               filePath={selectedChange.filePath}
               sessionId={sessionId}
               rootRef={diffWrapRef}
-              frameRef={noFrameRef}
+              channel={null}
               surface="diff"
               surfaceNonce={`${selectedChange.filePath}:${phoneDiff ? 'unified' : viewType}:${rendered}:${selectedChange.after.length}`}
             />

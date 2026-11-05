@@ -1,8 +1,9 @@
 /**
  * The extension's way to the Walnut server: its address and the device token a pairing code
- * bought (the extension's IndexedDB, which content scripts cannot open), and the vault session the master password bought (storage.session,
- * gone when the browser quits). Runs in the background only: a content script never holds
- * either.
+ * bought and the vault session the master password bought, both in the extension's IndexedDB
+ * (secret-store.ts), which content scripts cannot open, so a browser restart keeps the unlock
+ * (bg-autolock.ts ends it at browser start unless the person keeps "Walnut's setting"). Runs in
+ * the background only: a content script never holds either.
  *
  * Every call carries `Authorization: Bearer <device token>`: an extension's requests come
  * from its own origin, which Walnut never takes for this machine, so the token is what lets
@@ -12,6 +13,7 @@
 import { ext } from './ext'
 import { secrets } from './secret-store'
 import { clearPanelData } from './panel-data'
+import { getSettings } from './settings'
 import { derivePasswordKey, fromB64, toB64, type KdfParams } from '../../../src/core/vault/crypto'
 import type { VaultItem, VaultItemInput, VaultItemSummary } from '../../../src/core/vault/types'
 
@@ -28,7 +30,12 @@ export interface VaultStatus {
   kdf?: KdfParams
   itemCount?: number
   autoLockMinutes: number
+  /** "Keep Passwords unlocked" in Walnut (src/core/vault/unlock-length.ts); absent from an older Walnut. */
+  unlockFor?: 'idle' | '1h' | '12h' | '48h' | 'restart' | 'always'
+  lockAfterIdleMinutes?: number | null
   waitMs: number
+  /** The master password hint, shown on the locked view; absent when none (or from an older Walnut). */
+  hint?: string
 }
 
 export class ApiError extends Error {
@@ -72,14 +79,45 @@ export async function connection(): Promise<Connection | null> {
   return c && typeof c.serverUrl === 'string' && typeof c.token === 'string' ? c : null
 }
 
+// The token is in IndexedDB; storage.session's `vaultSession` holds only a mark (a time) that
+// changes with it, which the background's and the frames' listeners follow, and which tells
+// every page of the extension its copy here is stale.
+let cachedSession: { token: string | null } | null = null
+// Guarded: this module also loads in pages with no chrome.storage (the offscreen clipboard
+// document is popup.html, whose script imports it), and a throw here would stop that page.
+try { ext.storage?.onChanged?.addListener((changes, area) => { if (area === 'session' && 'vaultSession' in changes) cachedSession = null }) } catch { /* no storage here */ }
+
 export async function vaultSession(): Promise<string | null> {
-  const { vaultSession: s } = await ext.storage.session.get('vaultSession')
-  return typeof s === 'string' ? s : null
+  if (cachedSession) return cachedSession.token
+  let t = await secrets.get<string>('vaultSession').catch(() => undefined)
+  const { vaultSession: mark } = await ext.storage.session.get('vaultSession')
+  if (typeof mark === 'string') {
+    // An older extension kept the token itself in storage.session: carried over once.
+    if (typeof t !== 'string') { await secrets.set('vaultSession', mark).catch(() => undefined); t = mark }
+    await ext.storage.session.set({ vaultSession: Date.now() })
+  } else if (typeof t === 'string' && mark === undefined) {
+    // A token with no mark is one a previous run of the browser left (storage.session empties when
+    // the browser quits or the extension reloads): only "Walnut's setting" keeps it across that.
+    if ((await getSettings()).autoLock === 'walnut') await ext.storage.session.set({ vaultSession: Date.now() })
+    else { await secrets.delete('vaultSession').catch(() => undefined); t = undefined }
+  }
+  const token = typeof t === 'string' && t ? t : null
+  cachedSession = { token }
+  return token
 }
 
 async function setVaultSession(token: string | null): Promise<void> {
-  if (token) await ext.storage.session.set({ vaultSession: token })
-  else await ext.storage.session.remove('vaultSession')
+  cachedSession = { token }
+  if (token) {
+    // The mark first (a token never sits unmarked, which would read as a previous run's), and
+    // again after, so every page's copy is dropped once the token is written.
+    await ext.storage.session.set({ vaultSession: Date.now() })
+    await secrets.set('vaultSession', token)
+    await ext.storage.session.set({ vaultSession: Date.now() + 1 })
+  } else {
+    await secrets.delete('vaultSession').catch(() => undefined)
+    await ext.storage.session.remove('vaultSession')
+  }
 }
 
 /** `quiet`: a read the extension makes by itself, which never keeps the vault unlocked. */
@@ -154,6 +192,8 @@ async function removeDevice(conn: Connection): Promise<void> {
 /** The person disconnects: lock, remove its device in Walnut (offline, Settings still lists it), forget it. */
 export async function disconnect(): Promise<void> {
   const conn = await connection()
+  // Agents first hear the browser is gone (also when removing the device fails offline).
+  if (conn) await call('POST', '/browser/off', { why: 'disconnected' }, { conn, noSession: true, timeoutMs: 5000 }).catch(() => undefined)
   if (conn) await removeDevice(conn)
   await forgetConnection()
 }
@@ -181,8 +221,9 @@ export const api = {
     }
   },
 
-  async lock(): Promise<void> {
-    try { await call('POST', '/vault/lock', {}) } catch { /* locked anyway */ }
+  /** `everywhere`: the person's Lock, which locks Walnut's windows too; without it (an auto-lock) only this browser. */
+  async lock(opts: { everywhere?: boolean } = {}): Promise<void> {
+    try { await call('POST', '/vault/lock', opts.everywhere ? { everywhere: true } : {}) } catch { /* locked anyway */ }
     await setVaultSession(null)
   },
 

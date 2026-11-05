@@ -11,9 +11,9 @@
  * the master password there (keychain-unlock.ts), and locks it again after. Otherwise the sync is skipped and the
  * reason shows in Settings ("Last sync: not synced, Passwords is locked"); no letter is sent.
  */
-import { runVaultHelper } from './child-run.js'
-import { readKeychainSecret } from './keychain-secret.js'
-import { noteSyncSkipped, syncFromBitwarden, type SyncOptions, type SyncReport, type SyncTrigger } from './bitwarden-sync.js'
+import { runVaultHelper } from '../../child-run.js'
+import { readKeychainSecret } from '../../keychain-secret.js'
+import { noteSyncSkipped, syncFromBitwarden, type SyncOptions, type SyncReport, type SyncTrigger } from './sync.js'
 
 const SYNC_TIMEOUT_MS = 120_000
 const EXPORT_TIMEOUT_MS = 180_000
@@ -53,14 +53,14 @@ export function runBitwardenSync(trigger: SyncTrigger, opts: SyncOptions = {}): 
 }
 
 async function runOnce(trigger: SyncTrigger, opts: SyncOptions): Promise<SyncReport> {
-  const st = await import('./store.js')
+  const st = await import('../../store.js')
   const status = await st.vaultStatus()
   if (!status.setUp) return noteSyncSkipped(trigger, 'no vault yet')
   let keychainToken: string | null = null
   // Only the daily run opens a locked vault from the keychain; an agent's run needs it open already.
   if (!st.isOpen() && trigger !== 'daily') return noteSyncSkipped(trigger, 'Passwords is locked')
   if (!st.isOpen()) {
-    const { keychainItemPresent, unlockFromKeychain } = await import('./keychain-unlock.js')
+    const { keychainItemPresent, unlockFromKeychain } = await import('../../keychain-unlock.js')
     if (await keychainItemPresent()) {
       const u = await unlockFromKeychain({ client: 'This Mac (Bitwarden sync)' })
       if (u.ok) keychainToken = u.session.token
@@ -85,9 +85,9 @@ async function runOnce(trigger: SyncTrigger, opts: SyncOptions): Promise<SyncRep
   } finally {
     if (keychainToken) {
       // Unlocked only for this sync: lock again (the person's own windows keep theirs).
-      const s = await import('./sessions.js')
+      const s = await import('../../sessions.js')
       s.endSession(keychainToken)
-      const { closeIfNobody } = await import('../../web/routes/vault-v1.js')
+      const { closeIfNobody } = await import('../../../../web/routes/vault-v1.js')
       await closeIfNobody().catch(() => undefined)
     }
   }
@@ -112,7 +112,7 @@ export function startDailyBitwardenSync(): { stop: () => void } {
   }
   const fire = async () => {
     try {
-      const { getConfig } = await import('../config-manager.js')
+      const { getConfig } = await import('../../../config-manager.js')
       if ((await getConfig()).passwords?.bitwarden_daily !== true) return
       await runBitwardenSync('daily')
     } catch { /* the report holds the reason; the next day tries again */ }

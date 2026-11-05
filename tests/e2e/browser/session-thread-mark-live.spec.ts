@@ -331,7 +331,7 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
     await expect(lines).toHaveCount(0, { timeout: 15_000 })
 
-    // ── HTML preview: the lines live in the frame's own document ──
+    // ── HTML preview: its page reports the passage's rects, the overlay over it draws the lines ──
     await card.locator('.thread-card-input').press('Escape')
     view = await openFile(LONG_FILE)
     const frame = view.frameLocator('.fv-html-preview')
@@ -354,17 +354,18 @@ test.describe('The scanning line under a passage being answered', () => {
     await card.locator('.thread-card-input').fill(`${SLOW} Which slot wins?`)
     await card.locator('.thread-card-input').press('Enter')
     await expect(card).toHaveAttribute('data-answering', 'true', { timeout: 30_000 })
-    lines = frame.locator('#walnut-live-lines .thread-live-line')
+    lines = view.locator('.fv-live-lines .thread-live-line')
     await expect(lines.first()).toBeVisible({ timeout: 10_000 })
-    expectUnder(await boxes(lines, await frameOffset()), await frameRects())
-    await expectScanning(lines.first(), /^walnut-live-scan$/)
+    expectUnder(await boxes(lines), await frameRects())
+    await expectScanning(lines.first(), /^thread-live-scan$/)
     await shot(page, 'file-html-cell', (await frameRects())[0])
     // The page scrolls: the line rides with the cell.
     await frame.locator('body').evaluate(() => window.scrollBy(0, -120))
-    await page.waitForTimeout(150)
-    expectUnder(await boxes(lines, await frameOffset()), await frameRects())
+    await expect(async () => {
+      expectUnder(await boxes(lines), await frameRects())
+    }).toPass({ timeout: 3_000 })
     await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
-    await expect(frame.locator('#walnut-live-lines')).toHaveCount(0, { timeout: 15_000 })
+    await expect(lines).toHaveCount(0, { timeout: 15_000 })
     expect(await frame.locator('body').evaluate(() => (window as unknown as { CSS: { highlights?: Map<string, unknown> } }).CSS.highlights?.has('thread-mark-neutral') ?? false)).toBe(true)
   })
 })

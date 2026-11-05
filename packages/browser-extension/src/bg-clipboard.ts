@@ -56,17 +56,46 @@ export async function copyText(text: string): Promise<boolean> {
 export async function clearLater(text: string): Promise<void> {
   if (!text) return
   await ext.storage.session.set({ clipboardCopied: { hash: await hash(text), at: Date.now() } })
-  setTimeout(() => void clearIfDue(), CLEAR_MS + 200)
-  // The service worker may be stopped before then: an alarm wakes it.
-  try { await ext.alarms.create(ALARM, { delayInMinutes: CLEAR_MS / 60_000 }) } catch { /* the timer alone */ }
+  armClear(CLEAR_MS)
 }
 
-async function clearIfDue(): Promise<void> {
+let clearTimer: ReturnType<typeof setTimeout> | undefined
+/** A timer for when the clear is due, and an alarm in case the service worker is stopped before then. */
+function armClear(ms: number): void {
+  clearTimeout(clearTimer)
+  clearTimer = setTimeout(() => void clearIfDue(), ms + 200)
+  // Chrome's alarms wait at least 30 s; the timer covers a shorter wait while the worker lives.
+  try { void Promise.resolve(ext.alarms.create(ALARM, { delayInMinutes: Math.max(ms, CLEAR_MS) / 60_000 })).catch(() => undefined) } catch { /* the timer alone */ }
+}
+
+const READ_TRIES = 3
+const READ_GAP_MS = 1000
+let clearing: Promise<void> | null = null
+
+/** The timer, the alarm and a woken worker may all ask at once: one clear runs. */
+export function clearIfDue(): Promise<void> {
+  clearing ??= clearNow().finally(() => { clearing = null })
+  return clearing
+}
+
+async function clearNow(): Promise<void> {
   const { clipboardCopied: c } = await ext.storage.session.get('clipboardCopied')
   const copied = c as { hash: string; at: number } | undefined
-  if (!copied || Date.now() - copied.at < CLEAR_MS) return
+  if (!copied) return
+  // Woken before it is due (a later copy moved it, or a timer ran early): again when it is.
+  const left = copied.at + CLEAR_MS - Date.now()
+  if (left > 0) { armClear(left); return }
+  // The offscreen page can miss a read on a busy machine (it is being made, or Chrome closed it):
+  // a few tries before the clipboard is left alone.
+  let now: { ok: boolean; text?: string } | null = null
+  for (let i = 0; i < READ_TRIES && !now?.ok; i++) {
+    if (i) await new Promise((r) => setTimeout(r, READ_GAP_MS))
+    now = await clip('read')
+  }
+  // A copy made while it read is the one to clear now, later.
+  const { clipboardCopied: latest } = await ext.storage.session.get('clipboardCopied')
+  if ((latest as { at?: number } | undefined)?.at !== copied.at) return
   await ext.storage.session.remove('clipboardCopied')
-  const now = await clip('read')
   // Something else copied since (or the clipboard cannot be read): left alone.
   if (!now?.ok || typeof now.text !== 'string' || await hash(now.text) !== copied.hash) return
   await clip('write', '')
@@ -74,4 +103,6 @@ async function clearIfDue(): Promise<void> {
 
 export function initClipboard(): void {
   ext.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) void clearIfDue() })
+  // A worker started after the clear was due (its timer died with the last one): now.
+  void clearIfDue().catch(() => undefined)
 }

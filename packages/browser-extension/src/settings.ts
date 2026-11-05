@@ -6,9 +6,15 @@
 import { ext } from './ext'
 import { DEFAULT_PASSWORD, DEFAULT_PASSPHRASE, type PassphraseOptions, type PasswordOptions } from '../../../src/core/vault/generator'
 
-/** Minutes of no use before the extension locks; `browser`: only when the browser closes (or the computer locks); `never`: only when the browser closes. */
-export type AutoLock = '1' | '5' | '15' | '30' | '60' | 'browser' | 'never'
+/**
+ * `walnut` (the default): as long as Walnut keeps Passwords unlocked (its "Keep Passwords
+ * unlocked", 48 hours after the last use by default), across browser restarts. Otherwise minutes
+ * of no use before the extension locks; `browser`: only when the browser closes (or the computer
+ * locks); `never`: only when the browser closes. Every choice but `walnut` locks at browser start.
+ */
+export type AutoLock = 'walnut' | '1' | '5' | '15' | '30' | '60' | 'browser' | 'never'
 export const AUTO_LOCKS: ReadonlyArray<{ value: AutoLock; label: string }> = [
+  { value: 'walnut', label: "Walnut's setting" },
   { value: '1', label: 'After 1 minute' },
   { value: '5', label: 'After 5 minutes' },
   { value: '15', label: 'After 15 minutes' },
@@ -22,13 +28,15 @@ export interface GeneratorPrefs { kind: 'random' | 'words'; random: PasswordOpti
 
 export interface Settings {
   autoLock: AutoLock
+  /** The person picked `autoLock` here (an older extension saved its default 15 minutes with every setting). */
+  autoLockChosen?: boolean
   /** After a login with a one-time code is filled, its code goes on the clipboard (as Bitwarden does). */
   copyTotp: boolean
   generator: GeneratorPrefs
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  autoLock: '15',
+  autoLock: 'walnut',
   copyTotp: true,
   generator: { kind: 'random', random: DEFAULT_PASSWORD, words: DEFAULT_PASSPHRASE },
 }
@@ -38,7 +46,10 @@ export async function getSettings(): Promise<Settings> {
   const s = (settings ?? {}) as Partial<Settings>
   const g = (s.generator ?? {}) as Partial<GeneratorPrefs>
   return {
-    autoLock: AUTO_LOCKS.some((a) => a.value === s.autoLock) ? s.autoLock! : DEFAULT_SETTINGS.autoLock,
+    // An older extension wrote its default (15) whenever any setting changed: only a pick here keeps 15.
+    autoLock: s.autoLock === '15' && s.autoLockChosen !== true ? DEFAULT_SETTINGS.autoLock
+      : AUTO_LOCKS.some((a) => a.value === s.autoLock) ? s.autoLock! : DEFAULT_SETTINGS.autoLock,
+    ...(s.autoLockChosen === true ? { autoLockChosen: true } : {}),
     copyTotp: typeof s.copyTotp === 'boolean' ? s.copyTotp : DEFAULT_SETTINGS.copyTotp,
     generator: {
       kind: g.kind === 'words' ? 'words' : 'random',

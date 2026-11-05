@@ -26,6 +26,8 @@ const inWindow = params.has('window') && !embedded
 const panelWindow = embedded ? Number(params.get('window')) || undefined : undefined
 // The side panel and a window of its own give the view their width; the toolbar popup is 360 px.
 if (embedded || inWindow) document.documentElement.classList.add('wide')
+// In the side panel the panel's own tab bar is the header: no second Walnut brand bar (ui.css).
+if (embedded) document.documentElement.classList.add('in-panel')
 const ctx: PopupCtx = { root, embedded, inWindow, panelWindow, back: () => void render() }
 
 /** This popup's window, known before any click: opening the side panel must not wait on anything. */
@@ -108,7 +110,7 @@ function connectView(st: State): HTMLElement {
 // ── locked ──
 
 async function unlockView(st: State): Promise<HTMLElement> {
-  const status = await ask<{ status: { setUp: boolean; waitMs: number; hasSecretKey: boolean } }>({ type: 'vault-status' })
+  const status = await ask<{ status: { setUp: boolean; waitMs: number; hasSecretKey: boolean; hint?: string } }>({ type: 'vault-status' })
   if (!status.ok && status.code && DISCONNECTED.has(status.code)) return connectView({ connected: false, unlocked: false, serverUrl: st.serverUrl })
   if (status.ok && !status.status.setUp) {
     return h('div', { class: 'center' },
@@ -125,8 +127,9 @@ async function unlockView(st: State): Promise<HTMLElement> {
   const skWrap = h('div', { style: 'display:none;text-align:left' },
     h('label', { class: 'field-label', for: 'sk' }, 'This Mac does not hold your Secret Key: type it from your recovery kit.'), sk)
   const err = errLine(!status.ok ? status.error : undefined)
+  const hint = hintLine(status.ok ? status.status.hint : undefined)
   const go = h('button', { class: 'btn btn-primary btn-block', type: 'submit', 'data-testid': 'popup-unlock', style: 'margin-top:10px' }, 'Unlock')
-  const form = h('form', { style: 'text-align:left' }, pw, skWrap, go, err)
+  const form = h('form', { style: 'text-align:left' }, pw, hint.el, skWrap, go, err)
   form.onsubmit = async (e) => {
     e.preventDefault()
     if (!pw.value) { pw.focus(); return }
@@ -138,6 +141,7 @@ async function unlockView(st: State): Promise<HTMLElement> {
     if (r.code && DISCONNECTED.has(r.code)) { void render(); return }
     if (r.code === 'secret_key_needed') { skWrap.style.display = ''; sk.focus() }
     else { pw.select() }
+    if (r.code === 'wrong_password') hint.show()
     err.textContent = r.code === 'too_many_attempts' && typeof r.waitMs === 'number'
       ? `Too many tries. Wait ${Math.ceil(Number(r.waitMs) / 1000)} s.`
       : r.error ?? 'That did not unlock.'
@@ -151,6 +155,15 @@ async function unlockView(st: State): Promise<HTMLElement> {
     h('div', { class: 'pane', style: 'padding-top:0' }, form,
       h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'),
       h('div', { style: 'margin-top:6px;text-align:center' }, askButton())))
+}
+
+/** "Show hint" under the password field once the vault has a hint; a wrong password shows it at once. */
+function hintLine(text: string | undefined): { el: HTMLElement; show: () => void } {
+  const el = h('div', { class: 'hint-line' }) as HTMLElement
+  if (!text) return { el, show: () => undefined }
+  const show = () => el.replaceChildren(h('p', { class: 'hint-shown', 'data-testid': 'popup-hint-shown' }, h('span', { class: 'muted' }, 'Hint: '), text))
+  el.append(h('button', { class: 'link-btn', type: 'button', 'data-testid': 'popup-show-hint', onclick: show }, 'Show hint'))
+  return { el, show }
 }
 
 // ── unlocked ──

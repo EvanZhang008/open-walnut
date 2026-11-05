@@ -24,8 +24,7 @@ export interface Approval {
     /** For a request from no session: the process that ran it and the account it ran as. */
     process?: string; user?: string;
     /** The command line that ran it, read by Walnut from the process table. */
-    ranBy?: string;
-  };
+    ranBy?: string; local?: boolean; };
   /** Why it asks, the task's goal and its last steps, read when it asked (src/core/approvals/asker-context.ts). */
   context?: ApprovalContext;
   /** A signed approval that is used once (its detail is the signed envelope). */

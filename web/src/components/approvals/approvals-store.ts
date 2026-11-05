@@ -10,7 +10,8 @@
  */
 import { useSyncExternalStore } from 'react';
 import { answerApproval, enrollApprovalKey, listApprovals, type Approval, type ApprovalKey } from '@/api/approvals';
-import { vaultSession } from '@/api/vault';
+import { onVaultSessionChange, vaultSession } from '@/api/vault';
+import { howToApprove, signerKinds } from '../../../../src/core/approvals/signer-words';
 import { hasTouchIdBridge, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
@@ -29,9 +30,11 @@ export interface ApprovalsState {
   done: Readonly<Record<string, Approval>>;
   /** The approval the dialog shows (a row's click, a notification's click), or null. */
   openId: string | null;
+  /** The approval whose card shows its "Unlock to approve" form (ApprovalUnlock.tsx), or null. */
+  unlockId: string | null;
 }
 
-const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null };
+const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null };
 let state: ApprovalsState = EMPTY;
 const subs = new Set<() => void>();
 /** Approvals this page has raised a system notification for, so a re-read never repeats one. */
@@ -45,6 +48,14 @@ let readSeq = 0;
 function set(next: Partial<ApprovalsState>): void {
   state = { ...state, ...next };
   for (const fn of subs) fn();
+}
+
+// This window unlocked or locked Passwords: what each card offers changes (Approve, or Unlock to approve).
+if (typeof window !== 'undefined') onVaultSessionChange(() => set(state.unlockId && vaultSession() ? { unlockId: null } : {}));
+
+/** Show the unlock form on an approval's card or row (null: close it). */
+export function openUnlock(id: string | null): void {
+  set({ unlockId: id });
 }
 
 function subscribe(fn: () => void): () => void {
@@ -100,15 +111,26 @@ export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' 
 
 /** Why a biometric approval has no Approve here, in the words the person reads. */
 export function noApproveReason(s: ApprovalsState, a: Approval): string {
-  if (a.guard === 'vault') return 'Unlock Passwords in this window to approve, or approve on your iPhone with Face ID.';
-  if (a.guard === 'person') return 'Approve it on your iPhone with Face ID or in the Walnut Mac app with Touch ID, or unlock Passwords in this window.';
+  // Only the devices the person really has (their signing keys), and this window's unlock.
+  const kinds = signerKinds(s.keys);
+  if (a.guard === 'vault' || a.guard === 'person') return howToApprove(kinds, { unlock: true });
   if (a.guard === 'vault-sensitive' && a.mode !== 'biometric') return 'Unlock Passwords in this window to approve.';
   if (a.enrollsKey && a.enrollsKey === s.touchId?.keyId) {
     return 'This is the request to let this Mac sign approvals: approve it on a device that already signs (your iPhone, with Face ID).';
   }
   if (s.touchId && !s.touchId.available && s.touchId.reason) return `${s.touchId.reason} Approve it on your iPhone with Face ID.`;
   if (myKeyOf(s)?.status === 'pending') return 'This Mac is waiting to be allowed to sign approvals. Approve it on your iPhone with Face ID.';
-  return 'Approve it on your iPhone with Face ID (or in the Walnut Mac app with Touch ID).';
+  return kinds.length ? howToApprove(kinds, { unlock: false }) : 'Approve it on your iPhone with Face ID (or in the Walnut Mac app with Touch ID).';
+}
+
+/**
+ * A guarded ask (`vault`, `person`) this window cannot approve yet but could after Passwords is
+ * unlocked here: the card offers "Unlock to approve" (ApprovalUnlock.tsx). Not an item that needs
+ * Face ID or Touch ID itself (vault-sensitive, biometric).
+ */
+export function unlockApproves(s: ApprovalsState, a: Approval): boolean {
+  if (!a.guard || approveKind(s, a)) return false;
+  return !(a.guard === 'vault-sensitive' && a.mode === 'biometric');
 }
 
 function notice(a: Approval): void {

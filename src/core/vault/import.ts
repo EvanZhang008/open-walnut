@@ -5,7 +5,7 @@
  * Formats (column names as each product exports them):
  *  - Bitwarden JSON (unencrypted): logins (URIs, TOTP, custom fields, passkeys kept),
  *    notes, cards, identities (as custom fields); folders become tags; `reprompt` becomes
- *    sensitive. parseBitwardenExport keeps each item's Bitwarden id (bitwarden-sync.ts).
+ *    sensitive. parseBitwardenExport keeps each item's Bitwarden id (sources/bitwarden/sync.ts).
  *  - Bitwarden CSV: folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
  *  - 1Password CSV: Title,Website,Username,Password,One-time password,Favorite,Archived,Tags,Notes
  *  - Apple Passwords CSV: Title,URL,Username,Password,Notes,OTPAuth

@@ -118,9 +118,13 @@ export function drawSnap(view: SnapView, snap: AskSnap | TasksSnap): HTMLElement
       h('div', { class: 'panel-snap-composer' }, s.messages.length ? 'Ask a follow-up…' : 'Ask about this page…'))
   }
   const s = snap as TasksSnap
+  // The view's own layout (PopoutExtTasks): its save row on top, then the sections; a Focus with no
+  // task says so as the view does, so the drawing and the view never look like two pages.
   return h('div', { class: 'panel-snap panel-snap-tasks', 'data-testid': 'panel-snap', 'aria-hidden': 'true' },
+    h('div', { class: 'panel-snap-save' }, h('span', { class: 'panel-snap-btn' }, 'Save this page as a task')),
     ...s.sections.map((sec) => h('section', {},
       h('h3', {}, sec.title, ' ', h('span', { class: 'panel-snap-count' }, String(sec.count))),
+      ...(sec.rows.length === 0 && sec.title === 'Focus' ? [h('p', { class: 'panel-snap-empty' }, 'No Focus tasks.')] : []),
       ...sec.rows.map((r) => h('div', { class: 'panel-snap-task' },
         h('span', { class: `panel-snap-dot state-${r.state}` }),
         h('span', { class: 'panel-snap-task-text' },

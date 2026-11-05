@@ -46,12 +46,14 @@ const PAGES: Record<string, () => string> = {
       <label>Card number <input name="cardnumber" autocomplete="cc-number"></label>
       <label>Security code <input name="cvc" autocomplete="cc-csc"></label>
       <button>Place order</button>
-    </form><p id="out"></p>`,
+    </form><p>Order total: $42.10</p><p id="out"></p>`,
   '/feedback': () => `<h1>News</h1>
     <form onsubmit="event.preventDefault(); document.getElementById('sent').textContent = 'Thanks: ' + this.fb.value"><label>Your feedback <textarea name="fb"></textarea></label><button>Send feedback</button></form><p id="sent"></p>
     <label>Chat <textarea id="chat" onkeydown="if (event.key === 'Enter') { event.preventDefault(); document.getElementById('said').textContent = 'Said: ' + this.value }"></textarea></label><p id="said"></p>`,
   '/popup': () => `<h1>Help</h1><button id="help" onclick="window.open('/help-window', 'help', 'width=480,height=400')">Open the help window</button>`,
   '/help-window': () => `<h1>Help window</h1><p>Orders ship in 2 days.</p>`,
+  '/frame': () => `<h1>Account</h1><iframe src="/frame-inner" title="Sign in" width="420" height="160"></iframe>`,
+  '/frame-inner': () => `<button id="in" onclick="setTimeout(() => { document.getElementById('st').textContent = 'You are signed in.' }, 600)">Sign in here</button><p id="st"></p>`,
   '/keys': () => `<h1>Keys</h1>
     <button type="button" id="place" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); document.getElementById('out').textContent = 'Order placed by key' }">Place order</button>
     <button type="button" id="add" onkeydown="if (event.key === ' ') document.getElementById('cart').textContent = 'In cart: 1'">Add to cart</button>
@@ -93,7 +95,7 @@ async function answer(page: Page, id: string, decision: 'approve' | 'deny'): Pro
 const refOf = (snapshot: string, re: RegExp): string => {
   const line = snapshot.split('\n').find((l) => re.test(l))
   expect(line, `no element ${re} in\n${snapshot}`).toBeTruthy()
-  return /\[(e\d+)\]/.exec(line!)![1]
+  return /\[((?:f\d+:)?e\d+)\]/.exec(line!)![1]
 }
 const sw = (): Worker => ctx.serviceWorkers()[0]
 const pageAt = (p: string) => ctx.pages().find((x) => x.url().startsWith(site('shop.example.test', p)))
@@ -117,6 +119,18 @@ test.beforeAll(async ({}, info) => {
 })
 
 test.afterAll(async () => {
+  // Give back what this spec's agent opened, so the next spec on this server starts with no tab of its.
+  // and turn agents off here, so Walnut stops counting this browser (the next spec's browser takes the commands).
+  const page = ctx?.pages()[0]
+  if (page) {
+    const mine = ((await act(page, { action: 'tabs' }).catch(() => ({ body: {} as Record<string, any> }))).body.tabs ?? []) as Array<{ id: number }>
+    for (const t of mine) await act(page, { action: 'close', tab: t.id }).catch(() => undefined)
+    const p = await ctx.newPage()
+    await p.goto(`chrome-extension://${extId}/popup.html`).catch(() => undefined)
+    await p.getByRole('button', { name: 'Settings' }).click().catch(() => undefined)
+    if (await p.getByTestId('popup-agents').isChecked().catch(() => false)) await p.getByText('Let Walnut agents use this browser').click().catch(() => undefined)
+    await expect.poll(async () => (await status(page)).browsers.length, { timeout: 10_000 }).toBe(0).catch(() => undefined)
+  }
   await ctx?.close()
   await new Promise<void>((r) => sites?.close(() => r()) ?? r())
 })
@@ -207,9 +221,12 @@ test('Place order waits for the person, and runs only after they approve', async
   const shop = pageAt('/checkout')!
   // Nothing was sent: the form waits.
   await expect(shop.locator('#out')).toHaveText('')
-  // The approval is Walnut's own, for the person to answer.
-  const apr = await (await page.request.get(`${base}/api/v1/approvals/${ask.body.request}`)).json()
-  expect(JSON.stringify(apr)).toContain('Place order')
+  // The approval is Walnut's own, for the person to answer, and says exactly what in plain words:
+  // who asks (no task here: "a Walnut agent"), the button, the site, the total the page shows.
+  const apr = (await (await page.request.get(`${base}/api/v1/approvals/${ask.body.request}`)).json()).approval ?? {}
+  expect(apr.what).toBe(`Let a Walnut agent click button "Place order" on shop.example.test:${port} ($42.10)?`)
+  expect(apr.detail).toContain('Order total on the page: $42.10')
+  expect(apr.requester).toMatchObject({ local: true })
   // Asked again before the answer: the same ask, still waiting, still nothing sent.
   const again = await act(page, { action: 'click', tab, ref: place, request: ask.body.request })
   expect(again.status).toBe(202)
@@ -226,7 +243,24 @@ test('Place order waits for the person, and runs only after they approve', async
   const still = await act(page, { action: 'click', tab, ref: place, request: ask.body.request })
   expect(still.status, JSON.stringify(still.body)).toBe(202)
   await expect(shop.locator('#out')).toHaveText('')
-  await answer(page, ask.body.request, 'approve')
+  // The person approves on Walnut's card. Passwords is locked in that window, so the card offers
+  // "Unlock to approve" in place: the master password, then Approve.
+  // Passwords set up (a fresh fixture server has none); that window holds no unlock of its own.
+  await vaultSession(page)
+  const con = await ctx.newPage()
+  await con.goto(`${base}/`)
+  const card = con.locator(`[data-testid="approval-card"][data-approval-id="${ask.body.request}"]`)
+  await expect(card).toBeVisible({ timeout: 30_000 })
+  await expect(card.locator('.approval-who')).toContainText('on this computer')
+  await expect(card.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0)
+  await card.getByTestId('approval-unlock-to-approve').click()
+  await card.getByLabel('Master password').fill(MASTER)
+  await card.getByRole('button', { name: 'Unlock', exact: true }).click()
+  await expect.poll(async () => (await card.getByRole('button', { name: 'Approve', exact: true }).count()) || await card.innerText(), { timeout: 20_000 }).toBe(1)
+  await card.screenshot({ path: path.join(shots, 'card-unlocked-approve.png') })
+  await card.getByRole('button', { name: 'Approve', exact: true }).click()
+  await expect.poll(async () => ((await (await page.request.get(`${base}/api/v1/approvals/${ask.body.request}`)).json()).approval ?? {}).status, { timeout: 15_000 }).toBe('approved')
+  await con.close()
   const done = await act(page, { action: 'click', tab, ref: place, request: ask.body.request, wait_ms: 5000 })
   expect(done.status, JSON.stringify(done.body)).toBe(200)
   await expect(shop.locator('#out')).toHaveText('Order placed for Test Person')
@@ -243,6 +277,10 @@ test('sending feedback waits too; a no stops it; Enter in a chat box with a mess
   const sub = await act(page, { action: 'type', tab, ref: refOf(s, /textbox "Your feedback"/), text: 'Great update', submit: true })
   expect(sub.status, JSON.stringify(sub.body)).toBe(202)
   expect(sub.body.kind).toBe('send')
+  // The card shows the message it would send.
+  const subApr = (await (await page.request.get(`${base}/api/v1/approvals/${sub.body.request}`)).json()).approval ?? {}
+  expect(subApr.what).toContain(': "Great update"?')
+  expect(subApr.detail).toContain('Message it sends: Great update')
   const news = pageAt('/feedback')!
   await expect(news.locator('textarea[name=fb]')).toHaveValue('')
   expect((await act(page, { action: 'type', tab, ref: refOf(s, /textbox "Your feedback"/), text: 'Great update' })).status).toBe(200)
@@ -323,6 +361,39 @@ test('real input asks the page the same before it acts: Meta+Enter, and typed te
   // The same text with no newline is only typing: the point comes back.
   const plain = await locate({ ref: refOf(s, /textbox "Message"/), focus: true })
   expect(plain.result, JSON.stringify(plain)).toMatchObject({ x: expect.any(Number), y: expect.any(Number) })
+})
+
+test('refs are the page\'s own: form_values, snapshot and fill_form name a field the same way, also after a reload', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/checkout') })).status).toBe(200)
+  // form_values first on a fresh page, then the snapshot: one ref for Full name.
+  const fields = (await act(page, { action: 'form_values', tab })).body.fields as Array<{ ref: string; label: string }>
+  const nameRef = fields.find((f) => /Full name/.test(f.label))!.ref
+  const s1 = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
+  expect(refOf(s1, /textbox "Full name"/)).toBe(nameRef)
+  // fill_form, then a ref from the snapshot before it still works.
+  const filled = await act(page, { action: 'fill_form', tab, fields: [{ ref: nameRef, value: 'Ref Person' }] })
+  expect(filled.status, JSON.stringify(filled.body)).toBe(200)
+  const add = await act(page, { action: 'click', tab, ref: refOf(s1, /button "Add to cart"/) })
+  expect(add.status, JSON.stringify(add.body)).toBe(200)
+  // The same page loaded again: the same refs, whichever action reads it first.
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/checkout') })).status).toBe(200)
+  const s2 = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
+  expect(refOf(s2, /textbox "Full name"/)).toBe(nameRef)
+  expect(refOf(s2, /button "Add to cart"/)).toBe(refOf(s1, /button "Add to cart"/))
+})
+
+test('wait for text looks inside the page\'s frames too', async () => {
+  test.setTimeout(90_000)
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/frame') })).status).toBe(200)
+  const s = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
+  const button = refOf(s, /button "Sign in here"/)
+  expect(button).toMatch(/^f\d+:e\d+$/)
+  expect((await act(page, { action: 'click', tab, ref: button })).status).toBe(200)
+  const waited = await act(page, { action: 'wait', tab, text: 'You are signed in' })
+  expect(waited.status, JSON.stringify(waited.body)).toBe(200)
+  expect(waited.body.waited).toMatch(/in frame f\d+/)
 })
 
 test('a window the page opens from the agent tab is the agent\'s, named in the click\'s answer', async () => {

@@ -44,6 +44,8 @@ export interface ApprovalRequester {
   /** The command line that ran `walnut approve`, read from the process table (the person reads what really runs). */
   ranBy?: string
   user?: string
+  /** It asked from the machine Walnut runs on (not through a host's gateway): shown as "this computer", never its host name. */
+  local?: boolean
 }
 
 export interface ApprovalAnswer {

@@ -20,7 +20,7 @@ import {
 } from './crypto.js'
 import {
   VAULT_FORMAT, VAULT_VERSION, VaultError, aadWrap, commitSides, isOpen, loadFile, loadMachine, openGen, prepareSides, requireOpen,
-  rewrapItems, saveFile, serial, setAsideMachine, setOpen, tryOpenWithMachine, writeMachine, decryptAll, type MachineFile, type VaultFile,
+  mutate, rewrapItems, saveFile, serial, setAsideMachine, setOpen, tryOpenWithMachine, writeMachine, decryptAll, type MachineFile, type VaultFile,
 } from './state.js'
 
 export { VAULT_FORMAT, VAULT_VERSION, VaultError, closeVault, isOpen, openKey, resetVaultForTest } from './state.js'
@@ -45,6 +45,8 @@ export interface VaultStatus {
   hasRecovery?: boolean
   /** Its newest recovery kit was never confirmed saved (a lost answer, a failed download): make a new one. */
   recoveryUnsaved?: boolean
+  /** The master password hint the person wrote (hint.ts), shown on the unlock screen; absent when none. */
+  hint?: string
 }
 
 export async function vaultStatus(): Promise<VaultStatus> {
@@ -62,6 +64,7 @@ export async function vaultStatus(): Promise<VaultStatus> {
     vaultId: f.id,
     hasRecovery: hasLiveRecovery(f),
     recoveryUnsaved: hasLiveRecovery(f) && f.recoveryUnsaved === f.recoveryFor,
+    ...(f.hint ? { hint: f.hint } : {}),
   }
 }
 
@@ -89,7 +92,7 @@ export function defaultKdf(): KdfParams {
  * `kdf`; the server makes the Secret Key and returns it once, for the recovery kit
  * (revealSecretKey shows it again for the master password).
  */
-export async function setupVault(p: { passwordKey: string; kdf: KdfParams; agentsWhileAway: boolean }): Promise<{ secretKey: string; recoveryCode: string; vaultId: string }> {
+export async function setupVault(p: { passwordKey: string; kdf: KdfParams; agentsWhileAway: boolean; hint?: string }): Promise<{ secretKey: string; recoveryCode: string; vaultId: string }> {
   checkKdf(p.kdf)
   const pw = pwKeyBytes(p.passwordKey)
   const made = await serial(async () => {
@@ -113,6 +116,7 @@ export async function setupVault(p: { passwordKey: string; kdf: KdfParams; agent
         ...(machineKey ? { machine: await seal(machineKey, key, aadWrap(id, 'machine')) } : {}),
       },
       items: {},
+      ...(p.hint ? { hint: p.hint } : {}),
     }
     const recoveryCode = newRecoveryCode()
     f.wraps.recovery = await seal(await deriveRecoveryKey(parseRecoveryCode(recoveryCode)!, parseSecretKey(secretKey)!, id), key, aadWrap(id, 'recovery'))
@@ -261,7 +265,7 @@ export async function newRecoveryKit(passwordKey: string): Promise<RecoveryKit> 
  * else from the kit) opens the vault, which gets a new master password, a new vault key and a
  * new recovery code. Returns the new kit; the old code opens nothing from now on.
  */
-export async function recoverVault(p: { recoveryCode: string; secretKey?: string; newPasswordKey: string; kdf: KdfParams }): Promise<RecoveryKit> {
+export async function recoverVault(p: { recoveryCode: string; secretKey?: string; newPasswordKey: string; kdf: KdfParams; hint?: string }): Promise<RecoveryKit> {
   checkKdf(p.kdf)
   const newPw = pwKeyBytes(p.newPasswordKey)
   return serial(async () => {
@@ -289,6 +293,7 @@ export async function recoverVault(p: { recoveryCode: string; secretKey?: string
     const aukSalt = randomBytes(16)
     f.kdf = p.kdf
     f.aukSalt = toB64(aukSalt)
+    setHint(f, p.hint)
     const auk = await deriveUnlockKey(newPw, sk, aukSalt)
     if (m && m.vaultId !== f.id) { await setAsideMachine(m); m = null }
     const keep = !!(m && hasMachineKey(f, m))
@@ -336,7 +341,7 @@ export async function setAgentsWhileAway(on: boolean, passwordKey: string): Prom
  * New master password: a new vault key, wrapped by the new password, and a new recovery code
  * when the vault has one (returned). Needs the old password.
  */
-export async function changeMasterPassword(p: { oldPasswordKey: string; newPasswordKey: string; kdf: KdfParams }): Promise<{ kit?: RecoveryKit }> {
+export async function changeMasterPassword(p: { oldPasswordKey: string; newPasswordKey: string; kdf: KdfParams; hint?: string }): Promise<{ kit?: RecoveryKit }> {
   checkKdf(p.kdf)
   const newPw = pwKeyBytes(p.newPasswordKey)
   return serial(async () => {
@@ -354,9 +359,24 @@ export async function changeMasterPassword(p: { oldPasswordKey: string; newPassw
     const aukSalt = randomBytes(16)
     f.kdf = p.kdf
     f.aukSalt = toB64(aukSalt)
+    setHint(f, p.hint)
     const auk = await deriveUnlockKey(newPw, sk, aukSalt)
     // checkPassword found the Secret Key in machine.json, so it is this vault's.
     const recoveryCode = await rotate({ gen, f, oldKey: cur.key, items: cur.items, sk, auk, machine: m!, keepMachineKey: hasMachineKey(f, m!), recovery: hasLiveRecovery(f) })
     return recoveryCode ? { kit: { secretKey: secretKeyText(sk), recoveryCode } } : {}
+  })
+}
+
+/** A new master password takes the hint that came with it; none (an older client sent none) drops the old one, which was about the old password. */
+function setHint(f: VaultFile, hint: string | undefined): void {
+  if (hint) f.hint = hint
+  else delete f.hint
+}
+
+/** Change or remove the hint (the route checked it against the master password first). Needs the vault open. */
+export async function setVaultHint(hint: string): Promise<void> {
+  await mutate(async (s) => {
+    setHint(s.f, hint)
+    return { result: undefined }
   })
 }

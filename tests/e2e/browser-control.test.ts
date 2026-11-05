@@ -22,7 +22,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import * as hub from '../../src/core/browser-control/hub.js'
 import { siteKey } from '../../src/core/vault/url-match.js'
-import { createDevice } from '../../src/core/device-auth.js'
+import { createDevice, revokeDevice } from '../../src/core/device-auth.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { getPairingTargets } from '../../src/core/pairing-targets.js'
 import { answerMessage, keyIdOf } from '../../src/core/approvals/digest.js'
@@ -371,6 +371,34 @@ describe('agents in the person\'s browser', () => {
     await ext.stop()
     expect((await http('POST', '/browser/off', {}, ext.auth)).status).toBe(200)
     expect((await http('GET', '/browser/status')).body.browsers).toEqual([])
+    expect((await http('GET', '/browser/status')).body.gone).toMatchObject({ why: 'off' })
+  })
+
+  it('the person disconnects the extension: status says so at once and a command fails at once, plainly', async () => {
+    const dev = await pair()
+    const other = fakeExtension(dev.token)
+    await expect.poll(async () => (await http('GET', '/browser/status')).body.browsers.length, { timeout: 5000 }).toBe(1)
+    // Its Disconnect removes its device (as the extension does: lock, DELETE its device); its poll stays open.
+    expect(await revokeDevice(dev.name)).toBe(true)
+    const st = (await http('GET', '/browser/status')).body
+    expect(st.browsers).toEqual([])
+    expect(st.gone).toMatchObject({ why: 'disconnected' })
+    const t = Date.now()
+    const r = await http('POST', '/browser/act', { action: 'text', tab: 100 }, AGENT)
+    expect(Date.now() - t).toBeLessThan(2000)
+    expect(r.status, JSON.stringify(r.body)).toBe(409)
+    expect(r.body.code).toBe('browser_disconnected')
+    expect(r.body.error).toContain('disconnected this browser from Walnut')
+    await other.stop()
+  })
+
+  it('the extension says it is disconnecting (its Disconnect, before it forgets this Walnut)', async () => {
+    const dev = await pair()
+    const other = fakeExtension(dev.token)
+    await expect.poll(async () => (await http('GET', '/browser/status')).body.browsers.length, { timeout: 5000 }).toBe(1)
+    await other.stop()
+    expect((await http('POST', '/browser/off', { why: 'disconnected' }, other.auth)).status).toBe(200)
+    expect((await http('POST', '/browser/act', { action: 'tabs' }, AGENT)).body.code).toBe('browser_disconnected')
   })
 })
 

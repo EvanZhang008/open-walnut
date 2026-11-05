@@ -21,6 +21,7 @@ import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
+import { onCredentialsRevoked } from '../../core/device-auth.js'
 
 export const browserV1Router = Router()
 
@@ -145,12 +146,20 @@ browserV1Router.post('/browser/result', (req, res, next) => {
   })
 })
 
+// A device removed (the extension's Disconnect, Settings, `walnut device revoke`): its browser is
+// gone at once, and an agent's next command says the person disconnected it (no wait for a poll).
+onCredentialsRevoked((names) => {
+  void hub().then((h) => { for (const n of names) h.disconnect(n, 'disconnected') }).catch(() => undefined)
+})
+
 browserV1Router.post('/browser/off', (req, res, next) => {
   const device = extensionOf(req, res)
   if (!device) return
   void run(res, next, async () => {
-    (await hub()).disconnect(device)
-    log.web.info('browser control off', { device })
+    // `why: disconnected`: the extension is about to forget this Walnut (its Disconnect).
+    const why = (req.body as { why?: unknown } | undefined)?.why === 'disconnected' ? 'disconnected' : 'off'
+    ;(await hub()).disconnect(device, why)
+    log.web.info('browser control off', { device, why })
     return { ok: true }
   })
 })
@@ -158,7 +167,9 @@ browserV1Router.post('/browser/off', (req, res, next) => {
 browserV1Router.get('/browser/status', (_req, res, next) => {
   void run(res, next, async () => {
     const f = await (await sites()).readSites()
-    return { browsers: (await hub()).connected(), mode: f.mode, sites: f.sites }
+    const h = await hub()
+    const left = h.lastGone()
+    return { browsers: h.connected(), mode: f.mode, sites: f.sites, ...(left ? { gone: { label: left.label, at: new Date(left.at).toISOString(), why: left.why } } : {}) }
   })
 })
 

@@ -33,7 +33,7 @@ export function approvalNoticeText(a: Approval, hostName: string = hostDisplayLa
   const r = a.requester;
   const who = r.taskTitle ? `Task "${r.taskTitle}"` : r.command ? r.command : 'A script';
   const how = a.mode === 'biometric' ? 'Click to review it, then approve with Touch ID or Face ID.' : 'Click to approve or deny.';
-  return { title: `Approve? ${a.what}`, body: `${who} on ${hostName} is waiting for you. ${how}` };
+  return { title: `Approve? ${a.what}`, body: `${who} on ${r.local ? 'this computer' : hostName} is waiting for you. ${how}` };
 }
 
 /** Whether this window can raise a system notice now, and what to offer when it cannot. */

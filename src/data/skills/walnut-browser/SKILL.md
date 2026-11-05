@@ -108,5 +108,6 @@ loaded, `fill-login` answers `page_tampered`: navigate to the page again (a relo
 - `evaluate` reads anything on the page: use it only for what the other actions cannot read,
   never to get at a password field.
 
-Exit codes of `walnut browser`: 0 done, 1 refused, 2 no answer in time, 3 an error.
+Exit codes of `walnut browser`: 0 done, 1 refused or a choice to make (the message lists the choices), 2 no answer in time, 3 an error.
+`browser_disconnected` means the user disconnected the extension: ask them to connect it again, do not retry.
 Reference: `docs/reference/browser-control.md`.

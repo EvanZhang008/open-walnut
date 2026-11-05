@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
-import { askedOf, extTaskLists, keepTaskLists, keptTaskLists, KEPT_MAX_AGE_MS, pageTaskInput } from '../../web/src/popout/ext-tasks-model'
+import { askedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, KEPT_MAX_AGE_MS, pageTaskInput, rowLine } from '../../web/src/popout/ext-tasks-model'
 
 let n = 0
 const task = (over: Partial<Task>): Task => ({
@@ -30,6 +30,22 @@ describe('the Tasks tab lists', () => {
     expect(row.label).toBe('Needs you')
     expect(row.line).toContain('Pick a design')
     expect(lists.focus[0].label).toBe('Working')
+  })
+
+  it('a row does not repeat its section; one answered here stays, with its new state', () => {
+    const t = task({ title: 'Pick a design', phase: 'NEED_ACTION', user_status: { state: 'needs', source: 'session', ask: 'A or B?', category: 'decide' } as never })
+    const row = extTaskLists([t]).needs[0]
+    expect(rowLine(row, 'needs')).not.toMatch(/^Needs you/)
+    expect(rowLine(row, 'needs')).toContain('A or B?')
+    expect(rowLine({ label: 'Working', line: '' }, 'focus')).toBe('Working')
+    // Answered: the task works again, needs the person no more, yet stays listed where it was.
+    const working = { ...t, phase: 'IN_PROGRESS', user_status: { state: 'working', source: 'session' } } as Task
+    expect(extTaskLists([working]).needs).toHaveLength(0)
+    const kept = extTaskLists([working], new Set([t.id])).needs
+    expect(kept.map((r) => r.task.id)).toEqual([t.id])
+    expect(rowLine(kept[0], 'needs')).toMatch(/^Working/)
+    expect(inFocus({ ...t, pinned: true, focus_tier: 'focus' } as Task)).toBe(true)
+    expect(inFocus({ ...t, pinned: true } as Task)).toBe(false)
   })
 
   it('a page saved as a task names the page, and its address to come back to', () => {

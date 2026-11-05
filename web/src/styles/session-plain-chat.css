@@ -12,3 +12,35 @@
   overflow: visible;
   pointer-events: none;
 }
+
+/* A message's actions (copy, pin, the ⋮) come on hover or keyboard focus, never as a bare row under
+   every bubble, also where the page reports no hover (a headless or touch-less browser). The live
+   reply's own strip stays (sticky), as everywhere. */
+html body .session-panel.is-plain-chat .session-msg .session-msg-actions:not(.session-msg-actions--sticky),
+html body .session-panel.is-plain-chat .session-msg-bare .session-msg-actions:not(.session-msg-actions--sticky) {
+  opacity: 0;
+  pointer-events: none;
+}
+html body .session-panel.is-plain-chat .session-msg:hover .session-msg-actions,
+html body .session-panel.is-plain-chat .session-msg:focus-within .session-msg-actions,
+html body .session-panel.is-plain-chat .session-msg-bare:hover .session-msg-actions,
+html body .session-panel.is-plain-chat .session-msg-bare:focus-within .session-msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Before the first message: what goes with it (the page quote) sits on the composer, not mid-panel. */
+.draft-session-panel.is-plain-chat .draft-session-body {
+  align-items: flex-end;
+  justify-content: stretch;
+  text-align: left;
+  padding: 12px 12px 8px;
+}
+.draft-session-panel.is-plain-chat .draft-session-body > * { width: 100%; }
+
+/* The person's bubble keeps its actions beside it (in the empty side of the row), so the bubble
+   holds only their words and nothing shifts when the actions come. */
+.session-panel.is-plain-chat .session-msg-user { position: relative; }
+.session-panel.is-plain-chat .session-msg-user .session-msg-actions { position: absolute; right: 100%; bottom: 2px; margin: 0 6px 0 0; }
+.draft-session-panel.is-plain-chat .draft-intent-stack { align-items: stretch; margin: 0; max-width: none; }
+.draft-session-panel.is-plain-chat .ask-object-quote { max-width: none; }

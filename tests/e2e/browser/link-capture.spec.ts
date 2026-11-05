@@ -458,3 +458,35 @@ test.describe('phone layout', () => {
     expect(errors).toEqual([])
   })
 })
+
+// Last on purpose: the column it opens stays open on the Files tab (the layout is kept).
+test('the HTML preview\'s page hands its links to the same handlers: a click opens the plugin, a right-click its menu', async ({ page }) => {
+  const { errors, tabs } = await prepare(page)
+  const { links } = fixture
+  const col = await openColumn(page)
+  await col.getByRole('button', { name: 'Files' }).first().click()
+  const explorer = col.locator('.session-file-explorer')
+  await expect(explorer).toBeVisible({ timeout: 10_000 })
+  await explorer.locator('.sfe-name', { hasText: 'links.html' }).click()
+  const inner = col.frameLocator('iframe.fv-html-preview')
+  await expect(inner.locator('h1')).toHaveText('Report links', { timeout: 15_000 })
+  // The page runs in an origin of its own: the console's menu comes through its bridge.
+  expect(await inner.locator('body').evaluate(() => self.origin)).toBe('null')
+  const handled = inner.locator('#handled')
+  await handled.hover()
+  await page.waitForTimeout(300) // the page asks the console whether a plugin takes it
+  await handled.click({ button: 'right' })
+  const menu = linkMenu(page)
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem')).toHaveText(['Open in Team Chat', 'Open in default browser', 'Copy link'])
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-4-preview-link-menu.png` })
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  // A plain click opens the plugin, never a tab.
+  const before = tabs().length
+  await handled.click()
+  await expectOpenedInPlugin(page, links.permalink, 'click')
+  expect(tabs().slice(before)).toEqual([])
+  expect(errors).toEqual([])
+})

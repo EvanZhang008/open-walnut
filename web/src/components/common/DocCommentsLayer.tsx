@@ -20,8 +20,9 @@
  * it: one picked in the rendered doc shows on the same words in the source and
  * the other way round (doc-comment-anchor.ts matches across the markup). The
  * source editor is read through its document, so a passage it has not drawn yet
- * is scrolled to, never taken for changed; the HTML preview is a same-origin
- * frame, painted and hit-tested in its own document.
+ * is scrolled to, never taken for changed; the HTML preview's page runs in an
+ * origin of its own, where its bridge paints and hit-tests the comments from
+ * offsets located here in the text it sends (preview-marks.ts).
  */
 import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type RefObject,
@@ -41,8 +42,10 @@ import { DocCommentCard, DocCommentDraft, DocCommentsHead } from './DocCommentCa
 import type { FileSourceEditorHandle } from './FileSourceEditor';
 import type { FileThreadSurface } from './FileThreadLayer';
 import {
-  bodyOf, frameDocFor, frameDocOf, HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT, LocateMemo, paintFrame, reveal, scrollerOf,
+  bodyOf, FRAME_COMMENT_STYLE, HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT, LocateMemo, reveal, scrollerOf,
 } from './doc-comments-dom';
+import type { PreviewChannel } from './preview-frame';
+import { FrameMarkGroup, unionOf, type FrameMarkSpec } from './preview-marks';
 import { inPlaceCardPosition } from '@/utils/in-place-card';
 import { log } from '@/utils/log';
 import '@/styles/doc-comments.css';
@@ -56,7 +59,7 @@ const JUMP_FRESH_MS = 15_000;
 export interface DocCommentsHandle {
   /** Start a comment on the selection (`range`, or in the source editor `offsets`,
    *  else the live one). False = nothing to comment on. */
-  commentOn: (opts: { range?: Range; text?: string; offsets?: { from: number; to: number } | null }) => boolean;
+  commentOn: (opts: { range?: Range; text?: string; offsets?: { from: number; to: number } | null; inFrame?: boolean }) => boolean;
 }
 
 interface Props {
@@ -66,9 +69,10 @@ interface Props {
   rootRef: RefObject<HTMLDivElement | null>;
   /** Changes when the surface remounts or reloads (anchors are located again). */
   surfaceNonce: unknown;
-  /** The view on show. `source` is read through `editor`; `html` lives in `frameRef`. */
+  /** The view on show. `source` is read through `editor`; `html` through `channel`. */
   surface: FileThreadSurface;
-  frameRef: RefObject<HTMLIFrameElement | null>;
+  /** The HTML preview's page (its bridge), when that is the surface. */
+  channel: PreviewChannel | null;
   editor: RefObject<FileSourceEditorHandle | null>;
   /** The doc's text as it stands: tells words this view does not show (a link's
    *  target) from words that are gone. */
@@ -91,7 +95,7 @@ const NO_MARKS: Marks = { drawn: new Set(), elsewhere: new Set(), gone: new Set(
 const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((x) => b.has(x));
 
 export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function DocCommentsLayer(
-  { filePath, host, sessionId, rootRef, surfaceNonce, surface, frameRef, editor, getDocText }, ref,
+  { filePath, host, sessionId, rootRef, surfaceNonce, surface, channel, editor, getDocText }, ref,
 ) {
   const store = useDocComments({ path: filePath, host, sessionId });
   const inSource = surface === 'source';
@@ -133,10 +137,10 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   const docText = useRef<{ text: string | null; at: number; timer?: ReturnType<typeof setTimeout> }>({ text: null, at: 0 });
   const getDocTextRef = useRef(getDocText);
   getDocTextRef.current = getDocText;
-  /** The body holding the doc's text in the view on show, in whichever document. */
-  const bodyNow = useCallback((): Element | null => (
-    inFrame ? frameDocFor(frameRef.current)?.body ?? null : bodyOf(rootRef.current)
-  ), [inFrame, frameRef, rootRef]);
+  /** The body holding the doc's text in the view on show (none in the HTML preview's frame). */
+  const bodyNow = useCallback((): Element | null => (inFrame ? null : bodyOf(rootRef.current)), [inFrame, rootRef]);
+  const group = useMemo(() => (channel ? new FrameMarkGroup(channel, 'comments') : null), [channel]);
+
   const panelKey = `doc:${sessionId}:${filePath}`;
 
   const open = useMemo(() => store.comments.filter((c) => c.status === 'open'), [store.comments]);
@@ -163,6 +167,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     const next = new Map<string, Range>();
     const elsewhere = new Map<string, number>();
     const gone = new Set<string>();
+    const inPage: Array<{ id: string; start: number; end: number }> = [];
     const want: Array<[string, SessionPinnedQuote]> = store.comments
       .filter((c) => (c.status === 'open' || c.id === currentId) && c.quote.exact)
       .map((c) => [c.id, c.quote]);
@@ -176,6 +181,19 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
         if (!at) { gone.add(id); continue; }
         const r = ed.rangeAt(at.start, at.end);
         if (r) next.set(id, r); else elsewhere.set(id, at.start);
+      }
+    } else if (inFrame) {
+      // The page's text, as it last sent it; the page paints what is located in it.
+      const t = channel?.text();
+      if (t) {
+        let doc: string | null | undefined;
+        for (const [id, quote] of want) {
+          const at = viewMemo.current.locate(t.text, markup, quote);
+          if (at) { inPage.push({ id, start: at.start, end: at.end }); continue; }
+          if (doc === undefined) doc = readDocText();
+          const there = markup && doc != null ? docMemo.current.locate(doc, markup, quote) : null;
+          if (there) elsewhere.set(id, there.start); else if (doc != null) gone.add(id);
+        }
       }
     } else if (!inSource) {
       const b = bodyNow();
@@ -195,15 +213,17 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       }
     }
     ranges.current = next;
+    const located = new Set([...next.keys(), ...inPage.map((x) => x.id)]);
+    let revealInPage: string | null = null;
     // A card asked for (the list, a row above the composer) whose words were not drawn yet.
     const asked = revealRef.current;
     if (asked && (gone.has(asked) || (!inSource && elsewhere.has(asked)))) {
       // Not to be shown in this view: the ask ends here, it never pulls the view later.
       revealRef.current = null;
-    } else if (asked && next.has(asked)) {
+    } else if (asked && located.has(asked)) {
       revealRef.current = null;
       scrolledFor.current = null;
-      reveal(next.get(asked)!);
+      if (inFrame) revealInPage = asked; else reveal(next.get(asked)!);
     } else if (asked && ed?.scrollToPos && elsewhere.has(asked) && scrolledFor.current !== asked) {
       // Drawn once the editor scrolls there; the next pass reveals it.
       scrolledFor.current = asked;
@@ -214,25 +234,34 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     if (inFrame) {
       OPEN_LAYER.clear(panelKey);
       CURRENT_LAYER.clear(panelKey);
-      // (A page the preview strayed to has nothing located: its paint is cleared.)
-      paintFrame(frameDocOf(frameRef.current), openRanges, cur ? [cur] : []);
+      // (A page the preview strayed to sends no text of this file: nothing is located there.)
+      const t = channel?.text();
+      const curId = currentId && inPage.some((x) => x.id === currentId) ? currentId : DRAFT_KEY;
+      // Every one reports its rects: a card is placed under whichever is shown.
+      const specs: FrameMarkSpec[] = inPage.map((x) => ({
+        key: x.id, start: x.start, end: x.end,
+        name: x.id === curId ? HL_DOC_COMMENT_CURRENT : HL_DOC_COMMENT,
+        click: x.id !== DRAFT_KEY, rects: true,
+      }));
+      if (t && group) group.set(t.v, specs); else group?.clear();
+      if (revealInPage) group?.reveal(revealInPage);
     } else {
       OPEN_LAYER.set(panelKey, openRanges);
       CURRENT_LAYER.set(panelKey, cur ? [cur] : []);
     }
-    const drawn = new Set(next.keys());
+    const drawn = located;
     const away = new Set(elsewhere.keys());
     setMarks((prev) => (sameSet(prev.drawn, drawn) && sameSet(prev.elsewhere, away) && sameSet(prev.gone, gone)
       ? prev : { drawn, elsewhere: away, gone }));
-  }, [store.comments, open, currentId, draft, panelKey, inSource, inFrame, editor, markup, bodyNow, frameRef, readDocText]);
+  }, [store.comments, open, currentId, draft, panelKey, inSource, inFrame, editor, markup, bodyNow, channel, group, readDocText]);
   const locateRef = useRef(locate);
   locateRef.current = locate;
   useEffect(() => () => { OPEN_LAYER.clear(panelKey); CURRENT_LAYER.clear(panelKey); }, [panelKey]);
   useEffect(() => {
-    if (!inFrame) return;
-    const frame = frameRef.current;
-    return () => paintFrame(frameDocOf(frame), [], []);
-  }, [inFrame, frameRef, surfaceNonce]);
+    if (!inFrame || !channel || !group) return;
+    channel.style('walnut-comments', FRAME_COMMENT_STYLE);
+    return () => group.clear();
+  }, [inFrame, channel, group, surfaceNonce]);
 
   // ── Place the open card in place: under its words (utils/in-place-card.ts) ──
   const place = useCallback(() => {
@@ -244,13 +273,18 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     const minTop = Math.max(0, (bar ? bar.getBoundingClientRect().bottom : box.top) - box.top) + 4;
     // The cards' area starts under the toolbar and clips there; card tops are its.
     layer.style.setProperty('--dc-top', `${Math.round(minTop)}px`);
-    // The HTML preview's ranges measure in the frame's viewport.
-    const fb = inFrame ? frameRef.current?.getBoundingClientRect() : null;
+    // The HTML preview's rects (as its page reports them) measure in the frame's viewport.
+    const fb = inFrame ? channel?.frameBox() : null;
     const dx = fb?.left ?? 0;
     const dy = fb?.top ?? 0;
     const view = { width: box.width, height: box.height - minTop };
     for (const [id, el] of cardEls.current) {
-      const rects = Array.from(ranges.current.get(id)?.getClientRects() ?? []).map((r) => ({
+      // The page has not reported this one's rects yet (a draft just made): kept unseen but
+      // not hidden, so the draft's box can take focus, until they come.
+      if (inFrame && !group?.rects(id)) { el.style.opacity = '0'; el.style.visibility = 'visible'; continue; }
+      el.style.opacity = '';
+      const own = inFrame ? group?.rects(id)?.r ?? [] : Array.from(ranges.current.get(id)?.getClientRects() ?? []);
+      const rects = own.map((r) => ({
         left: r.left + dx - box.left, right: r.right + dx - box.left,
         top: r.top + dy - box.top - minTop, bottom: r.bottom + dy - box.top - minTop,
       }));
@@ -265,7 +299,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       const off = at.top + el.offsetHeight < 0 || at.top > view.height;
       el.style.visibility = off ? 'hidden' : 'visible';
     }
-  }, [rootRef, inFrame, frameRef]);
+  }, [rootRef, inFrame, channel, group]);
   const placeRef = useRef(place);
   placeRef.current = place;
 
@@ -307,55 +341,18 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     const onPointer = (e: Event) => {
       if (!cardEls.current.size) return;
       const t = e.target as Node | null;
-      if (t && (root.contains(t) || t.ownerDocument !== document)) placeRef.current();
+      if (t && root.contains(t)) placeRef.current();
     };
     document.addEventListener('scroll', onScroll, true);
     document.addEventListener('pointermove', onPointer, true);
     window.addEventListener('resize', onResize);
-    // The HTML preview: its page changes, scrolls and resizes in its own document,
-    // which is replaced on every load.
-    const frame = inFrame ? frameRef.current : null;
-    let fdoc: Document | null = null;
-    let fwin: Window | null = null;
-    let fmo: MutationObserver | null = null;
-    let fro: ResizeObserver | null = null;
-    const onFrameChange = () => later(true);
-    // Escape pressed while the page has focus (never one meant for the page's own field).
-    const onFrameKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
-      escapeRef.current(e);
-    };
-    const detachFrame = () => {
-      fmo?.disconnect();
-      fro?.disconnect();
-      fdoc?.removeEventListener('scroll', onScroll, true);
-      fdoc?.removeEventListener('pointermove', onPointer, true);
-      fwin?.removeEventListener('resize', onFrameChange);
-      fwin?.removeEventListener('keydown', onFrameKey);
-      fmo = null; fro = null; fdoc = null; fwin = null;
-    };
-    const attachFrame = () => {
-      detachFrame();
-      fdoc = frameDocOf(frame);
-      // Another page, or none: re-locate, which finds nothing there and clears what was drawn.
-      if (!fdoc?.body) { later(true); return; }
-      fwin = fdoc.defaultView;
-      fwin?.addEventListener('keydown', onFrameKey);
-      fmo = new MutationObserver(onFrameChange);
-      fmo.observe(fdoc.body, { childList: true, subtree: true, characterData: true });
-      const FrameRO = (fdoc.defaultView as (Window & { ResizeObserver?: typeof ResizeObserver }) | null)?.ResizeObserver;
-      fro = FrameRO ? new FrameRO(onFrameChange) : null;
-      fro?.observe(fdoc.body);
-      fdoc.addEventListener('scroll', onScroll, { capture: true, passive: true });
-      fdoc.addEventListener('pointermove', onPointer, { capture: true, passive: true });
-      fwin?.addEventListener('resize', onFrameChange);
-      later(true);
-    };
-    if (frame) {
-      frame.addEventListener('load', attachFrame);
-      if (frameDocOf(frame)?.readyState === 'complete') attachFrame();
-    }
+    // The HTML preview: its page sends its text again when it changes (relocate) and the
+    // rects of the comments when they move (place). Its page reports them on its own
+    // scroll, so the cards are placed in that message, not a frame later (as above).
+    const off = inFrame ? channel?.on((m) => {
+      if (m.type === 'text' || m.type === 'ready') later(true);
+      else if (m.type === 'rects') { group?.take(m); placeRef.current(); }
+    }) : undefined;
     later(true);
     return () => {
       mo.disconnect();
@@ -363,11 +360,10 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       document.removeEventListener('scroll', onScroll, true);
       document.removeEventListener('pointermove', onPointer, true);
       window.removeEventListener('resize', onResize);
-      frame?.removeEventListener('load', attachFrame);
-      detachFrame();
+      off?.();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [rootRef, surfaceNonce, filePath, inFrame, frameRef]);
+  }, [rootRef, surfaceNonce, filePath, inFrame, channel, group]);
   // The list or the current one changed: locate (paint) and place before the paint.
   useLayoutEffect(() => { locate(); place(); }, [locate, place, anchored]);
 
@@ -377,30 +373,29 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     if (!opened) return;
     const raf = requestAnimationFrame(() => {
       const root = rootRef.current;
-      const r = ranges.current.get(opened);
-      if (!root || !r) return;
-      const rect = r.getBoundingClientRect();
+      const r = inFrame ? null : ranges.current.get(opened);
+      const own = inFrame ? unionOf(group?.rects(opened)?.r ?? []) : r?.getBoundingClientRect();
+      const fb = inFrame ? channel?.frameBox() : null;
+      if (!root || !own || (inFrame && !fb)) return;
+      const top = own.top + (fb?.top ?? 0);
+      const bottom = own.bottom + (fb?.top ?? 0);
       const box = root.getBoundingClientRect();
-      if (rect.top < box.top + 48 || rect.bottom > box.bottom - 8) reveal(r);
+      if (top < box.top + 48 || bottom > box.bottom - 8) { if (r) reveal(r); else group?.reveal(opened); }
       placeRef.current();
     });
     return () => cancelAnimationFrame(raf);
-  }, [opened, rootRef]);
+  }, [opened, rootRef, inFrame, channel, group]);
 
   // ── A click on commented words makes its card current; elsewhere in the doc, none ──
-  // (In the HTML preview the click lands in the frame's document, at its own coordinates,
-  // which are the ones its ranges measure in.)
+  // (In the HTML preview the page hit-tests its own clicks and hovers and reports them.)
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    // In the HTML preview the ranges measure in the frame's viewport, so only the
-    // frame's own events (not the toolbar's, at the outer page's coordinates) hit them.
-    const hits = (e: MouseEvent) => !inFrame || (e.target as Node | null)?.ownerDocument !== document;
     const onClick = (e: MouseEvent) => {
       if (e.button !== 0 || layerRef.current?.contains(e.target as Node)) return;
-      const sel = ((e.target as Node | null)?.ownerDocument ?? document).getSelection();
+      const sel = document.getSelection();
       if (sel && !sel.isCollapsed) return;
-      for (const [id, r] of hits(e) ? ranges.current : []) {
+      for (const [id, r] of ranges.current) {
         if (id !== DRAFT_KEY && pointInRangeRects(r, e.clientX, e.clientY)) {
           setCurrentId(id);
           log.info('doc-comments', 'comment opened from its words', { path: filePath, id, surface });
@@ -418,7 +413,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     const onMove = (e: PointerEvent) => {
       if (e.buttons || e.pointerType === 'touch') return;
       if (layerRef.current?.contains(e.target as Node)) { window.clearTimeout(hideTimer); return; }
-      for (const [id, r] of hits(e) ? ranges.current : []) {
+      for (const [id, r] of ranges.current) {
         if (id !== DRAFT_KEY && pointInRangeRects(r, e.clientX, e.clientY)) {
           window.clearTimeout(hideTimer);
           setPeekId(id);
@@ -433,29 +428,28 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     root.addEventListener('click', onClick);
     root.addEventListener('pointermove', onMove);
     root.addEventListener('mouseleave', onLeave);
-    const frame = inFrame ? frameRef.current : null;
-    let fdoc: Document | null = null;
-    const attach = () => {
-      fdoc?.removeEventListener('click', onClick, true);
-      fdoc?.removeEventListener('pointermove', onMove, true);
-      fdoc = frameDocOf(frame);
-      fdoc?.addEventListener('click', onClick, true);
-      fdoc?.addEventListener('pointermove', onMove, true);
-    };
-    if (frame) {
-      frame.addEventListener('load', attach);
-      if (frameDocOf(frame)?.readyState === 'complete') attach();
-    }
+    const off = inFrame ? channel?.on((m) => {
+      if (m.type !== 'click' && m.type !== 'hover') return;
+      const id = group?.hit(m.hits) ?? null;
+      window.clearTimeout(hideTimer);
+      if (m.type === 'hover') {
+        if (id) setPeekId(id); else hideTimer = window.setTimeout(() => setPeekId(null), 300);
+      } else if (id) {
+        setCurrentId(id);
+        log.info('doc-comments', 'comment opened from its words', { path: filePath, id, surface });
+      } else {
+        setCurrentId(null);
+        setListOpen(false);
+      }
+    }) : undefined;
     return () => {
       window.clearTimeout(hideTimer);
       root.removeEventListener('click', onClick);
       root.removeEventListener('pointermove', onMove);
       root.removeEventListener('mouseleave', onLeave);
-      frame?.removeEventListener('load', attach);
-      fdoc?.removeEventListener('click', onClick, true);
-      fdoc?.removeEventListener('pointermove', onMove, true);
+      off?.();
     };
-  }, [rootRef, filePath, inFrame, frameRef, surface, surfaceNonce]);
+  }, [rootRef, filePath, inFrame, channel, group, surface, surfaceNonce]);
   useEffect(() => {
     if (!currentId && !draft) return;
     const onKey = (e: KeyboardEvent) => escapeRef.current(e);
@@ -520,11 +514,22 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   }, [draft, store, queue, inSource]);
 
   useImperativeHandle(ref, () => ({
-    commentOn: ({ range: given, text, offsets }) => {
+    commentOn: ({ range: given, text, offsets, inFrame: fromFrame }) => {
       let quote: SessionPinnedQuote | null = null;
       let picked = '';
       const ed = inSource ? editor.current : null;
-      if (ed) {
+      if (fromFrame || inFrame) {
+        // The page's selection, as it reported it: offsets into its text of that version.
+        const sel = channel?.selection();
+        const t = channel?.text();
+        if (!sel || !t || sel.v !== t.v) {
+          log.info('doc-comments', 'comment not started: no selection in the html preview', { path: filePath, hasText: !!t });
+          return false;
+        }
+        quote = quoteFromText(t.text, sel.start, sel.end);
+        picked = sel.text;
+        channel?.send({ type: 'clear-selection' });
+      } else if (ed) {
         // The source editor's own selection, as offsets in its document (its DOM
         // selection is gone by the time a pill is clicked).
         const at = offsets ?? ed.selectionOffsets?.() ?? null;
@@ -553,7 +558,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       log.info('doc-comments', 'comment started', { path: filePath, surface, chars: words.length });
       return true;
     },
-  }), [filePath, surface, inSource, editor, bodyNow]);
+  }), [filePath, surface, inSource, inFrame, editor, bodyNow, channel]);
 
   const outdated = store.loaded ? open.filter((c) => marks.gone.has(c.id)) : [];
   const outdatedIds = new Set(outdated.map((c) => c.id));
@@ -630,6 +635,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
         // The cards sit over the doc's scroller: a wheel over one scrolls the doc.
         onWheel={(e) => {
           if ((e.target as HTMLElement).closest('textarea')) return;
+          if (inFrame) { channel?.send({ type: 'scroll-by', dy: e.deltaY }); return; }
           const scroller = scrollerOf(bodyNow());
           if (scroller) scroller.scrollTop += e.deltaY;
         }}

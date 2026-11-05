@@ -20,7 +20,7 @@ import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
-import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, matchesFor, originOf, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
 import { domainOf } from './login-pick'
 import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock } from './bg-fill'
 import { handleMenu } from './bg-menu'
@@ -31,7 +31,7 @@ import { clearBadges, initBadge, setBadge } from './bg-badge'
 import { walletValues } from './bg-wallet'
 import { itemDetail, secretField } from './popup-item-data'
 
-const { pendingSave, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
+const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
 /**
  * A typed or generated password is kept only as long as it can still be offered: expired ones
@@ -43,7 +43,8 @@ async function sweep(): Promise<void> {
   if (Date.now() - sweptAt < 15_000) return
   sweptAt = Date.now()
   const now = Date.now()
-  await pendingSave.sweep((p) => now - p.at > PENDING_MS)
+  await pendingSave.sweep((p) => !pendingAlive(p, now))
+  await pendingPrev.sweep((p) => !pendingAlive(p, now))
   await seenUsername.sweep((u) => now - u.at > PENDING_MS)
   await generated.sweep((g) => now - g.at > GENERATED_MS)
   await lastLogin.sweep((l) => now - l.at > CODE_PAGE_MS)
@@ -58,9 +59,9 @@ async function startConnect(serverUrl: string): Promise<Reply> {
   return { ok: true }
 }
 
-/** Lock this browser's unlock (the auto-lock, the popup's Lock): the badges go with it. */
-async function lockNow(): Promise<void> {
-  await api.lock()
+/** Lock this browser's unlock (the auto-lock; the popup's Lock with `everywhere`, every window of Walnut too): the badges go with it. */
+async function lockNow(opts: { everywhere?: boolean } = {}): Promise<void> {
+  await api.lock(opts)
   forget()
   await clearBadges()
 }
@@ -184,7 +185,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       await touch(true)
       return { ok: true }
     }
-    case 'lock': await lockNow(); return { ok: true }
+    case 'lock': await lockNow({ everywhere: true }); return { ok: true }
     case 'site-items': {
       const tab = await activeTab(windowOf(msg))
       const page = tab?.url ?? ''
@@ -332,7 +333,7 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 })
 
 ext.tabs.onRemoved.addListener((tabId) => {
-  for (const s of [menus, pendingSave, seenUsername, connecting, frames, generated, lastLogin]) void s.delete(tabId)
+  for (const s of [menus, pendingSave, pendingPrev, seenUsername, connecting, frames, generated, lastLogin]) void s.delete(tabId)
 })
 
 // The toolbar count follows the tab the person is on.

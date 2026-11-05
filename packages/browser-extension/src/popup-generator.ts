@@ -76,5 +76,5 @@ export async function generatorView(root: HTMLElement, back: () => void): Promis
         h('button', { class: 'btn btn-primary', type: 'button', style: 'flex:1', 'data-testid': 'gen-copy', onclick: () => void copySecret(out.textContent ?? '', 'Password') }, 'Copy'),
         iconButton(icon('dice'), 'Make another', () => void make(), { class: 'btn icon-only', 'data-testid': 'gen-again' })),
       options,
-      h('p', { class: 'muted', style: 'font-size:12px;margin-top:14px' }, 'On a sign-up page, Walnut offers a strong password in the field itself (made to fit what the field accepts) and saves it when you send the form.'))))
+      h('p', { class: 'muted', style: 'font-size:12px;margin-top:14px' }, 'On a sign-up page, Walnut suggests a strong password in the field itself (made to fit what the field accepts). When you send the form, it asks whether to save the login.'))))
 }

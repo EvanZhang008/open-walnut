@@ -198,7 +198,8 @@ test('a question starts an ask about the page: its words alone, the page beside 
   // (Agents are still off in this browser, so there is no browser to send it to at all.)
   const before = await act({ action: 'snapshot', tab: docTab }, askSession)
   expect(before.status, JSON.stringify(before.body)).not.toBe(200)
-  expect(['browser_not_connected', 'not_your_tab']).toContain(before.body.code)
+  // No browser lets agents in (never on, or turned off a moment ago by an earlier test), or not this ask's tab.
+  expect(['browser_not_connected', 'browser_off', 'not_your_tab']).toContain(before.body.code)
 })
 
 test('the person lets the ask act in their tab: only it can read and act there', async () => {
@@ -407,7 +408,8 @@ test('Tasks tab: what needs the person with its status, a reply into its session
   await expect(row).toBeVisible({ timeout: 30_000 })
   await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
   await expect(row).toHaveAttribute('data-state', /needs|read/)
-  await expect(row.locator('.ext-task-line')).toContainText(/Needs you|To read/)
+  // Under Needs you a row does not say "Needs you" again (a To read row says so).
+  await expect(row.locator('.ext-task-line')).not.toContainText(/^Needs you/)
 
   await row.locator('.ext-task-head').click()
   await row.getByTestId('ext-task-input').fill('Thanks, that answers it')
@@ -438,7 +440,15 @@ test('Passwords tab: unlock in place, the page\'s logins, show a password, fill 
   })
   expect(made.ok(), await made.text()).toBe(true)
   // Lock the extension's own vault session, so the panel asks for the master password in place.
-  await sw().evaluate(async () => { await chrome.storage.session.remove('vaultSession').catch(() => undefined) })
+  // (The token is in its IndexedDB, secret-store.ts; storage.session holds only the mark its pages follow.)
+  await sw().evaluate(async () => {
+    await new Promise<void>((resolve) => {
+      const req = indexedDB.open('walnut', 1)
+      req.onsuccess = () => { const tx = req.result.transaction('kv', 'readwrite'); tx.objectStore('kv').delete('vaultSession'); tx.oncomplete = () => { req.result.close(); resolve() }; tx.onerror = () => resolve() }
+      req.onerror = () => resolve()
+    })
+    await chrome.storage.session.remove('vaultSession').catch(() => undefined)
+  })
   await doc.goto(site('docs.example.test', '/login'))
 
   await panel.getByTestId('panel-tab-passwords').click()
@@ -453,6 +463,12 @@ test('Passwords tab: unlock in place, the page\'s logins, show a password, fill 
   await unlock.click()
   const item = pw.getByTestId('popup-item').filter({ hasText: `Docs ${stamp}` })
   await expect(item).toBeVisible({ timeout: 30_000 })
+  // One header: the panel's tabs. No second Walnut brand bar; its tools stay, over the search.
+  await expect(pw.locator('.top:not(.top-sub) > h1')).toBeHidden()
+  await expect(pw.locator('.top:not(.top-sub) > .logo')).toBeHidden()
+  await expect(pw.getByTestId('popup-lock')).toBeVisible()
+  await expect(pw.getByTestId('popup-settings')).toBeVisible()
+  if (process.env.PANEL_SHOTS_DIR) await panel.screenshot({ path: `${process.env.PANEL_SHOTS_DIR}/r2-passwords-list.png` })
   // Its actions show on hover, as in the toolbar popup.
   await item.hover()
   await item.getByTestId('reveal-password').click()

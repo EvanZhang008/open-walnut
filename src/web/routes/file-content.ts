@@ -43,6 +43,8 @@ import { markHandledFailure } from '../middleware/handled-failure.js'
 import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
 import { secretsRoot } from '../../providers/secrets-core.js'
 import { masterRoot } from '../../core/secrets/fleet-secrets.js'
+import { sandboxUntrustedDoc } from '../untrusted-doc.js'
+import { takesPreviewBridge, withPreviewBridge } from '../preview-bridge.js'
 
 /** Why a remote read failed, as the viewer says it: in the host's own name, never its alias. */
 async function remoteReadSentence(host: string, err: unknown): Promise<string> {
@@ -195,6 +197,17 @@ export function rawTextMime(ext: string): string {
   return Object.hasOwn(RAW_TEXT_MIME, ext) ? RAW_TEXT_MIME[ext]! : 'text/plain; charset=utf-8'
 }
 
+/**
+ * A text file as the raw route answers it, every edge alike (local, remote host, the companion's
+ * relay and its copy). An HTML or SVG document runs sandboxed in an origin of its own, never with
+ * Walnut's (untrusted-doc.ts), and an HTML one carries the Files preview's bridge (preview-bridge.ts).
+ */
+export function sendRawText(res: Response, ext: string, content: string): void {
+  const ctype = rawTextMime(ext)
+  sandboxUntrustedDoc(res, ctype)
+  res.type(ctype).send(takesPreviewBridge(ext) ? withPreviewBridge(content) : content)
+}
+
 /** Per-write chunk when streaming remote bytes (matches DaemonFileReader.CHUNK_SIZE —
  *  one WS frame per chunk keeps corp SSH proxies from killing the tunnel). */
 const REMOTE_STREAM_CHUNK = 1024 * 1024
@@ -245,6 +258,7 @@ export async function serveRawBytes(
   download: boolean,
 ): Promise<void> {
   const isRemote = typeof host === 'string' && host.length > 0
+  sandboxUntrustedDoc(res, ctype)
 
   let size: number
   if (isRemote) {
@@ -1070,12 +1084,11 @@ export async function serveRawFileContent(
     res.status(404).type('text/plain').send('File not found')
     return
   }
-  const ctype = rawTextMime(ext)
-  // The doc runs with the server's origin (web: iframe sandbox allow-scripts +
-  // allow-same-origin; iOS: WKWebView on a non-persistent data store). Acceptable
-  // for a personal tool serving files the user explicitly opened; no
-  // untrusted-upload surface.
-  res.type(ctype).send(content)
+  // An HTML/SVG document never runs with the server's origin: its CSP sandbox gives it
+  // an origin of its own (web: the preview iframe without allow-same-origin; iOS: the
+  // WKWebView). An agent writes these files, and a script on Walnut's origin would read
+  // the Passwords unlock and the device token.
+  sendRawText(res, ext, content)
 }
 
 /**

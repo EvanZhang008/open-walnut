@@ -95,6 +95,7 @@ export async function requesterOf(req: Request, body: Record<string, unknown>) {
     // The host is named only for a call that came through a host's gateway: a local caller
     // could put any name in the header and pass its ask off as another machine's.
     host: origin.startsWith('host:') ? (hostHeader && hostHeader !== LOCAL_ORIGIN ? hostHeader : origin.slice(5)) : os.hostname() || 'this computer',
+    ...(origin.startsWith('host:') ? {} : { local: true }),
   }
   let sessionLive = false
   let daemonSid: string | undefined
@@ -403,6 +404,7 @@ async function vaultApprover(req: Request, body: Record<string, unknown>, target
   if (target.guard === 'vault-sensitive' && target.mode === 'biometric') return false
   const { useSession, SESSION_HEADER } = await import('../../core/vault/sessions.js')
   const { deviceOf } = await import('./vault-v1.js')
+  await (await import('../../core/vault/session-store.js')).sessionsRestored()
   const token = header(req, SESSION_HEADER) ?? (typeof body.vaultSession === 'string' ? body.vaultSession : undefined)
   return !!useSession(token, true, deviceOf(req))
 }
@@ -423,7 +425,8 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
       // The same for an agent's buy, send or delete in the browser (`person`).
       if (!(await vaultApprover(req, body, target))) {
         if (target.guard === 'person') {
-          throw new ApprovalError(403, 'proof_needed', 'Approve it on your iPhone with Face ID or in the Walnut Mac app with Touch ID (or unlock Passwords in this window): '
+          const { howToApprove, signerKinds } = await import('../../core/approvals/signer-words.js')
+          throw new ApprovalError(403, 'proof_needed', `${howToApprove(signerKinds(await keys.activeKeys()), { unlock: true }).replace(/\.$/, '')}: `
             + 'an agent\'s step that buys, sends or deletes needs proof that it is you saying yes.')
         }
         throw new ApprovalError(403, 'vault_unlock_needed', target.guard === 'vault-sensitive' && target.mode === 'biometric'

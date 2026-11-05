@@ -1355,8 +1355,9 @@ export interface Config {
   /** Passwords (core/vault/). `unlock_for`: "Keep Passwords unlocked" (core/vault/unlock-length.ts:
    *  idle, 1h, 12h, 48h (default), restart, always). `auto_lock_minutes`: the idle choice's minutes
    *  (default 15, at most 720); a config with only it reads `idle`. `bitwarden_daily`: sync from
-   *  Bitwarden every day at 04:00 (core/vault/bitwarden-run.ts), off unless set. */
-  passwords?: { auto_lock_minutes?: number; unlock_for?: 'idle' | '1h' | '12h' | '48h' | 'restart' | 'always'; bitwarden_daily?: boolean };
+   *  Bitwarden every day at 04:00 (core/vault/sources/bitwarden/run.ts), off unless set. `sources`: the
+   *  sync sources the person added in Settings (core/vault/sources/index.ts), e.g. ['bitwarden']. */
+  passwords?: { auto_lock_minutes?: number; unlock_for?: 'idle' | '1h' | '12h' | '48h' | 'restart' | 'always'; bitwarden_daily?: boolean; sources?: string[] };
   defaults: {
     priority: TaskPriority;
     /** Default platform/source for new tasks created via quick-add. Unset = 'local'

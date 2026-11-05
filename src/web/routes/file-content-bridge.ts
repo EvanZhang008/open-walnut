@@ -39,7 +39,7 @@ import { computeContentHash } from '../../utils/file-ops.js'
 import { sendV1Error } from './v1-control-relay.js'
 // ONE source of truth for which extensions ride the raw byte lane (see the
 // note next to its use below — a copied table drifted and corrupted bytes).
-import { RAW_INLINE_MIME, rawTextMime, attachmentDisposition } from './file-content.js'
+import { RAW_INLINE_MIME, rawTextMime, attachmentDisposition, sendRawText } from './file-content.js'
 import { resolveReplicaCopy } from './file-content-replica-copy.js'
 import { BRIDGE_MEDIA_EXTENSIONS, serveBridgeMedia } from './file-content-bridge-media.js'
 
@@ -332,8 +332,7 @@ export async function serveCloudFileContent(req: Request, res: Response, target?
       res.end(buf)
       return
     }
-    const ctype = rawTextMime(ext)
-    res.type(ctype).send(buf.toString('utf-8'))
+    sendRawText(res, ext, buf.toString('utf-8'))
     return
   }
 
@@ -390,6 +389,10 @@ async function serveReplicaCopy(
     const { serveRawBytes } = await import('./file-content.js')
     const inlineType = Object.hasOwn(RAW_INLINE_MIME, opts.ext) ? RAW_INLINE_MIME[opts.ext] : undefined
     const ctype = opts.download || inlineType ? (inlineType ?? 'application/octet-stream') : rawTextMime(opts.ext)
+    if (!opts.download && !inlineType && copy.size <= MAX_BRIDGE_FILE_BYTES) {
+      sendRawText(res, opts.ext, await fsp.readFile(copy.localPath, 'utf-8'))
+      return
+    }
     await serveRawBytes(req, res, copy.localPath, undefined, ctype, opts.download)
     return
   }

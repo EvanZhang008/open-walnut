@@ -158,8 +158,49 @@ export function trustedOutward(action: string, args: Record<string, unknown>): R
   return {}
 }
 
-/** What the person is asked about and what the approval names (it must still match when the step runs). */
-export function outwardHold(o: Outward, what: string): { kind: OutwardKind; why: string; what: string; url: string; sig: string } {
+const clip = (t: string, n: number) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x }
+const boxText = (x: Element): string => (x instanceof HTMLTextAreaElement || x instanceof HTMLInputElement ? x.value : (x as HTMLElement).isContentEditable ? (x.textContent ?? '') : '')
+
+/**
+ * The message a send would carry, for the person to read before they say yes: the text the
+ * agent is about to type, else the box's own text, else the message boxes of the form it sends.
+ */
+export function messageOf(el: Element, typing?: string): string | undefined {
+  if (typing !== undefined && typing.trim()) return clip(typing, 300)
+  const own = boxText(el)
+  if (own.trim() && !searchBox(el)) return clip(own, 300)
+  const form = (el as HTMLButtonElement).form ?? el.closest('form')
+  if (!form) return undefined
+  const parts = [...form.querySelectorAll('textarea, [contenteditable=""], [contenteditable=true]')].filter((x) => !searchBox(x)).map(boxText).filter((t) => t.trim())
+  return parts.length ? clip(parts.join(' / '), 300) : undefined
+}
+
+const MONEY = '(?:[$€£¥]\\s?\\d[\\d,]*(?:\\.\\d{1,2})?|\\d[\\d,]*(?:\\.\\d{1,2})?\\s?(?:USD|EUR|GBP|CAD|AUD|JPY|[$€£¥]))'
+const TOTAL = new RegExp(`\\b(order total|grand total|total due|amount due|total to pay|total)\\b[^\\n\\d$€£¥]{0,24}(${MONEY})`, 'gi')
+
+/** The order total the page shows, if it shows one ("Order total: $42.10"; a grand total wins over a plain "Total"). */
+export function orderTotal(text: string): string | undefined {
+  let best: { rank: number; v: string } | undefined
+  for (const m of text.matchAll(TOTAL)) {
+    const rank = /^total$/i.test(m[1]) ? 1 : 2
+    if (!best || rank >= best.rank) best = { rank, v: m[2].trim() }
+  }
+  return best?.v
+}
+
+/**
+ * What the person is asked about and what the approval names: the step, the page, and for a send
+ * the message, for an order the total the page shows. The signature covers them all, so an
+ * approval of one message or one total does not send another.
+ */
+export function outwardHold(o: Outward, what: string, extra: { message?: string; total?: string } = {}): {
+  kind: OutwardKind; why: string; what: string; url: string; sig: string; message?: string; total?: string
+} {
   const url = location.href.split('#')[0]
-  return { kind: o.kind, why: o.why, what, url, sig: `${o.kind}|${what}|${location.origin}${location.pathname}` }
+  const message = o.kind === 'send' ? extra.message : undefined
+  const total = o.kind === 'buy' ? extra.total : undefined
+  return {
+    kind: o.kind, why: o.why, what, url, ...(message ? { message } : {}), ...(total ? { total } : {}),
+    sig: `${o.kind}|${what}|${location.origin}${location.pathname}|${message ?? ''}|${total ?? ''}`.slice(0, 400),
+  }
 }

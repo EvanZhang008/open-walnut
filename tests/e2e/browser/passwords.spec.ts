@@ -223,12 +223,18 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await section.getByRole('button', { name: 'Cancel' }).click()
   await expect(section.locator('#pw-forever-pw')).toHaveCount(0)
   await expect(section.getByTestId('pw-unlock-48h')).toHaveAttribute('aria-checked', 'true')
-  // Bitwarden: the daily sync is off by default; Sync now says why it did not run (no bw here).
+  // Bitwarden is a source the person adds: until then only an Add button shows, no sync controls.
+  await expect(section.locator('#pw-bw-daily')).toHaveCount(0)
+  await section.getByTestId('pw-source-add-bitwarden').click()
+  // Added: the daily sync is off by default; Sync now says why it did not run (no bw here).
   const daily = section.locator('#pw-bw-daily')
   await expect(daily).toHaveAttribute('aria-checked', 'false')
   await expect(section).toContainText(/Last sync: /)
   await section.getByTestId('pw-bw-sync').click()
   await expect(section).toContainText(/Not synced: /)
+  // Removing the source hides it again (items it brought would stay).
+  await section.getByTestId('pw-source-remove-bitwarden').click()
+  await expect(section.getByTestId('pw-source-add-bitwarden')).toBeVisible()
   const away = section.locator('#pw-agents-away')
   await expect(away).toHaveAttribute('aria-checked', 'false')
   // The protected actions wait for the master password.
@@ -246,6 +252,14 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await card.getByLabel(/I saved my recovery kit/).check()
   await card.getByRole('button', { name: 'Done, I saved it' }).click()
   await expect(card).toHaveCount(0)
+  // The Secret Key, for setting up the iPhone app, shows after the master password and copies.
+  const showKey = section.getByTestId('pw-show-secret-key')
+  await expect(showKey).toBeDisabled()
+  await section.locator('#pw-confirm').fill(MASTER)
+  await showKey.click()
+  await expect(section.getByTestId('pw-settings-secret-key')).toHaveText(/^W1-[A-Z2-9]{6}(-[A-Z2-9]{5}){4}$/)
+  await expect(section).toContainText('Set up Passwords on your iPhone: paste this Secret Key there once.')
+  await expect(section.locator('#pw-confirm')).toHaveValue('')
   await section.locator('#pw-confirm').fill('not my master password')
   await away.click()
   await expect(section.getByRole('alert')).toContainText(/wrong master password/i)

@@ -115,10 +115,14 @@ export interface Pending {
   checked: boolean
   /** The save bar's page carries it in its URL; its messages must too. */
   nonce: string
+  /** When a save bar first showed it: from then on it waits as long as the bar may stay (BAR_MS). */
+  shownAt?: number
 }
 
 export const stores = {
   pendingSave: tabStore<Pending>('pendingSave'),
+  /** The login a newer one replaced while its bar was on screen: that bar still acts on it. */
+  pendingPrev: tabStore<Pending>('pendingPrev'),
   seenUsername: tabStore<{ url: string; username: string; at: number }>('seenUsername'),
   connecting: tabStore<string>('connecting'),
   menus: tabStore<MenuOwner>('menus'),
@@ -131,5 +135,9 @@ export const stores = {
 }
 
 export const PENDING_MS = 3 * 60_000
+/** A login whose save bar is on screen waits this long for the person's answer. */
+export const BAR_MS = 30 * 60_000
+/** A sent login is offered for PENDING_MS; once its bar showed, its bar acts on it for BAR_MS. */
+export const pendingAlive = (p: Pending, now = Date.now()) => now - p.at < (p.shownAt ? BAR_MS : PENDING_MS)
 /** The code page of a sign in comes within this long. */
 export const CODE_PAGE_MS = 5 * 60_000

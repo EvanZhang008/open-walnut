@@ -10,6 +10,20 @@ export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 
 const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : undefined)
 
+/**
+ * An address the way a person types it into the address bar: `shop.example.com/cart` goes to
+ * https://, `localhost:3000` to http://. A word with no dot (no host) is not an address: refused
+ * with how to give one, never searched for.
+ */
+export function webAddress(raw: string): string {
+  const u = raw.trim()
+  if (/^[a-z][a-z0-9+.-]*:/i.test(u) && !/^(localhost|[\w.-]+):\d+(\/|$)/i.test(u)) return u
+  const host = u.split(/[/?#]/)[0]
+  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host)) return `http://${u}`
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?$/.test(host)) return `https://${u}`
+  throw new BrowserError(`"${u.slice(0, 80)}" is not a web address: give one such as https://example.com (a bare name with a dot, example.com, opens over https).`, 400, 'not_a_web_page')
+}
+
 /** What an act may carry to the browser: known keys only, each cut to size. */
 export function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -20,7 +34,8 @@ export function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
   if (out.format !== undefined && out.format !== 'png' && out.format !== 'jpeg') delete out.format
   if (typeof out.text === 'string') out.text = (out.text as string).slice(0, 20_000)
   if (typeof out.textGone === 'string') out.textGone = (out.textGone as string).slice(0, 2000)
-  if (typeof out.url === 'string') out.url = (out.url as string).slice(0, 4000)
+  // An address to open (wait's `url` is a part of one, or a /regex/: left as given).
+  if (typeof out.url === 'string') out.url = b.action === 'open' || b.action === 'navigate' ? webAddress((out.url as string).slice(0, 4000)) : (out.url as string).slice(0, 4000)
   if (typeof out.expression === 'string') out.expression = (out.expression as string).slice(0, 100_000)
   if (Array.isArray(b.fields)) {
     out.fields = (b.fields as Array<Record<string, unknown>>).slice(0, 100).map((f) => ({

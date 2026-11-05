@@ -168,17 +168,18 @@ test('HTML preview remembers its scroll position too', async ({ page }) => {
   const panel = await openSessionPanel(page)
   let explorer = await openFiles(panel)
 
-  // The HTML preview renders inside a same-origin IFRAME whose own window
-  // scrolls — the regression was that only the parent document was listened
-  // to, so HTML files never saved a position.
+  // The HTML preview renders inside an IFRAME whose own window scrolls (in an
+  // origin of its own, so the console hears its position from the page's
+  // bridge): the regression was that HTML files never saved a position.
   await explorer.locator('.sfe-name', { hasText: 'drag-fixture.html' }).click()
   let frame = explorer.locator('iframe.fv-html-preview')
   await expect(frame).toBeVisible({ timeout: 10_000 })
   let inner = page.frameLocator('iframe.fv-html-preview').locator('body')
   await expect(inner).toContainText('Drag fixture preview', { timeout: 10_000 })
 
-  await frame.evaluate((el: HTMLIFrameElement) => el.contentWindow!.scrollTo(0, 1200))
-  await expect.poll(() => frame.evaluate((el: HTMLIFrameElement) => el.contentWindow!.scrollY)).toBeGreaterThan(1000)
+  // Scrolled from inside the page, as the reader would (the console cannot reach in).
+  await inner.evaluate(() => window.scrollTo(0, 1200))
+  await expect.poll(() => inner.evaluate(() => window.scrollY)).toBeGreaterThan(1000)
   await page.waitForTimeout(500) // debounced save
 
   await closeFiles(panel)
@@ -189,7 +190,7 @@ test('HTML preview remembers its scroll position too', async ({ page }) => {
   await expect(inner).toContainText('Drag fixture preview', { timeout: 10_000 })
 
   await expect.poll(
-    () => frame.evaluate((el: HTMLIFrameElement) => el.contentWindow!.scrollY),
+    () => inner.evaluate(() => window.scrollY),
     { timeout: 10_000, message: 'HTML preview should resume at the saved offset' },
   ).toBeGreaterThan(1000)
 

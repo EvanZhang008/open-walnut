@@ -32,11 +32,11 @@
  * was used. All changes are one vault write. Counts come back per item type.
  */
 import crypto from 'node:crypto'
-import { randomBytes, seal, sealJson } from './crypto.js'
-import { aadItem, aadItemKey, mutate, openSide, updateSide, VaultError, type VaultFile } from './state.js'
-import { cleanInput } from './items.js'
-import { parseBitwardenExport } from './import.js'
-import { PASSWORD_HISTORY_MAX, type VaultItem, type VaultItemInput } from './types.js'
+import { randomBytes, seal, sealJson } from '../../crypto.js'
+import { aadItem, aadItemKey, mutate, openSide, updateSide, VaultError, type VaultFile } from '../../state.js'
+import { cleanInput } from '../../items.js'
+import { parseBitwardenExport } from '../../import.js'
+import { PASSWORD_HISTORY_MAX, type VaultItem, type VaultItemInput } from '../../types.js'
 
 const FILE = 'bitwarden-sync.json'
 export const CONFLICT_TAG = 'conflict'

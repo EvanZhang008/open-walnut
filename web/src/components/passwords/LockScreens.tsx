@@ -10,6 +10,7 @@ import { passwordStrength, type StrengthLevel } from '../../../../src/core/vault
 import { KeyIcon, LockIcon, CopyIcon, CheckIcon } from './pw-icons'
 import { log } from '@/utils/log'
 import { unlockFootText } from './unlock-words'
+import { HintInput, ShowHint, hintError } from './HintField'
 
 const LEVEL_TEXT: Record<StrengthLevel, string> = {
   very_weak: 'Very weak', weak: 'Weak', fair: 'Fair', strong: 'Strong', very_strong: 'Very strong',
@@ -32,7 +33,7 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-function CopyButton({ text, label }: { text: string; label: string }) {
+export function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <button type="button" className="pw-btn pw-btn-small" onClick={() => { void copySecret(text).then(() => setCopied(true)) }}>
@@ -132,16 +133,17 @@ const KIT_SUB = 'Keep it on paper or in a safe place, away from this computer. T
 export function SetupFlow({ onKit }: { onKit: (k: KitToShow) => void }) {
   const [pw, setPw] = useState('')
   const [pw2, setPw2] = useState('')
+  const [hint, setHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const ok = newPasswordOk(pw, pw2)
+  const ok = newPasswordOk(pw, pw2) && !hintError(hint, pw)
 
   const create = async () => {
     if (!ok) return
     setBusy(true); setError('')
     try {
-      const r = await vaultApi.setup(pw)
-      setPw(''); setPw2('')
+      const r = await vaultApi.setup(pw, hint.trim())
+      setPw(''); setPw2(''); setHint('')
       onKit({ kit: r, title: 'Save your recovery kit', sub: KIT_SUB })
       log.info('passwords', 'vault set up', {})
     } catch (err) {
@@ -158,6 +160,7 @@ export function SetupFlow({ onKit }: { onKit: (k: KitToShow) => void }) {
         <h1>Set up Passwords</h1>
         <p className="pw-gate-sub">Your logins, codes and keys, encrypted on this Mac. Pick a master password you can remember; a few random words work well.</p>
         <NewPasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} idPrefix="pw-setup" autoFocus />
+        <HintInput id="pw-setup-hint" value={hint} onChange={setHint} password={pw} />
         {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
         <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!ok || busy}>{busy ? 'Creating…' : 'Create vault'}</button>
       </form>
@@ -185,6 +188,8 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
   const [needKey, setNeedKey] = useState(!status.hasSecretKey)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // A wrong password shows the hint at once.
+  const [wrong, setWrong] = useState(false)
   const { waitS, slowFor } = useWait(status.waitMs)
   const input = useRef<HTMLInputElement>(null)
   const unlock = async () => {
@@ -197,6 +202,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
     } catch (err) {
       if (err instanceof VaultApiError && err.code === 'secret_key_needed') setNeedKey(true)
       if (err instanceof VaultApiError && err.code === 'unlock_slowed' && err.waitMs) slowFor(err.waitMs)
+      if (err instanceof VaultApiError && err.code === 'wrong_password') setWrong(true)
       setError(errorText(err))
       setPw('')
       input.current?.focus()
@@ -215,6 +221,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
         <p className="pw-gate-sub">Enter your master password to unlock{status.itemCount ? ` ${status.itemCount} items` : ''}.</p>
         <input data-no-draft="secret" ref={input} className="pw-input pw-input-big" type="password" autoComplete="current-password" autoFocus placeholder="Master password" aria-label="Master password"
           value={pw} onChange={(e) => setPw(e.target.value)} disabled={waitS > 0} />
+        <ShowHint hint={status.hint} open={wrong} />
         {needKey && (
           <>
             <label className="pw-field-label" htmlFor="pw-sk">Secret Key (from your recovery kit)</label>
@@ -237,17 +244,18 @@ function RecoverFlow({ status, onBack, onKit }: { status: VaultStatus; onBack: (
   const [needKey, setNeedKey] = useState(!status.hasSecretKey)
   const [pw, setPw] = useState('')
   const [pw2, setPw2] = useState('')
+  const [hint, setHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const { waitS, slowFor } = useWait(status.waitMs)
-  const ok = !!code.trim() && newPasswordOk(pw, pw2) && (!needKey || !!secretKey.trim())
+  const ok = !!code.trim() && newPasswordOk(pw, pw2) && (!needKey || !!secretKey.trim()) && !hintError(hint, pw)
 
   const recover = async () => {
     if (!ok || busy) return
     setBusy(true); setError('')
     try {
-      const r = await vaultApi.recover(code.trim(), pw, needKey ? secretKey.trim() : undefined)
-      setCode(''); setSecretKey(''); setPw(''); setPw2('')
+      const r = await vaultApi.recover(code.trim(), pw, needKey ? secretKey.trim() : undefined, hint.trim())
+      setCode(''); setSecretKey(''); setPw(''); setPw2(''); setHint('')
       onKit({ kit: r, title: 'Save your new recovery kit', sub: 'Your master password is set and every other window was locked. The old recovery code no longer works: save this new kit and throw the old one away.' })
       log.info('passwords', 'master password reset with the recovery code', {})
     } catch (err) {
@@ -287,6 +295,7 @@ function RecoverFlow({ status, onBack, onKit }: { status: VaultStatus; onBack: (
           </>
         )}
         <NewPasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} idPrefix="pw-recover" />
+        <HintInput id="pw-recover-hint" value={hint} onChange={setHint} password={pw} />
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
         <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!ok || busy || waitS > 0}>{busy ? 'Checking…' : 'Set new master password'}</button>
         <button type="button" className="pw-link-btn" onClick={onBack}>Back to unlock</button>

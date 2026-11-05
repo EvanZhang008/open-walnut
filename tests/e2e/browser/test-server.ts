@@ -2797,6 +2797,10 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
     process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION},${SPLIT_SESSION}`
+    // `PW_MOCK_TRANSCRIPTS=1` (the review lab, extension-panel-reload.spec.ts): every session's
+    // turns are filed as its CLI transcript, the way the real CLI does, so a reload reads the
+    // person's own messages back instead of only what this run still holds in memory.
+    if (process.env.PW_MOCK_TRANSCRIPTS === '1') process.env.MOCK_CLAUDE_PERSIST_ALL = '1'
     await fs.writeFile(
       path.join(tmpBase, 'session-message-queue.json'),
       JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),

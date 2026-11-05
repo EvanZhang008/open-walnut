@@ -126,11 +126,12 @@ test('a relative link to a sibling page opens that page in the panel; repeated h
 test('an in-page anchor scrolls inside the preview and stays on the same file', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const explorer = await openFiles(panel)
-  const { frame, inner } = await openSummary(page, explorer)
+  const { inner } = await openSummary(page, explorer)
 
   await inner.locator('#anchor').click()
-  await expect.poll(() => frame.evaluate((el: HTMLIFrameElement) => el.contentWindow?.location.hash)).toBe('#tail')
-  await expect.poll(() => frame.evaluate((el: HTMLIFrameElement) => el.contentWindow?.scrollY ?? 0)).toBeGreaterThan(200)
+  // Read inside the page: it runs in an origin of its own, out of the console's reach.
+  await expect.poll(() => inner.locator('body').evaluate(() => location.hash)).toBe('#tail')
+  await expect.poll(() => inner.locator('body').evaluate(() => window.scrollY)).toBeGreaterThan(200)
   // Same file, same frame, no "back" strip, no history stop.
   await expect(selectedRow(explorer, 'summary.html')).toHaveCount(1)
   await expect(explorer.locator('.fv-strayed-banner')).toHaveCount(0)
@@ -172,14 +173,13 @@ test('a target=_blank link is left to the browser (new tab), not hijacked into t
 test('navigation the click handler cannot see (a script) offers a way back and a way to open the target', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const explorer = await openFiles(panel)
-  const { frame } = await openSummary(page, explorer)
+  await openSummary(page, explorer)
 
   // A script inside the page sets location to the sibling page's file-raw URL.
   // The panel does NOT follow automatically (two pages redirecting to each other
   // would bounce it forever); it says where the frame went and offers both ways.
-  await frame.evaluate((el: HTMLIFrameElement) => {
-    const w = el.contentWindow!
-    w.location.href = new URL('details.html', w.location.href).href
+  await page.frameLocator('iframe.fv-html-preview').locator('body').evaluate(() => {
+    setTimeout(() => { location.href = new URL('details.html', location.href).href }, 0)
   })
   await expect(page.frameLocator('iframe.fv-html-preview').locator('h1')).toHaveText('Details page', { timeout: 10_000 })
   const strip = explorer.locator('.fv-strayed-banner')
@@ -194,9 +194,8 @@ test('navigation the click handler cannot see (a script) offers a way back and a
   await expect(strip).toHaveCount(0)
 
   // Stray again, then take the other offer: open the target as a file of its own.
-  await frame.evaluate((el: HTMLIFrameElement) => {
-    const w = el.contentWindow!
-    w.location.href = new URL('details.html', w.location.href).href
+  await page.frameLocator('iframe.fv-html-preview').locator('body').evaluate(() => {
+    setTimeout(() => { location.href = new URL('details.html', location.href).href }, 0)
   })
   await expect(explorer.locator('.fv-strayed-banner')).toBeVisible({ timeout: 10_000 })
   await explorer.locator('.fv-strayed-banner').getByRole('button', { name: /Open details\.html here/ }).click()
@@ -218,10 +217,11 @@ test('a page styled by relatively linked CSS and scripts renders styled, not as 
   await styledRow.click()
   const inner = page.frameLocator('iframe.fv-html-preview')
   await expect(inner.locator('h1')).toHaveText('Styled report', { timeout: 10_000 })
-  // Both stylesheets, the classic script and the module script all took effect.
+  // Both stylesheets and the classic script took effect. A module script does not: the page
+  // runs in an origin of its own (src/web/untrusted-doc.ts), and a module load is a CORS request
+  // from that origin, which Walnut refuses like any other site's (a known limit).
   await expect(inner.locator('h1')).toHaveCSS('color', 'rgb(200, 30, 90)')
   await expect(inner.locator('body')).toHaveCSS('background-color', 'rgb(225, 240, 255)')
   await expect(inner.locator('html')).toHaveAttribute('data-classic', 'ran')
-  await expect(inner.locator('html')).toHaveAttribute('data-module', 'ran')
   await page.screenshot({ path: shot('styled-report') })
 })

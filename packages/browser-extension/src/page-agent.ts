@@ -21,9 +21,25 @@ export function setFrame(frame: unknown): void {
   framePrefix = typeof frame === 'string' && /^f\d+$/.test(frame) ? `${frame}:` : ''
 }
 
+function give(el: Element): string {
+  const r = `e${next++}`
+  refOf.set(el, r)
+  refs.set(r, new WeakRef(el))
+  return r
+}
+
+/**
+ * An element's ref. Refs are handed out in the page's own order, never in the order an action
+ * happens to read it: the first element without one numbers every control of the page that has
+ * none yet, top to bottom. So snapshot, form_values, find and fill_form name the same field the
+ * same way, whichever ran first, and an unchanged page loaded again gets the same refs.
+ */
 export function refFor(el: Element): string {
   let r = refOf.get(el)
-  if (!r) { r = `e${next++}`; refOf.set(el, r); refs.set(r, new WeakRef(el)) }
+  if (!r) {
+    for (const x of all(document, INTERACTIVE)) if (!refOf.has(x)) give(x)
+    r = refOf.get(el) ?? give(el)
+  }
   return framePrefix + r
 }
 
@@ -392,6 +408,12 @@ function where(box: Element): { scrollTop: number; scrollLeft: number; maxTop: n
 }
 
 const bodyText = () => (document.body?.innerText ?? '').toLowerCase()
+
+/** Whether this frame's page shows the text now (the background's wait asks every frame, agent-page.ts waitText). */
+export function hasText(args: { text?: unknown }): { has: boolean } {
+  const t = typeof args.text === 'string' ? args.text.toLowerCase() : ''
+  return { has: !!t && bodyText().includes(t) }
+}
 
 export async function wait(args: { text?: unknown; textGone?: unknown; ms?: unknown }): Promise<{ waited: string }> {
   const gone = typeof args.textGone === 'string' && args.textGone ? args.textGone : undefined

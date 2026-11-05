@@ -7,8 +7,10 @@
  * the passage (FileCardHost; the card itself, its turns and its composer are
  * the timeline's), offers an inline `Ask` on the block under the pointer, and
  * turns a selection into a draft question (`askSelection`, the pill's `Ask
- * here`). The HTML preview lives in an iframe, so marks and hits there run in
- * the frame's own document.
+ * here`). The HTML preview's page runs in an origin of its own: its marks are
+ * painted and hit-tested there by the page's bridge, from offsets the layer
+ * locates in the page's text (preview-marks.ts), and its scanning lines are drawn
+ * here, from the rects the page reports.
  *
  * The Changed tab mounts the same layer over a file's diff (surface `diff`): its
  * index holds only the current file's text (diff-passage.ts: no gutters, no
@@ -24,26 +26,27 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
-import { keepWindowHighlightRepaints } from '@/utils/highlight-repaint';
 import {
   byUrgency, liveBarsFor, markFlagsOf, markHighlightName, markPriority, useAnsweringKeys, useThreadMarks,
 } from '@/hooks/useThreadMarks';
 import {
-  LIVE_BAR_HEIGHT, LIVE_LINE_CLASS, LIVE_SCAN_MS, WAIT_LINE_CLASS, WAIT_PULSE_MS, paintLiveBars, type BoxLike,
+  liveLineBars, paintLiveBars, type BoxLike, type PaintedBar,
 } from '@/utils/thread-live-lines';
 import { ThreadMarkTipLayer } from '@/components/sessions/ThreadStackFrame';
 import { fileOfParent, fileParentOf, findSamePassageThread } from '@/utils/thread-tree';
 import { pendingPageKey } from '@/utils/thread-stack-state';
 import type { SessionPinnedQuote } from '@/types/session';
-import { buildTextIndex, quoteFromRange, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
+import { buildTextIndex, locateQuote, quoteFromRange, quoteFromText, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
 import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
   askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
 import { FileQuestionRail } from '@/components/common/FileQuestionRail';
-import { caretFromPoint, hitMark, rafThrottle, selectionIsEmpty, type ThreadMark } from '@/utils/thread-mark-hit';
+import { rafThrottle } from '@/utils/thread-mark-hit';
 import { log } from '@/utils/log';
 import { ContextMenu } from '@/components/common/ContextMenu';
+import type { PreviewChannel } from './preview-frame';
+import { FrameMarkGroup, toTop, unionOf, type FrameMarkSpec } from './preview-marks';
 import '@/styles/file-thread.css';
 
 export type FileThreadSurface = 'html' | 'wysiwyg' | 'source' | 'preview' | 'pre' | 'diff' | 'none';
@@ -68,8 +71,8 @@ export interface FileThreadLayerHandle {
    *  and a quote is text, found again in whatever DOM shows the file). The live
    *  selection (in the frame's document for the HTML preview) or `range`. */
   quoteOf: (opts: { inFrame: boolean; range?: Range }) => SessionPinnedQuote | null;
-  /** The pill's `Ask here`: the selection (the live one, in the frame's document
-   *  for the HTML preview; or `range`, the editor's own, from the WYSIWYG bubble
+  /** The pill's `Ask here`: the selection (the live one; the page's last reported
+   *  one for the HTML preview; or `range`, the editor's own, from the WYSIWYG bubble
    *  menu) becomes a draft question with its card beside it. */
   askSelection: (opts: { inFrame: boolean; line?: number; range?: Range }) => FileAskResult;
   /** A quote taken already (the Changed tab reads it at mouseup: diffPassageOf;
@@ -81,17 +84,16 @@ interface FileThreadLayerProps {
   filePath: string;
   sessionId: string;
   rootRef: RefObject<HTMLDivElement | null>;
-  frameRef: RefObject<HTMLIFrameElement | null>;
+  /** The HTML preview's page (its bridge), when that is the surface. */
+  channel: PreviewChannel | null;
   surface: FileThreadSurface;
   /** Changes when the surface remounts or reloads (the ranges must be re-derived). */
   surfaceNonce: unknown;
 }
 
-/** The text body of the surface on show, in whichever document holds it. */
-function bodyOf(root: HTMLElement | null, frame: HTMLIFrameElement | null, surface: FileThreadSurface): Element | null {
-  if (surface === 'html') {
-    try { return frame?.contentDocument?.body ?? null; } catch { return null; }
-  }
+/** The text body of the surface on show (none for the HTML preview, out of reach in its frame). */
+function bodyOf(root: HTMLElement | null, surface: FileThreadSurface): Element | null {
+  if (surface === 'html') return null;
   if (surface === 'diff') return root?.querySelector('.session-diff-filepane') ?? null;
   return root?.querySelector('.ProseMirror, .fv-md-preview, .file-viewer-code, .cm-content') ?? null;
 }
@@ -148,10 +150,8 @@ function stickyBarOf(root: HTMLElement, surface: FileThreadSurface): HTMLElement
   return root.querySelector<HTMLElement>(surface === 'diff' ? '.session-diff-filepane-sticky' : ':scope > .fv-html-toolbar');
 }
 
-const FRAME_STYLE_ID = 'walnut-file-marks';
-const FRAME_LIVE_ID = 'walnut-live-lines';
-/** The frame's copy of the mark paint (thread-stack-page.css, light theme: the
- *  page in the frame brings its own colors), the live and waiting lines included. */
+/** The page's copy of the mark paint (thread-stack-page.css, light theme: the
+ *  page in the frame brings its own colors). */
 const FRAME_STYLE = `
 ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); text-decoration: underline dashed 2px hsl(36 90% 42% / 0.95); text-underline-offset: 3px; }
 ::highlight(thread-mark-live-neutral) { background-color: hsl(140 60% 48% / 0.22); }
@@ -159,23 +159,19 @@ const FRAME_STYLE = `
 ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 70% 60% / 0.12); text-decoration: underline dotted 2px hsl(345 70% 44%); text-underline-offset: 3px; }
 ::highlight(thread-mark-neutral) { background-color: hsl(140 50% 48% / 0.15); text-decoration: underline 1px hsl(145 55% 34% / 0.85); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
-body[data-thread-mark-hover] { cursor: pointer; }
-#${FRAME_LIVE_ID} { position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 2147483000; }
-.${LIVE_LINE_CLASS} { position: absolute; height: ${LIVE_BAR_HEIGHT}px; border-radius: 1px; pointer-events: none;
-  background: linear-gradient(90deg, transparent, hsl(145 75% 30%), transparent) no-repeat, hsl(140 45% 58% / 0.55);
-  background-size: 40% 100%, 100% 100%; animation: walnut-live-scan ${LIVE_SCAN_MS}ms ease-in-out infinite; }
-.${WAIT_LINE_CLASS} { position: absolute; height: ${LIVE_BAR_HEIGHT}px; border-radius: 1px; pointer-events: none;
-  background: repeating-linear-gradient(90deg, hsl(38 92% 46%) 0 6px, transparent 6px 10px); animation: walnut-wait-pulse ${WAIT_PULSE_MS}ms ease-in-out infinite; }
-@keyframes walnut-live-scan { 0% { background-position: -40% 0, 0 0; } 100% { background-position: 140% 0, 0 0; } }
-@keyframes walnut-wait-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) {
-  .${LIVE_LINE_CLASS} { animation: none; background: hsl(145 75% 30%); opacity: 0.7; }
-  .${WAIT_LINE_CLASS} { animation: none; opacity: 0.8; }
-}
+html[data-walnut-mark-hover], html[data-walnut-mark-hover] * { cursor: pointer; }
 `;
+/** The anchor the open card is placed by (painted by nothing: its mark is the question's). */
+const CARD_KEY = '__card__';
+
+const within = (a: BoxLike | null, b: BoxLike | null): BoxLike | null => {
+  if (!a) return b;
+  if (!b) return a;
+  return { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) };
+};
 
 export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayerProps>(function FileThreadLayer(
-  { filePath, sessionId, rootRef, frameRef, surface, surfaceNonce }, ref,
+  { filePath, sessionId, rootRef, channel, surface, surfaceNonce }, ref,
 ) {
   const threads = useSessionThreadsApi();
   const layerRef = useRef<HTMLDivElement | null>(null);
@@ -183,7 +179,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   argsRef.current = { threads, filePath, surface };
   const parent = fileParentOf(filePath);
 
-  const body = useCallback(() => bodyOf(rootRef.current, frameRef.current, argsRef.current.surface), [rootRef, frameRef]);
+  const body = useCallback(() => bodyOf(rootRef.current, argsRef.current.surface), [rootRef]);
   const skip = TEXT_SKIP[surface];
 
   // Another file (or none) takes the view while an Ask about this one is open
@@ -284,134 +280,10 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   // A right-click on a mark: open its question, or quote it into the chat.
   const [markMenu, setMarkMenu] = useState<{ key: string; point: { x: number; y: number } } | null>(null);
 
-  // ── Marks inside the HTML preview's frame (its own document and highlight registry) ──
-  const frameMarks = useRef<ThreadMark[]>([]);
-  useEffect(() => {
-    const frame = frameRef.current;
-    if (surface !== 'html' || !frame) return;
-    let doc: Document | null = null;
-    let raf = 0;
-    let mo: MutationObserver | null = null;
-    const names = new Set<string>();
-    const clear = () => {
-      const w = doc?.defaultView as (Window & { CSS?: { highlights?: Map<string, unknown> } }) | null | undefined;
-      keepWindowHighlightRepaints(w);
-      for (const n of names) w?.CSS?.highlights?.delete(n);
-      names.clear();
-      frameMarks.current = [];
-      doc?.body?.removeAttribute('data-thread-mark-hover');
-      doc?.getElementById(FRAME_LIVE_ID)?.remove();
-    };
-    // The scanning lines: in a layer on the frame's root element (outside the
-    // body the observer watches), so they scroll with the page by themselves.
-    const paintLive = () => {
-      if (!doc?.documentElement) return;
-      let layer = doc.getElementById(FRAME_LIVE_ID);
-      if (!frameMarks.current.some((m) => m.live || m.wait)) { layer?.remove(); return; }
-      if (!layer) {
-        layer = doc.createElement('div');
-        layer.id = FRAME_LIVE_ID;
-        layer.setAttribute('aria-hidden', 'true');
-        doc.documentElement.appendChild(layer);
-      }
-      paintLiveBars(layer, liveBarsFor(frameMarks.current, layer, doc.documentElement, null));
-    };
-    const paint = () => {
-      if (!doc?.body) return;
-      const w = doc.defaultView as (Window & { CSS?: { highlights?: Map<string, unknown> }; Highlight?: new (...r: Range[]) => { priority: number } }) | null;
-      keepWindowHighlightRepaints(w);
-      const reg = w?.CSS?.highlights;
-      const Ctor = w?.Highlight;
-      const out: ThreadMark[] = [];
-      const byName = new Map<string, { ranges: Range[]; priority: number }>();
-      for (const s of specs) {
-        const range = rangeForQuote(doc.body, s.quote, undefined, LOCATE_FILE);
-        if (!range) continue;
-        const { live, wait } = markFlagsOf(s, liveKeys);
-        out.push({
-          key: s.key, headId: s.headId, range, hue: s.hue, resolved: s.resolved, title: s.title, neutral: true,
-          ...(s.state ? { state: s.state } : {}), ...(live ? { live } : {}), ...(wait ? { wait } : {}),
-        });
-        const name = markHighlightName(s.hue, s.resolved, true, live, s.state);
-        const entry = byName.get(name) ?? { ranges: [], priority: markPriority(s.state) };
-        entry.ranges.push(range);
-        byName.set(name, entry);
-      }
-      frameMarks.current = byUrgency(out);
-      paintLive();
-      if (!reg || !Ctor) return;
-      for (const n of names) if (!byName.has(n)) reg.delete(n);
-      names.clear();
-      for (const [name, e] of byName) { const h = new Ctor(...e.ranges); h.priority = e.priority; reg.set(name, h); names.add(name); }
-    };
-    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paint(); }); };
-    // An inner scroller of the page (not the page itself) moves the passage too.
-    const onFrameScroll = () => { if (frameMarks.current.some((m) => m.live || m.wait)) paintLive(); };
-    const at = (x: number, y: number) => (doc ? hitMark(frameMarks.current, caretFromPoint(doc, x, y), x, y) : null);
-    const move = rafThrottle<{ x: number; y: number }>(({ x, y }) => {
-      if (!doc?.body) return;
-      if (at(x, y)) doc.body.setAttribute('data-thread-mark-hover', ''); else doc.body.removeAttribute('data-thread-mark-hover');
-    });
-    const onMove = (e: PointerEvent) => move.call({ x: e.clientX, y: e.clientY });
-    // The timeline's outside-click closer listens on the top document, which a
-    // press inside the frame never reaches: close the card from here.
-    const onDown = (e: PointerEvent) => {
-      const t = argsRef.current.threads;
-      if (t.openCardKey && !at(e.clientX, e.clientY)) t.requestCard(null, 'frame-outside');
-    };
-    const onClick = (e: MouseEvent) => {
-      if (e.button !== 0 || !doc || !selectionIsEmpty(doc.getSelection())) return;
-      const hit = at(e.clientX, e.clientY);
-      if (!hit) return;
-      e.stopPropagation();
-      e.preventDefault();
-      log.info('threads', 'file mark click (html preview)', { sessionId, headId: hit.headId ?? '', path: filePath });
-      openCard(hit.key, 'file-mark');
-    };
-    const detach = () => {
-      if (!doc) return;
-      doc.removeEventListener('pointermove', onMove);
-      doc.removeEventListener('pointerdown', onDown, true);
-      doc.removeEventListener('click', onClick, true);
-      doc.removeEventListener('scroll', onFrameScroll, true);
-      doc.defaultView?.removeEventListener('resize', later);
-      mo?.disconnect();
-      mo = null;
-      clear();
-      doc = null;
-    };
-    const attach = () => {
-      detach();
-      try { doc = frame.contentDocument; } catch { doc = null; }
-      if (!doc?.body) return;
-      if (!doc.getElementById(FRAME_STYLE_ID)) {
-        const style = doc.createElement('style');
-        style.id = FRAME_STYLE_ID;
-        style.textContent = FRAME_STYLE;
-        doc.head?.appendChild(style);
-      }
-      doc.addEventListener('pointermove', onMove, { passive: true });
-      doc.addEventListener('pointerdown', onDown, true);
-      doc.addEventListener('click', onClick, true);
-      doc.addEventListener('scroll', onFrameScroll, { capture: true, passive: true });
-      doc.defaultView?.addEventListener('resize', later);
-      mo = new MutationObserver(later);
-      mo.observe(doc.body, { childList: true, subtree: true, characterData: true });
-      paint();
-    };
-    frame.addEventListener('load', attach);
-    if (frame.contentDocument?.readyState === 'complete') attach();
-    return () => {
-      frame.removeEventListener('load', attach);
-      if (raf) cancelAnimationFrame(raf);
-      move.cancel();
-      detach();
-    };
-  }, [surface, surfaceNonce, specs, liveKeys, frameRef, filePath, sessionId, openCard]);
-
-  // ── The card's host: registered while this file is on show; its place is
-  //    measured while the open card is about a passage of this file. ──
+  // ── Marks inside the HTML preview (painted by its page, from offsets into its text) ──
+  const group = useMemo(() => (channel ? new FrameMarkGroup(channel, 'threads') : null), [channel]);
   const openKey = threads.openCardKey;
+  // The open card's passage, when it is about this file (null otherwise).
   const cardPlaceOf = useCallback((key: string): { quote?: SessionPinnedQuote } | null => {
     const t = argsRef.current.threads;
     const pend = t.stack.pending?.pageKey === key ? t.stack.pending : undefined;
@@ -421,6 +293,86 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     return { ...(node.quote ? { quote: node.quote } : {}) };
   }, []);
   const mine = openKey ? cardPlaceOf(openKey) : null;
+  const cardQuote = mine?.quote;
+  /** Which of the page's marks wear the scanning line (scan) or the waiting pulse. */
+  const frameLines = useRef(new Map<string, { live: boolean; wait: boolean }>());
+  /** The scanning lines under the page's passages, drawn in this layer's overlay. */
+  const paintFrameLines = useCallback(() => {
+    const layer = liveRef.current;
+    if (!layer) return;
+    const fb = argsRef.current.surface === 'html' ? channel?.frameBox() : null;
+    const bars: PaintedBar[] = [];
+    if (fb && group) {
+      const origin = layer.getBoundingClientRect();
+      const clip = within(visibleBox(), { left: fb.left, top: fb.top, right: fb.right, bottom: fb.bottom });
+      for (const [key, e] of group.entries()) {
+        const flags = frameLines.current.get(key);
+        if (!flags || !e.t) continue;
+        const own = e.c ? { left: e.c[0] + fb.left, top: e.c[1] + fb.top, right: e.c[2] + fb.left, bottom: e.c[3] + fb.top } : null;
+        for (const b of liveLineBars(toTop(e.t, fb), origin, within(own, clip))) bars.push(flags.wait && !flags.live ? { ...b, kind: 'wait' } : b);
+      }
+    }
+    paintLiveBars(layer, bars);
+  }, [channel, group, visibleBox]);
+  useEffect(() => {
+    if (surface !== 'html' || !channel || !group) return;
+    channel.style('walnut-threads', FRAME_STYLE);
+    const send = () => {
+      const t = channel.text();
+      if (!t) return;
+      const out: FrameMarkSpec[] = [];
+      frameLines.current = new Map();
+      for (const s of byUrgency(specs)) {
+        const at = locateQuote(t.text, s.quote, LOCATE_FILE);
+        if (!at) continue;
+        const { live, wait } = markFlagsOf(s, liveKeys);
+        if (live || wait) frameLines.current.set(s.key, { live, wait });
+        out.push({
+          key: s.key, name: markHighlightName(s.hue, s.resolved, true, live, s.state), priority: markPriority(s.state),
+          start: at.start, end: at.end, click: true, stop: true, lines: live || wait,
+        });
+      }
+      const card = cardQuote ? locateQuote(t.text, cardQuote, LOCATE_FILE) : null;
+      if (card) out.push({ key: CARD_KEY, name: '', start: card.start, end: card.end, rects: true });
+      group.set(t.v, out);
+    };
+    send();
+    let raf = 0;
+    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paintFrameLines(); }); };
+    const off = channel.on((m) => {
+      if (m.type === 'text') send();
+      else if (m.type === 'rects') { group.take(m); paintFrameLines(); }
+      else if (m.type === 'click') {
+        const key = group.hit(m.hits);
+        const t = argsRef.current.threads;
+        if (key) {
+          log.info('threads', 'file mark click (html preview)', { sessionId, path: filePath });
+          openCard(key, 'file-mark');
+        } else if (t.openCardKey) t.requestCard(null, 'frame-outside');
+      }
+    });
+    // The frame itself moves with the panel around it.
+    document.addEventListener('scroll', later, true);
+    window.addEventListener('resize', later);
+    return () => {
+      off();
+      document.removeEventListener('scroll', later, true);
+      window.removeEventListener('resize', later);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [surface, surfaceNonce, specs, liveKeys, channel, group, cardQuote, filePath, sessionId, openCard, paintFrameLines]);
+  // Off the HTML preview (another view, another file, unmounted): its marks and lines go.
+  useEffect(() => {
+    if (surface !== 'html' || !group) return;
+    return () => {
+      group.clear();
+      frameLines.current = new Map();
+      if (liveRef.current) paintLiveBars(liveRef.current, []);
+    };
+  }, [surface, group, surfaceNonce, filePath]);
+
+  // ── The card's host: registered while this file is on show; its place is
+  //    measured while the open card is about a passage of this file. ──
   const scrolledForRef = useRef<string | null>(null);
   /** The open card's height as it first showed (`placeFileCard`'s `need`), for
    *  the passage it is about. Kept while a card stays open on that passage, so
@@ -449,26 +401,37 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     // Another passage: a new card there. (A question read back without its
     // quote yet is the same card.)
     if (needRef.current && mine.quote && needRef.current.exact !== mine.quote.exact) needRef.current = null;
-    const frame = () => (argsRef.current.surface === 'html' ? frameRef.current : null);
+    const inFrame = argsRef.current.surface === 'html';
+    /** The passage's box (and its last line's bottom) in the frame's or the top viewport. */
+    const passage = (): { whole: DOMRect; bottom: number; frame: DOMRect | null; bringOn: () => void } | null => {
+      if (inFrame) {
+        const r = group?.rects(CARD_KEY)?.r ?? [];
+        const whole = unionOf(r);
+        const fb = channel?.frameBox() ?? null;
+        return whole && fb ? { whole, bottom: r[r.length - 1]!.bottom, frame: fb, bringOn: () => group?.reveal(CARD_KEY) } : null;
+      }
+      const b = body();
+      const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip, LOCATE_FILE) : null;
+      if (!range) return null;
+      const rects = range.getClientRects();
+      const whole = range.getBoundingClientRect();
+      const last = rects.length ? rects[rects.length - 1] : whole;
+      return { whole, bottom: last.bottom, frame: null, bringOn: () => range.startContainer.parentElement?.scrollIntoView({ block: 'center' }) };
+    };
     /** `canRender`: false inside the effect itself, where no render may run. */
     const measure = (canRender: boolean) => {
       const hostBox = root.getBoundingClientRect();
       const host = { width: hostBox.width, height: hostBox.height };
-      const b = body();
-      const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip, LOCATE_FILE) : null;
+      const p = passage();
       let anchor: HostRect;
-      if (range) {
-        const rects = range.getClientRects();
-        const whole = range.getBoundingClientRect();
-        const last = rects.length ? rects[rects.length - 1] : whole;
-        const f = frame()?.getBoundingClientRect() ?? null;
-        anchor = toHostRect(new DOMRect(whole.left, whole.top, whole.width, last.bottom - whole.top), hostBox, f);
+      if (p) {
+        const { whole } = p;
+        anchor = toHostRect(new DOMRect(whole.left, whole.top, whole.width, p.bottom - whole.top), hostBox, p.frame);
         // First time this card opens here: bring its passage on screen.
         if (scrolledForRef.current !== openKey) {
           scrolledForRef.current = openKey;
           if (!rectInHost(anchor, host, 24)) {
-            const el = range.startContainer.parentElement;
-            el?.scrollIntoView({ block: 'center' });
+            p.bringOn();
             return later();
           }
         }
@@ -517,20 +480,19 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     ro?.observe(root);
     root.addEventListener('scroll', later, true);
     window.addEventListener('resize', later);
-    let fdoc: Document | null = null;
-    try { fdoc = frame()?.contentDocument ?? null; } catch { fdoc = null; }
-    fdoc?.addEventListener('scroll', later, true);
+    // The page reports its passage's rects (on paint, its scroll and its resize).
+    const off = inFrame ? channel?.on((m) => { if (m.type === 'rects') later(); }) : undefined;
     return () => {
       mo.disconnect();
       ro?.disconnect();
       root.removeEventListener('scroll', later, true);
       window.removeEventListener('resize', later);
-      fdoc?.removeEventListener('scroll', later, true);
+      off?.();
       live = false;
       if (raf) cancelAnimationFrame(raf);
       layer.removeAttribute(CARD_MEASURE_ATTR);
     };
-  }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, skip, rootRef, frameRef]);
+  }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, skip, rootRef, channel, group]);
   useEffect(() => () => { argsRef.current.threads.setFileCardHost(null); }, []);
   useEffect(() => { scrolledForRef.current = null; }, [filePath]);
 
@@ -548,20 +510,31 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     return { ok: true };
   }, [parent, filePath, sessionId]);
 
-  const docOf = useCallback((inFrame: boolean): Document | null => {
-    if (!inFrame) return document;
-    try { return frameRef.current?.contentDocument ?? null; } catch { return null; }
-  }, [frameRef]);
-  /** The selection (or `given`) as a quote of this file, or why it is not one. */
+  /** The selection (or `given`) as a quote of this file, or why it is not one. In the HTML
+   *  preview, the page's selection as it last reported it: offsets into its text of that
+   *  version (its document is out of reach, in an origin of its own). */
   const readQuote = useCallback((inFrame: boolean, given?: Range): SessionPinnedQuote | Exclude<FileAskFailure, 'cannot-ask' | 'no-layer'> => {
-    const sel = docOf(inFrame)?.getSelection();
+    if (inFrame) {
+      const sel = channel?.selection();
+      if (!sel) return 'no-selection';
+      const t = channel?.text();
+      if (!t) return 'no-text';
+      if (sel.v !== t.v) return 'not-in-file';
+      return quoteFromText(t.text, sel.start, sel.end) ?? 'no-text';
+    }
+    const sel = document.getSelection();
     const b = body();
     const range = given && !given.collapsed ? given : (sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null);
     if (!range || range.collapsed) return 'no-selection';
     // A kept range whose words were re-rendered away points at nothing now.
     if (!b || !b.contains(range.commonAncestorContainer)) return 'not-in-file';
     return quoteFromRange(buildTextIndex(b, skip), range) ?? 'no-text';
-  }, [body, docOf, skip]);
+  }, [body, skip, channel]);
+  /** The selection is taken: the page clears its own (the bridge), the top document here. */
+  const clearSelection = useCallback((inFrame: boolean) => {
+    if (inFrame) channel?.send({ type: 'clear-selection' });
+    else document.getSelection()?.removeAllRanges();
+  }, [channel]);
 
   useImperativeHandle(ref, () => ({
     quoteOf: ({ inFrame, range }) => {
@@ -576,15 +549,15 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         });
         return { ok: false, reason: quote };
       }
-      docOf(inFrame)?.getSelection()?.removeAllRanges();
+      clearSelection(inFrame);
       return askQuote(quote, line, 'file-selection');
     },
     askPassage: ({ quote, line, inFrame }) => {
       document.getSelection()?.removeAllRanges();
-      if (inFrame) docOf(true)?.getSelection()?.removeAllRanges();
+      if (inFrame) clearSelection(true);
       return askQuote(quote, line, argsRef.current.surface === 'diff' ? 'diff-selection' : 'file-selection');
     },
-  }), [askQuote, readQuote, docOf, sessionId, filePath]);
+  }), [askQuote, readQuote, clearSelection, sessionId, filePath]);
 
   // ── The inline Ask on the block under the pointer ──
   const [hover, setHover] = useState<{ el: Element; rect: HostRect } | null>(null);
@@ -595,15 +568,10 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     // Not over a diff: its table cells are removed lines as often as file text,
     // and the selection's Ask here already says which passage it means.
     if (!root || !threads.canAsk || surface === 'none' || surface === 'diff') return;
-    const frameDoc = (): Document | null => {
-      if (argsRef.current.surface !== 'html') return null;
-      try { return frameRef.current?.contentDocument ?? null; } catch { return null; }
-    };
-    const pick = rafThrottle<{ x: number; y: number; inFrame: boolean }>(({ x, y, inFrame }) => {
+    const pick = rafThrottle<{ x: number; y: number }>(({ x, y }) => {
       const b = body();
       if (!b) { if (hoverRef.current) setHover(null); return; }
-      const doc = inFrame ? frameDoc() : document;
-      const target = doc?.elementFromPoint(x, y) ?? null;
+      const target = document.elementFromPoint(x, y);
       const block = askableBlockOf(target, b);
       if (!block) {
         // Leaving the block for its own Ask button keeps the button.
@@ -612,13 +580,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
         return;
       }
       const hostBox = root.getBoundingClientRect();
-      const f = inFrame ? frameRef.current?.getBoundingClientRect() ?? null : null;
-      const rect = toHostRect(block.getBoundingClientRect(), hostBox, f);
+      const rect = toHostRect(block.getBoundingClientRect(), hostBox, null);
       const prev = hoverRef.current;
       if (prev && prev.el === block && Math.abs(prev.rect.top - rect.top) < 1 && Math.abs(prev.rect.right - rect.right) < 1) return;
       setHover({ el: block, rect });
     });
-    const onMove = (e: PointerEvent) => pick.call({ x: e.clientX, y: e.clientY, inFrame: false });
+    const onMove = (e: PointerEvent) => pick.call({ x: e.clientX, y: e.clientY });
     const onLeave = (e: PointerEvent) => {
       const to = e.relatedTarget as Element | null;
       if (to?.closest?.('.fv-ask-block')) return;
@@ -627,21 +594,15 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     };
     root.addEventListener('pointermove', onMove, { passive: true });
     root.addEventListener('pointerleave', onLeave);
-    const fd = frameDoc();
-    const onFrameMove = (e: PointerEvent) => pick.call({ x: e.clientX, y: e.clientY, inFrame: true });
-    fd?.addEventListener('pointermove', onFrameMove, { passive: true });
     const onScroll = () => { pick.cancel(); setHover(null); };
     root.addEventListener('scroll', onScroll, true);
-    fd?.addEventListener('scroll', onScroll, true);
     return () => {
       pick.cancel();
       root.removeEventListener('pointermove', onMove);
       root.removeEventListener('pointerleave', onLeave);
-      fd?.removeEventListener('pointermove', onFrameMove);
       root.removeEventListener('scroll', onScroll, true);
-      fd?.removeEventListener('scroll', onScroll, true);
     };
-  }, [rootRef, frameRef, surface, surfaceNonce, threads.canAsk, body]);
+  }, [rootRef, surface, surfaceNonce, threads.canAsk, body]);
   useEffect(() => { setHover(null); }, [filePath, surfaceNonce]);
   const cardHere = !!mine;
   useEffect(() => { if (cardHere) setHover(null); }, [cardHere]);

@@ -1,7 +1,7 @@
 /**
  * Settings → Passwords: how long an unlock lasts ("Keep Passwords unlocked", Forever being the
  * machine key), the keychain unlock, what an agent gets (Any / Ask / Off) and how long an
- * approval lasts, the Bitwarden sync, the browser extension, a new master password, the recovery
+ * approval lasts, the sync sources (PasswordSourcesGroup.tsx), the browser extension, a new master password, the recovery
  * kit, export, and Lock everywhere. Changing the vault itself needs this window unlocked (the
  * Passwords app); the unlock length and the daily sync are plain config values.
  */
@@ -12,12 +12,19 @@ import { SectionCard } from '../inputs/SectionCard'
 import { ToggleSwitch } from '../inputs/ToggleSwitch'
 import { SettingsGroup, SettingsRow } from '../SettingsSection'
 import { SettingsButton } from '../inputs/SettingsButton'
+import { PasswordSourcesGroup } from './PasswordSourcesGroup'
 import { SegmentedControl } from '../inputs/SegmentedControl'
-import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type BitwardenSyncStatus, type RecoveryKit, type UnlockFor, type VaultStatus } from '@/api/vault'
-import { downloadRecoveryKit, RecoveryKitCard } from '@/components/passwords/LockScreens'
+import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type RecoveryKit, type UnlockFor, type VaultStatus } from '@/api/vault'
+import { CopyButton, downloadRecoveryKit, RecoveryKitCard } from '@/components/passwords/LockScreens'
+import { hintError } from '@/components/passwords/HintField'
+import { HintSettings } from '@/components/passwords/HintSettings'
+import { HINT_MAX } from '../../../../../src/core/vault/hint'
 import { SWITCH } from '@/components/passwords/AgentActivity'
-import { GRANT_OPTIONS, UNLOCK_OPTIONS, unlockOptionLabel } from '@/components/passwords/unlock-words'
+import { GRANT_OPTIONS, UNLOCK_OPTIONS, unlockFootText, unlockOptionLabel } from '@/components/passwords/unlock-words'
 import '@/styles/passwords.css'
+
+/** How long a revealed Secret Key stays on screen. */
+const SHOWN_KEY_MS = 2 * 60_000
 
 interface Props {
   config: Config
@@ -33,15 +40,22 @@ export function PasswordsSection({ config, onSave }: Props) {
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [newPw2, setNewPw2] = useState('')
+  const [newHint, setNewHint] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [agents, setAgents] = useState<AgentsSwitch | null>(null)
   const [grantMs, setGrantMs] = useState<number | null>(null)
   // A move to or from Forever (the machine key) waits for the master password here.
   const [foreverTo, setForeverTo] = useState<UnlockFor | null>(null)
   const [foreverPw, setForeverPw] = useState('')
-  const [bw, setBw] = useState<BitwardenSyncStatus | null>(null)
   const [keychain, setKeychain] = useState<{ available: boolean; present: boolean } | null>(null)
   const [newKit, setNewKit] = useState<RecoveryKit | null>(null)
+  // The Secret Key shown for setting up another device; hidden again after a short while.
+  const [shownKey, setShownKey] = useState('')
+  useEffect(() => {
+    if (!shownKey) return
+    const t = window.setTimeout(() => setShownKey(''), SHOWN_KEY_MS)
+    return () => window.clearTimeout(t)
+  }, [shownKey])
   // Every new vault key comes with a new recovery code: save the kit and show it until confirmed.
   const gotKit = (kit: RecoveryKit) => { setNewKit(kit); downloadRecoveryKit(kit) }
 
@@ -50,7 +64,6 @@ export function PasswordsSection({ config, onSave }: Props) {
       setStatus(st)
       if (st.unlocked) {
         vaultApi.agentPolicy().then((p) => { setAgents(p.agents); setGrantMs(p.grantMs) }).catch(() => {}) // a failed read keeps the switch it showed
-        vaultApi.bitwardenSync().then(setBw).catch(() => {})
       } else { setAgents(null); setGrantMs(null) }
       vaultApi.keychain().then(setKeychain).catch(() => {}) // a failed read keeps what it showed
     }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
@@ -65,7 +78,7 @@ export function PasswordsSection({ config, onSave }: Props) {
     // Forever is the machine key: turning it on or off needs the master password.
     if (v === 'always' || isForever) { if (v !== status?.unlockFor) { setForeverTo(v); setForeverPw('') } return }
     setForeverTo(null)
-    void run('unlock', async () => { await saveUnlockFor(v); return 'Saved. A new unlock lasts this long; this window keeps the one it has.' })
+    void run('unlock', async () => { await saveUnlockFor(v); return 'Saved. A shorter choice also applies to the windows open now; a longer one to the next unlock.' })
   }
   const confirmForever = () => {
     const to = foreverTo
@@ -79,10 +92,6 @@ export function PasswordsSection({ config, onSave }: Props) {
         : `The key on this Mac is gone. A new vault key was made.${recoveryKit ? ' Your recovery code changed with it: save the new kit below, the old one no longer works.' : ''}`
     })
   }
-  const setDaily = (on: boolean) => void run('bw-daily', async () => {
-    await onSave({ passwords: { ...(config.passwords ?? {}), bitwarden_daily: on } })
-    return on ? 'Walnut syncs from Bitwarden every day at 4:00.' : 'The daily Bitwarden sync is off.'
-  })
 
   const run = async (key: string, work: () => Promise<string | void>) => {
     setBusy(key); setError(''); setNote('')
@@ -113,7 +122,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           label="Keep Passwords unlocked"
           help={status?.unlockFor === 'always'
             ? 'Forever: a key stays on this Mac, so agents can use Passwords while you are away. Any program running as you could read the vault.'
-            : 'How long an unlock lasts (no idle lock within a length). A restart locks every window unless this Mac\'s keychain unlocks it.'}
+            : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} A shorter choice also applies to the windows open now; a longer one to the next unlock.`}
           control={<SegmentedControl<UnlockFor> id="pw-unlock-for" aria-label="Keep Passwords unlocked" value={foreverTo ?? status?.unlockFor ?? '48h'} disabled={!status?.setUp || busy === 'unlock' || busy === 'forever'}
             options={UNLOCK_OPTIONS.map((o) => ({ value: o.value, label: unlockOptionLabel(o, status?.lockAfterIdleMinutes), testId: `pw-unlock-${o.value}` }))}
             onChange={pickUnlock} />}
@@ -168,30 +177,7 @@ export function PasswordsSection({ config, onSave }: Props) {
         </SettingsGroup>
       )}
 
-      {status?.setUp && (
-        <SettingsGroup heading="Bitwarden" footer={<>One way: Bitwarden is the source. Changed items are updated, deleted ones go to the trash, and an item changed on both sides is kept twice (the Walnut copy tagged conflict). Walnut runs <code>bw sync</code> and <code>bw export</code> itself, with BW_SESSION from its environment or this Mac's keychain; the export never touches the disk.</>}>
-          <SettingsRow
-            label="Sync from Bitwarden daily"
-            htmlFor="pw-bw-daily"
-            help="At 4:00 every day, while Passwords is unlocked or this Mac's keychain can unlock it."
-            control={<ToggleSwitch id="pw-bw-daily" checked={config.passwords?.bitwarden_daily === true} disabled={busy === 'bw-daily'} onChange={setDaily} />}
-          />
-          <SettingsRow
-            label="Sync now"
-            help={needUnlock ?? (bw?.last ? `Last sync: ${new Date(bw.last.at).toLocaleString()}, ${bw.summary ?? ''}` : 'Last sync: never.')}
-            control={<SettingsButton busy={busy === 'bw-sync'} disabled={!unlocked} data-testid="pw-bw-sync"
-              onClick={() => void run('bw-sync', async () => {
-                let r
-                try { r = await vaultApi.runBitwardenSync() } catch (err) {
-                  // Many items gone at once: the person confirms Bitwarden really deleted them.
-                  if (!(err instanceof VaultApiError && err.code === 'sync_mass_trash') || !window.confirm(`${err.message}\n\nMove them to the trash now?`)) throw err
-                  r = await vaultApi.runBitwardenSync(true)
-                }
-                return r.report.ok ? `Synced: ${r.summary}.` : `Not synced: ${r.report.error ?? 'unknown'}.`
-              })}>Sync now</SettingsButton>}
-          />
-        </SettingsGroup>
-      )}
+      {status?.setUp && <PasswordSourcesGroup config={config} onSave={onSave} unlocked={unlocked} needUnlock={needUnlock} />}
 
       {status?.setUp && (
         <SettingsGroup heading="Browser extension">
@@ -205,18 +191,22 @@ export function PasswordsSection({ config, onSave }: Props) {
           <SettingsRow label="Current" htmlFor="pw-old" control={<input id="pw-old" type="password" data-no-draft="secret" autoComplete="current-password" className="settings-input settings-input--short" disabled={!unlocked} value={oldPw} onChange={(e) => setOldPw(e.target.value)} />} />
           <SettingsRow label="New" htmlFor="pw-new" control={<input id="pw-new" type="password" data-no-draft="secret" autoComplete="new-password" className="settings-input settings-input--short" disabled={!unlocked} value={newPw} onChange={(e) => setNewPw(e.target.value)} />} />
           <SettingsRow label="Confirm new" htmlFor="pw-new2" help={newPw2 && newPw !== newPw2 ? 'The two new passwords differ.' : needUnlock} control={<input id="pw-new2" type="password" data-no-draft="secret" autoComplete="new-password" className="settings-input settings-input--short" disabled={!unlocked} value={newPw2} onChange={(e) => setNewPw2(e.target.value)} />} />
+          <SettingsRow label="New hint" htmlFor="pw-new-hint" help="Optional. The old hint goes with the old password." error={hintError(newHint, newPw) || undefined}
+            control={<input id="pw-new-hint" data-no-draft="secret" autoComplete="off" spellCheck={false} maxLength={HINT_MAX} className="settings-input settings-input--short" disabled={!unlocked} value={newHint} onChange={(e) => setNewHint(e.target.value)} />} />
           <SettingsRow
             label=""
-            control={<SettingsButton busy={busy === 'password'} disabled={!unlocked || !oldPw || newPw.length < 10 || newPw !== newPw2}
+            control={<SettingsButton busy={busy === 'password'} disabled={!unlocked || !oldPw || newPw.length < 10 || newPw !== newPw2 || !!hintError(newHint, newPw)}
               onClick={() => void run('password', async () => {
-                const r = await vaultApi.changePassword(oldPw, newPw, status.kdf)
-                setOldPw(''); setNewPw(''); setNewPw2('')
+                const r = await vaultApi.changePassword(oldPw, newPw, status.kdf, newHint.trim())
+                setOldPw(''); setNewPw(''); setNewPw2(''); setNewHint('')
                 if (r.recoveryKit) gotKit(r.recoveryKit)
                 return `Master password changed, and your other windows were locked.${r.recoveryKit ? ' Your recovery code changed too: save the new kit below, the old one no longer works.' : ''}`
               })}>Change master password</SettingsButton>}
           />
         </SettingsGroup>
       )}
+
+      {status?.setUp && <HintSettings status={status} onChanged={refresh} />}
 
       {newKit && (
         <SettingsGroup heading="Save your new recovery kit" footer={<>The old recovery code no longer works. Walnut keeps no copy of this one: save it before you leave this page.</>}>
@@ -243,6 +233,21 @@ export function PasswordsSection({ config, onSave }: Props) {
                 gotKit(kit)
                 return 'Downloaded a new recovery kit. Confirm below once it is saved; the old recovery code no longer works.'
               })}>Make a new recovery kit</SettingsButton>}
+          />
+          <SettingsRow
+            label="Secret Key"
+            help="Set up Passwords on your iPhone: paste this Secret Key there once."
+            control={shownKey
+              ? <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                  <code className="pw-secret-key" data-testid="pw-settings-secret-key">{shownKey}</code>
+                  <CopyButton text={shownKey} label="Copy" />
+                </span>
+              : <SettingsButton busy={busy === 'secret-key'} disabled={!unlocked || !confirmPw} data-testid="pw-show-secret-key"
+                  onClick={() => void run('secret-key', async () => {
+                    const key = await vaultApi.revealSecretKey(confirmPw, status.kdf)
+                    setConfirmPw('')
+                    setShownKey(key)
+                  })}>Show Secret Key</SettingsButton>}
           />
           <SettingsRow
             label="Agents can ask while Passwords is locked"
