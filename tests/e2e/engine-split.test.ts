@@ -173,6 +173,20 @@ describe('the engine split', () => {
     }
   }, 60_000)
 
+  it('a CLI that got its pid and died before its first reply, then closed, is "never started", not finished work', async () => {
+    const placeholder = await op('task_create', { title: 'CLI dies before first reply', project: 'Silent', record_only: true })
+    daemon.setCliCommand(path.resolve(import.meta.dirname, '../helpers/cli-dies-before-reply.mjs'))
+    try {
+      await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
+      await expect.poll(async () => (await getSessionsForTask(placeholder.id))[0]?.process_status, { timeout: 30_000 }).toBe('error')
+    } finally { daemon.setCliCommand(MOCK_CLI) }
+    expect((await api('PATCH', `/api/tasks/${placeholder.id}`, { phase: 'COMPLETE' })).status).toBe(200)
+    const r = await api('GET', '/api/usage/engines?project=Silent')
+    expect(r.body.rows).toHaveLength(1)
+    expect(r.body.rows[0]).toMatchObject({ done: 0, open: 0, notStarted: 1, errored: 1 })
+    expect(r.body.tasks[0]).toMatchObject({ taskId: placeholder.id, notStarted: true })
+  }, 90_000)
+
   it('counts a reopen of a completed task and compares the work on GET /api/usage/engines', async () => {
     const done = await op('task_create', { title: 'Finish and reopen', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
     expect((await api('PATCH', `/api/tasks/${done.id}`, { phase: 'COMPLETE' })).status).toBe(200)
@@ -196,6 +210,6 @@ describe('the engine split', () => {
     const fair = await api('GET', '/api/usage/engines?project=Marina&split=1')
     expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 11 })
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
-    expect(r.body.projects).toEqual([{ project: 'Marina', tasks: expect.any(Number) }])
+    expect(r.body.projects).toEqual(expect.arrayContaining([{ project: 'Marina', tasks: expect.any(Number) }]))
   }, 60_000)
 })

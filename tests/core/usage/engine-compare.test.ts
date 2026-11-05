@@ -386,6 +386,20 @@ describe('round-9 counting', () => {
     expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 0, notStarted: 1 });
   });
 
+  it('a CLI that got its pid and exited in error before its first reply, then closed, never started', () => {
+    const t = done('silent', 0.0003, { last_start: { id: 'ok', at, state: 'started', engine: 'claude' } });
+    const inp = input([t, done('real', 2)], { real: { costUsd: 1 } });
+    (inp.sessions as Map<string, object>).set('s-silent', { startedAt: '2026-11-02T00:00:00.000Z', messageCount: 2, errorCount: 1, process_status: 'error' });
+    expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 1, notStarted: 1, errored: 1, timedDone: 1 });
+  });
+
+  it('a session that ran turns and later errored is finished work, not "never started"', () => {
+    const t = done('worked', 3);
+    const inp = input([t], { worked: { costUsd: 2 } });
+    (inp.sessions as Map<string, object>).set('s-worked', { startedAt: '2026-11-02T00:00:00.000Z', errorCount: 1, contextTokens: 5000 });
+    expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 1, notStarted: 0, errored: 1 });
+  });
+
   it('a close of a start that never ran, then reopened and finished, dates and times from the real work', () => {
     // Closed unrun on 10-20, reopened, worked from 11-02 and finished 11-02 01:00.
     const t = done('late', 1, { first_completed_at: '2026-10-20T00:00:00.000Z', reopens: 1 });

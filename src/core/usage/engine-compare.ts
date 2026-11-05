@@ -254,7 +254,13 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     // it holds a conversation. Closed like that, it is not work the engine finished (Claude Code makes its
     // session record before the spawn, an ACP engine only after it, so the record alone says nothing).
     const ranTurn = !!spend || sessionsOf(t).some((id) => sessionRanTurn(input.sessions.get(id)));
-    const notStarted = closed && !ranTurn && ((t.start_failures ?? 0) > 0 || t.last_start?.state === 'failed');
+    // The evidence its start failed: a refused start, or a session that died in error (a CLI that got its
+    // pid and exited before its first reply leaves last_start "started" and only the session's error).
+    const sessionErrored = sessionsOf(t).some((id) => {
+      const r = input.sessions.get(id);
+      return r?.process_status === 'error' || (r?.errorCount ?? 0) > 0 || !!r?.status_history?.some((h) => h.process_status === 'error');
+    });
+    const notStarted = closed && !ranTurn && ((t.start_failures ?? 0) > 0 || t.last_start?.state === 'failed' || sessionErrored);
     const done = closed && !notStarted;
     // From its first session's start (a restart, an engine switch or a recovery starts another)
     // to its first completion (a reopen adds the idle time before it otherwise).
@@ -291,10 +297,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     }
     const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
     // Any session it held: a task that failed on one engine and finished on another still had the error.
-    const errored = sessionsOf(t).some((id) => {
-      const s = input.sessions.get(id);
-      return s?.process_status === 'error' || (s?.errorCount ?? 0) > 0 || !!s?.status_history?.some((h) => h.process_status === 'error');
-    }) || t.last_start?.state === 'failed' || (t.start_failures ?? 0) > 0;
+    const errored = sessionErrored || t.last_start?.state === 'failed' || (t.start_failures ?? 0) > 0;
     candidates.push({
       byCost, byPick, taskId: t.id, title: t.title, project: t.project ?? '', key: byCost.key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
