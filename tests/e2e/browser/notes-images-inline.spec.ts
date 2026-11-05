@@ -79,6 +79,8 @@ test('every image form in a vault note draws inline, a missing one names its fil
   await expect(big).toBeVisible()
   await page.locator('.lightbox-close').click()
   await editor.locator('img[alt="up"]').click()
+  // Enter is ProseMirror's own key: wait until the editor holds the picture.
+  await expect(editor.locator('.notes-picture-selected img[alt="up"]')).toHaveCount(1)
   await page.keyboard.press('Enter')
   await expect(big).toBeVisible()
   // The zoom grows a picture smaller than the screen.
