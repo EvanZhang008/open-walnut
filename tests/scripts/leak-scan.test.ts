@@ -117,13 +117,15 @@ describe('leak-scan rules', () => {
     expect(labels('unzorblax zorblaxer')).toEqual([])
   })
 
-  it('never reads a term out of an opaque id: a lower-case word of three or more letter and digit parts', () => {
+  it('never reads a term out of an opaque id: a lower-case word of three or more letter and digit parts, or one that starts with digits', () => {
     // 2026-11-05: a test letter id (a base-36 timestamp, then a random suffix) split into
     // `mw`, `35` and a short term, in a public CI log. Ids like these fill every log.
     expect(labels('{"letterId":"lt-mw35zorblax-fdfa03"}')).toEqual([])
     expect(labels('task 1a2zorblax and 9zorblax7b')).toEqual([])
-    // Whole words, two parts and camelCase keep matching.
-    expect(labels('zorblax2 zorblax2026 2zorblax')).toEqual(['tool', 'tool', 'tool'])
+    // The same day a test hook's random base-36 suffix was digits, then a short term.
+    expect(labels('{"hookIds":["test-hook-52zorblax"]} 2zorblax')).toEqual([])
+    // Whole words, a term then digits, and camelCase keep matching.
+    expect(labels('zorblax2 zorblax2026 zorblax')).toEqual(['tool', 'tool', 'tool'])
     expect(labels('lt-mw35-zorblax-fdfa03 mw35ZorblaxClient')).toEqual(['tool', 'tool'])
     // An id in capitals is no base-36 id: its parts still count.
     expect(labels('MW35ZORBLAX9')).toEqual(['tool'])

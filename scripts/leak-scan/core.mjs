@@ -155,14 +155,15 @@ export const RUN_BREAK = '\x1f'
 const PARTS = /[A-Z]{2,}(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g
 
 /**
- * A lower-case word of three or more letter and digit parts (`mw35zqx1`, `a1b2c3`) is an
- * opaque id (a base-36 timestamp, a random suffix), not words joined: its letter runs are
- * chance, and a short term turns up among them (2026-11-05: a test letter id in a CI log
- * read as a name). Such a word is matched whole, never by its parts. `foo2`, `foo2026`
- * and camelCase still are.
+ * A lower-case word of three or more letter and digit parts (`mw35zqx1`, `a1b2c3`), or of
+ * two that starts with its digits (`52abcd`), is an opaque id (a base-36 timestamp, a random
+ * suffix), not words joined: its letter runs are chance, and a short term turns up among
+ * them (2026-11-05: a test letter id in a CI log read as a name, then a test hook's random
+ * suffix). No name or identifier starts with a digit. Such a word is matched whole, never
+ * by its parts. `foo2`, `foo2026` and camelCase still are.
  */
 export function opaqueId(word, parts) {
-  return parts >= 3 && /^[a-z0-9]+$/.test(word)
+  return (parts >= 3 || /^[0-9]/.test(word)) && /^[a-z0-9]+$/.test(word)
 }
 
 /**
