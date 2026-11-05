@@ -24,7 +24,7 @@ import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, getTask, listTasks, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
 import {
-  MAX_RUNNING_SUBTASKS, MAX_SUBTASK_DEPTH, SubtaskLimitError, admitSubtaskStart, assertSubtaskDepth, taskDepth,
+  MAX_RUNNING_SUBTASKS, MAX_RUNNING_SUBTASKS_USER_ASKED, MAX_SUBTASK_DEPTH, SubtaskLimitError, admitSubtaskStart, assertSubtaskDepth, taskDepth,
 } from '../../../src/core/sessions/subtask-limits.js'
 import { admitStartWithinLimits } from '../../../src/core/sessions/task-start.js'
 
@@ -256,5 +256,83 @@ describe('running subtasks', () => {
     // The same shape from a worker is refused.
     const workerSid = await sessionFor(parent.id, 'fanout')
     await expect(admitStartWithinLimits(target, workerSid)).rejects.toBeInstanceOf(SubtaskLimitError)
+  })
+})
+
+describe("whose cap: the started task's lead, whoever starts it", () => {
+  // 2026-11-05: a helper task with no running subtasks of its own started a lead's queued subtask
+  // while 18 of that lead's subtasks ran (cap 16), because the cap was counted on the starter.
+  it("another task's session starting a full lead's subtask is held to the lead's cap, and queued under the lead", async () => {
+    const { task: lead } = await addTask({ title: 'Full lead', project: 'fanout' })
+    await children(lead.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
+    const [waiting] = await children(lead.id, ['TODO'])
+    const { task: helper } = await addTask({ title: 'Helper with nothing running', project: 'fanout' })
+    const helperSid = await sessionFor(helper.id, 'fanout')
+
+    const refused = await admitStartWithinLimits(await getTask(waiting), helperSid).catch((e: unknown) => e) as SubtaskLimitError
+    expect(refused).toBeInstanceOf(SubtaskLimitError)
+    expect(refused.detail).toMatchObject({ parentId: lead.id, cap: MAX_RUNNING_SUBTASKS })
+    expect(refused.message).toContain('Full lead')
+
+    const res = await fetch(api(`/api/v1/tasks/${waiting}/start`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': helperSid },
+      body: JSON.stringify({ message: 'go' }),
+    })
+    expect(res.status).toBe(202)
+    const json = await res.json() as { started: boolean; queued?: { cap: number } }
+    expect(json.started).toBe(false)
+    expect(json.queued?.cap).toBe(MAX_RUNNING_SUBTASKS)
+    expect((await getTask(waiting)).start_queue).toMatchObject({ parent_id: lead.id, caller_sid: helperSid })
+  })
+
+  it("the user's words raise the lead's cap to the higher one, from any starter", async () => {
+    const { task: lead } = await addTask({ title: 'Lead past the plain cap', project: 'fanout' })
+    const running = await children(lead.id, Array(MAX_RUNNING_SUBTASKS_USER_ASKED).fill('IN_PROGRESS'))
+    const [waiting] = await children(lead.id, ['TODO'])
+    const { task: helper } = await addTask({ title: 'Helper', project: 'fanout' })
+    const helperSid = await sessionFor(helper.id, 'fanout')
+    const words = 'please start this one now, I am waiting for it'
+    await expect(admitStartWithinLimits(await getTask(waiting), helperSid, words)).rejects.toBeInstanceOf(SubtaskLimitError)
+    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
+    ;(await admitStartWithinLimits(await getTask(waiting), helperSid, words))()
+    // Without the words the lead's plain cap still holds it.
+    await expect(admitStartWithinLimits(await getTask(waiting), helperSid)).rejects.toBeInstanceOf(SubtaskLimitError)
+  })
+
+  it('a lead that is an ask (Main) is never limited, and a task with no lead counts on its starter', async () => {
+    const { task: ask } = await addTask({ title: 'Main-like ask', project: 'Ask Walnut', walnut_agent: true })
+    await children(ask.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
+    const [askChild] = await children(ask.id, ['TODO'])
+    const { task: worker } = await addTask({ title: 'Busy worker of its own', project: 'fanout' })
+    await children(worker.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
+    const workerSid = await sessionFor(worker.id, 'fanout')
+    ;(await admitStartWithinLimits(await getTask(askChild), workerSid))()
+
+    const { task: loose } = await addTask({ title: 'No lead', project: 'fanout' })
+    await expect(admitStartWithinLimits(await getTask(loose.id), workerSid)).rejects.toMatchObject({ detail: { parentId: worker.id } })
+  })
+
+  it("a transfer's new task takes its source's slot: one for one, never refused for the source", async () => {
+    const { task: lead } = await addTask({ title: 'Lead at its cap', project: 'fanout' })
+    const running = await children(lead.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
+    const [moved] = await children(lead.id, ['TODO'])
+    await updateTaskRaw(moved, { transferred_from: running[0] } as never)
+    const workerSid = await sessionFor(running[0], 'fanout')
+    ;(await admitStartWithinLimits(await getTask(moved), workerSid))()
+    // Any other start under that lead is still held.
+    const [other] = await children(lead.id, ['TODO'])
+    await expect(admitStartWithinLimits(await getTask(other), workerSid)).rejects.toBeInstanceOf(SubtaskLimitError)
+  })
+
+  it('every admission counts on the lead: each call site, word for word', async () => {
+    // A new call of admitSubtaskStart must count on the started task's lead too (and pass the
+    // transfer's source); list it here once it does.
+    const { execFileSync } = await import('node:child_process')
+    const hits = execFileSync('git', ['grep', '-h', '-o', 'admitSubtaskStart([^;]*', '--', 'src'], { encoding: 'utf8' })
+      .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('admitSubtaskStart(\n')).sort()
+    expect(hits.filter((h) => !/^admitSubtaskStart\($/.test(h))).toEqual([
+      'admitSubtaskStart(lead.id, task.id, lead.title, { userAsked: !!quoted, replacing: task.transferred_from })',
+      'admitSubtaskStart(leadOf(t), t.id, undefined, { userAsked, replacing: t.transferred_from })',
+    ].sort())
   })
 })

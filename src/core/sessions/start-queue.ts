@@ -1,7 +1,7 @@
 /**
  * The start queue: a session's start that the running-subtask cap (subtask-limits.ts) would
  * refuse is recorded on the task (`Task.start_queue`) and answered "queued"; Walnut starts it
- * by itself once one of the caller task's running subtasks stops running.
+ * by itself once one of its lead's running subtasks stops running (the cap counts the task's lead).
  *
  * Why (2026-11-03): a VP whose job is to delegate hit the cap with 17 running, read "do this
  * part with your own tools" in the refusal and ran the investigation itself, then wrote its own
@@ -15,7 +15,8 @@
  *
  * Lifecycle: a start through startSessionForTask clears its entry, and the drain drops one whose task
  * has a session that began after it was queued (the web's Start, the phone, a quick start); a COMPLETE
- * task's entry is dropped, and so is one whose caller task completed or is gone; a task started some other way since it was queued (its `last_start`
+ * task's entry is dropped, and so is one whose asking task (the caller session's task, not the lead
+ * whose cap holds it) completed or is gone; a task started some other way since it was queued (its `last_start`
  * is newer) is dropped; a team stop (team-stop.ts, `team_stop` on the task or an ancestor) holds
  * the entries of its team until team_resume; a replay that fails for another reason is dropped
  * with the failure left on `last_start`, where task_get's execution reads it.
@@ -71,7 +72,7 @@ function replayParams(params: SessionStartParams): StartQueueEntry['params'] {
 
 /** Position (1-based) of a task among the entries queued behind the same parent. */
 function positionOf(taskId: string, parentId: string, tasks: readonly Task[]): number {
-  const line = tasks.filter((t) => t.start_queue?.parent_id === parentId && t.phase !== 'COMPLETE').sort(queueOrder);
+  const line = tasks.filter((t) => t.start_queue && leadOf(t) === parentId && t.phase !== 'COMPLETE').sort(queueOrder);
   const at = line.findIndex((t) => t.id === taskId);
   return at < 0 ? line.length + 1 : at + 1;
 }
@@ -153,12 +154,21 @@ export function drainStartQueue(parentId?: string, opts: { notBefore?: number } 
   return run;
 }
 
+/**
+ * The lead whose running-subtask cap holds a queued start: the task's own parent, as the start's
+ * admission counts it (task-start.ts admitStartWithinLimits), else the task it was queued under
+ * (an entry from before the cap counted on the lead recorded the asker's task there).
+ */
+export function leadOf(t: Pick<Task, 'parent_task_id' | 'start_queue'>): string {
+  return t.parent_task_id || t.start_queue?.parent_id || '';
+}
+
 async function drainNow(parentId: string | undefined, opts: { notBefore?: number }): Promise<DrainResult> {
   const out: DrainResult = { started: [], dropped: [], held: [], waiting: [] };
   const { listTasks } = await import('../task-manager.js');
   const all = await listTasks();
   const byId = new Map(all.map((t) => [t.id, t] as const));
-  const queued = all.filter((t) => t.start_queue && (!parentId || t.start_queue.parent_id === parentId));
+  const queued = all.filter((t) => t.start_queue && (!parentId || leadOf(t) === parentId));
   if (!queued.length) return out;
   const lines = new Map<string, Task[]>();
   for (const t of queued) {
@@ -175,16 +185,19 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
       out.dropped.push(t.id);
       continue;
     }
-    // The task that queued it finished or is gone: nobody waits for this start any more.
-    const parent = byId.get(entry.parent_id);
-    if (!parent || parent.phase === 'COMPLETE') {
-      await clearStartQueue(t.id, parent ? 'caller complete' : 'caller gone');
+    // The task whose session queued it finished or is gone: nobody waits for this start any more.
+    // That is the asker's task (caller_sid), not the lead whose cap holds it (parent_id): a helper
+    // may start a lead's subtask, and a lead completes with its subtasks still open.
+    const { getSessionsForTask, getSessionByClaudeId } = await import('../session-tracker.js');
+    const askerTaskId = (await getSessionByClaudeId(entry.caller_sid).catch(() => null))?.taskId ?? entry.parent_id;
+    const asker = byId.get(askerTaskId);
+    if (!asker || asker.phase === 'COMPLETE') {
+      await clearStartQueue(t.id, asker ? 'caller complete' : 'caller gone');
       out.dropped.push(t.id);
       continue;
     }
     // A session began since it was queued by a path that writes no last_start (the web's Start, the
     // phone, a quick start): a replay now would send the queued message into that conversation again.
-    const { getSessionsForTask } = await import('../session-tracker.js');
     const records = await getSessionsForTask(t.id).catch(() => []);
     if (records.some((r) => (r.startedAt ?? '') > entry.at)) {
       await clearStartQueue(t.id, 'session since queued');
@@ -192,9 +205,10 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
       continue;
     }
     if (heldByTeamStop(t, byId)) { out.held.push(t.id); continue; }
-    const line = lines.get(entry.parent_id) ?? [];
+    const lead = leadOf(t);
+    const line = lines.get(lead) ?? [];
     line.push(t);
-    lines.set(entry.parent_id, line);
+    lines.set(lead, line);
   }
   const { startSessionForTask, SessionExistsError } = await import('./task-start.js');
   const { SubtaskLimitError, admitSubtaskStart } = await import('./subtask-limits.js');
@@ -213,7 +227,7 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
       // that is gone would otherwise fail open and start every entry over the cap at once.
       let release = () => {};
       try {
-        release = await admitSubtaskStart(entry.parent_id, t.id, undefined, { userAsked });
+        release = await admitSubtaskStart(leadOf(t), t.id, undefined, { userAsked, replacing: t.transferred_from });
         await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE });
         out.started.push(t.id);
         log.session.info('queued start started', { taskId: t.id, parentId: entry.parent_id, queuedAt: entry.at });

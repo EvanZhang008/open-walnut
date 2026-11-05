@@ -155,6 +155,29 @@ describe('the start queue', () => {
     expect((await getTask(askedLater)).start_queue).toBeTruthy()
   })
 
+  it("a helper's start of a lead's subtask queues under the lead, starts when the lead has room, and drops with the helper", async () => {
+    const { parent: lead, running } = await fullWorker('Lead a helper starts for')
+    const [forHelper, dropsWithHelper] = await children(lead.id, ['TODO', 'TODO'])
+    const { task: helper } = await addTask({ title: 'Helper task', project: 'queue' })
+    const helperSid = await sessionFor(helper.id)
+    expect((await startAs(helperSid, forHelper, { message: 'go for the lead' })).json.queued).toMatchObject({ cap: MAX_RUNNING_SUBTASKS })
+    expect((await getTask(forHelper)).start_queue).toMatchObject({ parent_id: lead.id, caller_sid: helperSid })
+
+    // The lead completes with its subtasks open: the helper still waits, the entry stays.
+    await updateTaskRaw(lead.id, { phase: 'COMPLETE' as never })
+    expect((await drainStartQueue(lead.id)).waiting).toContain(forHelper)
+    await updateTaskRaw(lead.id, { phase: 'IN_PROGRESS' as never })
+
+    // A slot of the lead frees: the drain starts it.
+    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
+    expect((await drainStartQueue(lead.id)).started).toEqual([forHelper])
+
+    // The helper completes: its other queued start goes with it.
+    expect((await startAs(helperSid, dropsWithHelper, { message: 'later' })).json.queued).toBeTruthy()
+    await updateTaskRaw(helper.id, { phase: 'COMPLETE' as never })
+    expect((await drainStartQueue(lead.id)).dropped).toContain(dropsWithHelper)
+  })
+
   it("a person's start clears a queued entry", async () => {
     const { parent, sid } = await fullWorker('Lead the person overrides')
     const [waiting] = await children(parent.id, ['TODO'])

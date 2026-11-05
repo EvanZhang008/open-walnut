@@ -123,10 +123,24 @@ export async function admitStartWithinLimits(task: Task, callerSid: string | und
   if (quoted && quoted.length < MIN_USER_REQUEST_CHARS) {
     throw new QuickStartError(`user_request must quote the user's own words asking for this start (${MIN_USER_REQUEST_CHARS} characters or more)`, 400);
   }
-  if (quoted) {
-    log.session.info('subtask start as the user asked', { taskId: task.id, parentId: caller.task.id, callerSid, userRequest: quoted.slice(0, 300) });
+  // Whose cap: the task's own lead, whoever starts it. Counted on the starting session, any
+  // session could start another lead's queued subtask past that lead's cap (2026-11-05: a helper
+  // task started a lead's queued subtask with 18 of its 16 running). A task with no lead counts
+  // on the starter, a lead that is Main or an ask is never limited, as its own starts are not, and a
+  // transfer's new task takes its source's slot.
+  let lead: { id: string; title?: string } = caller.task;
+  if (task.parent_task_id && task.parent_task_id !== caller.task.id) {
+    const parent = await getTask(task.parent_task_id).catch(() => null);
+    if (parent) {
+      const { isAskTask } = await import('./caller-placement.js');
+      if (isAskTask(parent)) return open;
+      lead = parent;
+    }
   }
-  return admitSubtaskStart(caller.task.id, task.id, caller.task.title, { userAsked: !!quoted });
+  if (quoted) {
+    log.session.info('subtask start as the user asked', { taskId: task.id, parentId: lead.id, callerSid, userRequest: quoted.slice(0, 300) });
+  }
+  return admitSubtaskStart(lead.id, task.id, lead.title, { userAsked: !!quoted, replacing: task.transferred_from });
 }
 
 /**

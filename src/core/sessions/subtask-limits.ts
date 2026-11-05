@@ -180,7 +180,7 @@ const admissionLocks = new Map<string, Promise<void>>();
  * IN_PROGRESS before it confirms the spawn.
  */
 export async function admitSubtaskStart(
-  parentId: string, startingTaskId: string, parentTitle?: string, opts: { userAsked?: boolean } = {},
+  parentId: string, startingTaskId: string, parentTitle?: string, opts: { userAsked?: boolean; replacing?: string } = {},
 ): Promise<() => void> {
   let unlock!: () => void;
   const mine = new Promise<void>((resolve) => { unlock = resolve; });
@@ -195,7 +195,8 @@ export async function admitSubtaskStart(
     const starting = admitted.get(parentId) ?? new Set<string>();
     // A start waiting for its isolated workspace is a start on the way (core/workspaces).
     const preparing = (c: Task) => c.workspace?.state === 'creating' && !!c.workspace.pending_start;
-    const running = children.filter((c) => c.id !== startingTaskId
+    // A transfer's new task takes its source's place (`replacing`): one for one, no new slot.
+    const running = children.filter((c) => c.id !== startingTaskId && c.id !== opts.replacing
       && (c.phase === 'IN_PROGRESS' || starting.has(c.id) || preparing(c)));
     const cap = opts.userAsked ? MAX_RUNNING_SUBTASKS_USER_ASKED : MAX_RUNNING_SUBTASKS;
     if (running.length >= cap) {
