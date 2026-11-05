@@ -113,8 +113,30 @@ function normalizePicks(raw: unknown): PicksFile {
   return { version: 1, picks: picks.filter((p) => p && typeof p.key === 'string' && typeof p.at === 'string') };
 }
 
-/** Picks per entry key within the window. */
+/**
+ * Picks made in this process that their start has not recorded yet: two starts at once both
+ * read the file before either writes, and would otherwise take the same entry. A start that
+ * never records (it failed, or continued a conversation) stops counting after RESERVE_MS.
+ */
+const reserved: { key: string; at: number }[] = [];
+const RESERVE_MS = 120_000;
+
+/** Tests only. */
+export function _resetSplitReservations(): void { reserved.length = 0; }
+
+/** Adds this process's unrecorded picks to `counts`. Synchronous on purpose (see pickSplitEngine). */
+function withReserved(counts: Map<string, number>, nowMs: number): Map<string, number> {
+  for (let i = reserved.length - 1; i >= 0; i--) if (nowMs - reserved[i].at > RESERVE_MS) reserved.splice(i, 1);
+  for (const r of reserved) counts.set(r.key, (counts.get(r.key) ?? 0) + 1);
+  return counts;
+}
+
+/** Picks per entry key within the window, this process's unrecorded picks included. */
 export async function recentPickCounts(nowMs = Date.now()): Promise<Map<string, number>> {
+  return withReserved(await filePickCounts(nowMs), nowMs);
+}
+
+async function filePickCounts(nowMs: number): Promise<Map<string, number>> {
   const file = normalizePicks(await readJsonFile<unknown>(picksFile(), null));
   const counts = new Map<string, number>();
   for (const p of file.picks) {
@@ -126,12 +148,18 @@ export async function recentPickCounts(nowMs = Date.now()): Promise<Map<string, 
 
 /** Keep one pick (the start that made it was recorded on its task). */
 export async function recordPick(key: string, taskId: string, at: string, nowMs = Date.now()): Promise<void> {
-  await updateJsonFile<unknown>(picksFile(), null, (raw) => {
-    const file = normalizePicks(raw);
-    const picks = file.picks.filter((p) => nowMs - Date.parse(p.at) <= SPLIT_WINDOW_MS && p.taskId !== taskId);
-    picks.push({ key, taskId, at });
-    return { version: 1, picks: picks.slice(-KEEP_PICKS) };
-  });
+  try {
+    await updateJsonFile<unknown>(picksFile(), null, (raw) => {
+      const file = normalizePicks(raw);
+      const picks = file.picks.filter((p) => nowMs - Date.parse(p.at) <= SPLIT_WINDOW_MS && p.taskId !== taskId);
+      picks.push({ key, taskId, at });
+      return { version: 1, picks: picks.slice(-KEEP_PICKS) };
+    });
+  } finally {
+    // Only once the file holds it, so no read in between counts it nowhere.
+    const i = reserved.findIndex((r) => r.key === key);
+    if (i >= 0) reserved.splice(i, 1);
+  }
 }
 
 /**
@@ -149,9 +177,12 @@ export async function pickSplitEngine(
   for (const b of builders) {
     if (!isAcpEngine(b.engine) || (await available(b.engine).catch(() => null)) === true) usable.push(b);
   }
-  const counts = await recentPickCounts(nowMs);
+  // The reserved picks are added, the entry chosen and reserved with no await in between,
+  // so a start running at the same time always sees this one.
+  const counts = withReserved(await filePickCounts(nowMs), nowMs);
   const chosen = chooseBuilder(usable, counts);
   if (!chosen) return null;
+  reserved.push({ key: chosen.key, at: nowMs });
   return {
     key: chosen.key, engine: chosen.engine, ...(chosen.model ? { model: chosen.model } : {}), at: new Date(nowMs).toISOString(),
     shares: Object.fromEntries(builders.map((b) => [b.key, counts.get(b.key) ?? 0])),

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
-  builderLabel, chooseBuilder, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders,
+  _resetSplitReservations, builderLabel, chooseBuilder, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders,
 } from '../../../src/core/agents/engine-split.js';
 
 const picksFile = path.join(WALNUT_HOME, 'cache', 'engine-split.json');
@@ -72,7 +72,7 @@ describe('splitApplies', () => {
 });
 
 describe('picks', () => {
-  beforeEach(async () => { await fs.rm(picksFile, { force: true }); });
+  beforeEach(async () => { await fs.rm(picksFile, { force: true }); _resetSplitReservations(); });
   const two = splitBuilders({ defaults: { engine_split: ['claude', 'codex'] } });
 
   it('counts recent picks only, one per task', async () => {
@@ -99,5 +99,15 @@ describe('picks', () => {
     expect((await pickSplitEngine(two, async () => null, now))?.key).toBe('claude');
     expect((await pickSplitEngine(two, async () => false, now))?.key).toBe('claude');
     expect((await pickSplitEngine(two, async () => { throw new Error('down'); }, now))?.key).toBe('claude');
+  });
+
+  it('two starts at once take different entries, and an unrecorded pick stops counting after a while', async () => {
+    const now = Date.now();
+    const yes = async () => true;
+    const [a, b] = await Promise.all([pickSplitEngine(two, yes, now), pickSplitEngine(two, yes, now)]);
+    expect(new Set([a?.key, b?.key])).toEqual(new Set(['claude', 'codex']));
+    await recordPick(a!.key, 'ta', a!.at, now);
+    // b never records (its start failed): three minutes on, only the recorded pick counts.
+    expect(Object.fromEntries(await recentPickCounts(now + 180_000))).toEqual({ [a!.key]: 1 });
   });
 });
