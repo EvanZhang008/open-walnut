@@ -30,6 +30,7 @@ import { initAutoLock, lockIfIdle, touch } from './bg-autolock'
 import { clearBadges, initBadge, setBadge } from './bg-badge'
 import { walletValues } from './bg-wallet'
 import { itemDetail, secretField } from './popup-item-data'
+import { pageFillOn } from './settings'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -271,6 +272,8 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       }
       let barNonce: string | undefined
       let offerCode = false
+      // "Fill and save on web pages" (Settings): off, the page draws no icon, menu or bar of its own.
+      const pageFill = await pageFillOn()
       if (tabId !== undefined && sender.frameId === 0) {
         if (msg.top) {
           // A new top page: frames of another origin can no longer be filled. The rest stay (a
@@ -281,16 +284,16 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
           await frames.set(tabId, all)
           void setBadge(tabId, count)
         }
-        barNonce = await barNonceFor(tabId, page)
+        if (pageFill) barNonce = await barNonceFor(tabId, page)
       }
       // The code page after a sign in Walnut filled or saw: its menu offers that login's code.
-      if (tabId !== undefined && codes > 0) {
+      if (tabId !== undefined && codes > 0 && pageFill) {
         const last = await lastLogin.get(tabId)
         offerCode = !!last && last.hasTotp && Date.now() - last.at < CODE_PAGE_MS && siteOf(last.url) === siteOf(page)
       }
       // An agent's tab wears its frame and Stop button (top frame only).
       const agent = sender.frameId === 0 ? await isAgentTab(tabId) : undefined
-      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
+      return { ok: true, pageFill, connected: st.connected, unlocked: st.unlocked, count, ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
     }
     case 'frame-ready': {
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }

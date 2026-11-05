@@ -110,7 +110,7 @@ document.addEventListener('input', (e) => {
 
 /** The menu again for a username the person is typing, when this site has logins to offer. */
 async function reopenTyping(t: HTMLInputElement): Promise<void> {
-  if (cs.off || !MAY_FILL || openingFor(t) || !t.value) return
+  if (cs.off || !cs.pageFill || !MAY_FILL || openingFor(t) || !t.value) return
   const st = await ask<PageState>({ type: 'page-init' })
   if (!st.ok || !st.connected || !st.unlocked || (st.count ?? 0) === 0) return
   if (menu || document.activeElement !== t || openingFor(t)) return
@@ -139,6 +139,9 @@ async function onFocus(e: { target: EventTarget | null }): Promise<void> {
   if (!what) return
   const hit = groupOfField(cs.groups, t)
   cs.active = hit ? { group: hit.group, role: hit.role, field: t } : { wallet: walletGroupOf(cs.wallets, t) ?? undefined, role: what.role, field: t }
+  // Filling on pages is off (another password manager fills here): the field the person is in
+  // is kept for a fill they ask for, and Walnut draws nothing in the page.
+  if (!cs.pageFill) return
   showIcon(t)
   // Read now, before the await: a fill's focus moves, and whether the person brought focus here.
   const fromFill = cs.filling
@@ -166,7 +169,7 @@ async function onFocus(e: { target: EventTarget | null }): Promise<void> {
 let codeOffered = false
 let offerCode = false
 function maybeOfferCode(): void {
-  if (!offerCode || codeOffered || cs.off || !MAY_FILL) return
+  if (!offerCode || codeOffered || cs.off || !cs.pageFill || !MAY_FILL) return
   const g = cs.groups.find((x) => x.kind === 'totp' && x.totp)
   if (!g?.totp || g.totp.value) return
   if (document.activeElement === g.totp || g.totpBoxes?.includes(document.activeElement as HTMLInputElement)) {
@@ -187,7 +190,8 @@ const fillsHere = (origin: unknown) => !cs.off && MAY_FILL && origin === locatio
 
 const sentAt = new WeakMap<Element, number>()
 function sending(g: LoginGroup): void {
-  if (cs.off || !MAY_FILL) return
+  // Off, a sent login is not even noted: no save or update bar can come of it.
+  if (cs.off || !cs.pageFill || !MAY_FILL) return
   const last = sentAt.get(g.root) ?? 0
   if (Date.now() - last < 1500) return
   sentAt.set(g.root, Date.now())
@@ -265,7 +269,7 @@ addEventListener('resize', reposition)
 
 let bar: { host: Host; frame: HTMLIFrameElement; nonce: string } | null = null
 function showBar(nonce: string): void {
-  if (cs.off || SELF !== 'top' || !nonce) return
+  if (cs.off || !cs.pageFill || SELF !== 'top' || !nonce) return
   // Asked twice for the same login (the send, then the page it led to): keep the one shown.
   if (bar?.nonce === nonce && bar.host.el.isConnected) return
   hideBar()
@@ -421,9 +425,10 @@ if (SELF === 'top') {
 
 function start(): void {
   if (isWalnutApp()) return
-  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string }; offerCode?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
+  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string }; offerCode?: boolean; pageFill?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
     if (!r.ok || r.off) return
     cs.off = false
+    cs.pageFill = r.pageFill !== false
     offerCode = r.offerCode === true
     if (r.agent) showAgentMark(true, r.agent.who)
     reported = null
@@ -446,6 +451,16 @@ if (SELF === 'top') {
     }, 400)
   })
 }
+
+// "Fill and save on web pages" changed in Settings: open tabs follow at once, no reload. Off,
+// what Walnut drew in the page goes; on again, the next field the person is in shows the icon.
+ext.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !('settings' in changes) || !live()) return
+  const on = (changes.settings.newValue as { pageFill?: unknown } | undefined)?.pageFill !== false
+  if (on === cs.pageFill) return
+  cs.pageFill = on
+  if (!on) closeAll()
+})
 
 // Password fields as the page first draws them, and any focused later: one shown as text stays a secret.
 pageAgent.notePasswords()

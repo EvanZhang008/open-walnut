@@ -12,6 +12,7 @@ import { settingsView } from './popup-settings'
 import { itemRow, type Item, type PopupCtx } from './popup-item'
 import { findWalnut, rememberServer } from './popup-connect'
 import { startClipboardPage } from './clipboard-page'
+import { pageFillOn } from './settings'
 
 interface State { connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }
 
@@ -173,6 +174,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
   if (!site.ok && (site.code === 'vault_session_needed' || site.code === 'vault_locked')) return unlockView({ ...st, unlocked: false })
   if (!site.ok && site.code && DISCONNECTED.has(site.code)) return connectView({ connected: false, unlocked: false, serverUrl: st.serverUrl })
   const wallet = await ask<{ cards: Item[]; identities: Item[] }>({ type: 'wallet-items' })
+  const pageFill = await pageFillOn()
   const q = h('input', { class: 'input', type: 'search', id: 'q', placeholder: 'Search Walnut', 'aria-label': 'Search Walnut', autocomplete: 'off' })
   const list = h('div', { class: 'pane', style: 'padding-top:4px' })
   const siteItems = site.ok ? site.items : []
@@ -186,7 +188,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
         // Saved for the https address: this plain http page does not get it, and the person is told why.
         list.append(h('div', { class: 'notice', 'data-testid': 'popup-insecure' }, icon('warn'),
           h('span', {}, `This page is not secure (http). Your ${site.insecure === 1 ? 'login is' : `${site.insecure} logins are`} saved for the https address of ${site.site}, so Walnut does not fill ${site.insecure === 1 ? 'it' : 'them'} here.`)))
-      } else list.append(h('div', { class: 'empty' }, 'No saved login for this site. Sign in and Walnut offers to save it.'))
+      } else list.append(h('div', { class: 'empty' }, pageFill ? 'No saved login for this site. Sign in and Walnut offers to save it.' : 'No saved login for this site.'))
     } else {
       list.append(h('div', { class: 'empty' }, 'Search your vault, or open a site to see its logins here.'))
     }
@@ -230,6 +232,9 @@ async function vaultView(st: State): Promise<HTMLElement> {
         iconButton(popupIcon('gear'), 'Settings', () => void showSettings(st), { 'data-testid': 'popup-settings' }),
         lock)),
     h('div', { class: 'pane', style: 'padding-bottom:0' }, h('div', { class: 'search' }, icon('search'), q)),
+    // Off in Settings (another password manager fills this browser): one quiet line says so.
+    pageFill ? null : h('p', { class: 'quiet-line', 'data-testid': 'popup-pagefill-off' }, 'Filling on pages is off. ',
+      h('button', { class: 'link-btn', type: 'button', 'data-testid': 'popup-pagefill-settings', onclick: () => void showSettings(st) }, 'Turn on in Settings.')),
     list,
     h('div', { class: 'foot' },
       askButton(),

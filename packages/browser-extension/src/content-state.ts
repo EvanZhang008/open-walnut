@@ -20,6 +20,12 @@ export interface Active { group?: LoginGroup; wallet?: WalletGroup; role: string
 export const cs = {
   /** Off until the background answers, and for good on Walnut's own pages. */
   off: true,
+  /**
+   * Walnut's own page help (Settings, "Fill and save on web pages"): the field icon, the menu
+   * opening in a field, the save bar and noting a sent login. Off, a fill the person asks for
+   * (the popup, the context menu, the shortcut) still works, and so do agents.
+   */
+  pageFill: true,
   groups: [] as LoginGroup[],
   wallets: [] as WalletGroup[],
   active: null as Active | null,

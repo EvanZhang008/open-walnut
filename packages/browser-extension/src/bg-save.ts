@@ -11,6 +11,7 @@ import { touch } from './bg-autolock'
 import { COVERED, openUnlock, stillShown } from './bg-fill'
 import { CODE_PAGE_MS, PENDING_MS, forget, isWalnutPage, matchesFor, nonce, originOf, pendingAlive, siteOf, state, stores, summaries, type Choice, type Pending, type Reply } from './bg-vault'
 import { defaultLoginName, neverCovers, neverEntry, pickUpdate, type UpdateCandidate } from './login-pick'
+import { pageFillOn } from './settings'
 
 /** A pending login shows on another site's page only right after it was sent (a sign-in that lands elsewhere). */
 export const ELSEWHERE_MS = 20_000
@@ -87,6 +88,8 @@ async function seenLogin(tabId: number, url: string, sent: Sent, keep?: { at: nu
 }
 
 export async function showSaveBar(tabId: number): Promise<void> {
+  // Filling on pages is off: Walnut puts no bar of its own on a page.
+  if (!(await pageFillOn())) return
   const p = await stores.pendingSave.get(tabId)
   if (!p) return
   await ext.tabs.sendMessage(tabId, { type: 'show-savebar', nonce: p.nonce }, { frameId: 0 }).catch(() => undefined)
@@ -138,6 +141,8 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
   switch (msg.type) {
     case 'seen-login': {
       if (tabId === undefined || typeof msg.password !== 'string' || !msg.password) return { ok: false }
+      // Off (another password manager saves here): a sent login is not kept, so no bar can follow.
+      if (!(await pageFillOn())) return { ok: true, offered: false }
       const url = String(sender.url ?? '')
       if (await isWalnutPage(url)) return { ok: false }
       // Only what the person typed, or the strong password Walnut just made here, is offered:
@@ -159,6 +164,7 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       return { ok: true, offered: !!p }
     }
     case 'seen-username': {
+      if (!(await pageFillOn())) return { ok: true }
       if (tabId !== undefined && typeof msg.username === 'string' && msg.username) await seenUsername.set(tabId, { url: String(sender.url ?? ''), username: msg.username, at: Date.now() })
       return { ok: true }
     }

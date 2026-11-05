@@ -221,6 +221,9 @@ input[type=checkbox], input[type=range] { accent-color: var(--accent); }
 .link-btn:hover { text-decoration: underline; }
 .hint-line { margin: 6px 0 0; font-size: 12px; }
 .hint-line .link-btn { font-size: 12px; }
+/* Filling on pages is off (Settings): one quiet line under the search. */
+.quiet-line { margin: 8px 16px 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.quiet-line .link-btn { font-size: 12px; }
 .hint-shown { margin: 0; color: var(--fg2); overflow-wrap: anywhere; }
 .btn-danger { color: var(--bad); }
 .btn-danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; }

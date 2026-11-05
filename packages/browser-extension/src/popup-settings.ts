@@ -1,6 +1,6 @@
 /**
- * The popup's Settings: the connection, when the extension locks itself, copying the
- * one-time code after a fill, the sites Walnut never offers to save for (each removable), and
+ * The popup's Settings: the connection, when the extension locks itself, filling and saving on
+ * web pages, copying the one-time code after a fill, the sites Walnut never offers to save for (each removable), and
  * agents in this browser.
  */
 import { ask, ext } from './ext'
@@ -107,8 +107,12 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
       h('div', { class: 'group' }, h('div', { class: 'setting' }, h('label', { class: 'row-text', for: 'autolock' }, h('span', { class: 'row-title' }, 'Lock Walnut'),
         lockSub), lock)),
       h('div', { class: 'section-label' }, 'Filling'),
-      h('div', { class: 'group' }, switchRow('copytotp', 'Copy the one-time code after filling', 'Its code is then on the clipboard for the next page.', settings.copyTotp,
-        (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
+      h('div', { class: 'group' },
+        // Off while another password manager fills this browser: no icon, menu or bar in pages (content.ts).
+        switchRow('pagefill', 'Fill and save on web pages', 'Turn off while another password manager fills this browser; the popup still fills on a click.', settings.pageFill,
+          (on) => void setSettings({ pageFill: on }), 'popup-pagefill'),
+        switchRow('copytotp', 'Copy the one-time code after filling', 'Its code is then on the clipboard for the next page.', settings.copyTotp,
+          (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
       await neverSection(),
       await agentSection(),
       h('div', { class: 'section-label' }, 'Fill shortcut'),

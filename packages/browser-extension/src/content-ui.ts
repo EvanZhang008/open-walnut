@@ -231,7 +231,7 @@ export function onFieldKey(e: KeyboardEvent): boolean {
   }
   if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.shiftKey || !roleOf(t)) return false
   if (menu && !menu.hidden && cs.active?.field === t) focusMenu(e.key === 'ArrowUp' ? 'last' : 'first')
-  else if (e.key === 'ArrowDown' && !menu?.hidden) void openMenu(t, 'first')
+  else if (e.key === 'ArrowDown' && !menu?.hidden && cs.pageFill) void openMenu(t, 'first')
   else return false
   e.preventDefault()
   e.stopPropagation()

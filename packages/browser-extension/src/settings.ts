@@ -1,7 +1,8 @@
 /**
  * The person's extension settings (storage.local, so they last across restarts): the auto-lock
- * timeout, copying the one-time code after a fill, and the generator's last options. Read by
- * the background and the popup; content scripts never need them.
+ * timeout, filling and saving on web pages, copying the one-time code after a fill, and the
+ * generator's last options. Read by the background and the popup; the page script learns
+ * `pageFill` from the background and follows its changes (content.ts).
  */
 import { ext } from './ext'
 import { DEFAULT_PASSWORD, DEFAULT_PASSPHRASE, type PassphraseOptions, type PasswordOptions } from '../../../src/core/vault/generator'
@@ -30,6 +31,12 @@ export interface Settings {
   autoLock: AutoLock
   /** The person picked `autoLock` here (an older extension saved its default 15 minutes with every setting). */
   autoLockChosen?: boolean
+  /**
+   * Walnut's own page help: the field icon, the menu that opens in a field, and the save and
+   * update bars. Off while another password manager fills this browser; the popup, the context
+   * menu and the shortcut still fill on request, and agents are unaffected.
+   */
+  pageFill: boolean
   /** After a login with a one-time code is filled, its code goes on the clipboard (as Bitwarden does). */
   copyTotp: boolean
   generator: GeneratorPrefs
@@ -37,6 +44,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   autoLock: 'walnut',
+  pageFill: true,
   copyTotp: true,
   generator: { kind: 'random', random: DEFAULT_PASSWORD, words: DEFAULT_PASSPHRASE },
 }
@@ -50,6 +58,7 @@ export async function getSettings(): Promise<Settings> {
     autoLock: s.autoLock === '15' && s.autoLockChosen !== true ? DEFAULT_SETTINGS.autoLock
       : AUTO_LOCKS.some((a) => a.value === s.autoLock) ? s.autoLock! : DEFAULT_SETTINGS.autoLock,
     ...(s.autoLockChosen === true ? { autoLockChosen: true } : {}),
+    pageFill: typeof s.pageFill === 'boolean' ? s.pageFill : DEFAULT_SETTINGS.pageFill,
     copyTotp: typeof s.copyTotp === 'boolean' ? s.copyTotp : DEFAULT_SETTINGS.copyTotp,
     generator: {
       kind: g.kind === 'words' ? 'words' : 'random',
@@ -67,3 +76,6 @@ export async function setSettings(change: Partial<Settings>): Promise<Settings> 
 
 /** Minutes for a timed auto-lock, else null. */
 export const lockMinutes = (a: AutoLock): number | null => (/^\d+$/.test(a) ? Number(a) : null)
+
+/** Whether Walnut fills and saves on web pages by itself (the field icon, its menu, the save bar). */
+export const pageFillOn = async (): Promise<boolean> => (await getSettings()).pageFill
