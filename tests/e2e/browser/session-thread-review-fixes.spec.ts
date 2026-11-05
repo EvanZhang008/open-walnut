@@ -18,6 +18,8 @@ import {
   centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, openQuestionList, test,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
+import { setPanelMode } from './draft-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const DENSE_TASK = 'pw-task-threads-dense'
 const DENSE_READY = 'Walk me through part 6 of the storage notes.'
@@ -82,6 +84,8 @@ const historyRenders = (page: Page, sessionId: string) =>
 
 test.describe('Question stack review fixes', () => {
   test.describe.configure({ mode: 'serial' })
+  // R12 sets the panel count it needs; the count is one value the whole fixture shares.
+  holdPanelCountLock('file')
   test.setTimeout(240_000)
 
   test.beforeEach(async ({ request }) => {
@@ -228,6 +232,11 @@ test.describe('Question stack review fixes', () => {
   })
 
   test('R12: the root page of a session with questions has the geometry of one without', async ({ page }) => {
+    // Two sessions side by side, so two columns: another spec may have left the fixture's
+    // shared count at Auto, which at 1280 px is one column, and the second session then took
+    // the first one's column (CI 2026-11-05, after session-threads-landing set Auto).
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await setPanelMode(page, '2')
     await boot(page)
     const geometry = async (panel: Locator) => {
       const history = panel.locator('.session-history')
