@@ -85,8 +85,8 @@ export function settledWord(a: Approval): string {
 export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
   const working = s.busy[a.id];
   const kind = approveKind(s, a);
-  // Locked here: unlock in place, then Approve shows (a row opens the dialog to hold the form).
-  if (!compact && s.unlockId === a.id && unlockApproves(s, a)) return <ApprovalUnlock onCancel={() => openUnlock(null)} />;
+  // Locked here: unlock in place, then Approve shows.
+  if (s.unlockId === a.id && unlockApproves(s, a)) return <ApprovalUnlock onCancel={() => openUnlock(null)} />;
   return (
     <div className="approval-actions">
       <button type="button" className="approval-btn approval-btn-deny" disabled={!!working}
