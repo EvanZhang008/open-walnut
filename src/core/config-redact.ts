@@ -31,6 +31,8 @@ export const SECRET_FIELDS = new Set([
  */
 const SECRET_FIELDS_BY_PARENT: Record<string, Set<string>> = {
   push_tokens: new Set(['token']),
+  // A row's lock-screen card token (push_tokens[].work_card.token): a send capability for that card.
+  work_card: new Set(['token']),
 }
 
 /**
@@ -73,6 +75,9 @@ export function maskPushTokens<T>(config: T): T {
         out[k] = v
       }
       out.token = maskSecret((row as { token?: unknown }).token)
+      // The lock-screen card's own push token is a send capability for that card, the same.
+      const card = (row as { work_card?: unknown }).work_card
+      if (card && typeof card === 'object') out.work_card = { ...(card as object), token: maskSecret((card as { token?: unknown }).token) }
       return out
     }),
   } as T

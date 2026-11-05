@@ -25,6 +25,17 @@ function config() {
 }
 
 describe('a relayed row\'s claims are dropped from every answer', () => {
+  it('the lock-screen card token on a row is masked by both helpers', () => {
+    const CARD = 'ef'.repeat(32)
+    const input = { push_tokens: [{ token: TOKEN, platform: 'ios', key_name: 'acme-phone', work_card: { token: CARD, activity_id: 'act-1', registered_at: '2026-11-04T09:00:00.000Z' } }] }
+    for (const out of [maskPushTokens(input), redactConfig(input) as typeof input]) {
+      expect(JSON.stringify(out)).not.toContain(CARD)
+      expect(out.push_tokens[0].work_card).toMatchObject({ activity_id: 'act-1' })
+    }
+    // The registry's own copy keeps the real token.
+    expect(input.push_tokens[0].work_card.token).toBe(CARD)
+  })
+
   it('maskPushTokens drops them and masks the token; the other fields stay', () => {
     const input = config()
     const out = maskPushTokens(input)

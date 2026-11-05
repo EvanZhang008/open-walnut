@@ -308,6 +308,58 @@ builds that predate token tags log a 12-character slice of their own token in th
 diagnostic lines they upload; the server replaces it with the tag (or `[token]`) before the
 upload reaches disk, and again in every bug report.
 
+## The lock-screen work card (silent)
+
+The phone can show one Live Activity, the work card, on the lock screen and in the
+Dynamic Island: how many tasks are Working, how many Need you (To read included, as the
+phone draws it) and how many were Completed since the card began. Each number opens its
+list in the app. The counts are the Org's (`src/core/push/work-card.ts`).
+
+- **Who starts it.** The app, while it is open and something works
+  (`ios-native/Walnut/Core/WorkCardController.swift`). iOS lets an app start a Live
+  Activity only in the foreground, and a push that starts one needs an alert, so the
+  server never starts a card. The user turns it off in Settings, Lock Screen, Work card.
+- **How it stays current.** The app hands the card's own push token to
+  `POST /api/push/work-card` (`{activityId, token}`, `token: null` when it ended); it rides
+  the device's push row (`work_card`) and goes with the device on revoke, which first sends
+  that card an `end` dismissed at once, so the old pairing's numbers leave its lock screen. The server
+  sends each change of the counts to that token with `apns-push-type: liveactivity` on the
+  `<topic>.push-type.liveactivity` topic, at most one update per 10 s, a refresh every
+  20 minutes so the card does not read as stale, and an `end` once nothing worked for 15
+  minutes. Each push carries `apns-expiration` (an update until it would go stale, an end
+  for 8 hours), so Apple holds it for a phone that is offline. A push not every card took
+  is tried again, waiting twice as long each time, up to 10 minutes apart (an update some
+  cards took goes again only to the ones that missed it, at priority 5); an `end` still
+  owed survives a restart (`WALNUT_HOME/cache/work-card.json`, with the grace's start and the
+  numbers the end carries). An ended card's last face carries `endedAt` and reads "Finished".
+  A card that heard nothing
+  for 45 minutes (the Mac asleep) says how old its numbers are.
+- **What it needs.** An APNs key on the server, and notifications on for Walnut (the card's
+  token rides the phone's notification row). Without either the card still starts and
+  changes while the app is open, and Settings says why it does not change while Walnut is
+  closed: `GET /api/push/work-card` reports `pushes: false` with no key, and the token
+  write answers `device_not_registered` with no row. Leaving the app then leaves the card
+  in a state that stays true: with nothing working it ends at once (and lingers 15 minutes
+  as "Finished"); with work running it marks its numbers as old after 15 minutes. The title
+  under the counts is saved with the stretch, so a restart does not swap it and ring the new
+  one in at priority 10.
+- **A card swiped away while the app is not running.** The phone learns of it only the next
+  time Walnut opens (ActivityKit reports a card's state to a running app), and only then takes
+  its token off the server. Until then the server keeps sending to that token, which Apple
+  accepts and drops; nothing shows. A card token registered more than 8 hours ago belongs to a
+  card iOS has ended already: the server stops sending to it and takes it off the rows.
+- **The title under the counts** carries its task's id (`needsTaskId`): a tap on it opens that
+  task over the Needs you list (`walnut://work?list=needs&task=<id>`).
+- **Silent.** A card payload carries `aps.event`, `aps.timestamp`, `aps.content-state`
+  and a stale or dismissal date, and never `alert`, `sound` or `badge`: iOS redraws the card
+  and does nothing else. `tests/core/work-card.test.ts` fails on a payload with any of them
+  and on any other caller of the APNs sender.
+- **The numbers on demand.** `GET /api/push/work-card` answers `{state, lists, active,
+  stretch, pushes}`: the card's face, the task ids behind each number, whether a card
+  should show, the stretch it belongs to (a card the user swiped away stays away until the
+  next stretch), and whether the server can push. It never waits on Apple: pushes run on a
+  queue of their own. A replica relays both routes to the primary.
+
 ## Payload contract
 
 Renaming any of these keys breaks the tap-to-open deep link silently, so both

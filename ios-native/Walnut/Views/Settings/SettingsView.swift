@@ -25,6 +25,7 @@ struct SettingsView: View {
     @AppStorage(VoiceRecorder.micRouteKey, store: AppPrefs.defaults) private var micRoute = VoiceRecorder.MicRoute.automatic.rawValue
     /// Default is `always` — "send them all", the behavior the user asked for.
     @AppStorage(PushRegistration.modeKey, store: AppPrefs.defaults) private var notificationMode = PushRegistration.Mode.always.rawValue
+    @AppStorage(WorkCardController.enabledKey, store: AppPrefs.defaults) private var workCardEnabled = true
     @State private var push = PushRegistration.shared
 
     /// Wave-2 server info (GET /v1/config projection + chat stats). Best-effort:
@@ -49,6 +50,8 @@ struct SettingsView: View {
                 if !inDemo {
                     notificationsSection
                 }
+                // The demo shows the card too, from its sample tasks.
+                lockScreenSection
                 AppleHealthSettingsSection()
                 PlacesSettingsSection()
                 voiceSection
@@ -244,6 +247,36 @@ struct SettingsView: View {
         } footer: {
             Text(notificationsFooter)
         }
+    }
+
+    /// The lock-screen work card (WorkCardController): one Live Activity with how many tasks
+    /// work, need you and were completed. It never rings: the server only redraws it.
+    private var lockScreenSection: some View {
+        Section {
+            Toggle("Work card", isOn: $workCardEnabled)
+                .accessibilityIdentifier("settings.workCard")
+                .onChange(of: workCardEnabled) { _, on in WorkCardController.shared.enabled = on }
+            if WorkCardPlan.needsIOSSettings(enabled: workCardEnabled, allowed: WorkCardController.shared.allowed, notificationsDenied: push.authorization == .denied) {
+                Button("Open iOS Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                .accessibilityIdentifier("settings.workCard.openSettings")
+            } else if workCardEnabled, push.authorization == .notDetermined {
+                // Never asked: the card's background updates ride the notification registration.
+                Button("Turn On Notifications") { Task { await push.requestPermissionAndRegister() } }
+                    .accessibilityIdentifier("settings.workCard.askNotifications")
+            }
+        } header: {
+            Text("Lock Screen")
+        } footer: {
+            Text(workCardFooter)
+        }
+    }
+
+    private var workCardFooter: String {
+        let card = WorkCardController.shared
+        return WorkCardPlan.footer(enabled: workCardEnabled, allowed: card.allowed, background: card.background, notificationsDenied: push.authorization == .denied,
+                                  notificationsUndecided: push.authorization == .notDetermined)
     }
 
     private var notificationsFooter: String {

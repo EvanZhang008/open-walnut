@@ -209,7 +209,10 @@ const sessions = new Map<ApnsEnvironment, ClientHttp2Session>()
 function session(environment: ApnsEnvironment): ClientHttp2Session {
   const existing = sessions.get(environment)
   if (existing && !existing.closed && !existing.destroyed) return existing
-  const next = connect(HOSTS[environment])
+  // WALNUT_APNS_ORIGIN: a stand-in for Apple, for the wire tests (tests/core/apns-wire.test.ts),
+  // read under vitest only: a running server never sends its provider token anywhere but Apple.
+  const origin = process.env.VITEST ? process.env.WALNUT_APNS_ORIGIN : undefined
+  const next = connect(origin || HOSTS[environment])
   // Only evict THIS session. An unconditional delete on a late 'close' would
   // evict whatever live successor had already replaced it in the map, leaking
   // the successor and reconnecting on every subsequent push.
@@ -264,6 +267,18 @@ export interface ApnsSendResult {
   error?: string
 }
 
+/**
+ * `alert`: a notification (letters, approvals, threads). `liveactivity`: a content
+ * update to one lock-screen card (core/push/work-card.ts), sent to that card's own
+ * token on the bundle id's `.push-type.liveactivity` topic.
+ */
+export type ApnsPushType = 'alert' | 'liveactivity'
+
+/** The topic a push type is sent on: Apple refuses a Live Activity update on the bare bundle id. */
+export function apnsTopicFor(topic: string, pushType: ApnsPushType): string {
+  return pushType === 'liveactivity' ? `${topic}.push-type.liveactivity` : topic
+}
+
 /** One notification to one device token. */
 async function sendOne(
   cred: ApnsCredential,
@@ -272,6 +287,8 @@ async function sendOne(
   payload: Record<string, unknown>,
   priority: number,
   collapseId?: string,
+  pushType: ApnsPushType = 'alert',
+  expiration?: number,
 ): Promise<ApnsSendResult> {
   const body = JSON.stringify(payload)
   return await new Promise<ApnsSendResult>((resolve) => {
@@ -283,11 +300,13 @@ async function sendOne(
         [constants.HTTP2_HEADER_METHOD]: 'POST',
         [constants.HTTP2_HEADER_PATH]: `/3/device/${deviceToken}`,
         authorization: `bearer ${signProviderToken(cred)}`,
-        'apns-topic': cred.topic,
-        'apns-push-type': 'alert',
+        'apns-topic': apnsTopicFor(cred.topic, pushType),
+        'apns-push-type': pushType,
         'apns-priority': String(priority),
         // Apple caps this at 64 bytes and rejects the whole request if longer.
         ...(collapseId ? { 'apns-collapse-id': collapseId.slice(0, 64) } : {}),
+        // Epoch seconds: Apple stores the push and retries a phone that is offline until then.
+        ...(expiration !== undefined ? { 'apns-expiration': String(expiration) } : {}),
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(body),
       })
@@ -343,6 +362,8 @@ export interface ApnsSendOutcome {
   failed: number
   /** Tokens Apple says are dead — the caller prunes them from config. */
   deadTokens: string[]
+  /** Tokens Apple accepted (absent when nothing was attempted). */
+  delivered?: string[]
 }
 
 /**
@@ -355,7 +376,7 @@ export interface ApnsSendOutcome {
 export async function sendApns(
   targets: ApnsTarget[],
   payload: Record<string, unknown>,
-  opts: { priority?: number; collapseId?: string } = {},
+  opts: { priority?: number; collapseId?: string; pushType?: ApnsPushType; expiration?: number } = {},
 ): Promise<ApnsSendOutcome> {
   if (targets.length === 0) return { attempted: false, reason: 'no registered device tokens', sent: 0, failed: 0, deadTokens: [] }
 
@@ -377,7 +398,7 @@ export async function sendApns(
     try {
       return {
         token: t.token,
-        r: await sendOne(cred, t.environment ?? s.environment, t.token, payload, priority, opts.collapseId),
+        r: await sendOne(cred, t.environment ?? s.environment, t.token, payload, priority, opts.collapseId, opts.pushType, opts.expiration),
       }
     } catch (err) {
       return { token: t.token, r: { ok: false, error: err instanceof Error ? err.message : String(err) } as ApnsSendResult }
@@ -385,10 +406,11 @@ export async function sendApns(
   }))
 
   const deadTokens: string[] = []
+  const delivered: string[] = []
   let sent = 0
   let failed = 0
   for (const { token, r } of results) {
-    if (r.ok) { sent++; continue }
+    if (r.ok) { sent++; delivered.push(token); continue }
     failed++
     if (r.unregistered) deadTokens.push(token)
     // Apple's reply is service text: scrub the token out before it is kept or logged.
@@ -399,5 +421,5 @@ export async function sendApns(
       tokenTag: tokenTag(token), status: r.status, reason, error,
     })
   }
-  return { attempted: true, sent, failed, deadTokens }
+  return { attempted: true, sent, failed, deadTokens, delivered }
 }

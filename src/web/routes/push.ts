@@ -6,6 +6,8 @@
  * GET    /api/push/status       registration + credential status (honest about gaps)
  * POST   /api/push/preferences  set this device's mode / muted letter types
  * POST   /api/push/active       "this app is in the foreground" (a short lease)
+ * GET    /api/push/work-card    the lock-screen card's numbers and lists (core/push/work-card.ts)
+ * POST   /api/push/work-card    this device's card token, or null when its card ended
  *
  * Every route identifies the device by its BEARER TOKEN (`req.deviceName`, set
  * by authMiddleware), never by a name in the body — otherwise any paired device
@@ -30,8 +32,10 @@ import {
   registerPushToken,
   reportDeviceActive,
   setDevicePushPreferences,
+  setDeviceWorkCard,
   unregisterPushToken,
 } from '../../core/push/registry.js'
+import { workCardNow } from '../../core/push/work-card.js'
 import { pairingRefHolds, pairingRefOf, whilePairingHolds, type PairingRef } from '../../core/device-auth.js'
 import { revokePushTokensForDevice, takeBackPushRegistration } from '../../core/push/device-revoke.js'
 import { pushClaimOf, pushTokenSha } from '../../core/push/claims.js'
@@ -40,6 +44,15 @@ import type { SessionControlAction } from '../../core/sessions/session-controls.
 import { ambientTestRun } from '../../core/test-run.js'
 
 export const pushRouter = Router()
+
+/**
+ * A companion holds neither the phones' push rows nor the tasks: these routes are answered by
+ * the primary through the relay. `testRunStaysHere`: a test run's own write stays in its copy
+ * here (core/test-run-prefs.ts), never relayed.
+ */
+function relaysToPrimary(opts: { testRunStaysHere?: boolean } = {}): boolean {
+  return CLOUD_MODE && !(opts.testRunStaysHere && ambientTestRun())
+}
 
 /** Relay actions ignore sessionId; pass the same placeholder as human-inbox. */
 const SERVER_RELAY_SID = '__server__'
@@ -293,7 +306,7 @@ pushRouter.post('/preferences', async (req, res, next) => {
     const device = deviceOf(req)
     // A test run's choice stays in its own copy here (core/test-run-prefs.ts), never relayed:
     // on the companion, whose own rows are not the phones', it reads as an unknown device.
-    if (CLOUD_MODE && !ambientTestRun()) {
+    if (relaysToPrimary({ testRunStaysHere: true })) {
       const result = await relayToPrimary(res, 'server.push.preferences', {
         mode: body.mode,
         ...(body.letterTypes !== undefined ? { letterTypes: body.letterTypes } : {}),
@@ -332,6 +345,48 @@ pushRouter.post('/active', async (req, res, next) => {
       return
     }
     res.json(await reportDeviceActive(device, active))
+  } catch (err) {
+    if (reportRegistryError(res, err)) return
+    next(err)
+  }
+})
+
+/**
+ * GET /api/push/work-card — what the lock-screen card shows now: `{ state, lists, active,
+ * stretch, pushes }` (core/push/work-card.ts WorkCardView). The phone starts its card from this and
+ * updates it while the app is open; the box pushes the same numbers while it is locked.
+ */
+pushRouter.get('/work-card', async (_req, res, next) => {
+  try {
+    if (relaysToPrimary()) {
+      // The tasks are on the primary: a replica's own copy could disagree with the pushes.
+      const result = await relayToPrimary(res, 'server.push.work-card-state', {})
+      if (result) res.json(result)
+      return
+    }
+    res.json(await workCardNow())
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * POST /api/push/work-card — `{ activityId, token }`: the push token iOS minted for this
+ * device's card (hex), or `token: null` when the card ended on the phone. Scoped to the
+ * calling device like the preferences; 404 `device_not_registered` when it has no row here.
+ */
+pushRouter.post('/work-card', async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as { token?: unknown; activityId?: unknown }
+    const device = deviceOf(req)
+    if (relaysToPrimary({ testRunStaysHere: true })) {
+      const result = await relayToPrimary(res, 'server.push.work-card', {
+        token: body.token, activityId: body.activityId, keyName: device,
+      })
+      if (result) res.json(result)
+      return
+    }
+    res.json(await setDeviceWorkCard(device, body))
   } catch (err) {
     if (reportRegistryError(res, err)) return
     next(err)

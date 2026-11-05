@@ -26,6 +26,7 @@ import {
   reportDeviceActive,
   revokeDevicePushTokens,
   setDevicePushPreferences,
+  setDeviceWorkCard,
   takeBackPushToken,
   unregisterPushToken,
 } from './registry.js'
@@ -108,6 +109,14 @@ export async function handlePushRelayAction(
       ) as unknown as Record<string, unknown>
     case 'status':
       return await pushRegistrationStatus(deviceOf(p), 'relay')
+    // The lock-screen card (core/push/work-card.ts): its token rides the device's row, and
+    // its numbers are read here, where the tasks are.
+    case 'work-card':
+      return await setDeviceWorkCard(requireDevice(p), { token: p.token, activityId: p.activityId }, 'relay')
+    case 'work-card-state': {
+      const { workCardNow } = await import('./work-card.js')
+      return await workCardNow() as unknown as Record<string, unknown>
+    }
     default:
       throw new PushRegistryError(`unknown push action: ${sub}`, 'bad_request', 400)
   }

@@ -319,22 +319,29 @@ struct TeamStatusRowView: View {
     let row: TeamStatusRow
     /// A filter is on: a row whose leader the filter hides keeps no indent, so it never hangs off nothing.
     var flat = false
+    /// Off where every row of the list is in one state, which the list already names (the
+    /// work card's lists): the pill would only repeat it, and the time says what it is of.
+    var showsPill = true
+    /// What the task says about itself, under a row with no ask of its own (the work card's
+    /// Completed list: its result). Nil keeps the row as it was.
+    var detail: String? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let time = RowTime(date: TeamStatusModel.rowTime(row))
+        // With no pill to read it against, the time says what it is the time of.
+        let time = RowTime(date: TeamStatusModel.rowTime(row), verb: showsPill ? nil : Self.timeVerb(row))
         Group {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 3) {
                     // No room for three things on one line at these sizes: the title gets its own.
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 8) {
-                            UserStatePill(state: row.state, stuck: row.isStuck)
+                            if showsPill { UserStatePill(state: row.state, stuck: row.isStuck) }
                             Spacer(minLength: 4)
                             time
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            UserStatePill(state: row.state, stuck: row.isStuck)
+                            if showsPill { UserStatePill(state: row.state, stuck: row.isStuck) }
                             time
                         }
                     }
@@ -382,6 +389,12 @@ struct TeamStatusRowView: View {
         let s = row.status
         if row.state == .needs, let need = TeamStatusModel.needLine(s) {
             NeedLineView(need: need, toRead: row.isToRead, font: .footnote, id: "task.team.need")
+        } else if let detail, !detail.isEmpty {
+            Text(detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .accessibilityIdentifier("task.team.detail")
         } else if let line = OrgNodeTasksModel.line(row.task) {
             Text(line)
                 .font(.footnote)
@@ -438,13 +451,27 @@ struct NeedLineView: View {
     }
 }
 
-/// A row's time, ticking (30 s), on the AppClock.
+extension TeamStatusRowView {
+    /// What `TeamStatusModel.rowTime` is the time of, for this row.
+    static func timeVerb(_ row: TeamStatusRow) -> String {
+        switch row.state {
+        case .done: return "Finished"
+        case .working where row.task.liveActivity?.turnStartedAt != nil: return "Started"
+        case .needs: return "Asked"
+        default: return "Updated"
+        }
+    }
+}
+
+/// A row's time, ticking (30 s), on the AppClock. `verb`: "Started 3 hrs ago".
 private struct RowTime: View {
     let date: Date
+    var verb: String? = nil
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { ctx in
-            Text(RelativeTime.short(date: date, relativeTo: ctx.date.addingTimeInterval(AppClock.demoOffset)))
+            let ago = RelativeTime.short(date: date, relativeTo: ctx.date.addingTimeInterval(AppClock.demoOffset))
+            Text(verb.map { "\($0) \(ago == "now" ? "just now" : ago)" } ?? ago)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

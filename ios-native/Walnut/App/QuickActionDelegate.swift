@@ -179,7 +179,8 @@ final class QuickActionDelegate: NSObject, UIApplicationDelegate {
 /// Scene-level shortcut delivery — the warm path on any OS whose SwiftUI
 /// implements the scene variant (iOS 26 does).
 ///
-/// Deliberately minimal: it implements the two shortcut hooks and NOTHING else,
+/// Deliberately minimal: it implements the two shortcut hooks and the lock-screen
+/// work card's link (`openURLContexts`) and NOTHING else,
 /// so SwiftUI keeps full ownership of the window, the root view, and every other
 /// scene callback. Both hooks funnel into the same `VoiceQuickAction.handle()`
 /// the cold path uses — one mailbox, one set of rules (TTL, supersede, ignore
@@ -203,6 +204,15 @@ final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
         VoiceQuickAction.shared.handle(
             shortcutType: connectionOptions.shortcutItem?.type, source: "scene-connect"
         )
+        // A tap on the lock-screen work card that launched the app cold.
+        for context in connectionOptions.urlContexts { WorkCardLinkBox.shared.open(context.url) }
+    }
+
+    /// A tap on the lock-screen work card while the app runs (`walnut://work?list=…`). Taken
+    /// here because this class, not SwiftUI's, is the scene delegate UIKit messages; RootView's
+    /// `onOpenURL` stays as the second path, and opening the same list twice is one sheet.
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        for context in URLContexts { WorkCardLinkBox.shared.open(context.url) }
     }
 
     /// The warm tap: app already running, scene already connected.

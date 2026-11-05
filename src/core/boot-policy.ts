@@ -67,6 +67,7 @@ export const BOOT_POLICY = [
   { job: 'setup-token-banner', leader: false, replica: false, capability: 'public-door', why: 'devices come from the device copy, nothing is claimed here' },
   { job: 'terminal-sweep', leader: true, replica: false, why: 'the terminal stays with the Mac' },
   { job: 'letter-push', leader: true, replica: false, why: 'no relay credential is copied' },
+  { job: 'work-card', leader: true, replica: false, why: 'the lock-screen card is read from the tasks and pushed with the APNs key, both on the Mac' },
   { job: 'approvals', leader: true, replica: false, why: 'approvals live on the leader; a replica forwards every approvals route to it' },
   { job: 'audio', leader: true, replica: false, why: 'no capture or transcriber on a host' },
   { job: 'git-pull', leader: true, replica: false, why: 'a replica reads copies; git sync is the Mac\'s backup and writes no replica\'s data dir (4d)' },

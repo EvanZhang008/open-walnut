@@ -169,8 +169,13 @@ function isAskLike(task: { walnut_agent?: boolean; project?: string }): boolean 
 /** A task the org counts: open work, not a conversation, not an org node, not a plugin's own
  *  task, not a legacy sentinel. */
 export function isOrgMember(task: OrgTaskLike): boolean {
-  return task.phase !== 'COMPLETE'
-    && !isOrgNode(task)
+  return task.phase !== 'COMPLETE' && isOrgWork(task);
+}
+
+/** Work the org would count while it is open, finished or not (the lock-screen card counts the
+ *  finished ones, core/push/work-card.ts). */
+export function isOrgWork(task: Pick<OrgTaskLike, 'org_role' | 'plugin_only' | 'walnut_agent' | 'project' | 'title'>): boolean {
+  return !isOrgNode(task)
     && !isPluginOnlyTask(task)
     && !isAskLike(task)
     && !task.title.startsWith('.metadata');

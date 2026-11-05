@@ -253,6 +253,40 @@ describe('the sibling routes on a replica', () => {
   })
 })
 
+describe('the lock-screen work card on a replica', () => {
+  it('POST /work-card relays the card token with the device identity and stores nothing here', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { ok: true, stored: true } })
+    const card = 'c'.repeat(64)
+    const res = await request(createApp('phone-2')).post('/api/push/work-card').send({ activityId: 'act-1', token: card })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ ok: true, stored: true })
+    expect(relayCall().frame).toMatchObject({
+      action: 'server.push.work-card', params: { activityId: 'act-1', token: card, keyName: 'phone-2' },
+    })
+    expect(await localConfigText()).not.toContain(card)
+  })
+
+  it('an ended card relays its null token', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { ok: true, stored: true } })
+    await request(createApp()).post('/api/push/work-card').send({ activityId: 'act-1', token: null })
+    expect(relayCall().frame.params).toMatchObject({ activityId: 'act-1', token: null, keyName: 'iPhone' })
+  })
+
+  it('GET /work-card answers the primary\'s numbers, and 503 + retry when the bridge is down', async () => {
+    const view = { state: { working: 2, needs: 1, completed: 0, since: 1, updatedAt: 2 }, lists: { working: ['a', 'b'], needs: ['c'], completed: [] }, active: true, stretch: 'x' }
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: view })
+    const res = await request(createApp()).get('/api/push/work-card')
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual(view)
+    expect(relayCall().frame).toMatchObject({ action: 'server.push.work-card-state' })
+    bridgeRequestMock.mockReset()
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
+    const down = await request(createApp()).get('/api/push/work-card')
+    expect(down.status).toBe(503)
+    expect(down.body.retry).toBe(true)
+  })
+})
+
 describe('revoking a device on a replica', () => {
   it('relays the revoke so a revoked phone stops receiving letters', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: true, result: { removed: 1 } })

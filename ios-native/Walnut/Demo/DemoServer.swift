@@ -183,6 +183,7 @@ final class DemoServer: @unchecked Sendable {
         streams.reset()
         DemoPlaces.reset()
         DemoVoice.reset()
+        Self.resetWorkCard()
     }
 
     /// Read or change the store under the lock.
@@ -297,6 +298,9 @@ final class DemoServer: @unchecked Sendable {
             return .object(["ok": true, "kind": "apns", "mode": r.string("mode") ?? "always", "deliverable": false])
         }
         if match(r, "POST", s, "preferences") != nil || match(r, "POST", s, "active") != nil { return .ok }
+        if match(r, "GET", s, "work-card") != nil { return workCard() }
+        // The demo never pushes, so it keeps no card token.
+        if match(r, "POST", s, "work-card") != nil { return .object(["ok": true, "stored": false]) }
         return nil
     }
 

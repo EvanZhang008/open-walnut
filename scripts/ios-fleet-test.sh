@@ -183,9 +183,14 @@ candidates() {
   if printf '%s' "$loads" | js 'sys.exit(0 if any(not h.get("known") for h in d["hosts"]) else 1)'; then
     sleep 2; loads=$(op host_load '{}') || loads='{"hosts":[]}'
   fi
-  python3 - "$MAX_LOAD" "$hosts" "$loads" <<'PY'
+  # The fleet's answers go through files: host_list grew past the kernel's argument limit
+  # (2026-11-04: "python3: Argument list too long", so no Mac could be picked).
+  local hosts_f loads_f
+  hosts_f=$(mktemp) loads_f=$(mktemp)
+  printf '%s' "$hosts" > "$hosts_f"; printf '%s' "$loads" > "$loads_f"
+  python3 - "$MAX_LOAD" "$hosts_f" "$loads_f" <<'PY'
 import json, sys
-cap = float(sys.argv[1]); hosts = json.loads(sys.argv[2])["hosts"]; loads = {h["host"]: h for h in json.loads(sys.argv[3])["hosts"]}
+cap = float(sys.argv[1]); hosts = json.load(open(sys.argv[2]))["hosts"]; loads = {h["host"]: h for h in json.load(open(sys.argv[3]))["hosts"]}
 # No host tagged ios at all (an offline one keeps its tags): nothing to wait for.
 if not any("ios" in ((h.get("capabilities") or {}).get("tags") or []) for h in hosts):
     sys.exit(3)
@@ -206,6 +211,9 @@ for per, host, note in sorted(rows, key=lambda r: (r[1] == "__local__", r[0])):
         note += "; no other iOS Mac can take the run" if not others else "; after the other Macs"
     print(host + "\t" + note)
 PY
+  local rc=$?
+  rm -f "$hosts_f" "$loads_f"
+  return $rc
 }
 
 [ -z "$HOST" ] || [ "${HOST#@}" = "$HOST" ] || [ "$HOST" = "@ios" ] || die "only @ios is a selector this script picks from; name a host instead" 64

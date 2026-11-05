@@ -3088,6 +3088,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // user's chosen mode). Primary only — letters live here, and a replica relays
   // every human-inbox route to this box.
   if (bootPolicy('letter-push')) initLetterPush()
+  // The lock-screen work card (core/push/work-card.ts): silent Live Activity updates only.
+  if (bootPolicy('work-card')) {
+    const { startWorkCard } = await import('../core/push/work-card.js')
+    void startWorkCard().catch((err) => log.web.warn('work card: start failed', { error: String(err) }))
+  }
   // Approvals (core/approvals/): their phone pushes and key effects, and the clock that
   // expires an unanswered one. Leader only: a replica forwards every approvals route here.
   if (bootPolicy('approvals')) {
@@ -6853,6 +6858,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   try { await (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason) } catch { /* best-effort */ }
   ;(await import('../core/net/net-mac.js')).stopNet()
+  // The lock-screen card's clock: its bus subscription and timers belong to this server.
+  ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await (await import('../core/page-visits.js')).flushVisitsNow().catch(() => {})
   await searchCopyHandle?.stop().catch(() => {})

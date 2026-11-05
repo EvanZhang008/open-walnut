@@ -43,6 +43,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'setup-token-banner': cloudOnly,
   'terminal-sweep': leaderOnly,
   'letter-push': leaderOnly,
+  'work-card': leaderOnly,
   approvals: leaderOnly,
   'audio': leaderOnly,
   'git-pull': leaderOnly, // 4d: the companion reads its copies; git sync no longer writes its data dir

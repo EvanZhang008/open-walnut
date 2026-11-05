@@ -161,6 +161,8 @@ enum LocalDataReset {
         // names, crumbs or work trail into the fresh log.
         Breadcrumbs.eraseHistory()
         PushRegistration.shared.forgetServer()
+        // The lock-screen card shows this pairing's task titles: it goes with the pairing.
+        WorkCardController.shared.forgetServer()
         DemoServer.shared.reset()
 
         // 2. Stores with their own IO queues, cleared on those queues.

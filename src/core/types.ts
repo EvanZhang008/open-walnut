@@ -2174,6 +2174,20 @@ export interface PushTokenEntry {
    * so the companion can take back exactly its own write. See core/push/claims.ts.
    */
   claims?: string[];
+  /**
+   * The lock-screen work card this device shows now (an ActivityKit Live Activity,
+   * core/push/work-card.ts): the push token iOS minted for that one card, which takes
+   * only silent content updates. Cleared when the card ends.
+   */
+  work_card?: {
+    /** The card's own APNs push token (hex), not the device token. */
+    token: string;
+    /** ActivityKit's id for the card, so a late write for an older card is ignored. */
+    activity_id: string;
+    registered_at: string;
+  };
+  /** The last few cards that ended on this device: a late write of one never comes back. */
+  work_card_ended?: string[];
 }
 
 export interface AgentMessage {

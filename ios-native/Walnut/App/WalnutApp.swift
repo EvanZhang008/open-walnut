@@ -147,6 +147,8 @@ struct RootView: View {
         // First-frame budget proof (see LaunchTrace): must report
         // syncDiskLoads=0, i.e. nothing on this path waited on disk.
         .onAppear { LaunchTrace.markFirstFrame() }
+        // The lock-screen work card's links (`walnut://work?list=…`): MainTabView shows the list.
+        .onOpenURL { url in WorkCardLinkBox.shared.open(url) }
         .demoModeChrome()
         // Report model/OS once per launch. Also the BACKFILL path: devices
         // paired before /devices/self existed get labelled on their next open.
@@ -162,6 +164,8 @@ struct RootView: View {
             LaunchGate.shared.whenActive {
                 TimeHeartbeatReporter.shared.start()
                 TimeHeartbeatReporter.shared.setActive(true)
+                // The lock-screen work card can only start while the app is in front.
+                WorkCardController.shared.appBecameActive()
             }
         }
         // `.background` is the ONLY suspend trigger. `willResignActive` also
@@ -197,8 +201,12 @@ struct RootView: View {
                 // A permission ask held back because the server could not send
                 // yet is tried again on every return to the foreground.
                 PushRegistration.shared.recheckOnForeground()
+                // Start, refresh or end the lock-screen work card from the server's numbers.
+                WorkCardController.shared.appBecameActive()
             } else if phase == .background {
                 LifecycleHub.shared.suspendAll()
+                // From here the server's silent pushes keep the card current.
+                WorkCardController.shared.appWentBackground()
                 // Release the lease immediately so the very next letter buzzes,
                 // rather than waiting for it to expire.
                 PushRegistration.shared.reportActive(false)
@@ -273,6 +281,7 @@ struct MainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var contentLink = ContentActionLink.shared
     @State private var orgLink = OrgNodeLink.shared
+    @State private var workCardLink = WorkCardLinkBox.shared
 
     var body: some View {
         TabView(selection: $selection) {
@@ -359,6 +368,12 @@ struct MainTabView: View {
             // Leaving the Inbox ends the visit the Unread filter was keeping read
             // rows for (the console clears them when its panel closes).
             if tab != .inbox { inbox.forgetKeptRows() }
+        }
+        // A tap on the lock-screen work card: its list, over whichever tab is in front.
+        .sheet(item: Binding(get: { workCardLink.pending }, set: { workCardLink.pending = $0 })) { list in
+            // Full height: a short list on a half sheet left the blurred chat showing through.
+            WorkCardSheet(list: list)
+                .presentationDetents([.large])
         }
         .sheet(item: Binding(get: { approvals.presented }, set: { approvals.presented = $0 })) { approval in
             ApprovalSheet(approval: approval)

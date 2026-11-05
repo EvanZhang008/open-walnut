@@ -29,6 +29,12 @@ targets:
       # user's own Walnut server, which the developers never see.
       - path: Walnut/Support/PrivacyInfo.xcprivacy
         buildPhase: resources
+      # The lock-screen work card's model, shared with the widget extension.
+      - path: Shared
+    # The widget extension draws the lock-screen work card (a Live Activity).
+    dependencies:
+      - target: WalnutWidgets
+        embed: true
     # Hosted unit tests: `xcodebuild test -scheme Walnut` runs WalnutTests
     # (correctness + rendering-perf regression gates) on a simulator.
     scheme:
@@ -42,6 +48,17 @@ targets:
         CFBundleShortVersionString: "1.0.1"
         CFBundleVersion: "158"
         UILaunchScreen: {}
+        # The lock-screen work card (WorkCardController): one Live Activity with how many
+        # tasks work, need you and were completed, kept current by silent server pushes.
+        NSSupportsLiveActivities: true
+        # A new Needs you is sent at priority 10; a busy team sends many, which iOS would
+        # otherwise hold back.
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        # The card's links open its lists: walnut://work?list=needs (Shared/WorkCard.swift).
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.openwalnut.ios.work-card
+            CFBundleURLSchemes:
+              - walnut
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
@@ -134,6 +151,43 @@ targets:
       configs:
         Release:
           APS_ENVIRONMENT: production
+  # The widget extension: the lock-screen work card and its Dynamic Island
+  # (WalnutWidgets/WorkCardLiveActivity.swift). It draws what the app and the
+  # server's silent pushes give it, and reaches no network itself.
+  WalnutWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WalnutWidgets
+      - path: Shared
+    info:
+      path: WalnutWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Walnut
+        CFBundleShortVersionString: "1.0.0"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    # The build number and the version are the app's: App Store Connect warns on an
+    # extension whose numbers differ from its app's. It is copied from the app's Info.plist at build
+    # time rather than written here, so project.yml keeps the one number line that
+    # the TestFlight bump rewrites.
+    postBuildScripts:
+      - name: Take the app's build number
+        basedOnDependencyAnalysis: false
+        script: |
+          set -eu
+          build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${SRCROOT}/Walnut/Support/Info.plist")
+          plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          short=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${SRCROOT}/Walnut/Support/Info.plist")
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${build}" "$plist" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${build}" "$plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${short}" "$plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.widgets
+        TARGETED_DEVICE_FAMILY: "1"
+        # The script above reads the app's Info.plist and writes this target's.
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
   # Hosted unit tests (@testable import Walnut). Covers LiveMarkdownWindow
   # invariants, MessageRow pure helpers, clipProvisional, and the long-session
   # markdown rendering perf gates (see WalnutTests/MarkdownPerfTests.swift).

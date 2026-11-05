@@ -184,13 +184,19 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
     //  - a name is unique only within the box that minted it, and this store now
     //    holds names from two boxes (see PushTokenOrigin). Same name + different
     //    origin = a different phone, so it is left alone.
+    let sweptCard: PushTokenEntry['work_card']
+    let sweptEnded: string[] | undefined
     const filtered = tokens.filter((t) => {
       if (t.token === token) return false
       if (!authenticated) return true
       const sameDevice = t.key_name === keyName && parsePushOrigin(t.origin) === origin
-      if (sameDevice) swept++
+      if (sameDevice) { swept++; sweptCard ??= t.work_card; sweptEnded ??= t.work_card_ended }
       return !sameDevice
     })
+    // The lock-screen card the phone shows (work-card.ts) outlives a re-registration and a
+    // rotated device token: it is the same phone and the same card.
+    const card = (previous && ownedBy(previous, keyName, origin) ? previous.work_card : undefined) ?? sweptCard
+    const cardsEnded = previous && ownedBy(previous, keyName, origin) ? previous.work_card_ended : sweptEnded
     entry = {
       token,
       platform,
@@ -202,6 +208,8 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
       // Registration must not silently reset a mode the user already chose.
       mode: input.mode !== undefined ? parseMode(input.mode) : (previous?.mode ?? 'always'),
       ...(previous?.letter_types ? { letter_types: previous.letter_types } : {}),
+      ...(card ? { work_card: card } : {}),
+      ...(cardsEnded?.length ? { work_card_ended: cardsEnded } : {}),
     }
     const requestedTypes = cleanLetterTypes(input.letterTypes)
     if (requestedTypes && requestedTypes.length > 0) entry.letter_types = requestedTypes
@@ -367,6 +375,112 @@ export async function setDevicePushPreferences(
   return { ok: true, mode, ...(letterTypes ? { letterTypes } : {}) }
 }
 
+/** ActivityKit's ids are UUIDs; bound it anyway, it is stored and logged. */
+const ACTIVITY_ID_RE = /^[A-Za-z0-9._-]{1,100}$/
+/** How many ended cards a row remembers. */
+const ENDED_KEPT = 5
+
+function endedWith(ended: readonly string[], activityId: string): string[] {
+  return ended.includes(activityId) ? [...ended] : [...ended, activityId].slice(-ENDED_KEPT)
+}
+
+export interface WorkCardWrite {
+  /** The card's push token (hex), or null when the card ended on the phone. */
+  token?: unknown
+  activityId?: unknown
+}
+
+/**
+ * Attach the device's lock-screen work card (core/push/work-card.ts) to its push
+ * rows, or take it off (`token: null`).
+ *
+ * Scoped to the calling device like the preferences, with the same 404 when the box
+ * holds no row for it: the card's updates ride the device's own row, so a phone whose
+ * registration never landed must register first. A clear names the card it ends, so a
+ * late "ended" for an old card never takes a newer card's token away. A test run's
+ * write stores nothing (core/test-run.ts): the rows are the user's phone.
+ */
+export async function setDeviceWorkCard(
+  device: string | null,
+  body: WorkCardWrite,
+  origin: PushTokenOrigin = 'local',
+): Promise<{ ok: true; stored: boolean }> {
+  if (!device) {
+    throw new PushRegistryError('This endpoint requires a device Bearer token', 'bad_request', 400)
+  }
+  const activityId = typeof body.activityId === 'string' ? body.activityId.trim() : ''
+  if (!ACTIVITY_ID_RE.test(activityId)) {
+    throw new PushRegistryError('Missing or invalid activityId', 'bad_request', 400)
+  }
+  const clearing = body.token === null
+  const token = typeof body.token === 'string' ? body.token.trim() : ''
+  if (!clearing && !APNS_TOKEN_RE.test(token)) {
+    throw new PushRegistryError('token must be the card\'s APNs push token (hex), or null', 'bad_request', 400)
+  }
+  if (testRunPrefsWrite('push-preferences', () => new Map())) return { ok: true, stored: false }
+
+  let mine = 0
+  let changed = 0
+  let touched = 0
+  await updatePushTokens((tokens) => {
+    mine = 0; changed = 0; touched = 0 // the callback runs again when config.yaml changed under the write
+    const next = tokens.map((t) => {
+      if (!ownedBy(t, device, origin)) return t
+      mine++
+      const ended = t.work_card_ended ?? []
+      if (clearing) {
+        const known = ended.includes(activityId)
+        const holds = t.work_card?.activity_id === activityId
+        if (known && !holds) return t
+        touched++
+        const copy: PushTokenEntry = { ...t, work_card_ended: endedWith(ended, activityId) }
+        if (holds) { changed++; delete copy.work_card }
+        return copy
+      }
+      // A card that already ended here (its "ended" overtook its own token on the way) stays ended.
+      if (ended.includes(activityId)) return t
+      if (t.work_card?.token === token && t.work_card.activity_id === activityId) return t
+      changed++; touched++
+      return { ...t, work_card: { token, activity_id: activityId, registered_at: new Date().toISOString() } }
+    })
+    return touched === 0 ? null : next
+  })
+  if (mine === 0) {
+    throw new PushRegistryError(
+      'This device has no registered push token — register it again',
+      'device_not_registered', 404,
+    )
+  }
+  if (changed > 0) {
+    log.notif.info(clearing ? 'work card: token cleared' : 'work card: token registered', {
+      device, origin, activityId, ...(clearing ? {} : { tokenTag: tokenTag(token) }),
+    })
+  }
+  return { ok: true, stored: changed > 0 }
+}
+
+/**
+ * Take these card tokens off every row (the card ended, or Apple says the token is
+ * dead). Never touches the device token itself: the phone still gets its letters.
+ */
+export async function clearWorkCardTokens(cardTokens: readonly string[]): Promise<number> {
+  if (cardTokens.length === 0) return 0
+  const gone = new Set(cardTokens)
+  let cleared = 0
+  await updatePushTokens((tokens) => {
+    cleared = 0
+    const next = tokens.map((t) => {
+      if (!t.work_card || !gone.has(t.work_card.token)) return t
+      cleared++
+      const copy: PushTokenEntry = { ...t, work_card_ended: endedWith(t.work_card_ended ?? [], t.work_card.activity_id) }
+      delete copy.work_card
+      return copy
+    })
+    return cleared === 0 ? null : next
+  })
+  return cleared
+}
+
 /**
  * Record (or release) one device's "my app is on screen" lease.
  *
@@ -442,13 +556,20 @@ export async function revokeDevicePushTokens(
   }
   let removed = 0
   let kept = 0
+  let cards: Array<{ token: string; environment?: 'production' | 'sandbox' }> = []
   await updatePushTokens((tokens) => {
     const mine = tokens.filter((t) => ownedBy(t, device, origin))
     const keep = tokens.filter((t) => !ownedBy(t, device, origin) || newer(t))
     removed = tokens.length - keep.length
     kept = mine.length - removed
+    cards = mine.filter((t) => !newer(t) && t.work_card).map((t) => ({ token: t.work_card!.token, ...(t.environment ? { environment: t.environment } : {}) }))
     return removed === 0 ? null : keep
   })
+  // The revoked phone's lock-screen card goes now, not when Walnut is next opened there.
+  if (cards.length > 0 && removed > 0) {
+    const { endCardsNow } = await import('./work-card.js')
+    void endCardsNow(cards)
+  }
   if (removed > 0 || kept > 0) {
     log.notif.info('push: tokens revoked with the device', {
       device, origin, removed, ...(kept > 0 ? { keptNewerPairing: kept } : {}),
@@ -493,6 +614,8 @@ export async function pushRegistrationStatus(
           kind: tokenKind(mine),
           // An empty list clears the filter, as the real write deletes `letter_types`.
           letterTypes: own?.letterTypes !== undefined ? (own.letterTypes.length ? own.letterTypes : undefined) : mine.letter_types,
+          // Whether this box holds the lock-screen card's token (work-card.ts), never the token.
+          workCard: !!mine.work_card,
         },
       }
       : {}),
@@ -510,6 +633,7 @@ export async function pushRegistrationStatus(
       token_tag: tokenTag(t.token),
       // Legacy, for app builds that predate token tags (see LEGACY_TOKEN_PREFIX_CHARS).
       token_prefix: `${legacyTokenPrefix(t.token)}...`,
+      ...(t.work_card ? { work_card: true } : {}),
     })),
   }
 }
