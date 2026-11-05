@@ -17,7 +17,12 @@ import { api, seed, openNote, drawn, placeImage } from './notes-images-helpers'
 test('every image form in a vault note draws inline, a missing one names its file, a click zooms', async ({ page }) => {
   const { root, note } = await seed()
   const failed: string[] = []
-  page.on('response', (r) => { if (r.url().includes('/api/notes-v2/attachment') && r.status() >= 400) failed.push(`${r.status()} ${decodeURIComponent(r.url())}`) })
+  // This note's pictures only: the app reopens the last note first, which may
+  // be another test's with a missing picture of its own.
+  page.on('response', (r) => {
+    const url = decodeURIComponent(r.url())
+    if (url.includes('/api/notes-v2/attachment') && url.includes(`note=${note}`) && r.status() >= 400) failed.push(`${r.status()} ${url}`)
+  })
   const editor = await openNote(page, root)
 
   // Five pictures draw: bare, percent-encoded, ../, embed, sized embed.
