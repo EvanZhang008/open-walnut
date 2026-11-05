@@ -6,6 +6,177 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.26] - 2026-11-05
+
+### Added
+
+- Drop the switch that refused Main's or a VP's 4th command
+- Walnut agents use the person's own browser through the Walnut extension
+- Deploys queue up, so production restarts at most once per 10 minutes
+- A Walnut browser extension for Chrome and Firefox that fills and saves logins
+- Phones & Cloud is four tabs, each saying what its way is
+- A recovery code for a forgotten master password; agent choice moves to Settings
+- Pin a thread to the top of the Threads view
+- The Org page opens the org settings in place, beside Org chart
+- Every box that writes to an AI takes pictures
+- Remind Main and the VPs to hand work on instead of refusing their 4th command
+- Tree Mode splits into two halves with a path bar, so the question and the level it was asked in sit side by side
+- One daemon keeps each Walnut's settings apart
+- Agents use vault items with the person's approval
+- An encrypted password vault with its own app in Walnut
+- A task keeps the user's unanswered messages, and Threads read their answers right
+- Host_exec that stays out of the way, host_copy, Install that works on every host, and joined hosts that update their daemon
+- One letter when macOS blocks Walnut from the local network
+- Run the iOS tests on a Mac of the fleet from any task
+- The Overview shows what it read at once and reads on a click
+- A new import project goes under the VP of the other import projects
+- The invite line names the coding agents and installs none
+- Each Mac app release updates the previous release's app to itself first, and a failed automatic download is tried again
+- The Org list puts a node's Threads first and counts them once, with no "N open"
+- Talk to CEO opens a box for your words first, New task focuses the draft
+- Main and a VP never do the work themselves: a 3-command rule Walnut enforces
+- A click on a task row's project name shows every task of that project
+- Only link tags fold into the header's tags control; Trigger, Worker and Leader stay on the row
+- One phone link with its code inside, plugin-named tunnels, login retry for host uploads
+- Talk to CEO opens a box first and sends only on Send
+- A running Walnut installs a new release itself and restarts when the person is away
+- A Thread waiting on the user is the CEO's or a VP's Needs you, and threads come first
+- An Ask here answer is filed only from its own tag, with the thread id and name the question was sent with
+- The full-screen sheet grows outward while its review column is open, so the chat keeps its width
+- A kept row open beside the page wears a light tint, never a frame
+- To read sits under Needs you, and every Needs you row says what to do with it
+- To read sits under Needs you; every Needs you row says what to do with it
+- The task and session menu, redesigned: Open, Window and Panels lead; Pin to, Dates and plugin fields are each their own group
+- A tunnel plugin installs its tool by itself; found hosts wait for a yes
+- A task with a locked session panel hangs under its row too, with an eye or a lock
+- Every box that writes to an AI takes pictures
+- Ask here asks in the view on screen, a reply is only its own question's answer, and long conversations get named outline sections
+- VPs start by themselves in the background; Settings → Org turns the whole org off
+- On the Mac too, as Needs you and a system notification
+- Every email item offers Talk to CEO and New task
+- Store plugins keep themselves current
+- Waiting is only a real wait; a task's own build is Working; a finished result is To read
+- `walnut approve` pauses a script until a person approves, with a tap or Face ID / Touch ID
+- The Org page's Pinned is Home's Watching, one list
+- The session header folds every label into one control and shows no run status
+- Snooze a thread until a time, with a Snoozed section on Threads
+- A task opens on Home from anywhere; the separate task page is gone
+- POST /api/v1/content/draft gives a client without the web bundle the New task draft words
+- Every pane split on the Org page drags
+- Snooze until is the task menu's first row, with Watch beside it
+- Every plugin's content offers Talk to CEO and New task, and nothing turns it into a task on its own
+- The Org side bar opens into the full-screen sheet instead of widening
+- Walnut for Windows, a one-file installer and its own window
+
+### Fixed
+
+- Every rehearsal's daemon outlives a restart of its server, as a person's does
+- A self-call made for a caller elsewhere never counts as a private link
+- A host network machine that comes back is dialled again
+- A walnut call the exiting daemon never read waits for the next one
+- A daemon update that meets a call in flight is asked again, not dropped
+- A landing in Tree Mode measures under the gutter the reader will see
+- A transcript is read whole once, not after every restart, eviction or 4 MB
+- Gcc and dtach set up on a new host never read "Installing Claude Code"
+- A walnut call the server still has when its daemon stops gets an answer
+- A walnut call from outside any session is its host's one Walnut's, so it is answered while the Mac sleeps
+- A session that starts while every panel is pinned keeps its column
+- A read cut off by a server restart goes to the next server run
+- A UI run writes its xctestrun with a python whose plistlib loads
+- A walnut call's waiting notices go only to a terminal
+- A fleet run's results come back through a Walnut restart
+- A walnut call made while its host's daemon is replaced waits for the next one
+- Every surface the user reads says the task's status in user-status words, never a phase name
+- The CEO's and a VP's red is its threads, "0 threads" in grey, never its own Needs you
+- The endpoint wait never continues over a Stop, a closed task, a stopped team or a message sent during its probe
+- A turn that could not reach the model endpoint waits on its machine and continues by itself
+- A session's own work after its turn is one list, and its drain is no turn end
+- A host that does not answer is a 503 or 504, never a 500 card
+- The companion's tunnel daemon is replaced by a newer build; extracted daemon harnesses name every free name they read
+- A list drawn under a resting pointer holds still once its rows arrive
+- Install moves an npm launcher aside so the native claude takes its place
+- A fleet iOS run whose Mac replaced its daemon reads its result from the job's log
+- A walnut call on a host waits out a server restart and a broken link, and runs once
+- The terminal status pill shows words, never a raw status code
+- The first launch waits for the server that owns the data dir, and nothing runs on in an ended login session
+- Handlers act on the task list the page committed, never an interrupted render's
+- A hidden Home chat's question marks no longer paint on the open page's title in WebKit
+- A markdown table in a narrow pane keeps its words whole and scrolls sideways
+- A scanned .dmg that will not detach is tried again, and then a warning, never a skip
+- A compaction keeps the user's recent words, answered ones too, and task_history pages back
+- A card's Decide line opens the Page at its choice; panel-count specs take turns
+- Two Walnuts of different builds no longer swap a shared daemon back and forth
+- The build clone reuses the checkout's built SQLite, so a deploy never downloads it again
+- The question map's list grows to its longest title, so its rows show more
+- Closing the split's left half in Safari keeps the typing focus, moving it to the composer that stays
+- A compaction's summary or a hook's context starts no turn, so a question answered after a compaction keeps its answer
+- A commit that adds a dependency installs its lockfile in the build clone
+- A message's sender is its task's title, and a fork names its source once
+- A daemon update waits for the host_exec runs on its host
+- A fleet iOS run keeps its results when they cannot be fetched, and names its Xcode
+- A letter note's answer read from its letter replaces the chat words an older Walnut kept
+- A letter's thread holds only its own news, never a line naming another letter
+- The Talk to CEO box is an AnswerBox with a kept draft and pictures
+- The rehearsal's system PATH without Node is made again in the same dir on macOS 26
+- One machine is one choice in every host picker
+- A coding agent is installed only when the user asks
+- The VP's command count resets only at a turn's end, and a long message has a free way out
+- A Walnut notification's title attribute is its folded title
+- A live install waits for one already running, and a server that cannot restart offers no Restart
+- A drop between two rows lands on the row, never on the tier around them
+- Every lifecycle wait has a deadline and a clear result
+- A deploy's few seconds of failed recovery-status reads show no "Recovery status unavailable"
+- A stop the host did not confirm is sent again instead of blocking the session for good
+- Background checks on a Mac never read a keychain secret
+- Launch parity no longer lists the outline's turn-titles route, which is gone
+- The outline lists only what the user marked, never one row per message
+- Found hosts read the server role, and the ssh sweep test waits for a yes
+- A session's close never leaves the user's own items behind a clean Done
+- The folder and project menus' pickers keep the row they were opened on
+- A server restart's few seconds of failing host reads show no Reconnecting banner
+- A deploy that changes the daemon keeps remote sessions connected
+- The outline's turn-titles call is listed in the launch parity map
+- A status section row renames from its title like every task row
+- A task parked on its own build wears Working in its header and rows, never the hourglass
+- Instruction notices are few and small, and a note in front of the user's words never hides them
+- A session menu's Details opens the task even before Home's list has it
+- No white scrollbar bar under code blocks in the Mac app
+- A folded Needs you still shows its waiting approvals
+- A closed overlay never takes Escape from the Ask drawer
+- A machine found in ~/.ssh/config that joined is listed once
+- The compiler hint names the host's own package manager
+- The join waits for the network key while a new machine downloads walnut-net
+- A new machine joins while the release cannot, with the preview build from npm
+- The task kebab draws its three dots, so its ink sits on the header's line in every font
+- The approval sheet stacks its buttons at accessibility text sizes, names Face ID or Touch ID by device, and the simulator signs with its software key
+- A session writes its user_kind reason in the user's language
+- Bring main's guard tests and two browser specs back to green
+- One transfer for every reader of the same remote file at the same stat
+- Mail receipts and thread titles in the user's language; a rewrite example is the line itself
+- A path or a letter in agent text opens from every surface; proof stays where the user reads the result
+- Take another change's unfinished link hunks back out of the task-page commit
+- The Chat tab comes back to the chat you left
+- A pipe whose reader went away never ends the daemon or the server
+- Setup waits for the console without printing each refused try
+- Walnut installs into Programs\walnut, and a replaced page load is no error
+- The app installs with Bun from its own bun.lock
+- A model catalog fetched before the settings read names the settings model too
+- A waiting row's wait sentence is a third line under its title
+- Every word Walnut writes onto a letter follows the user's language
+- Default runs the user's settings model, never the CLI's own default
+- A dev box found in ~/.ssh/config is dialled when Walnut runs a server there
+- A read-only test server declares itself a probe so the daemon never hands it the real Walnut's calls
+- A VP's task is titled "<project> VP", and open ones an older build named "<project> lead" are renamed
+- Full screen is the pop-up sheet with margins again, not the whole window
+- A transcript sweep the throttle turns away runs when its window ends
+- A full pull that did not show an item never deletes its task
+- A locate keeps its task shown wherever it lands or moves
+- An open letter of a kind Walnut sends no more settles itself
+- Other sessions' mail is never a person's word, and a progress-only turn end no longer settles requests
+- One letter per question, triggers stop with their task, Walnut writes in the user's language, every turn is corrected
+- A Windows PC joined over SSH keeps Walnut running after the SSH session ends
+- End terminal says so when it could not confirm the terminal ended
+
 ## [0.6.25] - 2026-11-04
 
 ### Added
