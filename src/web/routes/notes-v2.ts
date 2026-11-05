@@ -365,7 +365,7 @@ const MAX_ATTACHMENT_SIZE = MAX_SERVED_ATTACHMENT_BYTES // 50 MB (mirror local-i
  * resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
  * containment as resolveSafePath, and only returns an existing regular file.
  */
-export async function readNoteAttachment(raw: unknown, notePath?: unknown, exactParam?: unknown): Promise<{
+export async function readNoteAttachment(raw: unknown, notePath?: unknown, exactParam?: unknown, decodeParam?: unknown): Promise<{
   buffer: Buffer
   mime: string
   /** Browser-renderable → serve inline; Office docs → download. */
@@ -386,7 +386,8 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown, exact
   // `exact`: a markdown image, which names one file (ResolveOptions): `1` beside
   // the note then the vault path, `note` or `vault` only that one place.
   const only: 'note' | 'vault' | undefined = exactParam === 'note' || exactParam === 'vault' ? exactParam : undefined
-  const opts = { exact: exactParam === '1' || exactParam === true || !!only, only }
+  // `decode=0`: the path as given only, never its percent-decoded spelling.
+  const opts = { exact: exactParam === '1' || exactParam === true || !!only, only, asWritten: decodeParam === '0' }
   const { companionAttachmentRead } = await import('../../core/companion-attachment-copy.js')
   let copied = await companionAttachmentRead(raw, note, opts)
   if (copied === undefined) copied = await (await import('../../replica/attachment-source.js')).replicaAttachmentRead(raw, note, opts)
@@ -441,7 +442,7 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown, exact
 //              `note` / `vault`: only that one, so the editor knows which it drew)
 notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note, req.query.exact)
+    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note, req.query.exact, req.query.decode)
     res.setHeader('Content-Type', mime)
     res.setHeader('Content-Length', buffer.length)
     res.setHeader('Cache-Control', 'public, max-age=3600')

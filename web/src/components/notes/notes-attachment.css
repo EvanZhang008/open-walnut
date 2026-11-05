@@ -64,3 +64,8 @@
 .notes-attachment-card:hover {
   border-color: var(--accent, #6b8afd);
 }
+
+/* The picture's card on the preview's own grey: lift it onto the page colour. */
+.notes-attachment-preview .notes-image-missing {
+  background: var(--bg, #111214);
+}

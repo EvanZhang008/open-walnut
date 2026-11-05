@@ -35,13 +35,17 @@ import {
 const NOTE = 'Trips/Spring/Plan.md';
 const VAULT: ResolveImageSrcContext = { notePath: NOTE };
 
-const vault = (p: string, exact = 'note') => `/api/notes-v2/attachment?${new URLSearchParams({ path: p, note: NOTE, exact })}`;
+const vault = (p: string, exact = 'note', written = p) => {
+  const params: Record<string, string> = { path: p, note: NOTE, exact, decode: '0' };
+  if (written !== p) params.w = written;
+  return `/api/notes-v2/attachment?${new URLSearchParams(params)}`;
+};
 const local = (p: string) => `/api/local-image?path=${encodeURIComponent(p)}`;
 
 /** [form, src as written in the note, where a vault note must paint it] */
 const FORMS: Array<[string, string, string]> = [
   ['relative bare', 'photo.jpeg', vault('photo.jpeg')],
-  ['relative percent-encoded (Notion export)', 'Untitled%201.jpeg', vault('Untitled%201.jpeg')],
+  ['relative percent-encoded (Notion export)', 'Untitled%201.jpeg', vault('Untitled 1.jpeg', 'note', 'Untitled%201.jpeg')],
   ['relative with a space (from <angle brackets>)', 'Untitled 1.jpeg', vault('Untitled 1.jpeg')],
   ['relative ./', './_attachment/a.png', vault('./_attachment/a.png')],
   ['relative ../', '../shared/map.png', vault('../shared/map.png')],
@@ -80,6 +84,11 @@ describe('every image form a vault note can hold paints a fetchable src', () => 
     ]);
     expect(resolveImageCandidates('photo.jpeg', VAULT)).toEqual([vault('photo.jpeg'), vault('photo.jpeg', 'vault')]);
     expect(resolveImageCandidates('https://e.com/a.png', VAULT)).toEqual(['https://e.com/a.png']);
+    // A percent sign is asked decoded first, then as a literal file name character.
+    const w = 'photo%41.png';
+    expect(resolveImageCandidates(w, VAULT)).toEqual([
+      vault('photoA.png', 'note', w), vault(w), vault('photoA.png', 'vault', w), vault(w, 'vault'),
+    ]);
     expect(resolveImageCandidates('/a.png', { baseDir: '/home/dev' })).toEqual([local('/a.png')]);
   });
 
@@ -123,8 +132,13 @@ describe('a copied vault image pastes back as the path it was written with', () 
     const fromRoot = vault('shared/map.png', 'vault');
     expect(vaultFileOf(fromRoot)).toBe('shared/map.png');
     expect(vaultFileOf(vault('../shared/map.png'))).toBe('Trips/shared/map.png');
-    expect(vaultFileOf(vault('Untitled%201.jpeg'))).toBe('Trips/Spring/Untitled 1.jpeg');
+    expect(vaultFileOf(vault('Untitled 1.jpeg', 'note', 'Untitled%201.jpeg'))).toBe('Trips/Spring/Untitled 1.jpeg');
+    // The URL that drew names one spelling: a literal % file is that file, never its decoding.
+    expect(vaultFileOf(vault('photo%41.png'))).toBe('Trips/Spring/photo%41.png');
+    expect(unproxyImageSrc(vault('photo%41.png'), { notePath: 'Trips/Summer/Log.md' })).toBe('../Spring/photo%2541.png');
+    // A URL that let the server pick (exact=1, or any spelling) names no one file.
     expect(vaultFileOf('/api/notes-v2/attachment?path=a.png&note=n.md&exact=1')).toBeNull();
+    expect(vaultFileOf('/api/notes-v2/attachment?path=a.png&note=n.md&exact=note')).toBeNull();
     expect(unproxyImageSrc(fromRoot, { notePath: 'B/Note.md' })).toBe('../shared/map.png');
     expect(unproxyImageSrc(vault('photo.jpeg', 'vault'), { notePath: 'Home.md' })).toBe('photo.jpeg');
   });
@@ -170,6 +184,20 @@ describe('every notes surface paints images through ResolvedImage', () => {
       expect(src, rel(f)).toMatch(/\bImageClipboard\b/);
       expect(src, rel(f)).toMatch(/\bImageKeys\b/);
     }
+  });
+
+  it('every notes surface that draws a vault picture tells a missing file from an undrawable one', () => {
+    // 2026-11-05 review: the tree's preview drew a broken image for a HEIC
+    // that the inline views showed as "Can't preview here" with a download.
+    const notesDir = path.join(WEB_SRC, 'components/notes');
+    const code = (f: string) => fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const drawers = files.filter((f) => f.startsWith(notesDir) && /<img\s|createElement\('img'\)/.test(code(f)));
+    expect(drawers.map(rel).sort()).toEqual([
+      'components/notes/AttachmentPreview.tsx',
+      'components/notes/WikiEmbedView.tsx',
+      'components/notes/extensions/resolved-image.ts',
+    ]);
+    for (const f of drawers) expect(fs.readFileSync(f, 'utf8'), rel(f)).toMatch(/\bfailureOf\(/);
   });
 
   it('the vault editor hands ResolvedImage the note it edits', () => {

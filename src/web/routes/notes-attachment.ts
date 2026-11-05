@@ -109,13 +109,15 @@ export function invalidateAttachmentIndex(): void {
  * strip an Obsidian size suffix (`|300`), and strip the legacy `Notion/` vault
  * root. Returns null for anything containing a `..` traversal segment.
  */
-function cleanRawPath(raw: string): string | null {
+function cleanRawPath(raw: string, legacyRoot = true): string | null {
   // An embed may carry a display size (`![[x.png|300]]`); callers usually strip
   // it, but a raw `![[...]]` inner string reaching here must not be treated as
   // part of the filename.
   let cleaned = raw.split('|')[0].trim().replace(/\\/g, '/').replace(/^\/+/, '')
   if (!cleaned || cleaned === '.' || cleaned === '..') return null
-  cleaned = cleaned.replace(/^Notion\//, '')
+  // The legacy `Notion/` root is an embed's old spelling only: a markdown image
+  // (exact) naming `Notion/x.png` means that folder (2026-11-05 review).
+  if (legacyRoot) cleaned = cleaned.replace(/^Notion\//, '')
   if (!cleaned) return null
   if (cleaned.split('/').some((seg) => seg === '..')) return null
   return cleaned
@@ -195,8 +197,9 @@ function matchSuffix(index: string[], suffix: string): string[] {
  * editors) write `![](Untitled%201.jpeg)` for the file `Untitled 1.jpeg`; the
  * literal form is tried first because `%` is also a legal filename character.
  */
-function spellingsOf(raw: string): string[] {
+function spellingsOf(raw: string, asWritten = false): string[] {
   const out = [raw]
+  if (asWritten) return out
   if (raw.includes('%')) {
     try {
       const decoded = decodeURIComponent(raw)
@@ -245,6 +248,11 @@ export interface ResolveOptions {
    * it drew and a copy pasted into another note names that same file.
    */
   only?: 'note' | 'vault'
+  /**
+   * Only the path as given, never its percent-decoded spelling: the editor
+   * asks each spelling itself, so it knows which file drew (`decode=0`).
+   */
+  asWritten?: boolean
 }
 
 /**
@@ -256,7 +264,7 @@ export function resolveAttachmentInIndex(
   raw: string, notePath: string | undefined, index: readonly string[], opts: ResolveOptions = {},
 ): string | null {
   const relativeHit = (): string | null => {
-    for (const spelling of spellingsOf(raw)) {
+    for (const spelling of spellingsOf(raw, opts.asWritten)) {
       const relative = noteRelativePath(spelling, notePath)
       if (relative && index.includes(relative)) return relative
     }
@@ -268,15 +276,17 @@ export function resolveAttachmentInIndex(
     const hit = opts.only === 'vault' ? null : relativeHit()
     if (hit || opts.only === 'note') return hit
   } else {
-    for (const spelling of spellingsOf(raw)) {
-      const cleaned = cleanRawPath(spelling)
-      if (cleaned && index.includes(cleaned)) return cleaned
+    for (const spelling of spellingsOf(raw, opts.asWritten)) {
+      // The path as named, then without a legacy `Notion/` root.
+      for (const cleaned of [cleanRawPath(spelling, false), cleanRawPath(spelling)]) {
+        if (cleaned && index.includes(cleaned)) return cleaned
+      }
     }
     const hit = relativeHit()
     if (hit) return hit
   }
-  for (const spelling of spellingsOf(raw)) {
-    const cleaned = cleanRawPath(spelling)
+  for (const spelling of spellingsOf(raw, opts.asWritten)) {
+    const cleaned = cleanRawPath(spelling, !opts.exact)
     if (!cleaned) continue
     if (index.includes(cleaned)) return cleaned
     if (opts.exact) continue
@@ -305,7 +315,7 @@ export async function resolveAttachmentPath(
   opts: ResolveOptions = {},
 ): Promise<string | null> {
   const relativeHit = async (): Promise<string | null> => {
-    for (const spelling of spellingsOf(raw)) {
+    for (const spelling of spellingsOf(raw, opts.asWritten)) {
       const relative = noteRelativePath(spelling, notePath)
       const hit = relative ? await statFile(relative) : null
       if (hit) return hit
@@ -320,17 +330,19 @@ export async function resolveAttachmentPath(
     const hit = opts.only === 'vault' ? null : await relativeHit()
     if (hit || opts.only === 'note') return hit
   } else {
-    for (const spelling of spellingsOf(raw)) {
-      const cleaned = cleanRawPath(spelling)
-      const hit = cleaned ? await statFile(cleaned) : null
-      if (hit) return hit
+    for (const spelling of spellingsOf(raw, opts.asWritten)) {
+      // The path as named, then without a legacy `Notion/` root.
+      for (const cleaned of new Set([cleanRawPath(spelling, false), cleanRawPath(spelling)])) {
+        const hit = cleaned ? await statFile(cleaned) : null
+        if (hit) return hit
+      }
     }
     const hit = await relativeHit()
     if (hit) return hit
   }
-  for (const spelling of spellingsOf(raw)) {
+  for (const spelling of spellingsOf(raw, opts.asWritten)) {
     const hit = opts.exact
-      ? await (async () => { const c = cleanRawPath(spelling); return c ? statFile(c) : null })()
+      ? await (async () => { const c = cleanRawPath(spelling, false); return c ? statFile(c) : null })()
       : await resolveVaultPath(spelling, notePath)
     if (hit) return hit
   }

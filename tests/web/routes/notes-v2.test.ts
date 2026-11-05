@@ -304,6 +304,29 @@ describe('GET /api/notes-v2/attachment', () => {
     expect(resolveAttachmentInIndex('map.png', 'A/Note.md', index, { exact: true, only: 'note' })).toBeNull();
   });
 
+  it('a markdown image keeps a real Notion folder and can ask one spelling only', async () => {
+    // 2026-11-05 review: exact=vault stripped `Notion/` and drew the root map.png.
+    await fs.mkdir(path.join(NOTES_DIR, 'Notion'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'Notion', 'map.png'), 'NAMED');
+    await fs.writeFile(path.join(NOTES_DIR, 'map.png'), 'ROOT');
+    await fs.mkdir(path.join(NOTES_DIR, 'A'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'A', 'photo%41.png'), 'LITERAL');
+    await fs.writeFile(path.join(NOTES_DIR, 'A', 'photoA.png'), 'DECODED');
+    const app = createApp();
+    const get = (q: Record<string, string>) => request(app).get('/api/notes-v2/attachment').query({ note: 'A/Note.md', ...q });
+    expect((await get({ path: 'Notion/map.png', exact: 'vault' })).body.toString()).toBe('NAMED');
+    expect((await get({ path: 'Notion/map.png', exact: '1' })).body.toString()).toBe('NAMED');
+    // An embed keeps reading the legacy root as before.
+    expect((await get({ path: 'Notion/map.png' })).body.toString()).toBe('NAMED');
+    expect((await get({ path: 'photo%41.png', exact: 'note', decode: '0' })).body.toString()).toBe('LITERAL');
+    expect((await get({ path: 'photoA.png', exact: 'note', decode: '0' })).body.toString()).toBe('DECODED');
+    expect((await get({ path: 'photo%20A.png', exact: 'note', decode: '0' })).status).toBe(404);
+    const { resolveAttachmentInIndex } = await import('../../../src/web/routes/notes-attachment.js');
+    const index = ['Notion/map.png', 'map.png'];
+    expect(resolveAttachmentInIndex('Notion/map.png', 'A/Note.md', index, { exact: true, only: 'vault' })).toBe('Notion/map.png');
+    expect(resolveAttachmentInIndex('x%20y.png', 'A/Note.md', ['A/x y.png'], { exact: true, asWritten: true })).toBeNull();
+  });
+
   it('keeps a literal % in a filename', async () => {
     await fs.writeFile(path.join(NOTES_DIR, '100%25 done.png'), 'LITERAL');
     const res = await request(createApp()).get('/api/notes-v2/attachment').query({ path: '100%25 done.png', note: 'n.md' });

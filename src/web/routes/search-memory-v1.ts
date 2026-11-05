@@ -450,7 +450,7 @@ searchMemoryV1Router.get('/notes/attachment', async (req: Request, res: Response
   try {
     const { readNoteAttachment, NotesOpError, attachmentHeaders } = await import('./notes-v2.js')
     try {
-      const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note, req.query.exact)
+      const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note, req.query.exact, req.query.decode)
       res.setHeader('Content-Type', mime)
       res.setHeader('Content-Length', buffer.length)
       res.setHeader('Cache-Control', 'public, max-age=3600')

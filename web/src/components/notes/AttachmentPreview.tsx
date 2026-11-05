@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
 import { browserCanInlinePdf } from '@/utils/pdf-support';
 import { NOTE_IMAGE_EXTS } from './notes-image-types';
+import { failureOf, knownUndrawable } from './image-load';
 import './notes-attachment.css';
+// The picture card's styles (shared with the editor's inline pictures).
+import './notes-editor.css';
 
 /**
  * Preview pane for a vault attachment selected in the tree.
@@ -20,7 +24,12 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
   const url = attachmentUrl(notePath);
   const breadcrumb = notePath.split('/');
 
-  const isImage = NOTE_IMAGE_EXTS.has(ext);
+  // A picture this browser cannot draw (HEIC, TIFF outside Safari) or that is
+  // gone: the same card the note shows inline, with a download for the former.
+  const [failed, setFailed] = useState<{ url: string; kind: 'missing' | 'undrawable' } | null>(() =>
+    knownUndrawable(url) ? { url, kind: 'undrawable' } : null);
+  const failure = failed?.url === url ? failed.kind : null;
+  const isImage = NOTE_IMAGE_EXTS.has(ext) && !failure;
   // Same guard as WikiEmbedView: with the browser's PDF viewer disabled an
   // <iframe> is a silent download, so route those users to the open card
   // (local app via /reveal) instead of downloading on every tree click.
@@ -40,14 +49,30 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
           ))}
         </div>
         <div className="notes-editor-meta">
-          <a className="notes-attachment-open" href={url} target="_blank" rel="noreferrer">
-            {isImage || isPdf ? 'Open in new tab' : 'Download'}
-          </a>
+          {isImage || isPdf ? (
+            <a className="notes-attachment-open" href={url} target="_blank" rel="noreferrer">Open in new tab</a>
+          ) : failure !== 'missing' && (
+            <a className="notes-attachment-open" href={url} download={name}>Download</a>
+          )}
         </div>
       </div>
       <div className="notes-attachment-preview">
         {isImage ? (
-          <img className="notes-attachment-image" src={url} alt={name} />
+          <img
+            className="notes-attachment-image"
+            src={url}
+            alt={name}
+            onError={() => { void failureOf(url).then((kind) => setFailed({ url, kind })); }}
+          />
+        ) : failure ? (
+          <div className="notes-image-missing notes-attachment-failed">
+            <span className="notes-image-missing-icon" aria-hidden>{failure === 'missing' ? '!' : '\u2193'}</span>
+            <span className="notes-image-missing-label">{failure === 'missing' ? 'Image not found' : "Can't preview here"}</span>
+            <span className="notes-image-missing-name">{name}</span>
+            {failure === 'undrawable' && (
+              <a className="notes-image-download" href={url} download={name}>Download</a>
+            )}
+          </div>
         ) : isPdf ? (
           <iframe className="notes-attachment-pdf" src={url} title={name} />
         ) : (

@@ -81,10 +81,17 @@ export const ImageClipboard = Extension.create({
         // A plugin view's listener is added after ProseMirror's own copy handler,
         // which clears the clipboard first: so the tag survives it.
         view(view) {
+          // The selection as it was before ProseMirror's own handler ran: a cut
+          // deletes it first (2026-11-05 review: a cut image lost the file it drew).
+          let before: Slice | null = null;
+          const grab = (e: Event) => {
+            if (e.target instanceof Node && view.dom.contains(e.target)) before = view.state.selection.content();
+          };
           const tag = (e: ClipboardEvent) => {
+            const slice = before ?? view.state.selection.content();
+            before = null;
             const note = notePath();
             if (!note || !e.clipboardData) return;
-            const slice = view.state.selection.content();
             const files = drawnFilesOf(slice, note);
             try {
               e.clipboardData.setData(NOTE_CLIPBOARD_TYPE, note);
@@ -99,10 +106,15 @@ export const ImageClipboard = Extension.create({
             }
             lastCopy = text.trim() ? { text: text.trim(), note, files } : null;
           };
+          const doc = view.dom.ownerDocument;
+          doc.addEventListener('copy', grab, true);
+          doc.addEventListener('cut', grab, true);
           view.dom.addEventListener('copy', tag);
           view.dom.addEventListener('cut', tag);
           return {
             destroy() {
+              doc.removeEventListener('copy', grab, true);
+              doc.removeEventListener('cut', grab, true);
               view.dom.removeEventListener('copy', tag);
               view.dom.removeEventListener('cut', tag);
             },

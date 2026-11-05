@@ -948,7 +948,8 @@ mark.notes-search-mark {
   outline-offset: 2px;
 }
 /* What a picture that is not there becomes: its name, never an empty gap. */
-.notes-editor .tiptap .notes-image-missing {
+.notes-editor .tiptap .notes-image-missing,
+.notes-attachment-preview .notes-image-missing {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -970,7 +971,8 @@ mark.notes-search-mark {
   outline: 2px solid var(--accent, #6366f1);
   outline-offset: 2px;
 }
-.notes-editor .tiptap .notes-image-missing-icon {
+.notes-editor .tiptap .notes-image-missing-icon,
+.notes-attachment-preview .notes-image-missing-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -983,18 +985,21 @@ mark.notes-search-mark {
   font-size: 12px;
   font-weight: 600;
 }
-.notes-editor .tiptap .notes-image-missing-label {
+.notes-editor .tiptap .notes-image-missing-label,
+.notes-attachment-preview .notes-image-missing-label {
   flex: none;
   color: var(--fg, #e6e6e6);
 }
-.notes-editor .tiptap .notes-image-missing-name {
+.notes-editor .tiptap .notes-image-missing-name,
+.notes-attachment-preview .notes-image-missing-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* A file this browser cannot draw (HEIC, TIFF outside Safari) is still there. */
-.notes-editor .tiptap .notes-image-download {
+.notes-editor .tiptap .notes-image-download,
+.notes-attachment-preview .notes-image-download {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1007,7 +1012,8 @@ mark.notes-search-mark {
   text-decoration: none;
   cursor: pointer;
 }
-.notes-editor .tiptap .notes-image-download:hover {
+.notes-editor .tiptap .notes-image-download:hover,
+.notes-attachment-preview .notes-image-download:hover {
   border-color: var(--accent, #6366f1);
 }
 

@@ -105,11 +105,29 @@ function joinPath(baseDir: string, rel: string): string {
 
 /**
  * A vault note's image URL. `exact`: `note` asks only beside the note, `vault`
- * only that vault path (the server's ResolveOptions), so the view that drew it
- * knows which file it is.
+ * only that vault path, and `decode=0` only this spelling (the server's
+ * ResolveOptions), so the URL that drew names exactly one file. `written` is
+ * the src as the note wrote it, kept for a paste back into the same note.
  */
-function vaultUrl(path: string, note: string, exact: 'note' | 'vault'): string {
-  return `${VAULT_ROUTE}?${new URLSearchParams({ path, note, exact })}`;
+function vaultUrl(path: string, note: string, exact: 'note' | 'vault', written = path): string {
+  const params: Record<string, string> = { path, note, exact, decode: '0' };
+  if (written !== path) params.w = written;
+  return `${VAULT_ROUTE}?${new URLSearchParams(params)}`;
+}
+
+/**
+ * The spellings a relative src may stand for, likeliest first: percent-decoded
+ * (a markdown image cannot hold a space, so `Untitled%201.jpeg` means the file
+ * `Untitled 1.jpeg`), then as written (`%` is a legal file name character).
+ */
+function srcSpellings(raw: string): string[] {
+  if (!raw.includes('%')) return [raw];
+  try {
+    const decoded = decodeURIComponent(raw);
+    return decoded === raw ? [raw] : [decoded, raw];
+  } catch {
+    return [raw];
+  }
 }
 
 /** The file name a src names, decoded for reading (`Untitled%201.jpeg` → `Untitled 1.jpeg`). */
@@ -159,7 +177,7 @@ export function resolveImageSrc(src: string, ctx: ResolveImageSrcContext = {}): 
       // the web, the phone app and the companion's copy. A markdown image names
       // one file, never "that name anywhere": beside the note first, then the
       // same path from the vault's root (resolveImageCandidates).
-      return vaultUrl(raw, notePath, 'note');
+      return vaultUrl(srcSpellings(raw)[0], notePath, 'note', raw);
     }
     absPath = joinPath(baseDir, raw);
   }
@@ -172,7 +190,7 @@ export function resolveImageSrc(src: string, ctx: ResolveImageSrcContext = {}): 
 }
 
 /** `path`, `note` and `exact` of a vault attachment URL (relative, or on this page's origin), else null. */
-function vaultPathOf(raw: string): { path: string; note: string; exact: string } | null {
+function vaultPathOf(raw: string): { path: string; note: string; exact: string; decode: string; written: string } | null {
   let url = raw.replace(/&amp;/g, '&');
   const origin = typeof location !== 'undefined' ? location.origin : '';
   if (origin && url.startsWith(origin + '/')) url = url.slice(origin.length);
@@ -180,7 +198,9 @@ function vaultPathOf(raw: string): { path: string; note: string; exact: string }
   const params = new URLSearchParams(url.slice(VAULT_ROUTE.length + 1));
   const path = params.get('path') ?? '';
   const note = params.get('note') ?? '';
-  return path && note ? { path, note, exact: params.get('exact') ?? '' } : null;
+  return path && note
+    ? { path, note, exact: params.get('exact') ?? '', decode: params.get('decode') ?? '', written: params.get('w') ?? path }
+    : null;
 }
 
 /**
@@ -190,9 +210,10 @@ function vaultPathOf(raw: string): { path: string; note: string; exact: string }
  */
 export function vaultFileOf(url: string): string | null {
   const v = vaultPathOf(url);
-  if (!v) return null;
-  if (v.exact === 'note') return joinPath('', `${dirOf(v.note)}/${safeDecode(v.path)}`) || null;
-  if (v.exact === 'vault') return joinPath('', safeDecode(v.path)) || null;
+  // Only a URL that asked one place and one spelling names one file.
+  if (!v || v.decode !== '0') return null;
+  if (v.exact === 'note') return joinPath('', `${dirOf(v.note)}/${v.path}`) || null;
+  if (v.exact === 'vault') return joinPath('', v.path) || null;
   return null;
 }
 
@@ -249,9 +270,11 @@ export function resolveImageCandidates(src: string, ctx: ResolveImageSrcContext 
   const raw = typeof src === 'string' ? src.trim() : '';
   const notePath = ctx.notePath?.trim();
   if (!notePath || ctx.baseDir?.trim() || first === src) return [first];
-  if (vaultPathOf(first)?.exact === 'note') return [first, vaultUrl(raw, notePath, 'vault')];
+  const spellings = srcSpellings(raw);
+  const at = (exact: 'note' | 'vault') => spellings.map((p) => vaultUrl(p, notePath, exact, raw));
+  if (vaultPathOf(first)?.exact === 'note') return [...at('note'), ...at('vault')];
   if (raw.startsWith('/') && !raw.startsWith('//') && !raw.startsWith('/api/')) {
-    return [vaultUrl(raw, notePath, 'vault'), first];
+    return [...at('vault'), first];
   }
   return [first];
 }
@@ -278,7 +301,7 @@ export function unproxyImageSrc(src: string | null | undefined, ctx: ResolveImag
     // file, wherever the path as written would point from the new note.
     const here = ctx.notePath?.trim();
     if (!here) return raw;
-    if (vault.note === here) return vault.path;
+    if (vault.note === here) return vault.written;
     const file = vaultFileOf(raw);
     if (file) return imageSrcForFile(file, here);
     if (vault.path.startsWith('/')) return raw;

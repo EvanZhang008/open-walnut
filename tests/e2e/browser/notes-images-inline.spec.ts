@@ -132,7 +132,7 @@ test('Backspace below a picture selects it before deleting it; a click selects a
 })
 
 
-test('a missing picture shows once its file is back; a copy pasted into another note names the file it drew', async ({ page }) => {
+test('a missing picture shows once its file is back; a cut pasted into another note names the file it drew', async ({ page }) => {
   const { root, note } = await seed()
   // `shared/map.png` is not beside the note: it draws the vault-root path.
   await api('PUT', `/api/notes-v2/content/${note}`, {
@@ -152,10 +152,12 @@ test('a missing picture shows once its file is back; a copy pasted into another 
   await expect.poll(() => editor.locator('img[alt="later"]').evaluate((i: HTMLImageElement) => !i.hidden && i.complete && i.naturalWidth > 0), { timeout: 10_000 }).toBe(true)
   await expect(editor.locator('.notes-image-missing:visible')).toHaveCount(0)
 
-  // Copy the root-drawn picture into a note in another folder.
+  // Cut the root-drawn picture and paste it into a note in another folder (a cut
+  // runs after ProseMirror deleted the selection: the file it drew must survive).
   await rooted.click()
   await expect(editor.locator('.notes-picture-selected img[alt="rooted"]')).toHaveCount(1)
-  await page.keyboard.press('ControlOrMeta+c')
+  await page.keyboard.press('ControlOrMeta+x')
+  await expect(rooted).toHaveCount(0)
   await page.locator(`[data-drop-folder="${root}"] .notes-tree-folder`, { hasText: 'Notes' }).click()
   await page.locator(`[data-drop-folder="${root}/Notes"] .notes-tree-file`, { hasText: 'Other' }).click()
   await expect(editor).toContainText('Other note')
