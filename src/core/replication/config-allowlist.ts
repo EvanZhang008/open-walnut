@@ -60,6 +60,8 @@ const ALLOW: Record<string, AllowSpec> = {
   session: {
     cron_policy: true, output_mode: true, acp_walnut_mcp: true, acp_walnut_tools: true, idle_timeout_minutes: true, max_idle: true,
     permission_prompt: true, auto_approve_bypass: true, enabled_modes: true, stream_partial_messages: true, premount_walnut_mcp: true,
+    // A replica's own sessions tag their model requests the way the Mac's do (6311af1f6).
+    tag_requests: true,
     turn_snapshots: { enabled: true, keep: true },
     turn_retry: { enabled: true, budget_hours: true, max_attempts: true, backoff_seconds: true, backoff_max_seconds: true },
   },
