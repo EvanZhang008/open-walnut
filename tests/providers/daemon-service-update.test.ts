@@ -56,14 +56,14 @@ function uploads(fault?: UploadFault) {
   return { chunk, slots, answer }
 }
 
-function lab(fault?: UploadFault | 'service' | 'transport', scope: 'user' | 'cron' = 'user') {
+function lab(fault?: UploadFault | 'service' | 'transport', scope: 'user' | 'cron' = 'user', extra = '') {
   const upload = uploads(fault === 'service' || fault === 'transport' ? undefined : fault)
   const calls: string[] = []
   const run = vi.fn(async (command: string, _timeoutMs?: number) => {
     calls.push(command)
     const answered = await upload.answer(command)
     if (answered !== null) return answered
-    expect(command).toBe(`${staged} walnut daemon update --yes --scope ${scope} --executable ${staged}`)
+    expect(command).toBe(`${staged} walnut daemon update --yes --scope ${scope} --executable ${staged}${extra}`)
     if (fault === 'transport') throw new Error('connection lost')
     return fault === 'service' ? JSON.stringify({ ok: false, failure: { message: 'busy', rollback: 'unchanged' } }) : '{"ok":true}'
   })
@@ -81,6 +81,12 @@ describe('managed daemon upload and update', () => {
     expect(l.calls[3]).toBe(RM)
     expect(l.calls.join('\n')).not.toMatch(/sudo|nohup|kill|enable/)
     expect(l.run.mock.calls[2][1]).toBe(600_000)
+  })
+
+  it('an overdue update asks the daemon to go over its own work (daemon-update-behind.ts)', async () => {
+    const l = lab(undefined, 'user', ' --over-busy')
+    await updateRemoteDaemonService({ binary }, version, l, 'user', { overBusy: true })
+    expect(l.calls[2]).toBe(`${staged} walnut daemon update --yes --scope user --executable ${staged} --over-busy`)
   })
 
   it('requests a cron service update for the cron scope', async () => {

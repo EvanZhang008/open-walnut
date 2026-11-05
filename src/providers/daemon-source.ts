@@ -4109,14 +4109,15 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.read': return cmdFsRead(ws, id, cmd);
     case 'fs.readImage': return cmdFsReadImage(ws, id, cmd);
     case 'fs.readBounded': return cmdFsReadBounded(ws, id, cmd);
-    case 'image.save': return cmdImageSave(ws, id, cmd);
-    case 'fs.write': return cmdFsWrite(ws, id, cmd);
-    case 'fs.mkdir': return cmdFsMkdir(ws, id, cmd);
+    // File writes are drained before a swap like session commands (twin of daemon-standalone.ts).
+    case 'image.save': return daemonCommands.run(function () { return cmdImageSave(ws, id, cmd); });
+    case 'fs.write': return daemonCommands.run(function () { return cmdFsWrite(ws, id, cmd); });
+    case 'fs.mkdir': return daemonCommands.run(function () { return cmdFsMkdir(ws, id, cmd); });
     // Mutation family ('fs-mutate-v1'). NOT in BRIDGE_ALLOWED_COMMANDS — see
     // the note there: a compromised cloud box must never move/delete host files.
-    case 'fs.rename': return cmdFsRename(ws, id, cmd);
-    case 'fs.rm': return cmdFsRm(ws, id, cmd);
-    case 'fs.copy': return cmdFsCopy(ws, id, cmd);
+    case 'fs.rename': return daemonCommands.run(function () { return cmdFsRename(ws, id, cmd); });
+    case 'fs.rm': return daemonCommands.run(function () { return cmdFsRm(ws, id, cmd); });
+    case 'fs.copy': return daemonCommands.run(function () { return cmdFsCopy(ws, id, cmd); });
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
@@ -4495,17 +4496,26 @@ async function cmdServiceHandover(ws, id, cmd) {
     || typeof cmd.stateDir !== 'string' || cmd.instanceId !== DAEMON_INSTANCE_ID) {
     return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation');
   }
-  if ((acp && acp.workers.size) || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some(function (pending) { return pending.size; })) {
+  // force: an overdue update goes over this daemon's own work (twin of daemon-standalone.ts).
+  const force = updating && cmd.force === true;
+  const relaying = [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some(function (pending) { return pending.size; });
+  const busyWith = [
+    acp && acp.workers.size ? acp.workers.size + ' ACP worker(s)' : '',
+    relaying ? 'relay requests' : '',
+    hostExec && hostExec.running() ? hostExec.running() + ' host_exec run(s)' : '',
+  ].filter(Boolean);
+  if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith: busyWith });
+  if (!force && ((acp && acp.workers.size) || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
-  if (hostExec && hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first');
+  if (!force && hostExec && hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first');
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform');
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
   // after a committed handover stops it (stopDaemon), its download kept for the next
   // Install, and a handover that fails leaves it running. A gcc install is waited for.
-  const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined);
+  const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined, { force: force });
   // Paused, the gateway turns calls away as stopping: the mark tells them to wait for the next daemon.
   noteRestarting();
   let recovery;
@@ -13594,7 +13604,7 @@ function daemonCapabilities() {
   if (triggerCheckCore && typeof triggerCheckCore.takeTriggerStateSnapshot === 'function') caps.push('trigger-state-snapshot-v1');
   // A routine run started here needs the start's checks and its task token from the sidecar.
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.validateClockStartSpec === 'function' && typeof triggerCheckCore.START_TASK_TOKEN === 'string') caps.push('clock-host-start-v1');
-  if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1');
+  if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1', 'service-update-force-v1');
   if (cronRuntimeCore && typeof cronRuntimeCore.prepareDaemonServiceHandover === 'function') caps.push('service-handover-v1');
   // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only
   // child_process, so this twin can always answer fs.grep. Stated explicitly

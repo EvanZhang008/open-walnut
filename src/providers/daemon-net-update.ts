@@ -30,6 +30,7 @@
  * `request`). WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off.
  */
 import { execRunsHold } from './exec-runs-hold.js'
+import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS, SERVICE_UPDATE_FORCE_CAP } from './daemon-update-behind.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -262,6 +263,7 @@ export class NetDaemonUpdater {
   private retryAt = 0
   private heldNoted: string | null = null
   private skipNoted: string | null = null
+  private overdueNoted: string | null = null
   /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
   private gapHeld: { expected: string; since: number } | null = null
   private stopped = false
@@ -370,12 +372,28 @@ export class NetDaemonUpdater {
     const first = decideNetUpdate(facts)
     if (first.go === false) return this.skipped(first, trigger)
     const expected = facts.expected!
+    // The bound on the whole update (daemon-update-behind.ts): behind this long, the writes in
+    // flight and the host_exec runs no longer hold it, and the daemon goes over its own work.
+    const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!c.daemonVersion && c.daemonVersion !== expected, (this.d.now ?? Date.now)())
+    if (behind.overdue && this.overdueNoted !== expected) {
+      this.overdueNoted = expected
+      log.session.warn('DaemonConnection: host network daemon update overdue; it goes ahead over the work that held it', {
+        host: c.host, running: c.daemonVersion, expected, behindMs: behind.behindMs,
+      })
+    }
+    const holds = async (): Promise<string | null> => {
+      if (!behind.overdue) return this.d.hold() ?? await this.hostBusy()
+      // Overdue: the writes in flight get a moment to end (as on the SSH path), then go over the rest.
+      const until = Date.now() + OVERDUE_GATE_WAIT_MS
+      while (this.d.hold() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 1_000))
+      return null
+    }
     const io = createNetUpdateIo(c, {
       ...this.d.io,
-      beforeLaunch: async () => (!c.connected ? 'the link dropped' : refused() ?? this.d.hold() ?? await this.hostBusy()),
+      beforeLaunch: async () => (!c.connected ? 'the link dropped' : refused() ?? await holds()),
       cancelled: () => this.stopped,
     })
-    const held = this.d.hold() ?? await this.hostBusy()
+    const held = await holds()
     if (held) return this.postpone(held)
     const scope = scopeFromStatus(await io.run(`${shq(facts.serviceExecutable!)} walnut daemon status 2>/dev/null || true`, 60_000))
     if (!('scope' in scope)) return this.skipped({ go: false, skip: 'unmanaged', why: scope.why }, trigger)
@@ -397,7 +415,7 @@ export class NetDaemonUpdater {
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
     try {
-      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope)
+      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, { overBusy: behind.overdue && c.hasCapability(SERVICE_UPDATE_FORCE_CAP) })
     } catch (err) {
       if (err instanceof NetUpdateHeldError) {
         // The upload was paid for: the next try waits a cooldown, it is not a failure.

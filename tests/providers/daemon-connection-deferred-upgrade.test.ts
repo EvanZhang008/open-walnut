@@ -25,7 +25,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const { managedUpdate } = vi.hoisted(() => ({ managedUpdate: vi.fn() }))
 vi.mock('../../src/providers/daemon-service-update.js', () => ({ updateRemoteDaemonService: managedUpdate }))
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import {
   DaemonConnection,
   daemonHandoverPending,
@@ -260,6 +263,80 @@ describe('the background update of a service-managed daemon', () => {
       expect(seen.filter((cmd) => cmd.includes('--stop') || cmd.includes('walnut-daemon-stop-confirmed'))).toEqual([])
       expect(state(c)._handoverUntil).toBe(0)
       expect(state(c).upgradeRecheckTimer).not.toBeNull()
+    }
+  })
+
+  it('a host behind past the bound: writes in flight, host_exec runs and a busy daemon no longer hold it, and the swap asks the daemon to go over its work', async () => {
+    // 2026-11-05: clouddev stayed on an old daemon for about 17.6 h, the reasons taking turns (daemon-update-behind.ts).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-overdue-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    const gate = { poll: DaemonConnection.OVERDUE_GATE_POLL_MS, wait: DaemonConnection.OVERDUE_GATE_WAIT_MS }
+    try {
+      DaemonConnection.OVERDUE_GATE_POLL_MS = 10
+      DaemonConnection.OVERDUE_GATE_WAIT_MS = 50
+      const c = make()
+      stub(c, { probe: MANAGED, version: OLD })
+      const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+      vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
+      vi.spyOn(c, 'send').mockImplementation((async (cmd: string) => (cmd === 'exec.list' ? { ok: true, jobs: [{ jobId: 'hx-forever', running: true }] } : { ok: true })) as never)
+      state(c)._capabilities = ['host-exec-v1', 'service-update-force-v1']
+      // A session write that never ends, in flight at every look.
+      ;(state(c).pendingCommands as Map<number, unknown>).set(99, { cmd: 'send', timer: setTimeout(() => {}, 0), resolve: () => {}, reject: () => {} })
+      let over: unknown = 'not asked'
+      managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean }) => {
+        over = opts?.overBusy
+        return (await opts?.onStaged?.()) === false ? 'held' : 'applied'
+      })
+
+      // Not yet overdue: held, nothing asked of the daemon.
+      live(c)
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).not.toHaveBeenCalled()
+
+      // Behind for the whole bound, checked all along (reasons taking turns do not restart it).
+      const now = Date.now()
+      for (let t = now - DAEMON_UPDATE_BEHIND_MAX_MS - 60_000; t < now; t += 30 * 60_000) daemonUpdateOverdue('devbox', OLD, true, t)
+      clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
+      state(c).upgradeRecheckTimer = null
+      live(c)
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(over).toBe(true)
+      expect(warn.mock.calls.map(([m]) => m)).toEqual(expect.arrayContaining([
+        'DaemonConnection: daemon update overdue; it goes ahead over the work that held it',
+        'DaemonConnection: overdue daemon update goes ahead over commands in flight',
+      ]))
+
+      // A daemon that can force but still refused (a session command it drains): asked again every minute.
+      const busyTry = async (caps: string[]) => {
+        managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { overBusy?: boolean }) => {
+          over = opts?.overBusy
+          throw new Error('Managed daemon update failed: Daemon has active operations; retry after they finish')
+        })
+        state(c)._capabilities = caps
+        state(c)._lastUpgradeAttempt = null
+        state(c)._busyRefusals = { expected: EXPECTED, n: 10 }
+        clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
+        state(c).upgradeRecheckTimer = null
+        live(c)
+        await priv(c).recheckPostponedUpgrade()
+        const postponed = warn.mock.calls.filter(([m]) => m === 'DaemonConnection: daemon update postponed; checking again').pop()
+        expect(String((postponed?.[1] as { reason?: string }).reason)).toContain("the host's daemon is busy")
+        return (postponed?.[1] as { retryInMs?: number }).retryInMs
+      }
+      expect(await busyTry(['host-exec-v1', 'service-update-force-v1'])).toBe(60_000)
+      expect(over).toBe(true)
+      // An older daemon cannot force: not asked to (the CLI would only wait longer), and it backs
+      // off as before, since every try uploads the file again.
+      expect(await busyTry(['host-exec-v1'])).toBeGreaterThan(60_000)
+      expect(over).toBe(false)
+    } finally {
+      DaemonConnection.OVERDUE_GATE_POLL_MS = gate.poll
+      DaemonConnection.OVERDUE_GATE_WAIT_MS = gate.wait
+      setAcpUpgradeHoldFileForTest(null)
+      fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 

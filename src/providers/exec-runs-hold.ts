@@ -29,11 +29,13 @@ export function execRunsReason(n: unknown): string | null {
 /**
  * A daemon's refusal of a handover or update before it changed anything: work of its own
  * (a host_exec run, a relay, a command) must finish first. The same words
- * daemon-service-cli.ts handoverBusy waits out; asked again, it is not a failure.
+ * daemon-service-cli.ts handoverBusy waits out; asked again, it is not a failure. Its drain
+ * that ran out (a session command still going after 15 s) is the same: it resumed and changed
+ * nothing, and taking it for a failed update left the update to the next reconnect.
  */
 export function daemonBusyRefusal(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error)
-  return /must finish first|has active operations; retry after they finish/.test(text)
+  return /must finish first|has active operations; retry after they finish|Service preparation timed out/.test(text)
 }
 
 /** How many jobs an exec.list reply names as running. */

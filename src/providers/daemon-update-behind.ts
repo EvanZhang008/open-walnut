@@ -1,0 +1,102 @@
+/**
+ * One bound for a daemon update, whatever holds it.
+ *
+ * 2026-11-05: clouddev's daemon ran an old build for about 17.6 hours, its update postponed
+ * 50 to 80 times an hour. Each hold had its own clock or none: host_exec runs (3 h) and open
+ * ACP turns (6 h) each restarted theirs whenever one check did not see them, and the server's
+ * in-flight commands, a connect in progress and the daemon's own refusal (a relay, an ACP
+ * worker, any request of any client still open: "Daemon has active operations") had no bound
+ * at all. A host whose sessions always run met one reason or another at every try.
+ *
+ * So the bound is on the update itself: since when the host has run a daemon other than the
+ * build this server would put there. A deploy while it waits does not restart it (the host is
+ * still behind), the reasons taking turns do not either; a check that finds the host on this
+ * build clears it. It is kept on disk beside the other hold clocks (acp-upgrade-hold.ts),
+ * because every deploy is a new server. Past DAEMON_UPDATE_BEHIND_MAX_MS the update is overdue:
+ * every hold in DAEMON_UPDATE_HOLDS gives way (logged), and the swap asks the daemon to go over
+ * its own work (daemon-over-busy.ts: `force` on service.update), which then ends
+ * the requests and host_exec runs still open, as a plain daemon restart always did. Live CLI
+ * sessions survive a swap either way.
+ */
+import { dropHoldClocks, upgradeHoldClock } from './acp-upgrade-hold.js'
+
+export const DAEMON_UPDATE_BEHIND_MAX_MS = 3 * 60 * 60_000
+
+/**
+ * A host behind is checked at least every 15 minutes while its server runs (the longest
+ * recheck delay, the update gap is 20 min); one not checked for this long (the server was
+ * down, the host offline) starts its clock over rather than being updated at once over work
+ * that just began.
+ */
+export const DAEMON_UPDATE_BEHIND_STALE_MS = 2 * 60 * 60_000
+
+/** How long an overdue update waits for the server's own in-flight writes before it goes over them. */
+export const OVERDUE_GATE_WAIT_MS = 30_000
+
+/**
+ * Whether `host`'s update is overdue: `running` is the build the host runs now ('' when unknown),
+ * `behind` whether that is another build than the one this server would put there. The clock is
+ * per running build: an update that landed (even on a build that is already old again, after a
+ * deploy) starts it over, so a daemon just replaced is never overdue.
+ * `behindMs`: how long it has been behind on this build (0 when it is not).
+ */
+export function daemonUpdateOverdue(host: string, running: string, behind: boolean, now: number = Date.now()): { overdue: boolean; behindMs: number } {
+  const key = `behind:${host}:${running}`
+  dropHoldClocks(`behind:${host}:`, key)
+  const { holds, heldMs } = upgradeHoldClock(key, behind, DAEMON_UPDATE_BEHIND_MAX_MS, now, DAEMON_UPDATE_BEHIND_STALE_MS)
+  return { overdue: behind && !holds, behindMs: heldMs }
+}
+
+/** The daemon capability that takes `force` on service.update (both twins advertise it). */
+export const SERVICE_UPDATE_FORCE_CAP = 'service-update-force-v1'
+
+export type DaemonUpdateHoldKind =
+  /** Work that holds the update: it gives way once the update is overdue. */
+  | 'hold'
+  /** A wait with its own bound (`bound`, a constant exported from `boundFile`). */
+  | 'bounded'
+  /** Nothing to wait for: a check or an upload that failed, asked again with a backoff. */
+  | 'retry'
+
+export interface DaemonUpdateHold {
+  file: string
+  /** The method the update is put off in. */
+  method: string
+  /** Text at the call or in the lines just above it (the reason it gives). */
+  near: string
+  kind: DaemonUpdateHoldKind
+  bound?: string
+  boundFile?: string
+  why: string
+}
+
+const DC = 'src/providers/daemon-connection.ts'
+const LD = 'src/providers/local-daemon.ts'
+const NU = 'src/providers/daemon-net-update.ts'
+
+/**
+ * Every place a daemon update is put off: each `postponeUpgrade(` of daemon-connection.ts, each
+ * `scheduleUpgradeRecheck()` of local-daemon.ts, each `this.postpone(` of daemon-net-update.ts.
+ * tests/providers/daemon-update-holds-ratchet.test.ts finds the calls and fails on one not
+ * listed, on a `hold` whose method never reads the overdue verdict, and on a `bounded` one
+ * whose constant is gone.
+ */
+export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
+  { file: DC, method: 'shouldUpgradeDaemon', near: 'could not check the OS-service state', kind: 'retry', why: 'no answer from the service probe; nothing is stopped without one' },
+  { file: DC, method: 'shouldUpgradeDaemon', near: 'daemonUpdateGapWhy(', kind: 'bounded', bound: 'DAEMON_UPDATE_MIN_GAP_MS', boundFile: 'src/providers/daemon-update-gap.ts', why: 'one replacement per gap, at most one gap in all; skipped when overdue' },
+  { file: DC, method: 'shouldUpgradeDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
+  { file: DC, method: 'shouldUpgradeDaemon', near: 'the version check did not finish', kind: 'retry', why: 'the version read failed' },
+  { file: DC, method: 'holdUpgradeForFoldPrewarm', near: 'fold checkpoints for the new daemon are being prepared', kind: 'bounded', bound: 'REMOTE_FOLD_PREWARM_MAX_MS', boundFile: 'src/providers/remote-fold-prewarm.ts', why: 'one prewarm per build; a failed or timed-out one lets the update go ahead' },
+  { file: DC, method: 'acpTurnsOpen', near: "'ACP turns are open'", kind: 'hold', why: 'a swap ends a running ACP turn' },
+  { file: DC, method: 'execRunsOpen', near: 'postponeUpgrade(why', kind: 'hold', why: 'host_exec runs end with the daemon' },
+  { file: DC, method: 'holdUpgrade', near: 'postponeUpgrade(hold', kind: 'hold', why: 'this server\'s commands that change a session or a file are in flight' },
+  { file: DC, method: 'runUpgradeRecheck', near: "'a connect was in progress'", kind: 'retry', why: 'the connect decides the update itself, with the same holds and the same clock' },
+  { file: DC, method: 'runUpgradeRecheck', near: 'the check failed', kind: 'retry', why: 'the decision threw' },
+  { file: DC, method: 'updateManagedDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
+  { file: DC, method: 'updateManagedDaemon', near: "the host's daemon is busy", kind: 'hold', why: 'the daemon refused before it changed anything; overdue, the swap asks it to go over its work' },
+  { file: LD, method: 'ensureRunningInner', near: "updatedPort === 'busy'", kind: 'hold', why: 'the managed local daemon refused as busy; overdue, the update asks it to go over its work' },
+  { file: LD, method: 'ensureRunningInner', near: 'ACP turns open', kind: 'hold', why: 'open ACP turns on this Mac' },
+  { file: LD, method: 'deferForExecRuns', near: 'host_exec runs', kind: 'hold', why: 'host_exec runs on this Mac' },
+  { file: NU, method: 'attempt', near: 'postpone(held)', kind: 'hold', why: 'writes in flight or host_exec runs on a host network machine' },
+  { file: NU, method: 'attempt', near: 'NetUpdateHeldError', kind: 'retry', why: 'held right before the launch, after the upload; overdue, only a dropped link or a refused grant gets here (holds() answers null)' },
+]

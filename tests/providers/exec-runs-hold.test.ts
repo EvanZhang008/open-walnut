@@ -72,6 +72,10 @@ describe('execRunsReason, execRunsHold', () => {
       expect(handoverBusy(new Error(text))).toBe(true)
     }
     expect(daemonBusyRefusal(new Error('Managed daemon update failed: the new daemon did not start'))).toBe(false)
+    // The daemon's drain that ran out resumed and changed nothing: asked again too (the CLI does not wait it out).
+    const drain = 'Service preparation timed out; existing work is still running, retry after it finishes'
+    expect(daemonBusyRefusal(new Error(`Managed daemon update failed: ${drain}`))).toBe(true)
+    expect(handoverBusy(new Error(drain))).toBe(false)
   })
 })
 

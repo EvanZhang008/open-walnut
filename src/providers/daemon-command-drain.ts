@@ -21,10 +21,14 @@ export function createDaemonCommandDrain() {
   return {
     get closed() { return closed || paused },
     get stopping() { return closed },
-    /** `except`: accepted work the pause need not wait for (the shutdown after it stops that work). */
-    pause(except?: unknown) {
+    /**
+     * `except`: accepted work the pause need not wait for (the shutdown after it stops that work).
+     * `force` (an overdue update): requests still open (a read, a scan, an MCP call) do not refuse
+     * it; the shutdown after it ends them. The commands that change a session are drained either way.
+     */
+    pause(except?: unknown, opts: { force?: boolean } = {}) {
       check()
-      if ([...admitted].some((work) => !pending.has(work))) throw new Error('Daemon has active operations; retry after they finish')
+      if (!opts.force && [...admitted].some((work) => !pending.has(work))) throw new Error('Daemon has active operations; retry after they finish')
       paused = true
       return {
         drained: Promise.allSettled([...pending].filter((work) => work !== except)).then(() => {}),

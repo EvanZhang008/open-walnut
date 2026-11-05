@@ -32,7 +32,7 @@ export const SERVES_FILE = 'daemon.serves.json'
  * Capabilities a daemon says or not by its host, never by its build: the service ones and
  * the ACP host engines. They are no reason to keep or to replace it.
  */
-const HOST_DEPENDENT = new Set(['service-handover-v1', 'cron-supervision-v1', 'service-update-v1', 'acp-host-v1'])
+const HOST_DEPENDENT = new Set(['service-handover-v1', 'cron-supervision-v1', 'service-update-v1', 'service-update-force-v1', 'acp-host-v1'])
 
 export type DaemonTwin = 'binary' | 'source'
 

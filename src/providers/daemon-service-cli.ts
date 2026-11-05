@@ -17,12 +17,15 @@ import { readDaemonBootExecutable } from './daemon-service-boot-script.js'
 import { moveDaemonState, unmanagedStateRoot } from './daemon-service-state-move.js'
 import { localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { RESTART_MARK_NAME } from './daemon-restart-mark.js'
+import { OVER_BUSY_FLAG, OVER_BUSY_PLAIN_MS, OVER_BUSY_WAIT_MS } from './daemon-over-busy.js'
 
 export interface DaemonServiceCliOptions {
   scope?: DaemonServiceScope
   yes?: boolean
   executable?: string
   sudo?: boolean
+  /** update: go over the daemon's own work (an overdue update, daemon-over-busy.ts). */
+  overBusy?: boolean
 }
 
 export function runDaemonServiceCommand(program: string, args: string[], input?: string): Promise<DaemonServiceCommandResult> {
@@ -152,13 +155,16 @@ export async function requestDaemonServiceHandover(
  */
 export async function requestDaemonServiceUpdate(
   runtimeDir: string, stateDir: string,
-  wait: { busyMs?: number; pauseMs?: number; note?: (text: string) => void } = {},
+  wait: { busyMs?: number; pauseMs?: number; note?: (text: string) => void; force?: boolean; plainMs?: number } = {},
 ): Promise<void> {
-  const deadline = Date.now() + (wait.busyMs ?? UPDATE_BUSY_WAIT_MS)
+  const started = Date.now()
+  const deadline = started + (wait.busyMs ?? UPDATE_BUSY_WAIT_MS)
   let noted = false
   for (;;) {
     try {
-      await requestRunningDaemonHandover(runtimeDir, stateDir, false, true)
+      // An overdue update forces only after asking plainly for a while (daemon-over-busy.ts).
+      const force = wait.force === true && Date.now() - started >= (wait.plainMs ?? OVER_BUSY_PLAIN_MS)
+      await requestRunningDaemonHandover(runtimeDir, stateDir, false, true, force)
       return
     } catch (error) {
       if (!(error instanceof DaemonServiceUpdateRefusedError) || !handoverBusy(error) || Date.now() >= deadline) throw error
@@ -171,7 +177,7 @@ export async function requestDaemonServiceUpdate(
   }
 }
 
-export async function requestRunningDaemonHandover(runtimeDir: string, stateDir: string, pending: boolean, updating = false): Promise<boolean> {
+export async function requestRunningDaemonHandover(runtimeDir: string, stateDir: string, pending: boolean, updating = false, force = false): Promise<boolean> {
   let connection: WebSocket | undefined
   let requested = false
   let refused = false
@@ -247,7 +253,8 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
       throw new Error('This daemon cannot hand over running sessions; update the unmanaged daemon before installing its service')
     }
     requested = true
-    const result = await rpc({ cmd: updating ? 'service.update' : 'service.handover', instanceId, stateDir }, 60_000)
+    // `force` (an update only): the daemon goes over its own requests and runs instead of refusing as busy.
+    const result = await rpc({ cmd: updating ? 'service.update' : 'service.handover', instanceId, stateDir, ...(updating && force ? { force: true } : {}) }, 60_000)
     if (result.ok !== true && !(updating && result.updateStarted === true)) {
       refused = true
       throw new Error(String(result.error ?? 'Daemon refused service handover'))
@@ -312,6 +319,7 @@ export async function runDaemonServiceArgs(args: string[]): Promise<number> {
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--yes') options.yes = true
     else if (args[i] === '--sudo') options.sudo = true
+    else if (args[i] === OVER_BUSY_FLAG) options.overBusy = true
     else if (args[i] === '--scope') {
       if (!args[i + 1]) throw new Error('--scope requires user, system or cron')
       options.scope = args[++i] as DaemonServiceScope
@@ -389,7 +397,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
         if (!(await runtimeDaemonAlive(runtimeDir))) await reportMoved(await moveDaemonState(unmanagedStateRoot(home), root), 'to the service')
         return handedOver
       },
-      prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root),
+      prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root, options.overBusy ? { busyMs: OVER_BUSY_WAIT_MS, force: true } : {}),
       prepareExecutable: async () => {
         if (!options.executable) throw new Error('No standalone daemon binary supplied; build the daemon before installing')
         return stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })

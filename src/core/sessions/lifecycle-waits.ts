@@ -92,6 +92,14 @@ export const LIFECYCLE_WAITS: readonly LifecycleWait[] = [
     restart: 'resumes (the same per-host clock in WALNUT_HOME/cache as the ACP wait)',
   },
   {
+    id: 'daemon-update-behind',
+    file: 'src/providers/daemon-update-behind.ts',
+    waitsFor: 'a daemon update held for any reason (DAEMON_UPDATE_HOLDS lists each), on one clock that the reasons taking turns do not restart',
+    limits: ['DAEMON_UPDATE_BEHIND_MAX_MS', 'DAEMON_UPDATE_BEHIND_STALE_MS', 'OVERDUE_GATE_WAIT_MS'],
+    atEnd: 'every hold gives way and the swap asks the daemon to go over its own work (requests, relays, ACP workers, host_exec runs)',
+    restart: 'resumes (the per-host clock in WALNUT_HOME/cache, beside the ACP and host_exec ones)',
+  },
+  {
     id: 'host-server-update-hold',
     file: 'src/core/host-server/update-hold.ts',
     waitsFor: 'a host server update while its host is busy',

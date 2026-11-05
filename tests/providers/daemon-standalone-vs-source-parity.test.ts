@@ -557,7 +557,8 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(allowBody).toContain("'image.save'")
       // Containment intact: no generic write escapes onto the bridge.
       expect(allowBody).not.toContain("'fs.write'")
-      expect(src).toMatch(/case 'image\.save': return cmdImageSave/)
+      // Through the drain like every file write: a swap waits for it (daemon-update-behind.ts).
+      expect(src).toMatch(/case 'image\.save': return daemonCommands\.run\((\(\) => |function \(\) \{ return )cmdImageSave/)
       expect(src).toMatch(/function cmdImageSave/)
     }
   })
@@ -1972,7 +1973,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // placeholder-seeded runtime list — daemonCapabilities() wraps
     // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
     expect(standaloneSrc).toMatch(/capabilities:\s*helloCapabilities\(\)/)
-    expect(standaloneSrc).toMatch(/return\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1'\]\s*:\s*\[\]\)/)
+    expect(standaloneSrc).toMatch(/return\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1',\s*'service-update-force-v1'\]\s*:\s*\[\]\)/)
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
     // getDaemonSource substitutes the ADVERTISED list into that placeholder,

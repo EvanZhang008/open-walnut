@@ -248,6 +248,27 @@ describe.each([
     expect(() => drain.admit(() => {})).toThrow('shutting down')
   })
 
+  it('a forced pause (an overdue update) goes over open requests but still drains the commands that change a session', async () => {
+    const drain = createDrain()
+    const scan = deferred()
+    drain.admit(() => scan.promise)
+    const send = deferred()
+    drain.admit(() => drain.run(() => send.promise))
+    expect(() => drain.pause()).toThrow('active operations')
+    const paused = drain.pause(undefined, { force: true })
+    expect(drain.closed).toBe(true)
+    let drained = false
+    const waiting = paused.drained.then(() => { drained = true })
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    send.resolve()
+    await waiting
+    // The open request was not waited for.
+    expect(drained).toBe(true)
+    paused.resume()
+    scan.resolve()
+  })
+
   it('a rejected command does not strand shutdown or change its rejection', async () => {
     const drain = createDrain()
     const write = deferred()

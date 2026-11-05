@@ -2577,7 +2577,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
 
 /** What this daemon's hello advertises: also what its serves file records. */
 function helloCapabilities(): string[] {
-  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : []), ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : [])]
+  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1', 'service-update-force-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : []), ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : [])]
 }
 
 /** This Walnut's per-Walnut pushes: an older server sends them naming no home. */
@@ -2611,14 +2611,15 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'fs.read': return cmdFsRead(ws, id as number, cmd)
     case 'fs.readImage': return cmdFsReadImage(ws, id as number, cmd)
     case 'fs.readBounded': return cmdFsReadBounded(ws, id as number, cmd)
-    case 'image.save': return cmdImageSave(ws, id as number, cmd)
-    case 'fs.write': return cmdFsWrite(ws, id as number, cmd)
-    case 'fs.mkdir': return cmdFsMkdir(ws, id as number, cmd)
+    // File writes are drained before a swap like session commands: a cut writeFile leaves a truncated file.
+    case 'image.save': return daemonCommands.run(() => cmdImageSave(ws, id as number, cmd))
+    case 'fs.write': return daemonCommands.run(() => cmdFsWrite(ws, id as number, cmd))
+    case 'fs.mkdir': return daemonCommands.run(() => cmdFsMkdir(ws, id as number, cmd))
     // Mutation family ('fs-mutate-v1'). NOT in BRIDGE_ALLOWED_COMMANDS — see
     // the note there: a compromised cloud box must never move/delete host files.
-    case 'fs.rename': return cmdFsRename(ws, id as number, cmd)
-    case 'fs.rm': return cmdFsRm(ws, id as number, cmd)
-    case 'fs.copy': return cmdFsCopy(ws, id as number, cmd)
+    case 'fs.rename': return daemonCommands.run(() => cmdFsRename(ws, id as number, cmd))
+    case 'fs.rm': return daemonCommands.run(() => cmdFsRm(ws, id as number, cmd))
+    case 'fs.copy': return daemonCommands.run(() => cmdFsCopy(ws, id as number, cmd))
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
@@ -2978,17 +2979,32 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   if (updating !== SERVICE_MODE || !requestDaemonShutdown || typeof cmd.stateDir !== 'string' || cmd.instanceId !== DAEMON_INSTANCE_ID) {
     return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation')
   }
-  if (acp.workers.size || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some((pending) => pending.size)) {
+  // force: an update overdue for hours (daemon-update-behind.ts) goes over this daemon's own
+  // work instead of refusing. The CLI sends it only after plain asks were refused for a minute
+  // (daemon-over-busy.ts), so a run about to end or a relay of a second has ended on its own.
+  // The shutdown answers the gateway's relays and waiting calls (they ask the next daemon) and
+  // ends the ACP workers, the host_exec runs and the requests still open, as a plain daemon
+  // restart does. Session commands and file writes are drained either way; live CLI sessions
+  // are handed over.
+  const force = updating && cmd.force === true
+  const relaying = [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some((pending) => pending.size)
+  const busyWith = [
+    acp.workers.size ? `${acp.workers.size} ACP worker(s)` : '',
+    relaying ? 'relay requests' : '',
+    hostExec.running() ? `${hostExec.running()} host_exec run(s)` : '',
+  ].filter(Boolean)
+  if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith })
+  if (!force && (acp.workers.size || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
-  if (hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first')
+  if (!force && hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first')
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform')
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
   // after a committed handover stops it (stopDaemon), its download kept for the next
   // Install, and a handover that fails leaves it running. A gcc install is waited for.
-  const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined)
+  const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined, { force })
   // Paused, the gateway turns calls away as stopping: the mark tells them to wait for the next daemon.
   noteRestarting()
   let recovery: ReturnType<NonNullable<typeof cronRuntime>['pause']> | undefined

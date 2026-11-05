@@ -15,6 +15,8 @@ import {
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
+import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import { permissionRisk } from '../../src/providers/host-exec-guards.js'
 import { log } from '../../src/logging/index.js'
 
@@ -333,6 +335,35 @@ describe('NetDaemonUpdater', () => {
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     expect(update).toHaveBeenCalledTimes(1)
     u.stop()
+  })
+
+  it('overdue (behind past the bound), host_exec runs no longer hold it and a daemon that can is asked to go over its work', async () => {
+    // 2026-11-05: the reasons took turns and a host stayed on an old daemon for hours (daemon-update-behind.ts).
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-overdue-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    try {
+      const now = Date.now()
+      for (let t = now - DAEMON_UPDATE_BEHIND_MAX_MS - 60_000; t < now; t += 30 * 60_000) daemonUpdateOverdue('studio-mac', OLD, true, t)
+      for (const [caps, overBusy] of [[[...ALL_CAPS, 'service-update-force-v1'], true], [[...ALL_CAPS], false]] as const) {
+        const base = link({ hasCapability: (c) => (caps as readonly string[]).includes(c) })
+        const conn = link({
+          hasCapability: base.hasCapability,
+          async send(cmd, params) {
+            if (cmd === 'exec.list') return { ok: true, jobs: [{ jobId: 'hx-forever', running: true }] }
+            return base.send(cmd, params)
+          },
+        })
+        const { u, update } = updater({}, conn)
+        u.schedule(0)
+        await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+        expect(update).toHaveBeenCalledTimes(1)
+        expect((update.mock.calls[0] as unknown[])[4]).toEqual({ overBusy })
+        u.stop()
+      }
+    } finally {
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('a hold that outlasted its wait before the detached start is a postponement by a cooldown, not a failure', async () => {

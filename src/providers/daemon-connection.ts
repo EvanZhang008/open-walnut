@@ -46,6 +46,7 @@ import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-se
 import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
+import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS, SERVICE_UPDATE_FORCE_CAP } from './daemon-update-behind.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
@@ -3701,6 +3702,7 @@ export class DaemonConnection {
     // expected and must not trigger a restart of the shared singleton.
     if (this.isReadOnlyRemote) return false
     this._sharedReplacing = false
+    this._overdueMs = 0
     let expected: string | null = null
     let remoteVersion = ''
     try {
@@ -3739,12 +3741,14 @@ export class DaemonConnection {
       // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
       // or each server would put its own build back on every connect (daemon-shared.ts).
       if (remoteVersion && remoteVersion !== expected && this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
+      // The bound on the whole update (daemon-update-behind.ts): behind this long, every hold below gives way.
+      this.noteOverdue(expected, remoteVersion, daemonUpdateOverdue(this.hostKey, remoteVersion, !!remoteVersion && remoteVersion !== expected))
       // One replacement per host per gap: the update is decided again when it ends,
       // with the build of then (daemon-update-gap.ts). A host with no daemon is a start.
       if (remoteVersion && remoteVersion !== expected) {
         const since = this._gapHeld?.expected === expected ? this._gapHeld.since : Date.now()
         const waitMs = daemonUpdateWaitMs(daemonAgeMs, daemonUpdateMinGapMs(), Date.now() - since)
-        if (waitMs > 0) {
+        if (waitMs > 0 && !this._overdueMs) {
           this._gapHeld = { expected, since }
           this.postponeUpgrade(daemonUpdateGapWhy(daemonAgeMs!, waitMs), expected, remoteVersion, { delayMs: waitMs + 5_000 })
           return false
@@ -3754,7 +3758,7 @@ export class DaemonConnection {
 
       if (takeover.managed) {
         if (remoteVersion !== expected) {
-          if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+          if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           if (updated === 'held') return false
@@ -3801,11 +3805,11 @@ export class DaemonConnection {
       if (await this.acpTurnsOpen(expected, remoteVersion)) return false
       // A host_exec run ends with the daemon: asked before the upload too, so a 2 h run is not paid an upload a minute.
       if (await this.execRunsOpen(expected, remoteVersion)) return false
-      if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+      if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
       // The new daemon's checkpoints first, while this one still serves; the
       // gate is asked again after it, right before the stop.
       if (await this.holdUpgradeForFoldPrewarm(expected, remoteVersion)) return false
-      if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+      if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
       // The new daemon goes onto the host first, while the old one still serves:
       // stopping first left the host with no daemon for the whole upload (minutes
       // for the walnut file on a slow link), and with none at all when it failed.
@@ -3824,7 +3828,7 @@ export class DaemonConnection {
         return false
       }
       // The upload may have taken minutes: work that started meanwhile still holds the stop.
-      if (await this.acpTurnsOpen(expected, remoteVersion) || await this.execRunsOpen(expected, remoteVersion) || this.holdUpgrade(gate, expected, remoteVersion)) {
+      if (await this.acpTurnsOpen(expected, remoteVersion) || await this.execRunsOpen(expected, remoteVersion) || await this.holdUpgrade(gate, expected, remoteVersion)) {
         this._staged = null
         return false
       }
@@ -3943,7 +3947,7 @@ export class DaemonConnection {
         && Array.isArray(busy.busySids) && busy.busySids.length > 0
       // The wait has an end: turns open this long get the upgrade anyway (acp-upgrade-hold.ts).
       const { holds, heldMs } = acpUpgradeHolds(this.hostKey, open)
-      if (open && !holds) {
+      if (open && (!holds || this._overdueMs)) {
         log.session.warn('DaemonConnection: daemon upgrade goes ahead over ACP turns open too long', {
           host: this.hostKey, expected, busySids: busy.busySids, heldMs,
         })
@@ -3965,6 +3969,8 @@ export class DaemonConnection {
   private async execRunsOpen(expected: string, remoteVersion: string): Promise<boolean> {
     const why = await execRunsHold(this, this.hostKey)
     if (!why) { this._execRunsNoted = null; return false }
+    // Overdue: the swap goes over them (daemon-update-behind.ts); noteOverdue said so.
+    if (this._overdueMs) return false
     // Asked again every minute while a run lasts (up to 2 h): said once per reason.
     if (this._execRunsNoted !== `${expected} ${why}`) {
       this._execRunsNoted = `${expected} ${why}`
@@ -3977,12 +3983,51 @@ export class DaemonConnection {
   }
   private _execRunsNoted: string | null = null
 
-  /** A re-check's gate said not now: drop the decision (stale) or ask again (busy). */
-  private holdUpgrade(gate: (() => UpgradeHold) | undefined, expected: string, remoteVersion: string): boolean {
-    const hold = gate?.() ?? null
+  /**
+   * A re-check's gate said not now: drop the decision (stale) or ask again (busy). An
+   * overdue update waits up to OVERDUE_GATE_WAIT_MS for the writes in flight (they end in
+   * seconds), then goes over the ones left.
+   */
+  private async holdUpgrade(gate: (() => UpgradeHold) | undefined, expected: string, remoteVersion: string): Promise<boolean> {
+    let hold = gate?.() ?? null
     if (hold === null) return false
+    if (hold !== UPGRADE_STALE && this._overdueMs) {
+      const until = Date.now() + DaemonConnection.OVERDUE_GATE_WAIT_MS
+      while (hold !== null && hold !== UPGRADE_STALE && Date.now() < until) {
+        await new Promise<void>((resolve) => setTimeout(resolve, DaemonConnection.OVERDUE_GATE_POLL_MS))
+        hold = gate?.() ?? null
+      }
+      if (hold === null) return false
+      if (hold !== UPGRADE_STALE) {
+        log.session.warn('DaemonConnection: overdue daemon update goes ahead over commands in flight', {
+          host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', hold, behindMs: this._overdueMs,
+        })
+        return false
+      }
+    }
     if (hold !== UPGRADE_STALE) this.postponeUpgrade(hold, expected, remoteVersion, { steady: true })
     return true
+  }
+
+  static OVERDUE_GATE_POLL_MS = 1_000
+  static OVERDUE_GATE_WAIT_MS = OVERDUE_GATE_WAIT_MS
+  /** How long the host has run another build, when that is past the bound (daemon-update-behind.ts); 0 otherwise. Set by each decision. */
+  private _overdueMs = 0
+  private _overdueNoted: string | null = null
+
+  /** Overdue, and the running daemon takes `force` on service.update. */
+  private forceable(): boolean {
+    return this._overdueMs > 0 && this.hasCapability(SERVICE_UPDATE_FORCE_CAP)
+  }
+
+  private noteOverdue(expected: string, remoteVersion: string, verdict: { overdue: boolean; behindMs: number }): void {
+    this._overdueMs = verdict.overdue ? Math.max(1, verdict.behindMs) : 0
+    if (!verdict.overdue) { this._overdueNoted = null; return }
+    if (this._overdueNoted === expected) return
+    this._overdueNoted = expected
+    log.session.warn('DaemonConnection: daemon update overdue; it goes ahead over the work that held it', {
+      host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', behindMs: verdict.behindMs,
+    })
   }
 
   /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
@@ -4242,9 +4287,12 @@ export class DaemonConnection {
         run: (command, timeout) => this.sshExec(command, timeout),
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
       }, scope, {
+        // Overdue (daemon-update-behind.ts): a daemon that can is asked to go over its own work;
+        // an older one would only make the CLI wait longer for the refusal it gives anyway.
+        overBusy: this.forceable(),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
-          if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+          if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           this._stageFail = null
           this._lastUpgradeAttempt = { expected, at: Date.now() }
@@ -4267,8 +4315,11 @@ export class DaemonConnection {
         // busy every time (an idle ACP worker lives up to 2 h) is asked less and less often.
         const n = this._busyRefusals?.expected === expected ? this._busyRefusals.n + 1 : 1
         this._busyRefusals = { expected, n }
+        // Overdue, a daemon that can go over its work did not (a session command it drains, a
+        // relay that outlived its grace): asked again in a minute. An older daemon backs off as
+        // before: each try uploads the file again.
         this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion,
-          n <= DaemonConnection.BUSY_STEADY_TRIES ? { steady: true } : { attempt: n - DaemonConnection.BUSY_STEADY_TRIES })
+          n <= DaemonConnection.BUSY_STEADY_TRIES || this.forceable() ? { steady: true } : { attempt: n - DaemonConnection.BUSY_STEADY_TRIES })
         return 'held'
       }
       // A double without the hook never asked: the attempt still counts against the cooldown.

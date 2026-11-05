@@ -31,6 +31,8 @@ import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { daemonBusyRefusal, execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
+import { daemonUpdateOverdue, SERVICE_UPDATE_FORCE_CAP } from './daemon-update-behind.js'
+import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
 import { DAEMON_BINARIES_DIR, WALNUT_HOME } from '../constants.js'
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
 import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
@@ -428,6 +430,22 @@ export class LocalDaemon {
     return true
   }
 
+  /** How long this Mac has run another daemon build, when that is past the bound (daemon-update-behind.ts); 0 otherwise. */
+  private _overdueMs = 0
+  private _overdueNoted: string | null = null
+  /** Overdue, and the running daemon takes `force` on service.update. */
+  private _forceable = false
+
+  private noteOverdue(running: string | undefined, expected: string | null | undefined, capabilities?: string[]): void {
+    const verdict = daemonUpdateOverdue('__local__', running ?? '', !!running && !!expected && running !== expected)
+    this._forceable = verdict.overdue && !!capabilities?.includes(SERVICE_UPDATE_FORCE_CAP)
+    this._overdueMs = verdict.overdue ? Math.max(1, verdict.behindMs) : 0
+    if (!verdict.overdue) { this._overdueNoted = null; return }
+    if (this._overdueNoted === expected) return
+    this._overdueNoted = expected ?? null
+    log.session.warn('local daemon update overdue; it goes ahead over the work that held it', { running, expected, behindMs: verdict.behindMs })
+  }
+
   /** A replace went through: when the daemon it replaced was shared, the breaker starts. */
   private noteDaemonReplaced(): void {
     if (this._sharedReplacing) this._sharedReplacedAt = Date.now()
@@ -471,6 +489,8 @@ export class LocalDaemon {
           this.auditOwnerOnAdopt(this._instanceId)
           return existingPort
         }
+        // The bound on the whole update (daemon-update-behind.ts): behind this long, every hold below gives way.
+        this.noteOverdue(helloResult.version, expectedVersion, helloResult.capabilities)
         if (helloResult.capabilities?.includes('cron-supervision-v1')) {
           if (expectedVersion && helloResult.version !== expectedVersion && this.deferForExecRuns(helloResult, existingPort, expectedVersion)) {
             return existingPort
@@ -479,6 +499,7 @@ export class LocalDaemon {
             const updatedPort = await this.updateManagedDaemon(binaryPath, expectedVersion)
             if (updatedPort === 'busy') {
               // Work of its own started after the hello (a host_exec run): the old daemon keeps serving.
+              // Overdue (this._overdueMs), the next try asks a daemon that can to go over that work.
               this.scheduleUpgradeRecheck()
             } else if (updatedPort !== null) {
               existingPort = updatedPort
@@ -511,10 +532,10 @@ export class LocalDaemon {
           const busySids = this.readAcpBusySids()
           // The wait has an end: turns open this long get the upgrade anyway (acp-upgrade-hold.ts).
           const acpHold = acpUpgradeHolds('__local__', busySids.length > 0)
-          if (busySids.length > 0 && !acpHold.holds) {
+          if (busySids.length > 0 && (!acpHold.holds || this._overdueMs)) {
             log.session.warn('local daemon upgrade goes ahead over ACP turns open too long', { busySids, heldMs: acpHold.heldMs })
           }
-          if (busySids.length > 0 && acpHold.holds) {
+          if (busySids.length > 0 && acpHold.holds && !this._overdueMs) {
             log.session.warn('local daemon version mismatch — upgrade DEFERRED (ACP turns open)', {
               running: helloResult.version,
               expected: expectedVersion,
@@ -607,6 +628,8 @@ export class LocalDaemon {
   private deferForExecRuns(hello: { version?: string; instanceId?: string; execRunning?: number }, port: number, expected: string): boolean {
     const why = execRunsWait('__local__', execRunsReason(hello.execRunning))
     if (!why) return false
+    // Overdue: the update goes over them (daemon-update-behind.ts).
+    if (this._overdueMs) return false
     log.session.warn('local daemon version mismatch — upgrade DEFERRED (host_exec runs)', { running: hello.version, expected, why })
     this._port = port
     this._wsUrl = `ws://localhost:${port}`
@@ -627,7 +650,8 @@ export class LocalDaemon {
     if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < 600_000) return null
     this._lastManagedUpdate = { expected, at: Date.now() }
     const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
-    const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath])
+    // Overdue (daemon-update-behind.ts): a daemon that can is asked to go over its own work.
+    const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath, ...(this._forceable ? [OVER_BUSY_FLAG] : [])])
     if (result.code !== 0 && daemonBusyRefusal(`${result.stdout}\n${result.stderr}`)) {
       // Refused before anything changed: asked again on the upgrade clock, not held off 10 minutes.
       this._lastManagedUpdate = null

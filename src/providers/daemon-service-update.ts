@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { createGzip } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import type { DaemonServiceScope } from './daemon-service-manager.js'
+import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
 
 export interface RemoteDaemonUpdateIo {
   run(command: string, timeoutMs?: number): Promise<string>
@@ -146,7 +147,7 @@ export class DaemonUpdateStageError extends Error {
  */
 export async function updateRemoteDaemonService(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user',
-  opts: { onStaged?: () => boolean | Promise<boolean> } = {},
+  opts: { onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean } = {},
 ): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
@@ -155,7 +156,8 @@ export async function updateRemoteDaemonService(
   })
   try {
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
-    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`
+    // An overdue update goes over the daemon's own work (daemon-update-behind.ts).
+    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}`
     const output = io.serviceUpdate
       ? await io.serviceUpdate({ command, directory, executable })
       : await io.run(command, 600_000).catch((error: unknown) => answerOfFailedRun(error))

@@ -80,9 +80,12 @@ export function acpUpgradeHolds(host: string, busy: boolean, now: number = Date.
 
 /**
  * The same clock for another reason an upgrade waits (`key`, e.g. `exec:<host>` for
- * host_exec runs, exec-runs-hold.ts), with its own limit.
+ * host_exec runs, exec-runs-hold.ts), with its own limit. `staleMs`: how long a clock
+ * not seen again still counts (a check repeated less often than every 15 minutes).
  */
-export function upgradeHoldClock(key: string, busy: boolean, maxMs: number, now: number = Date.now()): { holds: boolean; heldMs: number } {
+export function upgradeHoldClock(
+  key: string, busy: boolean, maxMs: number, now: number = Date.now(), staleMs: number = ACP_UPGRADE_HOLD_STALE_MS,
+): { holds: boolean; heldMs: number } {
   const s = load()
   if (!busy) {
     if (key in s) { delete s[key]; void persist() }
@@ -90,7 +93,7 @@ export function upgradeHoldClock(key: string, busy: boolean, maxMs: number, now:
   }
   const cur = s[key]
   const valid = !!cur && typeof cur === 'object' && Number.isFinite(cur.since) && Number.isFinite(cur.seen)
-    && cur.since <= now && now - cur.seen < ACP_UPGRADE_HOLD_STALE_MS
+    && cur.since <= now && now - cur.seen < staleMs
   if (!valid) {
     s[key] = { since: now, seen: now }
     void persist()
@@ -100,4 +103,12 @@ export function upgradeHoldClock(key: string, busy: boolean, maxMs: number, now:
   void persist()
   const heldMs = now - cur.since
   return { holds: heldMs < maxMs, heldMs }
+}
+
+/** Drop the clocks whose key starts with `prefix`, all but `keep` (a clock for a state that is over). */
+export function dropHoldClocks(prefix: string, keep: string): void {
+  const s = load()
+  let changed = false
+  for (const key of Object.keys(s)) if (key.startsWith(prefix) && key !== keep) { delete s[key]; changed = true }
+  if (changed) void persist()
 }
