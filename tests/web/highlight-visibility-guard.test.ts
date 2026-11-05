@@ -143,6 +143,8 @@ const SLOT = 'an empty slot or measuring box: it holds no painted words';
 const HEADER = 'a header or bar: no painter marks its words';
 /** Hides nothing a painter marks (thread marks, pins, comments, find), with why. */
 const NO_PAINTED_WORDS: Record<string, string> = {
+  // The jump-to-latest arrow, hidden while a passage's Comment box or Ask choice is open.
+  'web/src/styles/globals.css :: .quote-comment-open .scroll-to-bottom-btn': CONTROL,
   'web/src/utils/scrollbar-metrics.ts :: inline (1)': SLOT,
   'web/src/styles/plugin-updates.css :: .plugin-update-label::after': SLOT,
   'web/src/styles/plugin-updates.css :: .plugin-update-slot': SLOT,

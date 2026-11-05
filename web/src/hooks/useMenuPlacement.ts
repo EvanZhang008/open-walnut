@@ -75,7 +75,12 @@ export interface MenuPlacementOptions {
    * right-click-a-task-row path, which opens the menu at the cursor. Must be
    * referentially stable (keep it in state), since it is a dependency.
    */
-  anchorPoint?: { x: number; y: number } | null;
+  anchorPoint?: {
+    x: number;
+    y: number;
+    /** The anchor's bottom when it is a line rather than a point (default `y`). */
+    bottom?: number;
+  } | null;
   /**
    * Horizontal alignment relative to the anchor. Default 'right' (menu's right
    * edge at the anchor — matches kebab buttons at a row's right edge). 'left'
@@ -127,6 +132,19 @@ export interface MenuPlacementOptions {
    * (spec 4.4, C81). 'layout': the whole window (the desktop default).
    */
   bounds?: 'layout' | 'visual';
+  /**
+   * Fit inside this element's box instead of the window, vertically: a box that
+   * belongs to a scrolling timeline stays inside the timeline and never lies on
+   * the composer under it. With `bounds: 'visual'` it also stays above a phone
+   * keyboard. Falls back to `bounds` when the element is missing.
+   */
+  boundsRef?: RefObject<HTMLElement | null>;
+  /**
+   * Always open on this side: the caller has made room there itself (the passage
+   * Comment box opens in a gap it opened in the text), so flipping would only
+   * move the box onto the words it is about.
+   */
+  side?: 'up' | 'down';
 }
 
 /** The phone top bar's height and the keyboard's inset, from the CSS variables. */
@@ -276,7 +294,7 @@ export function useMenuPlacement(
 ): MenuPlacement | null {
   const {
     gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down',
-    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost,
+    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost, boundsRef, side,
   } = options;
   const bounds = options.bounds ?? (isPhoneLayout() ? 'visual' : 'layout');
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
@@ -313,7 +331,7 @@ export function useMenuPlacement(
           : null);
       // Vertical anchor: the element's own top/bottom, the trigger's left/right.
       const r = anchorPoint
-        ? { top: anchorPoint.y, bottom: anchorPoint.y, right: anchorPoint.x }
+        ? { top: anchorPoint.y, bottom: anchorPoint.bottom ?? anchorPoint.y, right: anchorPoint.x }
         : triggerRect && vertical && vertical.isConnected && vertical.offsetHeight > 0
           ? (() => { const v = vertical.getBoundingClientRect(); return { top: v.top, bottom: v.bottom, left: triggerRect.left, right: triggerRect.right }; })()
           : triggerRect;
@@ -364,23 +382,47 @@ export function useMenuPlacement(
       // pass adds that on top again — the cap then ratchets DOWN instead of
       // tracking the content (measured: a menu with 628px of content in 764px of
       // space stuck at 472px). Computed border widths depend on nothing we set.
-      const borderY = menu
+      //  · scrollHeight counts only what overflows BELOW the padding box. A child
+      //    centred (or end-aligned) in a flex menu that is taller than the cap
+      //    overflows above it too, and that part is neither counted nor reachable:
+      //    the measure came out about half the overflow short, so the menu stayed
+      //    squeezed into a scrolling strip with its first row cut off (2026-11-04,
+      //    the selection pill's Ask choice). Add only that unreachable part above:
+      //    a child's own box is no measure of content, a flex-grown body keeps the
+      //    height of the last cap and would never let the menu shrink again.
+      const [borderY, aboveY] = menu
         ? (() => {
             const cs = getComputedStyle(menu);
-            return (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+            const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+            const contentTop = menu.getBoundingClientRect().top + (parseFloat(cs.borderTopWidth) || 0)
+              + (parseFloat(cs.paddingTop) || 0) - (menu.scrollTop || 0);
+            let above = 0;
+            for (const child of Array.from(menu.children)) {
+              const c = child.getBoundingClientRect();
+              // A box with no layout to read (a stubbed or detached one) adds nothing.
+              if (c.height > 0 && Number.isFinite(contentTop - c.top)) above = Math.max(above, contentTop - c.top);
+            }
+            return [border, above];
           })()
-        : 0;
+        : [0, 0];
 
       const next = computePlacement({
         anchor: { top: r.top, bottom: r.bottom, right: r.right, ...('left' in r ? { left: r.left } : {}) },
-        naturalHeight: menu ? menu.scrollHeight + borderY : 0,
+        naturalHeight: menu ? menu.scrollHeight + aboveY + borderY : 0,
         menuWidth: menu ? menu.offsetWidth : 0,
         viewportWidth: window.innerWidth,
-        ...(bounds === 'visual'
-          ? (() => { const b = visualBounds(); return { viewportHeight: b.height, topInset: b.top }; })()
-          : { viewportHeight: window.innerHeight }),
+        ...(boundsRef?.current?.isConnected
+          ? (() => {
+              // The element's box, and on a phone also what the keyboard leaves.
+              const b = boundsRef.current!.getBoundingClientRect();
+              const v = bounds === 'visual' ? visualBounds() : { top: 0, height: window.innerHeight };
+              return { viewportHeight: Math.min(b.bottom, v.height), topInset: Math.max(0, b.top, v.top) };
+            })()
+          : bounds === 'visual'
+            ? (() => { const b = visualBounds(); return { viewportHeight: b.height, topInset: b.top }; })()
+            : { viewportHeight: window.innerHeight }),
         gap, margin, minHeight: bounds === 'visual' ? Math.min(minHeight, 132) : minHeight, align, preferSide, edgeOverflow,
-        forceSide: sideRef.current,
+        forceSide: side ?? sideRef.current,
       });
       // Latch on the first pass only — but not before the menu has been measured,
       // or we'd freeze a side chosen from naturalHeight 0 (which always "fits
@@ -476,7 +518,7 @@ export function useMenuPlacement(
       document.removeEventListener('transitionend', onScrollOrResize, true);
       if (bounds === 'visual') window.visualViewport?.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds, boundsRef, side]);
 
   return placement;
 }

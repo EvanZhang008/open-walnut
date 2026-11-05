@@ -1,7 +1,7 @@
 /* AnswerBox (components/common/AnswerBox.tsx): the composer's look for every answer in words. */
 .answer-box {
   display: flex; align-items: flex-end; gap: 4px; min-width: 0;
-  padding: 3px 4px 3px 10px; border: 1px solid var(--border); border-radius: 12px;
+  padding: 4px 4px 4px 10px; border: 1px solid var(--border); border-radius: 12px;
   background: var(--bg-secondary, var(--bg)); transition: border-color 0.12s;
 }
 .answer-box:focus-within { border-color: var(--accent); }
@@ -15,7 +15,16 @@
 .answer-box-input::placeholder { color: var(--fg-muted); }
 .answer-box-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .answer-box-tools .mic-btn { min-width: 28px; height: 28px; }
-.answer-box-send { border-radius: 9px; }
+/* An even 4px inset inside the box: the radius follows the box's (12 - 4). */
+.answer-box-send { border-radius: 8px; }
+/* Nothing to send yet: a neutral button with readable grey words, not a faded blue one. */
+.answer-box-send:disabled,
+.answer-box-send:disabled:hover {
+  background: var(--bg-tertiary, var(--bg-hover));
+  border-color: var(--border);
+  color: var(--fg-secondary);
+  cursor: default;
+}
 /* Pictures going with the words: the chat's thumbnails on their own row above the text. */
 .answer-box.has-pictures { flex-wrap: wrap; }
 .answer-box.is-drag-over { border-color: var(--accent); outline: 2px dashed var(--accent); outline-offset: -3px; }

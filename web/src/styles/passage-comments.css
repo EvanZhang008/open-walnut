@@ -64,7 +64,8 @@
 /* The pending list right above the composer: one row each, three in view. */
 .pending-comments {
   margin: 0 0 6px;
-  border: 1px solid rgba(240, 90, 20, 0.35);
+  /* Neutral: these are queued, not a warning. Orange stays on the marks in the text. */
+  border: 1px solid var(--border-strong);
   border-radius: 10px;
   background: var(--bg-secondary);
   color: var(--fg);
@@ -77,18 +78,24 @@
   padding: 5px 10px 3px;
   font-size: 12px;
 }
-.pending-comments-count { font-weight: 600; color: rgb(220, 85, 15); }
-[data-theme="dark"] .pending-comments-count { color: rgb(255, 150, 80); }
-.pending-comments-hint { color: var(--fg-muted); font-size: 11px; }
+.pending-comments-count { font-weight: 600; color: var(--fg); }
+.pending-comments-hint { color: var(--fg-secondary); font-size: 11px; }
 .pending-comments-list {
   list-style: none;
   margin: 0;
-  padding: 0 4px 4px;
+  /* The scrollbar keeps clear of the × column. */
+  padding: 0 8px 4px 4px;
   /* Three rows in view, scroll for the rest. */
   max-height: calc(3 * 34px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* More rows than three: the last one in view fades out, so the list reads as one that goes on. */
+.pending-comments-list[data-more] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+}
+.pending-comments-sep { flex: 0 0 auto; color: var(--fg-muted); font-size: 12px; }
 .pending-comments-row {
   display: flex;
   align-items: center;
@@ -140,18 +147,37 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* The quoted words' size, at full contrast: one weight per row. */
+  color: var(--fg);
+  font-size: 12px;
 }
-.pending-comments-text.is-quote { color: var(--fg-muted); font-style: italic; }
+/* What the row is (Quote or Comment): a small tag at its start, one width on every
+   row so the words after it start on one line. */
+.pending-comments-kind {
+  flex: 0 0 auto;
+  display: inline-block;
+  min-width: 62px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
 .pending-comments-remove {
   flex-shrink: 0;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   border: none;
   background: none;
-  border-radius: 6px;
-  color: var(--fg-muted);
+  border-radius: 7px;
+  color: var(--fg-secondary);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
 }
 .pending-comments-remove:hover { background: var(--bg-hover); color: var(--fg); }
+.pending-comments-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A plain quote has only its words to show: let them take the row. */
+.pending-comments-jump[data-kind="quote"] .pending-comments-where { flex: 1 1 auto; max-width: none; }

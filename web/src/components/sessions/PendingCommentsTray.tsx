@@ -16,32 +16,38 @@ interface Props {
   onRemove: (id: string) => void;
 }
 
+/** Rows in view before the list scrolls (the user's rule: three in view). */
+const IN_VIEW = 3;
+
 export function PendingCommentsTray({ pending, onJump, onRemove }: Props) {
   if (pending.length === 0) return null;
   return (
     <div className="pending-comments" data-testid="pending-comments" aria-label="Quotes and comments for your next message">
       <div className="pending-comments-head">
         <span className="pending-comments-count" data-testid="pending-comments-count">{countLabel(pending)}</span>
-        <span className="pending-comments-hint">Sent with your next message</span>
+        <span className="pending-comments-hint">
+          Sent with your next message{pending.length > IN_VIEW ? <><span aria-hidden="true"> · </span>scroll for all {pending.length}</> : null}
+        </span>
       </div>
-      <ul className="pending-comments-list">
+      <ul className="pending-comments-list" data-more={pending.length > IN_VIEW ? '' : undefined}>
         {pending.map((c) => (
           <li key={c.id} className="pending-comments-row" data-testid="pending-comment-row" data-comment-id={c.id}>
             <button
               type="button"
               className="pending-comments-jump"
+              data-kind={c.comment ? 'comment' : 'quote'}
               onClick={() => onJump(c.id)}
               title="Show where it was left"
             >
+              {/* Every row the same shape: what it is, the words it is on, then the comment. */}
+              <span className="pending-comments-kind">{c.comment ? 'Comment' : 'Quote'}</span>
               {c.doc && (
                 <span className="pending-comments-doc" title={c.doc.path}>
                   {c.doc.path.slice(c.doc.path.lastIndexOf('/') + 1)}{c.doc.reply ? ' · reply' : ''}
                 </span>
               )}
               <span className="pending-comments-where" title={c.text}>❝ {snippetOf(c.text, 60)}</span>
-              {c.comment
-                ? <span className="pending-comments-text" title={c.comment}>{snippetOf(c.comment, 120)}</span>
-                : <span className="pending-comments-text is-quote">Quote</span>}
+              {c.comment && <><span className="pending-comments-sep" aria-hidden="true">→</span><span className="pending-comments-text" title={c.comment}>{snippetOf(c.comment, 120)}</span></>}
             </button>
             <button
               type="button"

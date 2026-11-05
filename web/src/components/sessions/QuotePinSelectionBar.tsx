@@ -48,9 +48,10 @@
  * sends them as one message (2026-11-01, the user: "the comments pile up below, and
  * only when I send, they all go together").
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { GAP_ABOVE, useCommentGap } from './useCommentGap';
 import {
   canAnchorQuote, captureSelectionQuote, selectionBody, selectionInEditable, selectionVisibleIn,
   targetInEditable, type SelectionQuote,
@@ -65,13 +66,17 @@ import { draftHash, draftKey } from '@/utils/drafts';
 import { useDraft } from '@/hooks/useDraft';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
-import { fitsAsComment } from '@/utils/passage-comments';
+import { fitsAsComment, passageGist } from '@/utils/passage-comments';
 import { ICON_PIN } from './MessageActionIcons';
-import { rangePoint, sameBoundaries, useHeldPassage, type HeldPoint } from './useHeldPassage';
+import { passageExtent, rangePoint, sameBoundaries, sameHeldPoint, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
 import { ASK_MODE_HINT, ASK_MODE_LABEL, ASK_MODES, type AskMode } from '@/utils/ask-mode';
 
 /** A speech bubble with a question mark: Ask opens a question page. */
+/** The Comment box and the Ask choice: as wide as the message column, never narrower
+ *  than this (the field and Add need it; a short user bubble is about this wide). */
+const COMMENT_MIN_WIDTH = 280;
+
 const ICON_ASK = (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
@@ -179,7 +184,9 @@ function focusPoint(selection: Selection, range: Range): HeldPoint | null {
         const r = rects.length ? rects[backward ? 0 : rects.length - 1] : undefined;
         if (r && r.height) rect = new DOMRect(backward ? r.left : r.right, r.top, 0, r.height);
       }
-      if (rect && rect.height) return { x: Math.round(rect.left), y: Math.round(rect.top) };
+      if (rect && rect.height) {
+        return { x: Math.round(rect.left), y: Math.round(rect.top), lineBottom: Math.round(rect.top + rect.height), ...passageExtent(range) };
+      }
     } catch { /* offsets can lag a re-render by a frame; fall through */ }
   }
   return rangePoint(range, backward);
@@ -247,17 +254,45 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
    *  down and rebuilt per state change. */
   const stateRef = useRef<PillState | null>(null);
   stateRef.current = state;
-  // Referentially stable anchor: useMenuPlacement takes it as a dependency.
+  // The buttons hang just above where the gesture ended. The Comment box and the
+  // Ask choice open in a gap made for them in the text, under the block the passage
+  // ends in and lined up with the message column (comment-gap.ts), and stay inside
+  // the timeline: they cover no words, not the passage, not what follows it, never
+  // the composer (2026-11-04, the user: "bro this is still not fixed", the choice
+  // grew out of the button bar over the line above; then two reviewers of a choice
+  // dropped under the selection: it hid the rest of the paragraph, and at the
+  // bottom it lay on the composer). Memoized: useMenuPlacement takes the anchor as
+  // a dependency and re-places on a new one.
+  const anchor = state?.anchor ?? null;
+  const inGap = commentOpen || askPick;
+  // Both are as wide as the column, never narrower than the field and its button
+  // need: a short user message's bubble or a fifth panel is narrower than that, and
+  // then the box lines up with the column's right edge (where a user bubble sits)
+  // and stays inside the timeline. One form for both: no frame of their own, an
+  // "On ..." line, then the field or the two ways (2026-11-05, two reviewers: a
+  // framed 320px card beside a frameless full-width box read as two systems).
+  const gapBox = useMemo(() => {
+    if (!anchor || !inGap || anchor.blockBottom === undefined || anchor.columnLeft === undefined) return null;
+    const column = anchor.columnWidth ?? COMMENT_MIN_WIDTH;
+    const room = containerRef.current?.getBoundingClientRect();
+    const width = Math.round(Math.min(room ? room.width - 24 : Infinity, Math.max(column, COMMENT_MIN_WIDTH)));
+    const x = width <= column ? anchor.columnLeft : Math.max(anchor.columnLeft + column - width, room ? room.left + 12 : 0);
+    return { width, anchor: { x, y: anchor.blockBottom, bottom: anchor.blockBottom } };
+  }, [anchor, inGap, containerRef]);
   const placement = useMenuPlacement(!!state, noTrigger, pillRef, {
-    anchorPoint: state?.anchor ?? null,
-    align: 'center',
+    anchorPoint: gapBox?.anchor ?? anchor,
+    align: gapBox ? 'start' : 'center',
     preferSide: 'up',
-    gap: 8,
-    minHeight: 28,
+    ...(gapBox ? { side: 'down' as const, boundsRef: containerRef, bounds: 'visual' as const } : {}),
+    gap: GAP_ABOVE,
+    // A box in the gap is never squeezed into a scrolling sliver: when its gap is
+    // scrolled out of the timeline it slides to stay whole inside it.
+    minHeight: gapBox ? (commentOpen ? 160 : 96) : 28,
   });
+  const boxWidth = gapBox?.width;
 
   const reanchor = useCallback((point: HeldPoint) => {
-    setState((prev) => (prev && (prev.anchor.x !== point.x || prev.anchor.y !== point.y)
+    setState((prev) => (prev && !sameHeldPoint(prev.anchor, point)
       ? { ...prev, anchor: point }
       : prev));
   }, []);
@@ -269,6 +304,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     setState(null);
   }, []);
   const held = useHeldPassage({ containerRef, captureRef: stateRef, reanchor, onLost: pillDown });
+  useCommentGap(inGap && !!state, held, pillRef, containerRef);
 
   /** Pill down, and with it any held passage and its paint. The ONE exit. */
   const dismiss = useCallback(() => {
@@ -329,7 +365,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     const live = readLiveSelection(container, selection);
     if (!live) { setState(null); setCommentOpen(false); return; }
     setState((prev) => {
-      const sameAnchor = !!prev && prev.anchor.x === live.anchor.x && prev.anchor.y === live.anchor.y;
+      const sameAnchor = !!prev && sameHeldPoint(prev.anchor, live.anchor);
       if (prev && sameAnchor && prev.msgId === live.captured.msgId && sameQuote(prev.quote, live.captured.quote)) return prev;
       return {
         ...live.captured,
@@ -603,11 +639,21 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
   const canPin = !!state.msgId;
   const canAsk = !!onAsk && canAnchorQuote(state);
 
+  // What the box or the choice is about, in one quiet line: its start and its end, so
+  // the reader can tell where it stops (the list above the composer shows it the same
+  // way once it is added).
+  const onLine = inGap ? (
+    <div className="quote-pin-comment-on" data-testid="quote-comment-on" title={state?.text}>
+      On <span>“{passageGist(state?.text ?? '')}”</span>
+    </div>
+  ) : null;
+
   return createPortal(
     <div
       ref={pillRef}
       className="quote-pin-pill"
-      style={menuPlacementStyle(placement)}
+      style={{ ...menuPlacementStyle(placement), ...(boxWidth ? { width: boxWidth } : {}) }}
+      data-comment-open={commentOpen ? 'true' : undefined}
       data-testid="quote-pin-pill"
       onPointerDown={(e) => e.stopPropagation()}
       // The container's own mouseup handler recomputes the collapsing selection
@@ -615,7 +661,21 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       onMouseUp={(e) => e.stopPropagation()}
     >
       {askPick && canAsk ? (
-        <div className="quote-ask-modes" role="group" aria-label="Ask about this passage" data-testid="quote-ask-modes">
+        <div
+          className="quote-ask-modes"
+          role="group"
+          aria-label="Ask about this passage"
+          data-testid="quote-ask-modes"
+          // Up and Down move between the two ways, as in any menu.
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            const rows = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('.quote-ask-mode'));
+            const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+            const next = rows[(at + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length];
+            if (next) { e.preventDefault(); next.focus(); }
+          }}
+        >
+          {onLine}
           {ASK_MODES.map((m) => (
             <button
               key={m}
@@ -631,9 +691,12 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
               <span className="quote-ask-mode-hint">{ASK_MODE_HINT[m]}</span>
             </button>
           ))}
+          {/* The way back, said where the choice is (the Comment box says its keys too). */}
+          <div className="quote-ask-back" aria-hidden="true">↵ asks<span> · </span>↑↓ move<span> · </span>Esc goes back</div>
         </div>
       ) : commentOpen ? (
         <div className="quote-pin-comment" data-testid="quote-comment-box">
+          {onLine}
           <AnswerBox
             value={commentDraft.text}
             onChange={commentDraft.setText}
@@ -644,19 +707,23 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
             draftKey={commentDraft.key}
             autoFocus
             minRows={2}
-            placeholder="Comment on this passage"
+            placeholder="Add a comment"
             ariaLabel="Comment on this passage"
           />
-          <div className="quote-pin-comment-actions">
-            <span className="quote-pin-comment-hint">Sent with your next message, not now</span>
+          <div className="quote-pin-comment-foot">
+            {/* The same promise as a doc comment's card (DocCommentCard), and what Esc does. */}
+            <div className="quote-pin-comment-hint">
+              Sent with your next message<span className="quote-pin-comment-keys"><span aria-hidden="true"> · </span>Esc keeps a draft</span>
+            </div>
+            {/* Discard throws the words away; an Esc keeps them as the passage's draft. */}
             <button
               type="button"
-              className="quote-pin-pill-btn"
+              className="quote-pin-comment-cancel"
               onMouseDown={(e) => e.preventDefault()}
-              // Cancel throws the words away; an Esc keeps them as the passage's draft.
+              title="Throw this comment away"
               onClick={() => { commentDraft.clear(commentDraft.key); dismiss(); }}
             >
-              Cancel
+              Discard
             </button>
           </div>
         </div>

@@ -184,3 +184,5 @@
    they selected, unchanged. */
 ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.30); }
 [data-theme="dark"] ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.38); }
+/* On a user message's blue bubble the blue paint vanishes: white, like its selection. */
+.session-msg-user ::highlight(walnut-held-quote) { background-color: rgba(0, 0, 0, 0.28); }

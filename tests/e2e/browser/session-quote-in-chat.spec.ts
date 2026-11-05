@@ -53,7 +53,7 @@ async function expectQuoteRow(panel: Locator, phrase: string): Promise<void> {
   const rows = panel.getByTestId('pending-comment-row')
   await expect(rows).toHaveCount(1)
   await expect(rows.first().locator('.pending-comments-where')).toHaveAttribute('title', phrase)
-  await expect(rows.first().locator('.pending-comments-text')).toHaveText('Quote')
+  await expect(rows.first().locator('.pending-comments-kind')).toHaveText('Quote')
   await rows.first().getByTestId('pending-comment-remove').click()
   await expect(rows).toHaveCount(0)
 }

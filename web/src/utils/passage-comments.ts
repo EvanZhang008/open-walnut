@@ -123,6 +123,16 @@ export function fitsAsComment(text: string, comment: string, list: readonly Sess
 }
 
 /** One line of a passage for a row: whitespace folded, cut at `max` with an ellipsis. */
+/** A passage in one line: whole when it fits, else its start and its end around an
+ *  ellipsis, so the reader sees where it begins and where it stops. */
+export function passageGist(text: string, max = 90): string {
+  const one = text.replace(/\s+/g, ' ').trim();
+  if (one.length <= max) return one;
+  const head = one.slice(0, Math.round(max * 0.55)).replace(/\s+\S*$/, '');
+  const tail = one.slice(one.length - Math.round(max * 0.35)).replace(/^\S*\s+/, '');
+  return `${head} \u2026 ${tail}`;
+}
+
 export function snippetOf(text: string, max = 80): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
@@ -135,5 +145,8 @@ export function countLabel(pending: readonly SessionPassageComment[]): string {
   const part = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (!quotes) return part(comments, 'comment');
   if (!comments) return part(quotes, 'quote');
-  return `${part(comments, 'comment')}, ${part(quotes, 'quote')}`;
+  // In the order the rows start with, so the head reads like the list under it.
+  return pending[0]!.comment.trim()
+    ? `${part(comments, 'comment')}, ${part(quotes, 'quote')}`
+    : `${part(quotes, 'quote')}, ${part(comments, 'comment')}`;
 }

@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { setHeldQuoteRange } from '@/utils/pin-highlights';
 import { bodyForMsgId, rangeVisibleIn } from '@/utils/selection-quote';
 import { rangeForQuote, rangeIsLive, type TextQuote } from '@/utils/text-quote-anchor';
+import { messageColumnOf, passageEndBlock } from './comment-gap';
 
 /** Floor between two mutation-driven repairs — the pins' paint uses the same figure. */
 const REPAIR_MIN_GAP_MS = 250;
@@ -45,7 +46,51 @@ export interface HeldPassage {
   backward: boolean;
 }
 
-export interface HeldPoint { x: number; y: number }
+/**
+ * Where a pill hangs: the caret point the gesture ended at (`x`, `y` = that line's
+ * top), plus the bottom of that line and the passage's whole vertical extent, so
+ * a box opened from the pill can sit clear of the words it is about.
+ */
+export interface HeldPoint {
+  x: number;
+  y: number;
+  /** Bottom of the line the gesture ended on. */
+  lineBottom?: number;
+  /** Top and bottom of the whole passage, in viewport coordinates. */
+  passageTop?: number;
+  passageBottom?: number;
+  /** Bottom of the block the passage ends in (comment-gap.ts passageEndBlock). */
+  blockBottom?: number;
+  /** Left edge and width of the message body the passage is in. */
+  columnLeft?: number;
+  columnWidth?: number;
+}
+
+/** Same point, same line, same passage extent. */
+export function sameHeldPoint(a: HeldPoint, b: HeldPoint): boolean {
+  return a.x === b.x && a.y === b.y && a.lineBottom === b.lineBottom
+    && a.passageTop === b.passageTop && a.passageBottom === b.passageBottom
+    && a.blockBottom === b.blockBottom && a.columnLeft === b.columnLeft && a.columnWidth === b.columnWidth;
+}
+
+/** The passage's vertical extent, the block it ends in and its column, rounded;
+ *  nothing for a range with no box. */
+export function passageExtent(range: Range): Pick<HeldPoint, 'passageTop' | 'passageBottom' | 'blockBottom' | 'columnLeft' | 'columnWidth'> {
+  const r = range.getBoundingClientRect();
+  if (!r || (!r.width && !r.height)) return {};
+  const out: ReturnType<typeof passageExtent> = { passageTop: Math.round(r.top), passageBottom: Math.round(r.bottom) };
+  const block = passageEndBlock(range);
+  // The box lines up with the message: a user message's bubble, else its body.
+  const body = messageColumnOf(range.endContainer);
+  const column = body?.closest<HTMLElement>('.session-msg-user') ?? body;
+  if (block) out.blockBottom = Math.round(Math.max(block.getBoundingClientRect().bottom, r.bottom));
+  if (column) {
+    const c = column.getBoundingClientRect();
+    out.columnLeft = Math.round(c.left);
+    out.columnWidth = Math.round(c.width);
+  }
+  return out;
+}
 
 /** The end of a Range the gesture finished at. */
 export function rangePoint(range: Range, backward: boolean): HeldPoint | null {
@@ -53,10 +98,10 @@ export function rangePoint(range: Range, backward: boolean): HeldPoint | null {
   if (!rects.length) {
     const r = range.getBoundingClientRect();
     if (!r || (!r.width && !r.height)) return null;
-    return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
+    return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top), lineBottom: Math.round(r.bottom), ...passageExtent(range) };
   }
   const r = rects[backward ? 0 : rects.length - 1]!;
-  return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top) };
+  return { x: Math.round(backward ? r.left : r.right), y: Math.round(r.top), lineBottom: Math.round(r.bottom), ...passageExtent(range) };
 }
 
 /** Same four boundary points — the same selection, not a new one. */

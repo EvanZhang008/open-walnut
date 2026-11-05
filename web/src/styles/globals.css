@@ -296,6 +296,18 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+/* focus-ring-owners: a box that draws the focus ring itself (its :focus-within)
+   owns focus, so the field inside draws none. Without this the rule above adds a
+   second ring inside the box's own (measured on the comment box: a blue border
+   around a 3px blue glow). Every box with such a ring is listed here;
+   tests/web/focus-ring-owner-guard.test.ts fails when one is added without it. */
+:is(.answer-box, .search-bar, .chat-input-box, .pw-search, .routine-instructions-box,
+  .todo-search-bar, .thread-drawer-search, .apps-search, .tp-rules, .ask-walnut-drawer-search,
+  .mail-compose-field)
+  :is(input, textarea, select):focus {
+  box-shadow: none;
+}
+
 /* A textarea wraps its text, so it never scrolls sideways. Under page zoom
    (Cmd + / Cmd -) the UA default `overflow: auto` still showed a horizontal
    bar: WebKit lays an EMPTY box's placeholder out at the box width times the
@@ -32115,6 +32127,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   align-items: center;
   gap: 2px;
   padding: 3px;
+  /* The placement caps the height (useMenuPlacement's contract): content past it
+     scrolls inside the box, never spills out of it. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -32136,11 +32152,17 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   white-space: nowrap;
 }
 .quote-pin-pill-btn:hover { background: var(--bg-hover); }
+/* Inside the box: the box scrolls (overflow), so a ring drawn outside a row at its edge would be cut. */
+.quote-pin-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .quote-pin-pill-btn:disabled { opacity: 0.45; cursor: default; background: none; }
 /* Ask here's caret sits flush against it: one control, two parts. */
 .quote-pin-pill-btn.quote-ask-mode-btn { padding: 4px 5px; margin-left: -3px; color: var(--fg-muted); }
 /* The choice: inline or in Tree, each with what it does under its name. */
-.quote-ask-modes { display: flex; flex-direction: column; gap: 2px; padding: 1px; }
+/* A centred flex item taller than its box overflows above AND below, and
+   scrollHeight counts only the part below: the placement then measured the Ask
+   choice at about half its real height and squeezed it into a scrolling strip. */
+.quote-pin-pill:has(> .quote-ask-modes) { align-items: stretch; }
+.quote-ask-modes { display: flex; flex-direction: column; gap: 2px; padding: 1px; width: 100%; max-width: 560px; }
 .quote-pin-pill-btn.quote-ask-mode {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -32149,33 +32171,101 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding: 6px 9px;
   text-align: left;
 }
-.quote-ask-mode > svg { grid-row: span 2; align-self: center; }
-.quote-ask-mode-hint { color: var(--fg-muted); font-size: 11px; }
-.quote-ask-mode.is-current { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+/* One icon size for both rows, on the name's line. */
+.quote-ask-mode > svg { grid-row: span 2; align-self: start; width: 16px; height: 16px; margin-top: 1px; }
+.quote-ask-mode > span:first-of-type { color: var(--fg); font-weight: 500; }
+.quote-ask-mode-hint { color: var(--fg-secondary); font-size: 11.5px; }
+/* One signal for what Enter asks: the lit row (under the pointer, else the one the
+   keyboard is on, the default way when the choice opens) is filled and names itself in
+   the accent; the other row stays neutral. */
+.quote-ask-modes > .quote-pin-comment-on { margin-bottom: 2px; padding-left: 9px; }
+.quote-pin-pill-btn.quote-ask-mode { border-radius: 8px; }
+.quote-ask-back { padding: 4px 9px 0; color: var(--fg-muted); font-size: 11px; }
+/* One row lit at a time: the one under the pointer, else the one the keyboard is on,
+   else (focus not in the choice yet) the default way. */
+.quote-pin-pill-btn.quote-ask-mode:focus,
+.quote-pin-pill-btn.quote-ask-mode:hover,
+.quote-ask-modes:not(:focus-within) .quote-pin-pill-btn.quote-ask-mode.is-current { background: var(--bg-hover); }
+.quote-ask-modes:hover .quote-pin-pill-btn.quote-ask-mode:focus:not(:hover) { background: none; }
+.quote-pin-pill-btn.quote-ask-mode:focus > span:first-of-type,
+.quote-pin-pill-btn.quote-ask-mode:hover > span:first-of-type,
+.quote-ask-modes:not(:focus-within) .quote-ask-mode.is-current > span:first-of-type { color: var(--accent); }
+.quote-ask-modes:hover .quote-pin-pill-btn.quote-ask-mode:focus:not(:hover) > span:first-of-type { color: var(--fg); }
+/* In the room the text made for it the choice is part of the page, not a popover:
+   no frame of its own, like the Comment box; its rows fill the width. */
+.quote-pin-pill:has(> .quote-ask-modes) {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
 
-/* The pill's Comment box: the note that goes under the quote in the composer. */
+/* The pill's Comment box: the note that goes under the quote in the composer. It
+   opens in a gap the text makes for it under the passage (useCommentGap), as wide
+   as the message column up to 520px (set inline), so it covers no words. */
+/* The Comment box sits in a gap the text made for it, in the flow of the
+   conversation, so it needs no floating card: the field's own border is its one
+   frame, the hint and Discard sit under it. */
+.quote-pin-pill[data-comment-open="true"] {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
 .quote-pin-comment {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  width: min(340px, 80vw);
-  padding: 2px;
+  gap: 6px;
+  width: 100%;
+  /* The hint drops its second half in a narrow box (a short user bubble). */
+  container-type: inline-size;
 }
-.quote-pin-comment-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.quote-pin-comment-hint {
-  flex: 1;
-  min-width: 0;
-  padding: 0 4px;
-  color: var(--fg-muted);
-  font-size: 11px;
+/* What the comment is on: one quiet line over the field. Its overflow cuts the line,
+   so it must not shrink: a clipped box in a short flex column would drop to 0px. */
+.quote-pin-comment-on {
+  flex-shrink: 0;
   overflow: hidden;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.quote-pin-comment-on > span { color: var(--fg); }
+@container (max-width: 379px) { .quote-pin-comment-keys { display: none; } }
+/* Under the field: what happens to the comment, then Discard, quieter than Add. */
+.quote-pin-comment-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.quote-pin-comment-cancel {
+  flex-shrink: 0;
+  height: 24px;
+  /* A small ghost button: a frame that reads as clickable, its edge on the field's
+     right edge as the hint starts on its left. */
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: none;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.quote-pin-comment-cancel:hover { color: var(--fg); background: var(--bg-hover); }
+.quote-pin-comment-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.quote-pin-comment-hint {
+  min-width: 0;
+  padding: 0;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+/* The jump-to-latest arrow would sit on the passage's last line while the box is open. */
+.quote-comment-open .scroll-to-bottom-btn { visibility: hidden; }
 
 .quote-pin-popover { max-width: min(360px, 70vw); }
 

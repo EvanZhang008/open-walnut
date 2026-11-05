@@ -306,3 +306,26 @@ describe('computePlacement: idempotence (ResizeObserver re-measure must not ratc
     expect(h).toBeGreaterThan(MIN_HEIGHT);
   });
 });
+
+describe('computePlacement: a box inside a timeline (the passage Comment box, 2026-11-04)', () => {
+  // The box opens in a gap under its passage and must stay inside the timeline:
+  // the timeline's box is the viewport (top inset = its top, height = its bottom).
+  const timeline = { topInset: 60, viewportHeight: 780 };
+
+  it('sits right under its block when the gap is in view', () => {
+    const { out } = place({ anchor: { top: 400, bottom: 420, right: 300 }, naturalHeight: 90, forceSide: 'down', minHeight: 28, ...timeline });
+    expect(out.top).toBe(420 + GAP);
+  });
+
+  it('never runs past the timeline bottom onto the composer, even forced down, and is never squeezed', () => {
+    // minHeight at least the box's height: it slides up to stay whole instead of shrinking to a sliver.
+    const { out } = place({ anchor: { top: 740, bottom: 760, right: 300 }, naturalHeight: 90, forceSide: 'down', minHeight: 160, ...timeline });
+    expect(out.maxHeight).toBeGreaterThanOrEqual(90);
+    expect(out.top + 90).toBeLessThanOrEqual(timeline.viewportHeight - MARGIN);
+  });
+
+  it('never rises above the timeline top', () => {
+    const { out } = place({ anchor: { top: 20, bottom: 30, right: 300 }, naturalHeight: 90, forceSide: 'up', minHeight: 28, ...timeline });
+    expect(out.top).toBeGreaterThanOrEqual(timeline.topInset + MARGIN);
+  });
+});

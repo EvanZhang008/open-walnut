@@ -154,6 +154,8 @@ describe('labels', () => {
     expect(countLabel([item('a', 'x', 'y'), item('b', 'x', 'z')])).toBe('2 comments');
     expect(countLabel([item('a', 'x')])).toBe('1 quote');
     expect(countLabel([item('a', 'x', 'y'), item('b', 'x'), item('c', 'x')])).toBe('1 comment, 2 quotes');
+    // In the order the list starts with.
+    expect(countLabel([item('b', 'x'), item('a', 'x', 'y'), item('c', 'x')])).toBe('2 quotes, 1 comment');
   });
 
   it('folds a passage to one line and cuts it with an ellipsis', () => {
