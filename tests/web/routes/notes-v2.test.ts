@@ -199,11 +199,116 @@ describe('GET /api/notes-v2/attachment', () => {
     expect(res.headers['content-type']).toContain('application/pdf');
   });
 
-  it('rejects a disallowed type (svg / txt)', async () => {
-    await fs.writeFile(path.join(NOTES_DIR, 'evil.svg'), '<svg/>');
+  it('rejects a disallowed type (txt)', async () => {
+    await fs.writeFile(path.join(NOTES_DIR, 'evil.txt'), 'x');
     const app = createApp();
-    const res = await request(app).get('/api/notes-v2/attachment').query({ path: 'evil.svg' });
+    const res = await request(app).get('/api/notes-v2/attachment').query({ path: 'evil.txt' });
     expect(res.status).toBe(400);
+  });
+
+  it('serves an svg only under a sandbox CSP, so its script runs nowhere', async () => {
+    await fs.writeFile(path.join(NOTES_DIR, 'diagram.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const res = await request(createApp()).get('/api/notes-v2/attachment').query({ path: 'diagram.svg' });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/svg+xml');
+    expect(res.headers['content-security-policy']).toMatch(/^sandbox;.*default-src 'none'/);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('resolves a markdown image the way the note means it: relative to its folder, percent-decoded', async () => {
+    // Notion exports write `![](Untitled%201.jpeg)` for the file `Untitled 1.jpeg`.
+    await fs.mkdir(path.join(NOTES_DIR, 'Trips', 'Spring'), { recursive: true });
+    await fs.mkdir(path.join(NOTES_DIR, 'Trips', 'shared'), { recursive: true });
+    await fs.mkdir(path.join(NOTES_DIR, 'Other'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'Trips', 'Spring', 'Untitled 1.jpeg'), 'BESIDE');
+    await fs.writeFile(path.join(NOTES_DIR, 'Other', 'Untitled 1.jpeg'), 'STRANGER');
+    await fs.writeFile(path.join(NOTES_DIR, 'Trips', 'shared', 'map.png'), 'UP');
+    const app = createApp();
+    const get = (p: string) => request(app).get('/api/notes-v2/attachment').query({ path: p, note: 'Trips/Spring/Plan.md' });
+
+    for (const ref of ['Untitled%201.jpeg', 'Untitled 1.jpeg', './Untitled%201.jpeg']) {
+      const res = await get(ref);
+      expect(res.status, ref).toBe(200);
+      expect(res.body.toString(), ref).toBe('BESIDE');
+    }
+    const up = await get('../shared/map.png');
+    expect(up.status).toBe(200);
+    expect(up.body.toString()).toBe('UP');
+    // A climb out of the vault is never served.
+    expect((await get('../../../../etc/passwd.png')).status).toBe(404);
+  });
+
+  it('every image type the route serves inline is one each notes surface draws and the tree lists', async () => {
+    // A new image type served inline but missing from NOTE_IMAGE_EXTS would show
+    // as a file card in an embed; missing from ATTACHMENT_EXTS, the tree and the
+    // vault-wide name match would not see it at all.
+    const { INLINE_IMAGE_EXTS } = await import('../../../src/web/routes/notes-v2.js');
+    const { ATTACHMENT_EXTS } = await import('../../../src/core/notes-tree.js');
+    const { NOTE_IMAGE_EXTS } = await import('../../../web/src/components/notes/notes-image-types.js');
+    expect(INLINE_IMAGE_EXTS.length).toBeGreaterThan(5);
+    for (const ext of INLINE_IMAGE_EXTS) {
+      expect(NOTE_IMAGE_EXTS.has(ext), ext).toBe(true);
+      expect(ATTACHMENT_EXTS.has(ext), ext).toBe(true);
+    }
+    for (const ext of NOTE_IMAGE_EXTS) expect(INLINE_IMAGE_EXTS, ext).toContain(ext);
+  });
+
+  it('the companion copy resolves a markdown image the same way (relative, decoded)', async () => {
+    const { resolveAttachmentInIndex } = await import('../../../src/web/routes/notes-attachment.js');
+    const index = ['Trips/Spring/Untitled 1.jpeg', 'Other/Untitled 1.jpeg', 'Trips/shared/map.png'];
+    expect(resolveAttachmentInIndex('Untitled%201.jpeg', 'Trips/Spring/Plan.md', index)).toBe('Trips/Spring/Untitled 1.jpeg');
+    expect(resolveAttachmentInIndex('../shared/map.png', 'Trips/Spring/Plan.md', index)).toBe('Trips/shared/map.png');
+    expect(resolveAttachmentInIndex('../../../x.png', 'Trips/Spring/Plan.md', index)).toBeNull();
+  });
+
+  it('a markdown image (exact=1) never draws a same-named file from elsewhere', async () => {
+    await fs.mkdir(path.join(NOTES_DIR, 'Elsewhere'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'Elsewhere', 'image.png'), 'STRANGER');
+    await fs.mkdir(path.join(NOTES_DIR, 'Here', 'shots'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'Here', 'shots', 'own.png'), 'OWN');
+    const app = createApp();
+    const get = (p: string, exact?: string) => request(app).get('/api/notes-v2/attachment')
+      .query({ path: p, note: 'Here/Note.md', ...(exact ? { exact } : {}) });
+    expect((await get('image.png', '1')).status).toBe(404);
+    // The vault-wide name match stays for ![[embeds]] (no exact).
+    expect((await get('image.png')).body.toString()).toBe('STRANGER');
+    // An exact vault path still answers, and so does a path beside the note.
+    expect((await get('Elsewhere/image.png', '1')).body.toString()).toBe('STRANGER');
+    expect((await get('shots/own.png', '1')).body.toString()).toBe('OWN');
+    const { resolveAttachmentInIndex } = await import('../../../src/web/routes/notes-attachment.js');
+    expect(resolveAttachmentInIndex('image.png', 'Here/Note.md', ['Elsewhere/image.png'], { exact: true })).toBeNull();
+  });
+
+  it('an embed naming a vault path draws that path before a same-named file beside the note', async () => {
+    // 2026-11-05 review: ![[shared/map.png]] in A/Note.md drew A/shared/map.png.
+    await fs.mkdir(path.join(NOTES_DIR, 'shared'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'shared', 'map.png'), 'ROOT');
+    await fs.mkdir(path.join(NOTES_DIR, 'A', 'shared'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'A', 'shared', 'map.png'), 'BESIDE');
+    const app = createApp();
+    const get = (exact?: string) => request(app).get('/api/notes-v2/attachment')
+      .query({ path: 'shared/map.png', note: 'A/Note.md', ...(exact ? { exact } : {}) });
+    expect((await get()).body.toString()).toBe('ROOT');
+    // A markdown image means beside the note first; `note` and `vault` ask one place each.
+    expect((await get('1')).body.toString()).toBe('BESIDE');
+    expect((await get('note')).body.toString()).toBe('BESIDE');
+    expect((await get('vault')).body.toString()).toBe('ROOT');
+    await fs.rm(path.join(NOTES_DIR, 'A', 'shared', 'map.png'));
+    expect((await get('note')).status).toBe(404);
+    expect((await get('vault')).body.toString()).toBe('ROOT');
+    const { resolveAttachmentInIndex } = await import('../../../src/web/routes/notes-attachment.js');
+    const index = ['shared/map.png', 'A/shared/map.png'];
+    expect(resolveAttachmentInIndex('shared/map.png', 'A/Note.md', index)).toBe('shared/map.png');
+    expect(resolveAttachmentInIndex('shared/map.png', 'A/Note.md', index, { exact: true })).toBe('A/shared/map.png');
+    expect(resolveAttachmentInIndex('shared/map.png', 'A/Note.md', index, { exact: true, only: 'vault' })).toBe('shared/map.png');
+    expect(resolveAttachmentInIndex('map.png', 'A/Note.md', index, { exact: true, only: 'note' })).toBeNull();
+  });
+
+  it('keeps a literal % in a filename', async () => {
+    await fs.writeFile(path.join(NOTES_DIR, '100%25 done.png'), 'LITERAL');
+    const res = await request(createApp()).get('/api/notes-v2/attachment').query({ path: '100%25 done.png', note: 'n.md' });
+    expect(res.status).toBe(200);
+    expect(res.body.toString()).toBe('LITERAL');
   });
 
   it('rejects directory traversal (never serves a file outside the vault)', async () => {

@@ -97,7 +97,7 @@ async function readAll(req: Request, key: string): Promise<Buffer | null> {
  * file is the Mac's alone: the pictures turned off for this host, or a miss in a copy
  * that leaves notes out (the file may be in one of them).
  */
-export async function replicaAttachmentRead(raw: string, notePath?: string): Promise<{ rel: string; bytes: Buffer } | null | undefined | 'not_kept'> {
+export async function replicaAttachmentRead(raw: string, notePath?: string, opts: import('../web/routes/notes-attachment.js').ResolveOptions = {}): Promise<{ rel: string; bytes: Buffer } | null | undefined | 'not_kept'> {
   const req = request
   if (!req) return undefined
   let idx: { keys: string[]; asOf: string | null; off: boolean }
@@ -105,7 +105,7 @@ export async function replicaAttachmentRead(raw: string, notePath?: string): Pro
   if (idx.off) return 'not_kept'
   if (idx.asOf === null) return undefined
   const { resolveAttachmentInIndex } = await import('../web/routes/notes-attachment.js')
-  const rel = resolveAttachmentInIndex(raw, notePath, idx.keys)
+  const rel = resolveAttachmentInIndex(raw, notePath, idx.keys, opts)
   if (!rel) {
     // A miss: the Mac's when the picture may be in what the copy leaves out, else a broken link.
     const src = (await import('./notes-source.js')).replicaNotesSource()

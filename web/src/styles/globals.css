@@ -9098,6 +9098,32 @@ img[data-lightbox-src],
   color: #fff;
 }
 
+/* A finger-sized target on a phone too. */
+.lightbox-close {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lightbox-image {
   max-width: 90vw;
   max-height: 90vh;

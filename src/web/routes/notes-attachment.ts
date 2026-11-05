@@ -9,7 +9,12 @@
  * embed node never has to branch on file type or know where files physically
  * live — it just sends the raw `![[...]]` inner text.
  *
- * Resolution, in order (each step only runs if the previous found nothing):
+ * Resolution, in order (each step only runs if the previous found nothing; each
+ * runs on the reference as written, then percent-decoded, `Untitled%201.jpeg`):
+ *   0. Relative to the embedding note's folder, as a markdown image means it
+ *      `![](img.png)`, `![](../shared/img.png)` (never out of the vault). For an
+ *      embed this step comes right after step 1: an embed naming a vault path
+ *      means that path first.
  *   1. Exact vault-relative path       `![[Areas/x/_attachment/Foo.png]]`
  *   2. Same, after stripping a legacy `Notion/` vault root that no longer exists
  *   3. LONGEST MATCHING PATH SUFFIX    `![[Notion/Areas/Records/_attachment/Untitled 5.png]]`
@@ -185,19 +190,102 @@ function matchSuffix(index: string[], suffix: string): string[] {
 }
 
 /**
+ * The spellings one reference may stand for: as written, then percent-decoded.
+ * A standard markdown image cannot hold a space, so Notion exports (and most
+ * editors) write `![](Untitled%201.jpeg)` for the file `Untitled 1.jpeg`; the
+ * literal form is tried first because `%` is also a legal filename character.
+ */
+function spellingsOf(raw: string): string[] {
+  const out = [raw]
+  if (raw.includes('%')) {
+    try {
+      const decoded = decodeURIComponent(raw)
+      if (decoded !== raw) out.push(decoded)
+    } catch { /* a lone `%` is a literal character, not an escape */ }
+  }
+  return out
+}
+
+/**
+ * A markdown image path is relative to the NOTE's folder (`![](img.png)`,
+ * `![](./a/img.png)`, `![](../shared/img.png)`), which the vault-wide steps
+ * below only reach by guessing. Joined segment-wise; null when there is no note,
+ * the reference is vault-rooted (`/...`), or the join climbs out of the vault.
+ */
+function noteRelativePath(raw: string, notePath: string | undefined): string | null {
+  if (!notePath) return null
+  const ref = raw.split('|')[0].trim().replace(/\\/g, '/')
+  if (!ref || ref.startsWith('/')) return null
+  const noteDir = path.posix.dirname(notePath.replace(/\\/g, '/').replace(/^\/+/, ''))
+  const segments: string[] = []
+  for (const part of `${noteDir === '.' ? '' : noteDir}/${ref}`.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (!segments.length) return null
+      segments.pop()
+      continue
+    }
+    segments.push(part)
+  }
+  return segments.length ? segments.join('/') : null
+}
+
+export interface ResolveOptions {
+  /**
+   * Only the paths the reference names: beside the note, or that exact vault
+   * path. A markdown image (`![](x.png)`) names one file; the vault-wide name
+   * match below is for `![[embeds]]`, whose Obsidian meaning IS "that name
+   * anywhere". Without this a moved `image.png` drew some other note's
+   * `image.png` instead of its missing card (2026-11-05 review).
+   */
+  exact?: boolean
+  /**
+   * With `exact`, only one of its two places: `note` beside the note, `vault`
+   * that vault path. The editor asks them one at a time, so it knows which file
+   * it drew and a copy pasted into another note names that same file.
+   */
+  only?: 'note' | 'vault'
+}
+
+/**
  * The same resolution over a list of vault-relative paths instead of the disk:
  * the cloud companion's copy of the Mac's pictures (core/companion-attachment-copy.ts).
  * Returns the chosen path from `index`, or null.
  */
-export function resolveAttachmentInIndex(raw: string, notePath: string | undefined, index: readonly string[]): string | null {
-  const cleaned = cleanRawPath(raw)
-  if (!cleaned) return null
-  if (index.includes(cleaned)) return cleaned
-  const noteDir = notePath ? path.posix.dirname(cleanRawPath(notePath) || '') : undefined
-  const segments = cleaned.split('/')
-  for (let start = 0; start < segments.length; start++) {
-    const hits = matchSuffix(index as string[], segments.slice(start).join('/'))
-    if (hits.length) return pickBest(hits, noteDir === '.' ? undefined : noteDir)
+export function resolveAttachmentInIndex(
+  raw: string, notePath: string | undefined, index: readonly string[], opts: ResolveOptions = {},
+): string | null {
+  const relativeHit = (): string | null => {
+    for (const spelling of spellingsOf(raw)) {
+      const relative = noteRelativePath(spelling, notePath)
+      if (relative && index.includes(relative)) return relative
+    }
+    return null
+  }
+  // A markdown image means "beside the note" first; an embed that names a vault
+  // path means that path first (Obsidian), then beside the note.
+  if (opts.exact) {
+    const hit = opts.only === 'vault' ? null : relativeHit()
+    if (hit || opts.only === 'note') return hit
+  } else {
+    for (const spelling of spellingsOf(raw)) {
+      const cleaned = cleanRawPath(spelling)
+      if (cleaned && index.includes(cleaned)) return cleaned
+    }
+    const hit = relativeHit()
+    if (hit) return hit
+  }
+  for (const spelling of spellingsOf(raw)) {
+    const cleaned = cleanRawPath(spelling)
+    if (!cleaned) continue
+    if (index.includes(cleaned)) return cleaned
+    if (opts.exact) continue
+    const noteDir = notePath ? path.posix.dirname(cleanRawPath(notePath) || '') : undefined
+    const segments = cleaned.split('/')
+    for (let start = 0; start < segments.length; start++) {
+      const hits = matchSuffix(index as string[], segments.slice(start).join('/'))
+      if (hits.length) return pickBest(hits, noteDir === '.' ? undefined : noteDir)
+    }
   }
   return null
 }
@@ -214,7 +302,42 @@ export function resolveAttachmentInIndex(raw: string, notePath: string | undefin
 export async function resolveAttachmentPath(
   raw: string,
   notePath?: string,
+  opts: ResolveOptions = {},
 ): Promise<string | null> {
+  const relativeHit = async (): Promise<string | null> => {
+    for (const spelling of spellingsOf(raw)) {
+      const relative = noteRelativePath(spelling, notePath)
+      const hit = relative ? await statFile(relative) : null
+      if (hit) return hit
+    }
+    return null
+  }
+  // 0) A markdown image (`exact`) is relative to the note's folder first. An
+  //    embed naming a vault path means that path first (Obsidian), so a same-named
+  //    file beside the note never takes its place (2026-11-05 review), then the
+  //    note's folder, then the vault-wide match.
+  if (opts.exact) {
+    const hit = opts.only === 'vault' ? null : await relativeHit()
+    if (hit || opts.only === 'note') return hit
+  } else {
+    for (const spelling of spellingsOf(raw)) {
+      const cleaned = cleanRawPath(spelling)
+      const hit = cleaned ? await statFile(cleaned) : null
+      if (hit) return hit
+    }
+    const hit = await relativeHit()
+    if (hit) return hit
+  }
+  for (const spelling of spellingsOf(raw)) {
+    const hit = opts.exact
+      ? await (async () => { const c = cleanRawPath(spelling); return c ? statFile(c) : null })()
+      : await resolveVaultPath(spelling, notePath)
+    if (hit) return hit
+  }
+  return null
+}
+
+async function resolveVaultPath(raw: string, notePath?: string): Promise<string | null> {
   const cleaned = cleanRawPath(raw)
   if (!cleaned) return null
 

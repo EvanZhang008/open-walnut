@@ -284,7 +284,7 @@ notesV2Router.get('/', async (_req: Request, res: Response, next: NextFunction) 
 // Single notes-owned endpoint that serves vault attachments (images + PDF) for
 // the tree preview AND ![[embed]] rendering. Deliberately does NOT touch
 // local-image.ts (owned elsewhere, no PDF). Local-only — the notes vault lives
-// under NOTES_DIR; no remote/daemon fan-out needed. SVG excluded (XSS).
+// under NOTES_DIR; no remote/daemon fan-out needed. SVG only under a sandbox CSP.
 const ATTACHMENT_MIME: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -295,6 +295,15 @@ const ATTACHMENT_MIME: Record<string, string> = {
   // download it. Either way it must not 400 — these are ordinary user photos.
   heic: 'image/heic',
   heif: 'image/heif',
+  // Scans and exports. WebKit (the Mac app, the phone) draws tiff and bmp; a
+  // browser that cannot fails the <img> and the embed falls back to its card.
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  avif: 'image/avif',
+  // An SVG can carry script. As an <img> it never runs, and opened on its own it is
+  // served under a sandbox CSP (ATTACHMENT_HEADERS), so it runs nowhere.
+  svg: 'image/svg+xml',
   pdf: 'application/pdf',
   // Office formats: served as downloads (Content-Disposition below switches to
   // `attachment` for these) — the browser can't render them inline.
@@ -315,7 +324,24 @@ export const MAX_SERVED_ATTACHMENT_BYTES = 50 * 1024 * 1024
 // Extensions the browser can render inline; everything else downloads.
 // heic/heif are inline for iOS (native decode) and for the iOS app, which hands
 // the bytes to ImageIO — it decodes heic fine.
-const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf'])
+const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'avif', 'svg', 'pdf'])
+
+/** Image extensions the attachment route serves inline: what every notes image surface must draw. */
+export const INLINE_IMAGE_EXTS: readonly string[] = [...INLINE_EXTS].filter((e) => ATTACHMENT_MIME[e]?.startsWith('image/'))
+
+/**
+ * Headers every attachment response carries. nosniff keeps the browser to the
+ * declared type; an SVG opened as its own page (the zoom's "open original", a
+ * new tab) is a document that could run script on this origin, so it gets a
+ * sandbox with no script, frame or connection allowed.
+ */
+export function attachmentHeaders(mime: string): Record<string, string> {
+  const headers: Record<string, string> = { 'X-Content-Type-Options': 'nosniff' }
+  if (mime === 'image/svg+xml') {
+    headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'"
+  }
+  return headers
+}
 
 // RFC 5987 ext-value: encodeURIComponent leaves ' * ( ) unescaped, but a bare
 // ' collides with the UTF-8'' delimiter and breaks download filenames.
@@ -339,7 +365,7 @@ const MAX_ATTACHMENT_SIZE = MAX_SERVED_ATTACHMENT_BYTES // 50 MB (mirror local-i
  * resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
  * containment as resolveSafePath, and only returns an existing regular file.
  */
-export async function readNoteAttachment(raw: unknown, notePath?: unknown): Promise<{
+export async function readNoteAttachment(raw: unknown, notePath?: unknown, exactParam?: unknown): Promise<{
   buffer: Buffer
   mime: string
   /** Browser-renderable → serve inline; Office docs → download. */
@@ -357,9 +383,13 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown): Prom
   // its own, with the pictures pasted on it (core/companion-attachment-copy.ts), a host
   // replica its daemon's (replica/attachment-source.ts). The Mac reads its disk.
   const note = typeof notePath === 'string' ? notePath : undefined
+  // `exact`: a markdown image, which names one file (ResolveOptions): `1` beside
+  // the note then the vault path, `note` or `vault` only that one place.
+  const only: 'note' | 'vault' | undefined = exactParam === 'note' || exactParam === 'vault' ? exactParam : undefined
+  const opts = { exact: exactParam === '1' || exactParam === true || !!only, only }
   const { companionAttachmentRead } = await import('../../core/companion-attachment-copy.js')
-  let copied = await companionAttachmentRead(raw, note)
-  if (copied === undefined) copied = await (await import('../../replica/attachment-source.js')).replicaAttachmentRead(raw, note)
+  let copied = await companionAttachmentRead(raw, note, opts)
+  if (copied === undefined) copied = await (await import('../../replica/attachment-source.js')).replicaAttachmentRead(raw, note, opts)
   // What the user keeps from this replica is the Mac's: never a 404 for it (core/replication/keep-rule.ts).
   if (copied === 'not_kept') {
     const { NeedsLeaderError } = await import('../../core/replication/needs-leader.js')
@@ -380,6 +410,7 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown): Prom
   const fullPath = await resolveAttachmentPath(
     raw,
     typeof notePath === 'string' ? notePath : undefined,
+    opts,
   )
   if (!fullPath) throw new NotesOpError('Attachment not found', 404)
 
@@ -406,15 +437,18 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown): Prom
 
 // GET /api/notes-v2/attachment?path=<vault-relative path under NOTES_DIR>
 //   &note=<vault path of the embedding note>  (optional; breaks duplicate-name ties)
+//   &exact=1  (a markdown image: only beside the note or that exact vault path;
+//              `note` / `vault`: only that one, so the editor knows which it drew)
 notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note)
+    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note, req.query.exact)
     res.setHeader('Content-Type', mime)
     res.setHeader('Content-Length', buffer.length)
     res.setHeader('Cache-Control', 'public, max-age=3600')
     // Inline so the browser renders PDF/images in-page; Office docs download
     // (with their real filename) since the browser can't render them.
     res.setHeader('Content-Disposition', contentDisposition)
+    for (const [name, value] of Object.entries(attachmentHeaders(mime))) res.setHeader(name, value)
     res.send(buffer)
   } catch (err) {
     if (err instanceof NotesOpError) {

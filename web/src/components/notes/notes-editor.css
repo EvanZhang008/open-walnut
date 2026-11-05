@@ -927,3 +927,93 @@ mark.notes-search-mark {
 }
 .notes-bookmark-row:hover .notes-bookmark-remove { opacity: 0.7; }
 .notes-bookmark-remove:hover { opacity: 1 !important; background: var(--bg-tertiary, #3a3d45); color: var(--fg, #e8eaed); }
+
+/* ── Images (ResolvedImage node view, `![[embed]]` images) ─────────────── */
+/* Where a click opens the picture large (image-zoom.ts): reading, or a picture
+ * already selected in an editable note. */
+.notes-editor .tiptap .notes-picture-selected img[data-lightbox-src],
+.notes-editor .tiptap[contenteditable="false"] img[data-lightbox-src] {
+  cursor: zoom-in;
+}
+
+.notes-editor .tiptap .notes-image {
+  display: inline-block;
+  max-width: 100%;
+  /* Text typed beside a picture sits on its bottom line, not at its top corner. */
+  vertical-align: bottom;
+}
+.notes-editor .tiptap .notes-picture-selected .notes-image img,
+.notes-editor .tiptap .notes-image.notes-picture-selected img {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+}
+/* What a picture that is not there becomes: its name, never an empty gap. */
+.notes-editor .tiptap .notes-image-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--border, #2a2d34);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary, #1a1c20);
+  color: var(--fg-muted, #8a8f98);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: default;
+}
+.notes-editor .tiptap .notes-image-missing[hidden] {
+  display: none;
+}
+.notes-editor .tiptap .notes-image.notes-picture-selected .notes-image-missing {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+}
+.notes-editor .tiptap .notes-image-missing-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--border, #2a2d34);
+  color: var(--fg, #e6e6e6);
+  font-size: 12px;
+  font-weight: 600;
+}
+.notes-editor .tiptap .notes-image-missing-label {
+  flex: none;
+  color: var(--fg, #e6e6e6);
+}
+.notes-editor .tiptap .notes-image-missing-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A file this browser cannot draw (HEIC, TIFF outside Safari) is still there. */
+.notes-editor .tiptap .notes-image-download {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg, #111214);
+  color: var(--fg, #e6e6e6);
+  text-decoration: none;
+  cursor: pointer;
+}
+.notes-editor .tiptap .notes-image-download:hover {
+  border-color: var(--accent, #6366f1);
+}
+
+/* Reading selects nothing worth showing: no ring around a tapped picture.
+ * Last in the file so it wins over the selected rings above. */
+.notes-editor .tiptap[contenteditable="false"] .notes-picture-selected img,
+.notes-editor .tiptap[contenteditable="false"] .notes-picture-selected .notes-image-missing {
+  outline: none;
+}

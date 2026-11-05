@@ -448,13 +448,14 @@ searchMemoryV1Router.delete('/favorites/notes', async (req: Request, res: Respon
 // ties (a real vault has the same image filename in many `_attachment/` dirs).
 searchMemoryV1Router.get('/notes/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { readNoteAttachment, NotesOpError } = await import('./notes-v2.js')
+    const { readNoteAttachment, NotesOpError, attachmentHeaders } = await import('./notes-v2.js')
     try {
-      const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note)
+      const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note, req.query.exact)
       res.setHeader('Content-Type', mime)
       res.setHeader('Content-Length', buffer.length)
       res.setHeader('Cache-Control', 'public, max-age=3600')
       res.setHeader('Content-Disposition', contentDisposition)
+      for (const [name, value] of Object.entries(attachmentHeaders(mime))) res.setHeader(name, value)
       res.send(buffer)
     } catch (err) {
       if (err instanceof NotesOpError) {

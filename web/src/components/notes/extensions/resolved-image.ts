@@ -36,14 +36,26 @@
  *     (the markdown copy serializer in markdown-copy.ts only owns the
  *     `text/plain` flavour, so it cannot cover this.)
  *
- * `baseDir` unset ⇒ every src is left exactly as authored, which is the Notes
- * vault's existing behaviour (its images are `/api/images/…` or `![[embeds]]`).
+ * Two places a relative src can be relative TO:
+ *  - `baseDir` (the Files panel): a host directory, served by `/api/local-image`.
+ *  - `notePath` (a Notes vault note): the note's folder in the vault, served by
+ *    the notes attachment route, which resolves it beside the note first and
+ *    percent-decodes it (`![](Untitled%201.jpeg)`, how Notion exports write it).
+ *    Every Notes surface edits through this node (2026-11-05: the vault used the
+ *    plain Image node, so every `![](photo.jpeg)` in a note drew nothing).
+ * Neither set ⇒ a relative src is left exactly as authored.
  */
 import { mergeAttributes, type Editor } from '@tiptap/core';
 import Image, { type ImageOptions } from '@tiptap/extension-image';
+import {
+  claimLoad, drawnUrl, failureOf, knownUndrawable, noteDrawn, noteMissing, onPageReturn, recentlyMissing, retryDue,
+  settleLoad,
+} from '../image-load';
 
 /** Where a proxied src points. Mirrors `proxyImageSrcs()` in utils/markdown.ts. */
 const PROXY_ROUTE = '/api/local-image';
+/** Where a vault note's relative image points (attachmentUrl in api/notes-v2.ts). */
+const VAULT_ROUTE = '/api/notes-v2/attachment';
 
 /** Schemes that are already a complete reference — never a filesystem path. */
 const PASSTHROUGH_SCHEME = /^(?:data|blob|https?):/i;
@@ -56,6 +68,11 @@ export interface ResolveImageSrcContext {
   baseDir?: string;
   /** Remote exec host the file came from; rides along as `&host=`. */
   host?: string;
+  /**
+   * Vault path of the note being edited (`Areas/Trips/Plan.md`). Set (and no
+   * `baseDir`) ⇒ a relative src resolves in the vault beside this note.
+   */
+  notePath?: string;
   /**
    * Pane reload generation, folded into the URL as `&r=`. An `<img src>` that
    * stays byte-identical is served from the browser's per-document memory cache
@@ -87,6 +104,28 @@ function joinPath(baseDir: string, rel: string): string {
 }
 
 /**
+ * A vault note's image URL. `exact`: `note` asks only beside the note, `vault`
+ * only that vault path (the server's ResolveOptions), so the view that drew it
+ * knows which file it is.
+ */
+function vaultUrl(path: string, note: string, exact: 'note' | 'vault'): string {
+  return `${VAULT_ROUTE}?${new URLSearchParams({ path, note, exact })}`;
+}
+
+/** The file name a src names, decoded for reading (`Untitled%201.jpeg` → `Untitled 1.jpeg`). */
+function decodeName(src: string): string {
+  const base = src.split(/[?#]/)[0].split('/').pop() ?? '';
+  try { return decodeURIComponent(base); } catch { return base; }
+}
+
+/** The path of a `file:///Users/x/a%20b.png` URL, decoded; null for anything else. */
+function fileUrlPath(raw: string): string | null {
+  const m = /^file:\/\/(?:localhost)?(\/[^?#]*)/i.exec(raw);
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+}
+
+/**
  * The whole policy, as a pure function (so it is testable without TipTap).
  *
  * Returns the src UNCHANGED whenever there is nothing to resolve — callers use
@@ -103,12 +142,25 @@ export function resolveImageSrc(src: string, ctx: ResolveImageSrcContext = {}): 
   if (raw.startsWith('/api/')) return src;
 
   let absPath: string;
-  if (raw.startsWith('/')) {
+  const fileUrl = fileUrlPath(raw);
+  if (fileUrl) {
+    absPath = joinPath('/', fileUrl);
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    // Some other scheme (obsidian:, mailto:): not a file this page can draw.
+    return src;
+  } else if (raw.startsWith('/')) {
     absPath = joinPath('/', raw);
   } else {
     const baseDir = ctx.baseDir?.trim();
-    // No containing directory known (the Notes vault surface) — leave it alone.
-    if (!baseDir) return src;
+    if (!baseDir) {
+      const notePath = ctx.notePath?.trim();
+      if (!notePath) return src;
+      // The server joins it onto the note's folder and decodes it: one rule for
+      // the web, the phone app and the companion's copy. A markdown image names
+      // one file, never "that name anywhere": beside the note first, then the
+      // same path from the vault's root (resolveImageCandidates).
+      return vaultUrl(raw, notePath, 'note');
+    }
     absPath = joinPath(baseDir, raw);
   }
 
@@ -117,6 +169,91 @@ export function resolveImageSrc(src: string, ctx: ResolveImageSrcContext = {}): 
     ? `&r=${encodeURIComponent(String(ctx.version))}`
     : '';
   return `${PROXY_ROUTE}?path=${encodeURIComponent(absPath)}${hostParam}${versionParam}`;
+}
+
+/** `path`, `note` and `exact` of a vault attachment URL (relative, or on this page's origin), else null. */
+function vaultPathOf(raw: string): { path: string; note: string; exact: string } | null {
+  let url = raw.replace(/&amp;/g, '&');
+  const origin = typeof location !== 'undefined' ? location.origin : '';
+  if (origin && url.startsWith(origin + '/')) url = url.slice(origin.length);
+  if (!url.startsWith(`${VAULT_ROUTE}?`)) return null;
+  const params = new URLSearchParams(url.slice(VAULT_ROUTE.length + 1));
+  const path = params.get('path') ?? '';
+  const note = params.get('note') ?? '';
+  return path && note ? { path, note, exact: params.get('exact') ?? '' } : null;
+}
+
+/**
+ * The vault file a markdown image URL names, when the URL asks one place only
+ * (`exact=note` or `exact=vault`); null when the server may pick (an embed, or
+ * `exact=1`, beside the note or the vault path).
+ */
+export function vaultFileOf(url: string): string | null {
+  const v = vaultPathOf(url);
+  if (!v) return null;
+  if (v.exact === 'note') return joinPath('', `${dirOf(v.note)}/${safeDecode(v.path)}`) || null;
+  if (v.exact === 'vault') return joinPath('', safeDecode(v.path)) || null;
+  return null;
+}
+
+/** How note `toNote` writes an image that names the vault file `file`. */
+export function imageSrcForFile(file: string, toNote: string): string {
+  return relativeVaultPath(file, dirOf(toNote));
+}
+
+function dirOf(notePath: string): string {
+  const i = notePath.lastIndexOf('/');
+  return i < 0 ? '' : notePath.slice(0, i);
+}
+
+function safeDecode(s: string): string {
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+
+/**
+ * `target` (a vault path) as seen from the folder `fromDir`, written the way a
+ * markdown image can hold it: a space or a parenthesis would end the link, so
+ * those (and `%`) are percent-encoded; the server decodes them back.
+ */
+function relativeVaultPath(target: string, fromDir: string): string {
+  const to = target.split('/').filter(Boolean);
+  const from = fromDir.split('/').filter(Boolean);
+  let shared = 0;
+  while (shared < from.length && shared < to.length - 1 && from[shared] === to[shared]) shared++;
+  const parts = [...from.slice(shared).map(() => '..'), ...to.slice(shared)];
+  return parts.map((p) => (p === '..' ? p : p.replace(/[% ()]/g, (c) => encodeURIComponent(c).replace('(', '%28').replace(')', '%29')))).join('/');
+}
+
+/**
+ * A relative image src written in note `fromNote`, as the note `toNote` must
+ * write it to name the same file. Anything not relative to its note (a URL, an
+ * absolute path, an /api/ URL) is returned unchanged.
+ */
+export function rebaseImageSrc(src: string, fromNote: string, toNote: string): string {
+  const raw = src.trim();
+  if (!raw || fromNote === toNote) return src;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('/') || raw.startsWith('//')) return src;
+  return relativeVaultPath(joinPath('', `${dirOf(fromNote)}/${safeDecode(raw)}`), dirOf(toNote));
+}
+
+/**
+ * Every URL the picture may be at, best first; `resolveImageSrc` is the first.
+ * In a vault note a relative src is beside the note, else the same path from the
+ * vault's root (`Travel/shared/map.png`, how Obsidian's "absolute path" setting
+ * writes one). A src starting with `/` is either a path from the vault's root
+ * (`/Travel/shared/map.png`) or a file on this machine: both are asked, the
+ * vault first.
+ */
+export function resolveImageCandidates(src: string, ctx: ResolveImageSrcContext = {}): string[] {
+  const first = resolveImageSrc(src, ctx);
+  const raw = typeof src === 'string' ? src.trim() : '';
+  const notePath = ctx.notePath?.trim();
+  if (!notePath || ctx.baseDir?.trim() || first === src) return [first];
+  if (vaultPathOf(first)?.exact === 'note') return [first, vaultUrl(raw, notePath, 'vault')];
+  if (raw.startsWith('/') && !raw.startsWith('//') && !raw.startsWith('/api/')) {
+    return [vaultUrl(raw, notePath, 'vault'), first];
+  }
+  return [first];
 }
 
 /**
@@ -131,6 +268,22 @@ export function resolveImageSrc(src: string, ctx: ResolveImageSrcContext = {}): 
  */
 export function unproxyImageSrc(src: string | null | undefined, ctx: ResolveImageSrcContext = {}): string {
   const raw = typeof src === 'string' ? src : '';
+  const vault = vaultPathOf(raw);
+  if (vault) {
+    // A vault image copied inside this note keeps the path it was written with;
+    // pasted into another note it becomes the path from THAT note's folder, so
+    // the saved markdown never holds an /api/ URL (2026-11-05 review). A surface
+    // with no note of its own keeps the URL, which works from anywhere.
+    // The URL names the file it drew (vaultFileOf), so the paste names that
+    // file, wherever the path as written would point from the new note.
+    const here = ctx.notePath?.trim();
+    if (!here) return raw;
+    if (vault.note === here) return vault.path;
+    const file = vaultFileOf(raw);
+    if (file) return imageSrcForFile(file, here);
+    if (vault.path.startsWith('/')) return raw;
+    return rebaseImageSrc(vault.path, vault.note, here);
+  }
   const prefix = `${PROXY_ROUTE}?`;
   if (!raw.startsWith(prefix)) return raw;
 
@@ -150,6 +303,7 @@ export function unproxyImageSrc(src: string | null | undefined, ctx: ResolveImag
 export interface ResolvedImageOptions extends ImageOptions {
   baseDir?: string;
   host?: string;
+  notePath?: string;
   version?: string | number;
 }
 
@@ -164,6 +318,7 @@ export interface ResolvedImageOptions extends ImageOptions {
 export interface ResolvedImageStorage {
   baseDir?: string;
   host?: string;
+  notePath?: string;
   version?: string | number;
 }
 
@@ -199,23 +354,33 @@ function liveSrcContext(ctx: {
   return {
     baseDir: store && 'baseDir' in store ? store.baseDir : ctx.options.baseDir,
     host: store && 'host' in store ? store.host : ctx.options.host,
+    notePath: store && 'notePath' in store ? store.notePath : ctx.options.notePath,
     version: store && 'version' in store ? store.version : ctx.options.version,
   };
 }
 
 export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageStorage>({
   // NOTE: no `name` override on purpose — see rule (1) in the header comment.
+  // Pictures move by cut and paste: a press on one selects it (image-zoom.ts),
+  // so a drag affordance would only promise what it cannot do.
+  draggable: false,
   addOptions() {
     return {
       ...this.parent?.(),
       baseDir: undefined,
       host: undefined,
+      notePath: undefined,
       version: undefined,
     } as ResolvedImageOptions;
   },
 
   addStorage() {
-    return { baseDir: this.options.baseDir, host: this.options.host, version: this.options.version };
+    return {
+      baseDir: this.options.baseDir,
+      host: this.options.host,
+      notePath: this.options.notePath,
+      version: this.options.version,
+    };
   },
 
   addAttributes() {
@@ -236,12 +401,201 @@ export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageSto
     };
   },
 
+  /**
+   * The painted image, with what a broken one becomes. A browser draws a missing
+   * picture as nothing (WebKit, with no alt) or a tiny glyph, so a note whose
+   * image moved looked like a note with no image at all. The node view shows a
+   * card naming the file instead, and is a plain DOM view (no React) because a
+   * note can hold hundreds of them. `renderHTML` below stays the clipboard and
+   * getHTML form.
+   */
+  addNodeView() {
+    const options = this.options;
+    return ({ node: initial, editor }) => {
+      const dom = document.createElement('span');
+      dom.className = 'notes-image';
+      const img = document.createElement('img');
+      img.draggable = false;
+      dom.append(img);
+      let current = initial;
+      let src = '';
+
+      // Where the picture may be, tried in order (resolveImageCandidates); the
+      // view remembers how far it got for the src it shows, so a repaint (a
+      // selection change, an edit nearby) never brings back a picture that
+      // already failed as a broken-image glyph (2026-11-05 review). A failure
+      // older than a few seconds is asked again on the next repaint, so a file
+      // put back shows without reopening the note (image-load.ts).
+      let tried = '';
+      let at = 0;
+      let candidates: string[] = [];
+      let failed = false;
+      let failedAt = 0;
+      /** The URL this view's <img> is loading for every view waiting on it (claimLoad). */
+      let loading = '';
+      let destroyed = false;
+      /** While a missing card shows: ask again when the user comes back to the page. */
+      let stopReturn: (() => void) | null = null;
+
+      const card = document.createElement('span');
+      card.className = 'notes-image-missing';
+      card.hidden = true;
+      dom.append(card);
+      /** The card a picture that cannot draw becomes: missing, or here but not drawable. */
+      const showCard = (kind: 'missing' | 'undrawable', url = '') => {
+        if (kind === 'missing' && !stopReturn) {
+          stopReturn = onPageReturn(() => {
+            if (!destroyed && failed && retryDue(failedAt)) tryFrom(0);
+          });
+        }
+        failed = true;
+        failedAt = Date.now();
+        dom.classList.add('is-missing');
+        img.hidden = true;
+        img.removeAttribute('data-lightbox-src');
+        card.hidden = false;
+        const attrs = current.attrs as { alt?: string | null };
+        const name = decodeName(src) || attrs.alt || 'image';
+        // Rebuilt only when what it says changes: a retry that fails again while
+        // the user clicks the card must not pull the clicked element out from
+        // under the press (ProseMirror then lost the next click, 2026-11-05).
+        const says = `${kind}\n${name}\n${url}\n${src}`;
+        if (card.dataset.says === says) return;
+        card.dataset.says = says;
+        card.textContent = '';
+        const icon = document.createElement('span');
+        icon.className = 'notes-image-missing-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = kind === 'missing' ? '!' : '\u2193';
+        const label = document.createElement('span');
+        label.className = 'notes-image-missing-label';
+        label.textContent = kind === 'missing' ? 'Image not found' : "Can't preview here";
+        const file = document.createElement('span');
+        file.className = 'notes-image-missing-name';
+        file.textContent = name;
+        card.append(icon, label, file);
+        if (kind === 'undrawable' && url) {
+          // The file is there; this browser cannot draw its type (HEIC, TIFF).
+          const download = document.createElement('a');
+          download.className = 'notes-image-download';
+          download.href = url;
+          download.download = name;
+          download.textContent = 'Download';
+          card.append(download);
+        }
+        card.title = src;
+      };
+      const showPicture = () => {
+        stopReturn?.();
+        stopReturn = null;
+        failed = false;
+        dom.classList.remove('is-missing');
+        img.hidden = false;
+        card.hidden = true;
+      };
+      /** Point the <img> at the next candidate not seen missing a moment ago. */
+      const tryFrom = (index: number) => {
+        at = index;
+        while (at < candidates.length && recentlyMissing(candidates[at])) at++;
+        if (at >= candidates.length) {
+          img.removeAttribute('src');
+          showCard('missing');
+          return;
+        }
+        const url = candidates[at];
+        if (knownUndrawable(url)) {
+          img.removeAttribute('src');
+          showCard('undrawable', url);
+          return;
+        }
+        // A retry keeps the card up until the picture really comes back.
+        if (!failed) showPicture();
+        // Eager, never lazy: a lazy picture loading in as the user scrolls moves
+        // the text under the pointer, and a click meant for a line lands on the
+        // image and selects it (2026-11-05 review: typing then replaced it).
+        img.setAttribute('data-lightbox-src', url);
+        if (img.getAttribute('src') === url && (loading === url || (img.complete && img.naturalWidth > 0))) return;
+        const load = () => { loading = url; img.setAttribute('src', url); };
+        // One request per picture: a second view of it waits for the first's answer.
+        const mine = claimLoad(url, (outcome) => {
+          if (destroyed || candidates[at] !== url) return;
+          if (outcome === 'retry') load();
+          else if (outcome === 'ok') img.setAttribute('src', url);
+          else tryFrom(at);
+        });
+        if (mine) load();
+        else img.removeAttribute('src');
+      };
+      const paint = () => {
+        const attrs = current.attrs as { src?: string | null; alt?: string | null; title?: string | null; width?: unknown; height?: unknown };
+        src = typeof attrs.src === 'string' ? attrs.src : '';
+        candidates = src ? resolveImageCandidates(src, liveSrcContext({ editor, options })) : [];
+        const key = candidates.join('\n');
+        if (key !== tried || (failed && retryDue(failedAt))) {
+          tried = key;
+          if (candidates.length) tryFrom(0);
+          else { img.removeAttribute('src'); img.removeAttribute('data-lightbox-src'); showPicture(); }
+        }
+        img.alt = attrs.alt ?? '';
+        if (attrs.title) img.title = attrs.title; else img.removeAttribute('title');
+        for (const dim of ['width', 'height'] as const) {
+          const v = attrs[dim];
+          if (v != null && v !== '') img.setAttribute(dim, String(v)); else img.removeAttribute(dim);
+        }
+      };
+      img.addEventListener('error', () => {
+        const url = img.getAttribute('src');
+        if (!url) return;
+        const owned = loading === url;
+        if (owned) loading = '';
+        void failureOf(url).then((kind) => {
+          if (kind === 'missing') noteMissing(url);
+          if (owned) settleLoad(url, 'failed');
+          if (destroyed || url !== candidates[at] || img.getAttribute('src') !== url) return;
+          img.removeAttribute('src');
+          if (kind === 'undrawable') showCard('undrawable', url);
+          else tryFrom(at + 1);
+        });
+      });
+      img.addEventListener('load', () => {
+        const url = img.getAttribute('src');
+        if (!url) return;
+        if (loading === url) { loading = ''; settleLoad(url, 'ok'); }
+        if (destroyed || url !== candidates[at]) return;
+        showPicture();
+        // Which file this image is (a copy pasted elsewhere names it: renderHTML).
+        const note = liveSrcContext({ editor, options }).notePath?.trim();
+        if (note && src) noteDrawn(note, src, url);
+      });
+      paint();
+
+      return {
+        dom,
+        update(next) {
+          if (next.type !== current.type) return false;
+          current = next;
+          paint();
+          return true;
+        },
+        // The view owns its children (load/error swap them); none of that is
+        // content. A selection change still reaches ProseMirror.
+        ignoreMutation: (m) => m.type !== 'selection',
+        // A request still running keeps answering the views waiting on it.
+        destroy() { destroyed = true; stopReturn?.(); stopReturn = null; },
+      };
+    };
+  },
+
   renderHTML({ HTMLAttributes }) {
     const attrs = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes);
     const src = typeof attrs.src === 'string' ? attrs.src : '';
     if (!src) return ['img', attrs];
 
-    const resolved = resolveImageSrc(src, liveSrcContext(this));
+    const ctx = liveSrcContext(this);
+    // The URL this image drew from, when it drew: it names the file, so a copy
+    // pasted into another note names the same one (unproxyImageSrc).
+    const note = ctx.notePath?.trim();
+    const resolved = (note && drawnUrl(note, src)) || resolveImageSrc(src, ctx);
     // Untouched src ⇒ nothing was proxied, so don't stamp the proxy-only
     // attributes (keeps parity with proxyImageSrcs, which also only marks the
     // images it actually rewrote).

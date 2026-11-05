@@ -48,6 +48,7 @@ export const ATTACHMENT_EXTS = new Set([
   // every photo imported straight off a phone answered 400 "File type not
   // allowed" and rendered as a broken embed.
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf',
+  'tif', 'tiff', 'bmp', 'avif', 'svg',
   'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt',
 ])
 

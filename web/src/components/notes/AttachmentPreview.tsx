@@ -1,5 +1,6 @@
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
 import { browserCanInlinePdf } from '@/utils/pdf-support';
+import { NOTE_IMAGE_EXTS } from './notes-image-types';
 import './notes-attachment.css';
 
 /**
@@ -8,7 +9,7 @@ import './notes-attachment.css';
  * Attachments are NOT markdown notes — clicking one in the tree must NOT run it
  * through the markdown editor (it would 404 / garble). This renders the raw
  * file via the notes-owned /api/notes-v2/attachment endpoint:
- *   - images (png/jpg/jpeg/gif/webp) → <img>
+ *   - images (NOTE_IMAGE_EXTS) → <img>
  *   - pdf → <iframe> inline preview (browser-native PDF viewer)
  *   - Office docs (docx/xlsx/pptx/…) → open card: local app (Word/Excel) via
  *     /reveal, plus a browser download fallback. Never rendered inline.
@@ -19,7 +20,7 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
   const url = attachmentUrl(notePath);
   const breadcrumb = notePath.split('/');
 
-  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext);
+  const isImage = NOTE_IMAGE_EXTS.has(ext);
   // Same guard as WikiEmbedView: with the browser's PDF viewer disabled an
   // <iframe> is a silent download, so route those users to the open card
   // (local app via /reveal) instead of downloading on every tree click.

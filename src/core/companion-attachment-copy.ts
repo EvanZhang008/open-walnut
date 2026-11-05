@@ -77,7 +77,7 @@ async function pendingPastes(): Promise<Map<string, string>> {
  * that exact path); `'not_kept'` when the file is the Mac's alone: the pictures turned off
  * for the box, or a miss that may lie in what the box leaves out (keep-rule.ts pictureMayBeLeftOut).
  */
-export async function companionAttachmentRead(raw: string, notePath?: string): Promise<{ rel: string; bytes: Buffer } | null | undefined | 'not_kept'> {
+export async function companionAttachmentRead(raw: string, notePath?: string, opts: import('../web/routes/notes-attachment.js').ResolveOptions = {}): Promise<{ rel: string; bytes: Buffer } | null | undefined | 'not_kept'> {
   if (!onCompanion()) return undefined
   const c = theCopy()
   const pastes = await pendingPastes()
@@ -89,7 +89,7 @@ export async function companionAttachmentRead(raw: string, notePath?: string): P
     rel = exact
   } else if (c.held(HOME)) {
     const { resolveAttachmentInIndex } = await import('../web/routes/notes-attachment.js')
-    rel = resolveAttachmentInIndex(raw, notePath, [...new Set([...pastes.keys(), ...c.keys(HOME)])])
+    rel = resolveAttachmentInIndex(raw, notePath, [...new Set([...pastes.keys(), ...c.keys(HOME)])], opts)
   } else {
     // Before the first whole manifest the box's disk answers, but never for a picture pasted here.
     const exact = raw.split('|')[0]!.trim().replace(/^\/+/, '')

@@ -30,7 +30,7 @@ import type { Fragment, Node as PMNode } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
-import Image from '@tiptap/extension-image';
+import { ResolvedImage } from '@/components/notes/extensions/resolved-image';
 import Link from '@tiptap/extension-link';
 import { Markdown } from 'tiptap-markdown';
 
@@ -79,7 +79,7 @@ export function buildNotesExtensions(): Extensions {
     FenceCodeBlock,
     TightTaskList,
     TaskItem.configure({ nested: true }),
-    Image.configure({ inline: true, allowBase64: true }),
+    ResolvedImage.configure({ inline: true, allowBase64: true }),
     Markdown.configure({
       html: true,
       transformPastedText: true,
