@@ -1871,7 +1871,7 @@ Walnut on fresh EC2 Linux boxes and GitHub's macOS runners, on video.
   tokenizer that splits `camelCase`/`snake_case`/`kebab-case` identifiers into their parts and
   indexes Chinese as ordered character pairs, plus quantized vectors used only to rescore the
   keyword candidates. Cold interactive search went from seconds to milliseconds, and queries like
-  `operator` now find `PlatformEventOperator`, which no configuration of the previous engine could
+  `operator` now find `AcmeEventOperator`, which no configuration of the previous engine could
   do. Embedding models are ONNX presets chosen with `WALNUT_SEARCH_V2_EMBED_MODEL`
   (`qwen3-0.6b` default, `e5-small` for a smaller/faster index); `WALNUT_SEARCH_V2_SEMANTIC=0`
   gives keyword-only search with no model at all.

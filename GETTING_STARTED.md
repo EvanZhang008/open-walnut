@@ -556,7 +556,7 @@ Search is built in and runs entirely on your machine: one SQLite file (`~/.open-
 
 Nothing you have to wait for. The keyword half answers immediately (a few milliseconds), and it is a complete search on its own. The embedding model is fetched in the background on first use and cached under `~/.open-walnut/models/`; until it arrives, results are keyword-ranked. Indexing your existing data happens in the background too, paced so it never competes with the UI.
 
-Queries mixing Chinese and English work out of the box: the tokenizer splits `camelCase`, `snake_case` and `kebab-case` identifiers into their parts and indexes Chinese as ordered character pairs, so `operator` finds `PlatformEventOperator` and a Chinese phrase matches in order rather than as a bag of characters.
+Queries mixing Chinese and English work out of the box: the tokenizer splits `camelCase`, `snake_case` and `kebab-case` identifiers into their parts and indexes Chinese as ordered character pairs, so `operator` finds `AcmeEventOperator` and a Chinese phrase matches in order rather than as a bag of characters.
 
 ### Choosing an Embedding Model
 
