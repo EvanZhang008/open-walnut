@@ -114,8 +114,11 @@ export function builderLabel(b: Pick<SplitBuilder, 'engine' | 'model'>): string 
   return b.model ? `${name} · ${b.model}` : name;
 }
 
-/** A reviewer subtask: its title starts with "review" (after a bracketed tag) or names a reviewer. */
-export const REVIEW_RE = /^\s*(?:\[[^\]]*\]\s*)?(?:code |ui |ux |design |final |second |independent )?review\b|\breviewer\b/i;
+/**
+ * A reviewer subtask: its title starts with "review" or "reviewer" (after a bracketed tag and a
+ * kind such as "code"), never a title that only mentions one ("Fix the reviewer assignment bug").
+ */
+export const REVIEW_RE = /^\s*(?:\[[^\]]*\]\s*)?(?:(?:code|ui|ux|design|final|second|independent|fresh|claude|gpt)\s+)*review(?:er)?\b/i;
 
 /** A reviewer subtask counts toward its parent's work (engine-compare.ts), so it takes no turn of the split. */
 export function isReviewerTask(task: { parent_task_id?: string; title?: string }): boolean {

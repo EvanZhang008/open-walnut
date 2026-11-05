@@ -259,6 +259,40 @@ describe('aggregateEngineCompare', () => {
   });
 });
 
+describe('round-6 counting', () => {
+  it('an open task with no usage yet leaves the medians of finished work exact (and ranked)', () => {
+    const tasks = [...Array.from({ length: 6 }, (_, i) => done(`f${i}`, 1)), task({ id: 'fresh', session_id: 's-fresh' })];
+    const spend = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`f${i}`, { costUsd: 2, tokens: 100 }]));
+    const row = aggregateEngineCompare(input(tasks, spend)).rows[0];
+    expect(row).toMatchObject({ partialCost: 1, partialCostDone: 0, partialTokensDone: 0, medianCostUsd: 2 });
+  });
+
+  it('a title that only mentions a reviewer is work; one that starts with "Reviewer" is a reviewer', () => {
+    const tasks = [done('p', 1), task({ id: 'fix', parent_task_id: 'p', title: 'Fix the reviewer assignment bug', session_id: 's-fix' }),
+      task({ id: 'rv', parent_task_id: 'p', title: 'Independent reviewer: engine split', session_id: 's-rv' })];
+    const out = aggregateEngineCompare(input(tasks, {}));
+    expect(out.tasks.map((t) => t.taskId).sort()).toEqual(['fix', 'p']);
+    expect(out.tasks.find((t) => t.taskId === 'p')?.reviews).toBe(1);
+  });
+
+  it('a task reopened and being worked on again still counts as reopened', () => {
+    const tasks = [done('a', 1), task({ id: 'again', session_id: 's-again', phase: 'IN_PROGRESS', reopens: 1, first_completed_at: '2026-11-02T03:00:00.000Z' })];
+    expect(aggregateEngineCompare(input(tasks, {})).rows[0].reopenedShare).toBe(0.5);
+  });
+});
+
+describe('placeholder model ids', () => {
+  it('"unknown" usage names no family: the session model decides, and it is no move', () => {
+    expect(modelFamily('unknown')).toBeNull();
+    expect(modelFamily('<synthetic>')).toBeNull();
+    const pick = { key: 'claude', engine: 'claude' as const, at: '2026-11-02T00:00:00.000Z' };
+    const inp = input([done('ph', 1, { engine_pick: pick })], { ph: { model: 'unknown', unknown: 4, tokens: 10 } });
+    (inp.sessions as Map<string, object>).set('s-ph', { startedAt: '2026-11-02T00:00:00.000Z', cliModel: 'claude-opus-5-5' });
+    const out = aggregateEngineCompare({ ...inp, splitOnly: true });
+    expect(out.tasks[0]).toMatchObject({ key: 'claude|Claude', switched: false });
+  });
+});
+
 describe('errors that a later start hides', () => {
   it('a start that failed before a session counts as an error even after a later start succeeded', () => {
     const at = '2026-11-02T00:00:00.000Z';

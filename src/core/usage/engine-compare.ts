@@ -22,9 +22,12 @@ import { ensurePriceBook, priceThresholds, type UserPriceRates } from './price-b
 /** Which company's model a model id is. */
 export type ModelFamily = 'Claude' | 'GPT' | 'Gemini' | 'Other';
 
+/** Model ids that name no model (the usage scanner's placeholders): no evidence of a family. */
+const NO_MODEL = /^(?:unknown|<synthetic>|synthetic|none|default|null|undefined)$/i;
+
 export function modelFamily(model: string | undefined | null): ModelFamily | null {
-  const m = (model ?? '').toLowerCase();
-  if (!m) return null;
+  const m = (model ?? '').trim().toLowerCase();
+  if (!m || NO_MODEL.test(m)) return null;
   if (/claude|anthropic|opus|sonnet|haiku|fable/.test(m)) return 'Claude';
   if (/gpt|openai|(^|[^a-z])o[1-9]|codex/.test(m)) return 'GPT';
   if (/gemini/.test(m)) return 'Gemini';
@@ -91,6 +94,9 @@ export interface EngineCompareRow {
   noUsage: number;
   /** Tasks whose tokens leave out requests with no token counts (noUsage ones included). */
   partialTokens: number;
+  /** Of the finished tasks (the medians'), those whose cost or tokens are a floor. */
+  partialCostDone: number;
+  partialTokensDone: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched: number;
   medianCostUsd: number | null;
@@ -100,7 +106,7 @@ export interface EngineCompareRow {
   reviewsPerTask: number | null;
   /** What those reviewers cost, per finished task. */
   reviewCostPerTask: number | null;
-  /** Tasks whose review cost leaves out unpriced requests. */
+  /** Finished tasks whose review cost leaves out unpriced requests (the per-task review cost is of finished tasks). */
   reviewPartialCost: number;
   /** The user's messages per finished task. */
   followUpsPerTask: number | null;
@@ -209,7 +215,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     if (!spend || spend.unpriced > 0 || spend.unknown > 0) reviewPartial.add(t.parent_task_id);
   }
   type Group = { key: string; engine: string; family: ModelFamily };
-  type Candidate = EngineCompareTask & { finishedAt: string; byCost: Group; byPick: Group | null };
+  type Candidate = EngineCompareTask & { finishedAt: string; byCost: Group; byPick: Group | null; everDone: boolean };
   const candidates: Candidate[] = [];
   for (const t of input.tasks) {
     // A reviewer subtask counts toward its parent; a top-level task titled "Review ..." is work of its own.
@@ -251,7 +257,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       costUsd: spend?.costUsd ?? 0, partialCost: !spend || spend.unpriced > 0 || spend.unknown > 0, noUsage: usageUnknown(spend),
       partialTokens: !spend || spend.unknown > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
-      switched: !!byPick && byPick.key !== byCost.key, finishedAt: done ? t.completed_at! : '',
+      switched: !!byPick && byPick.key !== byCost.key, everDone: done || !!t.first_completed_at, finishedAt: done ? t.completed_at! : '',
     });
   }
   // Named like the columns ("Claude Code · GPT"), with the model an entry names.
@@ -279,20 +285,24 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const all = picked.filter((p) => p.key === key);
     const done = all.filter((p) => p.done);
     const known = done.filter((p) => !p.noUsage);
+    const everDone = all.filter((p) => p.everDone);
     const per = (f: (p: EngineCompareTask) => number) => done.length ? done.reduce((a, p) => a + f(p), 0) / done.length : null;
     rows.push({
       key, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}`,
       done: done.length, open: all.length - done.length, split: all.filter((p) => p.split).length,
       medianHours: median(done.map((p) => p.hours).filter((h): h is number => h !== null)),
       costUsd: all.reduce((a, p) => a + p.costUsd, 0), partialCost: all.filter((p) => p.partialCost).length,
+      // The medians are of finished tasks: only those can make them a floor (a task that just started cannot).
+      partialCostDone: done.filter((p) => p.partialCost).length, partialTokensDone: done.filter((p) => p.partialTokens).length,
       // Under the column the split assigned, in either view.
       noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && p.byPick?.key === key).length,
       // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
-      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: all.filter((p) => p.reviewPartialCost).length, followUpsPerTask: per((p) => p.followUps),
+      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: done.filter((p) => p.reviewPartialCost).length, followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
-      reopenedShare: per((p) => (p.reopens > 0 ? 1 : 0)),
+      // Of the tasks ever finished, a reopened one still being worked on included (it is not "done" now).
+      reopenedShare: everDone.length ? everDone.filter((p) => p.reopens > 0).length / everDone.length : null,
       erroredShare: all.length ? all.filter((p) => p.errored).length / all.length : null,
     });
   }
@@ -300,7 +310,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const tasks = [...picked]
     .sort((a, b) => Number(b.done) - Number(a.done) || b.finishedAt.localeCompare(a.finishedAt))
     .slice(0, TASKS_MAX)
-    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, ...t }) => t);
+    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, ...t }) => t);
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,
     projects: [...projects].sort((a, b) => b[1] - a[1]).map(([project, n]) => ({ project, tasks: n })),

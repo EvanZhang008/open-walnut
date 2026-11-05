@@ -122,7 +122,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('cost', 4)).toHaveAttribute('data-partial', 'true')
   // No usage recorded for it: its tokens are unknown too, never the "best" zero.
   await expect(cell('tokens', 4)).toHaveText('-')
-  await expect(cell('tokens', 4)).toHaveAttribute('title', '7 tasks had requests with no token counts recorded: the tokens leave those out')
+  await expect(cell('tokens', 4)).toHaveAttribute('title', '7 finished tasks had requests with no token counts recorded: the median leaves those out')
   await expect(cell('tokens', 4)).not.toHaveAttribute('data-best', 'true')
   await expect(cell('switched', 2)).toHaveText('2')
   // "Claude Code · GPT" has 3 finished (few): it is never ranked, though its 1.5 reviews is lowest.

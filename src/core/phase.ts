@@ -255,6 +255,9 @@ export function phaseDerivedFields(
     set.user_status = { state: 'done' };
     return { set, clear: ['session_id', 'plan_session_id', 'exec_session_id'] };
   }
+  // Reopened: the first completion is kept before completed_at goes (a task completed before
+  // first_completed_at existed has only completed_at; without this a reopen would lose it).
+  if (task.completed_at && !task.first_completed_at) set.first_completed_at = task.completed_at;
   // Reopened: Done is no longer true; readers fall back to the phase until the sync derives it.
   return { set, clear: task.user_status?.state === 'done' ? ['completed_at', 'user_status'] : ['completed_at'] };
 }

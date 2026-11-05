@@ -8624,6 +8624,8 @@ function prepareRawUpdate(
         (safeUpdates as Record<string, unknown>).completed_at = null;
       }
       if (safeUpdates.reopens === undefined) safeUpdates.reopens = (task.reopens ?? 0) + 1;
+      // The first completion outlives the reopen (phaseDerivedFields' twin), also for a task completed before it was kept.
+      if (safeUpdates.first_completed_at === undefined && task.completed_at && !task.first_completed_at) safeUpdates.first_completed_at = task.completed_at;
       // A Done status is no longer true either (phaseDerivedFields' twin); the sync derives it again.
       if (safeUpdates.user_status === undefined && task.user_status?.state === 'done') {
         (safeUpdates as Record<string, unknown>).user_status = null;

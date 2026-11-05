@@ -218,6 +218,9 @@ export interface EngineCompareRow {
   noUsage?: number;
   /** Tasks whose tokens leave out requests with no token counts. */
   partialTokens?: number;
+  /** Of the finished tasks (the medians'), those whose cost or tokens are a floor. */
+  partialCostDone?: number;
+  partialTokensDone?: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched?: number;
   medianCostUsd: number | null;

@@ -119,13 +119,14 @@ describe('the engine split', () => {
     try {
       await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false }))
         .rejects.toThrow(/the engine split's pick for this task.*retry with engine/)
+      // Both entries are Claude Code here, so it names no other engine to try.
     } finally { daemon.injectStartFault(null) }
     const first = (await task(placeholder.id)).engine_pick
     expect(first?.key).toBeTruthy()
     const retried = await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
     expect(retried.enginePick).toMatchObject({ key: first!.key, reused: true })
     // The failure is kept after the retry replaced last_start, so the comparison still counts it.
-    expect((await task(placeholder.id)).start_failures ?? 0).toBeGreaterThanOrEqual(1)
+    expect((await task(placeholder.id)).start_failures).toBe(1)
     await expect.poll(async () => (await getSessionsForTask(placeholder.id)).at(-1)?.cliModel ?? '', { timeout: 20_000 })
       .toSatisfy((m: string) => /sonnet/i.test(m) === (first!.key === 'claude:sonnet'))
   }, 60_000)
@@ -154,6 +155,19 @@ describe('the engine split', () => {
     await expect.poll(async () => (await getSessionsForTask(placeholder.id)).length, { timeout: 20_000 }).toBeGreaterThan(0)
     const [record] = await getSessionsForTask(placeholder.id)
     expect(/sonnet/i.test(record?.cliModel ?? '')).toBe(kept?.key === 'claude:sonnet')
+  }, 60_000)
+
+  it('a task completed before first_completed_at existed keeps its completion through a reopen, on both write paths', async () => {
+    const old = '2026-10-01T10:00:00.000Z'
+    for (const path of ['route', 'raw'] as const) {
+      const t = await op('task_create', { title: `Legacy completion (${path})`, project: 'Legacy', record_only: true })
+      // As an older Walnut left it: COMPLETE with completed_at and no first_completed_at.
+      await updateTaskRaw(t.id, { phase: 'COMPLETE', status: 'done', completed_at: old, first_completed_at: null as unknown as string })
+      expect((await task(t.id)).first_completed_at ?? null).toBeNull()
+      if (path === 'route') expect((await api('PATCH', `/api/tasks/${t.id}`, { phase: 'IN_PROGRESS' })).status).toBe(200)
+      else await updateTaskRaw(t.id, { phase: 'IN_PROGRESS' }, { source: 'api', reopenTerminal: true })
+      expect((await task(t.id)).first_completed_at).toBe(old)
+    }
   }, 60_000)
 
   it('counts a reopen of a completed task and compares the work on GET /api/usage/engines', async () => {

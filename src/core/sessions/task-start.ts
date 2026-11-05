@@ -316,8 +316,14 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
  */
 async function nameSplitPickInFailure(err: unknown, pick: { engine: SessionEngine; model?: string }): Promise<void> {
   if (!(err instanceof Error) || err.message.includes('engine split')) return;
-  const { builderLabel } = await import('../agents/engine-split.js');
-  try { err.message += ` (This start ran on ${builderLabel(pick)}, the engine split's pick for this task, and a retry uses it again: if that engine is what failed, retry with engine, for example "claude", to choose another.)`; } catch { /* a read-only message */ }
+  const { builderLabel, splitBuilders } = await import('../agents/engine-split.js');
+  const { getConfig } = await import('../config-manager.js');
+  // Name an engine other than the one that failed: the split's next other entry, else Claude Code.
+  const failed = resolveEngine(pick.engine);
+  const other = splitBuilders(await getConfig().catch(() => undefined)).map((b) => resolveEngine(b.engine)).find((e) => e !== failed)
+    ?? (failed === 'claude' ? undefined : 'claude');
+  const hint = other ? `retry with engine "${other}" (or another) to choose a different one` : 'retry with engine to choose a different one';
+  try { err.message += ` (This start ran on ${builderLabel(pick)}, the engine split's pick for this task, and a retry uses it again: if that engine is what failed, ${hint}.)`; } catch { /* a read-only message */ }
 }
 
 /** A start no host had room for, as the task's last start (unless another start is under way). */
@@ -546,7 +552,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         // A failed start is counted for good: a later start replaces last_start, and the comparison
         // (engine-compare.ts) must still see that this task's engine once failed to start.
         await updateTaskRaw(task.id, (current) => ({ last_start: { ...attempt, ...updates },
-          ...(updates.state === 'failed' ? { start_failures: (current.start_failures ?? 0) + 1 } : {}) }),
+          // Once per attempt: a failure is settled both where the launch rejects and in the outer catch.
+          ...(updates.state === 'failed' && current.last_start?.state !== 'failed' ? { start_failures: (current.start_failures ?? 0) + 1 } : {}) }),
           { source: 'task-start', shouldUpdate: (current) => current.last_start?.id === attempt.id });
       } catch (error) {
         log.session.error('Failed to persist task start outcome', { taskId: task.id, attemptId: attempt.id, error: String(error) });

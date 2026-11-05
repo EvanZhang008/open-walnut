@@ -45,18 +45,23 @@ interface Metric {
   show: (n: number | null, r: EngineCompareRow) => string;
   /** Lower is better (time, cost, rework); absent = not ranked. */
   lower?: boolean;
-  /** A cost: how many of a column's tasks hold requests with no price (its value is a floor and is not ranked). */
+  /** How many of the tasks behind the value leave something out (it is a floor and is not ranked). */
   partial?: (r: EngineCompareRow) => number;
+  /** The tooltip of such a value, given that count. */
+  partialNote?: (n: number) => string;
 }
 
-const ownPartial = (r: EngineCompareRow) => r.partialCost;
-const reviewPartial = (r: EngineCompareRow) => r.reviewPartialCost ?? 0;
 const noUsage = (r: EngineCompareRow) => r.noUsage ?? 0;
 /** None of a column's tasks has usage recorded: its cost is unknown, not $0. */
 const allUnknown = (r: EngineCompareRow) => r.done + r.open > 0 && noUsage(r) >= r.done + r.open;
-/** Tasks whose tokens leave something out (an older server sends only noUsage). */
-const tokensPartial = (r: EngineCompareRow) => r.partialTokens ?? noUsage(r);
 const tasksWord = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
+const finishedWord = (n: number) => `${n} finished task${n === 1 ? '' : 's'}`;
+const LEFT_OUT = 'requests to a model with no price, or usage that was not recorded';
+// The medians and the per-task review cost are of finished tasks; the total is of every task (an older server sends only the totals).
+const totalPartial = (r: EngineCompareRow) => r.partialCost;
+const medianCostPartial = (r: EngineCompareRow) => r.partialCostDone ?? r.partialCost;
+const medianTokensPartial = (r: EngineCompareRow) => r.partialTokensDone ?? r.partialTokens ?? noUsage(r);
+const reviewPartial = (r: EngineCompareRow) => r.reviewPartialCost ?? 0;
 /** The tooltip of one task's cost: why it is unknown or a floor. */
 function taskCostNote(t: EngineCompareTask): string | undefined {
   if (t.noUsage) return 'No usage of this task was recorded (an engine Walnut does not read usage from)';
@@ -64,27 +69,25 @@ function taskCostNote(t: EngineCompareTask): string | undefined {
   return undefined;
 }
 
-/** The tooltip of a value that is a floor: which of its tasks it leaves out, and why. */
-function partialNote(m: Metric, r: EngineCompareRow): string {
-  const none = noUsage(r);
-  if (m.partial === tokensPartial) return `${tasksWord(tokensPartial(r))} had requests with no token counts recorded: the tokens leave those out`;
-  const unpriced = m.partial!(r) - (m.partial === ownPartial ? none : 0);
-  return [unpriced > 0 && `${tasksWord(unpriced)} used a model with no price`, m.partial === ownPartial && none > 0 && `${tasksWord(none)} had no usage recorded`]
-    .filter(Boolean).join(', ') + ': the cost leaves those out';
-}
-
 const METRICS: Metric[] = [
   { id: 'done', label: 'Tasks finished', help: 'Completed in the period, counted under the engine and model that carried most of their cost (only the split\'s tasks: the engine it assigned).', value: (r) => r.done, show: (n) => String(n ?? 0) },
   { id: 'open', label: 'Still open', value: (r) => r.open, show: (n) => String(n ?? 0) },
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
   { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true },
-  { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: ownPartial },
-  { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => (allUnknown(r) ? null : r.costUsd), show: (n) => (n === null ? '-' : money(n)), partial: ownPartial },
-  { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: tokensPartial },
-  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a title starting with "Review" or naming a reviewer): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
-  { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.', value: (r) => r.reviewCostPerTask, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial },
+  { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: medianCostPartial,
+    partialNote: (n) => `${finishedWord(n)} leave out ${LEFT_OUT}: the median is a floor` },
+  { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => (allUnknown(r) ? null : r.costUsd), show: (n) => (n === null ? '-' : money(n)), partial: totalPartial,
+    partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
+  { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
+    partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out` },
+  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review" or "Reviewer"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
+  { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.',
+    // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
+    value: (r) => (r.reviewCostPerTask === 0 && r.done > 0 && reviewPartial(r) >= r.done ? null : r.reviewCostPerTask),
+    show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial,
+    partialNote: (n) => `${finishedWord(n)} had reviewers whose cost leaves out ${LEFT_OUT}` },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
-  { id: 'reopens', label: 'Reopened after done', help: 'Share of its finished tasks that were reopened.', value: (r) => r.reopenedShare, show: share, lower: true },
+  { id: 'reopens', label: 'Reopened after done', help: 'Share of the tasks it finished that were reopened, those being worked on again included.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
   { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counted in the column the split assigned; counting only the split\'s tasks, the task itself stays there too. A Claude Code task whose subagents ran mostly on another model counts as moved as well.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
 ];
@@ -183,7 +186,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                       <td title={m.help}>{m.label}</td>
                       {data.rows.map((r) => (
                         <td key={r.key} className="num" data-best={best.get(m.id) === r.key || undefined}
-                          data-partial={(m.partial && m.partial(r) > 0) || undefined} title={m.partial && m.partial(r) > 0 ? partialNote(m, r) : undefined}>
+                          data-partial={(m.partial && m.partial(r) > 0) || undefined} title={m.partial && m.partial(r) > 0 ? m.partialNote?.(m.partial(r)) : undefined}>
                           {m.show(m.value(r), r)}{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
                         </td>
                       ))}
