@@ -117,14 +117,31 @@ export function createUsagePages() {
     if (done) jobs.delete(key);
     return { result: evidence, key, offset: end, done };
   }
+  function store(result: Awaited<ReturnType<typeof scanHostUsage>>): string {
+    if (jobs.size >= 2) jobs.delete(jobs.keys().next().value!);
+    const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    jobs.set(key, { result, expiresAt: Date.now() + 15 * 60_000 });
+    setTimeout(() => jobs.delete(key), 15 * 60_000).unref();
+    return key;
+  }
+  // A scan can run longer than a link to the host stays up (the first full read of a big host takes ten minutes). It goes on without
+  // its requester, and the same request asked again within the hour its pages are kept takes up the same scan instead of starting over.
+  const asked = new Map<string, Promise<string>>();
+  async function scan(request: UsageScanRequest, run: () => Promise<Awaited<ReturnType<typeof scanHostUsage>>>) {
+    const { until: _until, ...same } = request;
+    const signature = JSON.stringify([same.since ?? null, same.proxyLogDir ?? null, same.outside === true, same.lifetime === true, same.sessionIds ?? null]);
+    const held = asked.get(signature);
+    if (held) {
+      try { return page(await held); } catch { asked.delete(signature); /* its pages are gone or it failed: scan again */ }
+    }
+    const started = run().then(store);
+    asked.set(signature, started);
+    started.catch(() => { if (asked.get(signature) === started) asked.delete(signature); });
+    setTimeout(() => { if (asked.get(signature) === started) asked.delete(signature); }, 15 * 60_000).unref();
+    return page(await started);
+  }
   return {
-    put(result: Awaited<ReturnType<typeof scanHostUsage>>) {
-      if (jobs.size >= 2) jobs.delete(jobs.keys().next().value!);
-      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      jobs.set(key, { result, expiresAt: Date.now() + 15 * 60_000 });
-      setTimeout(() => jobs.delete(key), 15 * 60_000).unref();
-      return page(key);
-    }, page,
+    put(result: Awaited<ReturnType<typeof scanHostUsage>>) { return page(store(result)); }, page, scan,
   };
 }
 

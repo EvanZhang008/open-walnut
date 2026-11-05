@@ -174,3 +174,29 @@ describe('proxy evidence of outside sessions', () => {
   });
 });
 
+describe('a scan that outlives its requester', () => {
+  it('is taken up by the same request asked again, and is scanned again once its pages are gone or it failed', async () => {
+    await transcript('p1/terminal.jsonl', 'cli', Array.from({ length: 600 }, (_, i) => `m${i}`));
+    const pages = createUsagePages();
+    const request = { projectsDir: root, until: '2026-10-13T13:00:00.000Z', sessionIds: [] as string[], outside: true, indexDir: index };
+    let runs = 0;
+    const run = (until: string) => () => { runs++; return scanHostUsage({ ...request, until }); };
+    // The first requester's link drops: it never reads the answer, and its scan goes on.
+    const first = pages.scan(request, run(request.until));
+    first.catch(() => {});
+    // The next collection, a little later, asks the same thing.
+    const again = await pages.scan({ ...request, until: '2026-10-13T13:30:00.000Z' }, run('2026-10-13T13:30:00.000Z'));
+    expect(runs).toBe(1);
+    expect(again.result.reconciliation.responseCount).toBe(600);
+    expect(again.done).toBe(false);
+    // Its pages were read to the end, so asking again scans anew.
+    expect(pages.page(again.key, again.offset).done).toBe(true);
+    await pages.scan(request, run(request.until));
+    expect(runs).toBe(2);
+    // A failed scan is not remembered.
+    const failing = createUsagePages();
+    await expect(failing.scan(request, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect((await failing.scan(request, run(request.until))).result.reconciliation.responseCount).toBe(600);
+  });
+});
+

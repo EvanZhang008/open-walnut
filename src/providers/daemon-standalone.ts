@@ -11217,16 +11217,20 @@ async function cmdUsageScan(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   }
   const until = typeof cmd.until === 'string' ? cmd.until : new Date().toISOString()
   const sessionIds = Array.isArray(cmd.sessionIds) ? cmd.sessionIds.filter((s): s is string => typeof s === 'string') : undefined
-  const work = usageScanInflight.catch(() => {}).then(() => scanHostUsage({
+  const request = {
     projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
     ...(typeof cmd.proxyLogDir === 'string' ? { proxyLogDir: cmd.proxyLogDir } : {}),
     ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}), until, sessionIds,
     ...(cmd.outside === true ? { outside: true } : {}),
     // The transcript file index: a scan reads only what the files gained since the last one.
     indexDir: path.join(DAEMON_DIR, 'usage-scan-index'),
-  }))
-  usageScanInflight = work.then(() => {}, () => {})
-  try { sendOk(ws, id, usagePages.put(await work)) }
+  }
+  const run = () => {
+    const work = usageScanInflight.catch(() => {}).then(() => scanHostUsage(request))
+    usageScanInflight = work.then(() => {}, () => {})
+    return work
+  }
+  try { sendOk(ws, id, await usagePages.scan(request, run)) }
   catch (err) { sendError(ws, id, 'usage.scan failed: ' + (err as Error).message) }
 }
 async function cmdUsageCostState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {

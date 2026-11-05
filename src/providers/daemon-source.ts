@@ -13714,16 +13714,20 @@ async function cmdUsageScan(ws, id, cmd) {
   }
   const until = typeof cmd.until === 'string' ? cmd.until : new Date().toISOString();
   const sessionIds = Array.isArray(cmd.sessionIds) ? cmd.sessionIds.filter((s) => typeof s === 'string') : undefined;
-  const work = usageScanInflight.catch(() => {}).then(() => usageCore.scanHostUsage({
+  const request = {
     projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
     ...(typeof cmd.proxyLogDir === 'string' ? { proxyLogDir: cmd.proxyLogDir } : {}),
     ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}), until, sessionIds,
     ...(cmd.outside === true ? { outside: true } : {}),
     // The transcript file index: a scan reads only what the files gained since the last one.
     indexDir: path.join(DAEMON_DIR, 'usage-scan-index'),
-  }));
-  usageScanInflight = work.then(() => {}, () => {});
-  try { sendOk(ws, id, usagePages.put(await work)); }
+  };
+  const run = () => {
+    const work = usageScanInflight.catch(() => {}).then(() => usageCore.scanHostUsage(request));
+    usageScanInflight = work.then(() => {}, () => {});
+    return work;
+  };
+  try { sendOk(ws, id, typeof usagePages.scan === 'function' ? await usagePages.scan(request, run) : usagePages.put(await run())); }
   catch (err) { sendError(ws, id, 'usage.scan failed: ' + err.message); }
 }
 async function cmdUsageCostState(ws, id, cmd) {
