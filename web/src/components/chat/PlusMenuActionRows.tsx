@@ -70,6 +70,7 @@ function actionRow(action: PlusMenuAction, onSelect: (action: PlusMenuAction) =>
     >
       {action.icon ?? <GearIcon />}
       <span>{action.label}</span>
+      {disabled && action.disabledHint && <span className="chat-plus-menu-hint">{action.disabledHint}</span>}
     </button>
   );
 }

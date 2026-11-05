@@ -1,9 +1,9 @@
 /**
  * The prompt cache facts a session panel reads from its history when its record has none, and the
- * "+" row's token count (web/src/components/sessions/compact-offer.ts).
+ * "+" row's token count, and which of two readings is current (web/src/components/sessions/compact-offer.ts).
  */
 import { describe, it, expect } from 'vitest';
-import { factsFromHistory, formatContextTokens } from '../../web/src/components/sessions/compact-offer';
+import { factsFromHistory, formatContextTokens, newerFacts } from '../../web/src/components/sessions/compact-offer';
 import { ONE_HOUR_MS } from '../../src/core/sessions/prompt-cache';
 
 describe('the token count', () => {
@@ -32,5 +32,20 @@ describe('the facts of a session that has none stored', () => {
     ]);
     expect(f?.compactedAt).toBe('2026-11-04T10:30:00.000Z');
     expect(factsFromHistory([])).toBeUndefined();
+  });
+});
+
+describe('the current reading of the facts', () => {
+  const before = { tokens: 400_000, ttlMs: ONE_HOUR_MS, requestAt: '2026-11-04T10:00:00.000Z', expiresAt: '2026-11-04T11:00:00.000Z' };
+  const compacted = { tokens: 18_000, ttlMs: ONE_HOUR_MS, requestAt: '2026-11-04T10:05:00.000Z', compactedAt: '2026-11-04T10:05:00.000Z', expiresAt: '2026-11-04T11:05:00.000Z' };
+  it('is the later one, whichever side holds it', () => {
+    // A compaction sends no live usage after it: the live reading can be the one from before it.
+    expect(newerFacts(before, compacted)).toBe(compacted);
+    expect(newerFacts(compacted, before)).toBe(compacted);
+  });
+  it('is the one there is when only one is', () => {
+    expect(newerFacts(undefined, compacted)).toBe(compacted);
+    expect(newerFacts(before, undefined)).toBe(before);
+    expect(newerFacts(undefined, undefined)).toBeUndefined();
   });
 });

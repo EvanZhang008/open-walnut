@@ -39,3 +39,13 @@ export function factsFromHistory(rows: readonly HistoryRowLike[]): PromptCacheFa
   }
   return undefined;
 }
+
+function factsStamp(f: PromptCacheFacts): number {
+  return Math.max(Date.parse(f.requestAt) || 0, Date.parse(f.compactedAt ?? '') || 0);
+}
+
+/** The later of two readings of one session's prompt cache facts. */
+export function newerFacts(a: PromptCacheFacts | undefined, b: PromptCacheFacts | undefined): PromptCacheFacts | undefined {
+  if (!a || !b) return a ?? b;
+  return factsStamp(b) > factsStamp(a) ? b : a;
+}

@@ -498,7 +498,10 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 
 /** Collapsed run of consecutive system notices from history or the live stream. */
 export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
-  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
+  // Walnut's idle compaction opens to why it ran, live and after (2026-11-04 review: the run closed when
+  // the compaction ended, its first line being another, and its reason was two clicks away).
+  const idleRun = members.some((member) => isIdleCompactLine(member.message));
+  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, idleRun);
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error' || member.variant === CLI_ERROR_VARIANT);
   // A compaction's run says so (its explanation and numbers are inside).
   const label = allErrors ? `${members.length} errors` : systemRunLabel(members);

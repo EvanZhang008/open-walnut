@@ -13,11 +13,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
-import { wsClient, type ConnectionState } from '@/api/ws';
+import { useWalnutCompactingSession, type WalnutCompaction } from '@/stores/idle-compacting-store';
 import type { SessionRecord } from '@/types/session';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import type { PromptCacheFacts } from '../../../../src/core/sessions/prompt-cache';
-import { formatContextTokens } from './compact-offer';
+import { formatContextTokens, newerFacts } from './compact-offer';
 import '@/styles/compact-context.css';
 
 export const COMPACT_COMMAND = '/compact';
@@ -52,10 +52,7 @@ function useLivePromptCache(sessionId: string | null): PromptCacheFacts | undefi
 /** The working line while Walnut's own idle compaction runs (session:idle-compaction). */
 export const IDLE_COMPACTING_TEXT = 'Walnut is compacting this idle session\u2026';
 
-/**
- * Whether Walnut's idle compaction runs in this session now: the server says when it starts and
- * ends (session:idle-compaction), and the turn's result ends it here too.
- */
+/** Whether one of Walnut's own compactions runs in this session now (web/src/stores/idle-compacting-store.ts). */
 export function useIdleCompacting(sessionId: string | null | undefined): boolean {
   return useWalnutCompacting(sessionId) !== null;
 }
@@ -64,28 +61,12 @@ export function useIdleCompacting(sessionId: string | null | undefined): boolean
 export const CONTEXT_COMPACTING_TEXT = 'Walnut is compacting this conversation so it fits again\u2026';
 
 /** Which of Walnut's own compactions runs in the session now, if one does: the working line says which. */
-export function useWalnutCompacting(sessionId: string | null | undefined): 'idle' | 'context' | null {
-  const [on, setOn] = useState<'idle' | 'context' | null>(null);
-  useEffect(() => { setOn(null); }, [sessionId]);
-  useEvent('session:idle-compaction', useCallback((data: unknown) => {
-    const d = data as { sessionId?: string; active?: boolean; reason?: string };
-    if (sessionId && d.sessionId === sessionId) setOn(d.active === true ? (d.reason === 'context' ? 'context' : 'idle') : null);
-  }, [sessionId]));
-  // Its result ends it; so does the CLI failing or ending before one.
-  const ended = useCallback((data: unknown) => {
-    if (sessionId && (data as { sessionId?: string })?.sessionId === sessionId) setOn(null);
-  }, [sessionId]);
-  useEvent('session:result', ended);
-  useEvent('session:error', ended);
-  // A reconnect may have missed the result: the composer goes back to the turn's own Stop rather
-  // than hide it for the rest of a turn the user started.
-  useEffect(() => {
-    const onState = (state: ConnectionState) => { if (state === 'connected') setOn(null); };
-    wsClient.onConnectionChange(onState);
-    return () => wsClient.offConnectionChange(onState);
-  }, []);
-  return on;
+export function useWalnutCompacting(sessionId: string | null | undefined): WalnutCompaction | null {
+  return useWalnutCompactingSession(sessionId, true);
 }
+
+/** How long a click holds the row off when its turn never shows (a send that failed). */
+const REQUEST_HOLD_MS = 30_000;
 
 export interface UseCompactContextArgs {
   sessionId: string | undefined;
@@ -106,11 +87,27 @@ export interface CompactContextParts {
 
 export function useCompactContext({ sessionId, session, acp, running, send, historyFacts }: UseCompactContextArgs): CompactContextParts {
   const live = useLivePromptCache(sessionId ?? null);
-  const facts = live ?? session?.promptCache ?? historyFacts;
+  // The newer of the two: a compaction brings no live usage after it, so the live facts can still be the
+  // ones from before it while the record already says compacted (2026-11-04 review: a second click went out).
+  const facts = newerFacts(live, session?.promptCache) ?? historyFacts;
   // Read at click time, so the row keeps its identity while the record re-renders.
   const latest = useRef(send);
   latest.current = send;
-  const compact = useCallback(() => { void latest.current(COMPACT_COMMAND); }, []);
+  // Clicked, and its turn has not shown yet: the row is off from the click, not from the server's word.
+  const [requested, setRequested] = useState(false);
+  const sawRun = useRef(false);
+  useEffect(() => { setRequested(false); sawRun.current = false; }, [sessionId]);
+  useEffect(() => {
+    if (!requested) return;
+    if (running) sawRun.current = true;
+    else if (sawRun.current) { sawRun.current = false; setRequested(false); }
+  }, [requested, running]);
+  useEffect(() => {
+    if (!requested) return;
+    const t = setTimeout(() => { sawRun.current = false; setRequested(false); }, REQUEST_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [requested]);
+  const compact = useCallback(() => { setRequested(true); void latest.current(COMPACT_COMMAND); }, []);
   const lane = session?.lane;
 
   const tokensLine = facts && facts.tokens > 0 ? `${formatContextTokens(facts.tokens)} tokens in context` : undefined;
@@ -119,15 +116,18 @@ export function useCompactContext({ sessionId, session, acp, running, send, hist
   const plusAction = useMemo<PlusMenuAction | undefined>(() => (acp || lane ? undefined : {
     id: 'compact-context',
     label: 'Compact context',
-    title: running
+    title: requested
+      ? 'Compacting\u2026'
+      : running
       ? 'Available when the current turn ends'
       : compacted
         ? 'Already compacted; available again after the next message'
         : `Summarize the conversation so far into a short context (sends ${COMPACT_COMMAND})${tokensLine ? `. ${tokensLine}` : ''}`,
-    disabled: running || compacted,
+    disabled: requested || running || compacted,
+    disabledHint: requested ? 'Compacting' : running ? 'After this turn' : compacted ? 'Just compacted' : undefined,
     icon: COMPACT_ICON,
     onSelect: compact,
-  }), [acp, lane, running, compacted, tokensLine, compact]);
+  }), [acp, lane, requested, running, compacted, tokensLine, compact]);
 
   return { plusAction };
 }

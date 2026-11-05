@@ -267,7 +267,7 @@ describe('when it fires', () => {
     expect(told).toEqual([true, false]);
   });
 
-  it('a person writing once the line went out leaves the panels saying it compacts (its result clears them)', async () => {
+  it('a person writing once the line went out leaves the panels saying it compacts, until its result', async () => {
     const told: boolean[] = [];
     const h = harness({ announce: (_sid, active) => { told.push(active); } });
     h.now.ms = T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS;
@@ -276,6 +276,22 @@ describe('when it fires', () => {
     noteSessionSend(SID, 'ui');
     expect(isQuietTurn(SID)).toBe(false);
     expect(told).toEqual([true]);
+    // The compaction's result ends it for every client (the task's circle reads it too), once.
+    h.ic.handleEvent(ev(EventNames.SESSION_RESULT, { sessionId: SID }));
+    expect(told).toEqual([true, false]);
+    h.ic.handleEvent(ev(EventNames.SESSION_RESULT, { sessionId: SID }));
+    expect(told).toEqual([true, false]);
+  });
+
+  it('a session error while it compacts ends it for every client', async () => {
+    const told: boolean[] = [];
+    const h = harness({ announce: (_sid, active) => { told.push(active); } });
+    h.now.ms = T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS;
+    expect(await h.ic.fire(SID, facts().requestAt)).toBe('sent');
+    noteQuietTurnDelivery(SID, [h.lastRow()!]);
+    noteSessionSend(SID, 'ui');
+    h.ic.handleEvent(ev(EventNames.SESSION_ERROR, { sessionId: SID }));
+    expect(told).toEqual([true, false]);
   });
 
   // 2026-11-04 on the Mac: under memory pressure the idle reap ends a CLI after 15 minutes, long before

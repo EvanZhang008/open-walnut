@@ -7541,6 +7541,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
    row stays hoverable and its title can still say why. No hover highlight. */
 .chat-plus-menu-item.is-disabled { opacity: 0.5; cursor: default; }
 .chat-plus-menu-item.is-disabled:hover { background: transparent; }
+.chat-plus-menu-hint { margin-left: auto; padding-left: 12px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
 

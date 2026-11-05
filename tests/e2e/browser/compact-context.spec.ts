@@ -110,6 +110,12 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await panel.locator('.session-panel-input .chat-plus-menu').screenshot({ path: `${SHOTS}/${info.project.name}-plus-menu.png` })
   await row.click()
   await expect(panel.locator('.session-panel-input .chat-plus-menu')).toHaveCount(0)
+  // Opened again at once (before the server says the turn runs), the row is already off.
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await expect(row).toHaveAttribute('aria-disabled', 'true')
+  // A click on it does nothing (dispatched: Playwright would wait for an aria-disabled row to turn on).
+  await row.dispatchEvent('click')
+  await page.keyboard.press('Escape')
   // While it runs the working line says what it does, not "is working".
   await expect(panel.locator('.session-working-label')).toHaveText(/is compacting the context/, { timeout: 10_000 })
   await openNotices(panel)
@@ -117,6 +123,17 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   // One row for one compaction: the live row and the transcript's are the same line.
   await page.waitForTimeout(1500)
   await expect(compactRows(panel)).toHaveCount(1)
+  // Done, the row stays off (the live usage from before the compaction does not turn it back on).
+  await expect(panel.locator('.session-working-label')).toHaveCount(0, { timeout: 15_000 })
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await expect(row).toHaveAttribute('aria-disabled', 'true')
+  await expect(row).toHaveAttribute('title', /Already compacted/)
+  await expect(row.locator('.chat-plus-menu-hint')).toHaveText('Just compacted')
+  await row.dispatchEvent('click')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(2500)
+  await expect(compactRows(panel)).toHaveCount(1)
+  await expect(panel.locator('.session-history').getByText('/compact', { exact: true })).toHaveCount(1)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-compacted.png` })
   expect(errors).toEqual([])
 })
@@ -196,12 +213,28 @@ test('the idle compaction row says why it ran and changes its setting in place',
   const { taskId, sid } = await bigSession(page, request, `Idle row ${info.project.name}`)
   const panel = await openTask(page, taskId, sid)
   const history = panel.locator('.session-history')
+  await expect(history).toContainText('Turn 1 done', { timeout: 25_000 })
+  await expect(panel.locator('.session-working-label')).toHaveCount(0, { timeout: 20_000 })
+  // Through the compaction the task's circle never reads as Working (its turn is quiet), and the
+  // sampling straddled it (the panel said it compacts).
+  const seen = await page.evaluate(async (id) => {
+    const out = { running: 0, compacting: 0 }
+    const until = Date.now() + 60_000
+    while (Date.now() < until) {
+      if (document.querySelector(`.todo-panel-item[data-task-id="${id}"] .task-circle-running`)) out.running++
+      if (document.body.textContent?.includes('Walnut is compacting this idle session')) out.compacting++
+      if (/Compacted by Walnut while idle/.test(document.querySelector('.session-history')?.textContent ?? '')) break
+      await new Promise((r) => setTimeout(r, 40))
+    }
+    return out
+  }, taskId)
+  expect(seen.compacting).toBeGreaterThan(0)
+  expect(seen.running).toBe(0)
   const fold = history.getByText(/^Compacted by Walnut while idle/).last()
   await expect(fold).toBeVisible({ timeout: 60_000 })
-  await fold.click()
+  // No click: the run opens by itself, live and once done, to the reason and the setting.
   const line = history.getByTestId('idle-compact-line').first()
   await expect(line).toBeVisible()
-  // Open already: the reason and the setting show as soon as the fold does.
   await expect(line.locator('.idle-compact-toggle')).toHaveAttribute('aria-expanded', 'true')
   await expect(line.getByTestId('idle-compact-why')).toHaveText(
     "Why: 400K tokens, past 85% (383K) of the model's 450K context window (no auto-compaction window is set).", { timeout: 15_000 })

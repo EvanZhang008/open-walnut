@@ -27,9 +27,9 @@
 .idle-compact-setting-row label { font-weight: 500; cursor: pointer; }
 .idle-compact-setting-at, .idle-compact-setting-unit { color: var(--fg-muted); }
 /* The share and its % never split across lines. */
-.idle-compact-percent-group { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.idle-compact-percent-group { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
 .idle-compact-percent {
-  width: 3.4em;
+  width: 2.9em;
   padding: 2px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;

@@ -18,6 +18,8 @@ export interface PlusMenuAction {
   title?: string;
   /** Rendered as `aria-disabled` + `is-disabled`; the click is a no-op and the menu stays open. */
   disabled?: boolean;
+  /** A disabled row's reason, a few words shown on the row itself (the title needs a hover). */
+  disabledHint?: string;
   /** 16px stroke=currentColor SVG; ChatInput draws a default gear when absent. */
   icon?: ReactNode;
   /** A heading the row sits under, after the rows with none (Main's "Quick actions"). */

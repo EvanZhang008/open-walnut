@@ -119,13 +119,12 @@ export function IdleCompactSetting() {
         />
         <span className="idle-compact-setting-unit">%</span>
         </span>
-        <span className="idle-compact-setting-unit">of the auto-compaction limit</span>
+        <span className="idle-compact-setting-unit">of the limit</span>
         {saved && <span className="idle-compact-saved" role="status">Saved</span>}
       </div>
       <div className="idle-compact-setting-help">
-        For every session; the default is {DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%. The limit is the session's auto-compaction
-        window, else its model's context window, and it stays at least 45K below that so it runs before Claude Code compacts by
-        itself. When neither is known Walnut does not compact.{' '}
+        For every session with a one-hour cache; the default is {DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%. The limit is where
+        Claude Code would compact by itself; Walnut compacts before that, and not at all when the limit is unknown.{' '}
         <Link to="/settings#sessions">All session settings</Link>
       </div>
       {error && <div className="idle-compact-error" role="alert">{error}</div>}

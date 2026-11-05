@@ -8,6 +8,7 @@
 import type { Task } from '@open-walnut/core';
 import type { ProcessStatus, TaskPhase } from '@/types/session';
 import { USER_STATE_LABELS, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
+import { idleCompactingStore } from '@/stores/idle-compacting-store';
 
 // ── Session ID resolution ──
 
@@ -97,7 +98,8 @@ export function taskCircleClass(
   const sessionId = resolveTaskSessionId(task);
   if (!sessionId) return 'task-circle-todo';
   const s = liveStatus ?? task.session_status ?? null;
-  if (s?.process_status === 'running') return 'task-circle-running';
+  // Walnut's idle compaction runs the CLI but is no work of the task's: it does not read as Working.
+  if (s?.process_status === 'running' && !idleCompactingStore.has(sessionId)) return 'task-circle-running';
   return 'task-circle-session';
 }
 

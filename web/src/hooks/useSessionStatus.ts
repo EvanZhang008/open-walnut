@@ -3,6 +3,7 @@ import type { SessionRecord } from '@/types/session';
 import type { SessionCronMetadata, Task } from '@open-walnut/core';
 import { resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import { onPageVisible } from '@/utils/page-visibility';
+import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
 import {
   resolveSessionRecordStatus,
   sessionStatusStore,
@@ -128,5 +129,7 @@ export function useResolvedSessionRecord<T extends SessionRecord | null>(record:
  *  to the task's REST enrichment snapshot when the store has nothing yet. */
 export function useTaskCircle(task: Task): string {
   const status = useSessionStatus(resolveTaskSessionId(task));
+  // Re-read when Walnut's idle compaction starts or ends (taskCircleClass reads it).
+  useIdleCompactingSession(resolveTaskSessionId(task));
   return taskCircleClass(task, status);
 }

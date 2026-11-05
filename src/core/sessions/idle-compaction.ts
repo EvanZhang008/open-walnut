@@ -217,6 +217,8 @@ export class IdleCompaction {
   private readonly held = new Set<string>();
   /** The settings the timers were last set under (a config change of another key re-arms nothing). */
   private lastCfg: string | undefined;
+  /** Sessions told "compacting" whose end is not told yet: every one hears it ends, however it ends. */
+  private readonly compacting = new Set<string>();
 
   constructor(deps: Partial<IdleCompactionDeps> = {}) {
     this.deps = { ...defaultDeps(), ...deps };
@@ -231,6 +233,8 @@ export class IdleCompaction {
           noteQuietTurnSettled(d.sessionId);
           void this.noteQuietEnd(d.sessionId);
         }
+        // A person's message ended the quiet turn while the CLI still compacted: this is the compaction's result.
+        this.endAnnounced(d.sessionId);
         // Not a clean end: no timer, but the facts are stored still, since the cache they describe is
         // what a cold resume replays against (prompt-refresh.ts).
         if (d.teamActive || d.backgroundActive) { void this.storeFacts(d.sessionId, false); return; }
@@ -249,6 +253,7 @@ export class IdleCompaction {
           noteQuietTurnSettled(d.sessionId);
           void this.noteQuietEnd(d.sessionId);
         }
+        this.endAnnounced(d.sessionId);
         this.cancel(d.sessionId, 'session-error');
         return;
       case EventNames.SESSION_SEND:
@@ -281,13 +286,17 @@ export class IdleCompaction {
     }
   };
 
+  private endAnnounced(sessionId: string): void {
+    if (this.compacting.delete(sessionId)) this.deps.announce(sessionId, false);
+  }
+
   /** A quiet turn ended, whichever way: a row that never went out is taken back, and the end is stored. */
   readonly onQuietEnd = (end: QuietTurnEnd): void => {
     if (end.kind !== 'idle-compact') return;
     // A person's message after the line went out ends the quiet turn, but the CLI still compacts
     // first: the panels keep saying so until the compaction's own result (they clear on it).
     const stillCompacting = end.delivered && (end.why === 'other-send' || end.why === 'other-line');
-    if (!stillCompacting) this.deps.announce(end.sessionId, false);
+    if (!stillCompacting) { this.compacting.delete(end.sessionId); this.deps.announce(end.sessionId, false); }
     if (end.rowId && !end.delivered) void this.takeBack(end.sessionId, end.rowId, end.why);
     void this.noteQuietEnd(end.sessionId);
   };
@@ -406,6 +415,7 @@ export class IdleCompaction {
       log.session.info('idle compaction skipped', { sessionId, taskId: rec?.taskId, why: 'busy' });
       return 'busy';
     }
+    this.compacting.add(sessionId);
     this.deps.announce(sessionId, true);
     const lineUuid = idleCompactLineUuid(randomUUID());
     // skipReason passed, so the facts are past a known threshold.
