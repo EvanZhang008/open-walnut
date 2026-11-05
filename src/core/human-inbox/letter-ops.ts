@@ -46,7 +46,7 @@ import type {
 export type LetterAnswerSource = 'web' | 'phone' | 'relay' | 'plugin';
 
 /** Sender for a caller we can't identify (hand-started agent, curl, tests). */
-const EXTERNAL_SENDER: LetterSender = { sessionId: 'external', host: 'local' };
+const EXTERNAL_SENDER: LetterSender = { sessionId: 'external', host: 'local', via: 'api' };
 
 /** Sender resolution touches the session tracker + task store — bound it. */
 const SENDER_RESOLVE_TIMEOUT_MS = 3_000;
@@ -99,10 +99,13 @@ async function resolveSenderUnbounded(sid: string): Promise<LetterSender> {
     return EXTERNAL_SENDER;
   }
   let taskTitle: string | undefined;
+  let agentId: string | undefined;
   if (record.taskId) {
     try {
       const { listTasksByIds } = await import('../task-manager.js');
-      taskTitle = (await listTasksByIds([record.taskId]))[0]?.title;
+      const task = (await listTasksByIds([record.taskId]))[0];
+      taskTitle = task?.title;
+      agentId = task?.agent_id;
     } catch (err) {
       // A missing task must not cost the letter its envelope.
       log.notif.warn('human-inbox: task title lookup failed', { taskId: record.taskId, error: errMsg(err) });
@@ -115,6 +118,8 @@ async function resolveSenderUnbounded(sid: string): Promise<LetterSender> {
     ...(record.taskId ? { taskId: record.taskId } : {}),
     ...(taskTitle ? { taskTitle } : {}),
     ...(record.project ? { project: record.project } : {}),
+    // Who the letter is from reads off it (letter-origin.ts): an Inbox Triage run's agent id.
+    ...(agentId ? { agentId } : {}),
   };
 }
 
@@ -127,13 +132,15 @@ export async function resolveLetterSender(callerSid: string | undefined): Promis
   const sid = (callerSid ?? '').trim();
   if (!sid) return EXTERNAL_SENDER;
   try {
+    // A session whose record could not be read in time still sent it: keep its sid, so the
+    // letter reads as a Walnut session's (letter-origin.ts), never as an API caller's.
     return await withTimeout(resolveSenderUnbounded(sid), SENDER_RESOLVE_TIMEOUT_MS, () => {
       log.notif.warn('human-inbox: sender resolution timed out', { callerSid: sid });
-      return EXTERNAL_SENDER;
+      return { sessionId: sid, host: 'local' };
     });
   } catch (err) {
     log.notif.warn('human-inbox: sender resolution failed', { callerSid: sid, error: errMsg(err) });
-    return EXTERNAL_SENDER;
+    return { sessionId: sid, host: 'local' };
   }
 }
 

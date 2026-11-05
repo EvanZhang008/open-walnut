@@ -86,6 +86,34 @@ final class InboxContractTests: XCTestCase {
         XCTAssertNil(letter.createdDate)
     }
 
+    /// Who a letter is from leads every row (LetterOriginBadge): the server's
+    /// `origin` when it sends one, else the same rule from the sender.
+    func testLetterOriginDecodesAndFallsBack() throws {
+        let stamped = try decode(Letter.self, #"""
+        { "id": "lt-x-abcd", "subject": "Decide on the Acme offer", "type": "action_required",
+          "sender": { "sessionId": "s-1", "taskId": "t-9", "taskTitle": "Offer review", "host": "local" },
+          "origin": { "kind": "task", "name": "Offer review", "taskId": "t-9" } }
+        """#)
+        XCTAssertEqual(stamped.resolvedOrigin, LetterOrigin(kind: "task", name: "Offer review", taskId: "t-9"))
+        XCTAssertEqual(stamped.resolvedOrigin.kindLabel, "Task")
+
+        let older = try decode(Letter.self, #"""
+        { "id": "lt-x-abce", "subject": "S", "type": "info",
+          "sender": { "sessionId": "s-1", "taskId": "t-9", "taskTitle": "Offer review", "host": "local" } }
+        """#)
+        XCTAssertEqual(older.resolvedOrigin.kind, "task")
+        XCTAssertEqual(older.resolvedOrigin.name, "Offer review")
+
+        let triage = try decode(Letter.self, #"""
+        { "id": "lt-x-abcf", "subject": "2 new mails", "type": "review",
+          "origin": { "kind": "triage", "name": "Inbox Triage", "taskId": "t-3" } }
+        """#)
+        XCTAssertEqual(triage.resolvedOrigin.kindLabel, "Triage")
+
+        let bare = try decode(Letter.self, #"{ "id": "lt-x-abd0", "subject": "Hi", "type": "info" }"#)
+        XCTAssertEqual(bare.resolvedOrigin.kind, "walnut", "a letter never reads as sender-less")
+    }
+
     func testUnknownLetterTypeStaysRenderable() throws {
         let letter = try decode(Letter.self, #"{ "id": "lt-x-abcd", "subject": "S", "type": "digest" }"#)
         XCTAssertEqual(letter.kind, .unknown)

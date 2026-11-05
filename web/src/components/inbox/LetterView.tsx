@@ -29,14 +29,14 @@ import { log } from '@/utils/log';
 import {
   answerLetter, deliveryText, getLetter, humanReplyToLetter, isDecisionWithoutOptions,
   LETTER_TYPE_LABEL, type LetterDetail, type LetterEnvelope,
-  answeredByName,
+  answeredByName, letterOriginOf,
 } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
 import { LetterThread } from './LetterThread';
 import { EmailItems } from './EmailItems';
 import { askAILabel } from './item-receipt-model';
 import { refreshWatchedItems } from './item-store';
-import { senderLabelOf } from './LetterEnvelopeRow';
+import { LetterOriginBadge } from './LetterOriginBadge';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -307,7 +307,14 @@ export function LetterView({
       className={`hib-view${embedded ? ' hib-view-embedded' : ''}${turns > 0 ? ' hib-view-split' : ''}`}
     >
       <div className="hib-reader-head">
+        {/* A host's back button stays first; then who it is from, on its own full-width line,
+            so on a phone Pin and Archive never squeeze the sender's name. */}
         {headLeading}
+        {shown && (
+          <div className="hib-reader-from">
+            <LetterOriginBadge letter={shown} variant="reader" linkTask />
+          </div>
+        )}
         <div className="hib-reader-title">
           <span className="hib-reader-subject">{shown?.subject || 'Letter'}</span>
           {shown && (settledNote ? (
@@ -339,11 +346,8 @@ export function LetterView({
 
       {shown && (
         <div className="hib-reader-meta">
-          <span className="hib-chip">{senderLabelOf(shown)}</span>
-          {shown.sender?.taskTitle && (
-            <span className="hib-chip hib-chip-task">{shown.sender.taskTitle}</span>
-          )}
-          {shown.sender?.project && <span className="hib-chip">{shown.sender.project}</span>}
+          {/* The sender leads the head (LetterOriginBadge, above the subject). */}
+          {shown.sender?.project && letterOriginOf(shown).kind !== 'triage' && <span className="hib-chip">{shown.sender.project}</span>}
           {shown.sender?.host && <span className="hib-chip">{shown.sender.host}</span>}
           <span className="hib-time">{formatRelative(shown.createdAt)}</span>
           {shown.archived && shown.archivedReason === 'task_completed' && (

@@ -29,6 +29,7 @@ import { getQuiet, logQuietSkipOnce, quietSuppresses } from '../quiet/quiet-stat
 import { deliverPush } from './deliver.js'
 import { truncatePreview } from '../human-inbox/preview.js'
 import type { PushContent } from './send.js'
+import { letterOriginLine } from '../human-inbox/letter-origin.js'
 import {
   ACTIVE_LEASE_MS,
   parseMode,
@@ -51,6 +52,8 @@ export interface LetterPushInput {
   type: string
   textPreview: string
   kind: 'new' | 'reply'
+  /** Who it is from (human-inbox/letter-origin.ts); absent on an event from an older store. */
+  origin?: { kind: string; name: string }
 }
 
 /**
@@ -58,12 +61,32 @@ export interface LetterPushInput {
  * asserted without a network or a config.
  */
 export function letterPushContent(letter: LetterPushInput): PushContent {
+  const preview = truncatePreview(letter.textPreview ?? '')
+  // Who sent it leads the banner: a task's decision whose subject names a company read as that
+  // company's mail (2026-11-04). The subject moves to the body's first line.
+  const origin = letter.origin?.name
+    ? letterOriginLine(letter.origin as Parameters<typeof letterOriginLine>[0], TITLE_MAX - 20)
+    : null
+  if (origin) {
+    return {
+      title: `${letter.kind === 'reply' ? 'Reply · ' : ''}${origin}`.slice(0, TITLE_MAX),
+      body: preview ? `${letter.subject}\n${preview}` : letter.subject || 'Open Walnut to read it',
+      ...pushTail(letter),
+    }
+  }
   const prefix = letter.kind === 'reply' ? 'Reply: ' : 'New letter: '
   return {
     title: `${prefix}${letter.subject}`.slice(0, TITLE_MAX),
     // The store caps every preview it emits at 300 characters; capped again here
     // so what reaches a lock screen never depends on every producer doing so.
-    body: truncatePreview(letter.textPreview ?? '') || 'Open Walnut to read it',
+    body: preview || 'Open Walnut to read it',
+    ...pushTail(letter),
+  }
+}
+
+/** The part of a letter's push that does not depend on how its words are laid out. */
+function pushTail(letter: LetterPushInput): Omit<PushContent, 'title' | 'body'> {
+  return {
     data: {
       type: LETTER_PUSH_TYPE,
       letterId: letter.letterId,
@@ -301,6 +324,7 @@ export function initLetterPush(): void {
         type: data.type,
         textPreview: data.textPreview,
         kind: data.kind,
+        ...(data.originKind && data.originName ? { origin: { kind: data.originKind, name: data.originName } } : {}),
       })
     } catch (err) {
       // A push must never break the letter that triggered it.

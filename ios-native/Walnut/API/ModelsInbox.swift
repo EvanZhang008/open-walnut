@@ -63,6 +63,33 @@ struct LetterSender: Codable, Equatable {
     let taskTitle: String?
     let project: String?
     let host: String?
+    /// An Inbox Triage run stamps "triage" (absent on older servers).
+    var agentId: String? = nil
+}
+
+/// Who a letter is from, as the server derives it from the stamped sender
+/// (src/core/human-inbox/letter-origin.ts). Every letter is Walnut's own, never
+/// outside mail, and every inbox surface leads a letter with it
+/// (`LetterOriginBadge`). Kinds: task, triage, session, walnut, plugin, script.
+struct LetterOrigin: Codable, Equatable {
+    let kind: String
+    let name: String
+    let taskId: String?
+
+    /// The short word the badge wears (the web's `LETTER_ORIGIN_KIND_LABEL`).
+    var kindLabel: String {
+        switch kind {
+        case "task": return "Task"
+        case "triage": return "Triage"
+        case "session": return "Session"
+        case "plugin": return "Plugin"
+        case "script": return "API"
+        default: return "Walnut"
+        }
+    }
+
+    /// A user's own task or Triage run: its name reads in the walnut tint.
+    var isWalnutWork: Bool { kind == "task" || kind == "triage" || kind == "session" }
 }
 
 /// The task that answered a letter, or wrote a reply turn, in the user's place.
@@ -116,6 +143,8 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     /// that predate the field.
     let delivery: LetterTurnDelivery?
     @LossyInboxItems var items: [InboxEmailItem]? = nil
+    /// Who it is from (server-derived); `resolvedOrigin` covers an older server.
+    var origin: LetterOrigin? = nil
     /// Human turns only: a task wrote this turn in the user's place.
     var by: LetterAnsweredBy? = nil
     /// Human turns only: the file names of the pictures that went with it.
@@ -238,6 +267,29 @@ struct Letter: Codable, Identifiable, Equatable {
         let sid = sender?.sessionId ?? ""
         if sid.isEmpty || sid == "external" { return "External agent" }
         return "Session \(sid.prefix(8))"
+    }
+
+    /// The letter's origin: the server's, else the same rule from the sender
+    /// alone (the web's `letterOriginOf`), so no letter reads as sender-less.
+    var resolvedOrigin: LetterOrigin {
+        if let origin, !origin.kind.isEmpty, !Self.oneLine(origin.name).isEmpty { return origin }
+        if let taskId = sender?.taskId, !taskId.isEmpty,
+           sender?.agentId == "triage" || sender?.project == "Ask Inbox Triage" {
+            return LetterOrigin(kind: "triage", name: "Inbox Triage", taskId: taskId)
+        }
+        if let taskId = sender?.taskId, !taskId.isEmpty {
+            return LetterOrigin(kind: "task", name: taskTitle ?? sessionTitleLine ?? "Walnut task", taskId: taskId)
+        }
+        let sid = sender?.sessionId ?? ""
+        if !sid.isEmpty && sid != "external" {
+            return LetterOrigin(kind: "session", name: sessionTitleLine ?? "Walnut session", taskId: nil)
+        }
+        return LetterOrigin(kind: "walnut", name: "Walnut", taskId: nil)
+    }
+
+    private var sessionTitleLine: String? {
+        guard let title = sender?.sessionTitle, !Self.oneLine(title).isEmpty else { return nil }
+        return Self.oneLine(title)
     }
 
     /// Which box it came from, in the words the rest of the app uses.

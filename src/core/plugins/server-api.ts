@@ -991,7 +991,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           ...(input.pin !== undefined ? { pin: input.pin } : {}),
           // `local` matches the sender the inbox already uses for a caller with no session: a
           // plugin runs inside THIS server process, which is the box the human is looking at.
-          sender: { sessionId: 'external', host: 'local', pluginId },
+          sender: { sessionId: 'external', host: 'local', pluginId, pluginName: options.pluginName },
         })
         return { letterId: letter.id }
       },

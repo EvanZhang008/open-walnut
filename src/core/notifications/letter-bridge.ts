@@ -24,6 +24,7 @@
  * exactly the moment the bridge must exist). Tests install it directly.
  */
 
+import { letterOriginLine, type LetterOriginKind } from '../human-inbox/letter-origin.js';
 import { bus, eventData, EventNames, type BusEvent } from '../event-bus.js';
 import type { HumanInboxLetterEvent } from '../event-types.js';
 import { addNotification, updateLetterNotification, type NewNotification } from './store.js';
@@ -92,7 +93,10 @@ function envelopeFor(data: HumanInboxLetterEvent): NewNotification {
   return {
     kind: 'letter',
     severity: 'info',
-    title: cap(data.subject, MAX_TITLE) ?? 'Letter',
+    // Who it is from leads the card and the desktop notification (human-inbox/letter-origin.ts).
+    title: cap(data.originKind && data.originName
+      ? `${letterOriginLine({ kind: data.originKind as LetterOriginKind, name: data.originName }, 80)}: ${data.subject}`
+      : data.subject, MAX_TITLE) ?? 'Letter',
     dedupKey: `letter:${data.letterId}`,
     letterId: data.letterId,
     ...(cap(data.textPreview, MAX_BODY) ? { body: cap(data.textPreview, MAX_BODY) } : {}),

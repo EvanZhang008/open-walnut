@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// One envelope in the inbox list: unread dot, pin marker, subject, the
-/// system-stamped sender line (session · task · host), the agent's own short
-/// preview, a type badge, and relative time.
+/// One envelope in the inbox list: unread dot, pin marker, who it is from
+/// (`LetterOriginBadge`, first), the subject, the agent's own short preview,
+/// a type badge, and relative time.
 ///
 /// Unread reads at a glance, the same way the console marks it: a filled tint
 /// dot leading the row, and the subject in semibold primary ink (a read row's
@@ -31,27 +31,26 @@ struct LetterEnvelopeRow: View {
                 .padding(.top, 5)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                // Who it is from leads the row, in Walnut's tint: a letter is
+                // never outside mail, whatever company its subject names.
+                HStack(alignment: .center, spacing: 5) {
                     if letter.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
                             .foregroundStyle(Theme.tint)
                     }
-                    Text(letter.subject.isEmpty ? "(no subject)" : letter.subject)
-                        .font(.body.weight(letter.isRead ? .regular : .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(timeUnderSubject ? 6 : 3)
+                    LetterOriginBadge(origin: letter.resolvedOrigin)
                     if !timeUnderSubject {
                         Spacer(minLength: 6)
                         relativeTime
                     }
                 }
-                if timeUnderSubject { relativeTime }
 
-                Text(senderLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                Text(letter.subject.isEmpty ? "(no subject)" : letter.subject)
+                    .font(.body.weight(letter.isRead ? .regular : .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(timeUnderSubject ? 6 : 3)
+                if timeUnderSubject { relativeTime }
 
                 if !letter.previewLine.isEmpty {
                     Text(letter.previewLine)
@@ -81,15 +80,6 @@ struct LetterEnvelopeRow: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
-    }
-
-    /// Sender first (that is who wrote it), task second — the two facts that
-    /// make a letter self-locating without opening it.
-    private var senderLine: String {
-        if let task = letter.taskTitle {
-            return "\(letter.senderName) · \(task)"
-        }
-        return letter.senderName
     }
 
     /// A read row keeps the dot's width so every subject starts at one edge.

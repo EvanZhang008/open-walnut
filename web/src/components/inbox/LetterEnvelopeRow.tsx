@@ -8,20 +8,11 @@
  */
 import { memo } from 'react';
 import { formatRelative } from '@/contexts/notifications';
-import { LETTER_TYPE_LABEL, answeredByName, type LetterEnvelope } from '@/api/human-inbox';
+import { LETTER_TYPE_LABEL, answeredByName, letterOriginOf, type LetterEnvelope } from '@/api/human-inbox';
+import { LetterOriginBadge } from './LetterOriginBadge';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
 import '@/styles/human-inbox.css';
-
-/** Sender line: friendly session title, else a short id, else "external". */
-export function senderLabelOf(letter: LetterEnvelope): string {
-  const sender = letter.sender ?? { sessionId: '', host: '' };
-  if (sender.sessionTitle) return sender.sessionTitle;
-  const sid = sender.sessionId ?? '';
-  if (!sid || sid === 'external') return 'External agent';
-  if (sid === '__local__') return 'Local session';
-  return sid.length > 8 ? `${sid.slice(0, 8)}…` : sid;
-}
 
 function PinIcon() {
   return (
@@ -78,6 +69,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       }}
       onContextMenu={(e) => menu.open(e, undefined)}
     >
+      {/* Who it is from comes first, in Walnut's colors: a letter is never outside mail. */}
       <div className="hib-row-head">
         <span
           className={`hib-dot${letter.read ? ' hib-dot-read' : ''}`}
@@ -85,17 +77,20 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
           role="img"
         />
         {letter.pinned && <span className="hib-pin" title="Pinned"><PinIcon /></span>}
+        <LetterOriginBadge letter={letter} />
+        <span className="hib-time">{formatRelative(letter.createdAt)}</span>
+      </div>
+
+      <div className="hib-row-subject-line">
         <span className="hib-subject">{letter.subject || '(no subject)'}</span>
         <span className={`hib-type hib-type--${letter.type}`}>
           {LETTER_TYPE_LABEL[letter.type] ?? letter.type}
         </span>
-        <span className="hib-time">{formatRelative(letter.createdAt)}</span>
       </div>
 
       <div className="hib-row-chips">
-        <span className="hib-chip">{senderLabelOf(letter)}</span>
-        {sender.taskTitle && <span className="hib-chip hib-chip-task">{sender.taskTitle}</span>}
-        {sender.project && <span className="hib-chip">{sender.project}</span>}
+        {/* A triage run's project ("Ask Inbox Triage") only repeats its badge. */}
+        {sender.project && letterOriginOf(letter).kind !== 'triage' && <span className="hib-chip">{sender.project}</span>}
         {sender.host && <span className="hib-chip">{sender.host}</span>}
         {replies > 0 && (
           <span className="hib-chip hib-chip-thread">{replies} in thread</span>

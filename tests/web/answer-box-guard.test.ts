@@ -61,6 +61,7 @@ const BOXES: Record<string, Kind> = {
   'components/settings/sections/PluginConfigCards.tsx': form("a plugin's settings"),
   'components/settings/sections/task-provider-parts.tsx': form('a provider\'s AI rule, free text'),
   'components/settings/sections/RemoteHostSshRow.tsx': form("a host's setup script"),
+  'components/settings/sections/TriageRoutingRules.tsx': form("a routing rule's note"),
   'components/settings/sections/cloud/CloudManualPaste.tsx': form('a setup script to paste'),
   'components/tasks/PhoneTaskDetailHead.tsx': form("a task's title"),
   'components/tasks/TaskForm.tsx': form("a task's fields"),

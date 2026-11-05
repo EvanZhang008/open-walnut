@@ -490,6 +490,9 @@ describe('human inbox store — bus events', () => {
       textPreview: record.textPreview,
       senderSessionId: SENDER.sessionId,
       senderTitle: SENDER.sessionTitle,
+      // Who it is from, for the bell and the push (letter-origin.ts).
+      originKind: 'task',
+      originName: SENDER.taskTitle,
       host: SENDER.host,
       kind: 'new',
     });

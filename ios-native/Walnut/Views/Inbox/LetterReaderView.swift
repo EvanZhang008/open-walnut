@@ -364,6 +364,8 @@ struct LetterReaderView: View {
 
     private func header(_ letter: Letter) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Who it is from comes before the subject (LetterOriginBadge).
+            LetterOriginBadge(origin: letter.resolvedOrigin, leadingFrom: true)
             Text(letter.subject.isEmpty ? "(no subject)" : letter.subject)
                 .font(.title3.weight(.semibold))
                 .textSelection(.enabled)

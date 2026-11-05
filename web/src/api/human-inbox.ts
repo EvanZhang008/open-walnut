@@ -34,6 +34,49 @@ export interface LetterSender {
   taskTitle?: string;
   project?: string;
   host: string;
+  pluginId?: string;
+  pluginName?: string;
+  agentId?: string;
+  via?: 'api';
+}
+
+/**
+ * Who a letter is from, as the server derives it from the stamped sender (src/core/human-inbox/
+ * letter-origin.ts). Every letter is Walnut's own, never outside mail, and every inbox surface leads
+ * a letter with this (LetterOriginBadge).
+ */
+export type LetterOriginKind = 'task' | 'triage' | 'session' | 'walnut' | 'plugin' | 'script';
+export interface LetterOrigin {
+  kind: LetterOriginKind;
+  name: string;
+  taskId?: string;
+}
+
+/** The short word the badge wears for each origin kind. */
+export const LETTER_ORIGIN_KIND_LABEL: Record<LetterOriginKind, string> = {
+  task: 'Task',
+  triage: 'Triage',
+  session: 'Session',
+  walnut: 'Walnut',
+  plugin: 'Plugin',
+  script: 'API',
+};
+
+/**
+ * The letter's origin: the server's, else (a server older than the field) the same rule from the
+ * sender alone, so a letter never reads as having no sender.
+ */
+export function letterOriginOf(letter: Pick<LetterEnvelope, 'sender' | 'origin'>): LetterOrigin {
+  if (letter.origin?.kind && letter.origin.name) return letter.origin;
+  const s = letter.sender ?? { sessionId: '', host: '' };
+  const sid = s.sessionId ?? '';
+  // Mirrors the server's order (src/core/human-inbox/letter-origin.ts) for a server that sends no origin.
+  if (s.taskId && (s.agentId === 'triage' || s.project === 'Ask Inbox Triage')) return { kind: 'triage', name: 'Inbox Triage', taskId: s.taskId };
+  if (s.taskId) return { kind: 'task', name: s.taskTitle?.trim() || s.sessionTitle?.trim() || 'Walnut task', taskId: s.taskId };
+  if (sid && sid !== 'external') return { kind: 'session', name: s.sessionTitle?.trim() || 'Walnut session' };
+  if (s.pluginId) return { kind: 'plugin', name: s.pluginName?.trim() || s.pluginId };
+  if (s.via === 'api') return { kind: 'script', name: 'A script' };
+  return { kind: 'walnut', name: 'Walnut' };
 }
 
 /** The task that answered a letter, or wrote a reply turn, in the user's place. */
@@ -87,6 +130,8 @@ export interface LetterEnvelope {
   bodyFormat: LetterBodyFormat;
   textPreview: string;
   sender: LetterSender;
+  /** Who it is from (server-derived; see letterOriginOf for the fallback). */
+  origin?: LetterOrigin;
   createdAt: number;
   read: boolean;
   /**

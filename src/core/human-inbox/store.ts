@@ -40,6 +40,8 @@ import { validateNewItems, allLetterItems, assertItemIds } from './item-schema.j
 import { duplicateLetterMessage, duplicateReplyMessage, findDuplicateLetter, findDuplicateReply, senderKey } from './duplicate-letter.js';
 import { cleanPictureNames } from '../answer-pictures.js';
 import type { AwayThreadMark, InboxItemReceipt } from './types.js';
+import { letterOriginOf } from './letter-origin.js';
+import { kindOfLetter } from './walnut-letters/registry.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
   letterFieldMaxBytes,
@@ -94,9 +96,19 @@ function errMsg(err: unknown): string {
  * Read-only snapshot. Unparseable / missing file → empty store, never throws.
  * `dir`: another inbox in the same layout (the companion's copy, replica-state.ts).
  */
+/**
+ * Every letter carries its origin (letter-origin.ts), derived here on each read rather than
+ * trusted from the file: a letter written before the field, or by an older Walnut, reads the same,
+ * and a sender can never write its own.
+ */
+function withOrigins(store: LetterStoreFile): LetterStoreFile {
+  for (const letter of store.letters) letter.origin = letterOriginOf(letter, !!kindOfLetter(letter));
+  return store;
+}
+
 async function readStore(dir = INBOX_DIR): Promise<LetterStoreFile> {
   try {
-    return normalizeStore(await readJsonFile<unknown>(dir === INBOX_DIR ? INDEX_FILE : path.join(dir, 'index.json'), null));
+    return withOrigins(normalizeStore(await readJsonFile<unknown>(dir === INBOX_DIR ? INDEX_FILE : path.join(dir, 'index.json'), null)));
   } catch (err) {
     log.notif.warn('human-inbox: failed to read index', { error: errMsg(err) });
     return emptyStore();
@@ -122,7 +134,7 @@ async function withStoreStamped<R>(fn: (store: LetterStoreFile) => R): Promise<{
   let out!: R;
   let stamp = '';
   const apply = (raw: unknown): LetterStoreFile => {
-    const store = normalizeStore(raw);
+    const store = withOrigins(normalizeStore(raw));
     out = fn(store);
     stamp = new Date().toISOString();
     store.lastUpdated = stamp;
@@ -159,7 +171,7 @@ export function onLetterStoreWritten(cb: () => void): () => void {
  * and the copy round then skips the inbox instead of removing the host's letters.
  */
 export async function readLetterIndexForReplica(opts: { readErrors?: 'fallback' | 'throw' } = {}): Promise<LetterRecord[]> {
-  return normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null, opts)).letters;
+  return withOrigins(normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null, opts))).letters;
 }
 
 // ── Ids + body files ──
@@ -444,6 +456,7 @@ function emitLetterEvent(
       textPreview,
       senderSessionId: record.sender.sessionId,
       senderTitle: record.sender.sessionTitle,
+      ...(record.origin ? { originKind: record.origin.kind, originName: record.origin.name } : {}),
       host: record.sender.host,
       kind,
       ...(quiet ? { quiet: true } : {}),
@@ -598,6 +611,7 @@ export async function sendLetterOnce(
     ...(opKey ? { createdByOp: opKey } : {}),
     ...(opts.awayThread ? { awayThread: { ...opts.awayThread } } : {}),
   };
+  record.origin = letterOriginOf(record, !!kindOfLetter(record));
 
   // Body first: an index entry pointing at a file that was never written would
   // read as a corrupt letter. A body file with no index entry is invisible junk.

@@ -4571,6 +4571,11 @@ import { humanInboxItemsV1Router } from './human-inbox-items-v1.js'
 apiV1Router.use(humanInboxItemsV1Router)
 apiV1Router.use(humanInboxV1Router)
 
+// Inbox Triage's standing routing rules (core/triage/routing-rules.ts): one feature, mounted here.
+import { triageRulesV1Router } from './triage-rules-v1.js'
+
+apiV1Router.use(triageRulesV1Router)
+
 // ─── Action cards (one clicked registry op) ────────────────────────────────
 // Same reason as above: /api/v1/actions/* is one feature, mounted next to the
 // v1 surface it is additive to.

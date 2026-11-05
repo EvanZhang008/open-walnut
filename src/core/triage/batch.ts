@@ -34,6 +34,7 @@ import { boundedItemsJson, ITEMS_JSON_CAP } from '../routines/trigger-envelope.j
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { TriagePendingMail, TriagePendingSlack } from './state.js';
 import { TRIAGE_AGENT_NAME, type TriageSource } from './types.js';
+import { firstMatchingRule, ruleMatchText, type TriageRoutingRule } from './routing-rules.js';
 
 /** The shared 32 KB whole-item-drop budget, re-exported for the action's tests. */
 export { ITEMS_JSON_CAP };
@@ -79,6 +80,8 @@ export interface TriageBatchInput {
   stateStale?: boolean;
   /** True when this exact batch was already handed to a run that never started. */
   redelivered?: boolean;
+  /** The standing routing rules (routing-rules.ts), in file order; disabled ones are left out. */
+  rules?: readonly TriageRoutingRule[];
 }
 
 export interface TriageBatchCounts {
@@ -250,6 +253,9 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
     }
   }
 
+  const routing = routingSection(input.rules ?? [], mail, slack);
+  if (routing) parts.push(routing);
+
   const stateDoc = (input.stateDoc ?? '').trim();
   if (stateDoc) {
     const { text } = cutStateDoc(stateDoc);
@@ -279,6 +285,55 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
   ].join('\n');
 
   return { message, body, note, counts };
+}
+
+/** How many pre-matched items the routing section lists (the rest the run finds itself). */
+const ROUTED_LIST_CAP = 40;
+
+/**
+ * The standing routing rules, and the items of this batch they already match.
+ *
+ * The rules are the user's (or Main's or a VP's), kept outside any run (routing-rules.ts), so a
+ * routing asked for once holds on every batch. Mail rides here as headlines, a sample: the run
+ * matches the messages it reads with mail_list against the same rules. Rule text and item words
+ * are the writers' and the senders', so this goes inside the fence with the rest of the batch.
+ */
+export function routingSection(
+  rules: readonly TriageRoutingRule[],
+  mail: readonly TriagePendingMail[],
+  slack: readonly TriagePendingSlack[],
+): string | null {
+  const live = rules.filter((r) => r.enabled);
+  if (live.length === 0) return null;
+  const lines = live.map((r) => {
+    const task = r.taskTitle ? `task ${r.taskId} ("${r.taskTitle}")` : `task ${r.taskId}`;
+    return `- ${r.id}: ${ruleMatchText(r)} → ${task}${r.note ? `. Why: ${r.note}` : ''}`;
+  });
+  const matched: string[] = [];
+  for (const row of mail) {
+    for (const h of row.headlines) {
+      const rule = firstMatchingRule(live, { source: 'mail', from: h.from, subject: h.subject });
+      if (rule) matched.push(`- mail on ${row.accountId}, from ${JSON.stringify(h.from)}, subject ${JSON.stringify(h.subject)} → ${rule.id}`);
+    }
+  }
+  for (const item of slack) {
+    const rule = firstMatchingRule(live, { source: 'slack', from: `${item.alias} ${item.conversation}`, subject: item.text });
+    if (rule) matched.push(`- Slack ${item.conversation} ${item.ts}, from ${JSON.stringify(item.alias)} → ${rule.id}`);
+  }
+  const shown = matched.slice(0, ROUTED_LIST_CAP);
+  return [
+    'Routing rules (standing; set by the user, Main or a VP, kept across runs):',
+    ...lines,
+    '',
+    'Every item you read that matches a rule (sender and subject, case-insensitive; the first rule',
+    'in this list wins) belongs to that rule\'s task: hand it over with triage_route (rule_id, the item\'s',
+    'subject, what it asks), which names the rule on the message the task gets. Do not route it',
+    'anywhere else, and do not write the user a letter about it as well. A rule whose task answers',
+    'that it is complete or missing: leave the item for the summary and name the rule there.',
+    ...(shown.length
+      ? ['', `Already matched in this batch${matched.length > shown.length ? ` (first ${shown.length} of ${matched.length})` : ''}:`, ...shown]
+      : []),
+  ].join('\n');
 }
 
 /**

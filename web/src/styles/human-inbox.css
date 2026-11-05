@@ -605,3 +605,105 @@
   .hib-reader { width: 96vw; max-height: 92vh; }
   .hib-html-frame { height: 50vh; }
 }
+
+/* ── Who a letter is from (LetterOriginBadge) ───────────────────────────────
+   Every letter is Walnut's own, never outside mail: the Walnut mark and the
+   sender's kind in the accent color lead it, so a task letter whose subject
+   names a company still reads as the task's at a glance. */
+
+.hib-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.hib-origin-from {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.hib-origin-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 2px;
+  border-radius: 6px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 16px;
+}
+
+.hib-origin-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 3.5px;
+  display: block;
+}
+
+.hib-origin-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.hib-origin--reader .hib-origin-name {
+  font-size: 13px;
+  /* A long sender name wraps (two lines at most) instead of shrinking to "Acm…". */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+a.hib-origin-name { text-decoration: none; }
+a.hib-origin-name:hover { text-decoration: underline; }
+
+/* A Walnut notice, a plugin or an API caller: still Walnut's, so the same badge,
+   but the name stays in ink (it is not one of the user's tasks). */
+.hib-origin--walnut .hib-origin-name,
+.hib-origin--plugin .hib-origin-name,
+.hib-origin--script .hib-origin-name { color: var(--fg-secondary); }
+
+/* Each kind its own tint, so the badge tells them apart too: a task or session in the
+   accent, Inbox Triage in green, Walnut itself, a plugin and an API caller in a quiet grey. */
+/* The system green is too light for 10 to 12px text on white (about 2.2:1): mixed with the text
+   color it is a deeper green on light and a lighter one on dark, in every theme mode (auto too). */
+.hib-origin--triage { --hib-triage: color-mix(in srgb, var(--success) 55%, var(--fg)); }
+.hib-origin--triage .hib-origin-badge {
+  background: color-mix(in srgb, var(--hib-triage) 13%, transparent);
+  color: var(--hib-triage);
+}
+.hib-origin--triage .hib-origin-name { color: var(--hib-triage); }
+.hib-origin--walnut .hib-origin-badge,
+.hib-origin--plugin .hib-origin-badge,
+.hib-origin--script .hib-origin-badge {
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.hib-row-subject-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hib-reader-head { flex-wrap: wrap; row-gap: 6px; }
+.hib-reader-from { flex: 1 0 100%; display: flex; min-width: 0; }
+.hib-reader-title { flex-wrap: wrap; row-gap: 4px; }
+
+/* A badge that is the mark alone (its name is the kind, "Walnut") is a square, not an empty pill. */
+.hib-origin-badge--mark { width: 18px; height: 18px; padding: 0; justify-content: center; box-sizing: border-box; }

@@ -191,6 +191,8 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
       project: 'marina',
       host: 'workbench',
     })
+    // Who it is from, derived from that stamp: the task's name leads every inbox surface.
+    expect((letters[0] as unknown as { origin: unknown }).origin).toEqual({ kind: 'task', name: 'Ship the cache layer', taskId: senderTaskId })
     // Envelopes carry a preview, never the body.
     expect(letters[0].textPreview).toContain('42 files')
     expect((letters[0] as unknown as { body?: string }).body).toBeUndefined()
@@ -205,7 +207,9 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
     const bogus = await sendLetter({ subject: 'Forged', type: 'info', markdown: 'hi' }, 'no-such-session-id')
     const byId = new Map((await listLetters()).letters.map((l) => [l.id, l]))
     for (const id of [anonymous, bogus]) {
-      expect(byId.get(id)!.sender).toEqual({ sessionId: 'external', host: 'local' })
+      expect(byId.get(id)!.sender).toEqual({ sessionId: 'external', host: 'local', via: 'api' })
+      // Who it is from reads as a caller of Walnut's API, never as a task or outside mail.
+      expect((byId.get(id) as unknown as { origin: unknown }).origin).toEqual({ kind: 'script', name: 'A script' })
     }
   })
 

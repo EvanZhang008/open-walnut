@@ -153,6 +153,9 @@ export function normalizeSender(raw: unknown): LetterSender {
     // would leave `walnut.letters.onAnswered` unable to tell its own letters from any other
     // `external` sender's, which is the whole reason the field exists.
     ...(typeof s.pluginId === 'string' ? { pluginId: s.pluginId } : {}),
+    ...(typeof s.pluginName === 'string' && s.pluginName ? { pluginName: s.pluginName.slice(0, 200) } : {}),
+    ...(typeof s.agentId === 'string' && s.agentId ? { agentId: s.agentId.slice(0, 100) } : {}),
+    ...(s.via === 'api' ? { via: 'api' as const } : {}),
   };
 }
 

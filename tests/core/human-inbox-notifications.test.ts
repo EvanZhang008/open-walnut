@@ -234,7 +234,8 @@ describe('letter store → envelope (the bridge installs itself)', () => {
 
     const rec = await envelopeWhen(letter.id);
     expect(rec).toBeDefined();
-    expect(rec!.title).toBe('Migration finished');
+    // Who it is from leads the card and the desktop notification (letter-origin.ts).
+    expect(rec!.title).toBe('Task “Fix the sync freeze”: Migration finished');
     expect(rec!.body).toBe('A short envelope preview.');
 
     await markRead([rec!.id]);

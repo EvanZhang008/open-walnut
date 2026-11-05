@@ -15,10 +15,10 @@ One batch, then stop.
 3. Match each item to a project and its tasks; update the tracking note
    (`project_tracking_get`, `project_tracking_ensure` if none).
 4. Each item is one of:
-   - **A task owns it** (a build failure mail, the task fixing that build):
-     `task_send` it there, `expect_reply: false`, with sender, date, subject,
-     message id and what it asks. That task carries on (and asks the user if
-     it must); no letter for it.
+   - **A rule matches it** (batch lists rules; `mail_list` items too):
+     `triage_route` it. No letter.
+   - **A task owns it**: `task_send` it there, `expect_reply: false`, with
+     sender, date, subject, message id and what it asks. No letter for it.
    - **Needs the user**: homework first. Read the thread, search related mail,
      tasks and notes, `mail_draft` the likely reply. The letter says what you
      found, what you propose, and which button does it.

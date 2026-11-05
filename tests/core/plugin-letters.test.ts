@@ -130,7 +130,7 @@ describe('walnut.letters.send', () => {
     const stored = await getLetter(letterId);
     // The plugin never wrote any of this: a caller that could set `sessionId` could aim a
     // letter's answer at somebody else's session.
-    expect(stored!.sender).toEqual({ sessionId: 'external', host: 'local', pluginId: 'mail' });
+    expect(stored!.sender).toEqual({ sessionId: 'external', host: 'local', pluginId: 'mail', pluginName: 'mail' });
     expect(stored!.type).toBe('action_required');
     expect(stored!.actions!.map((one) => one.id)).toEqual(['send', 'discard']);
     expect(stored!.pinned).toBe(true);

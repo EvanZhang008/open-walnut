@@ -34,6 +34,7 @@ import { readTriageConfig, isTriageWithinActiveHours } from '../core/triage/conf
 import { claimTriageBatch } from '../core/triage/state.js';
 import { buildTriageBatch, TRIAGE_STATE_NOTE } from '../core/triage/batch.js';
 import { TRIAGE_ACTION_ID } from '../core/triage/types.js';
+import { readRoutingRules, type TriageRoutingRule } from '../core/triage/routing-rules.js';
 
 export function describe(): ActionDescriptor {
   return {
@@ -57,6 +58,16 @@ async function readStateNote(home: string): Promise<string | undefined> {
   }
 }
 
+export async function liveRules(rules: TriageRoutingRule[]): Promise<TriageRoutingRule[]> {
+  if (rules.length === 0) return rules;
+  const { getTask } = await import('../core/task-manager.js');
+  const open = await Promise.all(rules.map(async (r) => {
+    const task = await getTask(r.taskId).catch(() => null);
+    return !!task && task.phase !== 'COMPLETE';
+  }));
+  return rules.filter((_, i) => open[i]);
+}
+
 export async function run(ctx: ActionContext): Promise<ActionResult> {
   const home = ctx.WALNUT_HOME;
   const { getConfig } = await import('../core/config-manager.js');
@@ -74,6 +85,10 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
   const nowMs = Date.now();
   const claimed = await claimTriageBatch(nowMs, home);
   const stateDoc = await readStateNote(home);
+  // The standing routing rules ride every batch (routing-rules.ts); a bad file costs only them.
+  // A rule whose task is complete or gone sits out: it must not win the first match and keep a
+  // later rule (to open work) from routing the item.
+  const rules = await liveRules(await readRoutingRules(home).catch(() => []));
 
   const batch = buildTriageBatch({
     mail: claimed.mail,
@@ -87,6 +102,7 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
     ...(claimed.lastJournalLine ? { previousJournalLine: claimed.lastJournalLine } : {}),
     ...(claimed.stateStale ? { stateStale: true } : {}),
     ...(claimed.redelivered ? { redelivered: true } : {}),
+    ...(rules.length ? { rules } : {}),
   });
 
   return { invoke: true, content: batch.message };

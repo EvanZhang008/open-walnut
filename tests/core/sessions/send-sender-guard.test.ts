@@ -145,6 +145,7 @@ const CALL_SITES: Record<string, number> = {
   'src/web/routes/messages-v1.ts': 1,              // task_send: the caller session, or an automation, is the sender
   'src/web/routes/notifications.ts': 1,
   'src/web/routes/task-v1.ts': 1,                  // task_start: a caller session makes it a peer note
+  'src/web/routes/triage-rules-v1.ts': 2,          // triage_route: an item a routing rule sends (or starts its task with), as `api-agent`
 };
 
 /**

@@ -1,0 +1,95 @@
+/* Settings > Inbox Triage > Routing rules (TriageRoutingRules.tsx). */
+
+.trr-empty { margin: 0; padding: 10px 14px; font-size: 13px; color: var(--fg-muted); }
+
+.trr-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+.trr-rule:first-child { border-top: none; }
+.trr-rule-off .trr-rule-main { opacity: 0.55; }
+
+.trr-rule-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.trr-rule-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 13px; color: var(--fg); }
+.trr-match { font-weight: 600; overflow-wrap: anywhere; }
+.trr-to { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.trr-rule-line { row-gap: 0; }
+.trr-arrow { color: var(--fg-muted); flex: 0 0 auto; }
+.trr-task { overflow-wrap: anywhere; }
+.trr-note { font-size: 12px; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.trr-warn { font-size: 12px; color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
+.trr-meta { font-size: 11px; color: var(--fg-muted); }
+.trr-off { margin: 0; padding: 8px 14px; font-size: 12px; color: var(--fg-muted); }
+.trr-hint { font-size: 11px; color: var(--fg-muted); }
+
+.trr-rule-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+
+.trr-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.trr-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-secondary); }
+.trr-field > .settings-input, .trr-picker > .settings-input { width: 100%; max-width: 520px; box-sizing: border-box; }
+.trr-chosen { display: inline-flex; align-items: center; gap: 8px; max-width: 520px; font-size: 13px; }
+.trr-picker { display: flex; flex-direction: column; gap: 4px; }
+.trr-picks {
+  display: flex;
+  flex-direction: column;
+  max-width: 520px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card-bg, var(--bg));
+}
+.trr-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.trr-pick:hover, .trr-pick:focus-visible { background: var(--bg-hover); }
+.trr-pick-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trr-pick-project { flex: 0 0 auto; font-size: 11px; color: var(--fg-muted); }
+.trr-pick-empty { padding: 8px 10px; font-size: 12px; color: var(--fg-muted); }
+.trr-editor-actions { display: flex; gap: 8px; }
+
+/* A phone-width settings page: the actions go under the rule instead of squeezing it. */
+@media (max-width: 600px) {
+  .trr-rule { flex-direction: column; gap: 6px; }
+  .trr-rule-actions { align-self: stretch; justify-content: flex-end; }
+  .trr-field > .settings-input, .trr-picker > .settings-input, .trr-picks { max-width: none; }
+}
+.trr-pick-active { background: var(--bg-hover); }
+/* The editor's own error sits under its fields, not at a settings row's indent. */
+.trr-editor .trr-error { margin: 0; padding: 0; }
+/* The body font at the field's own size (13px, 16px on a phone like its neighbors), not the mono 160px box. */
+textarea.settings-input.trr-note-input { width: 100%; height: auto; min-height: 0; padding: 5px 8px; resize: vertical; font-family: inherit; font-size: 13px; }
+/* On a phone its neighbors are 16px (phone-settings.css), and iOS zooms into a smaller box on focus. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .settings-layout[data-phone-settings] textarea.settings-input.trr-note-input { font-size: 16px; }
+}
+.trr-confirm-q { font-size: 12px; color: var(--fg-secondary); margin-right: 2px; }
+/* Confirming a removal: the question and its buttons take their own line under the rule, so the
+   rule's text does not reflow narrower. */
+.trr-rule-removing { flex-wrap: wrap; }
+.trr-rule-removing .trr-rule-actions { flex: 1 0 100%; justify-content: flex-end; }
+.trr-inline-btn { border: none; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
+@media (max-width: 600px) {
+  .trr-pick { min-height: 44px; }
+  .trr-inline-btn { display: flex; align-items: center; min-height: 44px; }
+}

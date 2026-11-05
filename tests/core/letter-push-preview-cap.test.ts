@@ -84,7 +84,8 @@ describe('a long letter on the push path', () => {
     expect(event.textPreview.length).toBeGreaterThan(PREVIEW_PROMISE - 40)
     expect(LONG.startsWith(event.textPreview)).toBe(true)
     const [body] = pushedBodies()
-    expect(body).toBe(event.textPreview)
+    // Who it is from is the title (letter-origin.ts); the subject leads the body, then the preview.
+    expect(body).toBe(`Marina trip plan\n${event.textPreview}`)
   })
 
   it('a reply: the event and the push carry at most 300 characters of the reply text', async () => {
@@ -97,8 +98,9 @@ describe('a long letter on the push path', () => {
     expect(reply.textPreview.length).toBeGreaterThan(PREVIEW_PROMISE - 40)
     expect(LONG.startsWith(reply.textPreview)).toBe(true)
     const [body] = pushedBodies()
-    expect(body).toBe(reply.textPreview)
-    expect((sendApns.mock.calls[0] as unknown as [unknown, { aps: { alert: PushedAlert } }])[1].aps.alert.title).toBe('Reply: Marina trip plan')
+    expect(body).toBe(`Marina trip plan\n${reply.textPreview}`)
+    // The sender has a task but no title stamped: the banner still says it is a Walnut task's.
+    expect((sendApns.mock.calls[0] as unknown as [unknown, { aps: { alert: PushedAlert } }])[1].aps.alert.title).toBe('Reply · Task “Walnut task”')
   })
 })
 
@@ -114,3 +116,10 @@ describe('the push boundary caps on its own', () => {
     expect(content.body).toBe('Open Walnut to read it')
   })
 })
+
+it('a long task name is cut inside its quotes, so the banner still closes them', () => {
+  const name = 'Plan the whole kitchen remodel with every contractor quote and the permit paperwork and the schedule';
+  const out = letterPushContent({ kind: 'new', subject: 'Pick a contractor', origin: { kind: 'task', name } } as never);
+  expect(out.title.length).toBeLessThanOrEqual(100);
+  expect(out.title).toMatch(/^Task “Plan the whole kitchen.*…”$/);
+});

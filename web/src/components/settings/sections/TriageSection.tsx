@@ -9,6 +9,7 @@ import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
+import { TriageRoutingRules } from './TriageRoutingRules';
 
 interface Props {
   config: Config;
@@ -128,6 +129,8 @@ export function TriageSection({ config, onSave }: Props) {
           htmlFor="inbox-triage-auto-mark-read" error={markRead.error}
           control={<ToggleSwitch id="inbox-triage-auto-mark-read" checked={markRead.value} busy={markRead.busy} disabled={off} onChange={markRead.set} />} />
       </SettingsGroup>
+
+      <TriageRoutingRules off={off} />
     </SectionCard>
   );
 }

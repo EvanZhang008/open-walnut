@@ -1075,6 +1075,9 @@ export interface HumanInboxLetterEvent {
   textPreview: string;
   senderSessionId: string;
   senderTitle?: string;
+  /** Who the letter is from (human-inbox/letter-origin.ts): leads the notification and the push. */
+  originKind?: string;
+  originName?: string;
   host: string;
   kind: 'new' | 'reply';
   /** No phone push: the user's away thread already buzzed and is still unread (human-inbox/away-thread.ts). */

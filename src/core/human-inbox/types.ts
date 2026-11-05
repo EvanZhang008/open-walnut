@@ -11,6 +11,8 @@
 
 // @ts-ignore Shared type-only package contract is outside the server emit root.
 import type { InboxLetterItem } from '../../../packages/plugin-api/src/inbox-items.js';
+import type { LetterOrigin } from './letter-origin.js';
+export type { LetterOrigin, LetterOriginKind } from './letter-origin.js';
 export type * from '../../../packages/plugin-api/src/inbox-items.js';
 
 /** WHY the letter exists. Drives how the UI treats it (badges, the Action needed chip). */
@@ -60,6 +62,15 @@ export interface LetterSender {
    * "every external letter", and so a reader can say who the letter came from.
    */
   pluginId?: string;
+  /** The plugin's own name, stamped beside `pluginId` so a reader can say who sent it. */
+  pluginName?: string;
+  /** The sending task's console agent (`task.agent_id`), e.g. `triage` for an Inbox Triage run. */
+  agentId?: string;
+  /**
+   * `api`: a caller of the letter route Walnut could not tie to a session (a script, a tool, a
+   * hand-started agent). Absent on a letter Walnut wrote itself, which also reads `external`.
+   */
+  via?: 'api';
 }
 
 /** The human's answer to an `action_required` letter. */
@@ -216,6 +227,11 @@ export interface LetterRecord {
    * updates of the same absence join this letter's thread instead of becoming letters.
    */
   awayThread?: AwayThreadMark;
+  /**
+   * Who the letter is from, as every inbox surface leads it (letter-origin.ts). Derived from
+   * `sender` on every read of the store, never written by a sender.
+   */
+  origin?: LetterOrigin;
 }
 
 export interface AwayThreadMark {

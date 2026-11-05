@@ -77,6 +77,7 @@ export const TRIAGE_RUN_INSTRUCTIONS = [
   'read what you need about each item, match items to the projects and tasks that',
   'already exist, and update the tracking notes.',
   '',
+  'An item a routing rule in the batch matches goes to that rule\'s task with triage_route.',
   'When a task already owns an item\'s work (its title, project or recent work covers it),',
   'hand the item to that task with task_send (expect_reply=false): what arrived, its message',
   'id, and what it asks. That task carries on from there, and asks the user itself if it',
