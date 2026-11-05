@@ -4686,6 +4686,8 @@ export async function updateTask(
       applyPhase(task, derivedPhase);
     }
   }
+  // A completed task given more work counts as reopened (the engine comparison reads it as rework).
+  if (TERMINAL_PHASES.has(phaseBefore) && !TERMINAL_PHASES.has(task.phase)) task.reopens = (task.reopens ?? 0) + 1;
   // After the phase: a wait_until on anything but a WAITING task is noise, and
   // a move out of WAITING already dropped the old one in applyPhase. A task
   // ENTERING WAITING with no clock named gets the default one; '' names "none"
@@ -8621,6 +8623,7 @@ function prepareRawUpdate(
       if (safeUpdates.completed_at === undefined) {
         (safeUpdates as Record<string, unknown>).completed_at = null;
       }
+      if (safeUpdates.reopens === undefined) safeUpdates.reopens = (task.reopens ?? 0) + 1;
       // A Done status is no longer true either (phaseDerivedFields' twin); the sync derives it again.
       if (safeUpdates.user_status === undefined && task.user_status?.state === 'done') {
         (safeUpdates as Record<string, unknown>).user_status = null;

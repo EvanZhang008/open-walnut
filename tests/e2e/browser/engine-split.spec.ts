@@ -1,0 +1,117 @@
+/**
+ * The engine split, as a person uses it:
+ *   - Settings → Sessions, "Share new tasks": checking two engines turns it on and writes
+ *     `defaults.engine_split` with the other `defaults` keys kept; unchecking one turns it off.
+ *   - Settings → Usage & Costs, "Engines compared": engines are columns, metrics are rows, the
+ *     best value of a ranked row is marked, a column with few finished tasks says so, the
+ *     project filter asks the server again, and the tasks behind the numbers open their task.
+ * The comparison reads a routed fixture at real density (three engines, 60 tasks), like
+ * usage-costs.spec.ts; the settings half writes the fixture server's real config.
+ * WebKit: `PW_WEBKIT=1 ... --project webkit`.
+ */
+import { devices, test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import path from 'node:path'
+import { openSessionsSection } from './engine-settings-helpers'
+import { routeCosts } from './usage-costs-fixture'
+
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
+test.describe.configure({ mode: 'serial' })
+test.setTimeout(120_000)
+
+const SHOTS = path.join(process.env.WALNUT_TASK_DIR || '/tmp', 'shots')
+
+async function serverDefaults(request: APIRequestContext): Promise<Record<string, unknown>> {
+  const body = await (await request.get('/api/config')).json() as { config?: { defaults?: Record<string, unknown> } }
+  return body.config?.defaults ?? {}
+}
+
+function row(key: string, label: string, done: number, extra: Record<string, unknown> = {}) {
+  return { key, engine: key.split('|')[0], family: key.split('|')[1], label, done, open: 2, split: 0, medianHours: 3.2, costUsd: done * 40,
+    medianCostUsd: 38, tokens: done * 9e7, medianTokens: 8.5e7, reviewsPerTask: 2.4, followUpsPerTask: 1.1, reopens: 2, errored: 1, ...extra }
+}
+
+function engines(project: string | null) {
+  const rows = [
+    row('claude|Claude', 'Claude Code · Claude', project ? 20 : 34, { split: 5 }),
+    row('codex|GPT', 'Codex · GPT', 6, { medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, followUpsPerTask: 0.6, split: 6, errored: 3 }),
+    row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 1.5, followUpsPerTask: 2 }),
+  ]
+  const tasks = Array.from({ length: 60 }, (_, i) => ({
+    taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : `Task number ${i}`,
+    project: i % 3 ? 'Walnut' : 'Walnut Idea', key: rows[i % 3].key, done: i % 7 !== 0, hours: i % 7 ? 1 + i / 4 : null,
+    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0,
+  }))
+  return { range: { start: null, end: null }, rows, tasks, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
+    split: { on: true, entries: [{ key: 'claude', label: 'Claude Code', weight: 1 }, { key: 'codex', label: 'Codex', weight: 1 }] } }
+}
+
+async function openUsage(page: Page) {
+  await page.goto('/')
+  await expect(page.locator('.app-shell')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('link', { name: 'Settings', exact: true }).click()
+  const nav = page.getByTestId('settings-nav-usage')
+  await nav.scrollIntoViewIfNeeded()
+  await nav.click()
+}
+
+test('Share new tasks: two engines turn it on, the other defaults stay, one turns it off', async ({ page, request }) => {
+  const before = await serverDefaults(request)
+  const section = await openSessionsSection(page)
+  const state = section.getByTestId('engine-split-state')
+  await expect(state).toHaveText('Off')
+  const boxes = section.locator('input[type="checkbox"][data-testid^="engine-split-"]')
+  expect(await boxes.count()).toBeGreaterThanOrEqual(2)
+  await boxes.nth(0).check()
+  await expect(state).toHaveText('Off')
+  await boxes.nth(1).check()
+  await expect(state).toHaveText('On')
+  await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(2)
+  const after = await serverDefaults(request)
+  for (const k of ['priority', 'platform', 'project', 'engine']) expect(after[k]).toEqual(before[k])
+  await section.getByTestId('engine-split-row').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(SHOTS, `split-settings-${test.info().project.name}.png`), clip: await section.boundingBox().then((b) => b ? { x: b.x, y: b.y, width: Math.min(b.width, 1280), height: Math.min(b.height, 700) } : undefined) })
+  await boxes.nth(1).uncheck()
+  await expect(state).toHaveText('Off')
+  await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(1)
+  await boxes.nth(0).uncheck()
+  await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(0)
+})
+
+test('Engines compared: engines side by side, the best marked, a project filter, the tasks behind it', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await routeCosts(page)
+  const asked: (string | null)[] = []
+  await page.route('**/api/usage/engines**', (route) => {
+    const project = new URL(route.request().url()).searchParams.get('project')
+    asked.push(project)
+    return route.fulfill({ json: engines(project) })
+  })
+  await openUsage(page)
+  const card = page.getByTestId('usage-engines')
+  await card.scrollIntoViewIfNeeded()
+  await expect(card.getByTestId('usage-engines-split')).toContainText('New tasks are shared: Claude Code 1 : Codex 1')
+  const table = card.getByTestId('usage-engines-table')
+  await expect(table.locator('thead th')).toHaveText(['', 'Claude Code · Claude', 'Codex · GPT', 'Claude Code · GPTfew'])
+  const cell = (metric: string, col: number) => table.locator(`tr[data-metric="${metric}"] td`).nth(col)
+  await expect(cell('done', 1)).toHaveText('34')
+  await expect(cell('time', 2)).toHaveText('1.9 h')
+  await expect(cell('time', 2)).toHaveAttribute('data-best', 'true')
+  await expect(cell('cost', 2)).toHaveText('$12.50')
+  await expect(cell('reviews', 3)).toHaveAttribute('data-best', 'true')
+  await expect(cell('followups', 2)).toHaveAttribute('data-best', 'true')
+  // Unranked rows (counts) mark nothing.
+  await expect(table.locator('tr[data-metric="done"] td[data-best]')).toHaveCount(0)
+  await page.screenshot({ path: path.join(SHOTS, `engines-card-${test.info().project.name}.png`), clip: await card.boundingBox().then((b) => b ? { x: b.x, y: b.y, width: Math.min(b.width, 1280), height: Math.min(b.height, 900) } : undefined) })
+
+  await card.getByTestId('usage-engines-project').selectOption('Walnut')
+  await expect(cell('done', 1)).toHaveText('20')
+  expect(asked.at(-1)).toBe('Walnut')
+
+  const tasks = card.getByTestId('usage-engines-tasks')
+  await tasks.locator('summary').click()
+  await expect(tasks.locator('tr')).toHaveCount(60)
+  await expect(tasks.locator('tr').first()).toContainText('Settings: share new tasks')
+  await expect(tasks.locator('tr').first()).toContainText('Claude Code · Claude')
+  expect(errors).toEqual([])
+})

@@ -108,3 +108,19 @@
 .settings-addons-stat[data-direct] .settings-addons-stat-label { color: var(--usage-s2); font-weight: 600; }
 /* A fourth figure (Billed directly) joins the row instead of wrapping to a second one. */
 .settings-addons-stats[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+/* Engines compared (EngineCompareCard): metrics are rows, engines are columns. */
+.usage-ec-body { display: block; padding-top: 10px; }
+.usage-ec-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.usage-ec-split { margin: 0; font-size: 12px; color: var(--fg-muted); flex: 1 1 260px; }
+.usage-ec-project { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+.usage-ec-scroll { overflow-x: auto; }
+.usage-ec-table { table-layout: auto; min-width: 420px; }
+.usage-ec-table th.num { white-space: nowrap; }
+.usage-ec-table td:first-child { color: var(--fg-muted); }
+.usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); }
+.usage-ec-few { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); }
+.usage-ec-tasks { table-layout: auto; }
+.usage-ec-tasks tr { cursor: pointer; }
+.usage-ec-tasks tr:hover td { background: var(--bg-secondary); }
+.usage-ec-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted); }

@@ -8,6 +8,7 @@ import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
+import { EngineSplitRow } from './EngineSplitRow';
 import { DefaultEngineRow } from './DefaultEngineRow';
 import { FallbackEngineRow } from './FallbackEngineRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
@@ -133,6 +134,9 @@ export function SessionsSection({ config, onSave }: Props) {
       <SettingsGroup>
         <DefaultEngineRow config={config} save={save} />
         <FallbackEngineRow config={config} save={save} />
+      </SettingsGroup>
+      <SettingsGroup>
+        <EngineSplitRow config={config} save={save} />
       </SettingsGroup>
       <ClaudeCodeImportGroups />
       <SettingsGroup>

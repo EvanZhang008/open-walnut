@@ -54,6 +54,37 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
   } catch (err) { next(err) }
 })
 
+// GET /api/usage/engines?start&end&project: engines compared on finished work (engine-compare.ts).
+// Local reads only (tasks, sessions, the per-day sums, the user-asks files), no host round trip.
+usageRouter.get('/engines', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const [{ aggregateEngineCompare, taskSpend }, { getConfig }, { listTasks }, { listSessions }, { readUserAsks }] = await Promise.all([
+      import('../../core/usage/engine-compare.js'), import('../../core/config-manager.js'),
+      import('../../core/task-manager.js'), import('../../core/session-tracker.js'), import('../../core/sessions/user-asks.js'),
+    ])
+    const store = responseUsageStore()
+    const config = await getConfig()
+    const [tasks, sessions] = await Promise.all([listTasks(), listSessions()])
+    const byId = new Map(sessions.map(s => [s.claudeSessionId, s]))
+    const spend = await taskSpend(store.rollup, config.usage?.prices, (sid) => byId.get(sid)?.taskId || undefined)
+    // The user's messages, read only for the tasks that have a file of them.
+    const fs = await import('node:fs/promises'), path = await import('node:path'), { WALNUT_HOME } = await import('../../constants.js')
+    const withAsks = new Set((await fs.readdir(path.join(WALNUT_HOME, 'user-asks')).catch(() => [] as string[]))
+      .filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)))
+    const followUps = new Map<string, number>()
+    await Promise.all(tasks.filter(t => withAsks.has(t.id)).map(async t => {
+      followUps.set(t.id, (await readUserAsks(t.id)).asks.length)
+    }))
+    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: store.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    const project = typeof req.query.project === 'string' && req.query.project !== '*' ? req.query.project : undefined
+    res.json(aggregateEngineCompare({
+      tasks, sessions: byId, spend, followUps: (id) => followUps.get(id) ?? 0, config, project,
+      range: { start: parseDate(req.query.start), end: parseDate(req.query.end) },
+      dayOf: (iso) => { const d = new Date(iso); return Number.isFinite(d.getTime()) ? fmt.format(d) : '' },
+    }))
+  } catch (err) { next(err) }
+})
+
 usageRouter.post('/collect', (req: Request, res: Response) => {
   const { since, until } = req.body ?? {}
   const valid = (value: unknown) => value === undefined || (typeof value === 'string'

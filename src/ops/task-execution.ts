@@ -15,7 +15,7 @@ export const TASK_START_INPUT = {
   host: z.string().optional().describe('Execution host alias; omit to inherit task/project defaults. Or ask for what a host has: "@ios", "@browser" (the user\'s own signed-in browser), "@mcp:<server>", "@always-on", "@ios+always-on" for both: Walnut picks a connected host that has it (host_list shows each host\'s capabilities.tags) or refuses, saying which hosts have it'),
   model: z.string().optional().describe('Model id or provider model value'),
   mode: z.enum(SESSION_MODE_IDS).optional().describe('Permission mode. Leave it out for a new coding task: never plan except when the user asks for plan; the owner writes its own plan and carries on.'),
-  engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default: the default engine (Settings > Engines), claude when none is set'),
+  engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine. Omit it and Walnut picks: the engine split (Settings > Sessions, "Share new tasks") when it is on, which spreads new work between engines and records each pick for the Usage & Costs comparison; else the default engine, claude when none is set. Name one only to override (a model or effort also keeps Claude Code)'),
   effort: z.enum(SESSION_EFFORT_IDS as [typeof SESSION_EFFORT_IDS[number], ...typeof SESSION_EFFORT_IDS[number][]]).optional().describe('Reasoning effort, the draft picker\'s Effort row (claude engine only; xhigh and max only on models that offer them). Omit for the model default'),
   user_request: z.string().trim().min(10).optional().describe('The user\'s own words asking for this start now, quoted. Only when the user asked: the start goes ahead at once even when its host has no free slot, as the user\'s own start does. Never for work you decided on yourself'),
   create_cwd: z.boolean().optional().describe('Create cwd on its host first, the folder picker\'s "Create folder & start". Default false: a missing folder fails the start'),
@@ -117,6 +117,14 @@ function placementNote(started: Record<string, unknown>): string {
   return ` Placed on ${p.host || 'this Mac'}: ${p.reason}${p.cwd ? `; it works in ${p.cwd}` : ''}.`
 }
 
+/** The engine split's pick (core/agents/engine-split.ts), with how to override it. */
+function enginePickNote(started: Record<string, unknown>): string {
+  const p = started.enginePick as { key?: string; shares?: Record<string, number> } | undefined
+  if (!p?.key) return ''
+  const shares = p.shares ? Object.entries(p.shares).map(([k, n]) => `${k} ${n}`).join(', ') : ''
+  return ` The engine split gave it ${p.key}${shares ? ` (picks in the last 14 days before this one: ${shares})` : ''}; name engine to choose one yourself.`
+}
+
 /**
  * The words of a start queued for a free slot on its host (core/sessions/start-queue.ts). Never
  * tells the caller to do the work itself: a lead whose job is to delegate read "do this part with
@@ -154,7 +162,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
       : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.`
       : state === 'running' ? `Task ${started.taskId} started.`
       : started.starting === true ? `Task ${started.taskId}'s session is still starting (its engine takes longer than this answer waits); it has not failed so far, and task_get shows it running once it is up.`
-      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started) + fallbackNote(started),
+      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started) + fallbackNote(started) + enginePickNote(started),
     typeof started.requestId === 'string'
       ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,

@@ -108,6 +108,8 @@ export interface SessionStartResult {
   queued?: { position: number; host: string; reason: string; running: string[]; cap?: number };
   /** The task's session host could not be reached: the start moved the task (host-lost.ts). */
   hostLost?: { from: string; fromSessionId: string; error: string };
+  /** The engine split chose this start's engine (core/agents/engine-split.ts), with the recent shares it saw. */
+  enginePick?: import('../agents/engine-split.js').EnginePick;
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -228,6 +230,25 @@ async function noteEngineFallback(task: Task, note: EngineFallbackNote | undefin
   }
 }
 
+/** The engine split's pick for this start, or null when it is off or does not apply. */
+async function splitPick(task: Task, params: SessionStartParams) {
+  const { splitApplies, splitBuilders, pickSplitEngine } = await import('../agents/engine-split.js');
+  // A task that holds a conversation continues it on the engine it has.
+  if (task.session_id || task.exec_session_id || task.session_ids?.length || !splitApplies(task, params)) return null;
+  const { getConfig } = await import('../config-manager.js');
+  const builders = splitBuilders(await getConfig());
+  if (builders.length < 2) return null;
+  // Asked of the host this start would use; placement later moves only to a host that runs the engine.
+  const host = await resolveTaskLaunchReadOnly(task, params).then((l) => l.host, () => undefined);
+  const { hostEnginesAvailability } = await import('../agents/host-engines.js');
+  let answer: Awaited<ReturnType<typeof hostEnginesAvailability>> | undefined;
+  return pickSplitEngine(builders, async (id) => {
+    answer ??= await hostEnginesAvailability(host || '__local__', { dial: false });
+    const row = answer[id];
+    return row ? row.installed : null;
+  });
+}
+
 /**
  * Start a session for a task. An automatic start that no host has room for is an error to its
  * caller, never a start left waiting (2026-11-06, the user: "if it did not start, it must be an
@@ -313,10 +334,14 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
   }
   // Resolved before the duplicate check: on the normal path nothing awaits between
   // that check and taking the slot below, or two concurrent starts both get through.
-  // An area task is always Claude Code: the default engine of the install never applies to it.
-  const inherited = area ? undefined
+  // An area task is always Claude Code: neither the engine split nor the install's default engine applies to it.
+  // The engine split (engine-split.ts) speaks before the default engine; a named engine is the override.
+  const split = !area && params.engine === undefined ? await splitPick(task, params) : null;
+  if (split?.model) params = { ...params, model: split.model };
+  const inherited = area || split ? undefined
     : params.engine !== undefined ? undefined : await inheritedEngine(task, params);
-  const engine = params.engine !== undefined ? normalizeEngine(params.engine) : inherited?.engine;
+  const engine = params.engine !== undefined ? normalizeEngine(params.engine)
+  : split ? normalizeEngine(split.engine) : inherited?.engine;
   // The fallback's model rides only this launch (prepareLaunch below): a start that waits for its
   // workspace or a slot replays the start as asked, and decides again then.
   const fallback = inherited?.fallback;
@@ -461,9 +486,9 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       const { validateInboxStartBoundary } = await import('../human-inbox/item-execution.js');
       await validateInboxStartBoundary(task.id, params.startAttemptId);
     }
+    const enginePick = split ? { key: split.key, engine: split.engine, ...(split.model ? { model: split.model } : {}), at: split.at } : undefined;
     const claimed = await withInboxStartAuthorization(task.id, params.startAttemptId, () => updateTaskRaw(task.id, {
-      last_start: attempt, ...(params.queuedAt ? { start_queue: null as never } : {}),
-    }, {
+      last_start: attempt, ...(params.queuedAt ? { start_queue: null as never } : {}), ...(enginePick ? { engine_pick: enginePick } : {}), }, {
       source: 'task-start', shouldUpdate: (current) => current.last_start?.id === task.last_start?.id
         && (!params.queuedAt || current.start_queue?.at === params.queuedAt)
         && (!params.startAttemptId || stableJson(current.last_start) === stableJson(task.last_start)
@@ -474,6 +499,10 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         throw new QueuedStartGoneError(`Task ${task.id}'s queued start was cancelled before it began; nothing started.`);
       }
       throw new QuickStartError(`Task ${task.id} changed before its start could be recorded. Read task_get before retrying.`, 409);
+    }
+    if (split) {
+      const { recordPick } = await import('../agents/engine-split.js');
+      await recordPick(split.key, task.id, split.at).catch((err) => log.session.warn('engine split: could not keep the pick', { taskId: task.id, error: String(err) }));
     }
     const settle = async (updates: Partial<NonNullable<Task['last_start']>>) => {
       try {
@@ -488,7 +517,8 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     let delivered: (() => void) | undefined;
     const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false,
       applied: appliedLaunchFields(task, params, launch), ...(placement ? { placement } : {}),
-      ...(fallback ? { fallback: fallback.note } : {}) };
+      ...(fallback ? { fallback: fallback.note } : {}),
+    ...(split ? { enginePick: split } : {}) };
     const work = (async (): Promise<SessionStartResult> => {
       try {
         if (recovery && previous) {

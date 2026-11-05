@@ -10,6 +10,7 @@ import { formatTokens as formatTokenCount } from '@/utils/format';
 import { timeAgo } from '@/utils/time';
 import { UsageBreakdownCard } from '@/components/usage/UsageBreakdownCard';
 import { UsageAccounts } from '@/components/usage/UsageAccounts';
+import { EngineCompareCard } from '@/components/usage/EngineCompareCard';
 import { dayLabel, periodDays } from '@/components/usage/breakdown-model';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
 import { collectUsage, type CostLine, type CostOrigin, type CostReport, type CostTaskLine, type Period } from '@/api/usage';
@@ -143,6 +144,8 @@ export function UsageSection() {
               <TaskList report={shown} heading="Most expensive tasks" />
             </>
           )}
+          {/* Its own read: tasks finished or started in the period, with or without counted usage yet. */}
+          <EngineCompareCard range={range} />
           <HowCounted report={shown} />
         </div>
       )}

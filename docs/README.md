@@ -86,6 +86,8 @@ must live under one of these top-level categories instead of directly under
 - [The pi engine](reference/pi-engine.md) - running tasks on pi, and "Import from Claude
   Code": what carries over (credentials, model, MCP servers, skills, instructions), what
   cannot and the nearest alternative
+- [The engine split: share new tasks between coding engines](reference/engine-split.md) - spread
+  new work between engines by weight, and compare them on Usage & Costs.
 - [The Codex engine: your own endpoint, default model](reference/codex-engine.md) - route every
   Codex session (this machine and other hosts) through your own OpenAI-compatible endpoint, and
   give new Codex sessions a default model and reasoning effort

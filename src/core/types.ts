@@ -813,6 +813,10 @@ export interface Task {
   /** This task's session started on the fallback engine because the default engine was out of
    *  usage (core/agents/fallback-engine.ts); cleared by a switch of its engine or the user. */
   engine_fallback?: EngineFallbackNote | null;
+  /** The engine split's pick for this task's first start (core/agents/engine-split.ts). */
+  engine_pick?: { key: string; engine: SessionEngine; model?: string; at: string };
+  /** How many times the task was reopened after it was completed (more work sent to it). */
+  reopens?: number;
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;
@@ -1425,6 +1429,12 @@ export interface Config {
      * which waits for the reset. Only launches that name neither an engine nor a model use it.
      */
     fallback_engine?: FallbackEngineSetting;
+    /**
+     * Share new task work between engines (core/agents/engine-split.ts): a task start that
+     * names no engine, model or effort takes the entry furthest below its weight's share of
+     * the last 14 days' picks, among those its host can run. Two or more entries turn it on.
+     */
+    engine_split?: EngineSplitEntry[];
   };
   provider: {
     type: string;
@@ -2431,6 +2441,15 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
  * views mask `env` by the shape of its keys (core/config-redact.ts), since it
  * holds the engine's API keys.
  */
+/** One entry of `defaults.engine_split`. */
+export interface EngineSplitEntry {
+  engine: SessionEngine;
+  /** A Claude Code model id (for example a model another company makes, served through a proxy). */
+  model?: string;
+  /** Relative share (default 1). */
+  weight?: number;
+}
+
 export interface EngineConfigEntry {
   /** argv of the ACP adapter, for an engine whose adapter comes from config (`engines.custom.adapter_cmd`). */
   adapter_cmd?: string[];

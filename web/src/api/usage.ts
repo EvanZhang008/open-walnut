@@ -201,3 +201,56 @@ export function fetchUsageCosts(view: CostView, range: { start?: string; end?: s
   if (origin !== 'all') q.origin = origin;
   return apiGet('/api/usage/costs', q);
 }
+
+/** One coding engine and model family on finished work (GET /api/usage/engines, core/usage/engine-compare.ts). */
+export interface EngineCompareRow {
+  key: string;
+  engine: string;
+  family: 'Claude' | 'GPT' | 'Gemini' | 'Other';
+  label: string;
+  done: number;
+  open: number;
+  split: number;
+  medianHours: number | null;
+  costUsd: number;
+  medianCostUsd: number | null;
+  tokens: number;
+  medianTokens: number | null;
+  reviewsPerTask: number | null;
+  followUpsPerTask: number | null;
+  reopens: number;
+  errored: number;
+}
+
+export interface EngineCompareTask {
+  taskId: string;
+  title: string;
+  project: string;
+  key: string;
+  done: boolean;
+  hours: number | null;
+  costUsd: number;
+  tokens: number;
+  reviews: number;
+  followUps: number;
+  reopens: number;
+  errored: boolean;
+  split: boolean;
+}
+
+export interface EngineCompare {
+  range: { start: string | null; end: string | null };
+  rows: EngineCompareRow[];
+  tasks: EngineCompareTask[];
+  projects: { project: string; tasks: number }[];
+  split: { on: boolean; entries: { key: string; label: string; weight: number }[] };
+}
+
+/** `project`: one project's tasks ('' = Inbox); absent counts every project. */
+export function fetchEngineCompare(range: { start?: string; end?: string }, project?: string): Promise<EngineCompare> {
+  const q: Record<string, string> = {};
+  if (range.start) q.start = range.start;
+  if (range.end) q.end = range.end;
+  if (project !== undefined) q.project = project;
+  return apiGet('/api/usage/engines', q);
+}
