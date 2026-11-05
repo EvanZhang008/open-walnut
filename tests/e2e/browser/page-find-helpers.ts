@@ -114,8 +114,12 @@ export function paint(page: Page) {
   return page.evaluate(() => {
     const reg = (window as unknown as { CSS: { highlights?: Map<string, { size: number }> } }).CSS.highlights;
     return {
-      find: reg?.get('walnut-find')?.size ?? 0,
-      active: reg?.get('walnut-find-active')?.size ?? 0,
+      // WebKit splits its paint (page-find.ts BoxPaint): boxed and solid matches.
+      // A solid active match is under its active name only (one name pair per
+      // match), so it counts here too.
+      find: (reg?.get('walnut-find')?.size ?? 0) + (reg?.get('walnut-find-solid')?.size ?? 0)
+        + (reg?.get('walnut-find-solid-active')?.size ?? 0),
+      active: (reg?.get('walnut-find-active')?.size ?? 0) + (reg?.get('walnut-find-solid-active')?.size ?? 0),
       sel: reg?.get('walnut-page-selmatch')?.size ?? 0,
     };
   });
@@ -125,9 +129,14 @@ export function paint(page: Page) {
  *  of the feature: by innerText, which leaves out what is not rendered. */
 export function expectedCount(page: Page, word: string) {
   return page.locator(HISTORY).evaluate((el, w) => {
-    const text = (el as HTMLElement).innerText.toLowerCase();
-    let n = 0;
-    for (let i = text.indexOf(w); i !== -1; i = text.indexOf(w, i + w.length)) n++;
+    const count = (t: string) => {
+      let n = 0;
+      for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+      return n;
+    };
+    // What the find skips ([data-find-skip]: the pinned copy of the first turn) is not counted.
+    let n = count((el as HTMLElement).innerText.toLowerCase());
+    for (const s of el.querySelectorAll<HTMLElement>('[data-find-skip]')) n -= count(s.innerText.toLowerCase());
     return n;
   }, word);
 }
@@ -178,7 +187,7 @@ export async function readerScrollToTop(page: Page) {
 export function activeInView(page: Page) {
   return page.locator(HISTORY).evaluate((el) => {
     const reg = (window as unknown as { CSS: { highlights: Map<string, Set<AbstractRange>> } }).CSS.highlights;
-    const h = reg.get('walnut-find-active');
+    const h = reg.get('walnut-find-active')?.size ? reg.get('walnut-find-active') : reg.get('walnut-find-solid-active');
     if (!h || !h.size) return false;
     // The paint holds StaticRanges (no geometry): measure through a live copy.
     const s = [...h][0]!;
@@ -194,9 +203,10 @@ export function activeInView(page: Page) {
 export const bar = (page: Page) => page.locator('.page-find');
 export const label = (page: Page) => page.locator('.page-find .fv-search-count');
 
-/** The count for the CURRENT query (the bar marks a query still being counted). */
+/** The count for the CURRENT query (the bar marks a query still being counted, on the
+ *  page and, in a session, across its whole history). */
 export async function settledLabel(page: Page): Promise<string> {
-  await expect(page.locator('.page-find[data-pending="false"]')).toHaveCount(1);
+  await expect(page.locator('.page-find[data-pending="false"]:not([data-remote="loading"])')).toHaveCount(1);
   return (await label(page).textContent()) ?? '';
 }
 

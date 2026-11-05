@@ -125,7 +125,7 @@ describe('the web', () => {
   it('draws the tasks under a reply in Main\'s or a lead\'s chat, and the line never prints', () => {
     expect(read('web/src/components/sessions/SessionPanel.tsx')).toMatch(/<MessageAboutContext\.Provider value=\{sessionTask\?\.org_role === 'main' \|\| sessionTask\?\.org_role === 'lead'\}>/)
     expect(read('web/src/components/sessions/SessionMessage.tsx')).toMatch(/<MessageAbout ids=\{aboutIds\} \/>/)
-    expect(read('web/src/utils/turn-end-marker.ts')).toMatch(/stripAboutTag\(text, streaming\)/)
+    expect(read('src/lib/turn-end-marker.ts')).toMatch(/stripAboutTag\(text, streaming\)/)
     expect(read('web/src/types/session.ts')).toMatch(/about\?: string\[\];/)
   })
 })

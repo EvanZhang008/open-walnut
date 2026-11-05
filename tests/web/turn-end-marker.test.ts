@@ -1,5 +1,5 @@
 /**
- * The agent acknowledgement line (web/src/utils/turn-end-marker.ts). It hides a
+ * The agent acknowledgement line (src/lib/turn-end-marker.ts). It hides a
  * whole turn, so the rule is strict: only the exact line, last, outside a code
  * fence, alone, in a turn no person started. Everything else stays on screen.
  */

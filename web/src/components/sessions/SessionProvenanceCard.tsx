@@ -317,6 +317,8 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
   if (kind === 'trigger') {
     const name = (peer.title ?? '').replace(/^Trigger:\s*/, '') || 'Routine';
     const scheduled = envelope.statusLine === 'scheduled';
+    // Its title is the note line when there is one, else the body's first sentence (a copy).
+    const titleCopy = !envelope.title && !(envelope.statusLine && !scheduled);
     return (
       <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
         <MessageFoldSummary
@@ -324,6 +326,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
           direction={scheduled ? 'Routine ran on schedule' : foldDirection(envelope)}
           sender={name}
           title={title}
+          titleCopy={titleCopy}
           open={open}
           onToggle={toggle}
         />
@@ -388,6 +391,8 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
         sender={sender}
         senderTitle={headline}
         title={title}
+        // Derived (no sender title) and the open card shows its source: a copy.
+        titleCopy={!envelope.title && !statusIsTitle}
         open={open}
         onToggle={toggle}
       />

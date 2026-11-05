@@ -60,6 +60,8 @@ interface ComposerControlsBarProps {
 
 /** Gap between pills — mirrors `.session-mode-bar { gap: 4px }`. */
 const ROW_GAP = 4;
+/** What the composer's recall line keeps for itself when the row is tight. */
+const RECALL_HINT_MIN_PX = 96;
 
 export function ComposerControlsBar({ controls, className, handleRef }: ComposerControlsBarProps) {
   const present = useMemo(() => controls.filter((c) => !!c.node), [controls]);
@@ -106,7 +108,11 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       shortWidths.current.set(id, w - detailW);
     }
     const spacer = bar.parentElement?.querySelector<HTMLElement>('.chat-input-controls-spacer');
-    const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0);
+    // The composer's recall line ("2 of 15 back") gives its room up
+    // first: it cuts its own words short rather than fold these controls.
+    const hint = bar.parentElement?.querySelector<HTMLElement>('.chat-recall-hint');
+    const yielded = hint ? Math.max(0, hint.getBoundingClientRect().width - RECALL_HINT_MIN_PX) : 0;
+    const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0) + yielded;
     const naturalWidth = inline.reduce((total, control) => total + (widths.current.get(control.id) ?? 64), 0)
       + Math.max(0, inline.length - 1) * ROW_GAP;
     const compact = available < Math.max(220, naturalWidth);

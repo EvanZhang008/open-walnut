@@ -7,6 +7,7 @@ import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { isUserDenied } from './tool-run-phrase';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, useDeniedNow, useSoleCall, useToolDecisions, useWaitingTools } from './waiting-tools';
+import { bashCommandSummary, toolDescription } from '@open-walnut/tool-header-text';
 
 // ── Bash tool call — terminal-style rendering ──
 // Bash commands/output are shell text, not JSON: the command renders with real
@@ -78,13 +79,10 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
   const input = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const command = typeof input.command === 'string' ? input.command : '';
   const rawDesc = typeof input.description === 'string' ? input.description.trim() : '';
-  const description = rawDesc ? (rawDesc.length > 120 ? rawDesc.slice(0, 120) + '...' : rawDesc) : null;
+  const description = toolDescription(input);
 
   // Collapsed summary: first line of the command (terminal one-liner, not JSON)
-  const commandSummary = useMemo(() => {
-    const firstLine = command.split('\n')[0];
-    return firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine;
-  }, [command]);
+  const commandSummary = useMemo(() => bashCommandSummary(command), [command]);
 
   // Screenshot-style image paths in output still get inline previews
   const resultImages = useMemo(() => {

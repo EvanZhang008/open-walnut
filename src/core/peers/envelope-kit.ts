@@ -328,7 +328,7 @@ export function createEnvelopeKit(): EnvelopeKit {
 
   /** Cut a last message to the notice budget, on a line break when one is near. */
   function clipNoticeMessage(text: string): EnvelopeLastMessage | undefined {
-    // The no-action line (web/src/utils/turn-end-marker.ts) is the panel's cue,
+    // The no-action line (src/lib/turn-end-marker.ts) is the panel's cue,
     // not the session's words: a quote never carries it.
     // The tasks line (org/message-about.ts, inlined: this body references nothing outside) is the chat's too.
     const trimmed = text

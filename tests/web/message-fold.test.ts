@@ -4,7 +4,9 @@
  * words, as one plain line.
  */
 import { describe, expect, it } from 'vitest';
-import { FOLD_TITLE_MAX, fallbackTitle, foldKey, noticeText, noticeTitle } from '../../web/src/components/sessions/message-fold';
+import {
+  FOLD_TITLE_MAX, _clearOpenedFolds, fallbackTitle, foldKey, noticeText, noticeTitle, openMessageFolds,
+} from '../../web/src/components/sessions/message-fold';
 
 describe('fallbackTitle', () => {
   it('is the first sentence once it can stand alone', () => {
@@ -69,5 +71,18 @@ describe('foldKey', () => {
   it('is stable for the same text and differs for different text', () => {
     expect(foldKey('<walnut-message kind="reply">a')).toBe(foldKey('<walnut-message kind="reply">a'));
     expect(foldKey('a')).not.toBe(foldKey('b'));
+  });
+});
+
+describe('openMessageFolds', () => {
+  it('says whether it opened anything (the find bar waits for the cards only then)', () => {
+    _clearOpenedFolds();
+    const a = foldKey('first card');
+    const b = foldKey('second card');
+    expect(openMessageFolds([a])).toBe(true);
+    expect(openMessageFolds([a])).toBe(false);
+    expect(openMessageFolds([a, b])).toBe(true);
+    expect(openMessageFolds([])).toBe(false);
+    _clearOpenedFolds();
   });
 });

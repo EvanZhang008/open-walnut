@@ -461,6 +461,41 @@ export async function fetchSessionHistoryBefore(
   return { messages: res.messages ?? [], reachedStart: !!res.reachedStart, unavailable: res.unavailable };
 }
 
+/** One row of the whole transcript holding a find query (GET /:id/find). */
+export interface SessionFindMatch {
+  /** The row's key in the timeline (`msgId`, else `walnutMessageId`). */
+  id: string;
+  role: 'user' | 'assistant';
+  timestamp: string;
+  count: number;
+}
+
+export interface SessionFindResult {
+  /** Oldest first. */
+  matches: SessionFindMatch[];
+  total: number;
+  capped: boolean;
+  /** Only part of a very long transcript could be read. */
+  partial?: boolean;
+}
+
+/** Find `query` in the session's whole transcript, rows not loaded here included.
+ *  A server without the route (an older one) answers 404: the caller treats that
+ *  as "nothing beyond the page". */
+export async function findInSessionHistory(
+  sessionId: string,
+  query: string,
+  caseSensitive: boolean,
+  signal?: AbortSignal,
+): Promise<SessionFindResult> {
+  const res = await apiGet<SessionFindResult>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/find`,
+    { q: query, ...(caseSensitive ? { case: '1' } : {}) },
+    { signal, timeoutMs: 60_000, quietStatuses: [404] },
+  );
+  return { matches: Array.isArray(res.matches) ? res.matches : [], total: res.total ?? 0, capped: !!res.capped, partial: !!res.partial };
+}
+
 export async function fetchSubagentHistory(
   sessionId: string,
   agentId: string,

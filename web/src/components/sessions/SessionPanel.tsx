@@ -3092,6 +3092,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onDictationInsert={holdDictationSelection}
             // The session's own draft: the words follow between this box and the panel's composer.
             draftKey={threads.draftKey}
+            promptRecallKey={sessionId}
             sendBlocked={macSessionAway}
             plusMenuActions={engineSettingsEntry.plusMenuActions}
             addMenuControls={{ handleRef: planComposerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
@@ -3943,6 +3944,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             // Any file goes to this session's host (api/file-upload.ts).
             fileTarget={{ sessionId }}
             focusNonce={composerFocusNonce}
+            promptRecallKey={plainChat ? undefined : sessionId}
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).
             onDictationInsert={holdDictationSelection}

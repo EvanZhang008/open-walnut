@@ -219,7 +219,7 @@ test('Cmd+F in a note counts, paints and steps through the note only', async ({ 
 
   const want = await inNote(page, NEEDLE)
   expect(want).toBe(6)
-  await expect(label(page)).toHaveText(`?/${want}`)
+  await expect(label(page)).toHaveText(`${want} matches`)
   expect(await paint(page)).toMatchObject({ find: want, active: 0 })
   await shot(page, 'typed')
 
@@ -243,7 +243,7 @@ test('Cmd+F in a note counts, paints and steps through the note only', async ({ 
   await expect(label(page)).not.toHaveText(at ?? '')
 
   // Match case: the upper-case copy drops out, and a match stays chosen
-  // (never back to "?/N" after the reader picked one).
+  // (never back to "N matches" after the reader picked one).
   await page.locator('.page-find .fv-search-case').click()
   await expect(label(page)).toHaveText(new RegExp(`^\\d+/${want - 1}$`))
   await page.locator('.page-find .fv-search-case').click()
@@ -261,15 +261,15 @@ test('Cmd+F in a note counts, paints and steps through the note only', async ({ 
   // source now (every copy, also the lines CodeMirror has not drawn), and back.
   // First with no match chosen (the query typed again: it only counts).
   await findInput(page).fill(NEEDLE.slice(0, 6))
-  await expect(label(page)).toHaveText(/^\?\/\d+$/)
+  await expect(label(page)).toHaveText(/^\d+ match(es)?$/)
   await findInput(page).press('End')
   await findInput(page).pressSequentially(NEEDLE.slice(6))
-  await expect(label(page)).toHaveText(`?/${want + 1}`)
+  await expect(label(page)).toHaveText(`${want + 1} matches`)
   await page.locator('.notes-raw-toggle-btn').click()
   await expect(page.locator('.notes-raw-view .cm-searchMatch').first()).toBeVisible()
-  await expect(label(page)).toHaveText(`?/${want + 1}`)
+  await expect(label(page)).toHaveText(`${want + 1} matches`)
   await page.locator('.notes-raw-toggle-btn').click()
-  await expect(label(page)).toHaveText(`?/${want + 1}`)
+  await expect(label(page)).toHaveText(`${want + 1} matches`)
   await expect.poll(async () => (await paint(page)).find).toBe(want + 1)
   // A chosen match stays chosen across the toggle, both ways.
   await findInput(page).focus()
@@ -325,7 +325,7 @@ test('Cmd+F from the sidebar still searches the open note, never the sidebar', a
   await chord(page)
   await expect(findInput(page)).toHaveAttribute('placeholder', 'Find in note')
   await findInput(page).fill(NEEDLE)
-  await expect(label(page)).toHaveText(`?/${await inNote(page, NEEDLE)}`)
+  await expect(label(page)).toHaveText(`${await inNote(page, NEEDLE)} matches`)
 })
 
 test('the raw markdown view is searched through CodeMirror, off-screen lines included', async ({ page }) => {
@@ -343,7 +343,7 @@ test('the raw markdown view is searched through CodeMirror, off-screen lines inc
   await page.keyboard.type(NEEDLE, { delay: 30 })
   // Six in the source, the last one hundreds of lines below what CodeMirror
   // draws. Typing only paints and counts, as in the rendered note.
-  await expect(label(page)).toHaveText('?/6')
+  await expect(label(page)).toHaveText('6 matches')
   await expect(page.locator('.notes-raw-view .cm-searchMatch').first()).toBeVisible()
   // The first press picks from where the view is (it keeps its scroll per
   // note); six presses then visit all six, wrapping.
@@ -527,7 +527,7 @@ test('a word selected in the note fills the bar', async ({ page }) => {
   }).toPass({ timeout: 20_000 })
   await chord(page)
   await expect(findInput(page)).toHaveValue(picked)
-  await expect(label(page)).toHaveText(/^\?\/\d+$/)
+  await expect(label(page)).toHaveText(/^\d+ match(es)?$/)
 })
 
 test('a hit whose word is not in the note body opens no bar', async ({ page }) => {
@@ -552,7 +552,7 @@ test('a hit whose word is not in the note body opens no bar', async ({ page }) =
   await page.locator(NOTE).getByText('Second item says nothing').click()
   await chord(page)
   await findInput(page).fill(NEEDLE)
-  await expect(label(page)).toHaveText(/\/6$/)
+  await expect(label(page)).toHaveText(/^(\d+\/6|6 matches)$/)
   await input.click()
   await input.fill('pelicanword')
   await expect(hit.first()).toBeVisible({ timeout: 20_000 })

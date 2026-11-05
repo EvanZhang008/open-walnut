@@ -51,7 +51,6 @@ import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
 import { isRoutedQuestion, isUserDenied, runSegments, toolRunPhrase, type RunCall } from './tool-run-phrase';
-import { parseAskUserQuestionInput } from './ask-user-question';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, runAnswerLines, SoleCallContext, useSoleCall, useDeniedNow, useToolDecisions, useWaitingTools } from './waiting-tools';
 import { toolCallsLabel } from './tool-call-grouping';
@@ -59,52 +58,9 @@ import { splitSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { KebabVerticalIcon } from '@/components/common/PhoneIcons';
+import { computeLineDiff, editDiffIsLarge, toolCardKind, toolDescription, toolInputSummary } from '@open-walnut/tool-header-text';
 
 // ── Edit Diff View ──
-
-/** Simple line diff: finds common prefix and suffix lines, marks the middle as changed. */
-function computeLineDiff(oldStr: string, newStr: string): { type: 'context' | 'removed' | 'added'; text: string }[] {
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const result: { type: 'context' | 'removed' | 'added'; text: string }[] = [];
-
-  // Find common prefix
-  let prefixLen = 0;
-  while (prefixLen < oldLines.length && prefixLen < newLines.length
-    && oldLines[prefixLen] === newLines[prefixLen]) {
-    prefixLen++;
-  }
-
-  // Find common suffix (from the end, not overlapping with prefix)
-  let suffixLen = 0;
-  while (suffixLen < oldLines.length - prefixLen && suffixLen < newLines.length - prefixLen
-    && oldLines[oldLines.length - 1 - suffixLen] === newLines[newLines.length - 1 - suffixLen]) {
-    suffixLen++;
-  }
-
-  // Prefix lines = context
-  for (let i = 0; i < prefixLen; i++) {
-    result.push({ type: 'context', text: oldLines[i] });
-  }
-
-  // Middle: removed from old, added from new
-  const oldMiddleEnd = oldLines.length - suffixLen;
-  const newMiddleEnd = newLines.length - suffixLen;
-
-  for (let i = prefixLen; i < oldMiddleEnd; i++) {
-    result.push({ type: 'removed', text: oldLines[i] });
-  }
-  for (let i = prefixLen; i < newMiddleEnd; i++) {
-    result.push({ type: 'added', text: newLines[i] });
-  }
-
-  // Suffix lines = context
-  for (let i = oldLines.length - suffixLen; i < oldLines.length; i++) {
-    result.push({ type: 'context', text: oldLines[i] });
-  }
-
-  return result;
-}
 
 interface EditDiffViewProps {
   filePath: string;
@@ -121,7 +77,7 @@ interface EditDiffViewProps {
 function EditDiffView({ filePath, oldString, newString, replaceAll, status, result, onViewFile, toolUseId }: EditDiffViewProps) {
   const [collapsed, setCollapsed] = useRowDisclosure(disclosureIds.diff(toolUseId), false);
   const totalLines = oldString.split('\n').length + newString.split('\n').length;
-  const isLarge = totalLines > 100;
+  const isLarge = editDiffIsLarge(oldString, newString);
   const [expanded, setExpanded] = useRowDisclosure(disclosureIds.diffFull(toolUseId), !isLarge);
 
   const diffLines = useMemo(
@@ -298,13 +254,6 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   );
 }
 
-/** Checks if a tool is a Write to ~/.claude/plans/ */
-function isPlanWrite(tool: { name: string; input: Record<string, unknown> }): boolean {
-  return tool.name === 'Write'
-    && typeof tool.input?.file_path === 'string'
-    && tool.input.file_path.includes('.claude/plans/');
-}
-
 /** Collapsed single-line row for Write to plans/ */
 export function CollapsedPlanWrite({ filePath }: { filePath: string }) {
   const filename = filePath.split('/').pop() ?? filePath;
@@ -452,7 +401,7 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
   const showAnswers = answers.length > 0 && !open;
   return (
     <div className="tool-run-row">
-      <button className={`tool-run-toggle${showAnswers ? ' tool-run-toggle--answered' : ''}`} onClick={() => setOpen((p) => !p)}>
+      <button className={`tool-run-toggle${showAnswers ? ' tool-run-toggle--answered' : ''}`} aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         {/* The answers under the line, not squeezed beside its count. */}
         {showAnswers ? (
           <>
@@ -789,7 +738,8 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
   return (
     <ToolRunShell phrase={phrase} calls={[...allTools.map(historyRunCall), ...trailingTools.map(streamRunCall)]} failCount={failCount} running={trailingLive || allTools.some((t) => t.liveStatus === 'calling')} count={allTools.length + trailingTools.length} disclosureId={disclosureIds.run(first)}>
       {messages.map((m, mi) => (
-        <div key={m.msgId ?? mi}>
+        // Each member counts its own words in a find (PageFind's row ids).
+        <div key={m.msgId ?? mi} data-find-row={m.msgId ?? m.walnutMessageId}>
           {m.thinking && <SessionThinking text={m.thinking} disclosureId={disclosureIds.thinking(m.msgId)} />}
           {(m.tools ?? []).map((t, ti) => (
             <SessionToolCall key={t.toolUseId ?? ti} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
@@ -875,24 +825,10 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     : (tool as { isError?: boolean }).isError && !routed ? 'error'
     : statusProp === 'error' && routed ? 'done' : statusProp;
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
-  const rawDesc = typeof safeInput.description === 'string' ? safeInput.description.trim() : '';
-  const description = rawDesc ? (rawDesc.length > 120 ? rawDesc.slice(0, 120) + '...' : rawDesc) : null;
+  const description = toolDescription(safeInput);
   // Memoized: JSON.stringify over a large Write/Edit input on EVERY render was
   // the measured hot spot behind whale-session slow commits (5-32s).
-  // slice-before-stringify keeps a multi-100KB string value from being
-  // serialized wholesale just to keep 60 chars of it.
-  const inputSummary = useMemo(() => tool.name === 'AskUserQuestion'
-    // A question reads as its words, not its JSON.
-    ? (parseAskUserQuestionInput(safeInput) ?? []).map((q) => q.question).join(' \u00b7 ')
-    : Object.entries(safeInput)
-    .filter(([k]) => k !== 'description')
-    .map(([k, v]) => {
-      const val = typeof v === 'string'
-        ? v
-        : JSON.stringify(v)?.slice(0, 200) ?? String(v);
-      return `${k}: ${val.length > 60 ? val.slice(0, 60) + '...' : val}`;
-    })
-    .join(', '), [safeInput, tool.name]);
+  const inputSummary = useMemo(() => toolInputSummary(tool.name, safeInput), [safeInput, tool.name]);
 
   // Dynamic icon and class based on status
   // A denied call: the person's no, not a failure (isUserDenied).
@@ -1145,26 +1081,26 @@ export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessi
   // Task/Agent tool with childMessages or agentId → its chip. A call still
   // streaming (`liveStatus`, a subagent's lane) is the chip from its first
   // frame, as its saved row will be.
-  if (GROUPABLE_HISTORY_TOOLS.has(tool.name) && (tool.childMessages || tool.agentId || tool.result || tool.liveStatus)) {
+  // How the call is drawn decides its header's words too: the whole-session find
+  // counts them with the same function (@open-walnut/tool-header-text).
+  const kind = toolCardKind(tool);
+  if (kind === 'chip') {
     return <TaskGroup tool={tool} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   // ExitPlanMode with plan content → render PlanCard
-  const exitPlanContent = tool.name === 'ExitPlanMode' ? getExitPlanContent(tool) : null;
-  if (exitPlanContent) {
-    return <PlanCard content={exitPlanContent} disclosureId={disclosureIds.plan(tool.toolUseId)} />;
+  if (kind === 'plan') {
+    return <PlanCard content={getExitPlanContent(tool) ?? ''} disclosureId={disclosureIds.plan(tool.toolUseId)} />;
   }
 
   // Write to plans → collapsed row
-  if (isPlanWrite(tool)) {
+  if (kind === 'plan-write') {
     return <CollapsedPlanWrite filePath={tool.input.file_path as string} />;
   }
 
   // Edit tool with old_string/new_string → render as diff view
-  if (tool.name === 'Edit'
-    && typeof tool.input?.file_path === 'string'
-    && typeof tool.input?.old_string === 'string'
-    && typeof tool.input?.new_string === 'string') {
+  if (kind === 'edit' && typeof tool.input.file_path === 'string'
+    && typeof tool.input.old_string === 'string' && typeof tool.input.new_string === 'string') {
     return (
       <EditDiffView
         filePath={tool.input.file_path}

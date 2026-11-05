@@ -58,8 +58,11 @@ export default defineConfig({
       // Where the cloud companion's keep choice lives: Settings reads it as the server does.
       '@open-walnut/companion-keep': path.resolve(__dirname, '../src/core/replication/companion-keep.ts'),
       '@open-walnut/history-turn-window': path.resolve(__dirname, '../src/lib/history-turn-window.ts'),
+      '@open-walnut/transcript-sent-by': path.resolve(__dirname, '../src/core/sessions/transcript-sent-by.ts'),
       '@open-walnut/history-injected-banner': path.resolve(__dirname, '../src/lib/history-injected-banner.ts'),
       '@open-walnut/history-session-envelope': path.resolve(__dirname, '../src/lib/history-session-envelope.ts'),
+      '@open-walnut/turn-end-marker': path.resolve(__dirname, '../src/lib/turn-end-marker.ts'),
+      '@open-walnut/tool-header-text': path.resolve(__dirname, '../src/lib/tool-header-text.ts'),
       '@open-walnut/history-walnut-riders': path.resolve(__dirname, '../src/lib/history-walnut-riders.ts'),
       '@open-walnut/attachment-headers': path.resolve(__dirname, '../src/lib/attachment-headers.ts'),
       '@open-walnut/walnut-added': path.resolve(__dirname, '../src/lib/walnut-added.ts'),

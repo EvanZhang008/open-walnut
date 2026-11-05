@@ -141,6 +141,18 @@ import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/compos
 import { PartIdentity } from './part-identity';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { QueuedImageThumbs } from './QueuedImageThumbs';
+import { registerSessionFind } from '@/utils/session-find';
+import { planSkipsForReveal, resolveSkips, turnStart, type RenderSkip, type ResolvedSkip } from './render-skips';
+import { foldKey, openMessageFolds } from './message-fold';
+import { RenderSkipDivider } from './RenderSkipDivider';
+import { publishRecallRows } from '@/components/chat/prompt-recall';
+
+/** A merged tool run's member rows, for the find bar: a member's words are
+ *  not drawn while the run is shut, and the bar opens it to land on them. */
+function findMembersAttr(msgs: readonly SessionHistoryMessage[]): string | undefined {
+  const ids = msgs.map((m) => m.msgId ?? m.walnutMessageId).filter(Boolean);
+  return ids.length ? ids.join(' ') : undefined;
+}
 
 /** A row's carded calls (session-outbound.ts), parsed once per call and result: a
  *  fold line reads them on every render of a long session. */
@@ -744,7 +756,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const [canGoBack, setCanGoBack] = useState(false);
   /** A jump whose target row is outside the loaded tail: parked here while the
    *  full history loads, finished by the effect next to jumpToPlace. */
-  const pendingJump = useRef<{ msgId: string; quote?: SessionPinnedQuote; via: string; armBack?: boolean; heldAtRequest: number } | null>(null);
+  const pendingJump = useRef<{ msgId: string; quote?: SessionPinnedQuote; via: string; armBack?: boolean; quiet?: boolean; onMissing?: () => void; stillWanted?: () => boolean; heldAtRequest: number } | null>(null);
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
   // Key: queueId, Value: blocks.length at creation time. Set once, never updated.
@@ -783,14 +795,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (loadedForkBoundary >= loadedMessages.length) return messages.length;
     return splitIndexOf(messages, loadedMessages[loadedForkBoundary]) ?? loadedForkBoundary;
   }, [loadedForkBoundary, loadedMessages, messages]);
+  // Stretches of the window left out after a far jump (render-skips.ts).
+  const [renderSkips, setRenderSkips] = useState<readonly RenderSkip[]>([]);
+  const resolvedSkips = useMemo(() => resolveSkips(messages, renderSkips, isHistoryUserTurn), [messages, renderSkips]);
   // Where each gap inside the loaded rows sits: the index of the row after it.
+  // A stretch left out on purpose is a break of the same kind: rows on either
+  // side never merge across it.
   const gapAt = useMemo(() => {
-    const at = new Map<number, HistoryGap>();
+    const at = new Map<number, HistoryGap | ResolvedSkip>();
     for (const gap of gaps) { const i = gapIndex(messages, gap); if (i > 0) at.set(i, gap); }
+    for (const skip of resolvedSkips) at.set(skip.end, skip);
     return at;
-  }, [messages, gaps]);
+  }, [messages, gaps, resolvedSkips]);
   const gapDivider = (index: number) => {
     const gap = gapAt.get(index);
+    if (gap && 'skip' in gap) {
+      return <RenderSkipDivider turns={gap.turns} rows={gap.end - gap.start}
+        onShow={() => setRenderSkips((list) => list.filter((s) => s !== gap.skip))} />;
+    }
     return gap ? <HistoryGapDivider state={gapStatus[gap.afterKey]} onLoad={() => fillHistoryGap(gap.afterKey)} /> : null;
   };
   const historyUnavailableRaw = parseHistoryUnavailable(error);
@@ -1998,7 +2020,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  gutter bars, which all name a place the same way. `via` only labels the log
    *  lines. */
   const jumpToPlace = useCallback((
-    msgId: string, quote: SessionPinnedQuote | undefined, via: string, opts?: { armBack?: boolean; onLanded?: () => void; stillWanted?: () => boolean },
+    msgId: string, quote: SessionPinnedQuote | undefined, via: string,
+    opts?: {
+      armBack?: boolean; onLanded?: () => void; stillWanted?: () => boolean;
+      /** Render the row only: no scroll, no flash (the find bar scrolls to its match). */
+      quiet?: boolean;
+      /** The row is not in the transcript, even after loading all of it. */
+      onMissing?: () => void;
+    },
   ) => {
     // `armBack: false` (a stack pop's fallback): no outline Back, and no smooth
     // scroll either, since a pop lands instantly.
@@ -2007,7 +2036,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // Told once the timeline is where the jump puts it (or the jump gave up).
     const landed = () => opts?.onLanded?.();
     const el = containerRef.current;
-    if (!el || !msgId) { landed(); return; }
+    if (!el || !msgId || (opts?.quiet && opts.stillWanted && !opts.stillWanted())) { landed(); return; }
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
       // The loaded rows are a TAIL window; a pin on an older message is a real
@@ -2019,27 +2048,45 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         log.info('session', 'pin jump: target is outside the loaded tail — loading the full history first', {
           sessionId, msgId, via,
         });
-        pendingJump.current = { msgId, quote, via, armBack, heldAtRequest: messages.length };
+        pendingJump.current = {
+          msgId, quote, via, armBack, quiet: opts?.quiet, onMissing: opts?.onMissing, stillWanted: opts?.stillWanted,
+          heldAtRequest: messages.length,
+        };
         loadFullHistory();
         landed();
         return;
       }
       log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, via });
+      opts?.onMissing?.();
       landed();
       return;
     }
-    if (armBack) {
+    if (armBack && !opts?.quiet) {
       jumpReturnTop.current = el.scrollTop;
       setCanGoBack(true);
     }
     // A jump is the user leaving the live tail on purpose; without this the
     // follow-bottom paths would drag them straight back down on the next delta.
     isAtBottom.current = false;
-    const needed = messages.length - index;
+    // The find bar's step far back renders the target's turn, not everything
+    // down to it (render-skips.ts).
+    // Its whole turn, the person's message that led to it included.
+    let from = index;
+    if (opts?.quiet) {
+      const start = renderWindowStart.current ?? messages.length;
+      setRenderSkips((list) => planSkipsForReveal(messages, list, start, index, isHistoryUserTurn));
+      from = turnStart(messages, index, isHistoryUserTurn, 0);
+    }
+    const needed = messages.length - from;
     if (needed > truncationOffset) {
       setTruncationOffset(needed);
     }
     revealFolded(msgId);
+    if (opts?.quiet) {
+      lastUserInput.current = Date.now();
+      landed();
+      return;
+    }
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         // Superseded on the way (another question's card opened since): not ours to move.
@@ -2098,10 +2145,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEffect(() => {
     const pending = pendingJump.current;
     if (!pending) return;
+    // Asked for by something that no longer wants it (the find bar moved on or
+    // closed): rendering hundreds of old rows for nobody is the one thing to avoid.
+    if (pending.stillWanted && !pending.stillWanted()) { pendingJump.current = null; return; }
     const present = messages.some((m) => (m.msgId ?? m.walnutMessageId) === pending.msgId);
     if (present) {
       pendingJump.current = null;
-      jumpToPlace(pending.msgId, pending.quote, pending.via, { armBack: pending.armBack !== false });
+      jumpToPlace(pending.msgId, pending.quote, pending.via, {
+        armBack: pending.armBack !== false, quiet: pending.quiet, onMissing: pending.onMissing, stillWanted: pending.stillWanted,
+      });
       return;
     }
     if (!phase2Pending) {
@@ -2117,8 +2169,56 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       log.warn('session', 'pin jump: message not in the transcript even after loading the full history', {
         sessionId, msgId: pending.msgId, via: pending.via,
       });
+      pending.onMissing?.();
     }
   }, [messages, phase2Pending, olderWindowed, loadFullHistory, jumpToPlace, sessionId]);
+
+  // ── Cmd+F across the whole session (utils/session-find.ts) ──
+  // The find bar asks this timeline which rows are above what it renders, and
+  // has it render one. Read through a ref: the bridge is registered once per
+  // container, and every answer must come from this render's rows.
+  const findState = useRef({ messages, olderHidden, olderWindowed, stackMode, jumpToPlace });
+  findState.current = { messages, olderHidden, olderWindowed, stackMode, jumpToPlace };
+  const findIndex = useRef<{ of: readonly SessionHistoryMessage[]; ids: Map<string, number> } | null>(null);
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const indexOf = (id: string): number => {
+      const rows = findState.current.messages;
+      let idx = findIndex.current;
+      if (idx?.of !== rows) {
+        const ids = new Map<string, number>();
+        rows.forEach((m, i) => { const key = m.msgId ?? m.walnutMessageId; if (key && !ids.has(key)) ids.set(key, i); });
+        idx = { of: rows, ids };
+        findIndex.current = idx;
+      }
+      return idx.ids.get(id) ?? -1;
+    };
+    const olderUnheld = () => findState.current.olderHidden > 0 || findState.current.olderWindowed;
+    return registerSessionFind(root, {
+      sessionId,
+      enabled: () => !findState.current.stackMode,
+      positionOf: (id, timestamp) => {
+        const at = indexOf(id);
+        if (at >= 0) return at;
+        // Not held: older than the held rows only when there is an older part.
+        if (!olderUnheld()) return null;
+        const head = findState.current.messages.find((m) => m.timestamp)?.timestamp;
+        return head && timestamp && timestamp <= head ? -1 : null;
+      },
+      reveal: (id, onMissing, stillWanted) => {
+        findState.current.jumpToPlace(id, undefined, 'find', { armBack: false, quiet: true, onMissing, stillWanted });
+      },
+      openFolds: (id) => {
+        const m = findState.current.messages[indexOf(id)];
+        const segs = m?.role === 'user' && m.text ? parseSessionEnvelopes(m.text) : null;
+        const keys = (segs ?? []).flatMap((seg) => (seg.kind === 'envelope' ? [foldKey(seg.envelope.raw)] : []));
+        return keys.length > 0 && openMessageFolds(keys);
+      },
+    });
+  }, [sessionId]);
+  // The composer's ArrowUp recall reads the person's sent messages from these rows.
+  useEffect(() => publishRecallRows(sessionId, () => findState.current.messages), [sessionId]);
 
   // A row of the composer's comment list: show where it was left. Each request lands once.
   const commentJump = commentsApi.jump;
@@ -3252,9 +3352,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       systemRun = [];
     };
+    let skipAt = 0;
     for (let i = 0; i < visibleMessages.length; i++) {
-      const m = visibleMessages[i];
       const globalIndex = visibleStart + i;
+      // Inside a stretch left out on purpose: on to its end (render-skips.ts).
+      while (skipAt < resolvedSkips.length && resolvedSkips[skipAt]!.end <= globalIndex) skipAt++;
+      const skip = resolvedSkips[skipAt];
+      if (skip && globalIndex >= skip.start) { i = skip.end - visibleStart - 1; continue; }
+      const m = visibleMessages[i];
       if ((forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) || gapAt.has(globalIndex)) {
         flushHistoryRun(true);
         flushSystemRun();
@@ -3332,7 +3437,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const part of parts) if (part.kind === 'run') part.memberMsgs = ids.list('run', part.memberMsgs);
     return { historyParts: parts, hiddenCount: visibleStart };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors, partIdentity]);
+  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, rootPageWindow, windowAnchors, partIdentity]);
   // A cut window forgets how far "Load earlier turns" or a jump had widened it,
   // else the next pass after the reader scrolls up would grow it straight back.
   useLayoutEffect(() => {
@@ -3347,6 +3452,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const keyOf = rowThreadKeyRef.current;
     return pageRowsBefore(hiddenCount, (i) => keyOf(messages[i].msgId ?? messages[i].walnutMessageId), ROOT_THREAD_KEY);
   }, [rootPageWindow, hiddenCount, messages, windowAnchors]);
+  /** The pinned Initial Prompt card stands for the first turn in a find (its
+   *  row id) only when it is that turn: held, not drawn, the same typed words. */
+  const firstRow = messages[0];
+  const initialPromptFindProps: Record<string, string> = hiddenCount > 0 && olderHidden === 0 && !olderWindowed
+    && !!initialPrompt && firstRow?.role === 'user' && (firstRow.msgId ?? firstRow.walnutMessageId)
+    && typedUserText(firstRow.text ?? '').trim() === typedUserText(initialPrompt).trim()
+    ? { 'data-find-row': (firstRow.msgId ?? firstRow.walnutMessageId)! }
+    : { 'data-find-skip': '' };
 
   // ── Stack page: ONE question's slice of the SAME parts ──────────────────────
   // A stack page renders no rows of its own. It filters the parts the linear view
@@ -4628,6 +4741,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           key={`mrun-${first.m.msgId ?? first.globalIndex}`}
           data-msg-index={first.globalIndex}
           data-row-keys={rowKeysAttr(part.memberMsgs.flatMap((m) => (m.tools ?? []).map((t) => t.toolUseId)))}
+          data-find-members={findMembersAttr(part.memberMsgs)}
           {...threadWrapperProps(first.m.msgId ?? first.m.walnutMessageId, 'session-msg-bare')}
         >
           {!part.seeded && forkBoundaryIndex != null && first.globalIndex === forkBoundaryIndex && (
@@ -5648,6 +5762,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     <div
       key={`boundary-run-${boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].globalIndex}`}
       data-msg-index={boundaryHistoryRun.members[0].globalIndex}
+      data-find-members={findMembersAttr(boundaryHistoryRun.memberMsgs)}
       {...threadWrapperProps(
         boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].m.walnutMessageId,
         'session-msg-bare',
@@ -6253,7 +6368,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {/* A question page is one question's turns: no transcript preamble above it
             (its rows are revealed into the render window when it opens). */}
         {!onQuestionPage && initialPrompt && (hiddenCount > 0 || olderHidden > 0 || olderWindowed) && (
-          <div className="session-msg session-msg-user session-initial-prompt">
+          // The find reads this card as the first turn when it is that turn's
+          // words and that turn is not drawn below (the card shows only while it
+          // is not); otherwise it is a copy out of transcript order, skipped.
+          <div className="session-msg session-msg-user session-initial-prompt" {...initialPromptFindProps}>
             <div className="session-msg-header">
               <span className="session-initial-prompt-label">Initial Prompt</span>
             </div>

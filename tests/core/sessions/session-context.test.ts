@@ -377,7 +377,7 @@ describe('buildSessionContext (identity note)', () => {
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
-    const { NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker')
+    const { NO_ACTION_TAG } = await import('../../../src/lib/turn-end-marker')
     expect(NO_ACTION_TAG).toBe('<walnut-turn status="agent-ack"/>')
     // 2026-10-25: under the old "a turn that only reports work" wording a session put
     // the line under its answer to the user's own question. Main and the asks get it too.

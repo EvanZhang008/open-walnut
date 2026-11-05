@@ -37,6 +37,7 @@ import { ComposerAttachmentStrip } from './ComposerAttachmentStrip';
 import { MAX_FILES, withFilePaths, type UploadTarget } from '@/api/file-upload';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { useFocusRequest } from '@/utils/focus-when-shown';
+import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -421,9 +422,12 @@ interface ChatInputProps {
    * why); its click is a no-op and the menu stays open.
    */
   plusMenuActions?: PlusMenuAction[];
+  /** The session this composer sends to: ArrowUp in an empty box brings back the
+   *  person's earlier messages in it (prompt-recall.ts). Unset: no recall. */
+  promptRecallKey?: string;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, promptRecallKey }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -443,6 +447,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // Mirror for effects keyed on something else (the prefill effect is keyed on
   // its nonce, so reading state there would read a stale render's values).
   const valueRef = useRef(value);
+  /** The earlier message ArrowUp put in the box, while it is there untouched. */
+  const recallRef = useRef<RecallPos | null>(null);
+  /** The same, for the hint in the controls row: which one of how many. */
+  const [recallShown, setRecallShown] = useState<{ index: number; total: number; text: string } | null>(null);
   valueRef.current = value;
 
   /**
@@ -723,7 +731,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (sendMenuOpen && sendGroupRef.current && !sendGroupRef.current.contains(t)) setSendMenuOpen(false);
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); setPlusOpen(false); setSendMenuOpen(false); }
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      // Closed from inside a menu: the focus goes back to the box, as a row's click does.
+      const from = document.activeElement;
+      const inMenu = !!from && (from === document.body
+        || !!plusGroupRef.current?.contains(from) || !!sendGroupRef.current?.contains(from));
+      setPlusOpen(false);
+      setSendMenuOpen(false);
+      if (inMenu) textareaRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -1038,6 +1054,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const imgs = sentImages(sent);
     // The files go as words: the header naming where each one was saved.
     const message = withFilePaths(text, sentFilePaths(sent));
+    recallRef.current = null;
+    setRecallShown(null);
+    // Recall offers it once the send is accepted (a refused one comes back to the box).
+    const recallKey = promptRecallKey;
+    const accepted = () => { if (recallKey) noteSentPrompt(recallKey, text); };
     // Optimistically clear the box for snappy feel, but keep the draft until we know
     // the send was accepted server-side.
     // The key the words were typed under: the box may show another one by the
@@ -1083,12 +1104,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const result = cb(message, imgs.length > 0 ? imgs : undefined);
     if (result instanceof Promise) {
       result.then((ok) => {
-        if (ok) { clearSentDraft(sentKey); settleAttachments(); }
+        if (ok) { clearSentDraft(sentKey); settleAttachments(); accepted(); }
         else failed();
       }).catch(failed);
     } else {
       clearSentDraft(sentKey);
       settleAttachments();
+      accepted();
     }
   };
 
@@ -1288,6 +1310,33 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     },
   });
 
+  /** Put a recalled message (or, past the newest, nothing) in the box, the
+   *  caret at its end, ready to add to it (on a message of several lines
+   *  ArrowUp first walks its lines). Not saved as a draft: an untouched recall
+   *  is the empty box still (an edit makes it one). */
+  const showRecalled = (ta: HTMLTextAreaElement, step: { index: number; entry: string }, total: number) => {
+    const split = applyText(step.entry, { keepRefs: false });
+    recallRef.current = step.index >= 0 ? { index: step.index, entry: step.entry, text: split.body, total } : null;
+    setRecallShown(step.index >= 0 ? { index: step.index, total, text: split.body } : null);
+    fitTextarea(ta);
+    ta.setSelectionRange(split.body.length, split.body.length);
+    ta.scrollTop = ta.scrollHeight;
+  };
+
+  /** The "+" menu's row: one ArrowUp, from an empty box or an untouched recall. */
+  const recallLast = () => {
+    setPlusOpen(false);
+    const ta = textareaRef.current;
+    if (!ta || !promptRecallKey) return;
+    ta.focus();
+    const entries = recallPrompts(promptRecallKey);
+    const step = stepRecall({
+      dir: -1, entries, pos: recallRef.current,
+      current: valueRef.current, empty: valueRef.current === '' && attachmentItemsRef.current.length === 0, atEdge: () => true,
+    });
+    if (step) showRecalled(ta, step, entries.length);
+  };
+
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode), except
     // while the "@" palette has source tabs, where it steps back one tab.
@@ -1410,6 +1459,53 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       }
     }
 
+    // ArrowUp / ArrowDown walk the person's earlier messages in this session
+    // (prompt-recall.ts says when they take over from the caret).
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && promptRecallKey
+      && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const ta = textareaRef.current;
+      const up = e.key === 'ArrowUp';
+      const entries = recallPrompts(promptRecallKey);
+      const step = ta ? stepRecall({
+        dir: up ? -1 : 1,
+        entries,
+        pos: recallRef.current,
+        current: valueRef.current,
+        empty: valueRef.current === '' && attachmentItemsRef.current.length === 0,
+        atEdge: () => caretOnEdgeLine(ta, up ? 'first' : 'last'),
+      }) : null;
+      if (step && ta) {
+        e.preventDefault();
+        showRecalled(ta, step, entries.length);
+        return;
+      }
+      // An untouched recall of several lines: one press takes the caret to its
+      // start (ArrowUp) or end (ArrowDown), the next goes on, not one press per line.
+      const held = recallRef.current;
+      if (ta && held && held.text === valueRef.current && ta.selectionStart === ta.selectionEnd) {
+        const at = up ? 0 : ta.value.length;
+        if (ta.selectionStart !== at) {
+          e.preventDefault();
+          ta.setSelectionRange(at, at);
+          return;
+        }
+      }
+    }
+    // Undo or Esc on an untouched recall: back to the empty box, as in a shell
+    // (the browser's own undo knows nothing of a value set by script).
+    const undo = e.key.toLowerCase() === 'z' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
+    const esc = e.key === 'Escape' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey;
+    if ((undo || esc) && recallRef.current && recallRef.current.text === valueRef.current) {
+      const ta = textareaRef.current;
+      if (ta) {
+        e.preventDefault();
+        // Esc here is this box's: nothing around it closes on it too.
+        if (esc) e.stopPropagation();
+        showRecalled(ta, { index: -1, entry: '' }, 0);
+        return;
+      }
+    }
+
     if (e.key === 'Enter') {
       if (e.shiftKey || e.altKey || returnInsertsNewline()) {
         // Shift+Enter or Option+Enter → newline (default behavior); touch: always
@@ -1428,6 +1524,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const handleChange = (newValue: string) => {
     lastInputAtRef.current = Date.now();
+    // Edited: a recalled message is a draft from now on, even typed back to what it was.
+    if (recallRef.current && newValue !== recallRef.current.text) { recallRef.current = null; setRecallShown(null); }
     // A pasted ref tag (someone copies a pill's markup, or a draft written by
     // another surface arrives through here) becomes its inline token.
     const split = applyText(newValue);
@@ -2029,6 +2127,34 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       <span>Skills</span>
                     </button>
                   )}
+                  {promptRecallKey && (() => {
+                    const untouched = !!recallRef.current && recallRef.current.text === value && !hasAttachments;
+                    const empty = (value === '' && !hasAttachments) || untouched;
+                    const any = plusOpen && recallPrompts(promptRecallKey).length > 0;
+                    // At the oldest already: nothing further back.
+                    const oldest = untouched && recallShown?.index === 0;
+                    const off = !empty || !any || oldest;
+                    // Off rows say why in the label itself (a tooltip is easy to
+                    // miss), and stay hoverable: aria-disabled, not `disabled`.
+                    return (
+                      <button
+                        className={`chat-plus-menu-item${off ? ' is-off-said' : ''}`}
+                        onClick={() => { if (!off) recallLast(); }}
+                        type="button"
+                        role="menuitem"
+                        aria-disabled={off || undefined}
+                        title={!any ? 'Nothing sent in this session yet'
+                          : oldest ? 'This is the first message you sent here'
+                            : untouched ? 'Bring back the message you sent before this one. \u2191 and \u2193 step through them too'
+                            : empty ? 'Bring back your last message here. In an empty box, \u2191 and \u2193 step through your earlier ones'
+                              : 'Empty the box first: your draft is never replaced'}
+                      >
+                        <span className="chat-plus-menu-key">{'\u2191'}</span>
+                        <span>{!any ? 'Recall: nothing sent yet' : oldest ? 'Recall: this is the first one'
+                          : untouched ? 'Recall the one before' : empty ? 'Recall your last message' : 'Recall: empty the box first'}</span>
+                      </button>
+                    );
+                  })()}
                   {isSessionMode && !plusMenuActions?.some((a) => a.id === 'trigger') && (
                     <button
                       className="chat-plus-menu-item"
@@ -2114,6 +2240,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         {/* Blocked: the send controls go, the box and its mic and "+" stay. */}
         {!sendBlocked && !light && controlsSlot}
         <span className="chat-input-controls-spacer" />
+        {/* Which earlier message the box holds, while it is untouched. */}
+        {recallShown && recallShown.text === value && (
+          <span className="chat-recall-hint" aria-live="polite">
+            <span className="chat-recall-hint-text">
+              {recallShown.total === 1 ? 'Your only message here'
+                : recallShown.index === recallShown.total - 1 ? `Last message (1 of ${recallShown.total})`
+                  : recallShown.index === 0 ? `First message (${recallShown.total} of ${recallShown.total})`
+                    : `${recallShown.total - recallShown.index} of ${recallShown.total} back`}
+            </span>
+            <span className="chat-recall-hint-keys" aria-hidden="true">
+              {recallShown.index > 0 && <><kbd>{'\u2191'}</kbd>older </>}<kbd>{'\u2193'}</kbd>newer
+            </span>
+          </span>
+        )}
         <MicButton
           onTranscribe={(text) => writeDictation(text, false)}
           onDraft={(text) => writeDictation(text, true)}

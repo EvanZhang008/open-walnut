@@ -19,11 +19,23 @@ interface FileSearchBarProps {
   placeholder?: string;
   /** More matches exist than were counted. */
   capped?: boolean;
+  /** Matches may still come (a search beyond the view is out): "…", not "No results". */
+  searching?: boolean;
+  /** Part of the search failed: none in what was searched is not "No results". */
+  incomplete?: boolean;
+}
+
+/** The bar's outline icons, drawn like the app's other toolbar icons. */
+function BarIcon({ d }: { d: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+  );
 }
 
 export function FileSearchBar({
   query, caseSensitive, count, index, onQueryChange, onToggleCase, onNav, onClose,
-  placeholder = 'Find in file', capped = false,
+  placeholder = 'Find in file', capped = false, searching = false, incomplete = false,
 }: FileSearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -54,6 +66,8 @@ export function FileSearchBar({
         ref={inputRef}
         className="fv-search-input"
         data-no-draft="search"
+        // Nothing found (and nothing still coming): the field says so in colour.
+        data-empty={query && count === 0 && !searching && !incomplete ? 'true' : undefined}
         value={query}
         placeholder={placeholder}
         aria-label={placeholder}
@@ -70,19 +84,23 @@ export function FileSearchBar({
       <button
         type="button"
         className={`fv-search-case${caseSensitive ? ' active' : ''}`}
+       
         onClick={onToggleCase}
         title="Match case"
+        aria-label="Match case"
         aria-pressed={caseSensitive}
       >
         Aa
       </button>
       <span className="fv-search-count" aria-live="polite">
         {/* index 0 with matches = none chosen yet (the page find never picks one on its own). */}
-        {query ? (count > 0 ? `${index || '?'}/${count}${capped ? '+' : ''}` : 'No results') : ''}
+        {query ? (count > 0
+          ? (index ? `${index}/${count}${capped ? '+' : ''}` : `${count}${capped ? '+' : ''} ${count === 1 && !capped ? 'match' : 'matches'}`)
+          : searching ? 'Searching\u2026' : incomplete ? 'None on screen' : 'No results') : ''}
       </span>
-      <button type="button" className="fv-search-nav" onClick={() => onNav(-1)} disabled={!count} title="Previous match (⇧Enter)" aria-label="Previous match">↑</button>
-      <button type="button" className="fv-search-nav" onClick={() => onNav(1)} disabled={!count} title="Next match (Enter)" aria-label="Next match">↓</button>
-      <button type="button" className="fv-search-close" onClick={onClose} title="Close (Esc)" aria-label="Close search">✕</button>
+      <button type="button" className="fv-search-nav" onClick={() => onNav(-1)} disabled={!count} title="Previous match (⇧Enter)" aria-label="Previous match"><BarIcon d="M4 10l4-4 4 4" /></button>
+      <button type="button" className="fv-search-nav" onClick={() => onNav(1)} disabled={!count} title="Next match (Enter)" aria-label="Next match"><BarIcon d="M4 6l4 4 4-4" /></button>
+      <button type="button" className="fv-search-close" onClick={onClose} title="Close (Esc)" aria-label="Close search"><BarIcon d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></button>
     </div>
   );
 }

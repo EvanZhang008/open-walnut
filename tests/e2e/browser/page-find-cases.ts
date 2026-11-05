@@ -39,7 +39,7 @@ export function definePageFindCases(engine: string): void {
     });
     const want = await expectedCount(page, WORD);
     expect(want).toBeGreaterThan(20);
-    expect(await settledLabel(page)).toBe(`?/${want}`);
+    expect(await settledLabel(page)).toBe(want === 1 ? '1 match' : `${want} matches`);
     expect(await paint(page)).toMatchObject({ find: want, active: 0 });
     expect(drift).toBe(0);
     expect(await scrollTop(page)).toBe(before);
@@ -99,7 +99,7 @@ export function definePageFindCases(engine: string): void {
     // ...and counted, in place, the moment the reader opens it.
     const fold = page.locator(historySelector).locator('.tool-run-toggle', { hasText: 'Thinking' }).last();
     await fold.click();
-    await expect(label(page)).toHaveText('?/1', { timeout: 5_000 });
+    await expect(label(page)).toHaveText('1 match', { timeout: 5_000 });
 
     // "Load earlier" renders the old rows; the count follows.
     await page.locator('.page-find input').fill(OLD_MARKER);
@@ -111,7 +111,7 @@ export function definePageFindCases(engine: string): void {
     // every retry of the click was scrolled back (2026-11-02, CI and a 3-CPU WebKit run).
     await readerScrollToTop(page);
     await loadEarlier.click();
-    await expect(label(page)).toHaveText(/^\?\/[1-9]\d*$/, { timeout: 10_000 });
+    await expect(label(page)).toHaveText(/^[1-9]\d* match(es)?$/, { timeout: 10_000 });
   });
 
   test(`${engine}: new content recounts in place and keeps the chosen match`, async ({ page }) => {
@@ -121,7 +121,7 @@ export function definePageFindCases(engine: string): void {
     await findChord(page);
     await page.keyboard.type(WORD);
     const want = await expectedCount(page, WORD);
-    expect(await settledLabel(page)).toBe(`?/${want}`);
+    expect(await settledLabel(page)).toBe(want === 1 ? '1 match' : `${want} matches`);
     await page.keyboard.press('Enter');
     const idx = Number((await label(page).textContent())!.split('/')[0]);
 
@@ -145,7 +145,8 @@ export function definePageFindCases(engine: string): void {
     // Two matches arriving ABOVE the chosen one: the same match stays chosen,
     // so its number moves up by two (a by-number fallback would keep `idx`).
     await page.locator(historySelector).evaluate((el, w) => {
-      const first = el.querySelector('.markdown-body')!;
+      // The first searched body: the pinned Initial Prompt ([data-find-skip]) is not one.
+      const first = [...el.querySelectorAll('.markdown-body')].find((b) => !b.closest('[data-find-skip]'))!;
       const p = document.createElement('p');
       p.textContent = `early ${w} and ${w}`;
       first.prepend(p);
@@ -174,10 +175,15 @@ export function definePageFindCases(engine: string): void {
       sel.addRange(r);
     }, WORD);
     // Exact = case-sensitive copies the reader can see (innerText skips folds).
+    // The pinned copy of the first turn ([data-find-skip]) is never painted.
     const exact = () => page.locator(historySelector).evaluate((el, w) => {
-      const t = (el as HTMLElement).innerText;
-      let n = 0;
-      for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+      const count = (t: string) => {
+        let n = 0;
+        for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+        return n;
+      };
+      let n = count((el as HTMLElement).innerText);
+      for (const s of el.querySelectorAll<HTMLElement>('[data-find-skip]')) n -= count(s.innerText);
       return n;
     }, WORD);
     // Both sides read live: the question map fills in after the history, and a
@@ -192,7 +198,7 @@ export function definePageFindCases(engine: string): void {
     await page.locator(historySelector).evaluate((el, w) => {
       const p = document.createElement('p');
       p.textContent = `${w.toUpperCase()} uppercase copy, and one more ${w}`;
-      el.querySelector('.markdown-body')!.appendChild(p);
+      [...el.querySelectorAll('.markdown-body')].find((b) => !b.closest('[data-find-skip]'))!.appendChild(p);
     }, WORD);
     await expect.poll(async () => (await paint(page)).sel, { timeout: 3_000 }).toBe(n0 + 1);
     expect(await exact()).toBe(n0 + 1);
@@ -221,10 +227,15 @@ export function definePageFindCases(engine: string): void {
     page.on('pageerror', (e) => errors.push(e.message));
     await openSession(page);
     await readerScrollUp(page, 600);
+    // The pinned copy of the first turn ([data-find-skip]) is never painted.
     const exact = (w: string) => page.locator(historySelector).evaluate((el, w) => {
-      const t = (el as HTMLElement).innerText;
-      let n = 0;
-      for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+      const count = (t: string) => {
+        let n = 0;
+        for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+        return n;
+      };
+      let n = count((el as HTMLElement).innerText);
+      for (const s of el.querySelectorAll<HTMLElement>('[data-find-skip]')) n -= count(s.innerText);
       return n;
     }, w);
     const selected = () => page.evaluate(() => getSelection()?.toString() ?? '');
@@ -258,9 +269,13 @@ export function definePageFindCases(engine: string): void {
       await expect.poll(selected).toBe(w);
       // Paint and text read in one turn: a stream between two reads would skew it.
       await expect.poll(() => page.locator(historySelector).evaluate((el, w) => {
-        const t = (el as HTMLElement).innerText;
-        let n = 0;
-        for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+        const count = (t: string) => {
+          let k = 0;
+          for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) k++;
+          return k;
+        };
+        let n = count((el as HTMLElement).innerText);
+        for (const s of el.querySelectorAll<HTMLElement>('[data-find-skip]')) n -= count(s.innerText);
         const reg = (window as unknown as { CSS: { highlights: Map<string, { size: number }> } }).CSS.highlights;
         return (reg.get('walnut-page-selmatch')?.size ?? 0) - n;
       }, w)).toBe(0);
@@ -349,7 +364,7 @@ export function definePageFindCases(engine: string): void {
     await expect(bar(page)).toHaveAttribute('data-scope', 'page');
     await expect(page.locator('.page-find input')).toHaveAttribute('placeholder', 'Find in page');
     await page.keyboard.type('Answer 239');
-    await expect(label(page)).toHaveText(/^\?\/[1-9]\d*$/);
+    await expect(label(page)).toHaveText(/^[1-9]\d* match(es)?$/);
 
     // Back into the chat: the same chord now searches that session.
     await page.locator(historySelector).getByText('Answer 239.').click();

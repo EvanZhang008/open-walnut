@@ -28,6 +28,9 @@ export { liveRange } from './page-find-geometry';
 export const HL_FIND = 'walnut-find';
 export const HL_FIND_ACTIVE = 'walnut-find-active';
 export const HL_PAGE_SELMATCH = 'walnut-page-selmatch';
+/** Box mode (BoxPaint): the matches it cannot box, painted the usual way. */
+const HL_FIND_SOLID = 'walnut-find-solid';
+const HL_FIND_ACTIVE_SOLID = 'walnut-find-solid-active';
 /** Find matches paint above every question mark state (useThreadMarks, 2 to 7). */
 const FIND_PRIORITY = 10;
 
@@ -45,6 +48,40 @@ export const FIND_SKIP_SELECTOR = '.page-find, [data-find-skip]';
 /** A document the reader writes in (a note's editor): searched although it is
  *  editable. Every other editable (a composer, a title being renamed) is not. */
 export const FIND_DOC_ATTR = 'data-find-doc';
+
+/**
+ * In a session chat, also never searched: the chat's own labels and controls
+ * around the messages (times, copy buttons, fold toggles, a card's sender line,
+ * dividers). The whole-session count (utils/session-find.ts) counts the words
+ * of the transcript; a label counted on screen but not in the turns it has not
+ * rendered would make the total mean two things, and move as turns render.
+ * The rule: what a turn shows without the reader opening anything is exactly
+ * what the server counts (src/core/sessions/session-find.ts findableText); what
+ * the reader opens (a tool's output, a thinking block) is searched on top.
+ * tests/e2e/browser/session-find-whole-cases.ts checks that every word left to
+ * search on the page is a word of the transcript.
+ */
+export const SESSION_FIND_SKIP_SELECTOR = [
+  FIND_SKIP_SELECTOR,
+  '.session-msg-actions', '.session-show-earlier-btn', '.session-gap-divider', '.session-streaming-indicator',
+  '.scroll-to-bottom-btn', '.tool-run-toggle', '.provenance-fold-from', '.provenance-details',
+  '.provenance-chips', '.provenance-label', '.provenance-asked-label', '.provenance-quote-label',
+  '.provenance-reply-request', '.session-msg-received-badge',
+  // A tool call's header line is searched (its name and summary: the server
+  // reads the same words, src/lib/tool-header-text.ts); its glyphs and buttons are not.
+  '.chat-tool-block-icon', '.chat-tool-block-arrow', '.chat-tool-block-calling-dot',
+  '.bash-tool-expand-btn', '.edit-diff-view-file', '.edit-diff-prefix', '.edit-diff-expand',
+  // A plan card's own header ("Plan", its buttons); the plan below it is searched.
+  '.session-plan-card-header',
+  // A message this session sent is a tool call: its card's closed lines (the target,
+  // the title Walnut's record may give, an error) are not the transcript's words; its
+  // body, once the reader opens the card, is searched.
+  '[data-envelope-kind="outbound"] > .op-card-to', '[data-envelope-kind="outbound"] > .op-card-main',
+  '[data-envelope-kind="outbound"] > .provenance-status',
+  '.session-msg-queued-actions',
+  // A background task's chip: the tool call's own label, not words of the transcript.
+  '.bg-tasks-chip',
+].join(', ');
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION', 'TEMPLATE']);
 /** Tags that end a run of text. Text in two different blocks is joined with a
@@ -250,6 +287,18 @@ export class PageFindController {
    *  in the plain match colour, the chosen one no longer told apart. */
   private paintedActive: StaticRange | null = null;
 
+  /** The element holding the active match where the engine paints no highlight. */
+  private host: HTMLElement | null = null;
+
+  /** WebKit, in a chat: the matches drawn as boxes behind the text (BoxPaint). */
+  private boxes: BoxPaint | null = null;
+
+  /** Draw matches as boxes behind the text (see BoxPaint), where the root allows it. */
+  useBoxes(): void {
+    if (this.boxes || !(this.root instanceof HTMLElement) || !this.ordered) return;
+    this.boxes = new BoxPaint(this.root, () => this.drawBoxes());
+  }
+
   /**
    * `view` = the box the reader sees the root through, when the root is not its
    * own scroller (a note's editor scrolls inside its pane).
@@ -258,6 +307,10 @@ export class PageFindController {
     readonly root: Element,
     private beforeScroll?: (el: Element) => void,
     private readonly view: Element = root,
+    private skipSelector: string = FIND_SKIP_SELECTOR,
+    /** What floats over the scope's top and bottom edges: a match under it is
+     *  not one "the reader can already see" for the first next/previous. */
+    private viewInset?: () => { top: number; bottom: number },
   ) {}
 
   /**
@@ -317,6 +370,26 @@ export class PageFindController {
 
   /** The DOM changed: the next run re-walks it. */
   markDirty(): void { this.index = null; }
+
+  /**
+   * Take off, now, every painted match whose text changed under it (a node gone,
+   * or shorter than the match's end): a StaticRange does not follow edits.
+   * Called from the owner's MutationObserver, which runs before the next frame
+   * is painted; the recount comes later (throttled on a long chat), and until
+   * then the engine would paint highlights past the end of their text.
+   */
+  dropStale(): void {
+    const ok = rangeFits;
+    const a = this.active >= 0 ? this.ranges[this.active] : undefined;
+    if (this.painted.every(ok) && (!a || ok(a))) return;
+    this.painted = this.painted.filter(ok);
+    this.ranges = this.ranges.filter(ok);
+    this.active = a && ok(a) ? this.ranges.indexOf(a) : -1;
+    this.index = null;
+    if (this.boxes) { this.paintedRanges = null; this.drawBoxes(); return; }
+    paintRanges(HL_FIND, this.painted, FIND_PRIORITY);
+    paintRanges(HL_FIND_ACTIVE, this.active >= 0 ? [this.ranges[this.active]!] : [], FIND_PRIORITY + 1);
+  }
 
   /** New query: paint and count, never scroll, no match chosen. */
   setQuery(query: string, caseSensitive: boolean): FindStatus {
@@ -406,9 +479,60 @@ export class PageFindController {
     if (r && rangeViewPosition(r) !== 0) revealRange(r, this.beforeScroll);
   }
 
+  /** Make match `i` the active one and bring it into view (a row just rendered
+   *  for a whole-session find, see utils/session-find.ts). */
+  select(i: number): FindStatus {
+    if (!this.index) this.refresh();
+    if (i < 0 || i >= this.ranges.length) return this.status();
+    this.lostNum = -1;
+    this.active = i;
+    this.paint();
+    revealRange(this.ranges[i]!, this.beforeScroll);
+    return this.status();
+  }
+
+  /** Make match `i` the active one where it is, without scrolling (the bar
+   *  reopened on the match it was on). */
+  mark(i: number): FindStatus {
+    if (!this.index) this.refresh();
+    if (i < 0 || i >= this.ranges.length) return this.status();
+    this.lostNum = -1;
+    this.active = i;
+    this.paint();
+    return this.status();
+  }
+
+  /** The active match lies elsewhere (in a row the page has not rendered). */
+  clearActive(): FindStatus {
+    if (this.active < 0) return this.status();
+    this.lostNum = -1;
+    this.active = -1;
+    this.paint();
+    return this.status();
+  }
+
+  /** Every match, in document order (read-only: the owner maps them to rows). */
+  matchRanges(): readonly StaticRange[] {
+    if (!this.index) this.refresh();
+    return this.ranges;
+  }
+
+  /** Indices of the matches inside `el`, in order. */
+  indicesWithin(el: Element): number[] {
+    if (!this.index) this.refresh();
+    const out: number[] = [];
+    this.ranges.forEach((r, i) => { if (el.contains(r.startContainer)) out.push(i); });
+    return out;
+  }
+
   close(): void {
     unpaint(HL_FIND);
     unpaint(HL_FIND_ACTIVE);
+    unpaint(HL_FIND_SOLID);
+    unpaint(HL_FIND_ACTIVE_SOLID);
+    this.boxes?.close();
+    this.boxes = null;
+    this.markHost(null);
     this.painted = [];
     this.paintedActive = null;
     this.ranges = [];
@@ -426,7 +550,7 @@ export class PageFindController {
   /** Re-derive the ranges; the caller fixes `active` and paints. */
   private recompute(): void {
     if (!this.query) { this.ranges = []; this.capped = false; return; }
-    this.index ??= buildFindIndex(this.root);
+    this.index ??= buildFindIndex(this.root, this.skipSelector);
     ({ ranges: this.ranges, capped: this.capped } = rangesForQuery(this.index, this.query, this.caseSensitive));
   }
 
@@ -451,26 +575,52 @@ export class PageFindController {
 
   /** Position against the scope's own viewport (ordered scopes only). */
   private rootPos(i: number, cache: OverflowCache): -1 | 0 | 1 {
-    return rangeViewPosition(this.ranges[i]!, cache, this.view);
+    return rangeViewPosition(this.ranges[i]!, cache, this.view, this.inset);
   }
 
+  /** Read once per pick, not per rect test. */
+  private inset: { top: number; bottom: number } | undefined;
+
   private pickFromView(dir: 1 | -1): number {
+    if (this.ordered) {
+      const i = this.fromView(dir);
+      return i >= 0 ? i : (dir === 1 ? 0 : this.ranges.length - 1);
+    }
+    return this.pickFromPage(dir);
+  }
+
+  /**
+   * The first match in view or past it in the pressed direction (ordered
+   * scopes), -1 when there is none that way: a whole-session find then weighs
+   * it against the rows the page does not show (PageFind.tsx).
+   */
+  fromView(dir: 1 | -1): number {
+    if (!this.index) this.refresh();
+    this.inset = this.viewInset?.();
+    try { return this.fromViewIn(dir); } finally { this.inset = undefined; }
+  }
+
+  private fromViewIn(dir: 1 | -1): number {
     const n = this.ranges.length;
     const cache: OverflowCache = new Map();
     const fullPos = (i: number) => rangeViewPosition(this.ranges[i]!, cache);
-    if (this.ordered) {
-      // Binary search against the chat's own viewport, then step over matches
-      // in view of the chat but clipped by a box inside it (a scrolled tool
-      // output), preferring one the reader can read without any scroll.
-      if (dir === 1) {
-        const i = this.search((k) => this.rootPos(k, cache) !== -1);
-        for (let j = i; j < n && j < i + 50 && this.rootPos(j, cache) === 0; j++) if (fullPos(j) === 0) return j;
-        return i < n ? i : 0;
-      }
-      const i = this.search((k) => this.rootPos(k, cache) === 1) - 1;
-      for (let j = i; j >= 0 && j > i - 50 && this.rootPos(j, cache) === 0; j--) if (fullPos(j) === 0) return j;
-      return i >= 0 ? i : n - 1;
+    // Binary search against the chat's own viewport, then step over matches
+    // in view of the chat but clipped by a box inside it (a scrolled tool
+    // output), preferring one the reader can read without any scroll.
+    if (dir === 1) {
+      const i = this.search((k) => this.rootPos(k, cache) !== -1);
+      for (let j = i; j < n && j < i + 50 && this.rootPos(j, cache) === 0; j++) if (fullPos(j) === 0) return j;
+      return i < n ? i : -1;
     }
+    const i = this.search((k) => this.rootPos(k, cache) === 1) - 1;
+    for (let j = i; j >= 0 && j > i - 50 && this.rootPos(j, cache) === 0; j--) if (fullPos(j) === 0) return j;
+    return i;
+  }
+
+  private pickFromPage(dir: 1 | -1): number {
+    const n = this.ranges.length;
+    const cache: OverflowCache = new Map();
+    const fullPos = (i: number) => rangeViewPosition(this.ranges[i]!, cache);
     // In view first (no scroll at all), else the nearest one past the view in
     // the pressed direction, else wrap.
     let fallback = -1;
@@ -524,19 +674,63 @@ export class PageFindController {
       this.paintedLo = 0;
       this.paintedHi = n;
     }
-    if (!sameRanges(slice, this.painted)) {
-      paintRanges(HL_FIND, slice, FIND_PRIORITY);
+    const a = this.active >= 0 ? this.ranges[this.active] : undefined;
+    if (this.boxes) {
       this.painted = slice;
+      this.drawBoxes();
+    } else {
+      if (!sameRanges(slice, this.painted)) {
+        paintRanges(HL_FIND, slice, FIND_PRIORITY);
+        this.painted = slice;
+      }
+      if (!a || !this.paintedActive || !sameRanges([a], [this.paintedActive])) {
+        paintRanges(HL_FIND_ACTIVE, a ? [a] : [], FIND_PRIORITY + 1);
+      }
     }
-    const a = this.active >= 0 ? this.ranges[this.active]! : null;
-    if (!a || !this.paintedActive || !sameRanges([a], [this.paintedActive])) {
-      paintRanges(HL_FIND_ACTIVE, a ? [a] : [], FIND_PRIORITY + 1);
-    }
-    this.paintedActive = a;
+    this.paintedActive = a ?? null;
+    this.markHost(a ? unpaintedHost(a.startContainer) : null);
+  }
+
+  /**
+   * Box mode: boxes for what can be boxed, the solid paint for the rest. Each
+   * match is under ONE pair of names, never both: a range painted under the
+   * cleared `walnut-find` and the solid one at once made WebKit assert in its
+   * text painting and kill the page (std::span<WebCore::MarkedText>::subspan,
+   * Playwright's WebKit, 2026-11-05, the long session's first Enter).
+   */
+  private drawBoxes(): void {
+    if (!this.boxes) return;
+    const a = this.active >= 0 ? this.ranges[this.active] : undefined;
+    const { boxed, solid } = this.boxes.draw(this.painted, a);
+    const sig = `${this.painted.length}:${boxed.size}:${solid.length}:${a ? this.active : -1}:${a && boxed.has(a) ? 1 : 0}`;
+    if (sig === this.paintSig && this.paintedRanges === this.painted) return;
+    this.paintSig = sig;
+    this.paintedRanges = this.painted;
+    paintRanges(HL_FIND, this.painted.filter((r) => boxed.has(r)), FIND_PRIORITY);
+    paintRanges(HL_FIND_ACTIVE, a && boxed.has(a) ? [a] : [], FIND_PRIORITY + 1);
+    paintRanges(HL_FIND_SOLID, solid.filter((r) => r !== a), FIND_PRIORITY);
+    paintRanges(HL_FIND_ACTIVE_SOLID, a && !boxed.has(a) ? [a] : [], FIND_PRIORITY + 1);
+  }
+
+  /** What box mode registered last (drawBoxes), so a redraw with the same split registers nothing. */
+  private paintSig = '';
+  private paintedRanges: readonly StaticRange[] | null = null;
+
+  /** WebKit paints no highlight on some text (unpaintedHost): the active match's
+   *  element gets an outline there instead, so the reader still sees where it is.
+   *  A data attribute, not a class: the owner's MutationObserver recounts on a
+   *  class change. */
+  private markHost(el: HTMLElement | null): void {
+    if (el === this.host) return;
+    this.host?.removeAttribute('data-find-active-host');
+    el?.setAttribute('data-find-active-host', '');
+    this.host = el;
   }
 
   /** The reader scrolled (debounced by the owner): move the painted window. */
   onScroll(): void {
+    // Boxes were left out far from the view (BoxPaint.draw): draw them where it is now.
+    if (this.boxes?.leftOut) this.drawBoxes();
     const n = this.ranges.length;
     if (n <= PAINT_ALL) return;
     if (!this.ordered) { this.paint(); return; }
@@ -571,6 +765,204 @@ function copiesBefore(block: Node, query: string, context: string, caseSensitive
   let k = 0;
   for (let i = text.indexOf(q); i !== -1 && i < at; i = text.indexOf(q, i + q.length)) k++;
   return k;
+}
+
+/**
+ * WebKit (the Mac app's engine) paints a ::highlight background on every line
+ * of a paragraph after the first from the bottom of the line above (its
+ * selection geometry): on wrapped text each match is a tall bar reaching up,
+ * and a one-letter query turns into columns of yellow between the lines
+ * (measured on Playwright's WebKit, 2026-11-05; Chromium paints the glyph box).
+ * In a session chat the matches are drawn instead as boxes from the match's own
+ * line rects, in a layer behind the text: the same shape on every line, in
+ * every engine's sense of it. The ::highlight stays registered (the active
+ * match's dark text, and tests read it) with its background cleared by
+ * `[data-find-boxes]`.
+ *
+ * A box can only sit behind text with nothing painted between: a match inside
+ * an element with its own background (the person's bubble, a code block), a
+ * clipping scroller or a sticky header is painted the usual way.
+ */
+const BOX_LAYER_CLASS = 'find-box-layer';
+
+export function prefersBoxPaint(): boolean {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  return /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Edg|Android/.test(ua);
+}
+
+/** A change BoxPaint made itself, which a find's MutationObserver must not recount on. */
+export function isBoxPaintMutation(r: MutationRecord): boolean {
+  const inLayer = (n: Node | null) => !!n && (n instanceof Element ? n : n.parentElement)?.closest(`.${BOX_LAYER_CLASS}`) != null;
+  if (inLayer(r.target)) return true;
+  if (r.type !== 'childList') return false;
+  const nodes = [...r.addedNodes, ...r.removedNodes];
+  return nodes.length > 0 && nodes.every((n) => n instanceof Element && n.classList.contains(BOX_LAYER_CLASS));
+}
+
+class BoxPaint {
+  private layer: HTMLDivElement | null = null;
+  private solidCache = new Map<Element, boolean>();
+  private ro: ResizeObserver | null = null;
+  private frame = 0;
+
+  constructor(private root: HTMLElement, private redraw: () => void) {}
+
+  /** Draw boxes for `ranges` (`active` in its own colour); says which were boxed. */
+  draw(ranges: readonly StaticRange[], active: StaticRange | undefined): { boxed: Set<StaticRange>; solid: StaticRange[] } {
+    const boxed = new Set<StaticRange>();
+    const solid: StaticRange[] = [];
+    const all = active && !ranges.includes(active) ? [...ranges, active] : ranges;
+    if (!all.length) { this.clearBoxes(); return { boxed, solid }; }
+    const layer = this.ensureLayer();
+    this.solidCache.clear();
+    const origin = layer.getBoundingClientRect();
+    const view = this.root.getBoundingClientRect();
+    const reach = Math.max(view.height, 400) * 2;
+    const boxes: string[] = [];
+    this.leftOut = false;
+    for (const r of all) {
+      const el = r.startContainer instanceof Element ? r.startContainer : r.startContainer.parentElement;
+      if (!el || this.needsSolid(el)) { solid.push(r); continue; }
+      const live = liveRange(r);
+      if (!live) continue;
+      boxed.add(r);
+      for (const c of live.getClientRects()) {
+        if (c.width < 0.5 || c.height < 0.5) continue;
+        // Far outside the view: nothing to see, and the layer stays small.
+        if (c.bottom < view.top - reach || c.top > view.bottom + reach) { this.leftOut = true; continue; }
+        boxes.push(`${r === active ? 'a' : 'm'}:${Math.round(c.top - origin.top)}:${Math.round(c.left - origin.left)}:${Math.round(c.width)}:${Math.round(c.height)}`);
+      }
+    }
+    // The same boxes as drawn: touch nothing (the chat watches its own DOM, and
+    // a layer rewritten on every recount would feed that watch forever).
+    const sig = boxes.join('|');
+    if (sig !== this.drawn) {
+      this.drawn = sig;
+      const frag = document.createDocumentFragment();
+      for (const b of boxes) {
+        const [kind, top, left, width, height] = b.split(':');
+        const d = document.createElement('div');
+        d.className = kind === 'a' ? 'find-box find-box-active' : 'find-box';
+        d.style.cssText = `top:${top}px;left:${left}px;width:${width}px;height:${height}px`;
+        frag.appendChild(d);
+      }
+      layer.replaceChildren(frag);
+    }
+    this.watch();
+    return { boxed, solid };
+  }
+
+  close(): void {
+    window.cancelAnimationFrame(this.frame);
+    this.ro?.disconnect();
+    this.ro = null;
+    this.layer?.remove();
+    this.layer = null;
+    this.root.removeAttribute('data-find-boxes');
+  }
+
+  private clearBoxes(): void {
+    if (this.drawn) this.layer?.replaceChildren();
+    this.drawn = '';
+  }
+
+  /** What the layer holds now (its boxes, as `draw` wrote them). */
+  private drawn = '';
+  /** The last draw left out boxes far from the view: a scroll there draws them. */
+  leftOut = false;
+
+  private ensureLayer(): HTMLDivElement {
+    if (this.layer?.isConnected && this.layer.parentElement === this.root) return this.layer;
+    const layer = document.createElement('div');
+    layer.className = BOX_LAYER_CLASS;
+    layer.setAttribute('aria-hidden', 'true');
+    layer.setAttribute('data-find-skip', '');
+    // A zero-height row at the top of the content: it scrolls with the text.
+    // In a flex column its gap would push every row down; take it back.
+    const cs = getComputedStyle(this.root);
+    const gap = cs.display.includes('flex') || cs.display.includes('grid') ? parseFloat(cs.rowGap) || 0 : 0;
+    if (gap) layer.style.marginBottom = `${-gap}px`;
+    this.root.setAttribute('data-find-boxes', '');
+    this.root.prepend(layer);
+    this.layer = layer;
+    return layer;
+  }
+
+  /** Text whose box would be hidden or misplaced behind something. */
+  private needsSolid(el: Element): boolean {
+    const chain: Element[] = [];
+    let answer = false;
+    for (let e: Element | null = el; e && e !== this.root; e = e.parentElement) {
+      const known = this.solidCache.get(e);
+      if (known !== undefined) { answer = known; break; }
+      chain.push(e);
+      const cs = getComputedStyle(e);
+      if (opaque(cs.backgroundColor) || cs.backgroundImage !== 'none'
+        || cs.overflowX !== 'visible' || cs.overflowY !== 'visible'
+        || cs.position === 'sticky' || cs.position === 'fixed') { answer = true; break; }
+    }
+    for (const e of chain) this.solidCache.set(e, answer);
+    return answer;
+  }
+
+  /** Rows that change size (an image loading, a card opening) move the text under the boxes. */
+  private watch(): void {
+    if (typeof ResizeObserver === 'undefined') return;
+    this.ro ??= new ResizeObserver((entries) => {
+      let moved = false;
+      for (const e of entries) {
+        const h = e.contentRect.height;
+        // observe() reports every new row once: only a real change redraws.
+        if (this.heights.get(e.target) !== h) {
+          if (this.heights.has(e.target)) moved = true;
+          this.heights.set(e.target, h);
+        }
+      }
+      if (!moved) return;
+      window.cancelAnimationFrame(this.frame);
+      this.frame = window.requestAnimationFrame(() => this.redraw());
+    });
+    for (const child of this.root.children) {
+      if (child === this.layer || this.observed.has(child)) continue;
+      this.observed.add(child);
+      this.ro.observe(child);
+    }
+  }
+
+  private observed = new WeakSet<Element>();
+  private heights = new WeakMap<Element, number>();
+}
+
+/** Both ends of `r` still inside their nodes (a StaticRange does not follow edits). */
+export function rangeFits(r: AbstractRange): boolean {
+  return fits(r.startContainer, r.startOffset) && fits(r.endContainer, r.endOffset);
+}
+
+/** A range boundary still inside its node. */
+function fits(node: Node, offset: number): boolean {
+  if (!node.isConnected) return false;
+  const len = node.nodeType === Node.TEXT_NODE || node.nodeType === Node.COMMENT_NODE ? (node as CharacterData).length : node.childNodes.length;
+  return offset <= len;
+}
+
+function opaque(color: string): boolean {
+  if (!color || color === 'transparent') return false;
+  const m = /rgba?\(([^)]+)\)/.exec(color);
+  if (!m) return true;
+  const parts = m[1]!.split(/[\s,/]+/).filter(Boolean);
+  return parts.length < 4 || parseFloat(parts[3]!) > 0;
+}
+
+/**
+ * The element of a text node WebKit draws no ::highlight on: text directly in a
+ * <button> (wrapped in a span it paints) and text directly in a line-clamped
+ * `display: -webkit-box` (the same). Measured on Playwright's WebKit, 2026-11-04.
+ */
+export function unpaintedHost(node: Node): HTMLElement | null {
+  const el = node.parentElement;
+  if (!el) return null;
+  if (el.tagName === 'BUTTON') return el;
+  return getComputedStyle(el).display === '-webkit-box' ? el : null;
 }
 
 function sameRanges(a: readonly AbstractRange[], b: readonly AbstractRange[]): boolean {

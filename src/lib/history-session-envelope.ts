@@ -119,6 +119,35 @@ export interface SessionEnvelope {
   raw: string;
 }
 
+/** How a subtask notice names the child (envelope-kit buildSubtaskNotification). */
+const SUBTASK_WHO = /^Your subtask ".*" \([^()\s]+\) /;
+
+/**
+ * A Walnut notice's outcome as the card shows it. A subtask notice opens by
+ * naming the child (title and task id), which the card's sender line already
+ * does, so that part goes: a long task title would push the outcome past the
+ * cut, and the id means nothing to a reader.
+ */
+export function noticeText(statusLine: string): string {
+  const rest = statusLine.replace(SUBTASK_WHO, '');
+  return rest === statusLine ? rest : rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
+/**
+ * The words an open card shows, once each, in order: the sender's title, what
+ * was asked, the outcome line (as the card prints it), the quoted words, the
+ * body. A title Walnut derives from one of those (a first sentence) is the same
+ * words again, not more of them. The whole-session find counts these; the
+ * page find skips the derived title copy (MessageFoldSummary).
+ */
+export function envelopeCardText(env: SessionEnvelope): string {
+  const status = !env.statusLine ? undefined
+    : env.kind === 'notification' ? noticeText(env.statusLine)
+      : env.kind === 'trigger' && env.statusLine === 'scheduled' ? undefined : env.statusLine;
+  return [env.title, env.askedPreview, status, ...(env.quote ?? []).map((q) => q.text), env.body]
+    .filter((t): t is string => !!t).join(' ');
+}
+
 /** One fenced block of a notification's quote (core/session-requests.ts quoteLastMessage). */
 export interface NoticeQuoteSection {
   /** "Its last message", "Its actions after that message", … as Walnut labelled it. */

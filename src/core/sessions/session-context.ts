@@ -64,7 +64,7 @@
  *      (2026-10-24: the user read every report at the weight of one that waited
  *      on them; 2026-10-25: the line was put under answers to the user's own
  *      questions, so it is now for agent messages only and never after words).
- *      A line, not wording: web/src/utils/turn-end-marker.ts reads only that
+ *      A line, not wording: src/lib/turn-end-marker.ts reads only that
  *      exact line. It is text, so Claude Code's thinking-only nudge ("[Your
  *      previous response had no visible output. Please continue and produce a
  *      user-visible response.]", CLI 2.1.284), which drew filler replies, never

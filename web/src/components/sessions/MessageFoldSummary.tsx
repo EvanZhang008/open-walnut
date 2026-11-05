@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 
 export function MessageFoldSummary({
-  glyph, direction, sender, senderTitle, title, open, onToggle, after,
+  glyph, direction, sender, senderTitle, title, open, onToggle, after, titleCopy,
 }: {
   glyph: string;
   /** "Reply from", "To", … */
@@ -18,6 +18,9 @@ export function MessageFoldSummary({
   onToggle: () => void;
   /** Shown under the title even while folded (an error the reader must see). */
   after?: ReactNode;
+  /** The title repeats words the open card shows anyway (a first sentence of
+   *  its body or outcome): Cmd+F counts them there, not twice. */
+  titleCopy?: boolean;
 }) {
   return (
     <>
@@ -33,7 +36,9 @@ export function MessageFoldSummary({
           <span className="provenance-fold-sender" title={senderTitle ?? sender}>{sender}</span>
           <span className="provenance-fold-chevron" aria-hidden="true">›</span>
         </span>
-        {title && <span className="provenance-fold-title">{title}</span>}
+        {/* The inner span: WebKit paints no find highlight on text directly in a
+            line-clamped box (utils/page-find.ts unpaintedHost). */}
+        {title && <span className="provenance-fold-title" {...(titleCopy ? { 'data-find-skip': '' } : {})}><span>{title}</span></span>}
       </button>
       {after}
     </>

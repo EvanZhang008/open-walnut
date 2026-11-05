@@ -100,6 +100,7 @@ export const SESSION_ACTION_PARITY: Readonly<Record<string, ParityEntry>> = {
   'vscode-embed': { none: 'Opens the editor beside the panel.' },
   'vscode-uri': { none: 'Opens the editor beside the panel.' },
   turns: { op: 'task_history', note: 'the conversation turn by turn' },
+  find: { op: 'task_history', note: 'the find bar counts a word across the whole conversation; an agent reads the conversation itself' },
   changes: { none: 'Read for the Changed tab; the session itself (and git) knows what it changed.' },
   commit: { none: 'The commit dialog commits a session\'s changes on the person\'s review; a session commits with git itself.' },
   cost: { none: 'Read for the usage readout.' },

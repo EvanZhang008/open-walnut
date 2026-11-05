@@ -122,7 +122,19 @@
 /* Selected text echoed on the page: a quieter tint than a find match. */
 ::highlight(walnut-page-selmatch) { background-color: rgba(80, 160, 255, 0.28); }
 [data-theme="dark"] ::highlight(walnut-find) { background-color: rgba(255, 200, 0, 0.32); }
+/* On the person's accent-blue bubble a see-through yellow turns a murky green
+   behind white text: an opaque yellow with dark text there. */
+.session-msg-user ::highlight(walnut-find) { background-color: rgb(255, 222, 102); color: #1a1a1a; }
 [data-theme="dark"] ::highlight(walnut-page-selmatch) { background-color: rgba(100, 170, 255, 0.30); }
+/* WebKit, in a session chat (page-find.ts BoxPaint): matches are boxes drawn
+   behind the text, so the highlight keeps only the active match's dark text;
+   what cannot be boxed is painted as `walnut-find-solid`. */
+[data-find-boxes] ::highlight(walnut-find) { background-color: transparent; }
+[data-find-boxes] ::highlight(walnut-find-active) { background-color: transparent; color: #1a1a1a; }
+::highlight(walnut-find-solid) { background-color: rgba(255, 200, 0, 0.38); }
+[data-theme="dark"] ::highlight(walnut-find-solid) { background-color: rgba(255, 200, 0, 0.32); }
+.session-msg-user ::highlight(walnut-find-solid) { background-color: rgb(255, 222, 102); color: #1a1a1a; }
+::highlight(walnut-find-solid-active) { background-color: rgba(255, 145, 0, 0.9); color: #1a1a1a; }
 
 /* ── Passage comments (from passage-comments.css) ── */
 /* Quotes and comments on passages (PassageCommentMarks, PendingCommentsTray).

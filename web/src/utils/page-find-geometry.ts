@@ -78,11 +78,14 @@ function ownBox(el: Element): Box {
  */
 export function rangeViewPosition(
   r: AbstractRange, cache: OverflowCache = new Map(), within?: Element,
+  /** Bands of `within` covered by what floats over it (a glass header at the top). */
+  inset?: { top: number; bottom: number },
 ): -1 | 0 | 1 {
   const live = liveRange(r);
   if (!live) return 1;
   const rect = live.getBoundingClientRect();
-  const box = within ? ownBox(within) : viewBox(r.startContainer, cache);
+  let box = within ? ownBox(within) : viewBox(r.startContainer, cache);
+  if (within && inset) box = { ...box, top: box.top + inset.top, bottom: box.bottom - inset.bottom };
   if (rect.top < box.top - 0.5) return -1;
   if (rect.bottom > box.bottom + 0.5) return 1;
   if (within) return 0;

@@ -9,7 +9,8 @@
  * sentence of its words. Pure apart from the open-set, which lives for the page
  * so a card the reader opened stays open when its row remounts.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { noticeText } from '@open-walnut/history-session-envelope';
 
 /** How long a derived title may run before it is cut. */
 export const FOLD_TITLE_MAX = 140;
@@ -47,19 +48,9 @@ export function fallbackTitle(text: string | undefined, max = FOLD_TITLE_MAX): s
   return points.length > max ? `${points.slice(0, max - 1).join('').trimEnd()}…` : line;
 }
 
-/** How a subtask notice names the child (envelope-kit buildSubtaskNotification). */
-const SUBTASK_WHO = /^Your subtask ".*" \([^()\s]+\) /;
-
-/**
- * A Walnut notice's outcome as the card shows it. A subtask notice opens by
- * naming the child (title and task id), which the card's sender line already
- * does, so that part goes: a long task title would push the outcome past the
- * cut, and the id means nothing to a reader.
- */
-export function noticeText(statusLine: string): string {
-  const rest = statusLine.replace(SUBTASK_WHO, '');
-  return rest === statusLine ? rest : rest.charAt(0).toUpperCase() + rest.slice(1);
-}
+/** A Walnut notice's outcome as the card shows it (shared with the server's
+ *  whole-session find, which searches the card's words as shown). */
+export { noticeText };
 
 /** A Walnut notice's folded title: the first sentence of its outcome. */
 export function noticeTitle(statusLine: string | undefined): string | undefined {
@@ -78,15 +69,32 @@ export function foldKey(text: string): string {
 }
 
 const opened = new Set<string>();
+const listeners = new Set<() => void>();
 
 /** Test seam. */
 export function _clearOpenedFolds(): void {
   opened.clear();
 }
 
+/** Open these cards (the find bar stepping onto words in a folded card's
+ *  body); false when every one was open already. */
+export function openMessageFolds(keys: Iterable<string>): boolean {
+  let changed = false;
+  for (const k of keys) if (!opened.has(k)) { opened.add(k); changed = true; }
+  if (changed) for (const fn of [...listeners]) fn();
+  return changed;
+}
+
 /** Open/closed for one card, starting folded, remembered for the page. */
 export function useMessageFold(key: string): [boolean, () => void] {
   const [, rerender] = useState(0);
+  // Opened from outside (openMessageFolds): only a card that was closed re-renders.
+  useEffect(() => {
+    let was = opened.has(key);
+    const fn = () => { const now = opened.has(key); if (now !== was) { was = now; rerender((n) => n + 1); } };
+    listeners.add(fn);
+    return () => { listeners.delete(fn); };
+  }, [key]);
   const toggle = useCallback(() => {
     if (opened.has(key)) opened.delete(key); else opened.add(key);
     rerender((n) => n + 1);

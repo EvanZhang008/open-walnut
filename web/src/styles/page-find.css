@@ -12,7 +12,8 @@
   background: var(--bg-secondary, var(--bg));
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
-.page-find .fv-search-input { flex: 0 1 220px; }
+/* Narrow: it floats over the chat's first lines, so it takes no more than the query needs. */
+.page-find .fv-search-input { flex: 0 1 180px; min-width: 110px; }
 
 /* A document's frame while the bar is open over it: the bar sits in this strip
    (PageFind barPosition), so it covers none of the document's own text. A
@@ -23,3 +24,72 @@
 }
 
 /* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
+
+/* The whole-session line under the bar (utils/session-find.ts): what the search
+   found above the rendered turns, or where that search stands. One card with
+   the bar: the bar gives up its bottom corners to it. */
+.page-find.page-find-has-note {
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+.page-find.page-find-has-note .fv-search-bar {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: none;
+}
+.page-find-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 5px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: var(--bg-secondary, var(--bg));
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+/* The way back from a failed search: a real secondary button, not a hint. */
+.page-find-retry {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.page-find-retry:hover { background: var(--bg-hover, var(--bg-secondary)); }
+.page-find-retry:active { transform: translateY(0.5px); }
+.page-find-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The active match sits where WebKit paints no highlight (utils/page-find.ts
+   unpaintedHost): its element is outlined in the active match's orange instead. */
+[data-find-active-host] {
+  outline: 2px solid rgba(255, 145, 0, 0.9);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Esc gives focus back to the chat it searched (PageFind close): no ring for that. */
+.session-history[tabindex="-1"]:focus { outline: none; }
+
+/* The count keeps its width while it grows ("7 matches" to "2981 matches"), so
+   the field beside it does not slide as the numbers change. */
+.page-find .fv-search-count {
+  min-width: 11.5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* WebKit, in a session chat (utils/page-find.ts BoxPaint): the matches are boxes
+   in a layer behind the text. The chat becomes its own stacking context so the
+   layer sits above the chat's background and below its words. */
+[data-find-boxes] { isolation: isolate; }
+.find-box-layer { position: relative; flex: none; height: 0; z-index: -1; pointer-events: none; }
+.find-box { position: absolute; border-radius: 2px; background-color: rgba(255, 200, 0, 0.38); }
+[data-theme="dark"] .find-box { background-color: rgba(255, 200, 0, 0.32); }
+.find-box.find-box-active { background-color: rgba(255, 145, 0, 0.9); }

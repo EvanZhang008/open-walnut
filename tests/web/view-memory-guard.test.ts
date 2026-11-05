@@ -75,6 +75,8 @@ const PASSING: Record<string, string> = {
   'components/common/NotificationPanel.tsx#section': 'the notification panel opens on the section that has news (it picks one per open)',
   'components/common/NotificationPanel.tsx#showArchived': 'archived letters looked up in one opening of the panel',
   'components/common/PageFind.tsx#scope': 'the find bar, a passing search',
+  'components/common/PageFind.tsx#view': "the find bar's count and place, worked out again from the page",
+  'components/chat/ChatInput.tsx#recallShown': 'a recalled message in the box, gone once it is edited or sent',
   'components/notes/MarkdownEditorPanel.tsx#rawMode': 'source editing of the note open now; its flush path assumes a note opens rendered',
   'components/settings/sections/ReposSection.tsx#showForm': 'the add-repository form, a dialog',
   'components/settings/sections/useSshHostEditor.ts#aliasShown': 'which new rows say their alias refusal under the field, from a Save or a left field; the row\'s state line says it at all times',

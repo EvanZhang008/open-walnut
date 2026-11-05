@@ -2024,6 +2024,47 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
   }
 })
 
+// GET /api/sessions/:sessionId/find?q=<text>[&case=1]
+// Which rows of the WHOLE transcript hold the text, oldest first, so the web's
+// Cmd+F can count and step to rows it has not loaded (core/sessions/session-find.ts).
+sessionsRouter.get('/:sessionId/find', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = req.params.sessionId as string
+    const q = typeof req.query.q === 'string' ? req.query.q : ''
+    const { findInHistoryRows, readFindableHistory, SESSION_FIND_MAX_QUERY } = await import('../../core/sessions/session-find.js')
+    if (!q || q.length > SESSION_FIND_MAX_QUERY) {
+      res.status(400).json({ error: `q must be 1 to ${SESSION_FIND_MAX_QUERY} characters` })
+      return
+    }
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'Session not found' })
+      return
+    }
+    const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
+    let found: Awaited<ReturnType<typeof readFindableHistory>>
+    try {
+      found = await boundHostRead(record.host, () => readFindableHistory(sessionId, record, {
+        readHistory: (id, r, host) => readProviderSessionHistory(id, r, host, true),
+        readBefore: (id, cwd, host, before) => readSessionHistoryBefore(id, cwd, host, before,
+          { minMessages: Number.MAX_SAFE_INTEGER, minText: 0, isText: isProseRow }),
+        getSession: getSessionByClaudeId,
+      }))
+    } catch (err) {
+      if (err instanceof HostReconnectingError) { sendControlError(res, err); return }
+      const msg = err instanceof Error ? err.message : String(err)
+      log.web.warn('session find: history read failed', { sessionId, host: record.host, error: msg })
+      // The find bar says so and offers a retry: not an endpoint incident.
+      markHandledFailure(res).status(502).json({ error: condenseStaleReason(msg) })
+      return
+    }
+    const result = findInHistoryRows(found.rows, q, { caseSensitive: req.query.case === '1' })
+    res.json({ ...result, ...(found.partial ? { partial: true } : {}) })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/subagent/:agentId/history — lazy-load a single subagent's messages
 // Core logic lives in core/sessions/session-extras.ts (getSubagentHistoryPayload)
 // — shared with the /api/v1 mobile route and the daemon control relay.

@@ -3511,7 +3511,7 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
   // One turn per rule the timeline must keep: narration stays, a failure
   // stays, a quoted or mid-text marker is ordinary text.
   {
-    const { NO_ACTION_TAG, LEGACY_NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker.js')
+    const { NO_ACTION_TAG, LEGACY_NO_ACTION_TAG } = await import('../../../src/lib/turn-end-marker.js')
     const sid = 'pw-fold-session'
     let seq = 0
     let parent: string | null = null

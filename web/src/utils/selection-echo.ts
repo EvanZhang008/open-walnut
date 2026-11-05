@@ -23,7 +23,7 @@
  * surface painted it.
  */
 import { applyHighlights, HL_SELMATCH } from './dom-text-search';
-import { HL_PAGE_SELMATCH, rangesForQuery, SELMATCH_CAP, type FindIndex } from './page-find';
+import { HL_PAGE_SELMATCH, rangeFits, rangesForQuery, SELMATCH_CAP, type FindIndex } from './page-find';
 
 /** The echo's highlight names; only this module paints them. */
 export const ECHO_HIGHLIGHTS = [HL_SELMATCH, HL_PAGE_SELMATCH] as const;
@@ -164,9 +164,22 @@ export function paintEcho(win: Window, name: EchoName, ranges: readonly Abstract
   const doc = win.document;
   if (!ranges.length || !echoVisible(doc.getSelection(), doc.activeElement)) return () => {};
   const undo = applyHighlights(win, name, ranges as Range[]);
-  const done = () => { if (painted.delete(done)) undo(); };
+  const done = () => { if (painted.delete(done)) { paintedRanges.delete(done); undo(); } };
   painted.add(done);
+  paintedRanges.set(done, ranges);
   return done;
+}
+
+/** What each echo painted, so an edit under it can take it off before the next frame. */
+const paintedRanges = new Map<() => void, readonly AbstractRange[]>();
+
+/**
+ * Take off, now, every echo with a range its text no longer holds (the page
+ * echo's are StaticRanges, which do not follow edits). For a MutationObserver
+ * callback: it runs before the next frame (see PageFindController.dropStale).
+ */
+export function dropStaleEchoes(): void {
+  for (const [done, ranges] of [...paintedRanges]) if (!ranges.every(rangeFits)) done();
 }
 
 /** The page echo: every exact (case-sensitive) visible copy of `needle` in `index`. */

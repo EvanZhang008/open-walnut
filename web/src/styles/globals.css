@@ -2236,18 +2236,30 @@ select {
   cursor: not-allowed;
 }
 
+/* The same dashed separator as a stretch left out mid-chat (.session-gap-divider):
+   one look for "turns not on screen", above the first turn or between two. */
 .session-show-earlier-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 6px 0;
+  padding: 8px 0;
   margin: 4px 0 8px;
   background: transparent;
   border: 0;
   color: var(--fg-muted);
   font-size: 12px;
+  font-weight: 500;
   text-align: center;
+  white-space: nowrap;
   cursor: pointer;
   transition: color 0.15s;
+}
+.session-show-earlier-btn::before,
+.session-show-earlier-btn::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
 }
 .session-show-earlier-btn:hover:not(:disabled) {
   color: var(--fg);
@@ -7821,6 +7833,51 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   container-type: inline-size;
 }
 .chat-input-controls-spacer { flex: 1; }
+/* "2 of 15 back": the box holds a recalled message, untouched
+   (ChatInput ArrowUp recall). Muted, one line; gives way first when the row is tight. */
+.chat-recall-hint {
+  /* Only the room the row has left (a zero basis): the mode and model pills
+     and the send controls keep their size and never fold for it. Tight, the
+     keys go first (they wrap to a second line, cut off by the height), then
+     the words cut short. */
+  flex: 1000 1 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  column-gap: 8px;
+  height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  margin-right: 8px;
+  font-size: 12.5px;
+  line-height: 20px;
+  color: var(--fg-secondary, var(--fg));
+}
+.chat-recall-hint-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-recall-hint-keys {
+  flex-shrink: 0;
+  color: var(--fg-secondary, var(--fg));
+  font-size: 11.5px;
+}
+/* A finger has no arrow keys: the line says which message, the "+" menu steps. */
+@media (pointer: coarse) {
+  .chat-recall-hint-keys { display: none; }
+}
+.session-panel.is-phone-layer .chat-recall-hint-keys { display: none; }
+.chat-recall-hint-keys kbd {
+  display: inline-block;
+  min-width: 16px;
+  margin-right: 3px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  font: inherit;
+  line-height: 15px;
+  text-align: center;
+}
 
 /* ── One-line composer (ChatInput `compact`) ──────────────────────────────────
    Text and send in ONE row, no controls row. For a lightweight spot where the
@@ -7994,6 +8051,11 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .chat-plus-menu-item.is-disabled { opacity: 0.5; cursor: default; }
 .chat-plus-menu-item.is-disabled:hover { background: transparent; }
 .chat-plus-menu-hint { margin-left: auto; padding-left: 12px; font-size: 12px; color: var(--fg); white-space: nowrap; }
+/* Off, with its label saying why: the reason stays readable (muted text, full
+   opacity), only the key cap fades. */
+.chat-plus-menu-item.is-off-said { color: var(--fg-muted); cursor: default; }
+.chat-plus-menu-item.is-off-said:hover { background: transparent; }
+.chat-plus-menu-item.is-off-said .chat-plus-menu-key { opacity: 0.5; }
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
 
@@ -25148,6 +25210,10 @@ a.file-link:hover {
   outline: none;
 }
 .fv-search-input:focus { border-color: var(--accent); }
+/* Nothing found: a quiet warm edge, not an error's red (it is an answer, not a fault). */
+.fv-search-input[data-empty="true"] {
+  border-color: color-mix(in srgb, var(--error) 30%, var(--border));
+}
 .fv-search-case,
 .fv-search-nav,
 .fv-search-close {
@@ -25170,6 +25236,9 @@ a.file-link:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .fv-search-nav:disabled { opacity: 0.35; cursor: default; }
+/* Their outline icons (FileSearchBar BarIcon): centred, the box the text glyphs had. */
+.fv-search-nav,
+.fv-search-close { display: inline-flex; align-items: center; justify-content: center; padding: 3px 5px; }
 .fv-search-count {
   font-size: 11px;
   color: var(--fg-muted);
