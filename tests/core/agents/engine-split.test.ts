@@ -87,24 +87,28 @@ describe('picks', () => {
   it('alternates across real starts and skips an engine the host has not reported installed', async () => {
     const now = Date.now();
     const yes = async () => true;
-    const first = await pickSplitEngine(two, yes, now);
+    const first = await pickSplitEngine(two, yes, now, 'a');
     expect(first?.key).toBe('claude');
     await recordPick(first!.key, 'a', first!.at, now);
-    const second = await pickSplitEngine(two, yes, now);
+    const second = await pickSplitEngine(two, yes, now, 'b');
     expect(second?.key).toBe('codex');
     expect(second?.shares).toEqual({ claude: 1, codex: 0 });
     await recordPick(second!.key, 'b', second!.at, now);
     await recordPick('claude', 'c', new Date(now).toISOString(), now);
     // Codex is next by share, but the host has not said it runs Codex: Claude Code takes it.
-    expect((await pickSplitEngine(two, async () => null, now))?.key).toBe('claude');
-    expect((await pickSplitEngine(two, async () => false, now))?.key).toBe('claude');
-    expect((await pickSplitEngine(two, async () => { throw new Error('down'); }, now))?.key).toBe('claude');
+    expect((await pickSplitEngine(two, async () => null, now, 'd'))?.key).toBe('claude');
+    _resetSplitReservations();
+    expect((await pickSplitEngine(two, async () => false, now, 'e'))?.key).toBe('claude');
+    _resetSplitReservations();
+    const down = await pickSplitEngine(two, async () => { throw new Error('down'); }, now, 'f');
+    expect(down?.key).toBe('claude');
+    expect(down?.skipped).toEqual([{ key: 'codex', reason: 'the host has not said whether it runs it' }]);
   });
 
   it('two starts at once take different entries, and an unrecorded pick stops counting after a while', async () => {
     const now = Date.now();
     const yes = async () => true;
-    const [a, b] = await Promise.all([pickSplitEngine(two, yes, now), pickSplitEngine(two, yes, now)]);
+    const [a, b] = await Promise.all([pickSplitEngine(two, yes, now, 'ta'), pickSplitEngine(two, yes, now, 'tb')]);
     expect(new Set([a?.key, b?.key])).toEqual(new Set(['claude', 'codex']));
     await recordPick(a!.key, 'ta', a!.at, now);
     // b never records (its start failed): three minutes on, only the recorded pick counts.

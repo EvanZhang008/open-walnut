@@ -8639,6 +8639,10 @@ function prepareRawUpdate(
   }
   // A raw write that completes the task stores it as Done, as applyPhase does (phaseDerivedFields):
   // a completed task is verified, and its last open words must not stay on the row.
+  if (!TERMINAL_PHASES.has(task.phase) && incomingPhase && TERMINAL_PHASES.has(incomingPhase) && !task.first_completed_at
+    && safeUpdates.first_completed_at === undefined) {
+    safeUpdates.first_completed_at = (typeof safeUpdates.completed_at === 'string' && safeUpdates.completed_at) || task.completed_at || new Date().toISOString();
+  }
   if (!TERMINAL_PHASES.has(task.phase) && incomingPhase && TERMINAL_PHASES.has(incomingPhase) && safeUpdates.user_status === undefined) {
     (safeUpdates as Record<string, unknown>).user_status = { state: 'done' };
   }

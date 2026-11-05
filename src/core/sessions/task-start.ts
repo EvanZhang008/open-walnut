@@ -230,11 +230,18 @@ async function noteEngineFallback(task: Task, note: EngineFallbackNote | undefin
   }
 }
 
-/** The engine split's pick for this start, or null when it is off or does not apply. */
+/**
+ * The engine split's pick for this start, or null when it is off or does not apply. The pick
+ * is kept on the task and counted at once, so a start that waits (the running-subtask queue,
+ * a workspace being made) runs on it when it replays, and a retry after a failed start too.
+ */
 async function splitPick(task: Task, params: SessionStartParams) {
-  const { splitApplies, splitBuilders, pickSplitEngine } = await import('../agents/engine-split.js');
   // A task that holds a conversation continues it on the engine it has.
-  if (task.session_id || task.exec_session_id || task.session_ids?.length || !splitApplies(task, params)) return null;
+  if (task.session_id || task.exec_session_id || task.session_ids?.length) return null;
+  const { splitApplies, splitBuilders, pickSplitEngine, recordPick } = await import('../agents/engine-split.js');
+  const named = params.engine !== undefined || !!params.effort || (!!params.model && params.model !== 'default');
+  if (task.engine_pick && !named) return { ...task.engine_pick, reused: true };
+  if (!splitApplies(task, params)) return null;
   const { getConfig } = await import('../config-manager.js');
   const builders = splitBuilders(await getConfig());
   if (builders.length < 2) return null;
@@ -242,11 +249,20 @@ async function splitPick(task: Task, params: SessionStartParams) {
   const host = await resolveTaskLaunchReadOnly(task, params).then((l) => l.host, () => undefined);
   const { hostEnginesAvailability } = await import('../agents/host-engines.js');
   let answer: Awaited<ReturnType<typeof hostEnginesAvailability>> | undefined;
-  return pickSplitEngine(builders, async (id) => {
+  const pick = await pickSplitEngine(builders, async (id) => {
     answer ??= await hostEnginesAvailability(host || '__local__', { dial: false });
     const row = answer[id];
     return row ? row.installed : null;
-  });
+  }, Date.now(), task.id);
+  if (!pick) return null;
+  const kept = { key: pick.key, engine: pick.engine, ...(pick.model ? { model: pick.model } : {}), at: pick.at };
+  try {
+    await updateTaskRaw(task.id, { engine_pick: kept }, { source: 'task-start' });
+    await recordPick(pick.key, task.id, pick.at);
+  } catch (err) {
+    log.session.warn('engine split: could not keep the pick', { taskId: task.id, error: String(err) });
+  }
+  return pick;
 }
 
 /**
@@ -486,9 +502,8 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       const { validateInboxStartBoundary } = await import('../human-inbox/item-execution.js');
       await validateInboxStartBoundary(task.id, params.startAttemptId);
     }
-    const enginePick = split ? { key: split.key, engine: split.engine, ...(split.model ? { model: split.model } : {}), at: split.at } : undefined;
     const claimed = await withInboxStartAuthorization(task.id, params.startAttemptId, () => updateTaskRaw(task.id, {
-      last_start: attempt, ...(params.queuedAt ? { start_queue: null as never } : {}), ...(enginePick ? { engine_pick: enginePick } : {}), }, {
+      last_start: attempt, ...(params.queuedAt ? { start_queue: null as never } : {}), }, {
       source: 'task-start', shouldUpdate: (current) => current.last_start?.id === task.last_start?.id
         && (!params.queuedAt || current.start_queue?.at === params.queuedAt)
         && (!params.startAttemptId || stableJson(current.last_start) === stableJson(task.last_start)
@@ -499,10 +514,6 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         throw new QueuedStartGoneError(`Task ${task.id}'s queued start was cancelled before it began; nothing started.`);
       }
       throw new QuickStartError(`Task ${task.id} changed before its start could be recorded. Read task_get before retrying.`, 409);
-    }
-    if (split) {
-      const { recordPick } = await import('../agents/engine-split.js');
-      await recordPick(split.key, task.id, split.at).catch((err) => log.session.warn('engine split: could not keep the pick', { taskId: task.id, error: String(err) }));
     }
     const settle = async (updates: Partial<NonNullable<Task['last_start']>>) => {
       try {

@@ -24,6 +24,8 @@ import { executeOp } from '../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { getConfig, updateConfig } from '../../src/core/config-manager.js'
 import { getSessionsForTask } from '../../src/core/session-tracker.js'
+import { updateTaskRaw } from '../../src/core/task-manager.js'
+import { startSessionForTask } from '../../src/core/sessions/task-start.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 let server: HttpServer
@@ -92,6 +94,15 @@ describe('the engine split', () => {
     expect(next.enginePick?.key).toBe('claude')
   }, 60_000)
 
+  it('a start that waited (the queue, a workspace) runs on the pick its first try made', async () => {
+    const placeholder = await op('task_create', { title: 'Queued start', project: 'Marina', record_only: true })
+    // Its first try picked Claude Code on another model, then waited in the running-subtask queue.
+    await updateTaskRaw(placeholder.id, { engine_pick: { key: 'claude:sonnet', engine: 'claude', model: 'sonnet', at: new Date().toISOString() } })
+    const replay = await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', source: 'start-queue', expectReply: false })
+    expect(replay.enginePick).toMatchObject({ key: 'claude:sonnet', reused: true })
+    await expect.poll(async () => (await getSessionsForTask(placeholder.id))[0]?.cliModel ?? '', { timeout: 20_000 }).toMatch(/sonnet/i)
+  }, 60_000)
+
   it('counts a reopen of a completed task and compares the work on GET /api/usage/engines', async () => {
     const done = await op('task_create', { title: 'Finish and reopen', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
     expect((await api('PATCH', `/api/tasks/${done.id}`, { phase: 'COMPLETE' })).status).toBe(200)
@@ -109,7 +120,7 @@ describe('the engine split', () => {
     expect(finished).toMatchObject({ done: true, reopens: 1, reviews: 1, split: true })
     const row = r.body.rows.find((x: { key: string }) => x.key === finished.key)
     expect(row).toMatchObject({ engine: 'claude', done: 1, reopens: 1, reviewsPerTask: 1 })
-    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(6)
+    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(7)
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
     expect(r.body.projects).toEqual([{ project: 'Marina', tasks: expect.any(Number) }])
   }, 60_000)

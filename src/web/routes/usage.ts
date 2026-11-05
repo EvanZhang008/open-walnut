@@ -72,9 +72,12 @@ usageRouter.get('/engines', async (req: Request, res: Response, next: NextFuncti
     const withAsks = new Set((await fs.readdir(path.join(WALNUT_HOME, 'user-asks')).catch(() => [] as string[]))
       .filter(f => f.endsWith('.json')).map(f => f.slice(0, -5)))
     const followUps = new Map<string, number>()
-    await Promise.all(tasks.filter(t => withAsks.has(t.id)).map(async t => {
-      followUps.set(t.id, (await readUserAsks(t.id)).asks.length)
-    }))
+    const { filedCount } = await import('../../core/sessions/user-asks-model.js')
+    const withFile = tasks.filter(t => withAsks.has(t.id))
+    // A few files at a time: a busy install has thousands.
+    for (let i = 0; i < withFile.length; i += 16) {
+      await Promise.all(withFile.slice(i, i + 16).map(async t => { followUps.set(t.id, filedCount(await readUserAsks(t.id))) }))
+    }
     const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: store.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
     const project = typeof req.query.project === 'string' && req.query.project !== '*' ? req.query.project : undefined
     res.json(aggregateEngineCompare({

@@ -39,6 +39,10 @@ export interface EnginePick {
   at: string;
   /** How many of the recent picks each entry had before this one, for the outcome line. */
   shares?: Record<string, number>;
+  /** Entries left out of this pick, and why. */
+  skipped?: { key: string; reason: string }[];
+  /** A start that waited (queued, a workspace) runs on the pick its first try made. */
+  reused?: boolean;
 }
 
 /** Picks older than this no longer count toward the shares. */
@@ -114,77 +118,81 @@ function normalizePicks(raw: unknown): PicksFile {
 }
 
 /**
- * Picks made in this process that their start has not recorded yet: two starts at once both
- * read the file before either writes, and would otherwise take the same entry. A start that
- * never records (it failed, or continued a conversation) stops counting after RESERVE_MS.
+ * Picks made in this process, kept for RESERVE_MS: two starts at once both read the file
+ * before either writes, and would otherwise take the same entry. A reservation whose task the
+ * file already lists is not counted again, so nothing is counted twice or not at all.
  */
-const reserved: { key: string; at: number }[] = [];
+const reserved: { key: string; taskId: string; at: number }[] = [];
 const RESERVE_MS = 120_000;
 
 /** Tests only. */
 export function _resetSplitReservations(): void { reserved.length = 0; }
 
-/** Adds this process's unrecorded picks to `counts`. Synchronous on purpose (see pickSplitEngine). */
-function withReserved(counts: Map<string, number>, nowMs: number): Map<string, number> {
+/** Adds this process's picks the file does not hold yet. Synchronous on purpose (see pickSplitEngine). */
+function withReserved(file: { counts: Map<string, number>; tasks: Set<string> }, nowMs: number): Map<string, number> {
   for (let i = reserved.length - 1; i >= 0; i--) if (nowMs - reserved[i].at > RESERVE_MS) reserved.splice(i, 1);
-  for (const r of reserved) counts.set(r.key, (counts.get(r.key) ?? 0) + 1);
+  const counts = new Map(file.counts);
+  for (const r of reserved) if (!file.tasks.has(r.taskId)) counts.set(r.key, (counts.get(r.key) ?? 0) + 1);
   return counts;
 }
 
 /** Picks per entry key within the window, this process's unrecorded picks included. */
 export async function recentPickCounts(nowMs = Date.now()): Promise<Map<string, number>> {
-  return withReserved(await filePickCounts(nowMs), nowMs);
+  return withReserved(await filePicks(nowMs), nowMs);
 }
 
-async function filePickCounts(nowMs: number): Promise<Map<string, number>> {
+async function filePicks(nowMs: number): Promise<{ counts: Map<string, number>; tasks: Set<string> }> {
   const file = normalizePicks(await readJsonFile<unknown>(picksFile(), null));
   const counts = new Map<string, number>();
+  const tasks = new Set<string>();
   for (const p of file.picks) {
     if (nowMs - Date.parse(p.at) > SPLIT_WINDOW_MS) continue;
     counts.set(p.key, (counts.get(p.key) ?? 0) + 1);
+    tasks.add(p.taskId);
   }
-  return counts;
+  return { counts, tasks };
 }
 
-/** Keep one pick (the start that made it was recorded on its task). */
+/** Keep one pick (one per task: a task picked again replaces its earlier pick). */
 export async function recordPick(key: string, taskId: string, at: string, nowMs = Date.now()): Promise<void> {
-  try {
-    await updateJsonFile<unknown>(picksFile(), null, (raw) => {
-      const file = normalizePicks(raw);
-      const picks = file.picks.filter((p) => nowMs - Date.parse(p.at) <= SPLIT_WINDOW_MS && p.taskId !== taskId);
-      picks.push({ key, taskId, at });
-      return { version: 1, picks: picks.slice(-KEEP_PICKS) };
-    });
-  } finally {
-    // Only once the file holds it, so no read in between counts it nowhere.
-    const i = reserved.findIndex((r) => r.key === key);
-    if (i >= 0) reserved.splice(i, 1);
-  }
+  await updateJsonFile<unknown>(picksFile(), null, (raw) => {
+    const file = normalizePicks(raw);
+    const picks = file.picks.filter((p) => nowMs - Date.parse(p.at) <= SPLIT_WINDOW_MS && p.taskId !== taskId);
+    picks.push({ key, taskId, at });
+    return { version: 1, picks: picks.slice(-KEEP_PICKS) };
+  });
 }
 
 /**
- * The split's pick for one start, or null (off, the start is an override, nothing usable).
+ * The split's pick for one start, or null (off, nothing usable).
  * `available` says whether an engine runs on the launch host: true, false, or null when the
  * host has not said (an ACP engine with no answer is not offered; Claude Code always is).
+ * The pick is reserved for `taskId` at once, so a start running at the same time sees it.
  */
 export async function pickSplitEngine(
   builders: readonly SplitBuilder[],
   available: (engine: SessionEngine) => Promise<boolean | null>,
   nowMs = Date.now(),
+  taskId = '',
 ): Promise<EnginePick | null> {
   if (builders.length < 2) return null;
   const usable: SplitBuilder[] = [];
+  const skipped: { key: string; reason: string }[] = [];
   for (const b of builders) {
-    if (!isAcpEngine(b.engine) || (await available(b.engine).catch(() => null)) === true) usable.push(b);
+    if (!isAcpEngine(b.engine)) { usable.push(b); continue; }
+    const ok = await available(b.engine).catch(() => null);
+    if (ok === true) usable.push(b);
+    else skipped.push({ key: b.key, reason: ok === false ? 'not installed on the host this start runs on' : 'the host has not said whether it runs it' });
   }
-  // The reserved picks are added, the entry chosen and reserved with no await in between,
+  // Reading the reservations, choosing and reserving happen with no await in between,
   // so a start running at the same time always sees this one.
-  const counts = withReserved(await filePickCounts(nowMs), nowMs);
+  const counts = withReserved(await filePicks(nowMs), nowMs);
   const chosen = chooseBuilder(usable, counts);
   if (!chosen) return null;
-  reserved.push({ key: chosen.key, at: nowMs });
+  reserved.push({ key: chosen.key, taskId, at: nowMs });
   return {
     key: chosen.key, engine: chosen.engine, ...(chosen.model ? { model: chosen.model } : {}), at: new Date(nowMs).toISOString(),
     shares: Object.fromEntries(builders.map((b) => [b.key, counts.get(b.key) ?? 0])),
+    ...(skipped.length ? { skipped } : {}),
   };
 }

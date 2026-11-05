@@ -213,13 +213,17 @@ export interface EngineCompareRow {
   split: number;
   medianHours: number | null;
   costUsd: number;
+  partialCost: number;
   medianCostUsd: number | null;
   tokens: number;
   medianTokens: number | null;
   reviewsPerTask: number | null;
+  reviewCostPerTask: number | null;
   followUpsPerTask: number | null;
   reopens: number;
   errored: number;
+  reopenedShare: number | null;
+  erroredShare: number | null;
 }
 
 export interface EngineCompareTask {
@@ -230,8 +234,10 @@ export interface EngineCompareTask {
   done: boolean;
   hours: number | null;
   costUsd: number;
+  partialCost: boolean;
   tokens: number;
   reviews: number;
+  reviewCostUsd: number;
   followUps: number;
   reopens: number;
   errored: boolean;

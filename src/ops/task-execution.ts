@@ -119,10 +119,12 @@ function placementNote(started: Record<string, unknown>): string {
 
 /** The engine split's pick (core/agents/engine-split.ts), with how to override it. */
 function enginePickNote(started: Record<string, unknown>): string {
-  const p = started.enginePick as { key?: string; shares?: Record<string, number> } | undefined
+  const p = started.enginePick as { key?: string; shares?: Record<string, number>; skipped?: { key: string; reason: string }[]; reused?: boolean } | undefined
   if (!p?.key) return ''
+  if (p.reused) return ` It runs on ${p.key}, the engine split's pick from its first start.`
   const shares = p.shares ? Object.entries(p.shares).map(([k, n]) => `${k} ${n}`).join(', ') : ''
-  return ` The engine split gave it ${p.key}${shares ? ` (picks in the last 14 days before this one: ${shares})` : ''}; name engine to choose one yourself.`
+  const skipped = p.skipped?.length ? ` Left out: ${p.skipped.map((x) => `${x.key} (${x.reason})`).join(', ')}.` : ''
+  return ` The engine split gave it ${p.key}${shares ? ` (picks in the last 14 days before this one: ${shares})` : ''}; name engine to choose one yourself.${skipped}`
 }
 
 /**

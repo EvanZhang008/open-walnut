@@ -53,6 +53,13 @@ export interface UserAsksFile {
   version: 1;
   taskId: string;
   asks: UserAsk[];
+  /** Every message of his filed for the task, never pruned (the engine comparison's rework count). */
+  filed?: number;
+}
+
+/** How many messages of his were ever filed: the counter, else the asks a file from before it holds. */
+export function filedCount(file: UserAsksFile): number {
+  return Math.max(file.filed ?? 0, file.asks.length);
 }
 
 export const ASK_TEXT_MAX = 2000;
@@ -84,7 +91,7 @@ export function normalizeUserAsks(raw: unknown, taskId: string): UserAsksFile {
   if (!f || typeof f !== 'object' || !Array.isArray(f.asks)) return emptyUserAsks(taskId);
   const asks = f.asks.filter((a): a is UserAsk => !!a && typeof a.id === 'string' && typeof a.at === 'string'
     && typeof a.text === 'string' && (a.state === 'open' || a.state === 'closed'));
-  return { version: 1, taskId, asks };
+  return { version: 1, taskId, asks, ...(typeof f.filed === 'number' && f.filed > 0 ? { filed: Math.floor(f.filed) } : {}) };
 }
 
 export function openAsks(file: UserAsksFile): UserAsk[] {
@@ -118,7 +125,7 @@ export function addAsk(file: UserAsksFile, input: AddAskInput): { file: UserAsks
     ...(input.sid ? { sid: input.sid } : {}),
     ...(input.key ? { key: input.key } : {}),
   };
-  return { file: prune({ ...file, asks: [...file.asks, ask] }, at), added: true };
+  return { file: prune({ ...file, asks: [...file.asks, ask], filed: filedCount(file) + 1 }, at), added: true };
 }
 
 function close(a: UserAsk, by: UserAskClosedBy, at: string): UserAsk {

@@ -34,6 +34,8 @@ export interface TaskSpend {
   costUsd: number;
   tokens: number;
   outputTokens: number;
+  /** Requests with no price: costUsd leaves them out. */
+  unpriced: number;
   /** The engine and model that carried most of the cost (or tokens, when nothing was priced). */
   engine: string;
   model: string;
@@ -47,8 +49,12 @@ export interface EngineCompareTask {
   done: boolean;
   hours: number | null;
   costUsd: number;
+  /** Some of its requests have no price, so costUsd is a floor. */
+  partialCost: boolean;
   tokens: number;
   reviews: number;
+  /** What its reviewer subtasks cost. */
+  reviewCostUsd: number;
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -67,15 +73,23 @@ export interface EngineCompareRow {
   split: number;
   medianHours: number | null;
   costUsd: number;
+  /** Tasks whose cost leaves out requests with no price. */
+  partialCost: number;
   medianCostUsd: number | null;
   tokens: number;
   medianTokens: number | null;
   /** Review subtasks per finished task. */
   reviewsPerTask: number | null;
+  /** What those reviewers cost, per finished task. */
+  reviewCostPerTask: number | null;
   /** The user's messages per finished task. */
   followUpsPerTask: number | null;
   reopens: number;
   errored: number;
+  /** Share of finished tasks reopened at least once (0..1). */
+  reopenedShare: number | null;
+  /** Share of all its tasks whose session had an error (0..1). */
+  erroredShare: number | null;
 }
 
 export interface EngineCompare {
@@ -88,7 +102,11 @@ export interface EngineCompare {
 }
 
 export const TASKS_MAX = 60;
-const REVIEW_RE = /\breview/i;
+/** A reviewer subtask: its title starts with "review" (after a bracketed tag) or names a reviewer. */
+const REVIEW_RE = /^\s*(?:\[[^\]]*\]\s*)?(?:code |ui |ux |design |final |second |independent )?review\b|\breviewer\b/i;
+
+/** The model family an engine runs when nothing says otherwise. */
+const ENGINE_FAMILY: Record<string, ModelFamily> = { claude: 'Claude', codex: 'GPT', gemini: 'Gemini' };
 
 export interface CompareInput {
   tasks: readonly Task[];
@@ -121,6 +139,22 @@ function counted(t: Task): boolean {
   return !/^ask /i.test((t.project ?? '').trim());
 }
 
+/** Every session the task held. */
+function sessionsOf(t: Task): string[] {
+  return [...new Set([t.session_id, t.exec_session_id, t.last_start?.session_id, ...(t.session_ids ?? []), ...(t.legacy_session_ids ?? [])]
+    .filter((x): x is string => !!x))];
+}
+
+/** The earliest start among every session the task held. */
+function firstStart(t: Task, sessions: CompareInput['sessions']): string | undefined {
+  let first: string | undefined;
+  for (const id of sessionsOf(t)) {
+    const at = sessions.get(id)?.startedAt;
+    if (at && (!first || at < first)) first = at;
+  }
+  return first;
+}
+
 function inRange(day: string, range: { start?: string; end?: string }): boolean {
   return (!range.start || day >= range.start) && (!range.end || day <= range.end);
 }
@@ -128,8 +162,11 @@ function inRange(day: string, range: { start?: string; end?: string }): boolean 
 /** The comparison, from tasks, their sessions and their spend. Pure. */
 export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const reviewsOf = new Map<string, number>();
+  const reviewCostOf = new Map<string, number>();
   for (const t of input.tasks) {
-    if (t.parent_task_id && REVIEW_RE.test(t.title)) reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
+    if (!t.parent_task_id || !REVIEW_RE.test(t.title)) continue;
+    reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
+    reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (input.spend.get(t.id)?.costUsd ?? 0));
   }
   const projects = new Map<string, number>();
   const picked: (EngineCompareTask & { finishedAt: string })[] = [];
@@ -138,7 +175,10 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     if (!counted(t) || REVIEW_RE.test(t.title)) continue;
     const session = input.sessions.get(taskSessionId(t)!);
     const done = t.phase === 'COMPLETE' && !!t.completed_at;
-    const startedAt = session?.startedAt ?? t.created_at;
+    // From its first session's start (a restart, an engine switch or a recovery starts another)
+    // to its first completion (a reopen adds the idle time before it otherwise).
+    const startedAt = firstStart(t, input.sessions) ?? t.engine_pick?.at ?? t.created_at;
+    const finishedAt = t.first_completed_at && t.completed_at && t.first_completed_at < t.completed_at ? t.first_completed_at : t.completed_at;
     const day = input.dayOf(done ? t.completed_at! : startedAt);
     if (!inRange(day, input.range)) continue;
     projects.set(t.project ?? '', (projects.get(t.project ?? '') ?? 0) + 1);
@@ -146,16 +186,19 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const spend = input.spend.get(t.id);
     const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine);
     const family = modelFamily(spend?.model) ?? modelFamily(session?.acpModel ?? session?.cliModel ?? session?.model)
-      ?? modelFamily(t.engine_pick?.model) ?? (engine === resolveEngine(undefined) ? 'Claude' : 'Other');
+      ?? modelFamily(t.engine_pick?.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
     const key = `${engine}|${family}`;
     meta.set(key, { engine, family });
-    const hours = done ? (Date.parse(t.completed_at!) - Date.parse(startedAt)) / 3600_000 : null;
-    const errored = session?.process_status === 'error' || !!session?.status_history?.some((h) => h.process_status === 'error')
-      || t.last_start?.state === 'failed';
+    const hours = done ? (Date.parse(finishedAt!) - Date.parse(startedAt)) / 3600_000 : null;
+    // Any session it held: a task that failed on one engine and finished on another still had the error.
+    const errored = sessionsOf(t).some((id) => {
+      const s = input.sessions.get(id);
+      return s?.process_status === 'error' || !!s?.status_history?.some((h) => h.process_status === 'error');
+    }) || t.last_start?.state === 'failed';
     picked.push({
       taskId: t.id, title: t.title, project: t.project ?? '', key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
-      costUsd: spend?.costUsd ?? 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0,
+      costUsd: spend?.costUsd ?? 0, partialCost: (spend?.unpriced ?? 0) > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0,
       followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
       finishedAt: done ? t.completed_at! : '',
     });
@@ -169,10 +212,12 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       key, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}`,
       done: done.length, open: all.length - done.length, split: all.filter((p) => p.split).length,
       medianHours: median(done.map((p) => p.hours).filter((h): h is number => h !== null)),
-      costUsd: all.reduce((a, p) => a + p.costUsd, 0), medianCostUsd: median(done.map((p) => p.costUsd)),
+      costUsd: all.reduce((a, p) => a + p.costUsd, 0), partialCost: all.filter((p) => p.partialCost).length, medianCostUsd: median(done.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(done.map((p) => p.tokens)),
-      reviewsPerTask: per((p) => p.reviews), followUpsPerTask: per((p) => p.followUps),
+      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
+      reopenedShare: per((p) => (p.reopens > 0 ? 1 : 0)),
+      erroredShare: all.length ? all.filter((p) => p.errored).length / all.length : null,
     });
   }
   rows.sort((a, b) => b.done - a.done || b.open - a.open || a.label.localeCompare(b.label));
@@ -205,8 +250,8 @@ export async function taskSpend(rollup: CostRollup, overrides: Record<string, Us
     if (!taskId) continue;
     const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
     const tokens = p.input + p.output + p.cacheRead + p.cacheWrite5m + p.cacheWrite1h;
-    const acc = out.get(taskId) ?? { costUsd: 0, tokens: 0, outputTokens: 0, engine: r.engine, model: r.model, top: -1 };
-    acc.costUsd += p.costUsd; acc.tokens += tokens; acc.outputTokens += p.output;
+    const acc = out.get(taskId) ?? { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, engine: r.engine, model: r.model, top: -1 };
+    acc.costUsd += p.costUsd; acc.tokens += tokens; acc.outputTokens += p.output; acc.unpriced += p.unpriced;
     // The engine and model that carried most of it: cost first, tokens break the tie for unpriced rows.
     const wk = `${taskId}\u0000${r.engine}\u0000${r.model}`;
     const w = (weightOf.get(wk) ?? 0) + p.costUsd * 1e9 + tokens;

@@ -817,6 +817,8 @@ export interface Task {
   engine_pick?: { key: string; engine: SessionEngine; model?: string; at: string };
   /** How many times the task was reopened after it was completed (more work sent to it). */
   reopens?: number;
+  /** When the task was first completed; completed_at is cleared by a reopen and set again by the next completion. */
+  first_completed_at?: string;
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;

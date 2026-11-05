@@ -247,6 +247,8 @@ export function phaseDerivedFields(
   const set: Partial<Task> = { ...readMarkerForPhase(phase) };
   if (phase === 'COMPLETE') {
     if (!task.completed_at) set.completed_at = nowIso;
+    // The first completion stays when a reopen clears completed_at (engine-compare.ts times work by it).
+    if (!task.first_completed_at) set.first_completed_at = task.completed_at || nowIso;
     // A completed task is verified (the user mostly closes it after checking): its stored
     // status reads Done in the same write, so no reader meets its last open words
     // ("waits on the user to install the build"). A reopen derives it again (user-status-sync).

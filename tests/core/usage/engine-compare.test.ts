@@ -18,7 +18,7 @@ function input(tasks: Task[], spend: Record<string, Partial<TaskSpend>>, over: P
   const sessions = new Map(tasks.filter((t) => t.session_id).map((t) => [t.session_id!, { startedAt: '2026-11-02T00:00:00.000Z' }]));
   return {
     tasks, sessions,
-    spend: new Map(Object.entries(spend).map(([id, s]) => [id, { costUsd: 0, tokens: 0, outputTokens: 0, engine: 'claude', model: 'claude-opus-5-5', ...s }])),
+    spend: new Map(Object.entries(spend).map(([id, s]) => [id, { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, engine: 'claude', model: 'claude-opus-5-5', ...s }])),
     followUps: () => 0, range: {}, dayOf: (iso) => iso.slice(0, 10), ...over,
   };
 }
@@ -95,6 +95,49 @@ describe('aggregateEngineCompare', () => {
     (inp.sessions as Map<string, object>).set('s-slot', { startedAt: '2026-11-02T00:00:00.000Z' });
     (inp.sessions as Map<string, object>).set('s-list', { startedAt: '2026-11-02T00:00:00.000Z' });
     expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 2, medianHours: 1.5 });
+  });
+
+  it('times work from its first session to its first completion, and rates reopens and errors', () => {
+    const tasks = [
+      // Restarted: the latest session started 5 h in; the first one counts.
+      done('restarted', 8, { session_ids: ['s-first', 's-restarted'] }),
+      // Reopened: finished first at 2 h, again at 30 h.
+      done('reopened', 30, { reopens: 1, first_completed_at: '2026-11-02T02:00:00.000Z' }),
+      done('clean', 4), done('c2', 4), done('c3', 4),
+    ];
+    const inp = input(tasks, {});
+    const sessions = inp.sessions as Map<string, { startedAt: string }>;
+    sessions.set('s-restarted', { startedAt: '2026-11-02T05:00:00.000Z' });
+    sessions.set('s-first', { startedAt: '2026-11-02T00:00:00.000Z' });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks.find((t) => t.taskId === 'restarted')?.hours).toBe(8);
+    expect(out.tasks.find((t) => t.taskId === 'reopened')?.hours).toBe(2);
+    expect(out.rows[0]).toMatchObject({ done: 5, reopenedShare: 0.2, erroredShare: 0 });
+  });
+
+  it('knows reviewer subtasks by their title only, and adds their cost per task', () => {
+    const tasks = [
+      done('p', 1), task({ id: 'fix', parent_task_id: 'p', title: 'Fix review comments', session_id: 's-fix' }),
+      task({ id: 'rv', parent_task_id: 'p', title: '[UI] Review: settings row', session_id: 's-rv' }),
+    ];
+    const out = aggregateEngineCompare(input(tasks, { rv: { costUsd: 4 } }));
+    expect(out.tasks.map((t) => t.taskId).sort()).toEqual(['fix', 'p']);
+    expect(out.tasks.find((t) => t.taskId === 'p')).toMatchObject({ reviews: 1, reviewCostUsd: 4 });
+  });
+
+  it('counts an error in any session the task held, and marks a cost that leaves out unpriced requests', () => {
+    const tasks = [done('sw', 1, { session_ids: ['s-failed', 's-sw'] })];
+    const inp = input(tasks, { sw: { costUsd: 3, unpriced: 2 } });
+    (inp.sessions as Map<string, object>).set('s-failed', { startedAt: '2026-11-01T20:00:00.000Z', process_status: 'error' });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks[0]).toMatchObject({ errored: true, partialCost: true, hours: 5 });
+    expect(out.rows[0]).toMatchObject({ errored: 1, partialCost: 1 });
+  });
+
+  it('gives an engine its usual model family when nothing names one', () => {
+    const inp = input([done('cx', 1)], {});
+    (inp.sessions as Map<string, object>).set('s-cx', { startedAt: '2026-11-02T00:00:00.000Z', engine: 'codex' });
+    expect(aggregateEngineCompare(inp).rows[0].key).toBe('codex|GPT');
   });
 
   it('reports the split as configured', () => {

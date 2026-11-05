@@ -121,6 +121,10 @@
 .usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); }
 .usage-ec-few { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); }
 .usage-ec-tasks { table-layout: auto; }
-.usage-ec-tasks tr { cursor: pointer; }
 .usage-ec-tasks tr:hover td { background: var(--bg-secondary); }
+.usage-ec-open { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--fg); font: inherit; text-align: left;
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-ec-open:hover { text-decoration: underline; }
+.usage-ec-open:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; border-radius: 3px; }
 .usage-ec-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted); }
+.usage-ec-partial { margin-left: 3px; font-size: 10px; color: var(--fg-muted); font-weight: 500; }
