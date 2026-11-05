@@ -650,10 +650,9 @@ test.describe('Settings', () => {
   test('"Build a plugin" has the mic inside its describe box', async ({ page }) => {
     test.setTimeout(120_000)
     await home(page)
-    await openSettings(page)
-    await page.getByTestId('settings-nav-plugin-store').click()
-    // Settings' Plugins entry either holds the card itself, or (once plugins moved to
-    // the Apps page) links to /apps, whose manual path leads to the card's own page.
+    // Plugins live on the Apps page, the sidebar's own entry; its manual path leads to the
+    // card's own page.
+    await page.getByTestId('sidebar-core-app-apps').click()
     const card = page.getByTestId('build-plugin-card')
     const apps = page.getByTestId('apps-make-card')
     await expect(card.or(apps)).toBeVisible({ timeout: 30_000 })

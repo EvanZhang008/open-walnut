@@ -198,7 +198,7 @@ export interface NotificationFix {
 export interface NotificationAction {
   /** Button text ("Sign in", "Open Settings"). */
   label: string;
-  /** Console route, e.g. `/settings#plugin-store`. */
+  /** Console route, e.g. `/apps?plugin=<id>`. */
   to: string;
 }
 

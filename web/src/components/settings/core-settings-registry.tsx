@@ -55,7 +55,8 @@ export interface CoreSettingsContribution {
   id: string
   label: string
   title: string
-  group: 'manage' | 'plugins' | 'configure' | 'diagnostics'
+  /** No 'plugins' group: a plugin and its settings live on its page in Apps, never here. */
+  group: 'manage' | 'configure' | 'diagnostics'
   divider?: boolean
   /** Rendered in its owner's pane (keeps its `#id` deep link) but has no nav entry of its own. */
   navHidden?: boolean
@@ -90,10 +91,10 @@ export interface CoreSettingsContribution {
 }
 
 export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = [
-  // Plugins are not a section here: the Apps page (/apps, pages/AppsPage.tsx) owns
-  // every plugin and every App, built in or not. The nav's Plugins group links to it
-  // (SettingsNav APPS_LINK_ROW) above the plugins' own settings panels, and
-  // the old `#plugin-store` deep link forwards there (SettingsPage).
+  // Plugins are not in Settings: the Apps page (/apps, pages/AppsPage.tsx, its own entry on
+  // the main side bar) owns every plugin and every App, built in or not, with each plugin's
+  // settings panels and sign-in on its page. The old `#plugin-store` and `#<plugin>:<panel>`
+  // deep links forward there (SettingsPage).
   // Repositories is hidden until the feature is ready: the section component
   // (ReposSection), the /api/repositories routes and the agent tools stay; only
   // the Settings entry is gone. Re-add the row here to bring it back.

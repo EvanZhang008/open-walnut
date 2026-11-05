@@ -1,28 +1,29 @@
 /**
- * The settings sidebar: `Settings` title, Find a setting, and four groups
- * (Manage / Plugins / Configure / Diagnostics; the heading uses the same word
- * as the Plugins pane and the Plugins page, never a synonym). One pane shows at
- * a time; a nav click only changes the hash (replace), SettingsPage mounts that
- * pane.
+ * The settings sidebar: `Settings` title, Find a setting, and three groups
+ * (Manage / Configure / Diagnostics). One pane shows at a time; a nav click only
+ * changes the hash (replace), SettingsPage mounts that pane.
  *
- * Off-page links (Agents, Commands, Memory, Apps) route away and carry an arrow-up-right mark. Plugin rows arrive
- * asynchronously, so until the plugin runtime is ready the Plugins group
- * renders as many quiet placeholders as last time (localStorage) and the
- * Configure group does not jump when the real rows land.
+ * Every row is Walnut's own (core-settings-registry, owner 'walnut'). Plugins are
+ * not in Settings at all: each plugin, its settings panels (`walnut.ui.settings`)
+ * and its sign-in live on its own page in Apps (components/apps-page/PluginDetail),
+ * and Apps is its own entry on the main side bar (2026-11-05, the user: "plugin
+ * shodl be all in apps, and app is not in seting"). An old `#<plugin>:<panel>` link
+ * forwards there (SettingsPage). Guard: tests/web/plugins-not-in-settings.test.ts.
+ *
+ * Off-page links (Agents, Commands, Memory) route away and carry an arrow-up-right mark.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { useAppCatalog } from '@/apps/hooks'
-import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import { useClosedPaneGates, type SettingsPaneGate } from './settings-pane-gates'
 import { corePaneFilterEntry, navRowShown, tabParent } from './settings-routing'
 import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type FilterEntry, type FilterHit } from './settings-filter'
-import { SettingsIcon, assignPluginTint, monogramFor, tileKey, type SettingsGlyphName } from './settings-icons'
+import { SettingsIcon, type SettingsGlyphName } from './settings-icons'
 import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './settings-pane-context'
 import { WAY_PANES } from './settings-way-panes'
 import { browserLinkSubtitle, useBrowserLinkName } from './sections/cloud/browser-link-name'
+import { APPS_PATH } from '@/utils/open-link'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
 
@@ -30,17 +31,14 @@ export { NAV_OWNER, resolvePane } from './settings-routing'
 
 export type NavGroup = CoreSettingsContribution['group']
 
-export const NAV_GROUPS: readonly NavGroup[] = ['manage', 'plugins', 'configure', 'diagnostics']
+export const NAV_GROUPS: readonly NavGroup[] = ['manage', 'configure', 'diagnostics']
 
 /** Displayed group headings (sentence case, no uppercase transform). */
 export const NAV_GROUP_LABELS: Readonly<Record<NavGroup, string>> = {
   manage: 'Manage',
-  plugins: 'Plugins',
   configure: 'Configure',
   diagnostics: 'Diagnostics',
 }
-
-export const PLUGIN_COUNT_KEY = 'walnut.settings.nav.pluginCount'
 
 const MANAGE_PAGES: ReadonlyArray<{ id: string; to: string; label: string; glyph: SettingsGlyphName; tint: string }> = [
   { id: 'agents', to: '/agents', label: 'Agents', glyph: 'two-person', tint: '#5856D6' },
@@ -56,26 +54,14 @@ export interface NavRow {
   testId: string
   label: string
   to?: string
-  /** True for rows a plugin contributed (counted for the placeholder cache). */
-  fromPlugin?: boolean
   /** A sub-page's row: indented under this pane's row (core-settings-registry `parent`). */
   parent?: string
   meta: SettingsPaneMeta
   filter: FilterEntry
 }
 
-export interface PluginPaneInfo {
-  pluginId: string
-  pluginName: string
-}
-
 export interface SettingsNavModel {
   rows: NavRow[]
-  /** Plugin runtime answered and webview apps loaded: plugin rows are final. */
-  ready: boolean
-  /** Plugin settings panel keys now registered. */
-  pluginKeys: string[]
-  pluginPanes: ReadonlyMap<string, PluginPaneInfo>
   metaFor: (sectionId: string) => SettingsPaneMeta | undefined
 }
 
@@ -130,69 +116,8 @@ const PAGE_ROWS: readonly NavRow[] = MANAGE_PAGES.map((page) => ({
   filter: { key: `link:${page.id}`, kind: 'link' as const, label: page.label, keywords: PAGE_LINK_KEYWORDS[page.id] ?? [] },
 }))
 
-/**
- * Plugins and their Apps moved out of Settings to the Apps page; an App is on the
- * Sidebar or only there, never in this nav. The Plugins group still holds the plugins'
- * own settings panels, so it leads with the way to the page that manages them. The testid keeps the old pane's name: it is the same entry point.
- */
-const APPS_LINK_ROW: NavRow = {
-  key: 'link:apps',
-  kind: 'link',
-  group: 'plugins',
-  testId: 'settings-nav-plugin-store',
-  label: 'Apps',
-  to: '/apps',
-  meta: {
-    id: 'apps', label: 'Apps', title: 'Apps', description: '',
-    icon: <SettingsIcon glyph="puzzle-piece" />, tint: '#34C759', glyph: 'puzzle-piece',
-  },
-  filter: { key: 'link:apps', kind: 'link', label: 'Apps', keywords: PAGE_LINK_KEYWORDS.apps ?? [] },
-}
-
-function Monogram({ letter }: { letter: string }) {
-  return <span className="settings-tile-monogram">{letter}</span>
-}
-
 /** Every nav row, its tile, and pane metadata for the page. One computation, two consumers. */
 export function useSettingsNavModel(): SettingsNavModel {
-  const pluginUi = usePluginUi()
-  const apps = useAppCatalog()
-  const runtime = useWebPluginRuntime()
-  const ready = runtime.ready && !apps.loadingWebviews
-
-  const dynamic = useMemo(() => {
-    // Seed with every core and page tile so plugin tiles shift away from them.
-    const taken = new Set<string>([...PAGE_ROWS, APPS_LINK_ROW, ...CORE_ROWS].map((r) => tileKey(r.meta.tint, r.meta.glyph)))
-    const pluginPanes = new Map<string, PluginPaneInfo>()
-    const panelRows: NavRow[] = pluginUi.settings.map((entry) => {
-      pluginPanes.set(entry.key, { pluginId: entry.pluginId, pluginName: entry.pluginName })
-      const app = apps.all.find((a) => a.pluginId === entry.pluginId && a.icon)
-      const AppIcon = app?.icon
-      const letter = monogramFor(entry.pluginName || entry.value.label)
-      const glyph = AppIcon && app ? `app-${app.key}` : `monogram-${letter}`
-      const tint = assignPluginTint(entry.pluginId, glyph, taken)
-      const description = `Provided by the ${entry.pluginName} plugin.`
-      return {
-        key: entry.key,
-        kind: 'pane' as const,
-        group: 'plugins' as const,
-        testId: `settings-nav-${entry.key}`,
-        label: entry.value.label,
-        fromPlugin: true,
-        meta: {
-          id: entry.key, label: entry.value.label, title: entry.value.label, description,
-          icon: AppIcon ? <AppIcon size={13} /> : <Monogram letter={letter} />, tint, glyph,
-        },
-        filter: {
-          key: entry.key, kind: 'pane' as const, label: entry.value.label,
-          descriptions: [description],
-          keywords: [entry.pluginName.toLowerCase(), entry.pluginId.toLowerCase()],
-        },
-      }
-    })
-    return { panelRows, pluginPanes }
-  }, [apps.all, pluginUi.settings])
-
   const closedGates = useClosedPaneGates()
   // A plugin's tunnel names the browser link after itself (browser-link-name.ts).
   const linkName = useBrowserLinkName()
@@ -205,14 +130,10 @@ export function useSettingsNavModel(): SettingsNavModel {
     const rows: NavRow[] = [
       ...PAGE_ROWS,
       ...byGroup('manage'),
-      ...byGroup('plugins'),
-      APPS_LINK_ROW,
-      ...dynamic.panelRows,
       ...byGroup('configure'),
       ...byGroup('diagnostics'),
     ]
     const metaByKey = new Map<string, SettingsPaneMeta>(CORE_META)
-    for (const r of dynamic.panelRows) metaByKey.set(r.key, r.meta)
     const named = rows.map((r) => {
       if (r.key !== WAY_PANES.browser || !linkName.plugin) return r
       const meta = { ...r.meta, label: linkName.title, title: linkName.title, description: browserLinkSubtitle(linkName) }
@@ -221,29 +142,9 @@ export function useSettingsNavModel(): SettingsNavModel {
     })
     return {
       rows: named,
-      ready,
-      pluginKeys: [...dynamic.pluginPanes.keys()],
-      pluginPanes: dynamic.pluginPanes,
       metaFor: (sectionId: string) => metaByKey.get(sectionId),
     }
-  }, [dynamic, ready, closedGates, linkName])
-}
-
-function readPluginCount(): number {
-  try {
-    const n = Number(window.localStorage.getItem(PLUGIN_COUNT_KEY))
-    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 40) : 0
-  } catch {
-    return 0
-  }
-}
-
-function writePluginCount(n: number): void {
-  try {
-    window.localStorage.setItem(PLUGIN_COUNT_KEY, String(n))
-  } catch {
-    /* storage blocked: the next open just may jump once */
-  }
+  }, [closedGates, linkName])
 }
 
 /** DOM id for a row, safe for aria-activedescendant (plugin keys contain `:`). */
@@ -285,7 +186,6 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
   const [overlay, setOverlay] = useState(false)
   // A scrolled list gets a hairline under the pinned filter (N3-14).
   const [listScrolled, setListScrolled] = useState(false)
-  const [cachedCount] = useState(readPluginCount)
   const inputRef = useRef<HTMLInputElement>(null)
   const navRef = useRef<HTMLElement>(null)
 
@@ -310,13 +210,6 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
   useEffect(() => {
     setHighlight(filtering ? primaryHit(hits)?.key ?? null : null)
   }, [hits, filtering])
-
-  // Plugin rows are final: remember how many so the next open reserves the space.
-  const pluginRowCount = model.rows.filter((r) => r.fromPlugin).length
-  useEffect(() => {
-    if (model.ready) writePluginCount(pluginRowCount)
-  }, [model.ready, pluginRowCount])
-  const placeholders = model.ready || filtering ? 0 : Math.max(0, cachedCount - pluginRowCount)
 
   // The current entry stays in view in a short window. Not on a phone: there
   // the list is the page under the open pane, and back must find it where the
@@ -515,23 +408,10 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
         className="settings-nav-list"
         onScroll={(e) => setListScrolled(e.currentTarget.scrollTop > 0)}
       >
-        {groups.map(({ group, rows }) => (rows.length === 0 && !(group === 'plugins' && placeholders > 0) ? null : (
+        {groups.map(({ group, rows }) => (rows.length === 0 ? null : (
           <div key={group} className="settings-nav-group" data-group={group}>
             <span className="settings-nav-group-label">{NAV_GROUP_LABELS[group]}</span>
-            {group === 'plugins'
-              ? (
-                <>
-                  {rows.filter((r) => !r.fromPlugin).map(renderRow)}
-                  {rows.filter((r) => r.fromPlugin).map(renderRow)}
-                  {Array.from({ length: placeholders }, (_, i) => (
-                    <span key={`ph-${i}`} className="settings-nav-item settings-nav-placeholder" aria-hidden="true">
-                      <span className="settings-nav-placeholder-tile" />
-                      <span className="settings-nav-placeholder-bar" />
-                    </span>
-                  ))}
-                </>
-              )
-              : rows.map(renderRow)}
+            {rows.map(renderRow)}
           </div>
         )))}
         {filtering && hits.length === 0 && (
@@ -539,6 +419,13 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
             <p>No settings match &quot;{query.trim()}&quot;.</p>
             <button type="button" className="settings-nav-clear-search" onClick={clearQuery}>Clear search</button>
           </div>
+        )}
+        {/* A plugin's settings are on its page in Apps, so a search for one is pointed there. */}
+        {filtering && (
+          <p className="settings-nav-empty settings-nav-empty-apps" data-testid="settings-filter-apps-hint">
+            A plugin&apos;s settings and sign-in are on its page in{' '}
+            <button type="button" className="settings-nav-clear-search" data-testid="settings-filter-open-apps" onClick={() => navigate(APPS_PATH)}>Apps</button>.
+          </p>
         )}
       </div>
     </nav>

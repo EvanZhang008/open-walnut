@@ -311,8 +311,8 @@ test('settings that live in the App: its page goes there, the save lands, and a 
   await expect(page.getByTestId('apps-app-sigma:main')).toHaveAttribute('data-shown', 'false', { timeout: 30_000 })
   await expect(page.getByTestId('sidebar-app-sigma:main')).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps"]')).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 
@@ -528,10 +528,10 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await expect(page.getByTestId('plugin-card-open-walnut-time')).toHaveCount(0)
 
   await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
 
-  // ── ON ── (back through the Settings nav's Apps link)
-  await page.getByTestId('settings-nav-plugin-store').click()
+  // ── ON ── (back through the sidebar's Apps entry)
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
   await openPluginDetail(page, 'walnut-time')
   const toggleAgain = page.locator('#plugin-toggle-walnut-time')

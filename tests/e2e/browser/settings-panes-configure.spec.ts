@@ -679,18 +679,19 @@ test('C59: the API provider is one group with a segmented choice; every model la
   expect(labels).toContain('Default engine')
 })
 
-test('C64 + C63: the filter finds Apps for slack and Tasks for jev', async ({ page }) => {
+test('C64 + C63: a plugin word points the search to Apps, and jev finds Tasks', async ({ page }) => {
   await fakeConfig(page)
   await openSettings(page)
   const filter = page.getByTestId('settings-filter')
-  const firstVisibleNav = () => page.locator('[data-testid^="settings-nav-"]:visible').filter({ hasNot: page.locator('[data-testid^="settings-nav-error-"]') }).first()
+  // No plugin is in Settings: a search names the page that has them, and goes there.
   await filter.fill('slack')
-  // The Plugins group's link to the Apps page keeps the old pane's id, plugin-store.
-  await expect(firstVisibleNav()).toHaveAttribute('data-testid', 'settings-nav-plugin-store')
-  await expect(firstVisibleNav()).toContainText('Apps')
+  await expect(page.getByTestId('settings-nav-plugin-store')).toHaveCount(0)
+  await expect(page.getByTestId('settings-filter-apps-hint')).toContainText("A plugin's settings and sign-in are on its page in Apps.")
   await filter.fill('jev')
   await expect(page.getByTestId('settings-nav-tasks')).toBeVisible()
-  await filter.fill('')
+  await page.getByTestId('settings-filter-open-apps').click()
+  await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 })
 
 test('C77: a change in one window reaches another window on the same server', async ({ page, browser }) => {

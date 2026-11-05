@@ -339,38 +339,6 @@
   box-shadow: 0 0 0 1.5px #fff;
 }
 
-.settings-tile-monogram {
-  font-size: 13px;
-  line-height: 1;
-  font-weight: 600;
-  color: #fff;
-}
-
-.settings-pane-tile:not(.settings-pane-tile-20) .settings-tile-monogram {
-  font-size: 20px;
-}
-
-/* Plugin rows not loaded yet: same 32px, so Configure does not move when they land. */
-.settings-container .settings-nav-placeholder {
-  cursor: default;
-  pointer-events: none;
-}
-
-.settings-container .settings-nav-placeholder-tile {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  background: var(--bg-tertiary);
-}
-
-.settings-container .settings-nav-placeholder-bar {
-  width: 60%;
-  height: 10px;
-  border-radius: 5px;
-  background: var(--bg-tertiary);
-}
-
 .settings-container .settings-nav-empty {
   padding: 14px 10px;
   font-size: 13px;
@@ -381,6 +349,12 @@
 .settings-container .settings-nav-empty p {
   margin: 0 0 6px;
   overflow-wrap: anywhere;
+}
+
+.settings-container .settings-nav-empty.settings-nav-empty-apps {
+  margin: 0;
+  padding-top: 4px;
+  font-size: 12px;
 }
 
 .settings-container .settings-nav-clear-search {
@@ -513,7 +487,7 @@
   }
 
   .settings-container .settings-nav:not(.is-overlay-open) :is(.settings-nav-title, .settings-filter-wrap,
-    .settings-nav-group-label, .settings-nav-text, .settings-nav-trailing, .settings-nav-empty, .settings-nav-placeholder-bar) {
+    .settings-nav-group-label, .settings-nav-text, .settings-nav-trailing, .settings-nav-empty) {
     display: none;
   }
 

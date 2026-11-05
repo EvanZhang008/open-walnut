@@ -559,6 +559,17 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   // The app's entry is managed in the App section of its plugin's page on Apps.
   await openPlugins(page)
   await openPluginDetail(page, 'walnut-demo')
+  // Its settings panel, registered through the old `walnut.ui.settings` call unchanged, is
+  // on this page under Settings, and Settings itself has no row or pane for it.
+  const demoPanel = page.getByTestId('plugin-settings-walnut-demo').getByTestId('plugin-panel-walnut-demo:demo')
+  await expect(demoPanel).toBeVisible({ timeout: 30_000 })
+  await expect(demoPanel.getByTestId('plugin-demo-settings')).toBeVisible()
+  // An old link to the panel's Settings pane opens this page at the panel.
+  const oldLinkPage = await context.newPage()
+  await oldLinkPage.goto(`http://127.0.0.1:${fixturePort}/settings#walnut-demo:demo`)
+  await expect(oldLinkPage).toHaveURL(new RegExp(`/apps\\?plugin=walnut-demo&panel=demo$`), { timeout: 30_000 })
+  await expect(oldLinkPage.getByTestId('plugin-panel-walnut-demo:demo').getByTestId('plugin-demo-settings')).toBeVisible({ timeout: 30_000 })
+  await oldLinkPage.close()
   const appTile = page.getByTestId('plugin-apps-walnut-demo').getByTestId('apps-app-walnut-demo:main')
   await expect(appTile).toBeVisible()
   await expect(appTile).toHaveAttribute('data-shown', 'true')

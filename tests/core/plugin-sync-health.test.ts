@@ -67,7 +67,7 @@ describe('decideSyncFailureNotice', () => {
     expect(n.title).toBe('Microsoft To-Do needs you to sign in again');
     expect(n.body).toContain('invalid_grant');
     expect(n.body).toContain('retrying will not fix this');
-    expect(n.action).toEqual({ label: 'Sign in', to: '/settings#plugin-store' });
+    expect(n.action).toEqual({ label: 'Sign in', to: '/apps?plugin=ms-todo' });
     expect(n.code).toBe('invalid_grant');
   });
 
@@ -139,7 +139,7 @@ describe('decideConnectionNotice', () => {
     expect(first.notice?.title).toBe('Microsoft To-Do needs you to sign in again');
     // The plugin's own sentence is the body: it knows until when sync still works.
     expect(first.notice?.body).toContain('until 14:32');
-    expect(first.notice?.action).toEqual({ label: 'Sign in', to: '/settings#plugin-store' });
+    expect(first.notice?.action).toEqual({ label: 'Sign in', to: '/apps?plugin=ms-todo' });
     expect(watch.noticed).toBe(true);
 
     // Same state again: nothing new to say.

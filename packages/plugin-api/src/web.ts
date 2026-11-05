@@ -28,7 +28,8 @@ export interface AppProps {
  *
  * `'settings'` is for an App that is a place you visit occasionally rather than a
  * daily surface: it gets no Sidebar entry and is opened from the Apps page (and the
- * Command Palette). The name is historic: such Apps once had a row in Settings. The
+ * Command Palette). The name is historic: such Apps once had a row in Settings, which
+ * lists no plugin and no App now. The
  * Sidebar is a small, expensive space, and an App that does not need to be one click
  * away should not spend it.
  */
@@ -58,6 +59,12 @@ export interface PageContribution {
   title?: string
 }
 
+/**
+ * A settings panel your plugin draws itself (a sign-in, a token, choices a schema cannot
+ * describe). It shows on your plugin's page in Apps, under Settings, above the form your
+ * manifest's `configSchema` describes; `label` heads it when it says more than your
+ * plugin's name. No plugin has a place in the Settings page itself.
+ */
 export interface SettingsContribution {
   id: string
   label: string

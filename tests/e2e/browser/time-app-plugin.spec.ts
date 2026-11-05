@@ -765,8 +765,8 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
   await shoot(page, 'placement-moved-to-sidebar')
   await openSettings(page)
-  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps"]')).toHaveCount(0)
 
   // It survives a reload, and the App itself is unchanged by the move: same route,
   // same page, reached from its new row.
@@ -786,8 +786,8 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveAttribute('data-shown', 'false')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await openSettings(page)
-  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps"]')).toHaveCount(0)
 
   // The choice is NOT browser-local. App preferences ride the ui-prefs mirror
   // (config/share/ui-prefs.json) so it follows you to another window. Assert the

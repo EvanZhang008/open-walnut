@@ -52,7 +52,7 @@ describe('settings deep links in the app', () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
     const bad: string[] = []
     for (const ref of settingsHashRefs()) {
-      const r = resolvePane(`#${ref.hash}`, [])
+      const r = resolvePane(`#${ref.hash}`)
       // `known` is the verdict: an unknown hash lands on General, but so does a
       // deliberate row link into General (`#session-panels`), and that one is fine.
       if (!r.known) bad.push(`${ref.file}: #${ref.hash} -> ${r.paneId}`)

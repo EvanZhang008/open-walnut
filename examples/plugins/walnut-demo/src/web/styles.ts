@@ -127,7 +127,9 @@ export const DEMO_CSS = `
 .wd-facts { display: grid; gap: 6px; margin: 0; }
 .wd-facts > div { display: flex; gap: 10px; justify-content: space-between; align-items: baseline; font-size: 12px; }
 .wd-facts dt { color: var(--fg-muted); }
-.wd-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.wd-facts dt { flex: none; }
+.wd-facts dd { margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.wd-facts .wd-chip { white-space: normal; }
 
 .wd-tokens { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin: 0; padding: 0; list-style: none; }
 .wd-tokens li { display: flex; gap: 8px; align-items: center; min-width: 0; }

@@ -19,7 +19,7 @@ export function DemoSettings(props: { demo: DemoContext }) {
     <div className="wd-root wd-settings" data-testid="plugin-demo-settings">
       <Card
         title="Walnut Plugin Demo"
-        hint="A settings contribution renders inside the host's own settings page."
+        hint="A settings contribution renders on this plugin's page in Apps."
       >
         <Facts
           rows={[

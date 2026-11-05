@@ -11,7 +11,6 @@ import { useAppCatalog } from '@/apps/hooks';
 import { SettingsGroup, SettingsNotice, SettingsLoadingRow, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
-import { usePluginUi } from '@/plugins/hooks';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/page-use.css';
 
@@ -34,7 +33,6 @@ function lastDays(days: Record<string, number>, n: number, now: number): number 
 
 export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneName> }) {
   const apps = useAppCatalog();
-  const pluginUi = usePluginUi();
   const [armed, setArmed] = useState(false);
   const [store, setStore] = useState<VisitStore | null>(null);
   const [loading, setLoading] = useState(false);
@@ -48,10 +46,8 @@ export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneNam
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  const places = useMemo(() => knownPlaces(apps.all, [
-    ...corePanes,
-    ...pluginUi.settings.map((entry) => ({ id: entry.key, label: entry.value.label })),
-  ]), [apps.all, corePanes, pluginUi.settings]);
+  // Settings holds Walnut's own panes only; a plugin's settings are on its page in Apps.
+  const places = useMemo(() => knownPlaces(apps.all, corePanes), [apps.all, corePanes]);
   const now = Date.now();
   const opened = useMemo(() => {
     if (!store) return [];

@@ -6,9 +6,9 @@ import { PHONES_CLOUD_TABS } from '../../web/src/components/settings/settings-wa
 import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'
 
 const EXPECTED_IDS = [
-  // No `plugin-store` (Plugins) and no `apps` row: every plugin and App lives on the
-  // Apps page (/apps). The nav's Plugins group links there (SettingsNav) and the old
-  // `#plugin-store` hash forwards there (SettingsPage).
+  // No `plugin-store` (Plugins) and no `apps` row: every plugin, its settings panels and
+  // every App live on the Apps page (/apps), and Settings has no Plugins group at all. The
+  // old `#plugin-store` and `#<plugin>:<panel>` hashes forward there (SettingsPage).
   // No `repositories` row for now either: the feature is hidden until ready
   // (ReposSection and its API stay; only the Settings entry is gone).
   'hooks',
@@ -55,15 +55,10 @@ describe('core settings registry', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS.find((entry) => entry.id === 'plugin-store')).toBeUndefined()
   })
 
-  it('keeps the Manage / Plugins / Configure / Diagnostics split', () => {
+  it('keeps the Manage / Configure / Diagnostics split', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'manage')
       .map((entry) => entry.id)).toEqual(['hooks'])
-    // The Plugins group has no core section now: the nav fills it with the Apps link
-    // and the plugins' own settings panels (Apps live on the Sidebar or the Apps page).
-    expect(CORE_SETTINGS_CONTRIBUTIONS
-      .filter((entry) => entry.group === 'plugins')
-      .map((entry) => entry.id)).toEqual([])
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'configure')
       .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(1, -DIAGNOSTICS_IDS.length))

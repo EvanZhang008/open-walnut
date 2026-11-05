@@ -9,6 +9,10 @@
  * history entry (Back leaves Settings in one step), and a hash naming a folded
  * section opens its owner and holds that section in view for a bounded time.
  * On a phone it is two layers, list then pane (usePhoneSettingsPane).
+ *
+ * No plugin has a pane here: a plugin's settings panels live on its page in Apps
+ * (PluginDetail). An old `#<plugin>:<panel>` link or bookmark, and `#plugin-store`,
+ * forward to that page (settingsHashMovedTo).
  */
 import {
   Component,
@@ -23,20 +27,17 @@ import {
 } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
-import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { SettingsNav, useSettingsNavModel, type SettingsNavModel } from '@/components/settings/SettingsNav'
 import { SettingsGroup, SettingsRow, SettingsSection } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
-import { APPS_PATH, LEGACY_PLUGINS_HASH } from '@/utils/open-link'
 import { SettingsBuildLine } from '@/components/settings/SettingsBuildLine'
 import { SettingsPaneBack } from '@/components/settings/SettingsPaneBack'
 import type { SaveSectionOptions } from '@/components/settings/core-settings-registry'
 import {
   DEFAULT_PANE_ID,
-  isCorePane,
-  pluginIdOfKey,
   resolvePane,
   sectionsForPane,
+  settingsHashMovedTo,
   tabParent,
 } from '@/components/settings/settings-routing'
 import {
@@ -47,9 +48,7 @@ import {
   useSettingsSaveNotifier,
 } from '@/components/settings/settings-pane-context'
 import { useSettingsConfig } from '@/hooks/useSettingsConfig'
-import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
-import { pluginUiRegistry } from '@/plugins/registry'
-import { appRegistry } from '@/apps/registry'
+import '@/plugins/dev-test-hooks'
 import { log } from '@/utils/log'
 import { usePhoneSettingsPane } from '@/components/settings/usePhoneSettingsPane'
 import '@/styles/phone-settings.css'
@@ -74,16 +73,12 @@ const HOLD_MIN_MS = 2000
 const HOLD_QUIET_MS = 1000
 const HOLD_MAX_MS = 5000
 
-// Dev-only test hooks (the Playwright fixture runs Vite dev): register a fake
-// plugin panel or app, or make one core section throw. Stripped from builds.
+// Dev-only: make one core section throw (the Playwright fixture runs Vite dev).
+// The fake plugin panel and App hooks live in plugins/dev-test-hooks.
 declare global {
   interface Window {
     __walnutSettingsCrash?: string
-    __walnutSettingsTestHooks?: { pluginUiRegistry: typeof pluginUiRegistry; appRegistry: typeof appRegistry }
   }
-}
-if (import.meta.env.DEV && typeof window !== 'undefined') {
-  window.__walnutSettingsTestHooks = { pluginUiRegistry, appRegistry }
 }
 
 function CrashProbe({ sectionId }: { sectionId: string }) {
@@ -214,26 +209,6 @@ function flashRow(el: HTMLElement, strong = false) {
   window.setTimeout(() => row.classList.remove(cls), strong ? 3100 : 1300)
 }
 
-type PaneView =
-  | { kind: 'core'; paneId: string }
-  | { kind: 'plugin'; paneId: string }
-  | { kind: 'plugin-off'; paneId: string; pluginName: string; wentAway: boolean }
-  | { kind: 'pending'; paneId: string }
-
-/** A group standing in for a plugin panel that is not there (plugin off or gone). */
-function PluginOffPane({ view, onOpenPlugins }: { view: Extract<PaneView, { kind: 'plugin-off' }>; onOpenPlugins: () => void }) {
-  const text = view.wentAway
-    ? `This panel went away because ${view.pluginName} is off.`
-    : `This panel is from ${view.pluginName}, which is off.`
-  return (
-    <div className="settings-pane-state" data-testid="settings-plugin-off">
-      <SettingsGroup>
-        <SettingsRow label={text} control={<SettingsButton onClick={onOpenPlugins}>Open Apps</SettingsButton>} />
-      </SettingsGroup>
-    </div>
-  )
-}
-
 function ConfigErrorPane({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="settings-pane-state settings-pane-state-centered" data-testid="settings-config-error">
@@ -250,7 +225,6 @@ function ConfigErrorPane({ message, onRetry }: { message: string; onRetry: () =>
 
 export function SettingsPage() {
   const model = useSettingsNavModel()
-  const runtime = useWebPluginRuntime()
   const location = useLocation()
   // Router navigations update location.hash; a native `#x` link (or code
   // setting window.location.hash) fires hashchange. Either one drives the pane.
@@ -262,61 +236,30 @@ export function SettingsPage() {
   }, [])
   useEffect(() => setNativeHash(window.location.hash), [location.hash])
   const hash = nativeHash
-  // Plugins moved to the Apps page; an old `#plugin-store` link (a notification, a
-  // bookmark, an install link) lands there instead of on General.
-  const movedToApps = hash === `#${LEGACY_PLUGINS_HASH}`
+  // Plugins live on the Apps page: an old `#plugin-store` or `#<plugin>:<panel>` link (a
+  // notification, a bookmark, a plugin's own link) lands on that plugin's page there.
+  const movedTo = settingsHashMovedTo(hash)
 
-  const resolved = useMemo(
-    () => resolvePane(hash, model.pluginKeys, { silent: !model.ready }),
-    [hash, model.pluginKeys, model.ready],
-  )
+  const resolved = useMemo(() => resolvePane(hash), [hash])
+  const paneId = resolved.paneId
 
-  // Plugin names seen this session, so a panel that disappears can say whose it was.
-  const seenPlugins = useRef(new Map<string, string>())
-  for (const [key, info] of model.pluginPanes) {
-    seenPlugins.current.set(key, info.pluginName)
-    seenPlugins.current.set(info.pluginId, info.pluginName)
-  }
-
-  const view: PaneView = useMemo(() => {
-    if (resolved.known) return { kind: isCorePane(resolved.paneId) ? 'core' : 'plugin', paneId: resolved.paneId }
-    const key = hash.replace(/^#/, '')
-    const decoded = (() => { try { return decodeURIComponent(key) } catch { return key } })()
-    const pluginId = pluginIdOfKey(decoded)
-    const seenName = seenPlugins.current.get(decoded)
-    if (seenName) return { kind: 'plugin-off', paneId: decoded, pluginName: seenName, wentAway: true }
-    // Only a `<plugin>:<panel>` key can still turn up once the runtime answers.
-    if (!model.ready && pluginId) return { kind: 'pending', paneId: DEFAULT_PANE_ID }
-    if (pluginId) {
-      const installed = runtime.plugins.some((p) => p.id === pluginId)
-        || runtime.errors.some((p) => p.id === pluginId)
-        || runtime.tombstones.some((p) => p.id === pluginId)
-      if (installed) {
-        return { kind: 'plugin-off', paneId: decoded, pluginName: seenPlugins.current.get(pluginId) ?? pluginId, wentAway: false }
-      }
-    }
-    return { kind: 'core', paneId: DEFAULT_PANE_ID }
-  }, [resolved, hash, model.ready, runtime.plugins, runtime.errors, runtime.tombstones])
-
-  // Local page-use counts (Settings > Page use): one visit per pane shown. A plugin
-  // panel's `<plugin>:<panel>` key is spelled with `~` (the visit key allows no `:`).
-  const visitKey = view.kind === 'core' || view.kind === 'plugin' ? settingsVisitKey(view.paneId) : null
+  // Local page-use counts (Settings > Page use): one visit per pane shown.
+  const visitKey = movedTo ? null : settingsVisitKey(paneId)
   useEffect(() => { recordVisit(visitKey) }, [visitKey])
 
   // <Navigate>, not navigate() in a layout effect: on a first load that effect runs before
   // the router subscribes to history, so the URL changed and the screen stayed on Settings.
-  if (movedToApps) return <Navigate to={APPS_PATH} replace />
-  const leadSectionId = view.kind === 'core' || view.kind === 'plugin' ? view.paneId : null
+  if (movedTo) return <Navigate to={movedTo} replace />
   return (
-    <SettingsPaneProvider paneId={view.paneId} leadSectionId={leadSectionId} metaFor={model.metaFor}>
-      <SettingsPageLayout model={model} view={view} targetId={resolved.known ? resolved.targetId : null} rowTarget={!!resolved.row} hash={hash} />
+    <SettingsPaneProvider paneId={paneId} leadSectionId={paneId} metaFor={model.metaFor}>
+      <SettingsPageLayout model={model} paneId={paneId} targetId={resolved.targetId} rowTarget={!!resolved.row} hash={hash} />
     </SettingsPaneProvider>
   )
 }
 
 interface LayoutProps {
   model: SettingsNavModel
-  view: PaneView
+  paneId: string
   targetId: string | null
   /** `targetId` is one row reached by deep link (ROW_TARGETS): land it a third
    *  down and flash it, as a Find a setting hit does. */
@@ -324,15 +267,13 @@ interface LayoutProps {
   hash: string
 }
 
-function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutProps) {
+function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: LayoutProps) {
   const { config, loading, error, saveSection, reload } = useSettingsConfig()
-  const pluginUi = usePluginUi()
   const navigate = useNavigate()
   const { notifySaved, notifySaveFailed } = useSettingsSaveNotifier()
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
-  const paneId = view.paneId
-  const meta = model.metaFor(view.kind === 'plugin-off' ? DEFAULT_PANE_ID : paneId) ?? model.metaFor(DEFAULT_PANE_ID)!
+  const meta = model.metaFor(paneId) ?? model.metaFor(DEFAULT_PANE_ID)!
 
   // Saves are booked to the pane that was showing when the save STARTED:
   // the wrapper is rebuilt per pane, so a late result lands on its own pane.
@@ -411,7 +352,7 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
     return () => { document.title = previous }
   }, [])
   // A tab is named by its entry (the tab bar names the tab): "Phones & Cloud" in the phone bar and the window.
-  const titleLabel = view.kind === 'plugin-off' ? view.pluginName : model.metaFor(tabParent(paneId) ?? paneId)?.label ?? meta.label
+  const titleLabel = model.metaFor(tabParent(paneId) ?? paneId)?.label ?? meta.label
   useEffect(() => {
     document.title = `Settings: ${titleLabel}`
   }, [titleLabel])
@@ -432,7 +373,7 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
   }, [targetId, scroller, paneId])
 
   const configReady = !!config
-  const paneReady = view.kind === 'plugin' || (view.kind === 'core' && configReady)
+  const paneReady = configReady
 
   // A deep link to a folded section (or a lead) holds it in view while the pane settles.
   useEffect(() => {
@@ -455,36 +396,7 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
 
   let body: ReactNode = null
   let labelled = false
-  if (view.kind === 'plugin-off') {
-    body = <PluginOffPane view={view} onOpenPlugins={() => navigate(APPS_PATH)} />
-  } else if (view.kind === 'plugin') {
-    const entry = pluginUi.settings.find((e) => e.key === paneId)
-    if (entry) {
-      const PluginSettings = entry.value.component
-      labelled = true
-      body = (
-        <SettingsSection
-          key={`${entry.key}:${entry.generation}`}
-          id={entry.key}
-          title={entry.value.label}
-          description={`Provided by the ${entry.pluginName} plugin.`}
-          className="plugin-settings-section"
-          data-plugin-id={entry.pluginId}
-        >
-          <SettingsGroup className="settings-plugin-group">
-            <div className="settings-plugin-body">
-              <PluginBoundary pluginId={entry.pluginId} pluginName={entry.pluginName} resetKey={entry.generation}>
-                <PluginSettings />
-              </PluginBoundary>
-            </div>
-          </SettingsGroup>
-        </SettingsSection>
-      )
-    }
-  } else if (view.kind === 'pending') {
-    // A hash that may name a plugin panel still registering: hold a quiet skeleton.
-    body = <SettingsPaneSkeleton meta={meta} />
-  } else if (!config && loading) {
+  if (!config && loading) {
     body = slow ? <SettingsPaneSkeleton meta={meta} /> : null
   } else if (!config) {
     body = error ? <ConfigErrorPane message={error} onRetry={() => { void reload() }} /> : null
@@ -498,7 +410,6 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
     ))
   }
 
-  const activeNav = view.kind === 'pending' ? DEFAULT_PANE_ID : paneId
   return (
     <div className="settings-container">
       <div
@@ -506,7 +417,7 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
         ref={layoutRef}
         data-phone-settings={phonePane.layer}
       >
-        <SettingsNav model={model} activePane={activeNav} onOpenPane={onOpenPane} />
+        <SettingsNav model={model} activePane={paneId} onOpenPane={onOpenPane} />
         <div
           ref={setScroller}
           className="settings-pane settings-content"
@@ -516,10 +427,10 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
           aria-label={labelled ? undefined : `Settings: ${titleLabel}`}
         >
           <SettingsPaneStickyBar />
-          <div className="settings-pane-inner" key={`${view.kind}:${paneId}`}>
-            {view.kind === 'core' && <SettingsPaneBack paneId={paneId} metaFor={model.metaFor} />}
+          <div className="settings-pane-inner" key={paneId}>
+            <SettingsPaneBack paneId={paneId} metaFor={model.metaFor} />
             {body}
-            {(labelled || view.kind === 'plugin-off') && <SettingsBuildLine />}
+            {labelled && <SettingsBuildLine />}
             {anchorRoom > 0 && <div className="settings-pane-anchor-room" aria-hidden="true" style={{ height: anchorRoom }} />}
           </div>
         </div>

@@ -86,15 +86,15 @@ export interface SyncFailureNotice {
   title: string;
   /** One or two human sentences. */
   body: string;
-  /** Button the card carries; the sign-in and config cases point at the Apps page (via Settings' forward, which an older window also understands). */
+  /** Button the card carries; the sign-in and config cases open the plugin's own page in Apps, where its settings and sign-in are. */
   action?: { label: string; to: string };
   /** The provider's own code, for the log line only. */
   code?: string;
 }
 
-/** Where the console shows a plugin's account link and config. */
-export function pluginSettingsPath(_pluginId: string): string {
-  return '/settings#plugin-store';
+/** Where the console shows a plugin's account link and config: its page in Apps. */
+export function pluginSettingsPath(pluginId: string): string {
+  return `/apps?plugin=${encodeURIComponent(pluginId)}`;
 }
 
 /**

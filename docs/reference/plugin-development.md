@@ -553,7 +553,7 @@ Rules worth knowing:
 
 - A failure rejects with an Error whose `code` says why (`ai_unconfigured`, `ai_disabled`, `ai_budget`, `ai_timeout`, `ai_format`, ...) and whose message can be shown to the person as it is.
 - `context` is read as data, never as instructions. `format` asks for one JSON value; the answer is parsed into `json` and checked for its types and required fields, with one retry on a direct call.
-- The user sees what your plugin spent this month in Settings, Plugins, sets its monthly budget there (10 dollars by default) and can turn its AI off. A plugin runs at most 2 agent runs at once; more wait their turn.
+- The user sees what your plugin spent this month on its page in Apps, sets its monthly budget there (10 dollars by default) and can turn its AI off. A plugin runs at most 2 agent runs at once; more wait their turn.
 - Deadlines: 60 seconds for a direct answer, 10 minutes for an agent run. `timeoutMs` can only lower them.
 - Agent runs use Claude Code today; on a machine whose default engine is another one they still run on Claude Code when it is installed.
 - `model.fastText` stays for older plugins; new code uses `ai.run`.
@@ -1056,7 +1056,7 @@ Three things stay your choice. A modal `<dialog>` still makes the whole page ine
 
 ### Settings, CSS, and pages
 
-`walnut.ui.settings` adds a section to the Settings page. `walnut.ui.injectCss` adds an owner-tagged stylesheet that Walnut removes when the plugin unloads. Scope your selectors to a class you own, because the stylesheet is global while it is mounted.
+`walnut.ui.settings` adds a settings panel to your plugin's page in Apps, under Settings, above the form your `configSchema` describes. That page is the one home of a plugin's settings and sign-in; no plugin has a row or a page in Settings, and an old `/settings#<plugin>:<panel>` link opens the panel there. `walnut.ui.injectCss` adds an owner-tagged stylesheet that Walnut removes when the plugin unloads. Scope your selectors to a class you own, because the stylesheet is global while it is mounted.
 
 ```tsx compile=web-settings
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
@@ -1372,7 +1372,7 @@ Do not ship a dependency as `bundledDependencies` (or `bundleDependencies`). bun
 
 Walnut runs `bun info` and `bun add` for an npm source, each with a package cache of its own, so a version a private registry re-published installs as it is now. bun reads the registry, auth and `cafile` from `~/.npmrc` (or `NPM_CONFIG_USERCONFIG`) itself, but not the network settings, so Walnut hands those on when the environment sets none: `https-proxy` (or `proxy`) as `HTTPS_PROXY`, `proxy` as `HTTP_PROXY`, `noproxy` as `NO_PROXY`, and `strict-ssl=false` as `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 
-A plugin whose `~/.open-walnut/plugins/<id>` is a symlink into a git checkout (what `walnut-plugin link` or a hand-made `ln -s` produces) is a **linked** plugin. Its row in Settings, Plugins shows the checkout, branch, commit, and whether the tree has uncommitted changes, with two buttons: **Check** fetches and reports how many commits the checkout is behind and ahead (a fetch that fails, offline or without access, is reported as such, never as "up to date"), and **Update** fast-forwards the checkout and hot-reloads every plugin linked out of it. Update refuses a dirty or diverged tree (409 `{ code: "dirty" | "diverged" }`) rather than touching your work. The same two operations are `POST /api/plugin-runtime/<id>/linked/check` and `POST /api/plugin-runtime/<id>/linked/update`.
+A plugin whose `~/.open-walnut/plugins/<id>` is a symlink into a git checkout (what `walnut-plugin link` or a hand-made `ln -s` produces) is a **linked** plugin. Its page in Apps shows the checkout, branch, commit, and whether the tree has uncommitted changes, with two buttons: **Check** fetches and reports how many commits the checkout is behind and ahead (a fetch that fails, offline or without access, is reported as such, never as "up to date"), and **Update** fast-forwards the checkout and hot-reloads every plugin linked out of it. Update refuses a dirty or diverged tree (409 `{ code: "dirty" | "diverged" }`) rather than touching your work. The same two operations are `POST /api/plugin-runtime/<id>/linked/check` and `POST /api/plugin-runtime/<id>/linked/update`.
 
 Discovery and reload are different operations: `POST /api/plugin-runtime/discover` only picks up a plugin id the host has not loaded yet, so a plugin that is already loaded keeps the module it was loaded from and the answer comes back with `alreadyLoaded: true` plus a `note` saying so. After you change the files of a plugin that is already running, call `POST /api/plugin-runtime/<id>/reload` instead, which is what `walnut-plugin dev` does on every save.
 

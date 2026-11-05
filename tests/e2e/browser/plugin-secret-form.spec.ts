@@ -150,13 +150,13 @@ async function selectLine(box: Locator, n: number): Promise<void> {
 }
 
 /**
- * Away to Settings and back to the Apps page through its Apps link, so the page mounts
- * again, then the plugin's card again: its detail page reads the stored settings afresh.
+ * Away to Settings and back to the Apps page through the sidebar's Apps entry, so the page
+ * mounts again, then the plugin's card again: its detail page reads the stored settings afresh.
  */
 async function reopenPluginForm(page: Page): Promise<Locator> {
   await page.locator('.sidebar-nav a[href^="/settings"]').click()
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 60_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await openPluginDetail(page, fixture!.pluginId)
   return page.getByTestId(`plugin-config-${fixture!.pluginId}`)
@@ -172,12 +172,20 @@ async function openSettings(page: Page, pane: string): Promise<void> {
   await page.getByTestId(pane).click()
 }
 
+/** The app's entry page once, then the sidebar's Apps entry; every step after it is a click. */
+async function openApps(page: Page): Promise<void> {
+  await page.goto(`http://127.0.0.1:${fixture!.port}/`)
+  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 90_000 })
+  if (await page.locator('.sidebar.collapsed').count()) await page.locator('.sidebar-collapse-btn').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
+}
+
 /**
- * Plugins live on the Apps page; Settings' Apps entry links there. The settings form is on
- * the plugin's detail page, always shown, so opening its card is all it takes.
+ * Plugins live on the Apps page, the sidebar's own entry. The settings form is on the
+ * plugin's detail page, always shown, so opening its card is all it takes.
  */
 async function openPluginForm(page: Page): Promise<Locator> {
-  await openSettings(page, 'settings-nav-plugin-store')
+  await openApps(page)
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await openPluginDetail(page, fixture!.pluginId)
   const form = page.getByTestId(`plugin-config-${fixture!.pluginId}`)

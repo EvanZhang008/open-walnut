@@ -257,10 +257,11 @@ test('an App an older build filed in Settings opens from Apps only, and Settings
   await expect(page.getByTestId('sidebar-core-app-apps')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0, { timeout: 15_000 })
 
-  // Settings has no App rows any more: only the way to the Apps page.
+  // Settings has no App and no plugin rows, and no way to Apps either: Apps is on the sidebar.
   await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-plugin-store')).toHaveCount(0)
+  await expect(page.locator('.settings-nav a[href^="/apps"]')).toHaveCount(0)
 
   const tile = await appTileOnApps(page)
   await expect(tile).toHaveAttribute('data-shown', 'false')

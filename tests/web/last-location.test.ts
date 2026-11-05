@@ -59,6 +59,17 @@ describe('rememberLocation + linkTargetFor', () => {
     expect(linkTargetFor('/settings', s)).toBe('/settings');
   });
 
+  it("a remembered plugin panel (now on its Apps page) sends the Settings link to Settings", () => {
+    const s = fakeStore();
+    rememberLocation(at('/settings', '', '#slack-public-mcp:settings'), s);
+    expect(linkTargetFor('/settings', s)).toBe('/settings');
+    rememberLocation(at('/settings', '', `#${encodeURIComponent('walnut-demo:demo')}`), s);
+    expect(linkTargetFor('/settings', s)).toBe('/settings');
+    // A Walnut pane is still remembered.
+    rememberLocation(at('/settings', '', '#sessions'), s);
+    expect(linkTargetFor('/settings', s)).toBe('/settings#sessions');
+  });
+
   it('a later visit with NO state overwrites the remembered one (the user cleared it)', () => {
     const s = fakeStore();
     rememberLocation(at('/calendar', '?view=month'), s);

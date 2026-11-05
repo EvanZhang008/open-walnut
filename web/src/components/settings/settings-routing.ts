@@ -2,16 +2,29 @@
  * Pane routing for /settings (pure; re-exported from SettingsNav).
  *
  * A pane is one visible nav entry plus every navHidden section folded under it
- * (NAV_OWNER). The URL hash names either a pane, a folded section (open its
- * owner, then scroll to it) or a plugin panel key. Anything else opens General
- * and is logged, never an error screen.
+ * (NAV_OWNER). The URL hash names either a pane or a folded section (open its
+ * owner, then scroll to it). A plugin panel key (`<plugin>:<panel>`) is no pane:
+ * it forwards to the plugin's page in Apps (legacyPluginTarget). Anything else
+ * opens General and is logged, never an error screen.
  */
 import { log } from '@/utils/log'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import type { FilterEntry } from './settings-filter'
 import { WAY_PANES, wayPaneForRow } from './settings-way-panes'
+import { legacyPluginTarget } from './settings-legacy-links'
 
 export { WAY_PANES, wayPaneForRow } from './settings-way-panes'
+export { legacyPluginTarget } from './settings-legacy-links'
+
+/**
+ * Where a Settings hash goes when it is no Settings place but an old link to a plugin
+ * (`#plugin-store`, `#<plugin>:<panel>`), else null. A hash Walnut's own panes answer
+ * (a host row whose alias holds a `:`, say) always stays in Settings.
+ */
+export function settingsHashMovedTo(hash: string): string | null {
+  if (resolvePane(hash, { silent: true }).known) return null
+  return legacyPluginTarget(hash)
+}
 
 export const DEFAULT_PANE_ID = 'general'
 /** Mirrors HOST_ROW_ID_PREFIX in utils/host-settings-nav.ts (kept local: this file stays import-light). */
@@ -123,15 +136,10 @@ function decodeHash(hash: string): string {
 }
 
 /**
- * `hash` -> which pane shows and what to scroll to.
- * `silent` skips the unknown-hash warning (used before the plugin runtime is
- * ready, when a plugin key may simply not have registered yet).
+ * `hash` -> which pane shows and what to scroll to. `silent` skips the
+ * unknown-hash warning.
  */
-export function resolvePane(
-  hash: string,
-  pluginKeys: readonly string[] = [],
-  opts: { silent?: boolean } = {},
-): ResolvedPane {
+export function resolvePane(hash: string, opts: { silent?: boolean } = {}): ResolvedPane {
   const id = decodeHash(hash)
   if (!id) return { paneId: DEFAULT_PANE_ID, targetId: null, known: true }
   const owner = NAV_OWNER[id]
@@ -152,7 +160,6 @@ export function resolvePane(
   if (id.startsWith(HINT_ROW_PREFIX) && id.length > HINT_ROW_PREFIX.length) {
     return { paneId: NAV_OWNER.sessions ?? 'sessions', targetId: id, known: true, row: true }
   }
-  if (pluginKeys.includes(id)) return { paneId: id, targetId: null, known: true }
   if (!opts.silent) log.warn('settings', 'unknown settings hash', { hash })
   return { paneId: DEFAULT_PANE_ID, targetId: null, known: false }
 }
@@ -162,6 +169,7 @@ export function pluginIdOfKey(key: string): string | null {
   const i = key.indexOf(':')
   return i > 0 ? key.slice(0, i) : null
 }
+
 
 /**
  * Find-a-setting metadata for one core pane: the lead's label, title,

@@ -10,7 +10,7 @@ import {
 import { CORE_PANE_IDS, corePaneFilterEntry } from '../../web/src/components/settings/settings-routing.js'
 
 // Nav order: the Manage page links and the Apps link first, then every core pane in registry order.
-const PAGE_LINKS: FilterEntry[] = ['agents', 'skills', 'commands', 'memory', 'apps'].map((id) => ({
+const PAGE_LINKS: FilterEntry[] = ['agents', 'skills', 'commands', 'memory'].map((id) => ({
   key: `link:${id}`,
   kind: 'link',
   label: id[0].toUpperCase() + id.slice(1),
@@ -65,10 +65,9 @@ describe('Find a setting matcher', () => {
     expect(keys('notify')).toContain('tasks')
   })
 
-  it('sends plugin words to the Apps page link', () => {
-    // Inbox Triage (it reads Slack) may rank first for `slack`; the Apps link is still a hit.
-    expect(keys('slack')).toContain('link:apps')
-    expect(primaryHit(filterEntries(ENTRIES, 'plugin'))?.key).toBe('link:apps')
+  it('has no Apps link to find: a plugin is never in Settings (the nav points a search to Apps)', () => {
+    expect(keys('slack')).not.toContain('link:apps')
+    expect(keys('plugin')).not.toContain('link:apps')
   })
 
   it('finds idle in Sessions only, with its row label', () => {

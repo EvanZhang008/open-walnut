@@ -23,7 +23,11 @@ import { isolateUiPrefs } from './todo-panel-helpers'
  *   4. The page opens on the plugins, those with a screen first, then those that run in
  *      the background; Built in comes last. A category chip narrows the plugins; the search
  *      box says when nothing matches, and Clear search brings everything back.
- *   5. The old Settings deep link (`/settings#plugin-store`) forwards here.
+ *   5. The old Settings deep link (`/settings#plugin-store`) forwards here, and Settings has
+ *      no Plugins group and no Apps link.
+ *   5b. A plugin's own settings panels (`walnut.ui.settings`) are on its page here, under
+ *      Settings, never in Settings; an old `/settings#<plugin>:<panel>` link opens that
+ *      panel here, even when the panel registers after the page opened.
  *   6. Make your own: Build it waits for a description, and the by-hand route shows the
  *      command that works today (from a clone; the plugin tools are not on npm yet).
  *
@@ -381,12 +385,79 @@ test('the old Settings deep link to Plugins forwards to the Apps page', async ({
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('sidebar-core-app-apps')).toHaveClass(/\bactive\b/)
 
-  // Settings' Plugins group still leads here, as a link labelled Apps.
+  // Settings has no Plugins group and no Apps link: Apps is its own sidebar entry.
   await page.getByTestId('sidebar-core-app-settings').click()
-  const link = page.getByTestId('settings-nav-plugin-store')
-  await expect(link).toBeVisible({ timeout: 30_000 })
-  await expect(link).toContainText('Apps')
-  await link.click()
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-plugin-store')).toHaveCount(0)
+  await expect(page.locator('.settings-nav-group[data-group="plugins"]')).toHaveCount(0)
+  await expect(page.locator('.settings-nav a[href^="/apps"]')).toHaveCount(0)
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page).toHaveURL(/\/apps$/)
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
+})
+
+type PanelHooks = { pluginUiRegistry: { registerSettings: (id: string, name: string, v: { id: string; label: string; component: unknown }) => { dispose(): void } } }
+type PanelWindow = Window & { __walnutSettingsTestHooks?: PanelHooks; __panelDisposers?: Array<{ dispose(): void }> }
+
+/** Two panels for walnut-time, as a plugin's web part registers them (dev-only hook). */
+async function registerTimePanels(page: Page): Promise<void> {
+  await page.waitForFunction(() => !!(window as PanelWindow).__walnutSettingsTestHooks, undefined, { timeout: 60_000 })
+  await page.evaluate(() => {
+    const w = window as PanelWindow
+    const text = (label: string) => () => label
+    const hooks = w.__walnutSettingsTestHooks!.pluginUiRegistry
+    w.__panelDisposers = [
+      hooks.registerSettings('walnut-time', 'Time', { id: 'account', label: 'Account', component: text('Signed in as fixture@example.invalid') }),
+      hooks.registerSettings('walnut-time', 'Time', { id: 'tracking', label: 'Tracking', component: text('Tracks the focused window') }),
+    ]
+  })
+}
+
+test("a plugin's settings panels are on its page in Apps, and an old Settings link opens them there", async ({ page }) => {
+  await home(page)
+  await openApps(page)
+  await openPluginDetail(page, 'walnut-time')
+  await registerTimePanels(page)
+  const group = page.getByTestId('plugin-settings-walnut-time')
+  await expect(group).toBeVisible()
+  await expect(group.getByTestId('plugin-panel-walnut-time:account')).toContainText('Signed in as fixture@example.invalid')
+  // Two panels: each one wears its own label.
+  await expect(group.locator('.plugin-settings-panel-title')).toHaveText(['Account', 'Tracking'])
+
+  // Settings has no row for either panel.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('settings-nav-general')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('[data-testid^="settings-nav-walnut-time"]')).toHaveCount(0)
+  await expect(page.locator('.settings-nav-group[data-group="plugins"]')).toHaveCount(0)
+
+  // An old bookmark to one panel: the page opens on the plugin, and the panel, registered
+  // only after the page loaded (a plugin's web part starts late), is scrolled to and flashed.
+  // A fresh document (a bookmark opened cold), not a hash change on the open Settings page.
+  await page.goto('about:blank')
+  await page.goto(`http://127.0.0.1:${fixture!.port}/settings#walnut-time:tracking`)
+  await expect(page).toHaveURL(/\/apps\?plugin=walnut-time&panel=tracking$/, { timeout: 60_000 })
+  await expect(page.getByTestId('plugin-detail')).toHaveAttribute('data-plugin-id', 'walnut-time', { timeout: 60_000 })
+  await registerTimePanels(page)
+  const tracking = page.getByTestId('plugin-panel-walnut-time:tracking')
+  await expect(tracking).toHaveClass(/settings-anchor-flash-strong/, { timeout: 10_000 })
+  await expect(tracking).toBeInViewport()
+  await expect(page.getByTestId('sidebar-core-app-apps')).toHaveClass(/\bactive\b/)
+})
+
+test("a plugin panel that throws stays inside its own box; the rest of the plugin's page works", async ({ page }) => {
+  await home(page)
+  await openApps(page)
+  await openPluginDetail(page, 'walnut-time')
+  await page.waitForFunction(() => !!(window as PanelWindow).__walnutSettingsTestHooks, undefined, { timeout: 60_000 })
+  await page.evaluate(() => {
+    const w = window as PanelWindow
+    const boom = () => { throw new Error('fixture panel crash') }
+    w.__panelDisposers = [w.__walnutSettingsTestHooks!.pluginUiRegistry.registerSettings('walnut-time', 'Time', { id: 'broken', label: 'Broken', component: boom })]
+  })
+  const panel = page.getByTestId('plugin-panel-walnut-time:broken')
+  await expect(panel.locator('.plugin-error-boundary')).toContainText('Time failed to render')
+  await expect(page.getByTestId('plugin-about-walnut-time')).toBeVisible()
+  await expect(page.getByTestId('plugin-row-walnut-time')).toBeVisible()
+  await page.evaluate(() => (window as PanelWindow).__panelDisposers?.forEach((d) => d.dispose()))
+  await expect(panel).toHaveCount(0)
 })

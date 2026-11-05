@@ -8,7 +8,8 @@
  * `?app=<key>`), which holds the switch, the settings, the parts, where the code comes
  * from and Update. The grid stays mounted under it, so going back keeps its place.
  *
- * Plugins used to live in Settings (`#plugin-store`), which still forwards here.
+ * Plugins used to live in Settings (`#plugin-store`, and a plugin's own panel at
+ * `#<plugin>:<panel>`), which still forward here (settings-routing legacyPluginTarget).
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -34,6 +35,7 @@ import {
   useSettingsSaveNotifier,
 } from '@/components/settings/settings-pane-context'
 import type { Config } from '@open-walnut/core'
+import '@/plugins/dev-test-hooks'
 import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
 import '@/styles/apps-page.css'
@@ -132,7 +134,7 @@ function AppsPageBody() {
         <div className="apps-page-inner apps-page-inner--detail">
           <div className="apps-detail-saved"><SettingsSavedIndicator placement="header" /></div>
           {pluginId && config ? (
-            <PluginDetail store={store} pluginId={pluginId} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} />
+            <PluginDetail store={store} pluginId={pluginId} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} focusPanel={params.get('panel')} />
           ) : pluginId ? (
             <SettingsLoadingRow>Loading plugin...</SettingsLoadingRow>
           ) : (
@@ -145,7 +147,7 @@ function AppsPageBody() {
           <span className="apps-hero-icon" aria-hidden="true"><AppsIcon size={26} /></span>
           <div className="apps-hero-text">
             <h1>Apps</h1>
-            <p>What Walnut can do. Open one to set it up and see where it comes from.</p>
+            <p>Every app and plugin Walnut has. Open one for its settings, its sign-in and where it comes from.</p>
           </div>
           {/* One indicator, in whichever view is showing (the grid stays mounted, hidden). */}
           {!detailOpen && <SettingsSavedIndicator placement="header" />}

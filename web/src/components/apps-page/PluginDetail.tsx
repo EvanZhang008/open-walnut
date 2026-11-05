@@ -1,7 +1,8 @@
 /**
  * One plugin's page on the Apps page, the way a store shows one app: its name, what it
  * does and its switch on top, then the App it adds, its settings (always open here, never
- * expanded inside a list), the plugins that are its parts, where its code comes from
+ * expanded inside a list: the plugin's own panels from `walnut.ui.settings`, its sign-in
+ * among them, then the form its manifest describes; no plugin has a place in Settings), the plugins that are its parts, where its code comes from
  * (kind, folder, remote, branch), whether it is current, and Remove.
  *
  * A plugin that is a part of another (`slack-mcp` of Slack) has a page too, reached from
@@ -37,10 +38,13 @@ import { isRunning, originKind, partParents, type RegistryRow } from './plugin-s
 import type { PluginStore } from './usePluginStore'
 import { ExposeGuide } from './ExposeGuide'
 import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProviderRulesGroup'
+import { PluginSettingsPanels, usePluginSettingsPanels } from './PluginSettingsPanels'
 
-export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen }: {
+export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, focusPanel }: {
   store: PluginStore
   pluginId: string
+  /** A panel an old Settings link named (`?panel=`): scrolled to once it shows. */
+  focusPanel?: string | null
   config: Config
   onSave: (partial: Partial<Config>) => Promise<void>
   onBack: () => void
@@ -69,11 +73,12 @@ export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen }
   }
   // Keyed by plugin: moving to another plugin's page (a part, a dependency) must never carry
   // this one's armed Remove along with it.
-  return <PluginDetailBody key={row.id} store={store} row={row} config={config} onSave={onSave} onBack={onBack} onOpen={onOpen} back={back} />
+  return <PluginDetailBody key={row.id} store={store} row={row} config={config} onSave={onSave} onBack={onBack} onOpen={onOpen} back={back} focusPanel={focusPanel} />
 }
 
-function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: {
+function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, focusPanel }: {
   store: PluginStore
+  focusPanel?: string | null
   row: RegistryRow
   config: Config
   onSave: (partial: Partial<Config>) => Promise<void>
@@ -99,6 +104,11 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
   // A plugin whose App draws its own settings keeps them there, so the form has one home.
   // Falls back to the form here when the App is not registered (its web entry failed).
   const settingsApp = row.settingsIn === 'app' ? apps[0] : undefined
+  // The panels the plugin draws itself (`walnut.ui.settings`): registered while its web part runs.
+  const panels = usePluginSettingsPanels(row.id)
+  const ownPanels = row.installed && panels.length > 0
+  // The manifest's form, unless the App holds it, or the plugin's own panels are all it has.
+  const showForm = !settingsApp && (row.configurable || !ownPanels)
   const connection = store.connections[row.id]
   const connectionBadge = connection && connection.state !== 'connected' ? CONNECTION_BADGE[connection.state] : null
   const warning = failed && reason ? firstSentence(reason)
@@ -108,9 +118,9 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
   const lead = firstSentence(row.description)
   const tagline = lead && plainText(row.description ?? '').trim().replace(/[.!?]$/, '') !== lead.replace(/[.!?]$/, '') ? lead : ''
 
-  const settings = row.installed && (row.configurable || settingsApp) ? (
+  const settings = row.installed && (row.configurable || settingsApp || ownPanels) ? (
     <SettingsGroup heading="Settings" className="apps-detail-group" data-testid={`plugin-settings-${row.id}`}>
-      {settingsApp ? (
+      {settingsApp && (
         <SettingsRow
           label={`Its settings are in the ${settingsApp.title} App`}
           control={
@@ -119,7 +129,9 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
             </SettingsButton>
           }
         />
-      ) : (
+      )}
+      {ownPanels && <PluginSettingsPanels panels={panels} pluginName={row.name} focusPanel={focusPanel} />}
+      {showForm && (
         <div className="settings-addons-rows plugin-store-config" data-testid={`plugin-config-${row.id}`}>
           <PluginConfigCards
             config={config}
@@ -128,7 +140,8 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
             bare
             renderEmpty={(why) => (why === 'loading'
               ? <SettingsLoadingRow>Loading settings...</SettingsLoadingRow>
-              : <SettingsRow label={why === 'failed' ? "Couldn't load its settings" : 'Nothing to set up'} help={why === 'failed' ? 'Reload the page to try again.' : undefined} />)}
+              : ownPanels ? null
+                : <SettingsRow label={why === 'failed' ? "Couldn't load its settings" : 'Nothing to set up'} help={why === 'failed' ? 'Reload the page to try again.' : undefined} />)}
           />
         </div>
       )}

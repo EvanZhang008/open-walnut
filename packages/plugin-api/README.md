@@ -99,7 +99,7 @@ export function activate(walnut: WalnutWebApi) {
 | Member | Purpose |
 | --- | --- |
 | `walnut.ui.app(contribution)` | register an App; returns a handle with `path`, `setBadge(value)`, `dispose()` |
-| `walnut.ui.settings(contribution)` | add a section to the Settings page |
+| `walnut.ui.settings(contribution)` | add a settings panel to your plugin's page in Apps |
 | `walnut.ui.injectCss(css)` | add an owner-tagged stylesheet, removed on unload |
 | `walnut.ui.page(contribution)` | a standalone console route that is not an App |
 | `walnut.ui.views` | `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box; optional), `ContentActions` (Talk to CEO and New task as buttons; optional) |

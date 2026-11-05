@@ -375,33 +375,17 @@ async function registerPanel(page: Page, pluginId: string, pluginName: string, l
   }, { pluginId, pluginName, label, mode })
 }
 
-test('C37: a plugin panel gets a pane header; a crashing panel stays inside its boundary', async ({ page }) => {
+test('C37: a plugin settings panel has no Settings row; its old link opens the plugin page in Apps', async ({ page }) => {
   await openSettings(page)
   await registerPanel(page, 'fixture-alpha', 'Fixture Alpha', 'Alpha Panel')
-  await clickNav(page, 'fixture-alpha:panel')
-  await expect(page.locator('.settings-pane-title')).toHaveText('Alpha Panel')
-  await expect(page.locator('.settings-pane-desc')).toHaveText('Provided by the Fixture Alpha plugin.')
-  await expect(page.locator('.settings-plugin-body')).toContainText('Alpha Panel body')
-  await registerPanel(page, 'fixture-beta', 'Fixture Beta', 'Beta Panel', 'throw')
-  await page.getByTestId(NAV('fixture-beta:panel')).click()
-  await expect(page.locator('.settings-pane-title')).toHaveText('Beta Panel')
-  await expect(page.locator('.settings-plugin-body')).not.toContainText('Beta Panel body')
-  await expect(page.locator('.settings-nav')).toBeVisible()
-  await clickNav(page, 'general')
-  expect(await mountedSections(page)).toEqual(['general'])
-})
-
-test('C82: a plugin panel that goes away says so, with a way back to Apps', async ({ page }) => {
-  await openSettings(page)
-  await registerPanel(page, 'fixture-gamma', 'Fixture Gamma', 'Gamma Panel')
-  await clickNav(page, 'fixture-gamma:panel')
-  await page.evaluate(() => (window as HookWindow).__fixtureDisposers!['fixture-gamma'].dispose())
-  const off = page.getByTestId('settings-plugin-off')
-  await expect(off).toContainText('This panel went away because Fixture Gamma is off.')
-  await expect(page).toHaveURL(/#fixture-gamma:panel$/)
-  await off.getByRole('button', { name: 'Open Apps' }).click()
-  await expect(page).toHaveURL(/\/apps$/)
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId(NAV('general'))).toBeVisible()
+  await expect(page.getByTestId(NAV('fixture-alpha:panel'))).toHaveCount(0)
+  await expect(page.locator('.settings-nav-group[data-group="plugins"]')).toHaveCount(0)
+  await expect(page.getByTestId(NAV('plugin-store'))).toHaveCount(0)
+  // A bookmark or a plugin's own link to the old pane lands on that plugin's page in Apps.
+  await page.evaluate(() => { window.location.hash = '#fixture-alpha:panel' })
+  await expect(page).toHaveURL(/\/apps\?plugin=fixture-alpha&panel=panel$/, { timeout: 20_000 })
+  await expect(page.getByTestId('plugin-detail')).toBeVisible({ timeout: 20_000 })
 })
 
 test('C38: a crashing core section shows its own shell and Try again', async ({ page }) => {
@@ -566,26 +550,18 @@ test('C70: one Clear button and no native search chrome', async ({ page, browser
 })
 
 test('C69: a slow plugin runtime does not move the Configure group', async ({ page }) => {
-  await openSettings(page)
-  // Let the nav learn (and cache) how many plugin rows this fixture has.
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem('walnut.settings.nav.pluginCount')), { timeout: 20_000 }).not.toBeNull()
+  // Settings has no plugin rows to wait for, so nothing above Configure lands late.
   await page.route('**/api/plugin-runtime', async (route) => {
     await new Promise((r) => setTimeout(r, 1000))
     return route.continue()
   })
-  await page.reload()
+  await openSettings(page)
   const sessions = page.getByTestId(NAV('sessions'))
   await expect(sessions).toBeVisible({ timeout: 30_000 })
   const firstY = (await sessions.boundingBox())!.y
   await page.waitForTimeout(2500)
   const laterY = (await sessions.boundingBox())!.y
   expect(Math.abs(laterY - firstY)).toBeLessThanOrEqual(1)
-  // No cache: the first frame shows only the Plugins row in its group, then the cache is written.
-  await page.evaluate(() => window.localStorage.removeItem('walnut.settings.nav.pluginCount'))
-  await page.reload()
-  await expect(sessions).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.settings-nav-placeholder')).toHaveCount(0)
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem('walnut.settings.nav.pluginCount')), { timeout: 20_000 }).not.toBeNull()
 })
 
 test('C74: deep links hold their target while slow content above it grows', async ({ page }) => {
@@ -614,7 +590,7 @@ test('C74: deep links hold their target while slow content above it grows', asyn
   expect(Math.abs((await pane.evaluate((el) => el.scrollTop)) - afterWheel)).toBeLessThanOrEqual(2)
 })
 
-test('C75: nav tiles stay distinct with plugin panels, and plugin Apps get no Settings row', async ({ page }) => {
+test('C75: nav tiles stay distinct, and plugin panels and Apps get no Settings row', async ({ page }) => {
   await openSettings(page)
   await page.waitForFunction(() => !!(window as HookWindow).__walnutSettingsTestHooks)
   await page.evaluate(() => {
@@ -627,9 +603,11 @@ test('C75: nav tiles stay distinct with plugin panels, and plugin Apps get no Se
       hooks.pluginUiRegistry.registerSettings(id, name, { id: 'panel', label: name, component: () => null })
     }
   })
-  await expect(page.locator('[data-testid^="settings-nav-fixture-panel-"]')).toHaveCount(2)
-  // Apps declared off the Sidebar open from the Apps page, never from this nav.
-  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
+  await expect(page.getByTestId(NAV('general'))).toBeVisible()
+  // A plugin's panels are on its page in Apps, and Apps declared off the Sidebar open from
+  // the Apps page: never from this nav.
+  await expect(page.locator('[data-testid^="settings-nav-fixture-panel-"]')).toHaveCount(0)
+  await expect(page.locator('.settings-nav a[href^="/apps"]')).toHaveCount(0)
   const tileKeys = () => page.$$eval('.settings-nav-list .settings-nav-item[data-testid] .settings-pane-tile', (els) =>
     els.map((el) => `${getComputedStyle(el).backgroundColor}|${el.getAttribute('data-glyph') ?? el.textContent}`))
   const keys = await tileKeys()
@@ -697,38 +675,39 @@ test('evidence: pane screenshots at 1280, 900 and 860 wide', async ({ page, brow
   await page.screenshot({ path: `/tmp/settings-redesign/after/p2-rail-overlay-860-${browserName}.png` })
 })
 
-test('C83 + C64: the second group reads Plugins; slack puts Plugins first', async ({ page }) => {
+test('C83 + C64: no Plugins group; slack finds Walnut panes and points to Apps', async ({ page }) => {
   await openSettings(page)
   const labels = await page.locator('.settings-nav-group-label').allTextContents()
-  expect(labels).toEqual(['Manage', 'Plugins', 'Configure', 'Diagnostics'])
+  expect(labels).toEqual(['Manage', 'Configure', 'Diagnostics'])
   expect(await page.locator('.settings-nav-group-label').first().evaluate((el) => getComputedStyle(el).textTransform)).toBe('none')
   await page.getByTestId('settings-filter').fill('slack')
-  await expect.poll(async () => (await visibleNavKeys(page))[0]).toBe(NAV('plugin-store'))
-  // That first row is a link to the Apps page; Enter opens the highlighted row, and the
-  // filter highlights the first matching PANE (Integrations holds the Slack token).
+  await expect(page.getByTestId('settings-filter-apps-hint')).toBeVisible()
+  expect(await visibleNavKeys(page)).not.toContain(NAV('plugin-store'))
+  // Enter opens the highlighted row: a Walnut pane (Inbox Triage reads Slack).
   const highlighted = page.locator('.settings-nav-item.is-highlighted')
   await expect(highlighted).toHaveCount(1)
   const target = await highlighted.getAttribute('data-testid')
-  expect(target).not.toBe(NAV('plugin-store'))
   await page.getByTestId('settings-filter').press('Enter')
   await expect(page.getByTestId(target!)).toHaveAttribute('aria-current', 'page')
 })
 
-test('C82: a deep link to an installed plugin that is off says so after the runtime answers', async ({ page }) => {
-  await page.route('**/api/plugin-runtime', async (route) => {
+test('C82: a deep link to an installed plugin that is off opens its page in Apps', async ({ page }) => {
+  await page.route('**/api/plugin-runtime/registry', async (route) => {
     try {
       const res = await route.fetch()
-      const json = await res.json() as { plugins?: Array<{ id: string; state: string }> }
-      json.plugins = [...(json.plugins ?? []), { id: 'fixture-off', state: 'disabled' }]
+      const json = await res.json() as { rows?: Array<Record<string, unknown>> }
+      const template = json.rows?.find((r) => r.installed) ?? {}
+      json.rows = [...(json.rows ?? []), { ...template, id: 'fixture-off', name: 'Fixture Off', installed: true, status: 'disabled', state: 'disabled', builtin: false }]
       await route.fulfill({ response: res, json })
     } catch {
       /* the page closed mid-refresh at the end of the test */
     }
   })
-  await openSettings(page, '#fixture-off:panel')
-  const off = page.getByTestId('settings-plugin-off')
-  await expect(off).toContainText('This panel is from fixture-off, which is off.', { timeout: 20_000 })
-  await expect(page.locator('#general.settings-section')).toHaveCount(0)
+  await page.goto('/settings#fixture-off:panel')
+  await expect(page).toHaveURL(/\/apps\?plugin=fixture-off&panel=panel$/, { timeout: 20_000 })
+  const detail = page.getByTestId('plugin-detail')
+  await expect(detail).toHaveAttribute('data-plugin-id', 'fixture-off', { timeout: 20_000 })
+  await expect(detail.locator('h1')).toHaveText('Fixture Off')
   await page.unrouteAll({ behavior: 'ignoreErrors' })
 })
 

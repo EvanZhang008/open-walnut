@@ -348,6 +348,18 @@
 .apps-install-consent { color: var(--fg-muted); font-size: 12.5px; max-width: 360px; }
 .apps-detail-group { margin-bottom: 14px; }
 .apps-detail-box:empty { display: none; }
+/* A long fact (a remote path) drops under its label at any width instead of squeezing the
+   label to one letter a line, and its Copy stays on screen; a short one stays beside it. */
+.apps-fact { flex-wrap: wrap; row-gap: 4px; }
+.apps-fact > .settings-row-copy { flex: 0 0 auto; }
+.apps-fact > .settings-row-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; margin-left: auto; }
+.apps-fact-value, .apps-fact-value code { min-width: 0; }
+
+/* A plugin's own settings panel (walnut.ui.settings), inside its Settings group. */
+.plugin-settings-panel { padding: 12px 16px; min-width: 0; overflow-wrap: anywhere; scroll-margin-top: 64px; }
+.plugin-settings-panel + .plugin-settings-panel,
+.settings-row + .plugin-settings-panel { border-top: 1px solid var(--settings-hairline); }
+.plugin-settings-panel-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--fg); }
 .apps-about { padding: 12px 16px; }
 .apps-about p { margin: 0; line-height: 1.55; color: var(--fg); }
 .apps-about-adds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
@@ -533,6 +545,8 @@
   .apps-detail-head .plugin-icon--xl, .apps-detail-head .apps-builtin-icon { width: 56px !important; height: 56px !important; }
   .apps-app-switch-label { display: none; }
   .apps-fact-value { text-align: left; max-width: 100%; }
+  /* A plugin's own panel gets the page's width back on a phone. */
+  .plugin-settings-panel { padding: 10px 12px; }
   .apps-make { padding: 18px; }
   .apps-make-ask { flex-direction: column; align-items: stretch; padding: 8px; }
 }

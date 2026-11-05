@@ -236,24 +236,6 @@ export function tileKey(tint: string, mark: string): string {
   return `${tint.toUpperCase()}|${mark}`
 }
 
-/**
- * Tint for a plugin tile: hashed from the plugin id, then shifted along
- * PLUGIN_TINTS until (tint, mark) is not already taken. Adds its own key.
- */
-export function assignPluginTint(pluginId: string, mark: string, taken: Set<string>): string {
-  const start = hashPluginId(pluginId) % PLUGIN_TINTS.length
-  for (let i = 0; i < PLUGIN_TINTS.length; i++) {
-    const tint = PLUGIN_TINTS[(start + i) % PLUGIN_TINTS.length]
-    const key = tileKey(tint, mark)
-    if (!taken.has(key)) {
-      taken.add(key)
-      return tint
-    }
-  }
-  // Six tints all taken for this mark: accept the hashed one (never throw in a nav).
-  return PLUGIN_TINTS[start]
-}
-
 /** First letter (or digit) of a plugin name, uppercased: the monogram mark. */
 export function monogramFor(name: string): string {
   const m = name.trim().match(/[\p{L}\p{N}]/u)
