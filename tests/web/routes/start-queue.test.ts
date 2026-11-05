@@ -20,7 +20,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
-import { MAX_RUNNING_SUBTASKS, SubtaskLimitError } from '../../../src/core/sessions/subtask-limits.js'
+import { MAX_RUNNING_SUBTASKS, MAX_RUNNING_SUBTASKS_USER_ASKED, SubtaskLimitError } from '../../../src/core/sessions/subtask-limits.js'
 import { startSessionForTask } from '../../../src/core/sessions/task-start.js'
 import { drainStartQueue } from '../../../src/core/sessions/start-queue.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
@@ -132,6 +132,27 @@ describe('the start queue', () => {
     }, { timeout: 10_000, interval: 200 })
     expect(spawned).toContain(plain)
     expect((await getTask(plain)).last_start?.state).toBe('started')
+  })
+
+  it('a start the user asked for is not held back by older plain starts the lower cap refuses', async () => {
+    // 2026-11-04: three older plain starts at the cap of 8 kept a user-asked start queued for
+    // hours with 15 of 16 running, because the first refusal stopped the whole line.
+    const { task: parent } = await addTask({ title: 'Lead past both caps', project: 'queue' })
+    const running = await children(parent.id, Array(MAX_RUNNING_SUBTASKS_USER_ASKED).fill('IN_PROGRESS'))
+    const sid = await sessionFor(parent.id)
+    const [olderA, olderB, asked, askedLater] = await children(parent.id, ['TODO', 'TODO', 'TODO', 'TODO'])
+    for (const id of [olderA, olderB]) expect((await startAs(sid, id, { message: 'plain' })).json.queued).toBeTruthy()
+    for (const id of [asked, askedLater]) {
+      expect((await startAs(sid, id, { message: 'asked', user_request: 'please start this one now, I am waiting' })).json.queued).toBeTruthy()
+    }
+
+    // One slot frees: under 16, still over 8. The user-asked one goes, the plain ones wait.
+    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
+    const drained = await drainStartQueue(parent.id)
+    expect(drained.started).toEqual([asked])
+    expect(drained.waiting.sort()).toEqual([olderA, olderB, askedLater].sort())
+    expect((await getTask(olderA)).start_queue).toBeTruthy()
+    expect((await getTask(askedLater)).start_queue).toBeTruthy()
   })
 
   it("a person's start clears a queued entry", async () => {

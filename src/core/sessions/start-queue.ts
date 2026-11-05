@@ -10,7 +10,8 @@
  * Order: highest task priority first (immediate, important, unset, backlog), then the oldest
  * queued. The replay is the same start as asked, run as the asking session's start with source
  * `start-queue`; such a start is never queued again: at the cap it throws as before, and the
- * drain stops for that parent until the next slot frees.
+ * drain stops for that parent's starts under that cap until the next slot frees (a start the user
+ * asked for runs under the higher one, so it still goes when only the lower cap is full).
  *
  * Lifecycle: a start through startSessionForTask clears its entry, and the drain drops one whose task
  * has a session that began after it was queued (the web's Start, the phone, a quick start); a COMPLETE
@@ -199,21 +200,30 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
   const { SubtaskLimitError, admitSubtaskStart } = await import('./subtask-limits.js');
   for (const line of lines.values()) {
     line.sort(queueOrder);
+    // A start the user asked for runs under the higher ceiling, so one refused at the lower cap
+    // must not hold it back (2026-11-04: three older plain starts at the cap of 8 kept a user-asked
+    // start queued for hours with 15 of 16 running). A full cap stops only the starts it caps.
+    const full = new Set<boolean>();
     for (let i = 0; i < line.length; i++) {
       const t = line[i];
       const entry = t.start_queue!;
+      const userAsked = !!entry.params.userRequest;
+      if (full.has(userAsked)) { out.waiting.push(t.id); continue; }
       // Admitted against the parent itself, not through the caller's session: a caller session
       // that is gone would otherwise fail open and start every entry over the cap at once.
       let release = () => {};
       try {
-        release = await admitSubtaskStart(entry.parent_id, t.id, undefined, { userAsked: !!entry.params.userRequest });
+        release = await admitSubtaskStart(entry.parent_id, t.id, undefined, { userAsked });
         await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE });
         out.started.push(t.id);
         log.session.info('queued start started', { taskId: t.id, parentId: entry.parent_id, queuedAt: entry.at });
       } catch (err) {
         if (err instanceof SubtaskLimitError && err.code === 'too_many_running_subtasks') {
-          out.waiting.push(...line.slice(i).map((x) => x.id));
-          break;
+          out.waiting.push(t.id);
+          full.add(userAsked);
+          // The higher ceiling full means the lower one is too.
+          if (userAsked) full.add(false);
+          continue;
         }
         if (err instanceof SessionExistsError) {
           await clearStartQueue(t.id, 'already started');
