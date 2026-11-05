@@ -16,6 +16,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { vaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -46,16 +47,7 @@ function startSites(): Promise<void> {
 }
 
 async function session(page: Page): Promise<string> {
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const go = () => st.setUp
-    ? page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  let r = await go()
-  // Another spec on the shared fixture may be unlocking at the same moment.
-  for (let i = 0; i < 10 && r.status() === 429; i++) { await page.waitForTimeout(1000); r = await go() }
-  for (let i = 0; i < 10 && !r.ok() && /unlock_busy/.test(await r.text()); i++) { await page.waitForTimeout(1000); r = await go() }
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return vaultSession(page, base, { password: MASTER })
 }
 
 async function seed(page: Page, key: string, item: Record<string, unknown>): Promise<void> {

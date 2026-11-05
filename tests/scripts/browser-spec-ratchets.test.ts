@@ -1732,3 +1732,70 @@ describe('a test that opens a threads fixture session', () => {
     expect(offendersOf(viaHelper, one)).toEqual([])
   })
 })
+
+describe('the shared fixture vault is opened through one helper', () => {
+  // Specs that share one fixture server unlock its vault at the same moment, and the server
+  // checks one master password at a time: the second is `429 unlock_busy` with a `waitMs`, and
+  // a setup that lost the race is `409 vault_exists` (2026-11-05: extension-agent failed on CI
+  // with unlock_busy; each spec had its own helper, most without a retry). Every route that
+  // checks the master password (vault-v1.ts handlers that run under `attempt`) is busy the
+  // same way, so the class is read from the routes, not listed: vault-session-helper.ts waits
+  // those answers out, and a spec reaches those routes only through it. A spec may still watch
+  // the unlock UI's own requests (waitForResponse, route).
+  const HELPER = 'vault-session-helper.ts'
+  const routesSrc = fs.readFileSync(path.resolve(__dirname, '../../src/web/routes/vault-v1.ts'), 'utf8')
+  const checkedRoutes = (src: string): string[] => src.split(/\n(?=vaultV1Router\.)/)
+    .map((part) => ({ m: /^vaultV1Router\.(?:post|put|patch|delete)\('([^']+)'/.exec(part), part }))
+    .filter(({ m, part }) => m && /\battempt\(/.test(part))
+    .map(({ m }) => m![1]!)
+  const CHECKED = checkedRoutes(routesSrc)
+  const routeRe = new RegExp(`(?:${CHECKED.map((r) => r.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')).join('|')})\\b`)
+  const WATCHES = /waitForResponse|waitForRequest|\.route\(|\.url\(\)/
+  const offendersOf = (text: string, re = routeRe): string[] => text.split('\n').flatMap((line, i) => {
+    const t = line.trim()
+    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) return []
+    if (/\bvaultCheckedRequest\(/.test(line)) return []
+    return re.test(line) && !WATCHES.test(line) ? [`${i + 1}: ${t.slice(0, 110)}`] : []
+  })
+
+  it('reads the password-checked routes from vault-v1.ts', () => {
+    expect(CHECKED).toEqual(expect.arrayContaining(['/vault/setup', '/vault/unlock', '/vault/hint']))
+    expect(CHECKED).not.toContain('/vault/items')
+    expect(CHECKED).not.toContain('/vault/lock')
+  })
+
+  it('no spec sends a password-checked vault request but through the helper', () => {
+    const helper = sources.find(({ file }) => file === HELPER)
+    expect(helper, `${HELPER} exists`).toBeTruthy()
+    expect(helper!.text).toMatch(/export async function vaultSession\(/)
+    expect(helper!.text).toMatch(/export async function vaultCheckedRequest\(/)
+    // The specs that need a vault session use it (a rename that drops it shows here).
+    const users = sources.filter(({ text }) => text.includes(`from './${HELPER.replace(/\.ts$/, '')}'`)).map(({ file }) => file)
+    expect(users.length).toBeGreaterThanOrEqual(13)
+    expect(sources.filter(({ file }) => file !== HELPER).flatMap(({ file, text }) => offendersOf(text).map((o) => `${file}:${o}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const direct = [
+      'async function session(page: Page): Promise<string> {',
+      '  const r = st.setUp',
+      '    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })',
+      '    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })',
+      '}',
+    ].join('\n')
+    expect(offendersOf(direct)).toHaveLength(2)
+    expect(offendersOf('const U = `${base}/api/v1/vault/unlock`\nawait page.request.post(U, { data })')).toHaveLength(1)
+    expect(offendersOf("await page.evaluate(() => fetch('/api/v1/vault/setup', { method: 'POST' }))")).toHaveLength(1)
+    expect(offendersOf("const r = await p.request.put(`${base}/api/v1/vault/hint`, { data: { hint, password: MASTER } })")).toHaveLength(1)
+    // A route vault-v1.ts gains under `attempt` joins the class by itself.
+    const more = checkedRoutes("vaultV1Router.post('/vault/new-check', async (req, res) => {\n  const r = await attempt(res, work)\n})\nvaultV1Router.post('/vault/plain', async () => {})\n")
+    expect(more).toEqual(['/vault/new-check'])
+    // Through the helper, watching the UI's own unlock, a comment, other routes: fine.
+    expect(offendersOf("const r = await vaultCheckedRequest(p, 'put', `${base}/api/v1/vault/hint`, { data })")).toEqual([])
+    expect(offendersOf("const done = page.waitForResponse((r) => r.url().includes('/api/v1/vault/unlock'))")).toEqual([])
+    expect(offendersOf('// POST /api/v1/vault/unlock answers 429 while another check runs')).toEqual([])
+    expect(offendersOf('await page.request.post(`${base}/api/v1/browser/extension/setup`)')).toEqual([])
+    expect(offendersOf('await page.request.get(`${base}/api/v1/vault/passwords`)')).toEqual([])
+    expect(offendersOf('return vaultSession(page, base, { password: MASTER })')).toEqual([])
+  })
+})

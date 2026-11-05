@@ -19,6 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { parseTotp, totpAt } from '../../../src/core/vault/totp'
+import { vaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -83,12 +84,7 @@ function startSites(): Promise<void> {
 // ── Walnut, through its API ──
 
 async function session(page: Page): Promise<string> {
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const r = st.setUp
-    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return vaultSession(page, base, { password: MASTER })
 }
 
 async function api(page: Page, method: 'GET' | 'POST', p: string, data?: unknown): Promise<any> {

@@ -8,6 +8,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
 import { openPanel, startPanelLab, type PanelLab } from './extension-panel-harness'
+import { vaultCheckedRequest, vaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -26,18 +27,14 @@ async function shot(p: Page, name: string): Promise<void> {
 
 /** A vault session from Walnut itself (set up the vault when nothing did yet). */
 async function webSession(p: Page): Promise<string> {
-  const st = await (await p.request.get(`${lab.base}/api/v1/vault/status`)).json()
-  const r = st.setUp
-    ? await p.request.post(`${lab.base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await p.request.post(`${lab.base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return vaultSession(p, lab.base, { password: MASTER })
 }
 
 async function setHint(hint: string): Promise<void> {
   const p = await lab.ctx.newPage()
   const s = await webSession(p)
-  const r = await p.request.put(`${lab.base}/api/v1/vault/hint`, { headers: { 'x-walnut-vault-session': s }, data: { hint, ...(hint ? { password: MASTER } : {}) } })
+  // A hint with a password is checked like an unlock: busy while another spec unlocks.
+  const r = await vaultCheckedRequest(p, 'put', `${lab.base}/api/v1/vault/hint`, { headers: { 'x-walnut-vault-session': s }, data: { hint, ...(hint ? { password: MASTER } : {}) } })
   expect(r.ok(), await r.text()).toBe(true)
   await p.request.post(`${lab.base}/api/v1/vault/lock`, { headers: { 'x-walnut-vault-session': s }, data: {} })
   await p.close()

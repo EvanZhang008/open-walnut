@@ -635,7 +635,8 @@ test.describe('Open from a browser', () => {
     await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
     const listed = await (await page.request.get('/api/devices')).json() as { devices: Array<{ name: string; createdAt: string; role?: string; info?: { deviceName?: string } }> }
     const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
-    expect(mine.info?.deviceName).toBe('iPhone Home Screen')
+    // " 2" when an earlier run on the same fixture signed one in too (numberedDeviceName).
+    expect(mine.info?.deviceName).toMatch(/^iPhone Home Screen( \d+)?$/)
     await openDevices(page)
     const row = (await backToDevices(page)).locator(`[data-device-name="${mine.name}"]`)
     // " 2" only when an earlier run on the same fixture signed one in too.

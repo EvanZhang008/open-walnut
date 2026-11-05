@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { ensureVaultSetUp } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -53,8 +54,7 @@ test.beforeAll(async ({}, info) => {
   await launch()
   // The fixture's vault, set up when no other spec did (the same master password as theirs).
   const p = await ctx.newPage()
-  const st = await (await p.request.get(`${base}/api/v1/vault/status`)).json()
-  if (!st.setUp) expect((await p.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })).ok()).toBe(true)
+  await ensureVaultSetUp(p, base, { password: MASTER })
   // Connect, as a person does.
   await p.goto(`chrome-extension://${extId}/popup.html`)
   await p.locator('#server').fill(base)

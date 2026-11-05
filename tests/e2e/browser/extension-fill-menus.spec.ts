@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { vaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -76,17 +77,7 @@ function startSites(): Promise<void> {
 }
 
 async function session(p: Page): Promise<string> {
-  for (let i = 0; ; i++) {
-    const st = await (await p.request.get(`${base}/api/v1/vault/status`)).json()
-    const r = st.setUp
-      ? await p.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-      : await p.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-    const text = await r.text()
-    // Another spec on the shared fixture vault unlocks at the same moment: wait and try again.
-    if (!r.ok() && /unlock_busy|setup/.test(text) && i < 20) { await p.waitForTimeout(1000); continue }
-    expect(r.ok(), text).toBe(true)
-    return JSON.parse(text).session.token
-  }
+  return vaultSession(p, base, { password: MASTER })
 }
 
 async function seed(p: Page, item: Record<string, unknown>): Promise<string> {

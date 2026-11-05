@@ -22,6 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { holdApprovalsLock } from './approvals-lock'
+import { vaultSession as openVaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 // It makes and answers approvals on the shared fixture server, where another file clears them.
@@ -79,12 +80,7 @@ async function act(page: Page, body: Record<string, unknown>): Promise<{ status:
 const MASTER = 'Correct Horse Battery Staple 42'
 /** The person's proof in this window: Passwords unlocked (set up first on a fresh server). */
 async function vaultSession(page: Page): Promise<string> {
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const r = st.setUp
-    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return openVaultSession(page, base, { password: MASTER })
 }
 /** The person answers: an Approve carries their proof (an unlocked Passwords session); a no needs none. */
 async function answer(page: Page, id: string, decision: 'approve' | 'deny'): Promise<void> {

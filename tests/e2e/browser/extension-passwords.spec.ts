@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { vaultSession as openVaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -95,15 +96,7 @@ function startSites(): Promise<void> {
 // ── Walnut, through its API (the fixture is this machine's own) ──
 
 async function vaultSession(page: Page): Promise<string> {
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  if (!st.setUp) {
-    const r = await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-    expect(r.ok(), await r.text()).toBe(true)
-    return (await r.json()).session.token
-  }
-  const r = await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return openVaultSession(page, base, { password: MASTER })
 }
 
 async function vaultItems(page: Page): Promise<Array<{ id: string; title: string; username?: string; urls?: string[] }>> {
@@ -194,7 +187,8 @@ test('connect the extension from its popup and the connect page', async () => {
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   ownDevice = (await extensionDevices()).find((n) => !earlier.has(n)) ?? ''
   expect(ownDevice).not.toBe('')
-  await expect(connect.locator('.pw-ext-card p').first()).toHaveText(/^Walnut extension \(Chrome on (Linux|Mac|Windows)\) is connected\./)
+  // " 2", " 7": Walnut numbers a name another device holds (numberedDeviceName), as on the shared fixture.
+  await expect(connect.locator('.pw-ext-card p').first()).toHaveText(/^Walnut extension \(Chrome on (Linux|Mac|Windows)\)( \d+)? is connected\./)
   // Its device: an extension, named for what it is.
   const devices = (await (await connect.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string; info?: { deviceName?: string } }>
   expect(devices.some((d) => d.name.startsWith('extension-') && /^Walnut extension \(Chrome on /.test(d.info?.deviceName ?? ''))).toBe(true)

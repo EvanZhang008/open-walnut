@@ -20,6 +20,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { holdApprovalsLock } from './approvals-lock'
+import { vaultSession as openVaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 // It makes and answers approvals on the shared fixture server, where another file clears them.
@@ -112,12 +113,7 @@ async function answer(page: Page, id: string, decision: 'approve' | 'deny', proo
 }
 /** The person's proof for an approval that needs one (an agent's buy, send or delete): Passwords unlocked in this window. */
 async function vaultSession(page: Page): Promise<string> {
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const r = st.setUp
-    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return openVaultSession(page, base, { password: MASTER })
 }
 
 async function popup(): Promise<Page> {
@@ -558,12 +554,7 @@ test('real input is off until the person turns it on: trusted, dialog and evalua
 
 test('fill_login signs in with the saved login for the page; the agent never sees the password', async () => {
   const page = ctx.pages()[0]
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const opened = st.setUp
-    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  expect(opened.ok(), await opened.text()).toBe(true)
-  const session = (await opened.json()).session.token as string
+  const session = await vaultSession(page)
   const secretPw = `Agent-Fill-${Date.now().toString(36)}`
   const made = await page.request.post(`${base}/api/v1/vault/items`, {
     headers: { 'x-walnut-vault-session': session },

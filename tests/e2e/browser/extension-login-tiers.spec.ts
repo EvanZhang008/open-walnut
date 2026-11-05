@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { vaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -66,11 +67,7 @@ function startSites(): Promise<void> {
 }
 
 async function api(page: Page, method: 'GET' | 'POST', p: string, data?: unknown): Promise<any> {
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  const r0 = st.setUp
-    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  const s = (await r0.json()).session.token
+  const s = await vaultSession(page, base, { password: MASTER })
   const r = method === 'GET'
     ? await page.request.get(`${base}/api/v1${p}`, { headers: { 'x-walnut-vault-session': s } })
     : await page.request.post(`${base}/api/v1${p}`, { headers: { 'x-walnut-vault-session': s }, data })
