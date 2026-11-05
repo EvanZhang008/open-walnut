@@ -247,7 +247,8 @@ test('Place order waits for the person, and runs only after they approve', async
   await con.goto(`${base}/`)
   const card = con.locator(`[data-testid="approval-card"][data-approval-id="${ask.body.request}"]`)
   await expect(card).toBeVisible({ timeout: 30_000 })
-  await expect(card.locator('.approval-who')).toContainText('on this computer')
+  // On Home the card is one line: who asks sits beside the buttons, its full words in the title.
+  await expect(card.locator('.approval-line-who')).toHaveAttribute('title', /on this computer/)
   await expect(card.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0)
   await card.getByTestId('approval-unlock-to-approve').click()
   await card.getByLabel('Master password').fill(MASTER)

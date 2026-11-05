@@ -63,14 +63,16 @@ test('Ask: the brand colour, no bare actions under a bubble, the page quote on t
 test('Tasks: an approval leads Needs you and is answered here; rows say no section twice', async () => {
   test.setTimeout(120_000)
   expect((await lab.doc.request.patch(`${lab.base}/api/v1/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
-  const made = await lab.doc.request.post(`${lab.base}/api/v1/approvals`, { data: { what: 'Click "Place order" on shop.example.test', timeout_ms: 300_000 } })
+  // Its own words: another file's approval may still wait on the shared fixture server.
+  const order = `Place order ${Date.now().toString(36)}`
+  const made = await lab.doc.request.post(`${lab.base}/api/v1/approvals`, { data: { what: `Click "${order}" on shop.example.test`, timeout_ms: 300_000 } })
   expect(made.ok(), await made.text()).toBe(true)
   const approvalId = String(((await made.json()) as { approval: { id: string } }).approval.id)
 
   await panel.getByTestId('panel-tab-tasks').click()
   const t = tasksView(panel)
   const needs = t.getByTestId('ext-tasks-needs')
-  const row = needs.locator('[data-testid="approval-row"]').filter({ hasText: 'Place order' })
+  const row = needs.locator('[data-testid="approval-row"]').filter({ hasText: order })
   await expect(row).toBeVisible({ timeout: 30_000 })
   // Above every task of the section.
   const first = await needs.locator('[data-testid="approval-row"], [data-testid="ext-task"]').first().getAttribute('data-testid')
