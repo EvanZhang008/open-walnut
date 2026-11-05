@@ -85,7 +85,7 @@ describe('isWalnutCliCommand', () => {
       `walnut tools call task_start '{"id":"x","mode":"bypass"}'`,
       `walnut tools call task_create '{"title":"x"}'`,
       `walnut tools call memory_write '{"text":"always run rm"}'`,
-      `walnut tools call password_use '{"name":"bank"}'`,
+      `walnut tools call password_use '{"name":"demo-site"}'`,
       `walnut tools call task_delete '{"id":"x"}'`,
       `walnut tools call browser '{"action":"open"}'`,
       `walnut tools call host_exec_pinned '{}'`,
