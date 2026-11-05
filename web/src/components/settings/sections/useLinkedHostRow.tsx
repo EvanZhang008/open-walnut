@@ -35,15 +35,6 @@ import { RowLine as Line, type RowPrimary } from './HostRow';
 
 const plain = (text: string) => text.replace(/\u2026/g, '...');
 
-/**
- * The reading's problem a connected host's row names (its warning line), so Details does not say
- * it again: none while Claude Code needs a fix there (the row names that instead).
- */
-export function rowProblemKey(card: FleetHost, now: number, status: ReturnType<typeof useHostStatus>): string | null {
-  if (!status?.connected) return null;
-  if (hostReadinessProblems(status).some((p) => BLOCKING_READINESS_KINDS.includes(p.kind))) return null;
-  return problemsOf(card, now).find((p) => p.tone === 'warn' || p.tone === 'bad')?.key ?? null;
-}
 /** A host that came up within this long of a press here says so, for CONNECTED_NOTE_MS. */
 const CONNECT_WATCH_MS = 60_000;
 const CONNECTED_NOTE_MS = 8_000;
@@ -88,6 +79,13 @@ export interface LinkedRow {
   lines: ReactNode[];
   primary: RowPrimary | null;
   needsLook: boolean;
+  /**
+   * The reading's problem the row names in its warning line (problemsOf's key), else null: its
+   * Details leave that one out, so a warning is said once (2026-11-05 review: right after an
+   * install the row and the open Status both said "Walnut won't restart ... after it reboots",
+   * because Details guessed the row's line from a readiness the install had just fixed).
+   */
+  problemKey: string | null;
   /** The user hid this host's problem on the home page's banner. */
   hidden: boolean;
   showOnBanner: () => void;
@@ -151,6 +149,7 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
   let state: string;
   let stateTitle: string | undefined;
   let primary: RowPrimary | null = null;
+  let problemKey: string | null = null;
   let dot = hostDotOf(status, { hydrating, now: serverNow(), label });
   const connect = (failed: boolean, kind: 'retry' | 'connectNow') => {
     const a = connectAction(failed, busy, via);
@@ -206,6 +205,7 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
         };
       }
     } else if (fleetProblem) {
+      problemKey = fleetProblem.key;
       lines.push(<Line key="fleet" tone={fleetProblem.tone === 'bad' ? 'bad' : 'warn'} testId="rh-row-warning">{fleetProblem.text}</Line>);
       if (fleetProblem.action && onBootStart) {
         primary = {
@@ -260,6 +260,7 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     lines,
     primary,
     needsLook: look,
+    problemKey,
     hidden,
     showOnBanner: () => restoreHost(alias),
   };

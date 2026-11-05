@@ -126,6 +126,14 @@ export class PaneRoutes {
   failInvites: Array<{ error: string; code?: string }> = []
   /** The next removals of a joined machine fail, each with this error. */
   failMachineRemoves: string[] = []
+  /** The next secret saves fail, each with this error. */
+  failSecretPuts: string[] = []
+  /**
+   * A host's own secret switch lands at once, as the server's reconcile does a moment later: the
+   * host's copy is the secret's version when it is shared, gone when it is not. Off by default: a
+   * removal stays pending (Alpha box's "Removing it here...").
+   */
+  copyOnShare = false
   /** Links called back with Cancel link: they read back as cancelled. */
   readonly cancelled = new Set<string>()
   readonly servers = [
@@ -364,18 +372,28 @@ export class PaneRoutes {
       }
       return route.fulfill({ json: { ok: true } })
     })
-    await page.route((url) => url.pathname.startsWith('/api/v1/secrets'), (route) => {
+    await page.route((url) => url.pathname.startsWith('/api/v1/secrets'), async (route) => {
       const method = route.request().method()
       if (method === 'GET') return route.fulfill({ json: { active: true, secrets: this.secrets } })
       const call = this.record(route)
       const name = decodeURIComponent(call.path.split('/').pop()!)
+      if (method === 'PUT') await this.pass('secret')
+      const failed = method === 'PUT' ? this.failSecretPuts.shift() : undefined
+      if (failed) return route.fulfill({ status: 502, json: { error: failed } })
       if (method === 'DELETE') this.secrets = this.secrets.filter((s) => s.name !== name)
       const b = (call.body ?? {}) as Record<string, unknown>
       if (method === 'PUT' && !this.secrets.some((s) => s.name === name)) {
         this.secrets = [...this.secrets, { name, description: b.description, hosts: b.hosts, env: b.env ?? undefined, sessions: b.sessions, version: 1, createdAt: Date.now(), updatedAt: Date.now(), copies: {} }]
       } else if (method === 'PUT' && Array.isArray(b.hosts)) {
         // A host's own switch (its Details, This host): the copy goes, or comes, there.
-        this.secrets = this.secrets.map((s) => (s.name === name ? { ...s, hosts: b.hosts } : s))
+        const hosts = b.hosts as string[]
+        this.secrets = this.secrets.map((s) => {
+          if (s.name !== name) return s
+          if (!this.copyOnShare) return { ...s, hosts }
+          const copies = { ...(s.copies as Record<string, unknown>) }
+          for (const h of new Set([...(s.hosts as string[]), ...hosts])) copies[h] = { version: hosts.includes(h) ? s.version : null, at: Date.now() }
+          return { ...s, hosts, copies }
+        })
       }
       return route.fulfill({ json: { ok: true, pending: [] } })
     })

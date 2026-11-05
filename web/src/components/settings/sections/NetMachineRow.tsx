@@ -61,7 +61,7 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
         sessions: card?.sessions.running ?? null, spendUsd: card?.spend?.last30dUsd ?? null, sub,
       }}
       data={{ 'data-net-path': m.path }}
-      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked kind="net" onClose={() => onDetails(false)} />}
+      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked kind="net" rowProblem={live.problemKey} onClose={() => onDetails(false)} />}
     />
   );
 }

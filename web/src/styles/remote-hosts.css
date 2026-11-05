@@ -440,8 +440,3 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 .rh-inline-link:hover { text-decoration: underline; }
 .rh-inline-link:focus-visible,
 .rh-inline-link[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-
-/* ── A secret's Save and Cancel stay in view at the window's foot while its form is taller than
-   the window (Sol review: at 700x800 only Name showed). `clip`, not `hidden`: sticky needs it. ── */
-[data-testid='fleet-secrets'] .settings-group:has(.secret-editor-actions) { overflow: clip; }
-.secret-editor-actions { position: sticky; bottom: 0; z-index: 2; background: var(--settings-group-bg, var(--card-bg)); }

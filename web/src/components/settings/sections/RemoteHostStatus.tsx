@@ -3,7 +3,10 @@
  * connected (HostFailureText, the SAME rendering the banner and the picker use: headline, the
  * server's hint verbatim, SSH output behind a toggle, a real countdown), the last reconnect
  * cause, and what Claude Code needs there. The row above already offers the fix (its one
- * action) and says when the problem is hidden on the banner, so neither repeats here.
+ * action), says when the problem is hidden on the banner, and says the failure's headline as its
+ * state line ("Connecting to Beta box timed out"), so none of them repeats here: the failure starts
+ * with what the row does not say, the hint and the output (2026-11-05 review: a row's warning said
+ * again in its Details).
  *
  * Its own component so a status push re-renders one host, not the section (the section owns
  * the auto-saving host editor the user may be typing in).
@@ -28,7 +31,7 @@ export function RemoteHostDetail({ alias, name }: { alias: string; name?: string
     ? (
       <div className="rh-failure" data-host={alias} data-kind={problem.kind}>
         <HostFailureText
-          headline={problem.headline} hint={problem.hint} summary={problem.summary} kind={problem.kind}
+          headline="" hint={problem.hint} summary={problem.summary} kind={problem.kind}
           retryAt={problem.retryAt} lastFrameAt={status?.at}
         />
       </div>

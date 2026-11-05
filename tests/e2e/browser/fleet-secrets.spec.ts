@@ -91,7 +91,9 @@ test('secrets: add with hosts and env, the value never shown again, rotate, unti
   await editor.getByTestId('secret-save').click()
   await expect(editor).toHaveCount(0)
   expect(puts.at(-1)).toEqual({ name: 'github-read', body: { hosts: ['__local__'], env: 'GH_TOKEN', sessions: true, description: 'GitHub, read only', value: VALUE, create: true } })
-  await expect(row('github-read')).toContainText('This Mac: copied')
+  // This Mac keeps it either way: its clause says its sessions get it (2026-11-05 review), never a copy.
+  await expect(row('github-read')).toContainText('This Mac: given to its sessions')
+  await expect(row('github-read')).not.toContainText('This Mac: copied')
   // The value went up once and is nowhere on the page now.
   expect(await page.content()).not.toContain(VALUE)
 

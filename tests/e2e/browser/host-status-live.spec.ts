@@ -447,8 +447,10 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   await row.getByTestId('rh-row-more').click()
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
   const failure = page.locator(`[data-testid="rh-details"][data-host="${HOST}"] .rh-failure`)
-  await expect(failure.locator('.hft-headline')).toHaveText(`Could not connect to ${HOST_LABEL}`)
+  // The row's state line says the headline; Details start with what it does not say (2026-11-05 review).
   await expect(failure.locator('.hft-hint')).toHaveText('Check the VPN.')
+  await expect(failure.locator('.hft-headline')).toHaveCount(0)
+  await expect(state).toHaveText(`Could not connect to ${HOST_LABEL}`)
   // Settings re-reads /api/config on its own clock; WebKit tears the page down
   // fast enough that one such read is still in flight when the test ends.
   await page.unrouteAll({ behavior: 'ignoreErrors' })

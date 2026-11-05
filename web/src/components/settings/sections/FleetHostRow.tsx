@@ -51,7 +51,7 @@ export function FleetHostRow({ card, now, detailsOpen, onDetails, boot, onBootSt
         rttMs: card.connection.connected ? card.connection.rttMs : null,
         sessions: card.sessions.running, spendUsd: card.spend?.last30dUsd ?? null, sub: card.system?.os ?? '',
       }}
-      panel={detailsOpen && <HostDetails alias={card.host} name={name} card={card} now={now} linked={false} kind={card.local ? 'local' : 'fleet'} onClose={() => onDetails(false)} />}
+      panel={detailsOpen && <HostDetails alias={card.host} name={name} card={card} now={now} linked={false} kind={card.local ? 'local' : 'fleet'} rowProblem={problem?.key ?? null} onClose={() => onDetails(false)} />}
     />
   );
 }

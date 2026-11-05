@@ -5,12 +5,15 @@
  *    in the page's one "need a look" (hostServerLook);
  *  - Secrets > Add refuses an empty Save at its first field, in field order (secretRefusal);
  *  - the network map colours a node as its row says it (topoKind): a host off is off whatever an
- *    old reading said.
+ *    old reading said;
+ *  - round 5 (2026-11-05 review): This Mac keeps every secret either way, so its switch's words
+ *    (copyLine, copiesLine) are about its sessions, never a copy or a send; other hosts keep theirs.
  */
 import { describe, expect, it } from 'vitest'
-import { grantSummary } from '../../web/src/components/settings/sections/HostThisPart'
+import { copyLine, grantSummary } from '../../web/src/components/settings/sections/HostThisPart'
 import { hostServerLook, hostServerLookWords } from '../../web/src/components/settings/sections/host-settings-data'
-import { secretRefusal } from '../../web/src/components/settings/sections/SecretsGroup'
+import { copiesLine, secretRefusal } from '../../web/src/components/settings/sections/SecretsGroup'
+import type { FleetSecret } from '../../web/src/api/secrets'
 import { topoKind } from '../../web/src/components/settings/sections/HostFleetTopology'
 import type { HostServerEntry } from '../../web/src/components/settings/sections/host-servers-status'
 import type { RowReport } from '../../web/src/components/settings/sections/host-row-model'
@@ -76,5 +79,63 @@ describe('topoKind: a node as its row says it', () => {
     expect(topoKind(row({ needsLook: true }))).toBe('warn')
     expect(topoKind(row({}))).toBe('connected')
     expect(topoKind(row({ local: true, online: false }))).toBe('connected')
+  })
+})
+
+describe('copyLine: where a secret stands on one host, in that host\'s words', () => {
+  const at = T
+  const states = (local: boolean) => ({
+    on: copyLine({ version: 2, at }, 2, true, local),
+    off: copyLine(undefined, 2, false, local),
+    turningOn: copyLine(undefined, 2, true, local),
+    turningOff: copyLine({ version: 2, at }, 2, false, local),
+    failedOn: copyLine({ version: null, at, error: 'the helper did not answer' }, 2, true, local),
+    stuckOff: copyLine({ version: 2, at, error: 'the helper did not answer' }, 2, false, local),
+    savingOn: copyLine(undefined, 2, false, local, true),
+    savingOff: copyLine({ version: 2, at }, 2, true, local, true),
+  })
+  it('this Mac: its sessions get it or not, never a copy or a send', () => {
+    const s = states(true)
+    expect(s).toEqual({
+      on: 'Sessions here get it.',
+      off: 'Not given to sessions here.',
+      turningOn: 'Turning on...',
+      turningOff: 'Turning off...',
+      failedOn: 'Not given to sessions here yet: the helper did not answer',
+      stuckOff: 'Sessions here still get it: it could not be taken back (the helper did not answer).',
+      savingOn: 'Turning on...',
+      savingOff: 'Turning off...',
+    })
+    for (const line of Object.values(s)) expect(line).not.toMatch(/cop(y|ied)|send/i)
+  })
+  it('another host: its copy, sent and removed', () => {
+    expect(states(false)).toEqual({
+      on: 'Copied here.',
+      off: 'Not copied here.',
+      turningOn: 'Sending it here...',
+      turningOff: 'Removing it here...',
+      failedOn: 'Not copied yet: the helper did not answer',
+      stuckOff: 'Still here: removed once it connects (the helper did not answer).',
+      savingOn: 'Sending it here...',
+      savingOff: 'Removing it here...',
+    })
+  })
+  it('an older copy is not the current one', () => {
+    expect(copyLine({ version: 1, at }, 2, true, true)).toBe('Turning on...')
+    expect(copyLine({ version: 1, at }, 2, true, false)).toBe('Sending it here...')
+  })
+})
+
+describe('copiesLine: the secrets list says This Mac in session words', () => {
+  const label = (h: string) => (h === '__local__' ? 'This Mac' : h === 'devbox' ? 'Alpha box' : h)
+  const secret = (over: Partial<FleetSecret>): FleetSecret => ({ name: 'github-read', hosts: [], version: 2, copies: {}, createdAt: T, updatedAt: T, ...over } as FleetSecret)
+  it('given, turning on, refused, still given, turning off', () => {
+    expect(copiesLine(secret({ hosts: ['__local__', 'devbox'], copies: { __local__: { version: 2, at: T }, devbox: { version: 2, at: T } } }), label))
+      .toBe('This Mac: given to its sessions; Alpha box: copied')
+    expect(copiesLine(secret({ hosts: ['__local__'] }), label)).toBe('This Mac: turning on')
+    expect(copiesLine(secret({ hosts: ['__local__'], copies: { __local__: { version: null, at: T, error: 'no answer' } } }), label)).toBe('This Mac: not given to its sessions yet (no answer)')
+    expect(copiesLine(secret({ copies: { __local__: { version: 2, at: T, error: 'no answer' } } }), label)).toBe('This Mac: its sessions still get it (no answer)')
+    expect(copiesLine(secret({ copies: { __local__: { version: 2, at: T } } }), label)).toBe('This Mac: turning off')
+    expect(copiesLine(secret({ copies: { __local__: { version: null, at: T } } }), label)).toBe('Kept on this Mac only: no session gets it until you tick a host')
   })
 })

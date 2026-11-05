@@ -302,7 +302,13 @@ export function useHostSettingsLook(host: string | undefined): string | null {
   const entry = ctx.servers.data?.hosts.find((h) => h.hostKey === host);
   if (entry && hostServerLook(entry, !!ctx.servers.errors[host])) return hostServerLookWords(entry, ctx.servers.errors[host]);
   const stuck = (ctx.secrets.state?.secrets ?? []).find((s) => !s.deletedAt && s.hosts.includes(host) && !!s.copies[host]?.error);
-  if (stuck) return `The secret ${stuck.name} is not copied here yet: ${stuck.copies[host]!.error}. Details, This host has it.`;
+  // This Mac keeps the secret either way: what is stuck is giving it to its sessions.
+  if (stuck) {
+    const why = stuck.copies[host]!.error;
+    return host === '__local__'
+      ? `Sessions here do not get the secret ${stuck.name} yet: ${why}. Details, This host has it.`
+      : `The secret ${stuck.name} is not copied here yet: ${why}. Details, This host has it.`;
+  }
   return null;
 }
 

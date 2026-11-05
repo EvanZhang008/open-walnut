@@ -296,7 +296,7 @@ export function RemoteHostSshRow(props: Props) {
       panel={
         <>
           {edit}
-          {detailsOpen && linked && <HostDetails alias={host.alias} name={name} card={card} now={now} linked={host.enabled} profile kind="ssh" onClose={() => props.onDetails(false)} />}
+          {detailsOpen && linked && <HostDetails alias={host.alias} name={name} card={card} now={now} linked={host.enabled} profile kind="ssh" rowProblem={live.problemKey} onClose={() => props.onDetails(false)} />}
         </>
       }
     />

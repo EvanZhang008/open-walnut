@@ -67,10 +67,13 @@ describe('connect failure (C6, C27, C78)', () => {
     expect(text(line + detail)).not.toContain("isn't reachable right now")
   })
 
-  it('the detail block is the shared HostFailureText: headline by kind + the hint verbatim, SSH output behind a toggle', () => {
+  it('the detail block is the shared HostFailureText: the hint verbatim, SSH output behind a toggle; the headline is the row\'s', () => {
     const { line, detail } = row(auth)
     expect(detail).toContain('class="rh-failure"')
-    expect(text(detail)).toContain('Could not connect to Key box')
+    // The headline by kind is the row's state line, said once (2026-11-05 review: again in Details).
+    expect(text(line)).toContain('Could not connect to Key box')
+    expect(text(detail)).not.toContain('Could not connect to Key box')
+    expect(detail).not.toContain('hft-headline')
     expect(detail).toContain('<code>ssh alice@key.example.com</code>')
     expect(text(detail)).toContain('Show SSH output')
     expect(detail).toContain('aria-expanded="false"')
@@ -79,8 +82,9 @@ describe('connect failure (C6, C27, C78)', () => {
   })
 
   it('a real schedule shows the countdown; cert_expired names its cause in the headline', () => {
-    const { detail } = row({ ...auth, kind: 'cert_expired', retryAt: clock + 192_000 } as HostStatus)
-    expect(text(detail)).toContain('Could not connect to Key box: SSH certificate expired')
+    const { line, detail } = row({ ...auth, kind: 'cert_expired', retryAt: clock + 192_000 } as HostStatus)
+    expect(text(line)).toContain('Could not connect to Key box: SSH certificate expired')
+    expect(text(detail)).not.toContain('Could not connect to Key box')
     expect(text(detail)).toContain('Walnut tries again in 3m 12s')
   })
 })

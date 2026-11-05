@@ -30,6 +30,7 @@ import { checkAlphaRow } from './remote-hosts-every-button-rows'
 import { checkBetaThisHost } from './remote-hosts-every-button-host'
 import { checkDraftKept, checkNewHost } from './remote-hosts-every-button-drafts'
 import { REGISTRY } from './remote-hosts-every-button-registry'
+import { expectRowLinesNotRepeated } from './remote-hosts-said-once'
 
 test.setTimeout(360_000)
 // A button that is not there fails in seconds, not at the end of the test's budget.
@@ -319,13 +320,18 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await output.click()
       await expect(details.locator('.hft-more')).toHaveCount(0)
       ran('Hosts/button.hft-details')
-      // The timeout is said once in Details, its ssh output folded (2026-11-05 review: on the row,
-      // as a heading, and as a red Connection line), and a host Walnut cannot reach is not judged
-      // for long jobs (the review: "Not for jobs that must keep running" twice).
-      expect(await details.evaluate((el) => (el.textContent!.match(/timed out/gi) ?? []).length)).toBe(1)
+      // The timeout is said once, on the row (2026-11-05 review: on the row, as a heading, and as a
+      // red Connection line; then on the row and as the Details' headline), its ssh output folded in
+      // Details, and a host Walnut cannot reach is not judged for long jobs (the review: "Not for
+      // jobs that must keep running" twice).
+      await expect(beta.getByTestId('rh-row-state')).toHaveText('Connecting to Beta box timed out')
+      expect(await details.evaluate((el) => (el.textContent!.match(/timed out/gi) ?? []).length)).toBe(0)
       await expect(details.locator('[data-row="connection"]')).toHaveCount(0)
       await expect(details.getByTestId('host-fleet-fit')).toHaveCount(0)
       expect(await details.evaluate((el) => /must keep running/.test(el.textContent!))).toBe(false)
+      // Nothing its row says is said again in them (the row's warning lines and its state line).
+      await openHostParts(details, ['status', 'this-host'])
+      expect(await expectRowLinesNotRepeated(beta, details)).toContain('Connecting to Beta box timed out')
       await checkBetaThisHost(ctx, details)
       await details.scrollIntoViewIfNeeded()
       await shot(page, 'beta-details')
@@ -453,12 +459,43 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await partToggle('status').click()
       await expect(details.getByTestId('host-fleet-card')).toBeVisible()
       await openHostParts(details)
+      await expectRowLinesNotRepeated(mac, details)
       const part = details.getByTestId('rh-this-host-__local__')
       // An empty limit reads as the default, not as a field turned off (the review: "Empty: 7").
       await expect(part.locator('#rh-limit-__local__')).toHaveAttribute('placeholder', '7 (default)')
       await expect(part.getByRole('switch', { name: 'Tasks on other hosts may use This Mac' })).toBeVisible()
-      // Ticking This Mac gives a secret to the sessions here (secretsForHost(LOCAL)): said so.
-      await expect(part.getByRole('switch', { name: 'Give github-read to sessions on This Mac' })).toBeVisible()
+      // Ticking This Mac gives a secret to the sessions here (secretsForHost(LOCAL)): said so. The
+      // Mac keeps every secret either way, so each state of its switch is said in words about
+      // its sessions, never a copy or a send (2026-11-05 review: "Not copied here", "Sending it
+      // here..."): off, saving, on, saving off, and a refused change.
+      const give = part.getByRole('switch', { name: 'Give github-read to sessions on This Mac' })
+      await expect(give).toBeVisible()
+      const giveLine = part.locator('[data-secret-copy="github-read"]')
+      const words = async (want: string) => {
+        await expect(giveLine).toContainText(want)
+        expect(await part.locator('[data-secret-copy]').allTextContents()).not.toContainEqual(expect.stringMatching(/cop(y|ied)|send/i))
+      }
+      await expect(give).toHaveAttribute('aria-checked', 'false')
+      await words('Not given to sessions here.')
+      routes.copyOnShare = true
+      for (const [to, saving, done] of [['true', 'Turning on...', 'Sessions here get it.'], ['false', 'Turning off...', 'Not given to sessions here.']] as const) {
+        const held = routes.gate('secret')
+        await give.click()
+        await expect(give).toHaveAttribute('aria-busy', 'true')
+        await words(saving)
+        held()
+        await expect(give).not.toHaveAttribute('aria-busy', 'true')
+        await expect(give).toHaveAttribute('aria-checked', to)
+        await words(done)
+        if (to === 'true') await shot(page, 'this-mac-secret-on')
+      }
+      routes.failSecretPuts.push('the local session helper did not answer')
+      await give.click()
+      await expect(part.locator('[data-secret-copy="github-read"] + .settings-row-error')).toHaveText('Could not change it: the local session helper did not answer')
+      await expect(give).toHaveAttribute('aria-checked', 'false')
+      await words('Not given to sessions here.')
+      await shot(page, 'this-mac-secret-refused')
+      routes.copyOnShare = false
       // Walnut runs here already: no "Walnut on this host" part for this Mac.
       await expect(part.getByTestId('host-server-part')).toHaveCount(0)
       await sweep()

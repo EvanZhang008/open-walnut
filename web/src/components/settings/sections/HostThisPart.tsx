@@ -33,12 +33,23 @@ export function grantSummary(g: ExecGrant): string {
   return parts.join('; ');
 }
 
-/** Where one secret's copy on this host stands. */
-function copyLine(copy: { version: number | null; error?: string } | undefined, version: number, on: boolean): string {
-  if (on && copy && copy.version === version && !copy.error) return 'Copied here.';
-  if (on) return copy?.error ? `Not copied yet: ${copy.error}` : 'Sending it here...';
-  if (copy && copy.version !== null) return copy.error ? `Still here: removed once it connects (${copy.error}).` : 'Removing it here...';
-  return 'Not copied here.';
+/**
+ * Where one secret stands on this host, `saving` while a flip of its switch is out. On a remote
+ * host the switch copies it there. On this Mac it is kept either way and the switch decides only
+ * whether the sessions here get it, so this Mac's words are about its sessions, never a copy
+ * (2026-11-05 review: "Not copied here" and "Sending it here..." under This Mac).
+ */
+export function copyLine(copy: { version: number | null; error?: string } | undefined, version: number, on: boolean, local: boolean, saving = false): string {
+  // A flip on its way: the words of the state it asks for.
+  if (saving) return local ? (on ? 'Turning off...' : 'Turning on...') : (on ? 'Removing it here...' : 'Sending it here...');
+  if (on && copy && copy.version === version && !copy.error) return local ? 'Sessions here get it.' : 'Copied here.';
+  if (on && copy?.error) return local ? `Not given to sessions here yet: ${copy.error}` : `Not copied yet: ${copy.error}`;
+  if (on) return local ? 'Turning on...' : 'Sending it here...';
+  if (copy && copy.version !== null) {
+    if (local) return copy.error ? `Sessions here still get it: it could not be taken back (${copy.error}).` : 'Turning off...';
+    return copy.error ? `Still here: removed once it connects (${copy.error}).` : 'Removing it here...';
+  }
+  return local ? 'Not given to sessions here.' : 'Not copied here.';
 }
 
 export function HostThisPart({ host, name, limitKey, server = false, secrets = true }: {
@@ -186,7 +197,7 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
                     indent
                     data-secret-copy={s.name}
                     label={s.name}
-                    help={copyLine(s.copies[host], s.version, on)}
+                    help={copyLine(s.copies[host], s.version, on, host === '__local__', ctx.secrets.busy === key)}
                     error={copyError?.name === s.name ? copyError.text : undefined}
                     control={
                       <ToggleSwitch

@@ -8,16 +8,20 @@
  * data is the page's one read (host-settings-data.tsx).
  *
  * The form (2026-11-04 review): Escape is Cancel and gives the focus back to Add; a refused
- * Save scrolls to the first field it refuses, focuses it and says why next to it.
+ * Save scrolls to the first field it refuses, focuses it and says why next to it. Add and Edit open
+ * it the same way (2026-11-05 review: Edit opened it at the window's foot, the focus left on Edit
+ * and the pinned Save across its first row): Edit opens it under the secret's own row, Add at the
+ * list's end; its start lands right below the page bar, the focus on its first control, and Save
+ * and Cancel sit at its own end, never pinned over a row of it.
  */
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FleetSecret, SecretChange } from '@/api/secrets';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SecretInput } from '../inputs/SecretInput';
 import { focusLanded } from '@/utils/focus-landed';
-import { landOnRow } from '@/utils/scroll-land';
+import { BELOW_BAR_PX, landOnRow } from '@/utils/scroll-land';
 import { RemoveConfirmRow } from './RemoveConfirmRow';
 import { useHostSettings } from './host-settings-data';
 import { mergeSecretHosts, tickSecretHost } from './secret-hosts';
@@ -25,13 +29,22 @@ import { mergeSecretHosts, tickSecretHost } from './secret-hosts';
 const LOCAL = '__local__';
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-/** Where each copy stands, one clause per host. */
+/**
+ * Where each copy stands, one clause per host. This Mac keeps every secret either way: its clause
+ * says whether its sessions get it, never a copy (2026-11-05 review).
+ */
 export function copiesLine(s: FleetSecret, label: (host: string) => string): string {
   const hosts = [...new Set([...s.hosts, ...Object.keys(s.copies)])];
   const parts = hosts.flatMap((h) => {
     const c = s.copies[h];
     const shared = s.hosts.includes(h);
-    if (shared && c && c.version === s.version && !c.error) return [`${label(h)}: copied`];
+    const current = !!c && c.version === s.version && !c.error;
+    if (h === LOCAL) {
+      if (shared) return [`${label(h)}: ${current ? 'given to its sessions' : c?.error ? `not given to its sessions yet (${c.error})` : 'turning on'}`];
+      if (c && c.version !== null) return [`${label(h)}: ${c.error ? `its sessions still get it (${c.error})` : 'turning off'}`];
+      return [];
+    }
+    if (shared && current) return [`${label(h)}: copied`];
     if (shared) return [`${label(h)}: ${c?.error ? `not copied yet (${c.error})` : 'sending'}`];
     if (c && c.version !== null) return [`${label(h)}: ${c.error ? `still there, removed when it connects (${c.error})` : 'removing'}`];
     return [];
@@ -86,7 +99,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   const root = useRef<HTMLDivElement>(null);
   const group = useRef<HTMLDivElement>(null);
   // 2026-11-04 review: a refused Save put its reason above the group, off screen, and focus stayed on Save.
-  const [focusField, setFocusField] = useState<Field | 'name-new' | 'add' | { edit: string } | null>(null);
+  const [focusField, setFocusField] = useState<Field | 'add' | { edit: string } | null>(null);
   const setError = (text: string | null, field: Field = 'form') => {
     setErrorState(text === null ? null : { field, text });
     if (text !== null && field !== 'form') setFocusField(field);
@@ -97,17 +110,32 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
       setFocusField(null);
       if (focusField === 'add') { focusLanded(group.current?.querySelector<HTMLElement>('[data-testid="secret-add"]')); return; }
       if (typeof focusField === 'object') { focusLanded(group.current?.querySelector<HTMLElement>(`[data-secret-name="${CSS.escape(focusField.edit)}"] [data-secret-edit]`)); return; }
-      const id = focusField === 'name-new' ? 'secret-name' : focusField === 'form' ? null : FIELD_ID[focusField];
+      const id = focusField === 'form' ? null : FIELD_ID[focusField];
       const el = id ? root.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`) : null;
       // The field may sit under the sticky header or below the fold: its row comes into view first.
-      // A new secret's form comes up whole, its start at the top of the pane, so its Save and
-      // Cancel are in view too (2026-11-05 review, 700x800: only Name showed, at the window's foot).
-      if (focusField === 'name-new') { if (root.current) landOnRow(root.current, { focus: false }); }
-      else (el?.closest('.settings-row') ?? el)?.scrollIntoView({ block: 'center' });
+      (el?.closest('.settings-row') ?? el)?.scrollIntoView({ block: 'center' });
       focusLanded(el);
     });
     return () => cancelAnimationFrame(raf);
   }, [focusField]);
+
+  // A form just opened lands with its start right below the page bar, so as much of it as fits (all
+  // of it, Save included, at 700x800 for a fleet of this size) is in view, and its first control
+  // takes the focus: Name for a new secret, the value's Replace for one being edited. In the same
+  // commit, before the browser takes the next input: a focus moved a frame later took a field the
+  // person had already reached (WebKit, 2026-11-05: what was typed into "What it is" went into Name).
+  const landed = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (editing === null) { landed.current = null; return; }
+    if (landed.current === editing || !root.current) return;
+    landed.current = editing;
+    const form = root.current;
+    // It holds through late layout above until the person moves the pointer or types.
+    landOnRow(form, { focus: false, topPx: BELOW_BAR_PX, stopOn: ['pointermove', 'input'] });
+    if (!form.contains(document.activeElement)) {
+      focusLanded(form.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled])'));
+    }
+  }, [editing]);
 
   if (!data || state === null) return null;
   // A host's name, as its row says it. Ticking This Mac gives the secret to the sessions that run
@@ -128,8 +156,6 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     setDraft(draftOf(s));
     setError(null);
     setDeleting(null);
-    // Add: straight into the Name field.
-    if (!s) setFocusField('name-new');
   };
   // Cancel ends the edit and what it was refused for (2026-11-04 review: the refusal stayed on top
   // of the group after Cancel); the focus goes back to where the edit began.
@@ -184,6 +210,47 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     : 'This Walnut is a test or throwaway server: secrets live with your own Walnut.';
   const invalid = (f: Field) => (error?.field === f ? true : undefined);
 
+  // The form: under the row of the secret it edits, or at the list's end for a new one.
+  const editor = editing !== null && (
+    <div
+      className="fleet-secret-editor"
+      data-testid="secret-editor"
+      ref={root}
+      onKeyDown={(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); close(); } }}
+    >
+      {isNew && (
+        <SettingsRow label="Name" htmlFor="secret-name" help="Lower case, like github-read: sessions find it at $WALNUT_SECRETS_DIR/<name>." error={error?.field === 'name' ? error.text : undefined} control={
+          <input id="secret-name" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
+            aria-invalid={invalid('name')} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} data-testid="secret-name" />
+        } />
+      )}
+      <SettingsRow label={isNew ? 'Value' : `Value of ${editing}`} help={isNew ? 'Pasted once; Walnut never shows it again.' : 'Replace to rotate: every host gets the new value.'} error={error?.field === 'value' ? error.text : undefined} control={
+        <SecretInput value={draft.value} onChange={(v) => setDraft({ ...draft, value: v })} saved={!isNew} aria-label="Secret value" aria-invalid={invalid('value')} data-testid="secret-value" />
+      } />
+      <SettingsRow label="What it is" htmlFor="secret-description" help="Sessions read this to know when to use it." control={
+        <input id="secret-description" type="text" data-no-draft="secret" className="settings-input settings-input--short" value={draft.description}
+          onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="GitHub, read only" data-testid="secret-description" />
+      } />
+      <SettingsRow label="Who gets it" help="Sessions on the hosts ticked here can use it; unticking one removes its copy there." />
+      {hostKeys.map((h) => (
+        <SettingsCheckbox key={h} checked={shownHosts.includes(h)} label={tickLabel(h)} data-testid={`secret-host-${h}`}
+          onChange={(on) => tick(h, on)} />
+      ))}
+      <SettingsRow label="Environment name" htmlFor="secret-env" help="Optional: the variable a session on those hosts gets it as." error={error?.field === 'env' ? error.text : undefined} control={
+        <input id="secret-env" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
+          aria-invalid={invalid('env')} value={draft.env} onChange={(e) => setDraft({ ...draft, env: e.target.value.toUpperCase() })} placeholder="GH_TOKEN" data-testid="secret-env" />
+      } />
+      <SettingsCheckbox checked={draft.sessions} label="Give it to every new session on those hosts" data-testid="secret-sessions"
+        onChange={(on) => setDraft({ ...draft, sessions: on })} />
+      <SettingsRow className="secret-editor-actions" error={error?.field === 'form' ? error.text : undefined} control={
+        <>
+          <SettingsButton variant="text" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>
+          <SettingsButton variant="primary" holdFocus busy={busy} busyLabel="Saving..." onClick={() => void save()} data-testid="secret-save">Save</SettingsButton>
+        </>
+      } />
+    </div>
+  );
+
   return (
     <SettingsGroup heading="Secrets" data-testid="fleet-secrets" footer={footer}>
       <div ref={group} className="settings-rows-contents">
@@ -199,7 +266,8 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
               help={`${copiesLine(s, label)}${s.env && s.sessions && s.hosts.length ? `; sessions there get $${s.env}` : ''}`}
               control={
                 <>
-                  {!s.deletedAt && (
+                  {/* Open already: its form is right below. */}
+                  {!s.deletedAt && editing !== s.name && (
                     <SettingsButton variant="text" disabled={busy} onClick={() => open(s)} aria-label={`Edit ${s.name}`} data-secret-edit="">Edit</SettingsButton>
                   )}
                   <SettingsButton variant="text" disabled={busy || !!deleting} onClick={() => setDeleting({ name: s.name, busy: false })} aria-label={`Delete ${s.name}`} data-secret-delete="">Delete</SettingsButton>
@@ -217,51 +285,14 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
                 onConfirm={() => void remove(s.name)}
               />
             )}
+            {editing === s.name && editor}
           </Fragment>
         ))}
         {state.active && editing === null && (
           <SettingsRow label="Add a secret" control={<SettingsButton onClick={() => open(null)} data-testid="secret-add">Add</SettingsButton>} />
         )}
-        {editing !== null && (
-          <div
-            className="fleet-secret-editor"
-            data-testid="secret-editor"
-            ref={root}
-            onKeyDown={(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); close(); } }}
-          >
-            {isNew && (
-              <SettingsRow label="Name" htmlFor="secret-name" help="Lower case, like github-read: sessions find it at $WALNUT_SECRETS_DIR/<name>." error={error?.field === 'name' ? error.text : undefined} control={
-                <input id="secret-name" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
-                  aria-invalid={invalid('name')} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} data-testid="secret-name" />
-              } />
-            )}
-            <SettingsRow label={isNew ? 'Value' : `Value of ${editing}`} help={isNew ? 'Pasted once; Walnut never shows it again.' : 'Replace to rotate: every host gets the new value.'} error={error?.field === 'value' ? error.text : undefined} control={
-              <SecretInput value={draft.value} onChange={(v) => setDraft({ ...draft, value: v })} saved={!isNew} aria-label="Secret value" aria-invalid={invalid('value')} data-testid="secret-value" />
-            } />
-            <SettingsRow label="What it is" htmlFor="secret-description" help="Sessions read this to know when to use it." control={
-              <input id="secret-description" type="text" data-no-draft="secret" className="settings-input settings-input--short" value={draft.description}
-                onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="GitHub, read only" data-testid="secret-description" />
-            } />
-            <SettingsRow label="Who gets it" help="Sessions on the hosts ticked here can use it; unticking one removes its copy there." />
-            {hostKeys.map((h) => (
-              <SettingsCheckbox key={h} checked={shownHosts.includes(h)} label={tickLabel(h)} data-testid={`secret-host-${h}`}
-                onChange={(on) => tick(h, on)} />
-            ))}
-            <SettingsRow label="Environment name" htmlFor="secret-env" help="Optional: the variable a session on those hosts gets it as." error={error?.field === 'env' ? error.text : undefined} control={
-              <input id="secret-env" type="text" data-no-draft="secret" className="settings-input settings-input--short settings-input--mono" spellCheck={false}
-                aria-invalid={invalid('env')} value={draft.env} onChange={(e) => setDraft({ ...draft, env: e.target.value.toUpperCase() })} placeholder="GH_TOKEN" data-testid="secret-env" />
-            } />
-            <SettingsCheckbox checked={draft.sessions} label="Give it to every new session on those hosts" data-testid="secret-sessions"
-              onChange={(on) => setDraft({ ...draft, sessions: on })} />
-            {/* Held at the window's foot while the form is taller than it (Sol review, 700x800). */}
-            <SettingsRow className="secret-editor-actions" error={error?.field === 'form' ? error.text : undefined} control={
-              <>
-                <SettingsButton variant="text" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>
-                <SettingsButton variant="primary" holdFocus busy={busy} busyLabel="Saving..." onClick={() => void save()} data-testid="secret-save">Save</SettingsButton>
-              </>
-            } />
-          </div>
-        )}
+        {/* A new one, or one whose row went meanwhile (deleted elsewhere): the form stays, with what was typed. */}
+        {(isNew || !state.secrets.some((s) => s.name === editing)) && editor}
       </div>
     </SettingsGroup>
   );

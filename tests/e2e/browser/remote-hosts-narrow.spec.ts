@@ -4,8 +4,10 @@
  * when a mouse drives them (2026-11-05 review: every one grew to a 44 px box, and Refresh sat on
  * its own line), the pinned bar one row, the join card's system picker inset and its Copy as tall
  * as the command, More settings' groups inside the window, a host's own settings (This host, in
- * its Details) inside the window, and a new secret's form in view at 700x800 (Sol review: only
- * its Name showed, at the window's foot). The same fixture fleet as remote-hosts-every-button.spec.ts.
+ * its Details) inside the window, and a secret's form, new or edited, in view at 700x800 (Sol
+ * review: only its Name showed, at the window's foot; 2026-11-05 review: Edit opened it at the
+ * window's foot with the pinned Save across its first row). The same fixture fleet as
+ * remote-hosts-every-button.spec.ts.
  * Navigation by clicks; the window narrows once the pane is open (the phone layout opens the
  * list of panes first).
  * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
@@ -13,6 +15,7 @@
 import { expect, test, type Locator } from '@playwright/test'
 import { openHostParts, resetServerHostFixture } from './host-problems-fixture-helpers'
 import { MORE_GROUPS, openFixturePane, pick, row, shot } from './remote-hosts-every-button-helpers'
+import { expectFormLanded, shotPart } from './remote-hosts-said-once'
 
 test.setTimeout(180_000)
 
@@ -152,21 +155,25 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
       expect(g.x + g.width, `${id} inside the window`).toBeLessThanOrEqual(700)
     }
 
-    // A new secret's form, at 700x800: Add brings its start up to the top of the window, Save in
-    // view (Sol review: Name at the window's foot, the rest off screen).
+    // A secret's form at 700x800, new or edited: its start right below the page bar, its first
+    // control focused, Save and Cancel whole at its own end, over no row of it.
     await page.setViewportSize({ width: 700, height: 800 })
+    const editor = page.getByTestId('secret-editor')
     const addSecret = page.getByTestId('secret-add')
     await addSecret.scrollIntoViewIfNeeded()
     await addSecret.click()
     const name = page.getByTestId('secret-name')
-    await expect(name).toBeFocused()
-    await expect(name).toBeInViewport()
-    await expect.poll(async () => (await box(name)).y).toBeLessThan(800 * 0.45)
-    // Save and Cancel whole, held at the window's foot while the form is taller than it.
-    await expect(page.getByTestId('secret-save')).toBeInViewport({ ratio: 1 })
-    await expect(page.getByTestId('secret-cancel')).toBeInViewport({ ratio: 1 })
-    await shot(page, 'narrow-700x800-secret-add')
+    await expectFormLanded(page, editor, name)
+    await shotPart(page, 'narrow-700x800-secret-add', editor)
     await name.press('Escape')
-    await expect(page.getByTestId('secret-editor')).toHaveCount(0)
+    await expect(editor).toHaveCount(0)
+    const edit = page.getByRole('button', { name: 'Edit github-read' })
+    await edit.scrollIntoViewIfNeeded()
+    await edit.click()
+    await expectFormLanded(page, editor, editor.getByRole('button', { name: 'Replace' }))
+    await shotPart(page, 'narrow-700x800-secret-edit', editor)
+    await page.keyboard.press('Escape')
+    await expect(editor).toHaveCount(0)
+    await expect(edit).toBeFocused()
   })
 })

@@ -42,10 +42,14 @@ const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 test.beforeEach(async ({ page }) => { await isolatePrefs(page) })
 test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-/** The HostFailureText inside `scope`: its two sentences, and its SSH output once opened. */
-async function readFailure(scope: Locator, error: string): Promise<{ headline: string; hint: string }> {
+/**
+ * The HostFailureText inside `scope`: its two sentences, and its SSH output once opened. A host's
+ * Details have no headline (its row's state line says it): `headline` reads it from there.
+ */
+async function readFailure(scope: Locator, error: string, headlineFrom?: Locator): Promise<{ headline: string; hint: string }> {
   const hft = scope.locator('.hft').first()
-  const headline = (await hft.locator('.hft-headline').innerText()).trim()
+  if (headlineFrom) await expect(hft.locator('.hft-headline')).toHaveCount(0)
+  const headline = (await (headlineFrom ?? hft.locator('.hft-headline')).innerText()).trim()
   const hint = (await hft.locator('.hft-hint').innerText()).trim()
   const toggle = hft.getByRole('button', { name: 'Show SSH output' })
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -112,7 +116,8 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     await expect(settingsRow.getByTestId('rh-row-connect')).toBeEnabled()
     await expect(settingsRow.locator('.hft')).toHaveCount(0)
     const details = await openHostDetails(page, 'keybox')
-    const inSettings = await readFailure(details.locator('.rh-failure'), wire.error!)
+    // The same two sentences: the headline on the row (said once, not again in Details), the rest in Details.
+    const inSettings = await readFailure(details.locator('.rh-failure'), wire.error!, settingsRow.getByTestId('rh-row-state'))
 
     expect(inBanner.headline).toBe('Could not connect to Key box')
     expect(inPicker).toEqual(inBanner)

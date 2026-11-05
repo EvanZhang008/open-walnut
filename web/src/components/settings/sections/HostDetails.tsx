@@ -22,12 +22,11 @@ import type { FleetHost } from '@/api/hosts-fleet';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { hostProblemOf } from '@open-walnut/host-problem';
-import { isLive, problemsOf, systemLine } from './host-fleet-dashboard-model';
+import { isLive, systemLine } from './host-fleet-dashboard-model';
 import { FleetFacts, FleetProblems, FleetVitals, type SystemLine } from './HostFleetVitals';
 import { RemoteHostDetail } from './RemoteHostStatus';
 import { HostProfileDisclosure, profileSystemLine, useHostProfile } from './HostProfileDisclosure';
 import { HostThisPart } from './HostThisPart';
-import { rowProblemKey } from './useLinkedHostRow';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { keepPress } from '../inputs/press-keeps-target';
 import { ChevronGlyph } from '../settings-glyphs';
@@ -47,6 +46,8 @@ interface Props {
   /** Show "What Walnut knows" and probe it (a saved SSH host). */
   profile?: boolean;
   kind: HostKind;
+  /** The reading's problem the row names in its warning line (problemsOf's key), else null: Status leaves it out. */
+  rowProblem: string | null;
   /** Hide details (its button, or Escape inside them). */
   onClose: () => void;
 }
@@ -99,16 +100,14 @@ function SystemOnly({ system }: { system?: SystemLine }) {
   );
 }
 
-function DetailsBody({ alias, name, card, now, linked, kind, system, profileBlock, profileSummary, onClose }: Props & { system?: SystemLine; profileBlock?: () => ReactNode; profileSummary?: string }) {
+function DetailsBody({ alias, name, card, now, linked, kind, rowProblem, system, profileBlock, profileSummary, onClose }: Props & { system?: SystemLine; profileBlock?: () => ReactNode; profileSummary?: string }) {
   const status = useHostStatus(alias);
   const replica = useIsCloudReplica();
   const local = kind === 'local';
   const live = !!card && isLive(card);
-  // The problem the row already names is not said again here (a row with no live status names
-  // its reading's first one: FleetHostRow.tsx).
-  const skip = !card ? null
-    : local || kind === 'fleet' ? (live ? problemsOf(card, now).find((p) => p.tone === 'warn' || p.tone === 'bad')?.key ?? null : null)
-    : rowProblemKey(card, now, status);
+  // The problem the row already names is not said again here: the row says which (its rule decides,
+  // so the two never drift apart).
+  const skip = rowProblem;
   const host = local ? '__local__' : alias;
   // Escape anywhere in the Details (not in a list portalled out of them: the Kind picker) closes them.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {

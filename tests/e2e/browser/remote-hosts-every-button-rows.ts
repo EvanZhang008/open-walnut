@@ -10,6 +10,7 @@ import { fixtureCounters, openHostParts } from './host-problems-fixture-helpers'
 import { expectFocusKept, pick, row } from './remote-hosts-every-button-helpers'
 import { expectRing, type StepCtx } from './remote-hosts-every-button-steps'
 import { checkAlphaThisHost } from './remote-hosts-every-button-host'
+import { expectRowLinesNotRepeated, shotPart } from './remote-hosts-said-once'
 
 const menu = (page: Page) => page.getByTestId('rh-row-menu')
 
@@ -66,6 +67,7 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   const warning = alpha.locator('.rh-row-line', { hasText: 'Claude Code' })
   await expect(warning).toHaveCount(1)
   await expect(details).not.toContainText((await warning.textContent())!.trim())
+  await expectRowLinesNotRepeated(alpha, details)
   const byHand = details.getByTestId('rh-by-hand')
   await expect(byHand).toHaveText('Install by hand')
   await expect(byHand).toHaveAttribute('aria-expanded', 'false')
@@ -157,6 +159,17 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   await expectFocusKept(page)
   ran('Hosts/button#rh-readiness-fix-claude_missing')
 
+  // What the install showed next, the reboot warning, is said once: on the row, beside its Set up.
+  // The open Status keeps the facts that differ (2026-11-05 review: the same sentence again under
+  // the graphs, since Details guessed the row's line from the readiness the install had just fixed).
+  await expect(alpha.getByTestId('rh-row-warning')).toHaveText("Walnut won't restart on Alpha box after it reboots")
+  await expect(details.getByTestId('rh-details-part-status')).toHaveAttribute('aria-expanded', 'true')
+  await expect(details.locator('[data-testid="host-fleet-problem"][data-problem="reboot"]')).toHaveCount(0)
+  await expect(details).not.toContainText("won't restart")
+  expect(await expectRowLinesNotRepeated(alpha, details)).toContain("Walnut won't restart on Alpha box after it reboots")
+  await alpha.scrollIntoViewIfNeeded()
+  await shotPart(page, 'alpha-reboot-said-once', alpha, details.getByTestId('host-fleet-card'))
+
   // Then its daemon: Set up (it does not start after a reboot).
   const fix = alpha.getByTestId('host-fleet-fix')
   await expect(fix).toHaveText('Set up')
@@ -167,6 +180,7 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   releaseBoot()
   await expect(alpha.getByTestId('host-fleet-action-note')).toHaveText('Set up: starts by itself after a reboot (as a systemd user service).')
   await expect(fix).toHaveCount(0)
+  await expectRowLinesNotRepeated(alpha, details)
   expect(routes.callsTo('POST', '/api/v1/hosts/devbox/boot-start')).toHaveLength(1)
   await expectFocusKept(page)
   ran('Hosts/button#host-fleet-fix')

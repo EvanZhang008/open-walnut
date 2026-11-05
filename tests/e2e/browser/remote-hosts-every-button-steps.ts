@@ -6,6 +6,7 @@
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
+import { expectFormLanded, shotPart } from './remote-hosts-said-once'
 import {
   WINDOWS_APP, askThenCancel, expectCopied, expectOpensTab, netCommand, netLink, netWindows, openGroup, openMore, shot, type PaneRoutes,
 } from './remote-hosts-every-button-helpers'
@@ -423,8 +424,19 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   const sec = page.getByTestId('fleet-secrets')
   const editor = sec.getByTestId('secret-editor')
   const edit = sec.getByRole('button', { name: 'Edit github-read' })
+  // At 1280x800 Edit opens the form under that secret's row, its start right below the page bar,
+  // the focus on its first control (the value's Replace), Save and Cancel at its end, in view
+  // (2026-11-05 review: it opened at the window's foot with the pinned strip across its first row).
+  const tall = page.viewportSize()!
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await edit.scrollIntoViewIfNeeded()
   await edit.click()
   await expect(editor).toContainText('Value of github-read')
+  expect(await editor.evaluate((el) => el.previousElementSibling?.getAttribute('data-secret-name'))).toBe('github-read')
+  // Open already: the row has no second Edit.
+  await expect(edit).toHaveCount(0)
+  await expectFormLanded(page, editor, editor.getByRole('button', { name: 'Replace' }))
+  await shotPart(page, 'secret-edit-1280x800', editor)
   await expect(editor.getByTestId('secret-value-saved')).toContainText('Saved in secrets, never synced.')
   // The Mac's own box is named as everywhere on the page.
   await expect(editor.getByRole('checkbox', { name: /^This Mac\b/ })).toHaveAttribute('data-testid', 'secret-host-__local__')
@@ -449,11 +461,13 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   await expectRing(page, edit)
   expect(routes.callsTo('PUT', '/api/v1/secrets/github-read')).toHaveLength(puts)
 
-  // Add focuses Name; Escape is Cancel and gives the focus back to Add.
+  // Add lands the same way and focuses Name; Escape is Cancel and gives the focus back to Add.
   const addBtn = sec.getByTestId('secret-add')
   await addBtn.click()
   const name = editor.getByTestId('secret-name')
-  await expect(name).toBeFocused()
+  await expectFormLanded(page, editor, name)
+  await shotPart(page, 'secret-add-1280x800', editor)
+  await page.setViewportSize(tall)
   await name.press('Escape')
   await expect(editor).toHaveCount(0)
   await expectRing(page, addBtn)
