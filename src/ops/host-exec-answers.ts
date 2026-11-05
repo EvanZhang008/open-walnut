@@ -423,16 +423,25 @@ function ownErrTrap(b: Record<string, unknown>, args: Record<string, unknown>): 
   return /\btrap\b[^\n]*\bERR\b/.test(args.command) ? 'Its line sets its own `trap … ERR`, which replaces the one strict names the failing step with, so no step is named.' : ''
 }
 
-/** What keep did (host-exec-keep.ts): where the run started, and whether its end carries to the next keep call. */
+/** What keep did (host-exec-keep.ts keepAnswer): where the run started, and whether its end carries to the next keep call. */
 function keepLine(b: Record<string, unknown>, args: Record<string, unknown>): string {
   if (args.keep !== true || b.sameJob) return ''
-  const k = b.keep && typeof b.keep === 'object' ? b.keep as { saves?: unknown } : null
+  const k = b.keep && typeof b.keep === 'object' ? b.keep as Record<string, unknown> : null
   if (!k) return 'The Walnut server is older than keep, so it ran this without it: no state was restored or saved.'
+  const host = String(b.host)
+  if (typeof k.notEntered === 'string') return `Its shell could not start in the kept directory ${k.notEntered} (the host may not enter it), so nothing ran and nothing was saved: give cwd to start somewhere else.`
   const from = named(args.cwd)
-    ? `It started in the cwd you gave, with the exported variables this task's last keep call on ${String(b.host)} left`
-    : `It started where this task's last keep call on ${String(b.host)} ended (its directory and exported variables; the home directory on the first)`
-  if (k.saves !== true) return `${from}; as a background run, its own directory and variables do not carry to the next keep call.`
-  return `${from}, and its directory and exported variables ${b.running ? 'carry to the next keep call there once it ends' : 'at its end carry to the next keep call there'}.`
+    ? `It started in the cwd you gave, with the exported variables this task's last keep call on ${host} left`
+    : typeof k.gone === 'string'
+      ? `The kept directory ${k.gone} is gone; this run started in ${String(b.cwd)}, with the exported variables this task's last keep call on ${host} left`
+      : `It started where this task's last keep call on ${host} ended (its directory and exported variables; the home directory on the first)`
+  // A host that could not hand Walnut the kept directory: the shell entered it, after the host's own checks.
+  const inShell = k.shellCd === true && !named(args.cwd)
+    ? ` The Walnut daemon on ${host} could not hand Walnut the kept directory, so the shell entered it itself: the host's macOS permission check and a relative wait_for.file did not see that directory, and cwd in this answer is where the shell was started.`
+    : ''
+  if (k.saves !== true) return `${from}; as a background run, its own directory and variables do not carry to the next keep call.${inShell}`
+  if (k.saved === false) return `${from}; its state was not saved (${String(k.why)}), so the next keep call starts from the last saved one.${inShell}`
+  return `${from}, and its directory and exported variables ${b.running ? 'carry to the next keep call there once it ends' : 'at its end carry to the next keep call there'}.${inShell}`
 }
 
 const named = (cwd: unknown) => typeof cwd === 'string' && cwd.trim() !== ''
@@ -440,8 +449,8 @@ const named = (cwd: unknown) => typeof cwd === 'string' && cwd.trim() !== ''
 /** The run in two lines: how it ended, then the output, so an agent reads it like its own Bash tool. */
 export function runOutcome(body: unknown, args: Record<string, unknown> = {}) {
   const b = (body ?? {}) as Record<string, unknown>
-  // A keep run without cwd started in its kept directory, not the one the host spawned it in.
-  const shownCwd = b.cwd && !(b.keep && args.keep === true && !named(args.cwd))
+  // A keep run whose shell entered its kept directory itself started elsewhere than the host spawned it.
+  const shownCwd = b.cwd && !(args.keep === true && !named(args.cwd) && (b.keep as { shellCd?: unknown } | undefined)?.shellCd === true)
   const where = `${String(b.host)}${shownCwd ? ` in ${String(b.cwd)}` : ''}${typeof b.shell === 'string' ? ` (${b.shell})` : ''}`
   const waited = waitLine(b, args)
   // A wait's sentence already says the run's state: the host and how long it ran come after it, once.
@@ -451,7 +460,7 @@ export function runOutcome(body: unknown, args: Record<string, unknown> = {}) {
     : b.running ? `Running on ${where} as job ${String(b.jobId)}.`
     : b.blocked ? `Stopped on ${where} after ${took(b.ms)}: it was waiting on a dialog.`
       : b.timedOut ? `Stopped on ${where} at its deadline after ${took(b.ms)} (${b.exitCode !== null && b.exitCode !== undefined ? `exit ${String(b.exitCode)}` : `ended by ${String(b.signal)}`}).`
-        : b.exitCode === null || b.exitCode === undefined ? `Ended by ${String(b.signal ?? 'a signal')} on ${where} after ${took(b.ms)}.`
+        : b.exitCode === null || b.exitCode === undefined ? typeof (b.keep as { notEntered?: unknown } | undefined)?.notEntered === 'string' ? `Did not start on ${where}.` : `Ended by ${String(b.signal ?? 'a signal')} on ${where} after ${took(b.ms)}.`
           : `Exit ${String(b.exitCode)} on ${where} after ${took(b.ms)}.`
   const notes = [
     b.sameJob ? typeof b.sameJobCommand === 'string'

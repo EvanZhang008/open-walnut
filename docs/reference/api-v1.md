@@ -2193,19 +2193,37 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   variables, new, changed and unset ones; at its end its own directory and exported variables
   are kept for the next keep call there. The server shapes the line (any daemon runs it); it
   needs bash (under sh it does nothing) and the task's directory on that host: the state is
-  `$WALNUT_TASK_DIR/host-exec/keep.sh` there, 0600, written whole through a temp file (two runs
-  at once: the last to end wins), and its values never come back in an answer. Not kept: shell
-  functions, aliases, unexported variables, shell options, traps, and `PWD OLDPWD SHLVL _`,
-  `WALNUT_TASK_DIR`, `WALNUT_HOST_EXEC_JOB`, `walnut_*`, `BASH_*` and readonly variables. It is saved when the line
+  `$WALNUT_TASK_DIR/host-exec/keep.sh` (the variables) and `keep.cwd` (the directory alone)
+  there, each 0600 and written whole through a temp file (two runs at once: the last to end
+  wins), and no value ever comes back in an answer. Not kept: shell functions, aliases,
+  unexported variables, shell options, traps, and `PWD OLDPWD SHLVL _`, `WALNUT_TASK_DIR`,
+  `WALNUT_HOST_EXEC_JOB`, `walnut_*`, `BASH_*` and readonly variables. It is saved when the line
   ends, `exit N` and SIGTERM (a stop, the deadline) included; not when the line sets its own
   EXIT trap, runs `exec`, is killed by SIGKILL, or runs with `background: true` (that run starts
-  from the state and saves nothing). With `strict`, keep's restore runs first (outside
-  `set -e`) and its EXIT trap stands in for strict's own; the failed step is named the same.
-  A kept directory that is gone, or a state file that cannot be read, is said on the output's
-  first line (`walnut: ...`) and the run goes on without it. The answer adds `keep: { saves }`
-  (false for a background run). Refusals: `400 bad_request` for a `keep` that is not a boolean
-  or comes with `argv`, `409 task_dir_unset` on a host with no task directory for the task,
-  each before anything runs.
+  from the state and saves nothing). The save runs in a subshell after turning off tracing,
+  verbose and aliases, so it changes no exit code or signal and prints no value; one that cannot
+  complete (a `walnut_` variable the line made readonly, a task directory it cannot write) ends
+  the output with `walnut: keep could not save this run's state (<reason>); the next keep call
+  starts from the last saved one`. With `strict`, keep's restore runs first (outside `set -e`)
+  and its EXIT trap stands in for strict's own; the failed step is named the same. Before a keep
+  call with no `cwd`, the server reads `keep.cwd` from the host (one `fs.readRange`) and sends
+  it as the run's `cwd`, so the host's macOS permission guard, its Command Line Tools check and
+  every `wait_for.file` use the directory the line starts in (a call that starts in or reads a
+  place macOS guards needs `allow_prompts` on that call). One the host refuses as missing (`cwd_missing`, refused
+  before anything ran) runs the same job again with no `cwd`. A daemon that cannot hand the file
+  over (no `fs.readRange`, no task directory root) has the shell enter the directory itself,
+  after those checks, as before. A state file that cannot be read is said on the output's first
+  line (`walnut: ...`) and the run goes on without it. The answer adds `keep: { saves, saved?,
+  why?, gone?, notEntered?, shellCd? }`: `saves` false for a background run; `saved: false` with
+  `why` when the run printed the could-not-save line; `gone`, the kept directory that no longer
+  exists (the run started in the default cwd); `notEntered`, one the shell could not start in
+  (nothing ran); `shellCd: true` when the shell entered it itself. Limits: the Command Line Tools
+  check reads the login PATH, not one keep restored; a trace sent to a descriptor of 10 or more
+  (`BASH_XTRACEFD`) is not silenced in the save; under `set -v` the output ends with the save's
+  first line, which holds no value. Refusals: `400 bad_request` for a `keep` that is not a
+  boolean or comes with `argv`, `409 task_dir_unset` on a host with no task directory for the
+  task, `409 may_prompt` with `keptDir` when the line would show a dialog from the kept
+  directory, each before anything runs.
 - `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
 - `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`) → updates the Walnut
   daemon on a machine that joined over the host network to this server's build, now:

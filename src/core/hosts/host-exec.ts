@@ -487,6 +487,9 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   let before: (() => void) | undefined
   // The grant the run counts on: a revoked one the user gave again while this call waited counts the new one.
   let used = grantId
+  // keep with no cwd: where this task's last keep call there ended, the run's cwd (host-exec-keep.ts).
+  let kept: import('./host-exec-keep.js').KeptCwd | null = null
+  let keptDir: string | null = null
   try {
     // Each wait (the slot, the dial) is followed by a look at the grant and the host's stop,
     // before the time check, so a revoke answers as a revoke.
@@ -496,43 +499,75 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     await waits.assertWaitSupported(conn, host, waitFor)
+    if (keep && !keepMod.named(params.cwd)) {
+      // One read of the task's keep.cwd there, within the dial's time; a lost answer ends the call (nothing ran).
+      const c = conn
+      kept = await keepMod.keptCwd(c, caller.taskId, (p) => ask(c, host, 'fs.readRange', p, Math.max(1, Math.min(DIAL_MS, budgetLeft(caller, t0) - START_MIN_LEFT_MS))))
+      keptDir = 'dir' in kept ? kept.dir : null
+      // The run starts there: the dialog guards read the line from there, as the host will, and a
+      // place macOS guards is a risk itself (said as keep's start, host-exec-keep.ts keepRefusal).
+      if (keptDir) await screenForPrompts(host, `cd ${shellQuote(keptDir)}\n${line}`, params.allow_prompts === true, undefined, caller.taskId)
+    }
     // Strict and keep shape the line here, after the dialog guards read the user's own text.
-    const shaped = keepMod.shapedLine(params, jobId)
+    const shaped = keepMod.shapedLine(params, jobId, { shellCd: kept !== null && 'shellCd' in kept })
     const runParams = shaped !== null ? { ...params, command: shaped } : params
     ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, shaped ?? line))
     // Last look before anything reaches the host: from here to the send nothing waits.
     used = await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
+    if (kept && budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
   } catch (err) {
     release(jobId) // nothing was sent: the slot is free
-    throw keep ? keepMod.keepRefusal(err, await hostName(host)) : err
+    throw keep ? keepMod.keepRefusal(err, await hostName(host), keptDir) : err
   }
   running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + timeoutMs + REPLY_MARGIN_MS, at: Date.now() })
   // This task's runs there, for host_exec_list (an older host does not say whose a job is).
   const noteRun = () => jobs.noteStarted({ jobId, taskId: caller.taskId, host, command: preview, startedAt: Date.now() })
-  let reply: Record<string, unknown>
-  try {
-    before?.() // an older daemon's task directory marker, then the run
-    reply = await ask(conn, host, 'exec.run', {
-      jobId, taskId: caller.taskId, ...send,
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      // The user agreed to a dialog there: the host neither refuses the line nor stops it at one.
-      ...(params.allow_prompts === true ? { allowPrompts: true } : {}),
-      // A foreground run keeps its own deadline on the host; only our wait for it is bounded.
-      timeoutMs, background: true, caller: { task: caller.taskId, host: caller.host },
-      // The host refuses a wait_for that could never hold there before it runs anything.
-      ...(waitFor && conn.hasCapability(waits.WAIT_CAPABILITY) ? { until: waitFor } : {}),
-      // What its shell leaves in its process group is stopped when it exits (the help says so).
-      ...(conn.hasCapability(GROUP_CAPABILITY) ? { endGroup: true } : {}),
-    }, Math.min(REPLY_MARGIN_MS, budgetLeft(caller, t0)))
-  } catch (err) {
-    // The host may have started it: the job keeps its slot until its deadline, and the
-    // answer names it, so the session reads it instead of running the command again.
+  const runIn = (cwd: string | null | undefined) => ask(conn, host, 'exec.run', {
+    jobId, taskId: caller.taskId, ...send,
+    ...(cwd ? { cwd } : {}),
+    // The user agreed to a dialog there: the host neither refuses the line nor stops it at one.
+    ...(params.allow_prompts === true ? { allowPrompts: true } : {}),
+    // A foreground run keeps its own deadline on the host; only our wait for it is bounded.
+    timeoutMs, background: true, caller: { task: caller.taskId, host: caller.host },
+    // The host refuses a wait_for that could never hold there before it runs anything.
+    ...(waitFor && conn.hasCapability(waits.WAIT_CAPABILITY) ? { until: waitFor } : {}),
+    // What its shell leaves in its process group is stopped when it exits (the help says so).
+    ...(conn.hasCapability(GROUP_CAPABILITY) ? { endGroup: true } : {}),
+  }, Math.min(REPLY_MARGIN_MS, budgetLeft(caller, t0)))
+  // The host may have started it: the job keeps its slot until its deadline, and the
+  // answer names it, so the session reads it instead of running the command again.
+  const mayHaveStarted = (err: unknown) => {
     if (err instanceof HostExecError) {
       err.message += ` It may have started there as job ${jobId}: read it with host_exec_read before running it again.`
       err.data = { ...err.data, jobId, mayHaveStarted: true }
       noteRun()
     }
-    throw err
+    return err
+  }
+  let reply: Record<string, unknown>
+  // The kept directory, when the host no longer has it: the run started in the fresh cwd.
+  let gone: string | undefined
+  try {
+    before?.() // an older daemon's task directory marker, then the run
+    reply = await runIn(params.cwd || keptDir)
+  } catch (err) {
+    throw mayHaveStarted(err)
+  }
+  // The host refuses a cwd that is missing or not a directory before it records or starts anything
+  // (host-exec-core.ts run: resolveCwd, then the job), so nothing ran: the same job again, in the fresh cwd.
+  if (keptDir && !params.cwd && reply.ok !== true && reply.code === 'cwd_missing') {
+    gone = keptDir
+    try {
+      used = await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
+    } catch (err) {
+      release(jobId)
+      throw err
+    }
+    try {
+      reply = await runIn(undefined)
+    } catch (err) {
+      throw mayHaveStarted(err)
+    }
   }
   if (!reply.ok) {
     // The host has a job by this id: this task's own run (its answer was lost, or a call with the
@@ -542,7 +577,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     }
     release(jobId)
     const refused = daemonError(reply, 'the host refused the command')
-    throw keep ? keepMod.keepRefusal(refused, await hostName(host)) : refused
+    throw keep ? keepMod.keepRefusal(refused, await hostName(host), gone ? null : keptDir) : refused
   }
   // The host has it now: a refresh may judge it by the host's list from here on.
   const entry = running.get(jobId)
@@ -576,8 +611,8 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   if (cut && out.running === true && waits.ranOut(waited?.waitedFor)) out.heldMs = Date.now() - t0
   // It waited for a slot under a cap first: the answer says how long (2026-11-05 review).
   if (slotMs >= 1_000) out.slotWaitMs = slotMs
-  // What keep does with this run's end: saves it, or (background) not.
-  if (keep) out.keep = { saves: !background }
+  // What keep did: where it started, and whether this run's end carries (host-exec-keep.ts keepAnswer).
+  if (keep) out.keep = keepMod.keepAnswer({ background, out, kept, gone })
   // A deadline over the most a run of its kind may have ran with that most: the answer says so (2026-11-05 review 12).
   if (typeof params.timeout_ms === 'number' && params.timeout_ms > cap) out.timeoutCappedMs = cap
   const step = out.failedStep as import('./host-exec-strict.js').FailedStep | undefined
@@ -601,7 +636,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   if (out.failedStep && typeof out.failedStep === 'object') { delete (out.failedStep as { bashLine?: number }).bashLine; delete (out.failedStep as { inner?: true }).inner }
   log.session.info('host exec', {
     taskId: caller.taskId, fromHost: caller.host, host, jobId, cwd: reply.cwd, background, running: out.running, shell: out.shell, legacy: !conn.hasCapability('host-exec-v2'),
-    exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0, waitedFor: waited?.waitedFor.matched, ...(keep ? { keep: true } : {}),
+    exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0, waitedFor: waited?.waitedFor.matched, ...(keep ? { keep: out.keep } : {}),
     command: preview.slice(0, 200),
   })
   return out

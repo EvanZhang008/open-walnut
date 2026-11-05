@@ -109,6 +109,21 @@ async function letters(): Promise<Array<{ id: string; subject: string; type: str
   return (r.body.letters ?? r.body.items ?? []) as Array<{ id: string; subject: string; type: string }>
 }
 
+/** The daemon's fs.readRange (daemon-standalone.ts cmdFsReadRange), on this machine's files: the host here is in-process. */
+async function readRange(p: Record<string, unknown>): Promise<Record<string, unknown>> {
+  try {
+    const st = await fs.stat(String(p.path))
+    if (!st.isFile()) return { ok: false, error: 'fs.readRange failed: not a regular file (ENOTFILE)' }
+    const buf = await fs.readFile(String(p.path))
+    const start = typeof p.start === 'number' ? p.start : 0
+    const part = buf.subarray(start, start + (typeof p.length === 'number' ? p.length : 1024 * 1024))
+    return { ok: true, data: part.toString('base64'), bytesRead: part.length, fileSize: buf.length, eof: start + part.length >= buf.length }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return { ok: false, error: `fs.readRange failed: ${(err as Error).message}${code ? ` (${code})` : ''}` }
+  }
+}
+
 async function until(fn: () => Promise<boolean>, what: string, ms = 10_000): Promise<void> {
   const end = Date.now() + ms
   while (Date.now() < end) {
@@ -134,13 +149,14 @@ beforeAll(async () => {
     promptProbe: null, matcher: testMatcherStart(),
   })
   cores.push(core)
-  // A current daemon (host-exec-v2, host-exec-wait-v1, host-exec-group-v1) in front of a real host
-  // core; `wait` false is one from before wait_for, which ignores an `until` and an `endGroup` it does not know.
-  const currentHost = (hostKey: string, hostCore = core, wait = true) => ({
-    connected: true, hostKey, connect: async () => {}, taskDirRoot: path.join(hostRoot, 'tasks'),
-    hasCapability: (c: string) => c === 'host-exec-v1' || c === 'host-exec-v2' || c === 'task-dir-v1' || (wait && (c === 'host-exec-wait-v1' || c === 'host-exec-group-v1')),
+  // A current daemon (host-exec-v2, host-exec-wait-v1, host-exec-group-v1, fs.readRange) in front of a
+  // real host core; `wait` false is one from before wait_for, which ignores an `until` and an `endGroup` it does not know.
+  const currentHost = (hostKey: string, hostCore = core, wait = true, taskDirRoot = path.join(hostRoot, 'tasks')) => ({
+    connected: true, hostKey, connect: async () => {}, taskDirRoot,
+    hasCapability: (c: string) => c === 'host-exec-v1' || c === 'host-exec-v2' || c === 'task-dir-v1' || c === 'fs.readRange' || (wait && (c === 'host-exec-wait-v1' || c === 'host-exec-group-v1')),
     send: async (cmd: string, params: Record<string, unknown> = {}) => {
       sent.push({ cmd, params, host: hostKey })
+      if (cmd === 'fs.readRange') return readRange(params)
       if (String(params.command ?? '').includes('LOSE_THE_HOST')) throw new Error('socket closed')
       if (cmd === 'exec.list' && awayHosts.has(hostKey)) throw new Error('socket closed')
       try {
@@ -203,10 +219,24 @@ beforeAll(async () => {
     promptProbe: { snapshot: async (pgids) => ({ processes: pgids.map((pgid) => ({ pid: 99_999, pgid, cpuMs: 0, comm: '/usr/bin/security' })), securityAgentStartedAt: Date.now() }), tccPrompts: async () => [] },
   })
   cores.push(tccCore)
+  // A Mac whose daemon guards its protected places itself (no prompt watch, Command Line Tools there),
+  // with a synthetic private file on its Desktop: keep's directory against that guard.
+  const keepHome = path.join(hostRoot, 'keep-home')
+  await fs.mkdir(path.join(keepHome, 'Desktop'), { recursive: true })
+  await fs.writeFile(path.join(keepHome, 'Desktop', 'private.txt'), 'synthetic private text\n')
+  const keepCore = createHostExec({
+    spawn: (await import('node:child_process')).spawn,
+    killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+    shell: '/bin/sh', home: keepHome, taskDirRoot: path.join(hostRoot, 'keep-tasks'), stateDir: path.join(hostRoot, 'keep-state'),
+    env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: keepHome },
+    platform: 'darwin', cltInstalled: () => true, promptProbe: null, matcher: testMatcherStart(),
+  })
+  cores.push(keepCore)
   const fakes: Record<string, unknown> = {
     macbox, devbox, strangerbox: devbox, 'Studio-MacBook': currentHost('Studio-MacBook'), 'studio-mac': devbox,
     oldmac: olderHost('oldmac', path.join(hostRoot, 'old-tasks')), 'oldmac-nodir': olderHost('oldmac-nodir', null),
     tccmac: currentHost('tccmac', tccCore), waitless: currentHost('waitless', core, false),
+    keepmac: currentHost('keepmac', keepCore, true, path.join(hostRoot, 'keep-tasks')),
   }
   const real = daemonConnections.getDaemonConnection
   vi.spyOn(daemonConnections, 'getDaemonConnection').mockImplementation(async (key, target) =>
@@ -228,6 +258,7 @@ beforeAll(async () => {
       'Studio-MacBook': { hostname: 'Studio-MacBook.walnut-net.invalid', label: 'Studio-MacBook', transport: 'net', endpoint: 'a'.repeat(64) },
       oldmac: { hostname: 'oldmac.example' }, 'oldmac-nodir': { hostname: 'oldmac-nodir.example' },
       tccmac: { hostname: 'tccmac.example' }, waitless: { hostname: 'waitless.example', label: 'Waitless box' },
+      keepmac: { hostname: 'keepmac.example' },
     } as never,
     net: { enabled: true },
   } as never)
@@ -507,12 +538,21 @@ describe('host_exec', () => {
     expect(plain.body).toMatchObject({ exitCode: 0, output: `${home}\nunset\n` })
     expect(plain.body.keep).toBeUndefined()
     const second = await executeOp('host_exec', { host: 'macbox', command: 'pwd; echo "$KEEP_E2E"', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
-    expect(second.result).toMatchObject({ exitCode: 0, output: `${home}/keep-e2e\none\n`, keep: { saves: true } })
-    expect(String(second.result.outcome)).toMatch(/^Exit 0 on macbox \(bash\) after .*It started where this task's last keep call on macbox ended .* at its end carry to the next keep call there\./)
+    expect(second.result).toMatchObject({ exitCode: 0, output: `${home}/keep-e2e\none\n`, cwd: `${home}/keep-e2e`, keep: { saves: true } })
+    expect(String(second.result.outcome)).toMatch(new RegExp(`^Exit 0 on macbox in ${home}/keep-e2e \\(bash\\) after .*It started where this task's last keep call on macbox ended .* at its end carry to the next keep call there\\.`))
+    // The server read the kept directory from the host (one fs.readRange of the path alone) and ran
+    // the line there: no cd of the shell's own.
+    const keptFile = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.cwd')
+    expect(sent.filter((m) => m.cmd === 'fs.readRange').at(-1)!.params).toEqual({ path: keptFile, start: 0, length: 4097 })
+    const secondRun = sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params
+    expect(secondRun.cwd).toBe(`${home}/keep-e2e`)
+    expect(String(secondRun.command)).not.toContain('builtin cd')
+    expect(await fs.readFile(keptFile, 'utf8')).toBe(`${home}/keep-e2e`)
     // Values stay on the host: in the task's 0600 file there, never in an answer.
     expect(JSON.stringify(second.result)).not.toContain('s3cr3t-keep-value')
     const state = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.sh')
     expect((await fs.stat(state)).mode & 0o777).toBe(0o600)
+    expect((await fs.stat(keptFile)).mode & 0o777).toBe(0o600)
     expect(await fs.readFile(state, 'utf8')).toContain('KEEP_E2E_SECRET')
     // With strict: the failed step is named as without keep, and where it stopped carries.
     const strict = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd /\ngrep -q zz-nomatch /dev/null\necho never', strict: true, keep: true }, SID)
@@ -524,6 +564,27 @@ describe('host_exec', () => {
     expect(bg.body).toMatchObject({ keep: { saves: false }, waitedFor: { matched: 'output', match: 'bg in /' } })
     await until(async () => (await api('GET', `/api/v1/hosts/macbox/exec/${String(bg.body.jobId)}`, undefined, SID)).body.running === false, 'the background keep run to end')
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "${KEEP_BG:-unset}"', keep: true }, SID)).body.output).toBe('unset\n')
+    // A save that cannot complete (here a walnut_ name the line made readonly) keeps the exit code,
+    // says so in one line with no value, and the answer says it was not saved.
+    const notSaved = await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_E2E=two; readonly walnut_kt; exit 2', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(notSaved.result).toMatchObject({ exitCode: 2, keep: { saves: true, saved: false, why: 'the line made a walnut_ variable readonly' } })
+    expect(notSaved.result.output).toBe('walnut: keep could not save this run\'s state (the line made a walnut_ variable readonly); the next keep call starts from the last saved one\n')
+    expect(String(notSaved.result.outcome)).toContain('its state was not saved (the line made a walnut_ variable readonly), so the next keep call starts from the last saved one.')
+    expect(String(notSaved.result.outcome)).not.toContain('carry to the next keep call')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "$KEEP_E2E"', keep: true }, SID)).body.output).toBe('one\n')
+    // A kept directory the host no longer has: refused before anything ran there, so the same job
+    // runs again in the fresh cwd, and the answer says so.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'mkdir -p "$HOME/gone-e2e" && cd "$HOME/gone-e2e"', keep: true }, SID)).body.exitCode).toBe(0)
+    await fs.rm(path.join(home, 'gone-e2e'), { recursive: true })
+    const gone = await executeOp('host_exec', { host: 'macbox', command: 'pwd; echo "$KEEP_E2E"', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(gone.result).toMatchObject({ exitCode: 0, output: `${home}\none\n`, cwd: home, keep: { saves: true, gone: `${home}/gone-e2e` } })
+    expect(String(gone.result.outcome)).toContain(`The kept directory ${home}/gone-e2e is gone; this run started in ${home}, with the exported variables`)
+    const [refused, again] = sent.filter((m) => m.cmd === 'exec.run').slice(-2)
+    expect(refused!.params).toMatchObject({ jobId: gone.result.jobId, cwd: `${home}/gone-e2e` })
+    expect(again!.params.jobId).toBe(gone.result.jobId)
+    expect(again!.params.cwd).toBeUndefined()
+    // That run's end is the new kept directory.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'pwd', keep: true }, SID)).body).toMatchObject({ output: `${home}\n`, keep: { saves: true } })
     // A wrong keep, or keep with argv, runs nothing.
     const before = sent.filter((m) => m.cmd === 'exec.run').length
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true', keep: 'yes' }, SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
@@ -531,6 +592,25 @@ describe('host_exec', () => {
     expect((await executeOp('host_exec', { host: 'macbox', command: 'true', keep: 'yes' }, opts)).ok).toBe(false)
     expect(sent.filter((m) => m.cmd === 'exec.run').length).toBe(before)
   }, 60_000)
+
+  // Review 2026-11-05 (keep round 1): a kept directory the host never saw let a relative read of a
+  // guarded place run without allow_prompts, and a relative wait_for.file looked in the fresh cwd.
+  it('keep: a relative wait_for.file looks in the kept directory, never a file of that name in the fresh cwd', async () => {
+    const home = path.join(hostRoot, 'home')
+    await fs.mkdir(path.join(home, 'wait-project'), { recursive: true })
+    await fs.writeFile(path.join(home, 'ready-flag'), 'decoy')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd "$HOME/wait-project"', keep: true }, SID)).body.exitCode).toBe(0)
+    const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const bg = await executeOp('host_exec', { host: 'macbox', command: 'sleep 0.4; touch ready-flag; sleep 1.5', keep: true, background: true, wait_for: { file: 'ready-flag' } }, opts) as { result: Record<string, unknown> }
+    expect(bg.result).toMatchObject({ running: true, cwd: `${home}/wait-project`, waitedFor: { matched: 'file', match: `${home}/wait-project/ready-flag` } })
+    expect((bg.result.waitedFor as { ms: number }).ms).toBeGreaterThanOrEqual(300)
+    // A later read of that job looks there too.
+    const read = await executeOp('host_exec_read', { host: 'macbox', job_id: bg.result.jobId, wait_ms: 1_000, wait_for: { file: 'ready-flag' } }, opts) as { result: Record<string, unknown> }
+    expect(read.result).toMatchObject({ waitedFor: { matched: 'file', match: `${home}/wait-project/ready-flag` } })
+    await until(async () => (await api('GET', `/api/v1/hosts/macbox/exec/${String(bg.result.jobId)}`, undefined, SID)).body.running === false, 'the background keep run to end')
+    // Back home for the tests after this one.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd ~', keep: true }, SID)).body.exitCode).toBe(0)
+  }, 30_000)
 
   it('a revoked grant stops the task and the next call asks the user again; Deny is kept', async () => {
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants
@@ -804,8 +884,14 @@ describe('host_exec', () => {
     expect(await api('POST', '/api/v1/hosts/oldmac/exec', { command: `echo ${'x'.repeat(9000)} > "$WALNUT_TASK_DIR/x"` }, OWN_SID)).toMatchObject({ status: 409, body: { code: 'task_dir_unset', taskDir } })
     // keep runs there too, shaped by the server; with no task directory there, or a line keep makes
     // too long for that daemon, it is refused in keep's words before anything runs.
-    expect((await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'export OLD_KEEP=1; cd /', keep: true }, OWN_SID)).body).toMatchObject({ exitCode: 0, keep: { saves: true } })
-    expect((await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'echo "$OLD_KEEP $PWD"', keep: true }, OWN_SID)).body.output).toBe('1 /\n')
+    // That daemon cannot hand the kept directory over (no fs.readRange here): its shell enters it,
+    // and the answer says the host's checks did not see it.
+    expect((await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'export OLD_KEEP=1; cd /', keep: true }, OWN_SID)).body).toMatchObject({ exitCode: 0, keep: { saves: true, shellCd: true } })
+    const oldKept = await executeOp('host_exec', { host: 'oldmac', command: 'echo "$OLD_KEEP $PWD"', keep: true }, { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID }) as { result: Record<string, unknown> }
+    expect(oldKept.result).toMatchObject({ output: '1 /\n', keep: { saves: true, shellCd: true } })
+    expect(String(oldKept.result.outcome)).toMatch(/^Exit 0 on oldmac \(bash\) after .*could not hand Walnut the kept directory, so the shell entered it itself/)
+    expect(sent.some((m) => m.host === 'oldmac' && m.cmd === 'fs.readRange')).toBe(false)
+    expect(String(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params.argv)).toContain('builtin cd -- "$walnut_kd"')
     const runs = sent.filter((m) => m.cmd === 'exec.run').length
     const nodir = await api('POST', '/api/v1/hosts/oldmac-nodir/exec', { command: 'true', keep: true }, OWN_SID)
     expect(nodir).toMatchObject({ status: 409, body: { code: 'task_dir_unset' } })
@@ -990,6 +1076,34 @@ describe('host_exec', () => {
     expect(String(blocked.result.outcome)).toContain('allow_prompts:true')
     const listed = await api('GET', '/api/v1/hosts/tccmac/exec', undefined, OWN_SID)
     expect(listed.body.jobs[0]).toMatchObject({ jobId: blocked.result.jobId, state: 'blocked', blocked: { reason: 'password_prompt' } })
+  }, 30_000)
+
+  it('keep on a Mac: the host\'s permission guard looks at the kept directory on every call', async () => {
+    const keepHome = path.join(hostRoot, 'keep-home')
+    const runs = () => sent.filter((m) => m.host === 'keepmac' && m.cmd === 'exec.run')
+    // Without keep, a relative read of a guarded place is refused.
+    expect(await api('POST', '/api/v1/hosts/keepmac/exec', { command: 'cat Desktop/private.txt' }, OWN_SID)).toMatchObject({ status: 409, body: { code: 'may_prompt' } })
+    // The user agreed to this one call: it runs, and where it ended is kept.
+    expect((await api('POST', '/api/v1/hosts/keepmac/exec', { command: 'cd "$HOME/Desktop"', keep: true, allow_prompts: true }, OWN_SID)).body).toMatchObject({ exitCode: 0 })
+    // The next keep call starts there, so a relative read is that guarded read again: refused without allow_prompts.
+    const next = await api('POST', '/api/v1/hosts/keepmac/exec', { command: 'cat private.txt', keep: true }, OWN_SID)
+    expect(next).toMatchObject({ status: 409, body: { code: 'may_prompt', keptDir: `${keepHome}/Desktop` } })
+    expect(next.body.error).toMatch(new RegExp(`^This keep call would start in ${keepHome}/Desktop, where this task's last keep call on keepmac ended, and macOS guards that place: .* Nothing ran\\. Give cwd to start somewhere else, or ask the user first and call again with allow_prompts: true\\.$`))
+    expect(JSON.stringify(next.body)).not.toContain('synthetic private text')
+    // The host refused it in that directory (its own guard), before anything ran.
+    expect(runs().at(-1)!.params).toMatchObject({ cwd: `${keepHome}/Desktop` })
+    expect(runs().at(-1)!.params.allowPrompts).toBeUndefined()
+    // With allow_prompts for this call too, it runs there.
+    expect((await api('POST', '/api/v1/hosts/keepmac/exec', { command: 'cat private.txt', keep: true, allow_prompts: true }, OWN_SID)).body).toMatchObject({ exitCode: 0, output: 'synthetic private text\n', cwd: `${keepHome}/Desktop` })
+    // Once Walnut knows the host is a Mac, this server refuses it too, before the host is asked.
+    await updateHostProfile('keepmac', (p) => { p.probed = { os: { platform: 'darwin', release: '1' }, arch: 'arm64', cpus: 8, memBytes: 1, home: keepHome, proxyEnv: {}, cloud: null, internet: null, tools: {}, uptimeSec: 1, probedAt: new Date().toISOString() } as never })
+    const before = runs().length
+    const served = await api('POST', '/api/v1/hosts/keepmac/exec', { command: 'cat private.txt', keep: true }, OWN_SID)
+    expect(served.body).toMatchObject({ code: 'may_prompt', keptDir: `${keepHome}/Desktop` })
+    expect(served.body.error).toMatch(/^This keep call would start in .*\/Desktop, where this task's last keep call on keepmac ended, and macOS guards that place/)
+    expect(runs().length).toBe(before)
+    // A cwd named elsewhere wins, and nothing is refused there.
+    expect((await api('POST', '/api/v1/hosts/keepmac/exec', { command: 'pwd', keep: true, cwd: '~' }, OWN_SID)).body).toMatchObject({ exitCode: 0, output: `${keepHome}\n` })
   }, 30_000)
 
   // 2026-11-04: a task that must run only under a grant the user gave checked the grant, then

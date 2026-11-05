@@ -65,8 +65,11 @@ const TAG_RE = /\t\((in a subshell, )?bash (\d+)(?:, (?:pid|bg) (\d+))?\)$/
  * the same job (`exitTrap` false).
  */
 const prefix = (jobId: string, seal: string, exitTrap = true) => `set -e; (set -o pipefail) 2>/dev/null && set -o pipefail; if [ -n "\${BASH_VERSION:-}" ]; then set -E; ${exitTrap ? 'trap : EXIT; ' : ''}trap 'walnut_rc=$? walnut_ps="\${PIPESTATUS[*]}"; walnut_in="${BASH_TAG}\${BASH_VERSINFO[0]:-0}, bg \${!:-0})"; [ "\${BASH_SUBSHELL:-0}" = 0 ] || walnut_in="${SUBSHELL_TAG}\${BASH_VERSINFO[0]:-0}, pid \${BASHPID:-0})"; case $- in *e*) printf "\\n${strictMark(jobId, seal)} %s [%s] line %s: %s%s\\n" "$walnut_rc" "$walnut_ps" "\${LINENO:-0}" "$BASH_COMMAND" "$walnut_in" >&2;; esac' ERR; fi`
-/** Walnut's own commands, which bash 4 may name as the step that failed after them (keep's EXIT trap too). */
-const OWN_COMMAND_RE = /^trap (?:'walnut_rc=|'walnut_ks=1;|: EXIT$)/
+/**
+ * Walnut's own commands, which bash 4 may name as the step that failed after them: strict's traps, and
+ * keep's EXIT trap, which bash names in single quotes by its first line (host-exec-keep.ts TRAP_FIRST_LINE).
+ */
+const OWN_COMMAND_RE = /^trap (?:'walnut_rc=|'\{ \\builtin set \+xv; \} |: EXIT$)/
 
 export function strictLine(line: string, jobId: string, opts: { exitTrap?: boolean } = {}): string {
   if (!/^hx-[A-Za-z0-9_-]+$/.test(jobId)) throw new Error(`strictLine: not a job id: ${jobId}`)

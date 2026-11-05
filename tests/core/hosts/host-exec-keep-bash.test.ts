@@ -2,9 +2,10 @@
  * host_exec keep against a real bash (src/core/hosts/host-exec-keep.ts): the cases in
  * tests/helpers/host-exec-keep-cases.ts, played call after call in one task directory, on every bash
  * this machine has (5.x in the test container, /bin/bash 3.2 on a Mac; add others with
- * WALNUT_KEEP_BASHES=/path/a:/path/b). Then two comparisons with the same lines run without keep:
- * keep changes no exit code, signal or output of a first call, and strict names the same step with
- * keep as without it.
+ * WALNUT_KEEP_BASHES=/path/a:/path/b), each both ways a call finds its kept directory (the server
+ * reads it, or the shell enters it). Then comparisons with the same lines run without keep: keep
+ * changes no exit code, signal or output of a first call (aliases, readonly names and tracing
+ * included), and strict names the same step with keep as without it.
  *
  * MACHINE SAFETY: short shell children under a 10 s timeout, each in its own temp dir; a signal goes
  * only to the process group of a child the runner started.
@@ -12,8 +13,8 @@
 import fs from 'node:fs'
 import { afterAll, describe, expect, it } from 'vitest'
 import { failedStepOf, strictLine, withoutInnerMarks } from '../../../src/core/hosts/host-exec-strict.js'
-import { shapedLine } from '../../../src/core/hosts/host-exec-keep.js'
-import { KEEP_CASES, bashesHere, expected, nonBashSh, playCase, runLine, sandbox, type Sandbox } from '../../helpers/host-exec-keep-cases.js'
+import { KEEP_SAVE_NAMES, shapedLine } from '../../../src/core/hosts/host-exec-keep.js'
+import { KEEP_CASES, bashesHere, expected, keptStart, nonBashSh, notSavedLine, playCase, runLine, sandbox, type KeepMode, type Sandbox } from '../../helpers/host-exec-keep-cases.js'
 
 const bashes = bashesHere()
 const sh = nonBashSh()
@@ -27,6 +28,30 @@ const job = () => `hx-keep-bash-${process.pid}-${n += 1}`
 const SAME_LINES = [
   'true', 'false', 'echo a\nexit 3', "sh -c 'exit 7'", "exec sh -c 'exit 4'", 'grep -q zz-nomatch /dev/null',
   'echo a &&', 'echo a |', 'cat <<EOF\nhello', 'kill -TERM $$', 'echo out; echo err >&2; exit 5',
+  // Review 2026-11-05 (keep round 1): tracing that would print a value, and what a line does to its shell.
+  "export SECRET=private-canary; PS4='$SECRET '; set -x",
+  "export SECRET=private-canary; exec 9>&2; BASH_XTRACEFD=9; PS4='$SECRET '; set -x",
+  "export SECRET=private-canary; PS4='$SECRET '; set -x; echo traced",
+  'export V=kept; readonly IFS; true', "export IFS='x y'; true", "IFS=$'\\n'; true",
+  'unset PWD; export V=kept; set -u; true', 'export V=1; exec 2>&-; true', 'set -a; AX=1; set -o posix; true',
+  'leak() { echo VALUE; }; export -f leak; leak', 'export V=1; set -eu; exit 3', 'printf -v BIG "%131072s" x; export BIG; true',
+  'export V=1; unset walnut_nl walnut_kn walnut_kb; true',
+]
+
+/**
+ * Lines stopped by a signal to their process group, as the daemon stops a job. The save's wait reaps
+ * a child the signal ended, and bash would report it ("Terminated") where the run without keep ends
+ * silently.
+ */
+const STOPPED_LINES: Array<[string, NodeJS.Signals]> = [
+  ['export K=1; cd /; sleep 5', 'SIGTERM'], ['export K=1; sleep 5', 'SIGHUP'],
+  ['export K=1; sleep 10 & sleep 5', 'SIGTERM'], ['export K=1; (sleep 5)', 'SIGTERM'],
+]
+
+/** Every word in command position in keep's EXIT trap past its first line, and `[`/`test` (the reviewer's); each as an alias. */
+const ALIASED = [
+  'builtin', 'command', '[', 'test', '[[', '!', 'printf', 'declare', 'compgen', 'export', 'set', 'shopt', 'trap', 'umask', 'pwd', 'exec', 'unset',
+  'mv', 'mkdir', 'rm', 'exit', 'if', 'then', 'elif', 'fi', 'while', 'do', 'done', 'case', 'esac', 'continue',
 ]
 
 /** Strict lines (tests/core/hosts/host-exec-strict-bash.test.ts, tests/e2e/host-exec-e2e.test.ts). */
@@ -52,23 +77,28 @@ const STRICT_LINES = [
 const comparable = (out: string, jobId: string) => withoutInnerMarks(out, jobId)
   .replaceAll(jobId, 'JOB').replace(/(walnut strict JOB) [0-9a-f]{12}/g, '$1').replace(/\t\(bash \d+, bg \d+\)$/gm, '')
 
+const root = process.getuid?.() === 0
+
 describe.each(bashes)('keep on bash %s', (_version, bash) => {
-  for (const c of KEEP_CASES) {
-    it.skipIf(c.steps.some((s) => s.sh) && !sh)(c.name, async () => {
-      const { results, box } = await playCase(c, bash, sh)
-      boxes.push(box)
-      for (const [i, step] of c.steps.entries()) {
-        const r = results[i]!
-        const e = expected(step, box)
-        const what = `step ${i + 1}: ${step.command.slice(0, 80)}\n--- output ---\n${r.out}`
-        if (e.rc !== undefined) expect(r.rc, what).toBe(e.rc)
-        if (e.signal !== undefined) expect(r.signal, what).toBe(e.signal)
-        if (e.out !== undefined) expect(r.out, what).toBe(e.out)
-        for (const h of e.has ?? []) expect(r.out, what).toContain(h)
-        for (const h of e.not ?? []) expect(r.out, what).not.toContain(h)
-        if (e.match !== undefined) expect(r.out, what).toMatch(new RegExp(e.match))
-      }
-    }, 30_000)
+  for (const mode of ['server', 'shell'] as KeepMode[]) {
+    for (const c of KEEP_CASES.filter((k) => !k.mode || k.mode === mode)) {
+      it.skipIf((c.steps.some((s) => s.sh) && !sh) || (c.nonRoot && root))(`${c.name} (${mode})`, async () => {
+        const { results, box } = await playCase(c, bash, sh, mode)
+        boxes.push(box)
+        for (const [i, step] of c.steps.entries()) {
+          const r = results[i]!
+          const e = expected(step, box, mode)
+          const what = `step ${i + 1}: ${step.command.slice(0, 80)}\n--- output ---\n${r.out.slice(0, 2000)}`
+          if (e.rc !== undefined) expect(r.rc, what).toBe(e.rc)
+          if (e.signal !== undefined) expect(r.signal, what).toBe(e.signal)
+          if (e.out !== undefined) expect(r.out, what).toBe(e.out)
+          for (const h of e.has ?? []) expect(r.out, what).toContain(h)
+          for (const h of e.not ?? []) expect(r.out, what).not.toContain(h)
+          if (e.match !== undefined) expect(r.out, what).toMatch(new RegExp(e.match))
+          if (e.gone !== undefined) expect(r.gone, what).toBe(e.gone)
+        }
+      }, 30_000)
+    }
   }
 
   it('changes no exit code, signal or output of a first call', async () => {
@@ -82,6 +112,59 @@ describe.each(bashes)('keep on bash %s', (_version, bash) => {
         .toEqual({ rc: plain.rc, signal: plain.signal, out: plain.out.replaceAll(plainBox.root, 'ROOT') })
     }
   }, 60_000)
+
+  it('a stop by a signal ends with the same signal and output as without keep', async () => {
+    for (const [line, signal] of STOPPED_LINES) {
+      const plainBox = sandbox()
+      const keepBox = sandbox()
+      boxes.push(plainBox, keepBox)
+      const kill = { signal, afterMs: 400 }
+      const plain = await runLine(bash, line, plainBox, { kill })
+      const kept = await runLine(bash, shapedLine({ command: line, keep: true }, job())!, keepBox, { kill })
+      expect({ rc: kept.rc, signal: kept.signal, out: kept.out }, `${line} (${signal})`).toEqual({ rc: plain.rc, signal: plain.signal, out: plain.out })
+    }
+  }, 60_000)
+
+  it('an alias of any command word the save uses changes neither the run nor the save', async () => {
+    for (const word of ALIASED) {
+      const line = `export VAL=keep; shopt -s expand_aliases; alias '${word}'='echo hijack'; true`
+      const plainBox = sandbox()
+      const keepBox = sandbox()
+      boxes.push(plainBox, keepBox)
+      const plain = await runLine(bash, line, plainBox)
+      const kept = await runLine(bash, shapedLine({ command: line, keep: true }, job())!, keepBox)
+      expect({ rc: kept.rc, signal: kept.signal, out: kept.out }, word).toEqual({ rc: plain.rc, signal: plain.signal, out: plain.out })
+      const next = await runLine(bash, shapedLine({ command: 'echo "${VAL-unset}"; pwd', keep: true }, job())!, keepBox, keptStart(keepBox))
+      expect(next.out, word).toBe(`keep\n${keepBox.home}\n`)
+    }
+  }, 120_000)
+
+  it('a name the save needs made readonly: the exit code stays, one line says it was not saved, and the last state stands', async () => {
+    for (const name of KEEP_SAVE_NAMES) {
+      for (const [tail, rc] of [['set -e; true', 0], ['set -eu; exit 3', 3]] as const) {
+        const box = sandbox()
+        boxes.push(box)
+        await runLine(bash, shapedLine({ command: 'export V=old', keep: true }, job())!, box)
+        const line = `export V=new; readonly ${name}; ${tail}`
+        const plainBox = sandbox()
+        boxes.push(plainBox)
+        const plain = await runLine(bash, line, plainBox)
+        const kept = await runLine(bash, shapedLine({ command: line, keep: true }, job())!, box, keptStart(box))
+        expect({ rc: kept.rc, signal: kept.signal }, line).toEqual({ rc: plain.rc, signal: plain.signal })
+        expect(kept.rc, line).toBe(rc)
+        expect(kept.out, line).toBe(plain.out + notSavedLine('the line made a walnut_ variable readonly'))
+        expect((await runLine(bash, shapedLine({ command: 'echo "$V"', keep: true }, job())!, box, keptStart(box))).out, line).toBe('old\n')
+      }
+    }
+    // The names the save only reads: readonly, it saves all the same.
+    for (const name of ['walnut_kf', 'walnut_kn', 'walnut_kb', 'walnut_kz']) {
+      const box = sandbox()
+      boxes.push(box)
+      const kept = await runLine(bash, shapedLine({ command: `export V=new; readonly ${name}; set -e; true`, keep: true }, job())!, box)
+      expect(kept, name).toMatchObject({ rc: 0, out: '' })
+      expect((await runLine(bash, shapedLine({ command: 'echo "$V"', keep: true }, job())!, box, keptStart(box))).out, name).toBe('new\n')
+    }
+  }, 120_000)
 
   it('strict names the same step with keep as without it, with the same exit code', async () => {
     for (const line of STRICT_LINES) {
@@ -107,7 +190,7 @@ describe.each(bashes)('keep on bash %s', (_version, bash) => {
     expect(failedStepOf(first.out, a, first.rc)).toMatchObject({ exitCode: 1, command: 'grep -q zz-nomatch /dev/null' })
     expect(first.out).not.toContain('never')
     const b = job()
-    const next = await runLine(bash, shapedLine({ command: 'echo "$SK $PWD"', strict: true, keep: true }, b)!, box, { jobId: b })
+    const next = await runLine(bash, shapedLine({ command: 'echo "$SK $PWD"', strict: true, keep: true }, b)!, box, { jobId: b, cwd: keptStart(box).cwd })
     expect(next).toMatchObject({ rc: 0, out: `1 ${box.home}/sk\n` })
     // A background strict run keeps strict's own EXIT trap, and saves nothing.
     const c = job()
