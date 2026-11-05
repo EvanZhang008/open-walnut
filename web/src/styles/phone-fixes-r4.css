@@ -160,20 +160,23 @@
   }
   .app-shell-navigation .mail-app .mail-reader-title-row > .mail-reader-actions {
     display: flex;
-    flex-wrap: nowrap;
+    /* Every button keeps a finger's width: one more than fits goes to a second line
+       instead of squeezing them all (320 px held six at 35 px). */
+    flex-wrap: wrap;
     justify-content: space-between;
-    gap: 4px;
+    gap: 2px;
     width: 100%;
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
     padding: 2px 0;
   }
-  .app-shell-navigation .mail-app .mail-reader-actions > .mail-task-slot {
+  .app-shell-navigation .mail-app .mail-reader-actions > .mail-task-slot,
+  .app-shell-navigation .mail-app .mail-reader-actions .content-actions {
     display: contents;
   }
   .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn {
     flex: 1 1 0;
-    min-width: 0;
+    min-width: 44px;
     width: auto;
     height: auto;
     min-height: 52px;
@@ -187,7 +190,9 @@
   /* The name each button already carries for a screen reader, shown. */
   .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn[data-label]::after {
     content: attr(data-label);
-    white-space: nowrap;
+    /* A two-word name ("Talk to CEO") takes two lines rather than run into its neighbour. */
+    white-space: normal;
+    text-align: center;
   }
 
   /* Invite answers are finger targets. */

@@ -405,6 +405,22 @@
     align-items: center;
   }
 
+  /* The detail's controls added after that rule (Watch, Complete and Delete,
+     + Dependency, the note box with its mic and Add) take a finger too. */
+  html body .is-phone-layer .task-watch-btn,
+  html body .is-phone-layer .tdp-action,
+  html body .is-phone-layer .tdp-link,
+  html body .is-phone-layer .mic-btn,
+  html body .is-phone-layer .tdp-note-add input {
+    min-height: 44px;
+  }
+
+  html body .is-phone-layer .task-watch-btn,
+  html body .is-phone-layer .mic-btn {
+    min-width: 44px;
+    justify-content: center;
+  }
+
   html body .is-phone-layer .tag-editor-input {
     min-height: 44px;
     font-size: 16px;
@@ -840,8 +856,16 @@
 
   .app-shell-navigation .mail-app .mail-view-menu-btn,
   .app-shell-navigation .mail-app .mail-text-btn,
-  .app-shell-navigation .mail-app .mail-reader-details-btn {
+  .app-shell-navigation .mail-app .mail-reader-details-btn,
+  .app-shell-navigation .mail-app .mail-load-older {
     min-height: 44px;
+  }
+
+  /* An open group's one-line rows are 32 px on a desktop; a finger needs 44, and the
+     row stays one line (its sender and subject centred in it). */
+  .app-shell-navigation .mail-app .mail-row.mail-kid {
+    min-height: 44px;
+    align-items: center;
   }
 
   /* The sender gets the whole line; the date and Details go under it. */
