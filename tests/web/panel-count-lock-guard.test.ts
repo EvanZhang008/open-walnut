@@ -57,7 +57,8 @@ describe('panel count lock', () => {
       const src = code(f);
       return /\.info\(\)/.test(src) && /(for \(;;\)|while \()[^\n]*\n[\s\S]{0,800}?setTimeout\(r,/.test(src);
     });
-    expect(queues).toEqual(expect.arrayContaining(['fixture-lease.ts', 'panel-count-lock.ts']));
+    // The panel count lock and the approvals lock both poll through spec-lock.ts.
+    expect(queues).toEqual(expect.arrayContaining(['fixture-lease.ts', 'spec-lock.ts']));
     const own = queues.filter((f) => !/\bwaitOutsideBudget\(/.test(code(f)) || /\binfo\.setTimeout\(/.test(code(f)));
     expect(own, 'poll the lock inside waitOutsideBudget() from ./wait-budget').toEqual([]);
   });

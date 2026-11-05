@@ -5,7 +5,8 @@
  * the toast up; a `backticked` command reads as code with its own Copy; the x stays inside the
  * toast in every form (Home, beside an approval card, a narrow window, the phone).
  */
-import { expect, test, type APIRequestContext, type Locator, type Page, type WebSocketRoute } from '@playwright/test'
+import { expect, test, type Locator, type Page, type WebSocketRoute } from '@playwright/test'
+import { holdApprovalsLock } from './approvals-lock'
 import { pausePageClock } from './page-clock'
 import { PHONE } from './phone-helpers'
 
@@ -34,15 +35,9 @@ function noticeEvent(key: string, extra: Record<string, unknown> = {}): string {
   })
 }
 
-async function denyAllWaiting(request: APIRequestContext) {
-  const res = await request.get('/api/v1/approvals')
-  if (!res.ok()) return
-  const { approvals } = await res.json() as { approvals: { id: string }[] }
-  for (const a of approvals) await request.post(`/api/v1/approvals/${a.id}/answer`, { data: { decision: 'deny' } })
-}
 test.describe.configure({ timeout: 90_000 })
-test.beforeEach(async ({ request }) => { await denyAllWaiting(request) })
-test.afterEach(async ({ request }) => { await denyAllWaiting(request) })
+// Each test starts and ends with no approval waiting, cleared under the approvals lock.
+holdApprovalsLock('test', { clear: true })
 
 async function boot(page: Page, sock: () => WebSocketRoute | null) {
   await page.route('**/api/quiet*', (r) => r.fulfill({ json: { quiet: false } }))

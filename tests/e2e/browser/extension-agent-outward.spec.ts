@@ -21,8 +21,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { holdApprovalsLock } from './approvals-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It makes and answers approvals on the shared fixture server, where another file clears them.
+holdApprovalsLock('file')
 
 let ctx: BrowserContext
 let extId = ''

@@ -18,6 +18,7 @@
  */
 import { expect, test, type APIRequestContext, type Page, type WebSocketRoute } from '@playwright/test'
 import crypto from 'node:crypto'
+import { holdApprovalsLock } from './approvals-lock'
 
 test.use({ video: process.env.APR_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
@@ -40,15 +41,9 @@ async function offHome(page: Page) {
 
 // The fixture server is shared: a request another file or an earlier run left waiting would take
 // the corner (it shows the first) and the Home summary line, so each test starts with none, and
-// ends with none, so a failed test leaves no card beside another file's toasts.
-async function denyAllWaiting(request: APIRequestContext) {
-  const res = await request.get('/api/v1/approvals')
-  if (!res.ok()) return
-  const { approvals } = await res.json() as { approvals: { id: string }[] }
-  for (const a of approvals) await request.post(`/api/v1/approvals/${a.id}/answer`, { data: { decision: 'deny' } })
-}
-test.beforeEach(async ({ request }) => { await denyAllWaiting(request) })
-test.afterEach(async ({ request }) => { await denyAllWaiting(request) })
+// ends with none, so a failed test leaves no card beside another file's toasts. The clearing runs
+// under the approvals lock, so it never denies a request another file is waiting on.
+holdApprovalsLock('file', { clear: true })
 
 async function waitFor(request: APIRequestContext, id: string, token: string) {
   const res = await request.post(`/api/v1/approvals/${id}/wait`, { data: { token, wait_ms: 5_000 } })
