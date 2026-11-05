@@ -1,0 +1,549 @@
+/* The servers a session started, inside its Web view (SessionServerList.tsx):
+   a strip of port chips over an open page, a list of rows when nothing is open. */
+
+.session-servers-strip {
+  container-type: inline-size;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  min-width: 0;
+}
+/* One line that fills what the row leaves: the chips are laid out to fit it (SessionServerList
+   relayout), so nothing scrolls and no chip is cut; the gap is CHIP_GAP there. */
+.session-servers-strip-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The measurer: the same chips, every way, out of sight and out of the row's flow. */
+.session-servers-strip-chips.session-servers-measure {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.session-server-chip-stopping { opacity: 0.6; }
+/* The page of a server being stopped: dimmed (its confirm says "Stopping…"). */
+.session-web-body-stopping .session-web-iframe { opacity: 0.45; transition: opacity 0.15s ease; }
+/* A chip keeps its size; only the page shown, alone too wide for the row, shortens its name. */
+.session-servers-strip-chips > .session-server-chip { flex: 0 0 auto; }
+/* Alone too wide for the row (a very narrow window): the chip shortens its name. */
+.session-servers-strip-chips > .session-server-chip:only-child { flex: 0 1 auto; min-width: 0; }
+.session-servers-strip-chips .session-server-chip-open { min-width: 0; }
+.session-servers-strip-chips .session-server-chip-open > :not(.session-server-name) { flex-shrink: 0; }
+/* Every chip here is a web page, so the list's kind dot would say nothing: its room goes to the name. */
+.session-servers-strip-chips .session-server-dot { display: none; }
+.session-servers-strip-chips .session-server-name { flex: 0 1 auto; min-width: 0; max-width: 150px; }
+/* The short form is measured at 72px and drawn at the cut the layout picked to fill the row. */
+.session-servers-strip-chips .session-server-chip-short .session-server-name { max-width: var(--session-server-chip-cut, 72px); }
+/* Holds the strip's height (its chips are 24px) until the first scan answers. */
+.session-servers-strip-pending .session-servers-strip-label { line-height: 24px; margin: 0 2px; }
+.session-servers-strip-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-right: 2px;
+}
+/* Opens every server's details over the page. */
+.session-servers-strip-all {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  height: 24px;
+  padding: 0 6px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+/* How many servers the list has, chips or not. */
+.session-servers-strip-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* "+2": web pages the chips had no room for, one click from the list that has them. */
+.session-servers-strip-others {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.session-servers-strip-others:hover { background: var(--bg-hover); color: var(--fg); }
+.session-servers-strip-others:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.session-servers-strip-all:hover { background: var(--bg-hover); color: var(--fg); }
+.session-servers-strip-all:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.session-servers-strip-all-open { background: var(--bg-hover); color: var(--fg); border-color: var(--border); }
+.session-servers-strip-all svg { transition: transform 0.12s ease; }
+.session-servers-strip-all-open svg { transform: rotate(180deg); }
+
+/* The stop confirm: a small card under the stop button, never over it. */
+.session-server-popover {
+  z-index: 10000;
+  width: 264px;
+  box-sizing: border-box;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--card-bg));
+  color: var(--fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+}
+.session-server-popover-title { font-weight: 600; }
+.session-server-popover-body { margin-top: 4px; font-size: 12px; color: var(--fg-secondary); line-height: 1.4; }
+.session-server-popover-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.session-server-popover-actions .session-server-btn { height: 28px; padding: 0 12px; }
+
+/* The list over an open page, under the strip. */
+.session-servers-strip-wrap { position: relative; flex-shrink: 0; z-index: 3; }
+.session-servers-overlay {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 14px;
+  right: 14px;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated, var(--card-bg));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+.session-servers-overlay .session-servers-list { max-width: none; }
+
+.session-server-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.session-server-chip-active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.session-server-chip-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.session-server-chip-open:hover:not(:disabled) { background: var(--bg-hover); }
+.session-server-chip-open:disabled { cursor: default; color: var(--fg-muted); }
+/* The shown page's Stop, inside its chip: a word with the usual square. */
+/* The shown page's Stop, at the row's end (it never moves when chips change). */
+.session-servers-strip-stop {
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 0 10px 0 9px;
+  color: var(--fg-secondary);
+}
+.session-servers-strip-stop-label { display: inline-grid; }
+.session-servers-strip-stop-label > span { grid-area: 1 / 1; text-align: left; }
+.session-servers-strip-stop-off { visibility: hidden; }
+
+.session-servers-strip-stop:hover:not(:disabled),
+.session-servers-strip-stop:hover:not(:disabled) .session-server-stop-glyph { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
+.session-server-chip .session-server-error { padding: 0 8px 0 2px; }
+
+.session-server-port {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.session-server-name {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-server-chip .session-server-name { color: var(--fg-secondary); }
+
+/* What answered on the port: green for a web page, grey for anything else. */
+.session-server-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-muted);
+}
+/* Green: it listens (a tag says when it is not a web page); amber: still asked. */
+.session-server-dot-http,
+.session-server-dot-https,
+.session-server-dot-other { background: var(--success); }
+.session-server-dot-unknown { background: var(--warning); }
+
+.session-server-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-server-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.session-server-btn:disabled { opacity: 0.45; cursor: default; }
+.session-server-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-server-chip-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.session-server-btn-open {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+.session-server-btn-open:hover:not(:disabled) { background: var(--accent-subtle); }
+/* Open, or where it would be: every row's buttons line up. */
+.session-server-btn-open,
+.session-server-btn-slot { min-width: 64px; box-sizing: border-box; }
+.session-server-btn-slot { display: inline-block; height: 24px; }
+.session-server-btn-danger {
+  border-color: var(--error);
+  background: var(--error);
+  color: #fff;
+}
+.session-server-btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 88%, #000); }
+.session-server-btn-icon { width: 26px; padding: 0; background: transparent; }
+/* What the Web view shows below its bar; a word after a stop floats over it, moving nothing. */
+.session-web-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+/* "Stopped :8080 (Storefront)." after any stop, at the foot of the page or the list (the
+   top holds the list's title and the "Stopping" word). */
+.session-servers-notice {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--card-bg, var(--bg));
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  color: var(--fg);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.session-servers-notice svg { flex-shrink: 0; color: var(--success, #34c759); }
+/* The usual "stop" mark: a square in a ring. */
+.session-server-stop-glyph { display: block; color: var(--fg-secondary); }
+.session-server-btn-icon[data-testid="session-server-stop"]:hover:not(:disabled) { color: var(--error); }
+.session-server-btn-icon[data-testid="session-server-stop"]:hover:not(:disabled) .session-server-stop-glyph { color: var(--error); }
+
+.session-server-btn-armed { background: var(--bg-hover); color: var(--error); }
+.session-server-btn-armed .session-server-stop-glyph { color: var(--error); }
+.session-server-stop-glyph-busy { animation: session-server-busy 0.9s ease-in-out infinite alternate; }
+@keyframes session-server-busy { from { opacity: 0.25; } to { opacity: 0.8; } }
+@media (prefers-reduced-motion: reduce) { .session-server-stop-glyph-busy { animation: none; opacity: 0.35; } }
+/* A row's Stop and its "Stopping…" take one width, so the buttons beside them stay put. */
+.session-server-row-actions .session-server-row-stop { min-width: 64px; box-sizing: border-box; display: inline-flex; justify-content: center; }
+/* Stop is as quiet as Open, in both themes: its weight is the confirm's. */
+.session-server-row-actions [data-testid="session-server-stop"] { background: transparent; color: var(--fg-secondary); }
+.session-server-error { font-size: 11px; color: var(--error); white-space: nowrap; }
+
+/* Nothing open yet: the list, then the usual hint. */
+.session-web-empty-servers {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 24px;
+}
+.session-web-empty-servers > .session-code-error-hint { text-align: center; }
+/* Under the list, the hint lines up with its rows. */
+.session-web-empty-servers:has(.session-servers-list) > .session-code-error-hint { text-align: left; width: 100%; max-width: 640px; margin: 0; padding: 0 2px; }
+.session-servers-list { width: 100%; max-width: 640px; }
+.session-servers-list-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 10px;
+}
+.session-servers-list-close { color: var(--fg-muted); }
+.session-servers-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+.session-server-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "main actions"
+    "meta actions"
+    "facts actions";
+  column-gap: 12px;
+  row-gap: 3px;
+  padding: 10px 14px;
+}
+.session-server-row + .session-server-row { border-top: 1px solid var(--border); }
+.session-server-row-active { background: var(--accent-subtle); }
+.session-server-chip-open .session-server-tag { margin-left: -2px; }
+.session-server-row-main {
+  grid-area: main;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+.session-server-row-main .session-server-name { max-width: none; color: var(--fg); }
+.session-server-row-main .session-server-title,
+.session-server-row-main .session-server-name:not(.session-server-program) { font-weight: 500; }
+.session-server-row-meta { grid-area: meta; min-width: 0; display: flex; align-items: flex-start; gap: 8px; }
+/* One line of the command, so rows line up; the whole of it is the title and the Copy button. */
+.session-server-command {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.session-server-copy { color: var(--fg-muted); border: 1px solid var(--border); width: 24px; }
+.session-server-copy:hover:not(:disabled) { color: var(--fg); }
+.session-server-copy.session-server-copy-done,
+.session-server-copy.session-server-copy-done:hover { color: var(--success); }
+.session-server-row-facts { grid-area: facts; font-size: 12px; color: var(--fg-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-server-row-actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-server-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+/* After .session-server-tag, which it overrides: the page on screen, in the accent. */
+.session-server-tag.session-server-tag-active { background: var(--accent-subtle); color: var(--accent); }
+
+/* A narrow Web view (a phone, or a small window beside the chat) stacks a row: its buttons go
+   under the command, so the name and the command keep the width. */
+@container (max-width: 520px) {
+  .session-server-row {
+    grid-template-areas: "main" "meta" "facts" "actions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .session-server-row-actions { margin-top: 6px; }
+}
+/* Short of room, a titled row drops its program (vite, http.server: the command below says it)
+   before it cuts the title. */
+@container (max-width: 640px) {
+  .session-server-row-main .session-server-title + .session-server-program { display: none; }
+}
+/* Used by touch: the row's buttons are finger-sized. */
+@media (pointer: coarse) {
+  .session-server-row .session-server-btn, .session-server-row .session-server-btn-slot { height: 36px; }
+  .session-server-row .session-server-copy { width: 36px; }
+}
+
+/* A row's name: the page's own title when it has one, the program beside it, muted. */
+.session-server-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.session-server-row-main .session-server-program { color: var(--fg-secondary); }
+/* Short of room, the program gives way first; the title keeps a few letters and its ellipsis. */
+.session-server-row-main .session-server-title { flex: 0 1 auto; min-width: 48px; }
+.session-server-row-main .session-server-name.session-server-program { flex-shrink: 4; min-width: 0; }
+.session-server-row-main .session-server-tag { white-space: nowrap; flex-shrink: 0; }
+/* The rows a "not a web page" answer pointed at. */
+/* Not the "Showing" blue: a passing amber, so only the page shown reads as selected. */
+.session-server-row-flash { animation: session-server-flash 2.2s ease-out; }
+@keyframes session-server-flash { from { background: color-mix(in srgb, var(--warning) 22%, transparent); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .session-server-row-flash { animation: none; background: color-mix(in srgb, var(--warning) 14%, transparent); } }
+.session-server-row-main .session-server-name { flex-shrink: 0; }
+
+/* A narrow strip shows more chips: shorter names (the whole one is the tooltip and the list),
+   and the shown page's chip shortens too rather than push its Stop out of view. */
+@container (max-width: 560px) {
+  .session-servers-strip-chips .session-server-name { max-width: 90px; }
+  .session-servers-strip-chips .session-server-chip-short .session-server-name { max-width: min(var(--session-server-chip-cut, 72px), 90px); }
+}
+
+/* The menu's Web preview row, once it knows nothing is listening. */
+.session-menu-servers-none { color: var(--fg-muted); font-weight: 400; }
+
+/* A narrow Web view keeps its address readable: the host badge goes (the address says it). */
+.session-web-panel { container-type: inline-size; }
+@container (max-width: 480px) {
+  .session-web-header .session-code-host { display: none; }
+  .session-web-header .session-code-label { display: none; }
+  .session-servers-strip-others { padding: 0 6px; }
+  /* The port it stops is the chip marked as shown (and its tooltip): room for one more chip. */
+  .session-servers-strip-stop-port { display: none; }
+}
+
+/* The title row's chip for the session's web servers (SessionServersChip.tsx), sized like the
+   wait's chip beside it, in the green of a running server. */
+.session-web-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.session-web-chip:hover,
+.session-web-chip[aria-expanded="true"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--fg); }
+.session-web-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-web-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex: none; }
+.session-web-chip-label { font-variant-numeric: tabular-nums; }
+.session-web-chip-icon { display: inline-flex; }
+/* Its card: the session's server list, over the page. */
+.session-web-card {
+  position: fixed;
+  z-index: 10050;
+  container-type: inline-size;
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated, var(--card-bg));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+.session-web-card .session-servers-list { max-width: none; }
+/* The servers a turn started, at its end in the chat (SessionServersTurnCard.tsx). */
+.session-servers-turn-card {
+  container-type: inline-size;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 640px;
+  margin: 6px 0 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+.session-servers-turn-card .session-servers-list { max-width: none; }
+.session-servers-turn-card .session-servers-list-title { font-size: 12px; color: var(--fg-secondary); }
+/* A card's list (SessionServerList dense): one line a server, port, name, Open, Stop. The
+   command, uptime and pid are the Web view's list (and the row's tooltip). */
+.session-servers-list-dense .session-server-row-meta,
+.session-servers-list-dense .session-server-row-facts,
+.session-servers-list-dense .session-server-copy,
+.session-servers-list-dense .session-server-row-main .session-server-title + .session-server-program { display: none; }
+.session-servers-list-dense .session-server-row {
+  grid-template-areas: "main actions";
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 7px 10px;
+}
+.session-servers-list-dense .session-servers-list-title { margin-bottom: 8px; font-size: 13px; }
+@container (max-width: 520px) {
+  .session-servers-list-dense .session-server-row {
+    grid-template-areas: "main actions";
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .session-servers-list-dense .session-server-row-actions { margin-top: 0; }
+}
+/* A narrow card (the chat column) never lets a row's name or tag run under its buttons: the
+   tag gives way first, then the name, each to an ellipsis (the row's tooltip has them whole). */
+.session-servers-list-dense .session-server-row-main { overflow: hidden; }
+.session-servers-list-dense .session-server-row-main .session-server-tag {
+  flex-shrink: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-servers-list-dense .session-server-row-main .session-server-title { min-width: 24px; }
+.session-servers-list-dense .session-server-row-main .session-server-name {
+  flex-shrink: 1;
+  min-width: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A card as narrow as the chat beside the Web view keeps the name: its tags (Terminal, not a
+   web page, Showing) go to the row's tooltip; the shown row keeps its accent. */
+@container (max-width: 360px) {
+  .session-servers-list-dense .session-server-row-main .session-server-tag { display: none; }
+  .session-servers-list-dense .session-server-row { padding: 6px 8px; }
+  .session-servers-list-dense .session-server-row-main { gap: 6px; }
+  .session-servers-list-dense .session-server-row-actions { gap: 4px; }
+  /* One width for Open, Stop and the empty slot of a row with no Open, so the columns line up. */
+  .session-servers-list-dense .session-server-row-actions .session-server-btn { min-width: 46px; padding: 0 8px; }
+  .session-servers-list-dense .session-server-row-actions .session-server-btn-slot { min-width: 46px; }
+}

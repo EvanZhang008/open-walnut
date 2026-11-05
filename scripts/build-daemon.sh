@@ -92,6 +92,7 @@ SOURCES=(
   src/core/usage/session-cost-pricing.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
+  src/providers/port-scan-core.ts
   src/providers/task-dir-core.ts
   src/providers/task-dir-sizes.ts
   src/lib/task-dir.ts
@@ -326,6 +327,12 @@ cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENS
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/path-resolve-core.cjs" \
   src/providers/path-resolve-core.ts
+
+# Session servers sidecar: listener scan + process-group Stop; 'ports-v1' is
+# advertised only when it loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/port-scan-core.cjs" \
+  src/providers/port-scan-core.ts
 
 # Task directories sidecar: the repo checks before a removal run git, which the
 # source template does not carry; 'task-dir-v1' is advertised only when it loads.

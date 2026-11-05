@@ -179,6 +179,24 @@ describe('store against an async history', () => {
     expect(ran).toEqual(['nav', 'now'])
   })
 
+  it('leaving the phone layout closes every layer, top first, and says it was the breakpoint', async () => {
+    const infos: string[] = []
+    const mark = (id: string) => ({ onClose: (i: { fromHistory: boolean; breakpoint?: boolean }) => infos.push(`${id}:${i.fromHistory}:${i.breakpoint === true}`) })
+    open('session:a', mark('session:a'))
+    open('viewer:web:a', mark('viewer:web:a'))
+    store.leavePhone()
+    await tick()
+    // A session's view keeps itself open on this flag (it becomes the desktop split).
+    expect(infos).toEqual(['viewer:web:a:true:true', 'session:a:true:true'])
+    expect(isPhoneOverlayOpen()).toBe(false)
+    expect(history.index).toBe(0)
+    // A back is never the breakpoint.
+    open('viewer:files:a', mark('viewer:files:a'))
+    history.back()
+    await tick()
+    expect(infos.at(-1)).toBe('viewer:files:a:true:false')
+  })
+
   it('open flipping false pops only its own entry and never calls onClose', async () => {
     const e = open('note:a.md')
     store.release(e)

@@ -11,7 +11,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CHEVRON_GLYPH } from '@/components/common/Icons';
 import '@/styles/session-kebab-groups.css';
 
-export function KebabGroup({ label, hint, icon, badge, testId, children }: {
+/** A self-opening group the user closed (localStorage, per group test id). */
+const CLOSED_KEY = 'open-walnut-kebab-group-closed:';
+
+export function KebabGroup({ label, hint, icon, badge, testId, openWhen, children }: {
   label: string;
   /** What the group holds, shown on the closed row ("code · web · notes"). */
   hint?: string;
@@ -19,9 +22,16 @@ export function KebabGroup({ label, hint, icon, badge, testId, children }: {
   /** A count that must be seen without opening the group (work still running). */
   badge?: ReactNode;
   testId?: string;
+  /** Opens by itself while this holds (the Open group while the session serves a web page),
+   *  unless the user closed it that way: that choice is kept (per group, in this browser). */
+  openWhen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const keptClosed = () => { try { return !!testId && localStorage.getItem(`${CLOSED_KEY}${testId}`) === '1'; } catch { return false; } };
+  const [open, setOpen] = useState(() => !!openWhen && !keptClosed());
+  const touched = useRef(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- re-decided when openWhen turns true only
+  useEffect(() => { if (openWhen && !touched.current && !keptClosed()) setOpen(true); }, [openWhen]);
   const bodyRef = useRef<HTMLDivElement>(null);
   // In a menu short enough to scroll, a group near the foot opens below the fold:
   // bring its rows into view so the click visibly did something.
@@ -35,7 +45,16 @@ export function KebabGroup({ label, hint, icon, badge, testId, children }: {
         className="task-kebab-item task-kebab-group-toggle"
         aria-expanded={open}
         aria-label={label}
-        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          touched.current = true;
+          const next = !open;
+          setOpen(next);
+          // Closed while it would open by itself: remembered; opened again: forgotten.
+          if (openWhen !== undefined && testId) {
+            try { if (next) localStorage.removeItem(`${CLOSED_KEY}${testId}`); else if (openWhen) localStorage.setItem(`${CLOSED_KEY}${testId}`, '1'); } catch { /* storage off */ }
+          }
+        }}
       >
         <span className="task-kebab-icon">{icon}</span>
         {/* The hint shows only on the closed row; the open rows say it themselves. */}

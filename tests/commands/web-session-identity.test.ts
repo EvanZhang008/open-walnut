@@ -10,10 +10,11 @@ import { describe, it, expect } from 'vitest'
 import { forgetInheritedSessionIdentity } from '../../src/commands/web.js'
 
 describe('forgetInheritedSessionIdentity', () => {
-  it('drops the session id and agent socket, and nothing else', () => {
+  it('drops the session id, agent socket and terminal session, and nothing else', () => {
     const env: NodeJS.ProcessEnv = {
       WALNUT_SESSION_ID: '11111111-2222-3333-4444-555555555555',
       WALNUT_AGENT_SOCKET: '/tmp/x/agent-gateway.sock',
+      WALNUT_TERMINAL_SESSION_ID: '11111111-2222-3333-4444-555555555555',
       OPEN_WALNUT_HOME: '/data/walnut',
       PATH: '/usr/bin',
     }

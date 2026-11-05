@@ -75,10 +75,16 @@ export const START_FN = 'walnut_st() { if [ -r "/proc/$1/stat" ]; then s=$(sed \
  * The script dtach runs in its pty as `/bin/sh -c <script> <shell>`: record the
  * master (`$PPID`) and its start time, atomically, then exec the login shell
  * (`$0 -l`). A failed record changes nothing for the user: the shell still starts.
+ *
+ * With `sessionId`, the shell and every job in it carry WALNUT_TERMINAL_SESSION_ID, so
+ * the host's port scan (port-scan-core.ts) can tell which session a server started
+ * in this terminal belongs to. It is set here rather than in the pty's env so a
+ * remote terminal gets it too, whatever the login shell ssh runs the command in.
  */
-export function dtachRecordScript(pidFile: string): string {
+export function dtachRecordScript(pidFile: string, sessionId?: string): string {
   const tmp = `${pidFile}.tmp`
-  return `${START_FN}; s=$(walnut_st "$PPID"); `
+  const tag = sessionId ? `export WALNUT_TERMINAL_SESSION_ID=${q(sessionId)}; ` : ''
+  return `${tag}${START_FN}; s=$(walnut_st "$PPID"); `
     + `[ -n "$s" ] && { printf "%s\\n%s\\n" "$PPID" "$s" > ${q(tmp)} && mv -f ${q(tmp)} ${q(pidFile)}; } 2>/dev/null; `
     + 'exec "$0" -l'
 }

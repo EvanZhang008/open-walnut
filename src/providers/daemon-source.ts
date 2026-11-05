@@ -230,7 +230,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4150,6 +4150,13 @@ function dispatchCommand(ws, id, cmd) {
       if (nop === 'status') return replyTransfer(ws, id, cmd.cmd, function () { return netSupervisor.status(); }, false);
       if (nop === 'identity') return replyTransfer(ws, id, cmd.cmd, async function () { return { endpointId: await netSupervisor.identity() }; }, false);
       return replyTransfer(ws, id, cmd.cmd, function () { return netSupervisor[nop](cmd); }, false);
+    }
+    // The servers a session started (ports-v1); not bridge- or follower-reachable:
+    // ports.stop signals host processes. Mirrors daemon-standalone.ts.
+    case 'ports.list': case 'ports.stop': {
+      if (!daemonPorts) return sendError(ws, id, cmd.cmd + ' unsupported: port-scan-core sidecar not loaded');
+      const pop = cmd.cmd.slice(6);
+      return replyTransfer(ws, id, cmd.cmd, function () { return daemonPorts[pop](cmd); }, false);
     }
     case 'http.request': {
       if (!hostHttp) return sendError(ws, id, cmd.cmd + ' unsupported: host-reach-core sidecar not loaded');
@@ -13422,6 +13429,22 @@ try {
   });
   hostHttp = hostReachCore.createHostHttp();
 } catch (err) { hostMcp = null; hostHttp = null; }
+// The servers a session started (port-scan-core.cjs): 'ports-v1' is advertised only
+// when it loads. Mirrors daemon-standalone.ts.
+let daemonPorts = null;
+try {
+  const portScanCore = require(path.join(__dirname, 'port-scan-core.cjs'));
+  daemonPorts = portScanCore.createDaemonPorts({
+    agentPids: function () {
+      const pids = new Map();
+      for (const [sid, s] of sessions) if (s.pid && s.pid > 1 && s.state === 'running') pids.set(s.pid, sid);
+      if (acp) for (const [rid, w] of acp.workers) if (w.state === 'running' && w.proc && w.proc.pid > 1) pids.set(w.proc.pid, rid);
+      return pids;
+    },
+    resolveSid: function (raw) { return resolveCallerSid(raw) || raw; },
+    daemonPid: process.pid,
+  });
+} catch (err) { daemonPorts = null; }
 // The host network sidecar (net-core.cjs): 'net-v1' is advertised only when it loads.
 // Mirrors daemon-standalone.ts.
 let netSupervisor = null;
@@ -13549,6 +13572,7 @@ function daemonCapabilities() {
   if (externalScanCore && externalScanCore.describeExternalSessions) caps.push('external-describe-v1');
   if (externalScanCore && externalScanCore.isHumanStartedClaude) caps.push('external-human-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
+  if (daemonPorts) caps.push('ports-v1');
   if (taskDirCore) caps.push('task-dir-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskBuilds === 'function') caps.push('task-dir-prune-builds-v1');
@@ -15734,6 +15758,11 @@ async function startDaemon() {
     throw new Error('--service requires the daemon-cron-runtime.cjs and daemon-instance-lock.cjs sidecars');
   }
   fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+  // A daemon started from a session's shell or terminal is no session's: what it spawns
+  // (an editor server, a helper) would be listed as that session's servers (port-scan-core.ts).
+  // Each session and terminal it starts gets its own value.
+  delete process.env.WALNUT_SESSION_ID;
+  delete process.env.WALNUT_TERMINAL_SESSION_ID;
   // Build directories are retired while detached daemons are still running.
   process.chdir(DAEMON_DIR);
   // One deterministic port per uid+runtime dir, taken BEFORE reconcile so no

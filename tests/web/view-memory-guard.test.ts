@@ -56,6 +56,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/SessionDiffView.tsx#narrowPane': 'a measurement of the pane width, not a choice',
   'components/sessions/EngineSettingsPopover.tsx#filter': 'a typed filter in a popover',
   'components/tasks/TaskDetailEdits.tsx#loopHidden': 'how many matches of one dependency search would make a loop, a count of that search',
+  'components/sessions/SessionWebView.tsx#showAll': 'the session\'s full server list, an overlay opened for one look',
   'components/sessions/SessionChatHistory.tsx#activeTeamTab': 'which team of one conversation is read; it follows the conversation',
   'components/sessions/SessionPanel.tsx#prefillMode': 'how one prefill lands in the composer',
   'components/sessions/SessionPathSelector.tsx#hostFilter': 'the folder picker, a dialog',

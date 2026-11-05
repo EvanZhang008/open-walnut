@@ -17,6 +17,9 @@ import { inboxChipTitle } from '@/components/inbox/session-letters';
 import type { SessionSplitView } from './sessionSplitView';
 import { sessionKebabMetaRows, shellWord } from './session-kebab-meta';
 import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
+import { useSessionServers } from '@/hooks/useSessionServers';
+import { serversSummary } from './session-server-label';
+import '@/styles/session-servers.css';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { openSessionRawView } from './SessionRawView';
 import { backgroundRunningLabel } from './background-ledger';
@@ -264,7 +267,7 @@ export function SessionViewItems({
             <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z" />
           </svg>
         </span>
-        <span>Web preview</span>
+        <span>Web preview<WebServersCount sessionId={sessionId} /></span>
       </button>
 
       <button
@@ -314,6 +317,21 @@ export function SessionViewItems({
       )}
 
     </>
+  );
+}
+
+/** The Web preview row's count, as the Open row and the phone rows say it (serversSummary): "· 3 web servers", "· 1 other server" when only those run, or "· none running" once it knows there are none. */
+function WebServersCount({ sessionId }: { sessionId: string }) {
+  const { servers, state } = useSessionServers(sessionId, { enabled: true, fast: true });
+  // What Web preview can open, else what else runs (a database is listed there too): never
+  // "none running" while one of the session's servers holds a port.
+  const summary = serversSummary(servers);
+  if (!summary && state !== 'ok') return null;
+  return (
+    <span className="session-menu-servers-count" data-testid="session-menu-servers-count"
+      title={summary ? `${summary} this session started ${summary.startsWith('1 ') ? 'is' : 'are'} listening; Web preview lists every one` : 'No server of this session is listening'}>
+      <span className={summary ? undefined : 'session-menu-servers-none'}>{summary ? ` · ${summary}` : ' · none running'}</span>
+    </span>
   );
 }
 

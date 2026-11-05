@@ -164,7 +164,8 @@ test('a service that is not up yet explains itself, and Retry recovers once it s
   await pending.click()
   const card = webView(panel).locator('.session-code-error-card')
   await expect(card).toContainText(`Can't open localhost:${port}`, { timeout: 15_000 })
-  await expect(card).toContainText('Nothing is answering')
+  await expect(card).toContainText(`Nothing this session started is listening on :${port}.`)
+  await expect(card).toContainText('reloads by itself when this session starts a server')
   // The card IS the report. A designed "not up yet" answer must not also raise
   // the app-wide "This API endpoint is failing (HTTP 502)" incident toast.
   await page.waitForTimeout(3_000)
@@ -204,7 +205,7 @@ test('the kebab opens an empty Web view to type an address, and toggles it close
 
   await (await openMenu()).click()
   await expect(webView(panel)).toBeVisible()
-  await expect(webView(panel)).toContainText('Open a service this session started')
+  await expect(webView(panel)).toContainText('No servers started by this session are running')
   await expect(address(panel)).toBeFocused()
   await shot(page, '06-empty-web-view', testInfo)
 

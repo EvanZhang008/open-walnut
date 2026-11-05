@@ -45,7 +45,7 @@ describe.skipIf(REMOTE_DTACH_SOCKET_DIR !== DTACH_SOCKET_DIR)('the remote dtach 
     const out = execFileSync(shell, ['-c', cmd], { encoding: 'utf8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: root, SHELL: '/bin/echo', ARGV_OUT: argvOut } })
 
     const argv = fs.readFileSync(argvOut, 'utf8').split('\n').slice(0, -1)
-    expect(argv).toEqual(['-A', dtachSocketPath(sid, true), '-z', '-E', '-r', 'winch', '/bin/sh', '-c', dtachRecordScript(dtachPidPath(sid, true)), '/bin/echo'])
+    expect(argv).toEqual(['-A', dtachSocketPath(sid, true), '-z', '-E', '-r', 'winch', '/bin/sh', '-c', dtachRecordScript(dtachPidPath(sid, true), sid), '/bin/echo'])
     // `exec "$0" -l` with $0 = the host's $SHELL (here /bin/echo, which prints its argument).
     expect(out.split('\n')[0]).toBe('-l')
     const fakePid = Number(/FAKE_PID=(\d+)/.exec(out)?.[1])

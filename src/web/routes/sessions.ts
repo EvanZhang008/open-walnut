@@ -62,6 +62,7 @@ import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { buildSessionVscodeEmbed, SessionVscodeEmbedError } from '../../core/session-vscode-embed.js'
 import { buildSessionServicePreview, ServicePreviewError } from '../../core/session-service-preview.js'
+import { listSessionServers, stopSessionServer, SessionServerStopError } from '../../core/session-servers.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import {
   listSessionDirs, getSessionControls, applySessionControl, getSessionSettings,
@@ -1192,6 +1193,36 @@ sessionsRouter.post('/:sessionId/service-preview', async (req: Request, res: Res
       // "Nothing is answering on port 8080" is a designed answer the Web view
       // shows in place (card + Retry), not an endpoint incident: no red card.
       markHandledFailure(res).status(err.status).json({ error: err.message, code: err.code, hint: err.hint })
+      return
+    }
+    next(err)
+  }
+})
+
+// GET /api/sessions/:sessionId/servers — the servers this session started (a dev
+// server its agent or its terminal runs), read by the daemon of its host. Never dials
+// a disconnected host: `state` says offline / unsupported instead.
+sessionsRouter.get('/:sessionId/servers', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = await getSessionByClaudeId(String(req.params.sessionId))
+    if (!session) { res.status(404).json({ error: 'session not found', code: 'session_not_found' }); return }
+    res.json(await listSessionServers(session))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/servers/stop — { pid, port } of one listed server.
+// The daemon re-scans and signals only a listener it still attributes to this session.
+sessionsRouter.post('/:sessionId/servers/stop', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = await getSessionByClaudeId(String(req.params.sessionId))
+    if (!session) { res.status(404).json({ error: 'session not found', code: 'session_not_found' }); return }
+    res.json(await stopSessionServer(session, { pid: req.body?.pid, port: req.body?.port }))
+  } catch (err) {
+    if (err instanceof SessionServerStopError) {
+      // Gone already, or not ours to stop: designed answers the list shows in place.
+      markHandledFailure(res).status(err.status).json({ error: err.message, code: err.code })
       return
     }
     next(err)

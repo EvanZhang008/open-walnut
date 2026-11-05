@@ -111,6 +111,11 @@ export function __setOwnerConnectionForTesting(fn: ((hostKey: string) => Promise
   connectionOverride = fn
 }
 
+/** The connected daemon that owns a host's sessions (the fixture's override in tests). Never dials. */
+export function ownerConnection(hostKey: string): Promise<OwnerConnection | null> {
+  return pooledConnection(hostKey)
+}
+
 async function pooledConnection(hostKey: string): Promise<OwnerConnection | null> {
   if (connectionOverride) return connectionOverride(hostKey)
   try {

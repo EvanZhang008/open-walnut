@@ -38,6 +38,9 @@ export interface OverlayLayerOptions {
   onEscape?(e: KeyboardEvent): boolean;
   /** Default true: Tab cycles inside the layer's first ref. */
   trapFocus?: boolean;
+  /** The click after a press that closed this layer goes through (a light confirm, where the
+   *  press outside means "do that instead"). Default false: it is swallowed. */
+  passOutsideClick?: boolean;
 }
 
 interface Layer {
@@ -126,14 +129,14 @@ function onKeyDownCapture(e: KeyboardEvent): void {
 
 function onPointerDownCapture(e: PointerEvent): void {
   if (stack.length === 0) return;
-  let closed = false;
+  let swallow = false;
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const layer = stack[i];
     if (contains(layer, e.target) || layer.opts.current.closeOnOutside === false) break;
+    if (layer.opts.current.passOutsideClick !== true) swallow = true;
     layer.opts.current.onClose('outside');
-    closed = true;
   }
-  if (closed) armSwallow();
+  if (swallow) armSwallow();
 }
 
 function onClickCapture(e: MouseEvent): void {

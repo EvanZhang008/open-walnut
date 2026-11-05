@@ -40,6 +40,14 @@ const INPUT_COMMANDS = new Set([
 ])
 
 const k = (...parts: string[]) => parts.join('\u0000')
+/** A thread one of this server's own ACP runs answered with on `host`, under any adapter. */
+function ownsThread(host: string, thread: string): boolean {
+  for (const key of ownThreads) {
+    const [h, , t] = key.split('\u0000')
+    if (h === host && t === thread) return true
+  }
+  return false
+}
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const pidOk = (v: unknown) => Number.isInteger(v) && (v as number) > 0
 
@@ -151,6 +159,19 @@ export function gateSessionCommand(scope: GateScope, cmd: string, params: Record
       // Reading the state is free; turning supervision on or off is a write.
       if (params.enabled !== undefined && !own.has(k(host, sid))) refuse(sid, cmd)
       return undefined
+    case 'ports.stop': {
+      // Stopping a server signals the host's real processes: only for sessions this server
+      // started. The daemon stops a server attributed to ANY of `sids` (one record's ids:
+      // an ACP session's runtime id, then its thread id, which names its terminal), so
+      // every one of them must be this server's own.
+      const sids = Array.isArray(params.sids) ? params.sids.map(str) : []
+      // The first must be a session this server started; the rest, its own ids or the
+      // threads of its own ACP runs.
+      const owned = (s: string, i: number) => !!s && (own.has(k(host, s)) || (i > 0 && ownsThread(host, s)))
+      const foreign = sids.length === 0 ? '' : sids.find((s, i) => !owned(s, i))
+      if (foreign !== undefined) refuse(foreign, cmd)
+      return undefined
+    }
     case 'attach': {
       if (own.has(k(host, sid))) return undefined
       const probe = pending.get(k(host, sid))

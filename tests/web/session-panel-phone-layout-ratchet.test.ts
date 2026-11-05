@@ -21,9 +21,9 @@ const READS: Record<string, string> = {
   'if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { collapseChat(false); }':
     'opening a view (toggleView): the phoneWidth effect enters full screen when the window widens',
   'if (!isPhoneLayout()) enterFullscreen();':
-    'a file opened from a path (openLocatedFile): the phoneWidth effect enters full screen when the window widens',
+    'a file opened from a path (openLocatedFile), or the Web view opened on a service (openWebView): the phoneWidth effect enters full screen when the window widens',
   'if (isFullscreen || !splitOpen || isPhoneLayout() || fullscreenPlace() === sheetAt) return;':
-    'a view closes outside full screen except on a phone: the phoneWidth effect keeps a widened view full screen',
+  'a view closes outside full screen except on a phone: the phoneWidth effect keeps a widened view full screen',
 }
 
 describe('ratchet: a phone-layout decision follows the window', () => {

@@ -256,7 +256,7 @@ function sshKeepaliveArgs(t: SshTarget): string[] {
  */
 export function buildDtachArgs(dtachBin: string, sessionId: string, shell: string): string[] {
   const sock = dtachSocketPath(sessionId)
-  return [dtachBin, '-A', sock, '-z', '-E', '-r', 'winch', ...dtachShellCommand(dtachPidPath(sessionId), shell)]
+  return [dtachBin, '-A', sock, '-z', '-E', '-r', 'winch', ...dtachShellCommand(dtachPidPath(sessionId), shell, sessionId)]
 }
 
 /**
@@ -265,8 +265,8 @@ export function buildDtachArgs(dtachBin: string, sessionId: string, shell: strin
  * (`$PPID`) to the pid file and then execs `<shell> -l`, the login shell the
  * terminal always ran. On a reattach dtach ignores the command.
  */
-function dtachShellCommand(pidFile: string, shell: string): string[] {
-  return ['/bin/sh', '-c', dtachRecordScript(pidFile), shell]
+function dtachShellCommand(pidFile: string, shell: string, sessionId: string): string[] {
+  return ['/bin/sh', '-c', dtachRecordScript(pidFile, sessionId), shell]
 }
 
 /**
@@ -313,7 +313,7 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
   // (must expand remotely) or an explicit safe token, so it is NOT re-quoted.
   // The record script goes as one quoted word; `shell` stays unquoted (above) and
   // becomes the script's $0, which it execs with `-l`.
-  const [sh, c, record] = dtachShellCommand(dtachPidPath(sessionId, true), '')
+  const [sh, c, record] = dtachShellCommand(dtachPidPath(sessionId, true), '', sessionId)
   const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${sh} ${c} ${shellQuote(record!)} ${shell}`
   const body = cwd ? `${remoteCd(cwd)}; ${dtach}` : dtach
   return `${mkdir}; ${body}`
@@ -421,12 +421,15 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
  * compiled-file server runs with its deploy stage's runtime dir, which a later
  * deploy deletes; a `walnut` run in the terminal would unpack into that stage, or
  * mkdir it back inside a dead one. Without it a compiled walnut uses its own tree.
+ * With `sessionId` it names the session the terminal belongs to (TERMINAL_SESSION_ENV);
+ * the dtach record script sets the same for a persistent terminal, local or remote.
  */
 export function terminalEnv(base: NodeJS.ProcessEnv = process.env, sessionId?: string): Record<string, string> {
   const env = { ...base, TERM: 'xterm-256color' } as Record<string, string>
   delete env.WALNUT_RUNTIME_DIR
-  // Which task's terminal this is, for `walnut approve` alone (its card names the task; the
-  // server checks the asking process descends from this terminal's shell). Never
+  // Which task's terminal this is, for `walnut approve` (its card names the task; the
+  // server checks the asking process descends from this terminal's shell) and the host's
+  // port scan (a server started here is this session's). Never
   // WALNUT_SESSION_ID: what a person types here is theirs, not the session's agent.
   if (sessionId) env[TERMINAL_SESSION_ENV] = sessionId
   return env

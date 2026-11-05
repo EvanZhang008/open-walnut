@@ -13,6 +13,8 @@
 import type { ReactNode } from 'react';
 import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_LOCATE, ICON_NEW_TAB, ICON_TERMINAL } from '../common/Icons';
 import { KebabGroup } from './KebabGroup';
+import { useSessionServers } from '@/hooks/useSessionServers';
+import { openable, serversSummary } from './session-server-label';
 import { PanelCountRow, SessionViewItems, ViewsBadge, type SessionViewItemsProps } from './SessionKebabSection';
 import type { SessionSplitView } from './sessionSplitView';
 
@@ -82,6 +84,12 @@ function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: 
 
 export function SessionMenuOpen(p: SessionMenuOpenProps) {
   const { views, close } = p;
+  // The Open row names the session's listening servers when there are any, and opens for them.
+  const listed = useSessionServers(views.sessionId, { enabled: true, fast: true }).servers;
+  const summary = serversSummary(listed);
+  // The group's hint is a list of its rows' short names: the count only, as "web (3)".
+  const webCount = listed.filter(openable).length;
+  const hintCount = webCount > 0 ? String(webCount) : summary;
   const view = (v: SessionSplitView) => () => { close(); views.onToggleView(v); };
   const windows = [
     p.locate && <Row key="locate" icon={ICON_LOCATE} label={p.locate.label} onClick={() => { close(); p.locate!.onClick(); }} testId="session-menu-locate" />,
@@ -92,9 +100,10 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
     <>
       <KebabGroup
         label="Open"
-        hint={`changed · files${p.board !== 'none' ? ' · board' : ''} · inbox · code…`}
+        hint={`changed · files${p.board !== 'none' ? ' · board' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
         icon={OPEN_ICON}
         testId="session-kebab-open"
+        openWhen={summary !== null}
         badge={<ViewsBadge {...views} />}
       >
         {!p.inset && <Row icon={ICON_FILE} label="Changed" active={views.activeView === 'changed'} onClick={view('changed')} testId="session-menu-changed" />}

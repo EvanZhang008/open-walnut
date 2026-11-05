@@ -45,6 +45,7 @@ const CORNER_ALLOWED: Record<string, string> = {
 /** Toast-like names that position themselves, and why they stay where they are. */
 const NAMED_ALLOWED: Record<string, string> = {
   '.thread-toast': 'a one-line answer to an action inside a session panel, drawn above that panel composer',
+  '.session-servers-notice': 'a one-line answer to a Stop inside a session Web view, drawn over the bottom of that view',
   '.unpaired-notice': 'the full-screen sign-in page (inset: 0), not a corner notice',
   '.sfe-reveal-error': 'a line inside the file explorer about the reveal the person just asked for',
   '.notification-toast-swipe': 'the swipe wrapper inside a toast',

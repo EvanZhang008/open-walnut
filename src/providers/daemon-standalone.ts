@@ -188,6 +188,7 @@ import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStale
 import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
+import { createDaemonPorts } from './port-scan-core.js'
 import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
@@ -219,6 +220,7 @@ import {
   withoutCallerProof,
   type CallerProof,
   parseGatewayLine,
+  resolveCallerSid,
   resolveGatewayCallerSid,
   SHIM_CORE_BASENAME,
   shimCoreNeedsCopy,
@@ -2644,6 +2646,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // The host network (net-v1, net-core.ts). NOT in BRIDGE_ALLOWED_COMMANDS or
     // FOLLOWER_ALLOWED_COMMANDS: it decides who may reach this daemon, so only the
     // trusted walnut socket asks. Keep in sync with daemon-source.ts.
+    // The servers a session started (ports-v1, port-scan-core.ts). NOT in
+    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: ports.stop signals host
+    // processes. Keep in sync with daemon-source.ts.
+    case 'ports.list': return replyTransfer(ws, id as number, 'ports.list', () => daemonPorts.list(cmd), false)
+    case 'ports.stop': return replyTransfer(ws, id as number, 'ports.stop', () => daemonPorts.stop(cmd), false)
     case 'net.status': return replyTransfer(ws, id as number, 'net.status', () => netSupervisor.status(), false)
     case 'net.identity': return replyTransfer(ws, id as number, 'net.identity', async () => ({ endpointId: await netSupervisor.identity() }), false)
     case 'net.configure': return replyTransfer(ws, id as number, 'net.configure', () => netSupervisor.configure(cmd), false)
@@ -11846,6 +11853,22 @@ const hostMcp = createHostMcp({
 })
 const hostHttp = createHostHttp()
 
+// ── The servers a session started (capability 'ports-v1', port-scan-core.ts) ──
+// PARITY: keep in sync with daemon-source.ts. NOT in BRIDGE_ALLOWED_COMMANDS or
+// FOLLOWER_ALLOWED_COMMANDS: ports.stop signals host processes, so only the trusted
+// walnut socket asks. The roots are each running session's CLI and each ACP worker;
+// a WALNUT_SESSION_ID a renamed session's CLI still carries resolves to its new sid.
+const daemonPorts = createDaemonPorts({
+  agentPids: () => {
+    const pids = new Map<number, string>()
+    for (const [sid, s] of sessions) if (s.pid && s.pid > 1 && s.state === 'running') pids.set(s.pid, sid)
+    for (const [rid, w] of acp.workers) if (w.state === 'running' && w.proc.pid && w.proc.pid > 1) pids.set(w.proc.pid, rid)
+    return pids
+  },
+  resolveSid: (raw) => resolveCallerSid(raw, sessions, gatewaySidAliases) ?? raw,
+  daemonPid: process.pid,
+})
+
 // ── The host network (capability 'net-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is net-core.ts: this twin hands it
 // spawn, the net state dir (never under the synced data dir) and where walnut-net lives:
@@ -13557,6 +13580,11 @@ if (action === '--start' || SERVICE_MODE) {
     throw new Error('isolated daemon: refusing to start it in the production daemon dir or as a service (WALNUT_DAEMON_ISOLATED_FOR names a test server)')
   }
   fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 })
+  // A daemon started from a session's shell or terminal is no session's: what it spawns
+  // (an editor server, a helper) would be listed as that session's servers (port-scan-core.ts).
+  // Each session and terminal it starts gets its own value.
+  delete process.env.WALNUT_SESSION_ID
+  delete process.env.WALNUT_TERMINAL_SESSION_ID
   // Build directories are retired while detached daemons are still running.
   process.chdir(DAEMON_DIR)
   const lock = await acquireDaemonInstanceLock({

@@ -1,13 +1,16 @@
 /**
  * The session header's row-1 actions as kebab rows, for the phone (C64): the
  * panel's own header is hidden there, so Changed, Files, Board, Terminal,
- * Scripts, Plan and Close are reached from the top bar's kebab. Each row calls the same
+ * Scripts, Plan and Close are reached from the top bar's kebab (and Web preview while the session
+ * serves a web page: its servers, to open or stop). Each row calls the same
  * handler as its header chip. Fork, Locate and Open in new tab are left out
  * on a phone (N12): a new tab is meaningless there, Locate is what Back does,
  * and Fork drew a greyed row with no reason. A disabled row says why.
  */
 import type { SessionSplitView } from './sessionSplitView';
 import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
+import { useSessionServers } from '@/hooks/useSessionServers';
+import { serversSummary } from './session-server-label';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 
 export interface PhoneSessionHeaderRowsProps {
@@ -52,12 +55,16 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
   // The desktop session menu's "Background tasks" row: the phone's menu does not draw that
   // section, and a background command has no chat chip to reach its list from.
   const { tasks: background, running: { total: running } } = useBackgroundRunning(p.sessionId);
+  const summary = serversSummary(useSessionServers(p.sessionId, { enabled: true, fast: true }).servers);
   return (
     <div className="phone-session-rows" data-testid="phone-session-rows">
       <Row label="Changed" active={p.activeView === 'changed'} onClick={view('changed')} testId="phone-row-changed" />
       <Row label="Files" active={p.activeView === 'files'} onClick={view('files')} testId="phone-row-files" />
       {p.terminal && (
         <Row label="Terminal" active={p.activeView === 'terminal'} onClick={view('terminal')} testId="phone-row-terminal" />
+      )}
+      {summary && (
+        <Row label={`Web preview \u00B7 ${summary}`} active={p.activeView === 'web'} onClick={view('web')} testId="phone-row-web" />
       )}
       {p.onScripts && <Row label="Scripts" onClick={() => { p.close(); p.onScripts?.(); }} testId="phone-row-scripts" />}
       {/* A lead's row only (useBoardTab), after the rows every session has, as on the header. */}

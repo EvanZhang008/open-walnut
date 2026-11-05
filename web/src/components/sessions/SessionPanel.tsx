@@ -39,7 +39,11 @@ import { SessionUsageOpenContext, useSessionBudgetUsage } from '@/hooks/useSessi
 import { useClickedPathOpener, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionCodeView } from './SessionCodeView';
-import { SessionWebView, type WebViewRequest } from './SessionWebView';
+import { SessionWebView, activeLocalPort, type WebViewRequest } from './SessionWebView';
+import { SessionServersChip } from './SessionServersChip';
+import { SessionServersTurnContext, type SessionServersTurnContextValue } from './SessionServersTurnCard';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
+import { useSessionServers } from '@/hooks/useSessionServers';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store';
 import { changedChipTitle } from '@/utils/git-glance-text';
@@ -1712,10 +1716,25 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     setWebRequest((prev) => ({ url, nonce: (prev?.nonce ?? 0) + 1 }));
     setActiveView('web');
     applyOpenCollapse('web');
-    enterFullscreen();
+    // Phone: the view is a layer under the top bar (its Back closes it), as toggleView opens one.
+    if (!isPhoneLayout()) enterFullscreen();
     log.info('session-web', 'service link opened in panel', { sessionId, url });
   }, [enterFullscreen, applyOpenCollapse, sessionId, setActiveView, setFileViewTarget, setWebRequest]);
   useEffect(() => { primeKnownServiceHosts(); }, []);
+  // The servers this session started, listed in the Web view: asked only while it is open.
+  // Slowly while the panel shows (the menu's count starts from it), every few seconds in the Web view.
+  const webServers = useSessionServers(sessionId, { enabled: !inset, fast: activeView === 'web' });
+  // The page the Web view shows, by its port: the title row's server card marks it.
+  const webShownPort = activeView === 'web' && webRequest?.url ? activeLocalPort(webRequest.url) : null;
+  const hostDisplayName = useHostDisplayLabels();
+  // The chat's turn cards read the servers from here (SessionServersTurnCard.tsx), so a scan
+  // re-renders those cards and not the whole history.
+  const serversTurnCtx = useMemo<SessionServersTurnContextValue | null>(() => (inset ? null : {
+    servers: webServers,
+    activePort: webShownPort,
+    hostLabel: webServers.host && webServers.host !== '__local__' ? hostDisplayName(webServers.host) : '',
+    onOpen: (s) => openWebView(s.url),
+  }), [inset, webServers, webShownPort, hostDisplayName, openWebView]);
   // Click delegation for the whole chat column: any rendered anchor (markdown
   // autolink, model-written HTML, tool output) whose href is a service. A plain
   // web link, a modified click (⌘/Ctrl/Shift/middle = "give me a real tab"), or a
@@ -2479,7 +2498,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     active: !!(phoneLayer || phoneHostSlot) && !!activeView,
     title: activeView ? activeView.charAt(0).toUpperCase() + activeView.slice(1) : '',
     withAction: false,
-    onClose: () => { setActiveView(null); collapseChat(false); },
+    // A window that stops being a phone shows the view as the desktop split: only a back closes it.
+    onClose: (info) => { if (info.breakpoint) return; setActiveView(null); collapseChat(false); },
   });
   // Where the kebab goes on a phone: this panel's own bar, or its host's.
   const kebabSlot = phoneLayer ? phoneBar.slot : (phoneHostSlot && phoneBar.phone ? hostSlot : null);
@@ -2497,6 +2517,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const headerPills = (
     <>
       <WaitingChip task={sessionTask} />
+      {!inset && <SessionServersChip servers={webServers} activePort={webShownPort} onOpen={(s) => openWebView(s.url)} />}
       {session?.provider === 'embedded' && (
         <span className="session-panel-badge session-panel-embedded-badge" data-header-pill="embedded" data-short="E">
           {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
@@ -3087,7 +3108,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 as a chip and is the first to move into "...". 2026-10-06: a time chip put
                 here by default was taken out at the user's request, then came back as this
                 opt-in. */}
-            <PinnedSessionFacts sessionId={sessionId} taskId={session?.taskId} hid={hid} />
+            <PinnedSessionFacts sessionId={sessionId} taskId={session?.taskId} hid={hid}
+              webOpen={activeView === 'web'} onOpenWeb={inset ? undefined : () => toggleView('web')} />
             {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
             <SessionHeaderMoreMenu rowRef={toolRowRef} ids={inMore} spacerIds={taskSlot === 'spacer' ? TASK_SLOT_IDS : undefined} />
             {activityAge && (
@@ -3313,6 +3335,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {/* And a linked pull request's state, the one way a phone opens its card (a row's
                   pills are labels there). */}
               {!loading && kebabSlot && sessionTask && createPortal(<PrPill task={sessionTask} compact />, kebabSlot, 'pr-pill')}
+              {!loading && kebabSlot && !inset && createPortal(
+                <SessionServersChip servers={webServers} activePort={webShownPort} onOpen={(s) => openWebView(s.url)} compact />,
+                kebabSlot, 'web-chip')}
               {!loading && sessionId && kebabSlot && createPortal(renderSessionKebab((close) => (
                 <PhoneSessionHeaderRows
                   sessionId={sessionId}
@@ -3570,6 +3595,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         request={webRequest}
                         onNavigate={openWebView}
                         barRightSlot={dockBarSlot}
+                        servers={webServers}
                       />
                     )}
                     {activeView === 'inbox' && (
@@ -3799,6 +3825,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <IslandHostContext.Provider value={islandHost}>
           <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
           <TreeHalfContext.Provider value={rightHalf}>
+          <SessionServersTurnContext.Provider value={serversTurnCtx}>
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
@@ -3839,6 +3866,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onQuoteInChat={quoteInChat}
             {...(plainChat ? { workingText: 'Walnut is thinking…' } : {})}
           />
+          </SessionServersTurnContext.Provider>
           </TreeHalfContext.Provider>
           </MessageAboutContext.Provider>
           </IslandHostContext.Provider>

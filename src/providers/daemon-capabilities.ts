@@ -475,6 +475,17 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Optional.
   'external-human-v1',
   'path-resolve-v1',
+  // 'ports-v1' — the servers a session started, and Stop for one (ports.list /
+  // ports.stop, port-scan-core.ts). The daemon reads its host's listening TCP sockets
+  // (ss, lsof, or /proc), attributes each to a session by the WALNUT_SESSION_ID (or a
+  // terminal's WALNUT_TERMINAL_SESSION_ID) in the listener's own environment, else by an
+  // ancestor that is a session's CLI, and never lists or signals the daemon, a
+  // session's CLI, their ancestors, a terminal's shell, or a pid the caller names.
+  // ports.stop re-scans, then signals the listener's process group (or the listener
+  // alone when the group holds anything else). Not on the bridge or follower
+  // allowlists: it signals host processes. Sidecar-gated in the source twin
+  // (port-scan-core.cjs). Optional: without it the session shows no server list.
+  'ports-v1',
   // 'task-dir-v1' — each task's durable working directory on this host
   // (src/lib/task-dir.ts): the daemon makes it at spawn from the start's
   // origin.task (acpStart's taskId) and sets WALNUT_TASK_DIR in the session's

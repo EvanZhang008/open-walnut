@@ -316,3 +316,27 @@ describe('a refused delivery is parked, not retried', () => {
     expect(classifyDeliveryFailure(new Error(err.message))).toMatchObject({ kind: 'permanent', code: 'inherited_session' })
   })
 })
+
+describe('ports.stop', () => {
+  it('stops only a server of a session this test server started', () => {
+    startOwn(A, NEW)
+    allowed(() => gate(A, 'ports.stop', { sids: [NEW], pid: 4242, port: 5173 }))
+    refused(() => gate(A, 'ports.stop', { sids: [COPIED], pid: 4242, port: 5173 }))
+    refused(() => gate(A, 'ports.stop', { sids: [OTHER], pid: 4242, port: 5173 }))
+    refused(() => gate(A, 'ports.stop', { sids: [], pid: 4242, port: 5173 }))
+    refused(() => gate(A, 'ports.stop', { pid: 4242, port: 5173 }))
+    // Own on one host is not own on another.
+    refused(() => gate(B, 'ports.stop', { sids: [NEW], pid: 4242, port: 5173 }))
+    // Listing is a read.
+    allowed(() => gate(A, 'ports.list', {}))
+  })
+
+  it('an ACP session is named by its runtime id first', () => {
+    acpOwn(A, 'rt-own', 'thread-own')
+    allowed(() => gate(A, 'ports.stop', { sids: ['rt-own', 'thread-own'], pid: 4242, port: 5173 }))
+    refused(() => gate(A, 'ports.stop', { sids: ['rt-copied', 'thread-x'], pid: 4242, port: 5173 }))
+    // The daemon stops a server of any id named: an own id first does not cover a copied one after it.
+    refused(() => gate(A, 'ports.stop', { sids: ['rt-own', 'thread-copied'], pid: 4242, port: 5173 }))
+    refused(() => gate(A, 'ports.stop', { sids: ['rt-own', ''], pid: 4242, port: 5173 }))
+  })
+})

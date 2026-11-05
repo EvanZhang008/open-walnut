@@ -120,6 +120,8 @@ const DAEMON_SOURCE_FILES = [
   // (same failure mode as the scan-core note above); keep in lockstep with
   // scripts/build-daemon.sh.
   'src/providers/path-resolve-core.ts',
+  // The servers a session started (ports.*): bundled AND shipped as port-scan-core.cjs.
+  'src/providers/port-scan-core.ts',
   // Task directories (taskdir.*, WALNUT_TASK_DIR at spawn): bundled into the binary
   // AND shipped as the task-dir-core.cjs sidecar, with the path rules it imports.
   'src/providers/task-dir-core.ts',

@@ -61,10 +61,13 @@ describe('session header title row', () => {
       .replace(/<SessionHeaderLabels>[\s\S]*?<\/SessionHeaderLabels>/g, '<SessionHeaderLabels />')
       .replace(/\bheaderPills\b/g, 'HEADER_PILLS')
       // The phone has no title row: its own top bar carries the wait as an hourglass
-      // button beside its kebab (PhoneTopBar's action slot), and a linked pull request's
-      // state as one more button (a phone has no other way to open its card), nothing else.
+      // button beside its kebab (PhoneTopBar's action slot), a linked pull request's state
+      // as one more button (a phone has no other way to open its card), and the session's
+      // web servers as a globe and count (the lead's call, 2026-11-05: "a compact chip next
+      // to the kebab on phone"), nothing else.
       .replace('createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_WAIT, kebabSlot')
-      .replace('createPortal(<PrPill task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_PR, kebabSlot');
+      .replace('createPortal(<PrPill task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_PR, kebabSlot')
+      .replace(/createPortal\(\s*<SessionServersChip\b(?:(?!\/>)[\s\S])*\bcompact \/>,\s*kebabSlot/, 'createPortal(PHONE_WEB, kebabSlot');
     const found = [...row.matchAll(PILL_LIKE)].map((m) => m[1]).filter((name) => !(name in ALLOWED_ON_ROW));
     expect(found, 'a label beside the title: put it in headerPills, or a tag in headerTags').toEqual([]);
     // A label drawn as a plain element (a badge span, a tag chip) counts too. The one badge the

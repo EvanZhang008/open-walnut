@@ -40,6 +40,13 @@ export type PhoneOverlayKind =
   | 'file' | 'plan' | 'viewer' | 'sheet';
 
 /** What the phone top bar shows while this layer is the top one with a bar. */
+/** Why a layer closed: `fromHistory` (a back, or the breakpoint), `breakpoint` (the window stopped being a phone). */
+export interface PhoneOverlayCloseInfo {
+  fromHistory: boolean;
+  /** The window left the phone layout: the layer's content may live on as desktop UI. */
+  breakpoint?: boolean;
+}
+
 export interface PhoneOverlayBar {
   title: string;
   subtitle?: string;
@@ -51,7 +58,7 @@ export interface PhoneOverlayOptions {
   id: string;
   kind: PhoneOverlayKind;
   open: boolean;
-  onClose: (info: { fromHistory: boolean }) => void;
+  onClose: (info: PhoneOverlayCloseInfo) => void;
   /** null / undefined: the layer draws its own chrome (drawer, sheets). */
   bar?: PhoneOverlayBar | null;
   /** First push of a page load opened from a deep link: back lands here. */
@@ -141,7 +148,7 @@ export function closePlan(item: StackItem, currentState: unknown): { kind: 'back
 interface LiveEntry extends StackItem {
   token: number;
   bar: PhoneOverlayBar | null;
-  onClose: (info: { fromHistory: boolean }) => void;
+  onClose: (info: PhoneOverlayCloseInfo) => void;
   getElement?: () => HTMLElement | null;
   deepLinkBaseUrl?: string;
 }
@@ -276,7 +283,7 @@ function closeAllForBreakpoint(): void {
   stack = [];
   notify();
   for (const e of closed) {
-    try { e.onClose({ fromHistory: true }); } catch { /* owner's problem, keep closing */ }
+    try { e.onClose({ fromHistory: true, breakpoint: true }); } catch { /* owner's problem, keep closing */ }
   }
   if (depth > 0) {
     beginBack();
@@ -463,6 +470,7 @@ export const __phoneOverlayInternals = {
   open: (o: PhoneOverlayOptions) => openEntry(o),
   release: (e: unknown) => releaseEntry(e as LiveEntry),
   close: (e: unknown) => closeEntry(e as LiveEntry),
+  leavePhone: () => closeAllForBreakpoint(),
 };
 
 /** Test hook: forget everything (vitest only). */

@@ -423,6 +423,27 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Session servers fixture (session-servers.spec.ts): the spec starts real
+        // servers whose environment names this session, as an agent's would.
+        id: 'pw-task-servers',
+        title: 'Session servers fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-servers-session'],
+        active_session_ids: [],
+        session_id: 'pw-servers-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Tags in the session header (task-tags-key-value.spec.ts): a ticket run's
         // tags, one of them a plain word an older build stored bare (`oncall`), which
         // the database open rewrites as `label:oncall`.
@@ -2413,6 +2434,25 @@ await fs.mkdir(serviceFixtureRoot, { recursive: true })
       '',
     ].join('\n'),
   )
+
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-servers-session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-servers-session',
+        timestamp: new Date(sessionFixtureNow - 25_000).toISOString(),
+        message: { role: 'user', content: 'Start the dev servers' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-servers-session',
+        timestamp: new Date(sessionFixtureNow - 22_000).toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: 'The dev servers are starting in the background: the storefront on http://localhost:5173 and the API docs on http://localhost:8000.' }] },
+      }),
+      '',
+    ].join('\n'),
+  )
 }
 
 // Bare task ids fixture (bare-task-id-pills.spec.ts). The reply cites other
@@ -3641,6 +3681,19 @@ await fs.writeFile(
         messageCount: 2,
         cwd: serviceFixtureRoot,
         title: 'Service preview fixture session',
+      },
+      {
+        claudeSessionId: 'pw-servers-session',
+        taskId: 'pw-task-servers',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 2,
+        cwd: serviceFixtureRoot,
+        title: 'Session servers fixture session',
       },
       {
         claudeSessionId: 'pw-codepath-session',

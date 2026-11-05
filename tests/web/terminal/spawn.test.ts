@@ -52,7 +52,7 @@ describe('buildDtachArgs (local)', () => {
     const args = buildDtachArgs('/path/dtach', 'sid1', '/bin/zsh');
     expect(args).toEqual([
       '/path/dtach', '-A', `${DTACH_SOCKET_DIR}/walnut-sid1.dsock`, '-z', '-E', '-r', 'winch',
-      '/bin/sh', '-c', dtachRecordScript(`${DTACH_SOCKET_DIR}/walnut-sid1.dpid`), '/bin/zsh',
+      '/bin/sh', '-c', dtachRecordScript(`${DTACH_SOCKET_DIR}/walnut-sid1.dpid`, 'sid1'), '/bin/zsh',
     ]);
     expect(args[9]).toMatch(/exec "\$0" -l$/);
   });
@@ -67,7 +67,7 @@ describe('buildRemoteDtachCommand', () => {
   // purpose) so the login user's actual $SHELL (zsh on our dev hosts) is used,
   // launched as a login shell (`-l`) — matching tmux.
   const DEFAULT_SHELL = '"${SHELL:-/bin/bash}"';
-  const record = (sid: string) => `/bin/sh -c ${shellQuote(dtachRecordScript(`${DTACH_SOCKET_DIR}/walnut-${sid}.dpid`))}`;
+  const record = (sid: string) => `/bin/sh -c ${shellQuote(dtachRecordScript(`${DTACH_SOCKET_DIR}/walnut-${sid}.dpid`, sid))}`;
 
   it('defaults to the remote $SHELL as a LOGIN shell, cds to cwd', () => {
     expect(buildRemoteDtachCommand('/home/u/.local/bin/walnut-dtach', 'sid2', undefined, '/var/data')).toBe(
@@ -194,3 +194,14 @@ describe('a terminal whose folder is gone (a removed workspace) still opens', ()
     expect(buildRemotePlainShellCommand(undefined, '/gone/ws')).toBe(`cd '/gone/ws' || cd; exec "\${SHELL:-/bin/bash}" -l`);
   });
 });
+
+describe('the terminal names its session (port scan attribution)', () => {
+  it('the env and the dtach record script carry WALNUT_TERMINAL_SESSION_ID', () => {
+    expect(terminalEnv({ HOME: '/home/acme' }, 'sid-7').WALNUT_TERMINAL_SESSION_ID).toBe('sid-7')
+    expect(terminalEnv({ HOME: '/home/acme' }).WALNUT_TERMINAL_SESSION_ID).toBeUndefined()
+    const local = buildDtachArgs('/bin/dtach', 'sid-7', '/bin/zsh')
+    expect(local[9]).toMatch(/^export WALNUT_TERMINAL_SESSION_ID='sid-7'; /)
+    expect(buildRemoteDtachCommand('dtach', 'sid-7')).toContain("export WALNUT_TERMINAL_SESSION_ID='\\''sid-7'\\''; ")
+  })
+})
+

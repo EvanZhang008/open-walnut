@@ -138,6 +138,7 @@ import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/compos
 import { PartIdentity } from './part-identity';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { QueuedImageThumbs } from './QueuedImageThumbs';
+import { SessionServersTurnCard } from './SessionServersTurnCard';
 
 /** A send call's targets (send-targets.ts), parsed once per call and result: a
  *  fold line reads them on every render of a long session. */
@@ -5733,7 +5734,26 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const key = isValidElement(node) && node.key != null ? node.key : `at${i}`;
     streamRows.push(<div key={`live:${key}`} className="session-live-row">{node}</div>);
   });
-  const bodyRows = [...pageRows, boundaryEl, ...streamRows];
+  // The servers each turn started (SessionServersTurnCard.tsx): a card at the turn's end,
+  // that is before the next turn's first row, the last turn's at the timeline's end. A
+  // render-time slot placed by row index into the rows built above (never a stream block);
+  // each reads the servers from context, so a scan never re-renders this tree.
+  const turnStartRows = turnShapes.map((t) => t.start).filter((s) => s >= 0);
+  const turnTs = (i: number | undefined) => (i == null ? -Infinity : Date.parse(messages[i]?.timestamp ?? ''));
+  const startOrder = new Map(turnStartRows.map((s, j) => [s, j]));
+  const rowsWithServerCards: React.ReactNode[] = [];
+  for (const row of pageRows) {
+    const at = isValidElement(row) ? (row.props as { 'data-msg-index'?: unknown })['data-msg-index'] : undefined;
+    const j = typeof at === 'number' ? startOrder.get(at) : undefined;
+    if (j != null) {
+      rowsWithServerCards.push(
+        <SessionServersTurnCard key={`servers-turn-${at as number}`} fromMs={turnTs(turnStartRows[j - 1])} toMs={turnTs(at as number)} />,
+      );
+    }
+    rowsWithServerCards.push(row);
+  }
+  const serversEndCard = <SessionServersTurnCard key="servers-turn-end" fromMs={turnTs(turnStartRows.at(-1))} toMs={Infinity} />;
+  const bodyRows = [...rowsWithServerCards, boundaryEl, ...streamRows, serversEndCard];
 
   return (
     <RowDisclosureScope.Provider value={sessionId}>

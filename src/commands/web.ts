@@ -30,6 +30,9 @@ export function forgetInheritedSessionIdentity(env: NodeJS.ProcessEnv = process.
   // That session's task directory too: the local daemon, the in-app terminal and
   // every script a child runs would otherwise write into another task's.
   delete env.WALNUT_TASK_DIR
+  // A server started in a session's terminal is not that terminal's job either: its
+  // daemon and helpers would be listed as that session's servers (port-scan-core.ts).
+  delete env.WALNUT_TERMINAL_SESSION_ID
 }
 
 /**

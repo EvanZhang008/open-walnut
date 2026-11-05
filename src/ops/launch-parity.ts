@@ -96,6 +96,7 @@ export const SESSION_ACTION_PARITY: Readonly<Record<string, ParityEntry>> = {
   models: { none: 'Read for the picker.' },
   settings: { none: 'Reads the engine settings the popover edits (global engine config such as fast mode, not a launch choice).' },
   'service-preview': { none: 'The web view of a service the session serves.' },
+  servers: { none: 'Lists and stops the servers a session started, beside its web view; an agent stops its own server with kill.' },
   'vscode-embed': { none: 'Opens the editor beside the panel.' },
   'vscode-uri': { none: 'Opens the editor beside the panel.' },
   turns: { op: 'task_history', note: 'the conversation turn by turn' },

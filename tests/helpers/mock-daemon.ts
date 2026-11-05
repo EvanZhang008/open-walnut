@@ -27,6 +27,7 @@ import { createTurnGuard } from '../../src/providers/turn-guard-core.js'
 import { computeHostLocalChanges } from '../../src/providers/session-changes-core.js'
 import { scanSessionCost } from '../../src/providers/session-cost-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from '../../src/providers/workspace-core.js'
+import { createDaemonPorts } from '../../src/providers/port-scan-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -101,6 +102,16 @@ export interface MockDaemonOptions {
 export class MockDaemon {
   private wss: WebSocketServer | null = null
   private sessions = new Map<string, DaemonSession>()
+  /** The servers a session started (ports-v1): the real host scan, rooted at this mock's CLIs. */
+  private ports = createDaemonPorts({
+    agentPids: () => {
+      const pids = new Map<number, string>()
+      for (const [sid, s] of this.sessions) if (s.pid && s.pid > 1 && s.exitCode === null) pids.set(s.pid, sid)
+      return pids
+    },
+    resolveSid: (raw) => raw,
+    daemonPid: process.pid,
+  })
   private tmpDir: string
   private _port = 0
   private _fault: string | null = null
@@ -412,6 +423,13 @@ export class MockDaemon {
       }
       // Offline host (offline-host-v1, advertised above): a mock host is never
       // left answering for an away server, so its journal is always empty.
+      case 'ports.list': case 'ports.stop': {
+        const run = cmd.cmd === 'ports.list' ? this.ports.list(cmd) : this.ports.stop(cmd)
+        return void (run as Promise<object>).then(
+          (r) => this.sendOk(ws, id, r as Record<string, unknown>),
+          (err: Error) => this.sendError(ws, id, `${cmd.cmd} failed: ${err.message}`),
+        )
+      }
       case 'host.slice': return this.sendOk(ws, id, { changed: true, pendingHandover: false })
       case 'offline.drain': return this.sendOk(ws, id, { records: [], more: false })
       case 'offline.ack': return this.sendOk(ws, id, { remaining: 0 })

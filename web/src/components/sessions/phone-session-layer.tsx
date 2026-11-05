@@ -9,7 +9,7 @@
  * panel re-renders on every streamed token.
  */
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
-import { usePhoneOverlay, type PhoneOverlayKind } from '@/hooks/usePhoneOverlayHistory';
+import { usePhoneOverlay, type PhoneOverlayCloseInfo, type PhoneOverlayKind } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 
 const slots = new Map<string, HTMLElement>();
@@ -43,7 +43,7 @@ export interface PhoneLayerInput {
   active: boolean;
   title: string;
   subtitle?: string;
-  onClose: (info: { fromHistory: boolean }) => void;
+  onClose: (info: PhoneOverlayCloseInfo) => void;
   /** Scroll target of a tap on the bar title (never "to the top" for a timeline). */
   onTitleTap?: () => void;
   /** First push of the load opened from a deep link: back lands on this URL. */

@@ -214,7 +214,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       closeKebab();
     };
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeKebab(); };
+    // Capture, and taken (preventDefault): the open menu is the layer this Escape closes, so a
+    // full-screen panel under it stays (useFullscreen leaves only on an Escape nobody took).
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); closeKebab(); } };
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
@@ -226,11 +228,11 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeKebab();
     };
     document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', handleKey);
+    document.addEventListener('keydown', handleKey, true);
     window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('keydown', handleKey, true);
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [kebabOpen, closeKebab, cursorAnchor]);

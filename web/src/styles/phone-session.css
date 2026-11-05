@@ -733,3 +733,29 @@
   .session-panel.is-phone-layer .session-terminal-selection-pop { padding: 2px; }
   .session-panel.is-phone-layer .session-terminal-btn { min-height: 44px; padding: 0 14px; font-size: 14px; }
 }
+
+/* The session's web servers beside the kebab (SessionServersChip compact): a globe and the
+   count in a 44 px target. With the wait's chip there too, the title's gutters grow by both. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .phone-topbar .phone-bar-slot .session-web-chip.is-compact {
+    justify-content: center;
+    gap: 3px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 6px;
+    border-color: transparent;
+    background: transparent;
+    color: var(--success);
+    font-size: 12px;
+  }
+  .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-dot { display: none; }
+  .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-icon svg { width: 16px; height: 16px; }
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-web-chip) .phone-topbar-title {
+    left: calc(96px + var(--wn-safe-left));
+    right: calc(96px + var(--wn-safe-right));
+  }
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-web-chip):has(.phone-bar-slot .task-waiting-chip) .phone-topbar-title {
+    left: calc(140px + var(--wn-safe-left));
+    right: calc(140px + var(--wn-safe-right));
+  }
+}

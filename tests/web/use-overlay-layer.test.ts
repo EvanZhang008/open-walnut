@@ -123,11 +123,29 @@ describe('useOverlayLayer stack', () => {
     overlayLayerHandlers.click(click as unknown as MouseEvent);
     expect(click.preventDefault).toHaveBeenCalled();
   });
-  it('a press that closes nothing never swallows a click', () => {
-    layer({ el: menu });
-    overlayLayerHandlers.pointerdown(ev({ target: node('x', menu) }) as unknown as PointerEvent);
+  it('a layer that passes the outside click lets the press do what it pressed', () => {
+    const closeConfirm = layer({ el: menu, passOutsideClick: true });
+    overlayLayerHandlers.pointerdown(ev({ target: row }) as unknown as PointerEvent);
+    expect(closeConfirm).toHaveBeenCalledWith('outside');
     const click = ev();
     overlayLayerHandlers.click(click as unknown as MouseEvent);
     expect(click.stopImmediatePropagation).not.toHaveBeenCalled();
   });
+  it('a press that closes a passing layer and a swallowing one under it still swallows', () => {
+    const closeMenu = layer({ el: menu });
+    const closeFly = layer({ el: flyout, passOutsideClick: true });
+    overlayLayerHandlers.pointerdown(ev({ target: row }) as unknown as PointerEvent);
+    expect(closeFly).toHaveBeenCalledWith('outside');
+    expect(closeMenu).toHaveBeenCalledWith('outside');
+    const click = ev();
+    overlayLayerHandlers.click(click as unknown as MouseEvent);
+    expect(click.stopImmediatePropagation).toHaveBeenCalled();
+  });
+  it('a press that closes nothing never swallows a click', () => {
+  layer({ el: menu });
+  overlayLayerHandlers.pointerdown(ev({ target: node('x', menu) }) as unknown as PointerEvent);
+  const click = ev();
+  overlayLayerHandlers.click(click as unknown as MouseEvent);
+  expect(click.stopImmediatePropagation).not.toHaveBeenCalled();
+});
 });
