@@ -18,10 +18,11 @@ import { strictMark } from '../../providers/host-exec-line.js'
  * job's environment, unlike its id), so a line the job prints in Walnut's form is never taken as
  * Walnut's (2026-11-05 review claude13: `echo 'walnut strict <its id>: exit 7 …'; exit 7` named a
  * step that never ran). Kept for the newest runs; after a restart any seal of the right form counts.
+ * keep's could-not-save mark carries the same seal (host-exec-keep.ts).
  */
 const seals = new Map<string, string>()
 const SEALS_KEPT = 5_000
-function sealFor(jobId: string, make = false): string | undefined {
+export function sealFor(jobId: string, make = false): string | undefined {
   let seal = seals.get(jobId)
   if (!seal && make) {
     seal = randomBytes(6).toString('hex')
@@ -69,7 +70,7 @@ const prefix = (jobId: string, seal: string, exitTrap = true) => `set -e; (set -
  * Walnut's own commands, which bash 4 may name as the step that failed after them: strict's traps, and
  * keep's EXIT trap, which bash names in single quotes by its first line (host-exec-keep.ts TRAP_FIRST_LINE).
  */
-const OWN_COMMAND_RE = /^trap (?:'walnut_rc=|'\{ \\builtin set \+xv; \} |: EXIT$)/
+const OWN_COMMAND_RE = /^trap (?:'walnut_rc=|'\{ POSIXLY_CORRECT=y \|\| \\:; |: EXIT$)/
 
 export function strictLine(line: string, jobId: string, opts: { exitTrap?: boolean } = {}): string {
   if (!/^hx-[A-Za-z0-9_-]+$/.test(jobId)) throw new Error(`strictLine: not a job id: ${jobId}`)

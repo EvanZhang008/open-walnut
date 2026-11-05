@@ -361,11 +361,16 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
   const { shapeOf } = await import('./host-exec-legacy.js')
   if (reply.running !== true) release(jobId)
   const raw = typeof reply.output === 'string' ? reply.output : ''
-  const { text, redacted, keyToEnd } = await redact(raw)
+  const keepMod = await import('./host-exec-keep.js')
+  const redacted0 = await redact(raw)
+  const { redacted, keyToEnd } = redacted0
+  // keep's could-not-save mark, said as a sentence on its own line (host-exec-keep.ts).
+  const text = keepMod.withKeepMarkSaid(redacted0.text, jobId)
   const strict = await import('./host-exec-strict.js')
   // Read from the output as it came: a step whose command looks like a credential had its whole
   // line hidden, and the step with it (2026-11-05 review sol13: `test password=… = x` named none).
-  const failedStep = reply.running !== true ? strict.failedStepOf(raw, jobId, reply.exitCode) : null
+  // keep's mark, printed after the line ended, is not part of the line's output for this.
+  const failedStep = reply.running !== true ? strict.failedStepOf(keepMod.withoutKeepMark(raw, jobId), jobId, reply.exitCode) : null
   // bash's own line number serves only the run's lookup of the step (functionCall); never shown.
   if (failedStep && !opts.bashLine) { delete failedStep.bashLine; delete failedStep.inner }
   // A strict run's own lines say the failing step once, and name what failedStep names. The run's
@@ -487,8 +492,8 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   let before: (() => void) | undefined
   // The grant the run counts on: a revoked one the user gave again while this call waited counts the new one.
   let used = grantId
-  // keep with no cwd: where this task's last keep call there ended, the run's cwd (host-exec-keep.ts).
-  let kept: import('./host-exec-keep.js').KeptCwd | null = null
+  // keep: the snapshot this task's last keep call there saved, and with no cwd its directory, the run's cwd (host-exec-keep.ts).
+  let kept: import('./host-exec-keep.js').Kept | null = null
   let keptDir: string | null = null
   try {
     // Each wait (the slot, the dial) is followed by a look at the grant and the host's stop,
@@ -499,17 +504,17 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     await waits.assertWaitSupported(conn, host, waitFor)
-    if (keep && !keepMod.named(params.cwd)) {
-      // One read of the task's keep.cwd there, within the dial's time; a lost answer ends the call (nothing ran).
+    if (keep) {
+      // One read of the task's keep.current there, within the dial's time; a lost answer ends the call (nothing ran).
       const c = conn
-      kept = await keepMod.keptCwd(c, caller.taskId, (p) => ask(c, host, 'fs.readRange', p, Math.max(1, Math.min(DIAL_MS, budgetLeft(caller, t0) - START_MIN_LEFT_MS))))
-      keptDir = 'dir' in kept ? kept.dir : null
+      kept = await keepMod.keptState(c, caller.taskId, (p) => ask(c, host, 'fs.readRange', p, Math.max(1, Math.min(DIAL_MS, budgetLeft(caller, t0) - START_MIN_LEFT_MS))))
+      keptDir = 'dir' in kept && !keepMod.named(params.cwd) ? kept.dir : null
       // The run starts there: the dialog guards read the line from there, as the host will, and a
       // place macOS guards is a risk itself (said as keep's start, host-exec-keep.ts keepRefusal).
       if (keptDir) await screenForPrompts(host, `cd ${shellQuote(keptDir)}\n${line}`, params.allow_prompts === true, undefined, caller.taskId)
     }
     // Strict and keep shape the line here, after the dialog guards read the user's own text.
-    const shaped = keepMod.shapedLine(params, jobId, { shellCd: kept !== null && 'shellCd' in kept })
+    const shaped = keepMod.shapedLine(params, jobId, kept && 'gen' in kept ? { gen: kept.gen } : { shellCd: kept !== null })
     const runParams = shaped !== null ? { ...params, command: shaped } : params
     ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, shaped ?? line))
     // Last look before anything reaches the host: from here to the send nothing waits.
@@ -549,13 +554,13 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   let gone: string | undefined
   try {
     before?.() // an older daemon's task directory marker, then the run
-    reply = await runIn(params.cwd || keptDir)
+    reply = await runIn(keptDir ? keepMod.daemonCwd(keptDir) : params.cwd)
   } catch (err) {
     throw mayHaveStarted(err)
   }
   // The host refuses a cwd that is missing or not a directory before it records or starts anything
   // (host-exec-core.ts run: resolveCwd, then the job), so nothing ran: the same job again, in the fresh cwd.
-  if (keptDir && !params.cwd && reply.ok !== true && reply.code === 'cwd_missing') {
+  if (keptDir && reply.ok !== true && reply.code === 'cwd_missing') {
     gone = keptDir
     try {
       used = await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
@@ -612,7 +617,10 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   // It waited for a slot under a cap first: the answer says how long (2026-11-05 review).
   if (slotMs >= 1_000) out.slotWaitMs = slotMs
   // What keep did: where it started, and whether this run's end carries (host-exec-keep.ts keepAnswer).
-  if (keep) out.keep = keepMod.keepAnswer({ background, out, kept, gone })
+  if (keep) {
+    const shellCd = kept !== null && 'shellCd' in kept && !keepMod.named(params.cwd)
+    out.keep = keepMod.keepAnswer({ background, out, output: typeof last.output === 'string' ? last.output : '', jobId, keptDir, shellCd, gone })
+  }
   // A deadline over the most a run of its kind may have ran with that most: the answer says so (2026-11-05 review 12).
   if (typeof params.timeout_ms === 'number' && params.timeout_ms > cap) out.timeoutCappedMs = cap
   const step = out.failedStep as import('./host-exec-strict.js').FailedStep | undefined

@@ -537,22 +537,26 @@ describe('host_exec', () => {
     const plain = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'pwd; echo "${KEEP_E2E:-unset}"; cd /; export KEEP_E2E=plain' }, SID)
     expect(plain.body).toMatchObject({ exitCode: 0, output: `${home}\nunset\n` })
     expect(plain.body.keep).toBeUndefined()
+    // The pointer the first keep call left: a generation, then its directory; no value.
+    const pointer = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.current')
+    const [gen, keptDir] = (await fs.readFile(pointer, 'utf8')).split('\n')
+    expect(gen).toMatch(/^\d+-\d+-\d+$/)
+    expect(keptDir).toBe(`${home}/keep-e2e`)
     const second = await executeOp('host_exec', { host: 'macbox', command: 'pwd; echo "$KEEP_E2E"', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
     expect(second.result).toMatchObject({ exitCode: 0, output: `${home}/keep-e2e\none\n`, cwd: `${home}/keep-e2e`, keep: { saves: true } })
     expect(String(second.result.outcome)).toMatch(new RegExp(`^Exit 0 on macbox in ${home}/keep-e2e \\(bash\\) after .*It started where this task's last keep call on macbox ended .* at its end carry to the next keep call there\\.`))
-    // The server read the kept directory from the host (one fs.readRange of the path alone) and ran
-    // the line there: no cd of the shell's own.
-    const keptFile = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.cwd')
-    expect(sent.filter((m) => m.cmd === 'fs.readRange').at(-1)!.params).toEqual({ path: keptFile, start: 0, length: 4097 })
+    // The server read the pointer from the host (one fs.readRange) and ran the line in its directory,
+    // sourcing that generation: no cd of the shell's own.
+    expect(sent.filter((m) => m.cmd === 'fs.readRange').at(-1)!.params).toEqual({ path: pointer, start: 0, length: 64 + 1 + 4096 + 1 })
     const secondRun = sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params
     expect(secondRun.cwd).toBe(`${home}/keep-e2e`)
+    expect(String(secondRun.command)).toContain(`walnut_kg=${gen};`)
     expect(String(secondRun.command)).not.toContain('builtin cd')
-    expect(await fs.readFile(keptFile, 'utf8')).toBe(`${home}/keep-e2e`)
-    // Values stay on the host: in the task's 0600 file there, never in an answer.
+    // Values stay on the host: in the task's 0600 snapshot there, never in an answer.
     expect(JSON.stringify(second.result)).not.toContain('s3cr3t-keep-value')
-    const state = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.sh')
+    const state = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.d', `${gen}.sh`)
     expect((await fs.stat(state)).mode & 0o777).toBe(0o600)
-    expect((await fs.stat(keptFile)).mode & 0o777).toBe(0o600)
+    expect((await fs.stat(pointer)).mode & 0o777).toBe(0o600)
     expect(await fs.readFile(state, 'utf8')).toContain('KEEP_E2E_SECRET')
     // With strict: the failed step is named as without keep, and where it stopped carries.
     const strict = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd /\ngrep -q zz-nomatch /dev/null\necho never', strict: true, keep: true }, SID)
@@ -566,12 +570,25 @@ describe('host_exec', () => {
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "${KEEP_BG:-unset}"', keep: true }, SID)).body.output).toBe('unset\n')
     // A save that cannot complete (here a walnut_ name the line made readonly) keeps the exit code,
     // says so in one line with no value, and the answer says it was not saved.
-    const notSaved = await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_E2E=two; readonly walnut_kt; exit 2', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    const notSaved = await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_E2E=two; readonly walnut_g; exit 2', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
     expect(notSaved.result).toMatchObject({ exitCode: 2, keep: { saves: true, saved: false, why: 'the line made a walnut_ variable readonly' } })
     expect(notSaved.result.output).toBe('walnut: keep could not save this run\'s state (the line made a walnut_ variable readonly); the next keep call starts from the last saved one\n')
     expect(String(notSaved.result.outcome)).toContain('its state was not saved (the line made a walnut_ variable readonly), so the next keep call starts from the last saved one.')
     expect(String(notSaved.result.outcome)).not.toContain('carry to the next keep call')
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "$KEEP_E2E"', keep: true }, SID)).body.output).toBe('one\n')
+    // Review 2026-11-05 (keep round 2): output with no line end before keep's mark. The mark has its
+    // own line and the run's seal, so it is read wherever it is; the answer says it as the sentence.
+    const merged = await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_E2E=three; printf no-newline; readonly walnut_s; true', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(merged.result).toMatchObject({ exitCode: 0, keep: { saves: true, saved: false, why: 'the line made a walnut_ variable readonly' } })
+    expect(merged.result.output).toBe('no-newline\nwalnut: keep could not save this run\'s state (the line made a walnut_ variable readonly); the next keep call starts from the last saved one\n')
+    expect(String(merged.result.outcome)).toContain('its state was not saved (the line made a walnut_ variable readonly)')
+    expect(String(merged.result.outcome)).not.toContain('carry to the next keep call')
+    // A line that prints the sentence itself is not the mark: its state carries.
+    const look = await executeOp('host_exec', { host: 'macbox', command: 'printf \'%s\\n\' "walnut: keep could not save this run\'s state (x); the next keep call starts from the last saved one"; export KEEP_LOOK=1', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(look.result).toMatchObject({ exitCode: 0, keep: { saves: true } })
+    expect((look.result.keep as Record<string, unknown>).saved).toBeUndefined()
+    expect(String(look.result.outcome)).toContain('carry to the next keep call')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "$KEEP_E2E ${KEEP_LOOK:-unset}"', keep: true }, SID)).body.output).toBe('one 1\n')
     // A kept directory the host no longer has: refused before anything ran there, so the same job
     // runs again in the fresh cwd, and the answer says so.
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'mkdir -p "$HOME/gone-e2e" && cd "$HOME/gone-e2e"', keep: true }, SID)).body.exitCode).toBe(0)
@@ -609,6 +626,25 @@ describe('host_exec', () => {
     expect(read.result).toMatchObject({ waitedFor: { matched: 'file', match: `${home}/wait-project/ready-flag` } })
     await until(async () => (await api('GET', `/api/v1/hosts/macbox/exec/${String(bg.result.jobId)}`, undefined, SID)).body.running === false, 'the background keep run to end')
     // Back home for the tests after this one.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd ~', keep: true }, SID)).body.exitCode).toBe(0)
+  }, 30_000)
+
+  // Review 2026-11-05 (keep round 2): the daemon trims a cwd, so a kept directory ending in white space
+  // went to a sibling without it. It goes as `<dir>/.`, which the trim leaves and the resolve makes exact.
+  it('keep: a kept directory ending in white space is where the next call runs, reads and waits, never its sibling', async () => {
+    const home = path.join(hostRoot, 'home')
+    await fs.mkdir(path.join(home, 'odd'), { recursive: true })
+    await fs.writeFile(path.join(home, 'odd', 'f.txt'), 'decoy\n')
+    await fs.writeFile(path.join(home, 'odd', 'flag2'), 'decoy')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'mkdir -p "$HOME/odd " && cd "$HOME/odd " && echo in-space > f.txt', keep: true }, SID)).body.exitCode).toBe(0)
+    const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const read = await executeOp('host_exec', { host: 'macbox', command: 'cat f.txt; pwd', keep: true }, opts) as { result: Record<string, unknown> }
+    expect(read.result).toMatchObject({ exitCode: 0, output: `in-space\n${home}/odd \n`, cwd: `${home}/odd ` })
+    expect((read.result.keep as Record<string, unknown>).gone).toBeUndefined()
+    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params.cwd).toBe(`${home}/odd /.`)
+    const bg = await executeOp('host_exec', { host: 'macbox', command: 'sleep 0.3; touch flag2; sleep 1', keep: true, background: true, wait_for: { file: 'flag2' } }, opts) as { result: Record<string, unknown> }
+    expect(bg.result).toMatchObject({ running: true, cwd: `${home}/odd `, waitedFor: { matched: 'file', match: `${home}/odd /flag2` } })
+    await until(async () => (await api('GET', `/api/v1/hosts/macbox/exec/${String(bg.result.jobId)}`, undefined, SID)).body.running === false, 'the background keep run to end')
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd ~', keep: true }, SID)).body.exitCode).toBe(0)
   }, 30_000)
 
