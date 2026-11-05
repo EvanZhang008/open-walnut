@@ -145,8 +145,10 @@ a window the older one locked while its token is still in that browser.
 
 **Lock.** A window's Lock (`POST /api/v1/vault/lock {everywhere: true}`, the Passwords page's and
 the extension popup's Lock button) ends every window's session and the extension's; the other tabs
-show the lock screen at once (a `storage` event), another browser or the extension at its next
-read or within a minute (a quiet status check while the page is shown). A lock with no body ends
+show the lock screen at once (a `storage` event), another browser at its next read or within a
+minute (a quiet status check while the page is shown), and an open extension popup or side panel
+within a few seconds (it asks Walnut every 3 s while it is shown, and any refusal of its unlock
+brings its lock screen with the password field, never an error). A lock with no body ends
 only the caller's own session: what an older client's Lock meant, and what an auto-lock (a tab's
 idle time, the extension's own timer, its browser start) sends. Lock all also ends every agent
 grant. A Lock answers only after `sessions.json` is written without the ended sessions; when that
@@ -346,6 +348,37 @@ device revoke`, another process, ends at its next use. The last session ending t
 the vault as an auto-lock would. The reads the extension makes by itself carry
 `x-walnut-vault-quiet: 1`, so browsing, and opening the popup, never keep the vault unlocked;
 a fill or a copy does. Disconnect locks its session and removes its device.
+
+**One unlock on this computer.** With "Walnut's setting", the extension on the computer Walnut runs
+on needs no password of its own while the person has Passwords unlocked there: a Walnut window or
+the Mac app unlocking, another browser's extension unlocking, or the keychain unlock at start.
+Its status then says `canJoin`, and `POST /api/v1/vault/join` gives it a session of its own
+(`sessions.joinSession`), held only with its device token and part of that one unlock (`source`
+on the session): it holds only while that unlock does, so its expiry, a Lock of that window and
+Lock all end both, and a use of it renews that unlock, as a use in any window does. Sharing never
+makes an unlock last longer, and a restart never brings a shared session back without its unlock. An open popup or side panel takes it within a few
+seconds, a popup opened later at once. Only that extension may: the device must be a paired
+Walnut extension (`extension-<hex>`, which only the person at this computer can pair), the request
+must come over this computer's own network path (a loopback connection with no proxy header,
+addressed to a loopback name, off the tunnel's port) with no session's header, and the unlock it
+shares must have been made the same way, in a browser (it sends an Origin; a script or the CLI is
+no window and shares nothing), marked `here` on the session and kept by `sessions.json`. So a
+phone, a browser elsewhere, the companion and an unlock made through Walnut's tunnel share nothing, nor
+does a Walnut window share the extension's unlock (a page and a local process look the same to
+Walnut; only the extension carries a secret of its own). Known limit: a forward to Walnut's port
+that adds no proxy header (`ssh -L`, socat, a bare `proxy_pass`) makes a request from elsewhere
+look like this computer's, the same limit `src/web/middleware/local-trust.ts` names, which trusts
+such a request with no credential at all (more than sharing gives; sharing also needs the
+extension's device token). Walnut's own tunnels connect to its tunnel port, where loopback is
+never trusted, so through them nothing is shared. A Lock ends the shared sessions with the rest,
+and an extension that locked only itself (its own timer) shares nothing until the person unlocks
+again, after a Walnut restart too (`sessions.json` keeps that record, signed with the sessions). Every other auto-lock choice in the popup locks at browser start and after
+its own time, which sharing would undo, so with those the extension unlocks with the password.
+The Playwright fixture's one vault serves specs side by side, so there (`WALNUT_TEST_VAULT_JOIN=named`)
+only the extension a spec names through `POST /api/test/vault-join` shares an unlock. Tests:
+`tests/e2e/vault-join.test.ts`, `tests/core/vault/session-join.test.ts`,
+`tests/core/browser-control/extension-popup-race.test.ts` (a late answer never draws over the lock
+screen: `popup-view.ts`), `tests/e2e/browser/extension-one-unlock.spec.ts`.
 
 **What lives where.** The background holds the device token and the vault session (its
 IndexedDB, which content scripts cannot open) and, for 5 s while unlocked, the item summaries (so a

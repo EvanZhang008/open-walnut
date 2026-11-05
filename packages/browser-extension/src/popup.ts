@@ -13,12 +13,15 @@ import { itemRow, type Item, type PopupCtx } from './popup-item'
 import { findWalnut, rememberServer } from './popup-connect'
 import { startClipboardPage } from './clipboard-page'
 import { pageFillOn } from './settings'
+import { currentView, isCurrent, nextView, paint } from './popup-view'
 
 interface State { connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }
 
 const root = document.getElementById('root')!
 /** Walnut no longer knows this extension (removed in Settings): it forgot the connection, so connect again. */
 const DISCONNECTED = new Set(['not_connected', 'not_paired', 'token_refused'])
+/** Walnut ended this browser's unlock: the lock screen, with its password field. */
+const LOCKED = new Set(['vault_session_needed', 'vault_locked'])
 const params = new URLSearchParams(location.search)
 /** This view inside the side panel's Passwords tab (sidepanel.ts), for the page of one window. */
 const embedded = params.get('embed') === 'panel'
@@ -126,7 +129,7 @@ async function unlockView(st: State): Promise<HTMLElement> {
   const pw = h('input', { class: 'input', type: 'password', id: 'pw', autocomplete: 'current-password', 'aria-label': 'Master password', placeholder: 'Master password' })
   const sk = h('input', { class: 'input mono', id: 'sk', 'aria-label': 'Secret Key', placeholder: 'W1-XXXXXX-…', spellcheck: 'false', style: 'margin-top:8px' })
   const skWrap = h('div', { style: 'display:none;text-align:left' },
-    h('label', { class: 'field-label', for: 'sk' }, 'This Mac does not hold your Secret Key: type it from your recovery kit.'), sk)
+    h('label', { class: 'field-label', for: 'sk' }, 'The computer Walnut runs on does not hold your Secret Key: type it from your recovery kit.'), sk)
   const err = errLine(!status.ok ? status.error : undefined)
   const hint = hintLine(status.ok ? status.status.hint : undefined)
   const go = h('button', { class: 'btn btn-primary btn-block', type: 'submit', 'data-testid': 'popup-unlock', style: 'margin-top:10px' }, 'Unlock')
@@ -203,8 +206,10 @@ async function vaultView(st: State): Promise<HTMLElement> {
     const text = q.value.trim()
     if (!text) { showSite(); return }
     const mine = ++seq
+    const g = currentView()
     const r = await ask<{ items: Item[] }>({ type: 'search', q: text })
-    if (mine !== seq) return
+    if (mine !== seq || !isCurrent(g)) return
+    if (!r.ok && r.code && LOCKED.has(r.code)) { void render(); return }
     list.replaceChildren(h('div', { class: 'section-label' }, 'Results'))
     if (!r.ok) { list.append(errLine(r.error)); return }
     if (!r.items.length) { list.append(h('div', { class: 'empty' }, `Nothing matches "${text}".`)); return }
@@ -224,7 +229,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
   showSite()
   setTimeout(() => q.focus(), 30)
 
-  const lock = iconButton(icon('lock'), 'Lock Walnut', async () => { await ask({ type: 'lock' }); void render() }, { 'data-testid': 'popup-lock' })
+  const lock = iconButton(icon('lock'), 'Lock Walnut', async () => { nextView(); await ask({ type: 'lock' }); void render() }, { 'data-testid': 'popup-lock' })
   return h('div', {},
     h('div', { class: 'top' }, h('span', { class: 'logo' }, icon('key')), h('h1', {}, 'Walnut'),
       h('div', { class: 'top-tools' },
@@ -248,18 +253,56 @@ function showSettings(st: State): Promise<void> {
 // ── start ──
 
 async function render(): Promise<void> {
+  const g = nextView()
   const st = await ask<State>({ type: 'state' })
   let view: HTMLElement
   if (!st.ok) view = h('div', { class: 'center' }, errLine(st.error))
   else if (!st.connected) view = connectView(st)
   else if (!st.unlocked) view = await unlockView(st)
   else view = await vaultView(st)
-  root.replaceChildren(view)
+  // What it holds, read from the view itself (an unlocked render may have drawn the lock screen).
+  const shows = view.querySelector('#pw') ? 'locked' : st.ok && st.connected && st.unlocked && !view.querySelector('#server') ? 'unlocked' : 'neutral'
+  if (paint(root, view, g, shows) && st.ok) root.dataset.connected = st.connected ? '1' : '0'
+}
+
+/**
+ * An open popup or side panel follows the vault without a reload (R3-1, R3-2): a Lock all or a
+ * Lock in another window replaces the list with the lock screen at once, and an unlock in a Walnut
+ * window on this computer shows the list (the background shares it, bg-vault.ts liveState).
+ */
+function followVault(): void {
+  let checking = false
+  const check = async () => {
+    if (checking || document.visibilityState !== 'visible' || !root.dataset.shows) return
+    checking = true
+    try {
+      const st = await ask<State>({ type: 'vault-watch' })
+      if (!st.ok) return
+      // The view on show now, whichever path drew it (popup-view.ts), against Walnut's answer.
+      const shows = root.dataset.shows
+      const stale = st.connected !== (root.dataset.connected === '1')
+        || (shows === 'unlocked' && !st.unlocked) || (shows === 'locked' && st.unlocked)
+      if (!stale) return
+      // Unlocked in another window while this one waits for the password: its work is done.
+      if (inWindow && st.unlocked && shows === 'locked') { window.close(); return }
+      await render()
+    } finally { checking = false }
+  }
+  setInterval(() => void check(), 3000)
+  document.addEventListener('visibilitychange', () => void check())
+  window.addEventListener('focus', () => void check())
+  // The background dropped or took an unlock (a refusal from Walnut on any request, an unlock, a
+  // share): its mark in storage.session comes and goes with the token (walnut-api.ts).
+  ext.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'session' || !('vaultSession' in changes)) return
+    const c = changes.vaultSession
+    if ((c.oldValue !== undefined) !== (c.newValue !== undefined)) void check()
+  })
 }
 
 // popup.html?clipboard=1 is Chrome's offscreen document for the clipboard (bg-clipboard.ts), not a view.
 if (params.has('clipboard')) startClipboardPage()
-else void render()
+else { void render(); followVault() }
 
 // In the side panel the view stays open while the person moves on: it follows the page in its
 // window (another tab, another address), unless they are typing in it.

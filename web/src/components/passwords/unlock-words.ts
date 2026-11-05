@@ -25,7 +25,7 @@ export function unlockFootText(status: Pick<VaultStatus, 'unlockFor' | 'lockAfte
     case 'idle': return `Locks again after ${status.lockAfterIdleMinutes ?? status.autoLockMinutes} minutes unused.`
     case '1h': return 'Stays unlocked for 1 hour.'
     case '12h': return 'Stays unlocked for 12 hours.'
-    case '48h': return 'Stays unlocked for 48 hours after you last use it, until you lock it or restart the Mac.'
+    case '48h': return 'Stays unlocked for 48 hours after you last use it, until you lock it or the computer Walnut runs on restarts.'
     case 'restart': return 'Stays unlocked until Walnut restarts.'
     default: return 'Stays unlocked; agents can use it while you are away.'
   }

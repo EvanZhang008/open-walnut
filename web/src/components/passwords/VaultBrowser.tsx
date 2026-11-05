@@ -102,7 +102,7 @@ function SecurityView({ items, onOpen }: { items: VaultItemSummary[]; onOpen: (i
         <span className={`pw-shield ${total ? 'warn' : 'ok'}`}><ShieldIcon size={28} /></span>
         <div className="pw-detail-title">
           <h2>{total ? `${total} item${total === 1 ? '' : 's'} to look at` : 'No problems found'}</h2>
-          <span className="pw-detail-type">Checked on this Mac. No password or site leaves it.</span>
+          <span className="pw-detail-type">Checked by Walnut on its own computer. No password or site leaves it.</span>
         </div>
       </div>
       <div className="pw-sec-tiles">

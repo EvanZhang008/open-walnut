@@ -5,6 +5,7 @@
 import { ask } from './ext'
 import { h } from './dom'
 import { rememberServer } from './popup-connect'
+import { nextView } from './popup-view'
 
 export function disconnectControl(st: { serverUrl?: string }, back: () => void): HTMLElement {
   const wrap = h('div', { 'data-testid': 'popup-disconnect-wrap' })
@@ -19,6 +20,7 @@ export function disconnectControl(st: { serverUrl?: string }, back: () => void):
       yes.disabled = true
       // Offered again on the connect view.
       if (st.serverUrl) rememberServer(st.serverUrl)
+      nextView() // nothing still out draws over what comes next
       await ask({ type: 'disconnect' })
       back()
     }

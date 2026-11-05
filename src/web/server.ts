@@ -2453,6 +2453,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     app.use('/api/test/host-fixture', fixture.testHostFixtureRouter)
     void fixture.preloadHostFixture()
   }
+  // Test-only: the Playwright fixture names the extensions that share an unlock (core/vault/sessions.ts).
+  if ((await import('../core/vault/sessions.js')).joinTestRouteAllowed({ ephemeral: IS_EPHEMERAL, cloudMode: isCompanion() })) {
+    app.use('/api/test/vault-join', (await import('./routes/test-vault-join.js')).testVaultJoinRouter)
+  }
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
   // Whether the companion runs this Mac's build (the Mac drives it: core/companion-build/mac.ts).

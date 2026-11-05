@@ -4,11 +4,13 @@
  * (settings.ts), and the in-page strong password starts from it too.
  */
 import { ask } from './ext'
+import { nextView, paint } from './popup-view'
 import { h, icon } from './dom'
 import { getSettings, setSettings, type GeneratorPrefs } from './settings'
 import { copySecret, iconButton, topBar } from './popup-ui'
 
 export async function generatorView(root: HTMLElement, back: () => void): Promise<void> {
+  const g = nextView()
   const prefs: GeneratorPrefs = (await getSettings()).generator
   const out = h('div', { class: 'gen-out mono', 'data-testid': 'gen-out', 'aria-live': 'polite' })
   const options = h('div', {})
@@ -69,12 +71,12 @@ export async function generatorView(root: HTMLElement, back: () => void): Promis
   const kinds = h('div', { class: 'gen-kinds', role: 'group', 'aria-label': 'Kind' }, kindBtn('random', 'Password'), kindBtn('words', 'Passphrase'))
   drawOptions()
   void make()
-  root.replaceChildren(h('div', {},
+  paint(root, h('div', {},
     topBar('Password generator', back),
     h('div', { class: 'pane' }, kinds, out,
       h('div', { style: 'display:flex;gap:6px;margin-top:10px' },
         h('button', { class: 'btn btn-primary', type: 'button', style: 'flex:1', 'data-testid': 'gen-copy', onclick: () => void copySecret(out.textContent ?? '', 'Password') }, 'Copy'),
         iconButton(icon('dice'), 'Make another', () => void make(), { class: 'btn icon-only', 'data-testid': 'gen-again' })),
       options,
-      h('p', { class: 'muted', style: 'font-size:12px;margin-top:14px' }, 'On a sign-up page, Walnut suggests a strong password in the field itself (made to fit what the field accepts). When you send the form, it asks whether to save the login.'))))
+      h('p', { class: 'muted', style: 'font-size:12px;margin-top:14px' }, 'On a sign-up page, Walnut suggests a strong password in the field itself (made to fit what the field accepts). When you send the form, it asks whether to save the login.'))), g, 'neutral')
 }

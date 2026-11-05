@@ -91,7 +91,7 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
         <span className="pw-shield ok"><RobotIcon size={28} /></span>
         <div className="pw-detail-title">
           <h2>Agent Activity</h2>
-          <span className="pw-detail-type">What your agents may use, and every time they asked. Kept encrypted on this Mac.</span>
+          <span className="pw-detail-type">What your agents may use, and every time they asked. Kept encrypted on the computer Walnut runs on.</span>
         </div>
       </div>
 

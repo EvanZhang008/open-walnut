@@ -158,7 +158,7 @@ export function SetupFlow({ onKit }: { onKit: (k: KitToShow) => void }) {
       <form className="pw-gate-card" onSubmit={(e) => { e.preventDefault(); void create() }}>
         <div className="pw-gate-icon"><KeyIcon size={30} /></div>
         <h1>Set up Passwords</h1>
-        <p className="pw-gate-sub">Your logins, codes and keys, encrypted on this Mac. Pick a master password you can remember; a few random words work well.</p>
+        <p className="pw-gate-sub">Your logins, codes and keys, encrypted on the computer Walnut runs on. Pick a master password you can remember; a few random words work well.</p>
         <NewPasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} idPrefix="pw-setup" autoFocus />
         <HintInput id="pw-setup-hint" value={hint} onChange={setHint} password={pw} />
         {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}

@@ -4,7 +4,8 @@
  * the per-tab state that must outlive the service worker (tab-store.ts).
  */
 import { ext, type Tab } from './ext'
-import { ApiError, DEFAULT_SERVER, api, connection, vaultSession } from './walnut-api'
+import { ApiError, DEFAULT_SERVER, LOCKED_CODES, api, connection, vaultSession } from './walnut-api'
+import { getSettings } from './settings'
 import { insecureOnly, siteKey } from '../../../src/core/vault/url-match'
 import type { VaultItemSummary } from '../../../src/core/vault/types'
 import type { FieldRules } from './field-rules'
@@ -18,14 +19,45 @@ export const fail = (err: unknown): Reply => err instanceof ApiError
   ? { ok: false, error: err.message, code: err.code, ...(err.waitMs ? { waitMs: err.waitMs } : {}) }
   : { ok: false, error: err instanceof Error ? err.message : String(err) }
 
-let cache: { at: number; items: VaultItemSummary[] } | null = null
+// Kept per unlock: a list read under a session that has ended is never shown again.
+let cache: { at: number; token: string; items: VaultItemSummary[] } | null = null
 export async function summaries(): Promise<VaultItemSummary[]> {
-  if (cache && Date.now() - cache.at < 5_000) return cache.items
+  const token = await vaultSession()
+  if (cache && token && cache.token === token && Date.now() - cache.at < 5_000) return cache.items
+  cache = null
   const items = (await api.items()).filter((i) => !i.trashedAt)
-  cache = { at: Date.now(), items }
+  const now = await vaultSession()
+  if (now) cache = { at: Date.now(), token: now, items }
   return items
 }
-export const forget = () => { cache = null }
+export const forget = () => { cache = null; lastJoinTry = 0 }
+
+/** A refusal that means this browser is locked (Walnut ended its unlock). */
+export const isLockedError = (err: unknown): boolean => err instanceof ApiError && !!err.code && LOCKED_CODES.has(err.code)
+
+// One unlock on the computer Walnut runs on (POST /vault/join): a locked extension under "Walnut's
+// setting" shares the person's unlock made there. Every other choice locks at browser start and
+// after its own time, which sharing would undo, so it unlocks with the password.
+let lastJoinTry = 0
+const JOIN_RETRY_MS = 5_000
+
+async function joinAllowed(): Promise<boolean> {
+  return (await getSettings()).autoLock === 'walnut'
+}
+
+/** Locked here: share the person's unlock when Walnut says there is one (`known`), else ask at most every few seconds. */
+async function tryJoin(known?: boolean): Promise<boolean> {
+  if (known === false || !(await joinAllowed())) return false
+  if (known === undefined) {
+    if (Date.now() - lastJoinTry < JOIN_RETRY_MS) return false
+    lastJoinTry = Date.now()
+    const st = await api.status().catch(() => null)
+    if (!st?.canJoin) return false
+  }
+  const ok = await api.join()
+  if (ok) { cache = null; lastJoinTry = 0 }
+  return ok
+}
 
 /** Logins offered on a page (tier 1): the same host first, then favorites, then most recently used. */
 export async function matchesFor(page: string): Promise<MenuItem[]> {
@@ -47,10 +79,36 @@ export async function walletItems(kind: 'card' | 'identity'): Promise<MenuItem[]
   return (await summaries()).filter((i) => i.type === kind).sort(recent).map((i) => ({ ...view(i), type: kind }))
 }
 
+/**
+ * What this browser holds: an unlock (found out on its next use when Walnut has ended it), or
+ * locked, in which case it shares the person's unlock on this computer when there is one.
+ */
 export async function state(): Promise<{ connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }> {
   const conn = await connection()
   if (!conn) return { connected: false, unlocked: false }
-  return { connected: true, unlocked: !!(await vaultSession()), serverUrl: conn.serverUrl, device: conn.device }
+  const unlocked = !!(await vaultSession()) || await tryJoin().catch(() => false)
+  return { connected: true, unlocked, serverUrl: conn.serverUrl, device: conn.device }
+}
+
+/**
+ * The vault as Walnut sees it now, for an open popup or side panel: an unlock Walnut ended (Lock
+ * all, a Lock in another window, its time) is dropped at once, and a locked one shares the
+ * person's unlock on this computer. Walnut not answering: what this browser holds.
+ */
+export async function liveState(): Promise<{ connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }> {
+  const conn = await connection()
+  if (!conn) return { connected: false, unlocked: false }
+  const base = { connected: true, serverUrl: conn.serverUrl, device: conn.device }
+  let st: Awaited<ReturnType<typeof api.status>>
+  try { st = await api.status() } catch (err) {
+    // A token Walnut refused was forgotten by call(): not connected any more.
+    if (!(await connection())) return { connected: false, unlocked: false }
+    return { ...base, unlocked: !isLockedError(err) && !!(await vaultSession()) }
+  }
+  if (st.unlocked) return { ...base, unlocked: true }
+  if (await vaultSession()) await api.forgetSession()
+  cache = null
+  return { ...base, unlocked: await tryJoin(!!st.canJoin).catch(() => false) }
 }
 
 export const originOf = (url: string): string => { try { return new URL(url).origin } catch { return '' } }

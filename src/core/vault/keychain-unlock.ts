@@ -71,16 +71,18 @@ export type KeychainUnlock =
 
 /**
  * Unlock with the keychain's master password and open a session named `client` (the person's
- * window, or "this Mac" for a start-up or sync unlock nobody holds a token for).
+ * window, or "this Mac" for a start-up or sync unlock nobody holds a token for). `here`: the
+ * person's own unlock on this computer (the one at start, which they chose), which this computer's
+ * browser extension may share; a sync's is not.
  */
-export async function unlockFromKeychain(opts: { client: string; device?: string }): Promise<KeychainUnlock> {
+export async function unlockFromKeychain(opts: { client: string; device?: string; here?: boolean }): Promise<KeychainUnlock> {
   const r = await keychainOpen(async (status) => {
     const { getConfig } = await import('../config-manager.js')
     const { unlockChoice } = await import('./unlock-length.js')
     const choice = unlockChoice((await getConfig()).passwords, status.agentsWhileAway)
     const s = await import('./sessions.js')
     // Walnut's own unlock (a sync, the start): a restart unlocks again, so none is kept for one.
-    const session = s.createSession(opts.client, { ...choice.limits, survivesRestart: false }, opts.device)
+    const session = s.createSession(opts.client, { ...choice.limits, survivesRestart: false }, opts.device, opts.here)
     return { token: session.token, expiresAt: session.expiresAt }
   })
   return r.ok ? { ok: true, session: r.value } : r

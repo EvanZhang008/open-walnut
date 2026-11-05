@@ -4,6 +4,7 @@
  * agents in this browser.
  */
 import { ask, ext } from './ext'
+import { nextView, paint } from './popup-view'
 import { h, icon } from './dom'
 import { AUTO_LOCKS, getSettings, setSettings, type AutoLock } from './settings'
 import { errLine, iconButton, switchRow, topBar } from './popup-ui'
@@ -84,6 +85,7 @@ async function neverSection(): Promise<HTMLElement> {
 }
 
 export async function settingsView(root: HTMLElement, st: { serverUrl?: string; device?: string }, back: () => void): Promise<void> {
+  const g = nextView()
   const settings = await getSettings()
   const off = disconnectControl(st, back)
   const lock = h('select', { class: 'select', id: 'autolock', 'aria-label': 'Lock Walnut', 'data-testid': 'popup-autolock' },
@@ -97,15 +99,15 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
     walnutSt = (r as { status?: WalnutLength } | undefined)?.status
     lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt)
   }).catch(() => undefined)
-  root.replaceChildren(h('div', {},
+  // What a person changes comes first (lock, filling, agents), so it fits the popup's first
+  // screen; the sites never offered for saving, the connection and Disconnect close the page.
+  paint(root, h('div', {},
     topBar('Settings', back),
-    h('div', { class: 'pane' },
-      h('div', { class: 'section-label' }, 'Connected to'),
-      h('div', { class: 'group' }, h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
-        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ? hostOf(st.serverUrl) : ''), h('span', { class: 'row-sub' }, st.device ?? '')))),
+    h('div', { class: 'pane settings' },
       h('div', { class: 'section-label' }, 'Lock'),
-      h('div', { class: 'group' }, h('div', { class: 'setting' }, h('label', { class: 'row-text', for: 'autolock' }, h('span', { class: 'row-title' }, 'Lock Walnut'),
-        lockSub), lock)),
+      // The choice on one line with its select, its help under both at full width.
+      h('div', { class: 'group' }, h('div', { class: 'setting setting-stack', 'data-testid': 'popup-lock-row' },
+        h('label', { class: 'row-title', for: 'autolock' }, 'Lock Walnut'), lock, lockSub)),
       h('div', { class: 'section-label' }, 'Filling'),
       h('div', { class: 'group' },
         // Off while another password manager fills this browser: no icon, menu or bar in pages (content.ts).
@@ -113,11 +115,13 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
           (on) => void setSettings({ pageFill: on }), 'popup-pagefill'),
         switchRow('copytotp', 'Copy the one-time code after filling', 'Its code is then on the clipboard for the next page.', settings.copyTotp,
           (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
-      await neverSection(),
+      h('p', { class: 'group-note', 'data-testid': 'popup-shortcut-note' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page. In a field, the arrow keys open the menu.'),
       await agentSection(),
-      h('div', { class: 'section-label' }, 'Fill shortcut'),
-      h('p', { class: 'group-note', style: 'margin-top:0' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page, or opens the menu when there are several. In a field, the arrow keys open the menu and move through it.'),
-      h('div', { style: 'height:18px' }), off)))
+      await neverSection(),
+      h('div', { class: 'section-label' }, 'This browser'),
+      h('div', { class: 'group', 'data-testid': 'popup-connection' }, h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
+        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ? `Connected to ${hostOf(st.serverUrl)}` : 'Connected'), h('span', { class: 'row-sub' }, st.device ?? '')))),
+      h('div', { style: 'height:10px' }), off)), g, 'neutral')
 }
 
 /** Walnut's "Keep Passwords unlocked" (src/core/vault/unlock-length.ts), as its own Settings words it. */
@@ -130,7 +134,7 @@ function walnutLength(st: WalnutLength | undefined): string {
     case '12h': return 'Stays unlocked for 12 hours.'
     case 'restart': return 'Stays unlocked until Walnut restarts.'
     case 'always': return 'Stays unlocked; agents can use it while you are away.'
-    case '48h': return 'Stays unlocked for 48 hours after you last use it, until you lock it or restart the Mac.'
+    case '48h': return 'Stays unlocked for 48 hours after you last use it, until you lock it or the computer Walnut runs on restarts.'
     default:
       // Not read yet, or an older Walnut that names only its idle minutes.
       return st?.autoLockMinutes ? `Locks after ${st.autoLockMinutes} minutes unused.` : 'Stays unlocked as long as Walnut keeps Passwords unlocked.'

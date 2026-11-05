@@ -20,7 +20,7 @@ import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
-import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
 import { domainOf } from './login-pick'
 import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock } from './bg-fill'
 import { handleMenu } from './bg-menu'
@@ -88,7 +88,7 @@ function senderKind(sender: Sender): SenderKind | null {
 }
 
 const ALLOWED: Record<string, SenderKind> = {
-  state: 'popup', 'start-connect': 'popup', 'pair-code': 'popup', disconnect: 'popup', 'vault-status': 'popup',
+  state: 'popup', 'vault-watch': 'popup', 'start-connect': 'popup', 'pair-code': 'popup', disconnect: 'popup', 'vault-status': 'popup',
   unlock: 'popup', lock: 'popup', 'site-items': 'popup', search: 'popup', 'copy-secret': 'popup', 'fill-tab': 'popup',
   generate: 'popup', 'open-walnut': 'popup', 'totp-code': 'popup', copied: 'popup', 'wallet-items': 'popup', 'item-detail': 'popup',
   'page-init': 'content', 'frame-ready': 'content', 'open-menu': 'content', 'menu-focus': 'content', 'seen-login': 'content', 'seen-username': 'content',
@@ -170,8 +170,10 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       // The popup opening is when to find out the person removed this extension in Settings
       // (a refusal forgets the connection, so the popup asks to connect again).
       if (await connection()) await api.checkConnection().catch(() => undefined)
-      return { ok: true, ...(await state()) }
+      return { ok: true, ...(await liveState()) }
     }
+    // An open popup or side panel follows the vault: Walnut locked it, or the person unlocked it in another window.
+    case 'vault-watch': return { ok: true, ...(await liveState()) }
     case 'start-connect': return startConnect(String(msg.serverUrl ?? ''))
     case 'pair-code': {
       const conn = await pair(String(msg.serverUrl || DEFAULT_SERVER), String(msg.code ?? ''))

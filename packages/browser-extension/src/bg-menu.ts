@@ -14,7 +14,7 @@ import { getSettings } from './settings'
 import { clearLater } from './bg-clipboard'
 import { walletValues } from './bg-wallet'
 import { COVERED, afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock, stillShown } from './bg-fill'
-import { CODE_PAGE_MS, PENDING_MS, insecureFor, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, insecureFor, isLockedError, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
 import { domainOf, stepOneFirst } from './login-pick'
 
 const WALLET = new Set(['card', 'identity'])
@@ -104,19 +104,25 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       const base = { ok: true, role: owner.role, kind: owner.kind, site: displayHost(owner.url) }
       if (!st.connected) return { ...base, state: 'not-connected' }
       if (!st.unlocked) return { ...base, state: 'locked' }
-      if (WALLET.has(owner.role)) return { ...base, state: 'unlocked', items: await walletItems(owner.role as 'card' | 'identity') }
-      if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, await matchesFor(owner.url)) }
-      const { first, others } = await tiersOf(owner.url)
-      const insecure = first.length || others.length ? 0 : await insecureFor(owner.url)
-      // Logins saved for other parts of this site: listed apart, under their own heading.
-      const apart = others.length ? { others, othersDomain: domainOf(owner.url) } : {}
-      if (owner.role === 'new-password') {
-        owner.suggestion ??= await suggest(owner.rules)
-        await stores.menus.set(owner.tabId, owner)
-        return { ...base, state: 'unlocked', items: first, suggestion: owner.suggestion }
+      // Walnut ended this browser's unlock (Lock all, a Lock elsewhere): the menu's lock view, never an error.
+      try {
+        if (WALLET.has(owner.role)) return { ...base, state: 'unlocked', items: await walletItems(owner.role as 'card' | 'identity') }
+        if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, await matchesFor(owner.url)) }
+        const { first, others } = await tiersOf(owner.url)
+        const insecure = first.length || others.length ? 0 : await insecureFor(owner.url)
+        // Logins saved for other parts of this site: listed apart, under their own heading.
+        const apart = others.length ? { others, othersDomain: domainOf(owner.url) } : {}
+        if (owner.role === 'new-password') {
+          owner.suggestion ??= await suggest(owner.rules)
+          await stores.menus.set(owner.tabId, owner)
+          return { ...base, state: 'unlocked', items: first, suggestion: owner.suggestion }
+        }
+        const { items, more } = stepOneFirst(first, await stepOneHint(owner))
+        return { ...base, state: 'unlocked', items, ...(more.length ? { more } : {}), ...apart, insecure }
+      } catch (err) {
+        if (isLockedError(err)) return { ...base, state: 'locked' }
+        throw err
       }
-      const { items, more } = stepOneFirst(first, await stepOneHint(owner))
-      return { ...base, state: 'unlocked', items, ...(more.length ? { more } : {}), ...apart, insecure }
     }
     case 'menu-codes': {
       // The countdown ran out: the next codes.

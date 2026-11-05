@@ -9,6 +9,7 @@
 import { ask } from './ext'
 import { avatar, h, icon, totpView } from './dom'
 import { copyPlain, copySecret, errLine, iconButton, popupIcon, toast, topBar } from './popup-ui'
+import { currentView, isCurrent, nextView, paint } from './popup-view'
 import { webUrl, type DetailField, type ItemDetail } from './popup-item-data'
 
 export interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string; sub?: string }
@@ -21,14 +22,24 @@ export const REVEAL_MS = 20_000
 
 const isLogin = (it: Item) => !it.type || it.type === 'login'
 
+/** Walnut ended this browser's unlock: the popup shows its lock screen (the background forgot the token). */
+const LOCKED = new Set(['vault_session_needed', 'vault_locked'])
+const lockedReply = (r: { ok: boolean; code?: string }) => !r.ok && !!r.code && LOCKED.has(r.code)
+
 async function copy(id: string, field: string, what: string): Promise<void> {
+  const g = currentView()
   const r = await ask<{ value: string }>({ type: 'copy-secret', id, field })
+  // The view changed meanwhile (a Lock, another view): the answer is not acted on.
+  if (!isCurrent(g)) return
   if (!r.ok) { toast(r.error ?? 'Could not copy.'); return }
   await copySecret(r.value, what)
 }
 
 export async function fillTab(it: { id: string }, ctx: PopupCtx): Promise<void> {
+  const g = currentView()
   const r = await ask<{ code?: string }>({ type: 'fill-tab', id: it.id, ...(ctx.panelWindow ? { windowId: ctx.panelWindow } : {}) })
+  if (!isCurrent(g)) return
+  if (lockedReply(r)) { ctx.back(); return }
   if (!r.ok) { toast(r.error ?? 'Could not fill.'); return }
   // Its one-time code goes on the clipboard (the background had no clipboard of its own here).
   if (r.code) await copySecret(r.code, 'Code')
@@ -68,7 +79,9 @@ function revealer(id: string, field: string, target: HTMLElement, button: HTMLBu
   }
   return async () => {
     if (shown) { hide(); return }
+    const g = currentView()
     const r = await ask<{ value: string }>({ type: 'copy-secret', id, field })
+    if (!isCurrent(g)) return
     if (!r.ok) { toast(r.error ?? 'Could not show it.'); return }
     shown = true
     target.textContent = r.value
@@ -150,9 +163,13 @@ function fieldRow(d: ItemDetail, f: DetailField): HTMLElement {
 
 /** One item opened in the popup: every field, each copied in one click. */
 export async function detailView(it: Item, fills: boolean, ctx: PopupCtx): Promise<void> {
+  const g = nextView()
   const r = await ask<{ item: ItemDetail }>({ type: 'item-detail', id: it.id })
+  // A Lock (or any other view) came first: this late answer draws nothing.
+  if (!isCurrent(g)) return
+  if (lockedReply(r)) { ctx.back(); return }
   const back = topBar(TYPE_LABEL[it.type ?? 'login'] ?? 'Item', ctx.back)
-  if (!r.ok) { ctx.root.replaceChildren(h('div', {}, back, h('div', { class: 'pane' }, errLine(r.error ?? 'Could not open it.')))); return }
+  if (!r.ok) { paint(ctx.root, h('div', {}, back, h('div', { class: 'pane' }, errLine(r.error ?? 'Could not open it.'))), g, 'neutral'); return }
   const d = r.item
   const tile = d.type === 'card' ? h('span', { class: 'avatar avatar-lg', style: 'background:#5b4fa8' }, icon('card'))
     : d.type === 'identity' ? h('span', { class: 'avatar avatar-lg', style: 'background:#2f7f7a' }, icon('person'))
@@ -165,10 +182,10 @@ export async function detailView(it: Item, fills: boolean, ctx: PopupCtx): Promi
   const fields = d.fields.length
     ? h('div', { class: 'group' }, ...d.fields.map((f) => fieldRow(d, f)))
     : h('div', { class: 'empty' }, 'Nothing saved in this item yet.')
-  ctx.root.replaceChildren(h('div', { class: 'view', 'data-testid': 'popup-detail' },
+  paint(ctx.root, h('div', { class: 'view', 'data-testid': 'popup-detail' },
     back,
     h('div', { class: 'pane' }, head, fields),
     h('div', { class: 'foot' },
       siteUrl ? h('button', { class: 'btn', type: 'button', 'data-testid': 'detail-open-site-foot', onclick: () => window.open(siteUrl, '_blank', 'noopener') }, icon('out'), h('span', {}, 'Open site')) : null,
-      h('button', { class: 'btn', type: 'button', 'data-testid': 'detail-edit', onclick: () => void ask({ type: 'open-walnut', item: d.id }) }, popupIcon('edit'), h('span', {}, 'Edit in Walnut')))))
+      h('button', { class: 'btn', type: 'button', 'data-testid': 'detail-edit', onclick: () => void ask({ type: 'open-walnut', item: d.id }) }, popupIcon('edit'), h('span', {}, 'Edit in Walnut')))), g, 'unlocked')
 }

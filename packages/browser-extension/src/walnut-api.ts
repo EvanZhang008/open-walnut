@@ -36,7 +36,12 @@ export interface VaultStatus {
   waitMs: number
   /** The master password hint, shown on the locked view; absent when none (or from an older Walnut). */
   hint?: string
+  /** Locked here while the person has Passwords unlocked on the computer Walnut runs on: api.join shares that unlock. */
+  canJoin?: boolean
 }
+
+/** A vault refusal that means "locked here": the view shows the lock screen with its password field. */
+export const LOCKED_CODES: ReadonlySet<string> = new Set(['vault_session_needed', 'vault_locked'])
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string, readonly waitMs?: number) { super(message) }
@@ -220,6 +225,21 @@ export const api = {
       }
     }
   },
+
+  /**
+   * Share the unlock the person made on the computer Walnut runs on (POST /vault/join): a session
+   * of this browser's own, no password. False when there is none to share (or Walnut is older).
+   */
+  async join(): Promise<boolean> {
+    try {
+      const r = await call<{ session: { token: string } }>('POST', '/vault/join', { client: CLIENT }, { noSession: true, timeoutMs: 8000 })
+      await setVaultSession(r.session.token)
+      return true
+    } catch { return false }
+  },
+
+  /** Forget this browser's unlock without telling Walnut (Walnut already ended it). */
+  forgetSession: () => setVaultSession(null),
 
   /** `everywhere`: the person's Lock, which locks Walnut's windows too; without it (an auto-lock) only this browser. */
   async lock(opts: { everywhere?: boolean } = {}): Promise<void> {

@@ -184,6 +184,16 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .setting { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
 .setting .row-text { flex: 1; }
 .setting .select { width: auto; flex: none; max-width: 170px; }
+/* A choice on one line with its select, and its help under both at the row's full width. */
+.setting-stack { flex-wrap: wrap; row-gap: 4px; }
+.setting-stack > .row-title { flex: 1; }
+.setting-stack > .row-sub { flex: 0 0 100%; white-space: normal; line-height: 1.4; }
+/* Settings: tighter than the list, so lock, filling and agents fit the popup's first screen. */
+.pane.settings { padding-top: 6px; }
+.settings .section-label { margin: 10px 6px 5px; }
+.settings > .section-label:first-child { margin-top: 6px; }
+.settings .group > .row, .settings .group > .setting, .settings .group > .switch-row { padding: 8px 12px; }
+.settings .switch-row .row-sub { line-height: 1.4; }
 .never-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; }
 .never-row .row-title { flex: 1; font-weight: 500; }
 .gen-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }

@@ -27,8 +27,10 @@ const BOOT_SLACK_S = 60
 const USE_WRITE_MS = 60_000
 
 interface Boot { at: number; id?: string }
-interface Stored { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number | null; maxMs: number | null; device?: string; choice?: string }
-interface SessionsFile { format: typeof FORMAT; version: 1; vaultId?: string; boot?: Boot; savedAt: string; sessions: Stored[]; mac?: string }
+interface Stored { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number | null; maxMs: number | null; device?: string; choice?: string; here?: boolean; source?: string }
+interface SelfLock { device: string; at: number }
+/** `selfLocks`: when a device last locked only itself (sessions.ts joinSource); absent from an older Walnut's file. */
+interface SessionsFile { format: typeof FORMAT; version: 1; vaultId?: string; boot?: Boot; savedAt: string; sessions: Stored[]; selfLocks?: SelfLock[]; mac?: string }
 
 let enabled = false
 let restoring: Promise<void> | null = null
@@ -69,7 +71,9 @@ function sameBoot(a: Boot, b: Boot): boolean {
 
 function sign(key: Uint8Array, f: SessionsFile): string {
   const k = Buffer.from(crypto.hkdfSync('sha256', key, Buffer.from(String(f.vaultId)), Buffer.from('walnut-vault-sessions-v1'), 32))
-  return crypto.createHmac('sha256', k).update(JSON.stringify([f.format, f.version, f.vaultId, f.boot, f.savedAt, f.sessions])).digest('base64url')
+  // `selfLocks` joins the signed list only when present, so a file an older Walnut wrote (or reads) checks out as before.
+  const signed = [f.format, f.version, f.vaultId, f.boot, f.savedAt, f.sessions, ...(f.selfLocks ? [f.selfLocks] : [])]
+  return crypto.createHmac('sha256', k).update(JSON.stringify(signed)).digest('base64url')
 }
 
 function verify(key: Uint8Array, f: SessionsFile): boolean {
@@ -82,7 +86,8 @@ function verify(key: Uint8Array, f: SessionsFile): boolean {
 const toStored = (s: S.Session): Stored => ({
   hash: s.hash, client: s.client, createdAt: s.createdAt, lastUsedAt: s.lastUsedAt,
   idleMs: Number.isFinite(s.idleMs) ? s.idleMs : null, maxMs: Number.isFinite(s.maxMs) ? s.maxMs : null,
-  ...(s.device ? { device: s.device } : {}), ...(s.choice ? { choice: s.choice } : {}),
+  ...(s.device ? { device: s.device } : {}), ...(s.choice ? { choice: s.choice } : {}), ...(s.here ? { here: true } : {}),
+  ...(s.source ? { source: s.source } : {}),
 })
 
 function fromStored(x: Stored): S.Session | null {
@@ -94,6 +99,8 @@ function fromStored(x: Stored): S.Session | null {
   return {
     hash: x.hash, client: String(x.client ?? '').slice(0, 80), createdAt: x.createdAt, lastUsedAt: x.lastUsedAt, idleMs, maxMs, keep: true,
     ...(typeof x.device === 'string' && x.device ? { device: x.device } : {}), ...(typeof x.choice === 'string' ? { choice: x.choice } : {}),
+    ...(x.here === true ? { here: true } : {}),
+    ...(typeof x.source === 'string' && /^[0-9a-f]{64}$/.test(x.source) ? { source: x.source } : {}),
   }
 }
 
@@ -105,7 +112,10 @@ async function writeNow(): Promise<void> {
   if (list.length && isOpen()) {
     try {
       const { vaultId, key } = await openKey()
-      body = { ...body, vaultId, boot: await bootNow(), sessions: list.map(toStored) }
+      // A device's own lock counts only against the unlocks it was made after: older records go.
+      const oldest = Math.min(...list.map((s) => s.createdAt))
+      const selfLocks = S.selfLockList().filter((l) => l.at >= oldest)
+      body = { ...body, vaultId, boot: await bootNow(), sessions: list.map(toStored), ...(selfLocks.length ? { selfLocks } : {}) }
       body.mac = sign(key, body)
     } catch {
       body = { format: FORMAT, version: 1, savedAt: body.savedAt, sessions: [] }
@@ -183,6 +193,8 @@ async function restore(): Promise<RestoreOutcome> {
   const install = async (): Promise<boolean> => {
     const k = await openKey().catch(() => null)
     if (!k || k.vaultId !== f.vaultId || !verify(k.key, f)) { macBad = !!k; return false }
+    // Before the sessions, so no status or join is answered without them (they are checked together).
+    if (Array.isArray(f.selfLocks)) S.restoreSelfLocks(f.selfLocks.filter((l) => l && typeof l.device === 'string' && typeof l.at === 'number'))
     S.restoreSessions(list)
     return true
   }

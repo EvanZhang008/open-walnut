@@ -298,6 +298,37 @@ export function deviceOf(req: Request): string | undefined {
   return (req as Request & { deviceName?: string }).deviceName
 }
 
+/**
+ * The request came over this computer's own network path: a loopback connection with no proxy
+ * header, addressed to a loopback name, off the tunnel's port, from Walnut's own page or another
+ * origin (the browser extension), and no session made it. An unlock made so is the person's on
+ * this computer, which this computer's extension may share (POST /vault/join). Known limit, the
+ * one local-trust.ts names: a forward that adds no proxy header looks the same.
+ */
+function fromThisComputer(req: Request): boolean {
+  if (header(req, 'x-walnut-caller-sid') || isOnBehalfOfRemote(req)) return false
+  const t = classifyLocalRequest(req)
+  return t.trusted || t.reason === 'foreign-origin'
+}
+
+/**
+ * An unlock the person made in a browser on this computer (a Walnut window, the Mac app's page,
+ * an extension: each sends its Origin), which this computer's extension may share. A request with
+ * no Origin (a script, the CLI) is not a window, and shares nothing.
+ */
+function unlockedHere(req: Request): boolean {
+  return typeof req.headers.origin === 'string' && fromThisComputer(req)
+}
+
+/** A paired Walnut browser extension (browser-pair.ts names its device `extension-<hex>`). */
+const EXTENSION_DEVICE = /^extension-[0-9a-f]+$/
+
+/** This computer's extension, the only client that may share an unlock made here. */
+function joiningDevice(req: Request): string | null {
+  const device = deviceOf(req)
+  return device && EXTENSION_DEVICE.test(device) && fromThisComputer(req) ? device : null
+}
+
 function clientName(req: Request): string {
   const c = (req.body as { client?: unknown } | undefined)?.client
   if (typeof c === 'string' && c.trim()) return c.trim()
@@ -313,7 +344,10 @@ vaultV1Router.get('/vault/status', async (req, res, next) => {
     await closeIfNobody()
     const st = await (await store()).vaultStatus()
     const u = await unlockLength(st.agentsWhileAway)
-    return { ...st, unlocked, autoLockMinutes: u.autoLockMinutes, unlockFor: u.unlockFor, lockAfterIdleMinutes: u.lockAfterIdleMinutes, waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
+    // This computer's extension, locked while the person has Passwords unlocked here: it may share that unlock.
+    const device = unlocked ? null : joiningDevice(req)
+    const canJoin = !!device && !!s.joinSource(device)
+    return { ...st, unlocked, ...(canJoin ? { canJoin } : {}), autoLockMinutes: u.autoLockMinutes, unlockFor: u.unlockFor, lockAfterIdleMinutes: u.lockAfterIdleMinutes, waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
   })
 })
 
@@ -331,7 +365,7 @@ vaultV1Router.post('/vault/setup', async (req, res, next) => {
       const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true, hint })
       await writeNewVaultUnlockLength()
       const minutes = (await unlockLength()).limits
-      return { ...made, session: s.createSession(clientName(req), minutes, deviceOf(req)) }
+      return { ...made, session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
     return r ? r.value : SENT
   })
@@ -354,9 +388,35 @@ vaultV1Router.post('/vault/unlock', async (req, res, next) => {
     const r = await attempt(res, async () => {
       const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
       await st.unlockVault({ passwordKey, ...(typeof body.secretKey === 'string' && body.secretKey ? { secretKey: body.secretKey } : {}) })
-      return { session: s.createSession(clientName(req), minutes, deviceOf(req)) }
+      return { session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
     return r ? r.value : SENT
+  })
+})
+
+/**
+ * One unlock for this computer: the browser extension on the computer Walnut runs on, locked while
+ * the person has Passwords unlocked here (in a Walnut window, or another browser's extension),
+ * gets a session of its own sharing that unlock, with no password (sessions.joinSession: on the
+ * same clocks, so it never lasts longer). Nothing else may: a browser elsewhere, a phone or a
+ * page has no extension device token, and a session never asks (gate). A Lock ends it with the
+ * rest; an extension that locked only itself shares nothing until the person unlocks again.
+ */
+vaultV1Router.post('/vault/join', async (req, res, next) => {
+  if (!gate(req, res)) return
+  await run(res, next, async () => {
+    const s = await sessions()
+    const device = joiningDevice(req)
+    if (!device) {
+      res.status(403).json({ error: 'Only the Walnut extension on the computer Walnut runs on shares an unlock: unlock with the master password.', code: 'join_refused' })
+      return SENT
+    }
+    const session = s.joinSession(device, clientName(req))
+    if (!session) {
+      res.status(409).json({ error: 'Passwords is locked: unlock it with the master password.', code: 'nothing_to_join' })
+      return SENT
+    }
+    return { session }
   })
 })
 
@@ -376,7 +436,7 @@ vaultV1Router.post('/vault/lock', async (req, res, next) => {
       // A person's Lock (a window's Lock button): every window and the extension lock with it.
       // No body is one window only, what an older client (and an auto-lock) means by it.
       ended = s.endAllSessions()
-    } else s.endSession(header(req, s.SESSION_HEADER))
+    } else s.endSession(header(req, s.SESSION_HEADER), deviceOf(req))
     // Written before the answer: a restart right after a Lock must not bring the windows back.
     await (await import('../../core/vault/session-store.js')).saveSessionsNow()
     await closeIfNobody()
@@ -588,7 +648,7 @@ vaultV1Router.post('/vault/recover', async (req, res, next) => {
       })
       // Inside the attempt, as unlock does: closeIfNobody must not close the vault before this window holds its session.
       s.endAllSessions()
-      return { ...kit, session: s.createSession(clientName(req), minutes, deviceOf(req)) }
+      return { ...kit, session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
     if (!r) return SENT
     const { endAllGrants } = await import('../../core/vault/agent.js')

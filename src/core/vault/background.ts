@@ -30,7 +30,7 @@ export async function unlockAtStart(): Promise<'unlocked' | 'open' | 'skipped' |
     // Forever: the machine key already reopens the vault; a keychain unlock adds nothing.
     if (st.isOpen()) return 'open'
     if (!(await kc.keychainItemPresent())) return 'skipped'
-    const r = await kc.unlockFromKeychain({ client: 'This Mac (keychain, at start)' })
+    const r = await kc.unlockFromKeychain({ client: 'This Mac (keychain, at start)', here: true })
     return r.ok ? 'unlocked' : r.code
   } catch (err) {
     return (err as Error).message

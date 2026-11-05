@@ -6,6 +6,7 @@
  * Run on the Mac app's engine: PW_WEBKIT=1 bun x playwright test passwords-unlock-holds --project webkit
  */
 import { expect, test, type Page } from '@playwright/test'
+import { ensureVaultSetUp } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -21,8 +22,7 @@ async function openPasswords(page: Page) {
 
 async function ensureVault(page: Page) {
   const base = new URL(page.url()).origin
-  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
-  if (!st.setUp) expect((await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })).ok()).toBe(true)
+  await ensureVaultSetUp(page, base, { password: MASTER })
 }
 
 async function unlock(page: Page) {
@@ -75,7 +75,7 @@ test('Settings says plainly how long Passwords stays unlocked', async ({ page })
   // The fixture's config may hold any choice; with the default it is 48 hours after the last use.
   await expect(row.getByText(/Stays unlocked|Locks again/).first()).toBeVisible({ timeout: 20_000 })
   const help = await row.getByText(/Stays unlocked|Locks again/).first().textContent()
-  if (/48 hours/.test(help ?? '')) expect(help).toContain('48 hours after you last use it, until you lock it or restart the Mac.')
+  if (/48 hours/.test(help ?? '')) expect(help).toContain('48 hours after you last use it, until you lock it or the computer Walnut runs on restarts.')
   await page.setViewportSize({ width: 1280, height: 800 })
   await row.screenshot({ path: `${SHOTS}/settings-passwords.png` })
 })
