@@ -1,7 +1,8 @@
 /**
  * Settings, Passwords, "Sync from another password manager": the sync sources the vault can pull
- * items from, one way (src/core/vault/sources/). A person who never added one sees only an Add
- * button; the vault itself works the same either way. Bitwarden is the only source today.
+ * items from, one way (src/core/vault/sources/). A person who never added one sees only a generic
+ * "Add a source" button; the sources to pick from show once they press it, and a source's own
+ * details only once it is added. Bitwarden is the only source today.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { Config } from '@open-walnut/core'
@@ -25,6 +26,7 @@ export function PasswordSourcesGroup({ config, onSave, unlocked, needUnlock }: P
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
+  const [picking, setPicking] = useState(false)
   const passwords = (config.passwords ?? {}) as PasswordsConfig
   const sources = Array.isArray(passwords.sources) ? passwords.sources : []
   // Once Settings wrote the list it decides; an older config counts the daily switch or a past sync.
@@ -51,6 +53,7 @@ export function PasswordSourcesGroup({ config, onSave, unlocked, needUnlock }: P
   const save = (next: Partial<PasswordsConfig>) => onSave({ passwords: { ...passwords, ...next } as Config['passwords'] })
   const add = () => void run('bw-add', async () => { await save({ sources: [...new Set([...sources, 'bitwarden'])] }) })
   const remove = () => void run('bw-remove', async () => {
+    setPicking(false)
     await save({ sources: sources.filter((s) => s !== 'bitwarden'), bitwarden_daily: false })
     return 'Bitwarden is no longer a source. The items it brought stay in your vault.'
   })
@@ -62,8 +65,16 @@ export function PasswordSourcesGroup({ config, onSave, unlocked, needUnlock }: P
   if (!added) {
     return (
       <SettingsGroup heading="Sync from another password manager" footer={<>Optional. Your Walnut vault works on its own; a source only copies items into it, one way.</>}>
-        <SettingsRow label="Bitwarden" help="Keep a copy of your Bitwarden vault here, synced every day. Needs the Bitwarden CLI (bw) on this Mac."
-          control={<SettingsButton busy={busy === 'bw-add'} data-testid="pw-source-add-bitwarden" onClick={add}>Add</SettingsButton>} />
+        {!picking ? (
+          <SettingsRow label="Sources" help="None added."
+            control={<SettingsButton data-testid="pw-source-add" onClick={() => setPicking(true)}>Add a source…</SettingsButton>} />
+        ) : (
+          <SettingsRow label="Bitwarden" help="Copies your Bitwarden vault into Walnut. Needs the Bitwarden CLI (bw) on this computer."
+            control={<div style={{ display: 'flex', gap: 8 }}>
+              <SettingsButton data-testid="pw-source-add-cancel" onClick={() => setPicking(false)}>Cancel</SettingsButton>
+              <SettingsButton busy={busy === 'bw-add'} data-testid="pw-source-add-bitwarden" onClick={add}>Add</SettingsButton>
+            </div>} />
+        )}
         {error && <p className="settings-test-result" data-kind="fail" role="alert">{error}</p>}
       </SettingsGroup>
     )

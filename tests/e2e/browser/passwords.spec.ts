@@ -223,8 +223,11 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await section.getByRole('button', { name: 'Cancel' }).click()
   await expect(section.locator('#pw-forever-pw')).toHaveCount(0)
   await expect(section.getByTestId('pw-unlock-48h')).toHaveAttribute('aria-checked', 'true')
-  // Bitwarden is a source the person adds: until then only an Add button shows, no sync controls.
+  // A source is something the person adds: until then only a generic Add button shows, no
+  // Bitwarden details and no sync controls; the sources to pick from show once it is pressed.
   await expect(section.locator('#pw-bw-daily')).toHaveCount(0)
+  await expect(section.getByTestId('pw-source-add-bitwarden')).toHaveCount(0)
+  await section.getByTestId('pw-source-add').click()
   await section.getByTestId('pw-source-add-bitwarden').click()
   // Added: the daily sync is off by default; Sync now says why it did not run (no bw here).
   const daily = section.locator('#pw-bw-daily')
@@ -234,7 +237,8 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await expect(section).toContainText(/Not synced: /)
   // Removing the source hides it again (items it brought would stay).
   await section.getByTestId('pw-source-remove-bitwarden').click()
-  await expect(section.getByTestId('pw-source-add-bitwarden')).toBeVisible()
+  await expect(section.getByTestId('pw-source-add')).toBeVisible()
+  await expect(section.getByTestId('pw-source-add-bitwarden')).toHaveCount(0)
   const away = section.locator('#pw-agents-away')
   await expect(away).toHaveAttribute('aria-checked', 'false')
   // The protected actions wait for the master password.
