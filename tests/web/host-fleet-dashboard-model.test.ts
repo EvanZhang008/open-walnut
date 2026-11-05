@@ -60,7 +60,9 @@ describe('problem line', () => {
   })
   it('offers Set up when the host says a setup is due', () => {
     const [p] = problemsOf(noBoot({ mode: 'none', backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: NOW, setupRunning: false, setupError: null, next: 'install' }), NOW)
-    expect(p).toMatchObject({ key: 'reboot', text: 'Daemon does not come back after a reboot', action: { kind: 'boot-start', label: 'Set up' } })
+    // Plain words, naming the host (2026-11-04 review: "Daemon does not come back after a reboot").
+    expect(p).toMatchObject({ key: 'reboot', text: "Walnut won't restart on Dev box after it reboots", action: { kind: 'boot-start', label: 'Set up' } })
+    expect(p.text).not.toMatch(/daemon/i)
   })
   it('offers Check again when only a change on the host can fix it', () => {
     const [p] = problemsOf(noBoot({ mode: 'login', backend: 'systemd-user', reason: 'linger is off', checkedAt: NOW, setupRunning: false, setupError: null, next: 'recheck' }), NOW)
@@ -80,7 +82,7 @@ describe('problem line', () => {
   })
   it('says it is setting up while it is', () => {
     const [p] = problemsOf(noBoot({ mode: 'none', backend: null, reason: null, checkedAt: NOW, setupRunning: true, setupError: null }), NOW)
-    expect(p).toMatchObject({ text: 'Setting up start after a reboot', tone: 'muted' })
+    expect(p).toMatchObject({ text: 'Setting up Walnut to restart on Dev box after a reboot', tone: 'muted' })
     expect(p.action).toBeUndefined()
   })
   it('the cloud box and this computer get no Set up', () => {
@@ -192,10 +194,10 @@ describe('gauges, disk and chips', () => {
     expect(diskFree(host({ system: { ...host().system!, diskFreeBytes: 12 * GB } }))).toEqual({ text: '12 GB', low: true })
     expect(diskFree(host({ system: null }))).toBeNull()
   })
-  it('role chips: Primary, Cloud, Always on, Replica', () => {
+  it('role chips in plain words: Leads, Cloud, Always on, Walnut runs here', () => {
     const h = host({ local: true, server: { enabled: true, program: 'replica', phase: 'running', phaseLabel: 'running', build: null, phone: null, message: null } })
     h.capabilities = { tags: [], alwaysOn: true, placement: null, os: null, ios: null, browsers: [], mcp: [], clis: [], declared: [], unknown: [] }
-    expect(roleChips(h).map((c) => c.text)).toEqual(['Primary', 'Always on', 'Replica'])
+    expect(roleChips(h).map((c) => c.text)).toEqual(['Leads', 'Always on', 'Walnut runs here'])
   })
   it('capability chips name what a task can use', () => {
     const h = host()
@@ -274,6 +276,11 @@ describe('diagram', () => {
       expect(n.y - TOPO.nodeH / 2).toBeGreaterThanOrEqual(0)
       expect(n.y + TOPO.nodeH / 2).toBeLessThanOrEqual(height)
     }
+  })
+  it('draws the list rows as they are: a row off is not live whatever its reading says', () => {
+    const { centre, nodes } = topologyLayout([{ host: '__local__', local: true, live: true }, { host: 'alpha', local: false, live: false }, { host: 'beta', local: false, live: true }])
+    expect(centre?.host).toBe('__local__')
+    expect(nodes.map((n) => [n.host, n.live])).toEqual([['alpha', false], ['beta', true]])
   })
   it('grows with the fleet so no two nodes overlap', () => {
     const list = [host({ host: '__local__', local: true }), ...Array.from({ length: 11 }, (_, i) => host({ host: `h${i}` }))]

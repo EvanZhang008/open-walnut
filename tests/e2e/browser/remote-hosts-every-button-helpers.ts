@@ -4,9 +4,9 @@
  * The SSH hosts are the SERVER's host fixture (real status frames, real connect and check
  * routes). Everything else the pane reads is answered here, so no click reaches a real host,
  * starts an agent or deletes anything: the config (the fixture's hosts plus one host found in
- * ~/.ssh/config; saves are kept here, never written), the Overview, the host network, Walnut
- * on a host, the exec grants, the secrets, the removals to confirm, the host profiles and voice
- * status. Where the real server answers in steps (a read of the hosts runs a while, a host that
+ * ~/.ssh/config; saves are kept here, never written), the Overview, the host network (its links,
+ * calling one back, starting it), Walnut on a host, the exec grants, the secrets, the removals to
+ * confirm, the host profiles and voice status. Where the real server answers in steps (a read of the hosts runs a while, a host that
  * connects shows as live in the next read), these routes answer the same way. Each routed request is recorded in `calls`; a gated route waits for its release so
  * a busy label can be seen.
  * No tests in this file (Playwright refuses a test() call from an imported module).
@@ -40,8 +40,6 @@ const STABLE_CLASSES = ['setup-copy-btn', 'hc-other', 'rh-connect-btn', 'rh-show
 /** A button whose label is its state: the key it is registered under. */
 const STATE_ALIASES: Record<string, string> = {
   'Hosts/button:Done': 'Hosts/button:Edit',
-  'Hosts/button:Probe now': 'Hosts/button:Probe again',
-  'Hosts/button:Probing...': 'Hosts/button:Probe again',
 }
 /** Keys that differ only by a part the same check walks through (one copy switch per kind). */
 const FOLDS: Array<[RegExp, string]> = [[/^(.*)\/switch#host-server-copy-<host>-[a-z_]+$/, '$1/switch#host-server-copy-<host>-<kind>']]
@@ -124,8 +122,12 @@ export class PaneRoutes {
   expireInvites = false
   relay: 'own' | 'public' | 'none' = 'public'
   invites = 0
-  /** The next this many link requests fail (the host network is not running). */
-  failInvites = 0
+  /** The next link requests fail, each as the server says it (`code` absent: an older server). */
+  failInvites: Array<{ error: string; code?: string }> = []
+  /** The next removals of a joined machine fail, each with this error. */
+  failMachineRemoves: string[] = []
+  /** Links called back with Cancel link: they read back as cancelled. */
+  readonly cancelled = new Set<string>()
   readonly servers = [
     hostServer('devbox', 'Alpha box', { state: 'connected', url: ALPHA_URL }, 'It runs an older build than this computer.'),
     hostServer('downbox', 'Beta box', { state: 'retrying', lastError: 'The tunnel stopped', nextRetryAt: Date.now() + 60_000 }),
@@ -198,9 +200,11 @@ export class PaneRoutes {
       const host = call.path.split('/')[3]
       const answer = (call.body as { answer: string }).answer
       const patch = { connect: answer, enabled: answer === 'yes' }
+      await this.pass(`found:${host}`)
       this.found[host] = { ...this.found[host], ...patch }
       if (this.hosts?.[host]) this.hosts[host] = { ...this.hosts[host], ...patch }
-      return route.fulfill({ json: { ok: true, host, answer } })
+      // A yes dials it: the answer carries the status it came up with (as the server's does).
+      return route.fulfill({ json: { ok: true, host, answer, ...(answer === 'yes' ? { status: stamp(connected(host, host)) } : {}) } })
     })
     // A host the fixture does not know: the machine on the host network.
     await page.route(/\/api\/hosts\/gpu-box\/connect$/, async (route) => {
@@ -238,7 +242,10 @@ export class PaneRoutes {
       if (route.request().method() === 'GET') return route.fulfill({ json: { profile: cur, summary: '' } })
       const body = this.record(route).body as { kind?: string | null; refresh?: boolean; user_note?: string }
       let next = { ...cur }
-      if (body.refresh) next = { ...profile(host, 32), kind: cur.kind, kindSetByUser: cur.kindSetByUser }
+      if (body.refresh) {
+        await this.pass('probe')
+        next = { ...profile(host, 32, {}, Date.now()), kind: cur.kind, kindSetByUser: cur.kindSetByUser }
+      }
       if ('kind' in body) next = { ...next, kind: body.kind ?? 'dev-box', kindSetByUser: body.kind !== null }
       if (typeof body.user_note === 'string') next = { ...next, userNote: body.user_note }
       this.profiles.set(host, next)
@@ -252,7 +259,8 @@ export class PaneRoutes {
     let machines = [{ host: 'gpu-box', endpoint: 'e'.repeat(64), enabled: true, platform: 'linux-x64', addedAt: Date.now() - DAY, path: 'none' }]
     const invite = (id: string) => {
       const n = Number(id.split('-')[1])
-      return { id, link: netLink(n), command: netCommand(n), windowsCommand: netWindows(n), windowsApp: WINDOWS_APP, expiresAt: Date.now() + 10 * MIN, state: this.expireInvites ? 'expired' : 'waiting' }
+      const state = this.cancelled.has(id) ? 'cancelled' : this.expireInvites ? 'expired' : 'waiting'
+      return { id, link: netLink(n), command: netCommand(n), windowsCommand: netWindows(n), windowsApp: WINDOWS_APP, expiresAt: Date.now() + 10 * MIN, state }
     }
     await page.route('**/api/hosts/net', (route) => route.fulfill({
       json: { enabled: true, macId: 'a'.repeat(64), companion: false, relay: this.relay, relays: [], syncedAt: Date.now(), error: null, machines },
@@ -260,13 +268,28 @@ export class PaneRoutes {
     await page.route('**/api/hosts/net/invites', async (route) => {
       this.record(route)
       await this.pass('invite')
-      if (this.failInvites > 0) { this.failInvites--; return route.fulfill({ status: 503, json: { error: 'The host network is not running on this Mac' } }) }
+      const fail = this.failInvites.shift()
+      if (fail) return route.fulfill({ status: 502, json: fail })
       this.invites++
       return route.fulfill({ status: 201, json: invite(`ni-${this.invites}`) })
     })
-    await page.route('**/api/hosts/net/invites/*', (route) => route.fulfill({ json: invite(new URL(route.request().url()).pathname.split('/').pop()!) }))
-    await page.route('**/api/hosts/net/machines/*', (route) => {
+    await page.route('**/api/hosts/net/invites/*', async (route) => {
+      const id = new URL(route.request().url()).pathname.split('/').pop()!
+      // Cancel link: the link takes no machine in from now on.
+      if (route.request().method() === 'DELETE') { this.record(route); await this.pass('cancel'); this.cancelled.add(id) }
+      return route.fulfill({ json: invite(id) })
+    })
+    // Start the host network (a failed link's fix): it starts, and the list reads again.
+    await page.route('**/api/hosts/net/sync', async (route) => {
+      this.record(route)
+      await this.pass('net-start')
+      return route.fulfill({ json: { enabled: true, error: null, machines } })
+    })
+    await page.route('**/api/hosts/net/machines/*', async (route) => {
       const host = decodeURIComponent(this.record(route).path.split('/').pop()!)
+      const fail = this.failMachineRemoves.shift()
+      if (fail) return route.fulfill({ status: 502, json: { error: fail } })
+      await this.pass('machine-remove')
       machines = machines.filter((m) => m.host !== host)
       this.removed.add(host)
       return route.fulfill({ json: { removed: host } })
@@ -324,9 +347,12 @@ export class PaneRoutes {
       const call = this.record(route)
       const name = decodeURIComponent(call.path.split('/').pop()!)
       if (method === 'DELETE') this.secrets = this.secrets.filter((s) => s.name !== name)
+      const b = (call.body ?? {}) as Record<string, unknown>
       if (method === 'PUT' && !this.secrets.some((s) => s.name === name)) {
-        const b = call.body as Record<string, unknown>
         this.secrets = [...this.secrets, { name, description: b.description, hosts: b.hosts, env: b.env ?? undefined, sessions: b.sessions, version: 1, createdAt: Date.now(), updatedAt: Date.now(), copies: {} }]
+      } else if (method === 'PUT' && Array.isArray(b.hosts)) {
+        // A host's own switch (its Details, This host): the copy goes, or comes, there.
+        this.secrets = this.secrets.map((s) => (s.name === name ? { ...s, hosts: b.hosts } : s))
       }
       return route.fulfill({ json: { ok: true, pending: [] } })
     })
@@ -388,18 +414,26 @@ export async function flip(sw: Locator, saved: (on: boolean) => Promise<void>): 
   await saved(before)
 }
 
-/** An inline confirm: armed by a press, put back by Escape, and nothing was sent. */
-export async function armThenCancel(routes: PaneRoutes, button: Locator, label: string, confirm: string): Promise<void> {
+/**
+ * The page's one way a removal asks (RemoveConfirmRow): a press opens "<question>" under it with
+ * Cancel focused; Escape is Cancel, the focus goes back to the button, nothing was sent, and
+ * nothing turns back by itself (2026-11-04 review: a 3 s timer put the old armed buttons back).
+ */
+export async function askThenCancel(page: Page, routes: PaneRoutes, button: Locator, testId: string, question: string): Promise<Locator> {
   const calls = routes.calls.length
-  await expect(button).toHaveText(label)
   await button.click()
-  await expect(button).toHaveText(confirm)
-  await expect(button).toHaveAttribute('data-armed', 'true')
-  await button.press('Escape')
-  // Well inside the 3 s auto-disarm (CONFIRM_ARM_MS): it is Escape that put it back.
-  await expect(button).toHaveAttribute('data-armed', 'false', { timeout: 1_000 })
-  await expect(button).toHaveText(label)
+  const ask = page.getByTestId(testId)
+  await expect(ask).toContainText(question)
+  await expect(ask.getByTestId(`${testId}-cancel`)).toBeFocused()
+  await expect(ask.getByTestId(`${testId}-remove`)).toHaveClass(/settings-button-danger/)
+  // Past the old 3 s timer: it still asks.
+  await page.waitForTimeout(3_300)
+  await expect(ask).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(ask).toHaveCount(0)
+  await expect(button).toBeFocused()
   expect(routes.calls.slice(calls).filter((c) => c.method !== 'GET')).toEqual([])
+  return ask
 }
 
 /** The fixture's hosts, every route, then Settings > Remote Hosts by clicks, with each group shown. */
@@ -427,14 +461,15 @@ export async function openPane(page: Page): Promise<void> {
   await openRemoteHosts(page)
   await expect(page.locator('#rh-host-devbox')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('rh-summary-online')).toHaveText('2 of 4 online', { timeout: 20_000 })
+  await expect(page.getByTestId('rh-summary-off')).toHaveText('1 off')
   await expect(page.locator('[data-host-alias="gpu-box"]')).toBeVisible({ timeout: 20_000 })
   for (const id of ['remote-hosts-list', 'replica-removals-host', 'remote-hosts-more']) {
     await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
   }
 }
 
-/** The More settings groups, each folded to one line until opened. */
-export const MORE_GROUPS = ['host-network-relay', 'host-servers', 'host-exec-grants', 'fleet-secrets', 'rh-session-limits']
+/** The More settings groups (what belongs to the whole page), each folded to one line until opened. */
+export const MORE_GROUPS = ['host-network-relay', 'fleet-secrets']
 
 /** Opens More settings (closed by default) and waits for its groups' lines. */
 export async function openMore(page: Page): Promise<void> {

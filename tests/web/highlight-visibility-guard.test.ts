@@ -163,6 +163,8 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/session-header-fit.css :: .session-meta-row-2 [data-header-spacer="true"]': SLOT,
   'web/src/styles/phone-layout.css :: .app-shell-navigation .phone-topbar-sync': CONTROL,
   'web/src/styles/settings-shell.css :: .settings-pane-stickybar-inner': HEADER,
+  'web/src/styles/phone-settings.css :: @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) { .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-stickybar-title': HEADER,
+  'web/src/styles/remote-hosts.css :: .rh-row-more-space': SLOT,
   'web/src/styles/thread-review.css :: .thread-review-card[data-enlarged="true"]': 'a review card under its open full card: its words are a summary, never a marked passage',
   'web/src/styles/attention-banner.css :: .hpb-below-slot': SLOT,
   'web/src/styles/host-status.css :: .hpb-btn-stack::before': SLOT,

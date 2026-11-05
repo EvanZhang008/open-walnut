@@ -120,6 +120,29 @@ export async function forgetLocalInvite(local: Daemon, id: string): Promise<void
 }
 
 /**
+ * Call a link back before a machine used it: walnut-net is handed the list without it, so its
+ * code takes no machine in. One walnut-net already holds a join for is not dropped (that would
+ * forget a machine that came in): it reads as joined, and the poll keeps it.
+ */
+export async function cancelLocalInvite(local: Daemon, id: string): Promise<'cancelled' | 'joined'> {
+  const node = await nodeStatus(local).catch(() => null)
+  // No answer decides nothing: a machine may have used the link already, and calling it back
+  // then would drop a join walnut-net recorded.
+  if (!node) throw new NetError(409, 'net_no_answer', "This machine's walnut-net did not answer, so the link was not called back. Try again.")
+  if (node.invites?.find((i) => i.id === id)?.used) return 'joined'
+  const kept = pending.get(id)
+  pending.delete(id)
+  try {
+    await pushInvites(local)
+  } catch (err) {
+    // walnut-net still holds it: the link still works, so it is not called back.
+    if (kept) pending.set(id, kept)
+    throw err
+  }
+  return 'cancelled'
+}
+
+/**
  * Joins an earlier run of this server never read (it stopped while an invite was open), or
  * null while walnut-net does not answer. Keep them, then clearLeftovers: walnut-net forgets
  * every invite this run did not make, so a code shown before a restart takes no machine in

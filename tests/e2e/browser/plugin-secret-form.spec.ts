@@ -27,9 +27,10 @@ import { openPluginDetail } from './apps-store-helpers'
  *   3. A URL moved to another host with its password still hidden is refused:
  *      "Not saved", the reason under the Save row, the edit still in its box,
  *      nothing written. Typed in full, it saves.
- *   4. Both tunnel option forms (Open from a browser, and Walnut on a host): a
- *      refused option keeps what was typed in its box, with the reason under
- *      that option, until that option is saved or put back. Saving another
+ *   4. Both tunnel option forms (Open from a browser, and Walnut on this host in
+ *      the host's Details, under This host): a refused option keeps what was
+ *      typed in its box, with the reason under that option, until that option
+ *      is saved or put back. Saving another
  *      option, flipping a switch or switching the provider leaves both (gate r8
  *      MED-1, gate r9 M6 and M12). Both forms keep what is typed while a save
  *      is in flight (gate r8 M14, gate r9 L-3). A space typed after a hidden
@@ -170,6 +171,18 @@ async function openSettings(page: Page, pane: string): Promise<void> {
   await page.locator('.sidebar-nav a[href^="/settings"]').click()
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 60_000 })
   await page.getByTestId(pane).click()
+}
+
+/**
+ * Walnut on the host's tunnel form: in the host's Details (row menu > Details), under This host
+ * (2026-11-04 review: it sat under More settings as "Walnut on a host", away from the host).
+ */
+async function openHostServer(page: Page): Promise<Locator> {
+  const row = page.locator(`#rh-host-${HOST}`)
+  await expect(row).toBeVisible({ timeout: 60_000 })
+  await row.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
+  return page.locator(`[data-testid="rh-details"][data-host="${HOST}"] [data-testid="host-server-part"][data-host="${HOST}"]`)
 }
 
 /** The app's entry page once, then the sidebar's Apps entry; every step after it is a click. */
@@ -583,13 +596,10 @@ test('Open from a browser: a refused option keeps its value and reason while ano
   expect((await disk()).expose.options).toEqual({ ...seeded, token: 'tok-form-typed-4545' })
 })
 
-test('Walnut on a host: a refused tunnel option keeps its value and reason through other writes, until it is put back or saved', async ({ page }, info) => {
+test('Walnut on this host: a refused tunnel option keeps its value and reason through other writes, until it is put back or saved', async ({ page }, info) => {
   await reset()
   await openSettings(page, 'settings-nav-remote-hosts')
-  // Walnut on a host sits under More settings, both closed by default.
-  await page.getByTestId('remote-hosts-more-toggle').click()
-  await page.getByTestId('host-servers-toggle').click()
-  const group = page.getByTestId('host-servers')
+  const group = await openHostServer(page)
   const endpoint = group.getByTestId(`host-server-option-${HOST}-endpoint`)
   const token = group.getByTestId(`host-server-option-${HOST}-token`)
   await expect(endpoint).toBeVisible({ timeout: 60_000 })
@@ -666,13 +676,10 @@ test('Walnut on a host: a refused tunnel option keeps its value and reason throu
   expect(await diskText()).not.toContain(B)
 })
 
-test('Walnut on a host: text typed while an option is being saved stays in its box', async ({ page }) => {
+test('Walnut on this host: text typed while an option is being saved stays in its box', async ({ page }) => {
   await reset()
   await openSettings(page, 'settings-nav-remote-hosts')
-  // Walnut on a host sits under More settings, both closed by default.
-  await page.getByTestId('remote-hosts-more-toggle').click()
-  await page.getByTestId('host-servers-toggle').click()
-  const group = page.getByTestId('host-servers')
+  const group = await openHostServer(page)
   const name = group.getByTestId(`host-server-option-${HOST}-name`)
   await expect(name).toHaveValue(fixture!.hosts[HOST]!.server.expose.options.name!, { timeout: 60_000 })
 
@@ -729,12 +736,9 @@ test('a space typed after a hidden token is refused under that option in both tu
   await token.press('Enter')
   await expect(page.getByTestId('browser-access').locator('.settings-row-error')).toHaveCount(0)
 
-  // H6, Walnut on a host.
+  // H6, Walnut on this host.
   await page.getByTestId('settings-nav-remote-hosts').click()
-  // Walnut on a host sits under More settings, both closed by default.
-  await page.getByTestId('remote-hosts-more-toggle').click()
-  await page.getByTestId('host-servers-toggle').click()
-  const hostToken = page.getByTestId('host-servers').getByTestId(`host-server-option-${HOST}-token`)
+  const hostToken = (await openHostServer(page)).getByTestId(`host-server-option-${HOST}-token`)
   const hostStored = fixture!.hosts[HOST]!.server.expose.options.token!
   await expect(hostToken).toHaveValue(tail(hostStored), { timeout: 60_000 })
   const hostRefused = putTo(page, '/api/host-servers/')

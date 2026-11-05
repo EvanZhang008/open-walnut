@@ -39,6 +39,8 @@ const SESSION_FILES: Record<string, string> = {
   'components/common/server-update-pill.ts': 'the Walnut version this tab last saw, so a restart into a new one is announced once per tab',
   'components/settings/sections/cloud/OwnDeviceSignOut.tsx': 'sets the sign-out notice flag',
   'components/settings/SettingsSection.tsx': 'the settings hash target of this visit',
+  'components/settings/sections/ssh-draft-store.ts': 'a new SSH host typed and not saved yet, kept for this tab so leaving Remote Hosts loses nothing; Save or Cancel clears it',
+  'components/settings/sections/join-link-store.ts': 'the id and end of a join link this tab made, so Remote Hosts can still call it back after leaving the pane; the link itself is the server\'s',
   'components/board/kanban/useKanbanLayout.ts': 'done rails opened for this visit (spec 3.2)',
   'components/chat/island-runtime.ts': 'blocks storage inside a sandboxed island, touches no key',
   'hooks/usePhoneRestore.ts': 'the scroll anchor of one reload; the strip itself is phoneColumns',

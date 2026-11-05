@@ -4,10 +4,12 @@
  * Join a machine with a link puts the link first in Hosts: the command for the new machine's
  * system with Copy and the minutes left, the notes folded; it watches the invite, and the
  * machine that joins becomes a Hosts row (a Link tag) saying how this Mac reaches it; an
- * expired link offers a new one; a refused invite says why; Remove (its More menu) asks once, sends the
- * DELETE and drops the row; the relay choice (More settings) says what each one shares, a
- * companion means its relay, without one a pick is sent once and the rows follow it, a
- * refused pick says why, and the invite is a ticket. The server is faked at the route (no
+ * expired link offers a new one; a refused invite says why, with the fix its reason names
+ * (2026-11-04 review: every refusal offered only Try again, which failed the same way); Close
+ * puts a link away; Remove (its More menu) asks once, Cancel focused, then sends the DELETE and
+ * drops the row; the relay choice (More settings) says what each one shares, a companion means
+ * its relay, without one a pick is sent once, the rows follow it and a link goes to Phones &
+ * Cloud, a refused pick says why, and the invite is a ticket. The server is faked at the route (no
  * companion here; tests/e2e/host-network-e2e.test.ts runs the real one). Navigation is by
  * clicks. WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
@@ -115,6 +117,8 @@ test('Join a machine with a link: the command, the countdown, the join, the path
   await expect(invite).toHaveAttribute('data-invite-state', 'joined', { timeout: 15_000 })
   await expect(invite).toContainText('gpu-box joined.')
   await expect(invite).toContainText('It is in the list below.')
+  // Close, not Done: the card goes away and nothing is undone (2026-11-04 review).
+  await expect(page.getByTestId('host-network-done')).toHaveText('Close')
   const row = group.locator('[data-host-alias="gpu-box"]')
   await expect(row).toBeVisible({ timeout: 10_000 })
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, direct, 31 ms')
@@ -130,6 +134,8 @@ test('Join a machine with a link: the command, the countdown, the join, the path
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Remove', exact: true }).click()
   const confirm = page.getByTestId('rh-row-confirm')
   await expect(confirm).toContainText('Remove gpu-box?')
+  // The page's one way of asking (RemoveConfirmRow): Cancel holds the focus, Remove beside it.
+  await expect(confirm.getByTestId('rh-row-confirm-cancel')).toBeFocused()
   expect(deleted).toEqual([])
   await confirm.getByTestId('rh-row-confirm-remove').click()
   await expect.poll(() => deleted, { timeout: 10_000 }).toEqual(['DELETE gpu-box'])
@@ -146,7 +152,7 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
     { host: 'a-machine-with-a-rather-long-name-for-a-narrow-window', endpoint: ID, enabled: true, platform: 'darwin-arm64', path: 'relay', rttMs: 88 },
   ]) }))
   await page.route('**/api/hosts/net/invites', (route) => {
-    if (refuse) return route.fulfill({ status: 400, json: { error: 'Adding machines goes through your cloud companion; pair one first (Settings > Cloud Companion).', code: 'no_companion' } })
+    if (refuse) return route.fulfill({ status: 400, json: { error: 'Adding machines goes through your cloud companion; pair one first (Settings > Phones & Cloud).', code: 'no_companion' } })
     return route.fulfill({ status: 201, json: { id: 'ni-2', link: LINK, command: COMMAND, expiresAt: Date.now() + 10 * 60_000, state: 'waiting' } })
   })
   // A restart forgot it: the server answers 404, which reads as expired.
@@ -162,9 +168,17 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
   expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 
   await joinWithLink(page)
-  // The row names what failed; the reason sits under it.
-  await expect(page.getByTestId('host-network-invite-error')).toContainText('Could not make a link')
-  await expect(group.getByRole('alert')).toContainText('pair one first')
+  // The row names what failed; the reason sits under it, with the fix it names: a link to the
+  // page that pairs a companion, not a Try again that fails the same way.
+  const refused = page.getByTestId('host-network-invite-error')
+  await expect(refused).toContainText('Could not make a link')
+  await expect(refused).toHaveAttribute('data-fix', 'pair')
+  await expect(group.getByRole('alert')).toContainText('pair one first (Settings > Phones & Cloud)')
+  await expect(group.getByRole('alert')).toContainText('Pair a cloud companion in Phones & Cloud, then make the link.')
+  await expect(refused.getByTestId('host-network-open-cloud')).toHaveText('Open Phones & Cloud')
+  await expect(refused.getByTestId('host-network-open-cloud')).toHaveAttribute('href', '/settings#cloud')
+  await expect(refused.getByTestId('host-network-try-again')).toHaveCount(0)
+  await expect(refused.getByTestId('host-network-error-done')).toHaveText('Close')
   await group.scrollIntoViewIfNeeded()
   await shot(page, '4-refused')
 
@@ -175,6 +189,7 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
   await expect(invite).toHaveAttribute('data-invite-state', 'expired', { timeout: 15_000 })
   await expect(invite).toContainText('This link expired.')
   await expect(page.getByTestId('host-network-new-link')).toHaveText('New link')
+  await expect(page.getByTestId('host-network-done')).toHaveText('Close')
   await shot(page, '5-expired')
   expect(errors).toEqual([])
 })
@@ -217,11 +232,14 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   // A companion: its relay, and the other two say what they share but cannot be picked.
   await expect(own).toHaveAttribute('aria-checked', 'true')
   await expect(own).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
-  await expect(pub).toContainText("They see your machines' internet addresses and which of them talk to each other")
+  // Plain words, no company or library names (2026-11-04 review: "Run by n0, the company behind iroh").
+  await expect(pub).toContainText('Shared relays run by n0, who make iroh, the network software Walnut uses.')
+  await expect(pub).toContainText("they see your machines' internet addresses and which of them talk to each other")
   await expect(none).toContainText('Machines behind two home routers may not connect.')
   await expect(pub).toBeDisabled()
   await expect(none).toBeDisabled()
   await expect(picker).toContainText('While a cloud companion is paired, your machines use its relay.')
+  await expect(picker.getByTestId('host-network-relay-pair')).toHaveCount(0)
   await picker.scrollIntoViewIfNeeded()
   await pickerShot(page, '6-relay-own')
   const row = page.getByTestId('remote-hosts-list').locator('[data-host-alias="gpu-box"]')
@@ -238,7 +256,13 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect(pub).toHaveAttribute('aria-checked', 'true')
   await expect(own).toHaveAttribute('aria-disabled', 'true')
   await expect(own).toBeDisabled()
-  await expect(own).toContainText('Pair a cloud companion first (Settings > Cloud Companion).')
+  await expect(own).toContainText('On your cloud companion, once you pair one.')
+  // How to get one is a real link to the page that pairs it (2026-11-04 review: the words named
+  // "Settings > Cloud Companion", a page called Phones & Cloud, and were no link).
+  const pair = picker.getByTestId('host-network-relay-pair')
+  await expect(pair).toHaveText('Phones & Cloud')
+  await expect(pair).toHaveAttribute('href', '/settings#cloud')
+  await expect(picker).not.toContainText('Cloud Companion')
   await expect(picker).not.toContainText('While a cloud companion is paired')
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, through a public relay, 40 ms')
 

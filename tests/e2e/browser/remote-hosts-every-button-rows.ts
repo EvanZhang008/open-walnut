@@ -1,13 +1,15 @@
 /**
  * A saved host's row in remote-hosts-every-button.spec.ts, step by step: its More menu, its
- * Details in place (the reading, the command to copy, Other ways, Check again, Kind, Probe),
- * its one action (Install, then Set up). Takes the spec's context like the other steps.
+ * Details in place (the reading with its one System line, Install by hand with the command to
+ * copy, Other ways and Check again, Kind, Probe again, This host), its one action (Install, then
+ * Set up). Takes the spec's context like the other steps.
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type Page } from '@playwright/test'
 import { fixtureCounters } from './host-problems-fixture-helpers'
 import { expectFocusKept, pick, row } from './remote-hosts-every-button-helpers'
 import { expectRing, type StepCtx } from './remote-hosts-every-button-steps'
+import { checkAlphaThisHost } from './remote-hosts-every-button-host'
 
 const menu = (page: Page) => page.getByTestId('rh-row-menu')
 
@@ -36,16 +38,33 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   // The read it started is the summary's one Refreshing...; Details say how old what they show is.
   await expect(details.getByTestId('host-fleet-read-age')).toHaveText(/^Read /)
   await expect(details.getByText('Refreshing...', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('Refreshing...', { exact: true })).toHaveCount(await page.getByTestId('host-fleet-refreshing').count())
-  await expect(details.getByTestId('host-profile-system')).toHaveText('Ubuntu 24.04, x64, 16 CPUs, 64 GB memory, 200 GB free')
+  await expect(page.getByText('Refreshing...', { exact: true })).toHaveCount(await page.locator('[data-testid="host-fleet-refresh"][aria-busy="true"]').count())
+  // One System line, the probe's (2026-11-04 review: two, with two CPU counts).
+  const system = details.getByTestId('host-system-line')
+  await expect(system).toHaveCount(1)
+  await expect(system).toHaveText('Ubuntu 24.04, x64, 16 CPUs, 64 GB memory, 200 GB free')
+  await expect(details.getByTestId('host-probe-note')).toHaveText('Probed 2h ago.')
   // The reading's disk says the same free space (one fixture).
   await expect(details.locator('[data-gauge="disk"]')).toContainText('200 GB')
   await expectFocusKept(page)
   await sweep()
   ran('Row menu/menuitem[details]')
 
+  // The row names the problem and offers the fix; Details says neither again: the command by
+  // hand is folded under "Install by hand" (2026-11-04 review: a second line and a second fix).
+  const warning = alpha.locator('.rh-row-line', { hasText: 'Claude Code' })
+  await expect(warning).toHaveCount(1)
+  await expect(details).not.toContainText((await warning.textContent())!.trim())
+  const byHand = details.getByTestId('rh-by-hand')
+  await expect(byHand).toHaveText('Install by hand')
+  await expect(byHand).toHaveAttribute('aria-expanded', 'false')
+  await expect(details.locator('.rh-by-hand-body')).toBeHidden()
+  await byHand.click()
+  await expect(byHand).toHaveAttribute('aria-expanded', 'true')
+  ran('Hosts/button#rh-by-hand')
+
   // The command to copy: a box that wraps (no scrollbar) and the page's one Copy look.
-  const block = details.locator('.rh-readiness-block[data-host="devbox"]')
+  const block = details.locator('.rh-by-hand-body')
   const chip = block.locator('.hc-chip').first()
   expect(await chip.evaluate((el) => [getComputedStyle(el).whiteSpace, el.scrollWidth <= el.clientWidth + 1])).toEqual(['pre-wrap', true])
   const copy = block.locator('button.setup-copy-btn').first()
@@ -85,10 +104,22 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   expect((await routes.nth('PATCH', '/api/v1/hosts/devbox/profile', 1)).body).toEqual({ kind: 'laptop' })
   await expect(kind).toHaveText('Laptop')
   await expect(kind).toBeFocused()
-  await details.getByRole('button', { name: 'Probe again' }).click()
+  ran('Hosts/button:Kind of <host>')
+  // Probe again: Probing... (it keeps the focus), then the new System line and its time.
+  const probe = details.getByTestId('host-probe')
+  await expect(probe).toHaveText('Probe again')
+  const probed = routes.gate('probe')
+  await probe.click()
+  await expect(probe).toHaveText('Probing...')
   expect((await routes.nth('PATCH', '/api/v1/hosts/devbox/profile', 2)).body).toEqual({ refresh: true })
-  await expect(details.getByTestId('host-profile-system')).toContainText('32 CPUs')
-  ran('Hosts/button:Kind of <host>', 'Hosts/button:Probe again')
+  probed()
+  await expect(system).toContainText('32 CPUs')
+  await expect(details.getByTestId('host-probe-note')).toHaveText('Probed just now.')
+  await expect(probe).toHaveText('Probe again')
+  await expectFocusKept(page)
+  ran('Hosts/button#host-probe')
+
+  await checkAlphaThisHost(ctx, details)
 
   // Install, the row's one action: Installing..., then Installed, said once (2026-11-04
   // review: "Last checked just nowInstalled Claude Code" beside "Alpha box is ready").

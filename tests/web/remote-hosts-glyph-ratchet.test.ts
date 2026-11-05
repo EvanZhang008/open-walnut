@@ -11,7 +11,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const DIR = join(__dirname, '../../web/src/components/settings/sections')
-const OWN = /^(RemoteHost|Host|host-|NetMachine|FleetHost|useLinkedHost|useHost|SecretsGroup|ReplicaKeep)/
+// 2026-11-04 review: the pane's one way of asking (RemoveConfirmRow, also under Removals to
+// confirm), the join link's fixes, the SSH draft and the focus keeper joined it.
+const OWN = /^(RemoteHost|Host|host-|NetMachine|FleetHost|useLinkedHost|useHost|SecretsGroup|ReplicaKeep|ReplicaRemoval|RemoveConfirmRow|join-link-model|ssh-draft-store|useFocusKeeper)/
 // Em and en dash, middle dot, arrows, triangles, check and cross marks, times, ellipsis, as escapes.
 const BANNED = /[\u2014\u2013\u00b7\u2192\u203a\u25b8\u25be\u2713\u2717\u00d7\u2026\u2197]/u
 

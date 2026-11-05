@@ -389,7 +389,8 @@ test.describe('Settings host row head', () => {
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
   test('C32: at 1280px a 10-character alias is never cut; the long hostname is, with the full name as its title', async ({ page, request }) => {
-    const hostname = 'devcloud01.build-runners.eu-central-1.compute.internal.example.com'
+    // Longer than the row at 1280px, now that the page grows to about 920px there (round 4).
+    const hostname = 'devcloud01.build-runners.nightly-pool.blue-cluster.eu-central-1.compute.internal.test-lab.example.com'
     const file = fixtureFile('host-problems')
     file.hosts = { devcloud01: { label: 'Dev cloud', hostname, phase: 'connected', claude: { version: '2.1.281', auth: 'ok', installMethod: 'native' } } }
     await hostFixture(request, { action: 'load', file })
@@ -440,8 +441,14 @@ test.describe('Settings host row head', () => {
     await expect(dot).toHaveAttribute('data-kind', 'connected')
     await hosts.push(failed('draftbox', 'Draft box', 'auth'))
     await expect(dot).toHaveAttribute('data-kind', 'failed')
-    // Not saved (no hostname): it says what is missing and offers no connect.
+    // Not saved (no hostname): it says what is missing and offers no connect. It reads as new, a
+    // "Not saved" tag and no More menu: Cancel is its one way out (2026-11-04 review: a hostname
+    // with no alias looked like a normal row and was dropped with the pane).
     await expect(row.getByTestId('rh-row-state')).toHaveText('Add a hostname to save this host.')
     await expect(row.getByTestId('rh-row-connect')).toHaveCount(0)
+    await expect(row).toHaveAttribute('data-unsaved', 'true')
+    await expect(row.locator('.settings-tag', { hasText: 'Not saved' })).toBeVisible()
+    await expect(row.getByTestId('rh-row-more')).toHaveCount(0)
+    await expect(row.getByTestId('rh-draft-cancel')).toBeVisible()
   })
 })

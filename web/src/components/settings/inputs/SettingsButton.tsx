@@ -14,6 +14,12 @@ export interface SettingsButtonProps extends ButtonHTMLAttributes<HTMLButtonElem
   busyLabel?: string
   /** Other labels this button may show; the widest one reserves the width. */
   reserve?: string[]
+  /**
+   * Disabled or busy, it stays focusable (aria-disabled, the press ignored) instead of `disabled`:
+   * a button that starts work keeps the focus while it runs (2026-11-04 Remote Hosts review: a
+   * disabled button drops the focus to the page, and WebKit drops it later with no event).
+   */
+  holdFocus?: boolean
   children?: ReactNode
   'data-testid'?: string
 }
@@ -33,8 +39,11 @@ export function SettingsButton({
   children,
   className,
   disabled,
+  holdFocus = false,
+  onClick,
   ...rest
 }: SettingsButtonProps) {
+  const off = disabled || busy
   const showing = busy && busyLabel ? busyLabel : children
   // Reserved labels ride on pseudo-elements (data attributes), so they take
   // space without entering textContent or the accessible name.
@@ -46,8 +55,10 @@ export function SettingsButton({
       tabIndex={0}
       {...rest}
       className={`settings-button settings-button-${variant}${className ? ` ${className}` : ''}`}
-      disabled={disabled || busy}
+      disabled={off && !holdFocus}
+      aria-disabled={off && holdFocus ? true : rest['aria-disabled']}
       aria-busy={busy ? true : rest['aria-busy']}
+      onClick={(e) => { if (off && holdFocus) { e.preventDefault(); return } onClick?.(e) }}
     >
       <span className="settings-button-stack" data-r1={r1 || undefined} data-r2={r2 || undefined}>
         <span className="settings-button-label">{showing}</span>

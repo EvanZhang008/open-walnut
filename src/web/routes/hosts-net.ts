@@ -4,8 +4,10 @@
  *
  *   GET    /api/hosts/net                 on or off, this Mac's id, each machine and its path now
  *   POST   /api/hosts/net/invites {name?} a link a new machine runs to join (10 minutes, one use)
- *   GET    /api/hosts/net/invites/:id     waiting | joined | expired
- *   POST   /api/hosts/net/sync            read the list again (the companion's, or this Mac's)
+ *   GET    /api/hosts/net/invites/:id     waiting | joined | expired | cancelled
+ *   DELETE /api/hosts/net/invites/:id     call a link back before a machine used it
+ *   POST   /api/hosts/net/sync {enable?}  read the list again (the companion's, or this Mac's);
+ *                                         `enable: true` turns the network on first and says why not
  *   PUT    /api/hosts/net/relay {relay}   own | public | none: how machines reach each other
  *   DELETE /api/hosts/net/machines/:host  take a machine out
  *
@@ -15,7 +17,7 @@
 import { Router, type Request, type Response } from 'express'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { NetError, netState, relayNow, removeMachine, setRelay, syncNet } from '../../core/net/net-mac.js'
-import { inviteStatus, makeInvite } from '../../core/net/net-invites.js'
+import { cancelInvite, inviteStatus, makeInvite } from '../../core/net/net-invites.js'
 import { joinedTwins } from '../../core/hosts/joined-twins.js'
 
 export const hostsNetRouter = Router()
@@ -99,9 +101,21 @@ hostsNetRouter.get('/invites/:id', (req, res) => {
   res.json(inv)
 })
 
+hostsNetRouter.delete('/invites/:id', async (req, res) => {
+  try {
+    res.json(await within(WRITE_DEADLINE_MS, cancelInvite(String(req.params.id))))
+  } catch (err) {
+    sendError(req, res, err)
+  }
+})
+
 hostsNetRouter.post('/sync', async (req, res) => {
   try {
-    res.json(await within(WRITE_DEADLINE_MS, syncNet()))
+    const enable = (req.body ?? {}).enable === true
+    const state = await within(WRITE_DEADLINE_MS, syncNet({ enable }))
+    // Turning it on that did not work is a refusal, not a state to read.
+    if (enable && state.error) { res.status(502).json({ error: state.error, code: 'net_unavailable' }); return }
+    res.json(state)
   } catch (err) {
     sendError(req, res, err)
   }

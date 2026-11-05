@@ -100,8 +100,11 @@ export function CopyDiagnosticsLink({ copy, testId = 'settings-copy-diagnostics'
         // WebKit only tabs to buttons with an explicit tabindex (N20).
         tabIndex={0}
         className="settings-build-line-action"
+        // Busy, it stays focusable (aria-disabled, the press ignored by copy itself): a disabled
+        // button drops the focus to the page (2026-11-04 Remote Hosts review).
         onClick={copy.copy}
-        disabled={state.kind === 'busy'}
+        aria-disabled={state.kind === 'busy' || undefined}
+        aria-busy={state.kind === 'busy' || undefined}
         aria-live="polite"
         data-testid={testId}
         title={title}

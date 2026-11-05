@@ -43,7 +43,8 @@ export interface NetInvite {
   /** Walnut for Windows to download (the app takes `link`), once the newest release carries it. */
   windowsApp?: string;
   expiresAt: number;
-  state: 'waiting' | 'joined' | 'expired' | 'failed';
+  /** `cancelled`: called back here before a machine used it (absent from an older server). */
+  state: 'waiting' | 'joined' | 'expired' | 'failed' | 'cancelled';
   member?: { id: string; name: string; platform?: string };
   error?: string;
 }
@@ -58,6 +59,16 @@ export function makeNetInvite(name?: string): Promise<NetInvite> {
 
 export function fetchNetInvite(id: string): Promise<NetInvite> {
   return apiGet<NetInvite>(`/api/hosts/net/invites/${encodeURIComponent(id)}`, undefined, { timeoutMs: 10_000, quietStatuses: [404] });
+}
+
+/** Call a link back before a machine used it: its code takes no machine in from then on. */
+export function cancelNetInvite(id: string): Promise<NetInvite> {
+  return apiDelete<NetInvite>(`/api/hosts/net/invites/${encodeURIComponent(id)}`, { timeoutMs: 70_000 });
+}
+
+/** Turn the host network on (and read its list); refused with why it did not start. */
+export function startNet(): Promise<unknown> {
+  return apiPost<unknown>('/api/hosts/net/sync', { enable: true }, { timeoutMs: 70_000 });
 }
 
 export function removeNetMachine(host: string): Promise<{ removed: string }> {

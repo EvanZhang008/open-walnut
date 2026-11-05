@@ -2,14 +2,15 @@
  * Settings > Remote Hosts at 700 px (the phone layout): one column, every row's one action
  * inside its row and in one column with the others, the summary's read part on its own line,
  * the pinned bar one row, the join card's system picker inset and its Copy as tall as the
- * command, and More settings' groups each one folded line. The same fixture fleet as
- * remote-hosts-every-button.spec.ts. Navigation by clicks; the window narrows once the pane
- * is open (the phone layout opens the list of panes first).
+ * command, More settings' groups each one folded line, and a host's own settings (This host, in
+ * its Details) inside the window. The same fixture fleet as remote-hosts-every-button.spec.ts.
+ * Navigation by clicks; the window narrows once the pane is open (the phone layout opens the
+ * list of panes first).
  * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { expect, test, type Locator } from '@playwright/test'
 import { resetServerHostFixture } from './host-problems-fixture-helpers'
-import { openFixturePane } from './remote-hosts-every-button-helpers'
+import { MORE_GROUPS, openFixturePane, pick, row } from './remote-hosts-every-button-helpers'
 
 test.setTimeout(180_000)
 
@@ -20,7 +21,7 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
   test.describe.configure({ mode: 'serial' })
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('one column; each row keeps its action inside it; the bar stays one row; the join card and More settings fit', async ({ page, request }) => {
+  test('one column; each row keeps its action inside it; the bar stays one row; the join card, This host and More settings fit', async ({ page, request }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await openFixturePane(page, request)
     await page.setViewportSize({ width: 700, height: 900 })
@@ -86,11 +87,29 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
     await page.getByTestId('host-network-done').click()
     await expect(card).toHaveCount(0)
 
+    // A host's own settings (2026-11-04 review: they moved from More settings into its Details,
+    // under This host): every row of the part inside the window, its controls too.
+    const alpha = row(page, 'devbox')
+    await alpha.scrollIntoViewIfNeeded()
+    await pick(page, alpha, 'Details')
+    const part = page.locator('[data-testid="rh-details"][data-host="devbox"]').getByTestId('rh-this-host-devbox')
+    await expect(part.locator('#rh-limit-devbox')).toBeVisible()
+    await expect(part.getByTestId('host-server-devbox')).toBeVisible()
+    for (const control of await part.locator('.settings-row input, .settings-row [role="switch"], .settings-row button').all()) {
+      if (!(await control.isVisible())) continue
+      const c = await box(control)
+      expect(c.x).toBeGreaterThanOrEqual(0)
+      expect(c.x + c.width).toBeLessThanOrEqual(700)
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(700)
+    await pick(page, alpha, 'Hide details')
+
     // More settings: each group one folded line, its summary under its name, inside the window.
+    // Only the page's own groups are left there (the relay, the secrets).
     const more = page.getByTestId('remote-hosts-more-toggle')
     await more.scrollIntoViewIfNeeded()
     await more.click()
-    for (const id of ['host-network-relay', 'host-servers', 'host-exec-grants', 'fleet-secrets', 'rh-session-limits']) {
+    for (const id of MORE_GROUPS) {
       const toggle = page.getByTestId(`${id}-toggle`)
       await expect(toggle).toHaveAttribute('aria-expanded', 'false')
       const t = await box(toggle.locator('.settings-fold-group-title'))

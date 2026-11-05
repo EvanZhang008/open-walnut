@@ -43,7 +43,7 @@ export function RemoteHostDetail({ alias, name }: { alias: string; name?: string
       : null;
   const readiness = problem?.type === 'off'
     ? null
-    : <RemoteHostReadiness alias={alias} label={label} status={status} actions={actions} />;
+    : <RemoteHostReadiness alias={alias} label={label} status={status} actions={actions} rowFixes={!replica} />;
   if (!failure && !status?.connected) return null;
   return (
     <div className="rh-host-detail" data-host={alias}>

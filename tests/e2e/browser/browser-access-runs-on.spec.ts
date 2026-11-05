@@ -2,8 +2,9 @@
  * Where the tunnel runs (BrowserAccessGroup.tsx "Runs on", HostServersGroup.tsx;
  * src/core/expose/placement.ts): a provider that names always-on hosts runs on
  * one by default, the person moves it to this computer and back, the state line
- * names the host, and the host's row in Remote Hosts says it carries the tunnel
- * with its switch held on. An older server (no `places`) shows no Runs on row.
+ * names the host, and the host's Details in Remote Hosts (This host, Walnut on this
+ * host) say it carries the tunnel with its switch held on. An older server (no
+ * `places`) shows no Runs on row.
  *
  * The shared fixture has no tunnel plugin and no host server, so this spec
  * answers /api/expose and /api/host-servers itself, keeping what was written; the
@@ -13,6 +14,7 @@
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { hostDetails, hostRow, openHostDetails } from './host-problems-fixture-helpers'
 
 test.setTimeout(120_000)
 
@@ -38,21 +40,22 @@ function exposeBody(s: Server) {
   }
 }
 
-function hostsBody(s: Server) {
+/** GET /api/host-servers: the always-on host, under `hostKey` (the Remote Hosts test names a saved one). */
+function hostsBody(s: Server, hostKey = 'devbox', label = 'Dev box') {
   const carries = (s.runOn ?? 'devbox') === 'devbox'
   return {
     hosts: [{
-      hostKey: 'devbox', label: 'Dev box',
+      hostKey, label,
       settings: { enabled: carries, ...(carries ? { carriesTunnel: true } : {}), expose: { enabled: false, provider: null, options: {} } },
       view: carries
-        ? { hostKey: 'devbox', enabled: true, phase: 'running', since: 1, server: { expose: { enabled: true, provider: 'acme-tunnel', state: 'connected', since: 1, url: URL_HOST } } }
-        : { hostKey: 'devbox', enabled: false, phase: 'off', since: 1, server: null },
+        ? { hostKey, enabled: true, phase: 'running', since: 1, server: { expose: { enabled: true, provider: 'acme-tunnel', state: 'connected', since: 1, url: URL_HOST } } }
+        : { hostKey, enabled: false, phase: 'off', since: 1, server: null },
     }],
     providers: exposeBody(s).providers,
   }
 }
 
-async function serve(page: Page, s: Server) {
+async function serve(page: Page, s: Server, host?: { key: string; label: string }) {
   await page.route('**/api/expose', async (route: Route) => {
     if (route.request().method() === 'PUT') {
       const body = route.request().postDataJSON() as { run_on?: string | null }
@@ -63,7 +66,7 @@ async function serve(page: Page, s: Server) {
     }
     await route.fulfill({ json: exposeBody(s) })
   })
-  await page.route('**/api/host-servers', (route) => route.fulfill({ json: hostsBody(s) }))
+  await page.route('**/api/host-servers', (route) => route.fulfill({ json: hostsBody(s, host?.key, host?.label) }))
   // The phone link Settings makes by itself once connected: the host's always-on address first.
   await page.route('**/api/devices/browser-code', (route) => route.fulfill({
     json: {
@@ -124,18 +127,23 @@ test('runs on the always-on host by default; moves to this computer and back', a
 test('the host that carries the tunnel says so in Remote Hosts, its switch held on', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   const s: Server = { runOn: null, puts: [], places: true }
-  await serve(page, s)
+  // Walnut on a host shows in that host's Details, so the always-on host here is the fixture's
+  // own saved SSH host (switched off: nothing dials it).
+  const HOST = 'fixture-remote'
+  await serve(page, s, { key: HOST, label: 'Big remote host' })
   await openSettings(page, 'settings-nav-remote-hosts')
-  // Walnut on a host sits under More settings, both closed by default.
-  await page.getByTestId('remote-hosts-more-toggle').click()
-  await page.getByTestId('host-servers-toggle').click()
-  const group = page.getByTestId('host-servers')
-  await expect(group).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('host-server-carries-devbox')).toContainText("Runs this computer's tunnel: change it in Phones & Cloud, Open from a browser.")
-  await expect(page.getByTestId('host-server-enabled-devbox')).toBeDisabled()
-  await expect(page.getByTestId('host-server-url-devbox')).toHaveText('someone-walnut.acme-tunnel.example')
+  // 2026-11-04 review: it sat under More settings as "Walnut on a host"; it is the host's own
+  // setting now, in its Details (row menu > Details) under This host.
+  await expect(hostRow(page, HOST)).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('host-servers')).toHaveCount(0)
+  await openHostDetails(page, HOST)
+  const group = hostDetails(page, HOST).getByTestId(`rh-this-host-${HOST}`)
+  await expect(group.getByTestId(`host-server-${HOST}`)).toBeVisible({ timeout: 30_000 })
+  await expect(group.getByTestId(`host-server-carries-${HOST}`)).toContainText("Runs this computer's tunnel: change it in Phones & Cloud, Open from a browser.")
+  await expect(group.getByTestId(`host-server-enabled-${HOST}`)).toBeDisabled()
+  await expect(group.getByTestId(`host-server-url-${HOST}`)).toHaveText('someone-walnut.acme-tunnel.example')
   // Not its own tunnel controls: those belong to a tunnel of its own.
-  await expect(page.getByTestId('host-server-expose-devbox')).toHaveCount(0)
+  await expect(group.getByTestId(`host-server-expose-${HOST}`)).toHaveCount(0)
   await group.scrollIntoViewIfNeeded()
   await shot(page, '3-remote-hosts-carries', group)
 })

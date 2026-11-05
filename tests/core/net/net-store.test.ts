@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  INVITE_TTL_MS, NetStoreError, inviteStatus, isMember, listMembers, makeInvite, memberNameFrom, normalInviteCode,
+  INVITE_TTL_MS, NetStoreError, cancelInvite, inviteStatus, isMember, listMembers, makeInvite, memberNameFrom, normalInviteCode,
   peekInvite, redeemInvite, removeMember, resetInvitesForTest, restoreHostMember, setMacMember, validMemberName, validNetId, validNetKey,
 } from '../../../src/core/net/net-store.js'
 import { netKey } from '../../helpers/net-keys.js'
@@ -98,6 +98,25 @@ describe('invites', () => {
   it('refuses a ninth open invite', () => {
     for (let i = 0; i < 8; i++) makeInvite({}, 0)
     expect(() => makeInvite({}, 0)).toThrow(/Too many open invites/)
+  })
+
+  it('a link called back takes no machine in; a used one stays joined; an unknown id is refused', () => {
+    const inv = makeInvite({}, 0)
+    expect(cancelInvite(inv.id, 1)).toEqual({ state: 'cancelled' })
+    expect(peekInvite(inv.code, 2)).toBeNull()
+    expect(() => redeemInvite({ code: inv.code, endpointId: id('b') }, 2, file)).toThrow(/not valid any more/)
+    expect(() => inviteStatus(inv.id, 2)).toThrow(/No such invite/)
+    const used = makeInvite({}, 4)
+    redeemInvite({ code: used.code, endpointId: id('c') }, 5, file)
+    expect(cancelInvite(used.id, 6)).toEqual({ state: 'joined' })
+    expect(inviteStatus(used.id, 7)).toMatchObject({ state: 'joined' })
+    expect(() => cancelInvite('ni-nope', 8)).toThrow(/No such invite/)
+    // A link called back no longer counts as open: eight fit again.
+    for (let i = 0; i < 7; i++) makeInvite({}, 9)
+    const last = makeInvite({}, 9)
+    expect(() => makeInvite({}, 9)).toThrow(/Too many open invites/)
+    cancelInvite(last.id, 10)
+    expect(() => makeInvite({}, 10)).not.toThrow()
   })
 
   it('a code one character off finds nothing', () => {

@@ -6,14 +6,24 @@
  * Details and Edit open in place under the row (`panel`).
  *
  * Focus never falls to the page (2026-11-04 review: Enter on Not now, Connect or Show again
- * left `document.activeElement` on body): a menu item, the confirm, or a primary action that
- * went away with its state hands focus to the row's More button.
+ * left `document.activeElement` on body): a busy primary action keeps it (Retrying...), and a menu
+ * item, the confirm, or a primary action that went away with its state hands it to the row's
+ * More button. A row the "need a look" count counts carries a "Needs a look" tag; the row whose
+ * menu is open is the one marked (2026-11-04 review: a row the network map landed on kept its
+ * ring while another row's menu was open, as if the menu were its).
+ *
+ * Each row says what it shows to the list's store (`report`, host-list-store.ts): the summary
+ * line, the count and the network map read it from there.
  */
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ContextMenu } from '@/components/common/ContextMenu';
-import { SettingsRow } from '../SettingsSection';
+import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { focusLanded } from '@/utils/focus-landed';
+import { RemoveConfirmRow } from './RemoveConfirmRow';
+import { useRowReport } from './host-list-store';
+import { useHostSettingsLook } from './host-settings-data';
+import type { RowReport } from './host-row-model';
 
 export interface RowPrimary {
   /** What the button says now (its busy words while it runs). */
@@ -56,6 +66,10 @@ interface Props {
   panel?: ReactNode;
   off?: boolean;
   needsLook?: boolean;
+  /** What the row tells the summary, the count and the map (none: a row that is no machine yet). */
+  report?: Omit<RowReport, 'key' | 'name' | 'needsLook'>;
+  /** "Not saved": a new host whose fields stay open until it saves. */
+  unsaved?: boolean;
   data?: Record<`data-${string}`, string | undefined>;
 }
 
@@ -72,8 +86,8 @@ function MoreGlyph() {
   );
 }
 
-/** The focus fell to the page (the element that held it went away). */
-const fell = () => !document.activeElement || document.activeElement === document.body;
+/** The focus fell to the page (the element that held it went away; WebKit may still name it for a while). */
+const fell = () => !document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected;
 
 /**
  * The focus fell to the page, or still sits on a control in `within` that just turned disabled:
@@ -85,12 +99,18 @@ const stranded = (within: HTMLElement | null) => {
   return fell() || (!!within && !!a && within.contains(a) && (a as HTMLButtonElement).disabled === true);
 };
 
-export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, primary, menu, onRemove, removeNote, panel, off, needsLook, data }: Props) {
+export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, primary, menu, onRemove, removeNote, panel, off, needsLook, report, unsaved, data }: Props) {
   const moreRef = useRef<HTMLButtonElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number; keys: boolean } | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const backToMore = () => requestAnimationFrame(() => { if (fell()) focusLanded(moreRef.current); });
+  // Its own settings (Walnut on it, a secret's copy) count with the rest: one count on the page.
+  const settingsLook = useHostSettingsLook(report?.counted ? (report.local ? '__local__' : alias) : undefined);
+  const look = (!!needsLook || !!settingsLook) && !!report?.counted;
+  useRowReport(report ? { ...report, key: rowKey, name, needsLook: look } : null);
+  const shownLines = settingsLook ? [...(lines ?? []), <RowLine key="settings-look" tone="warn" testId="rh-row-settings-look">{settingsLook}</RowLine>] : lines;
 
   // A primary action that went away or turned busy while it held the focus (Connect on a host
   // that came up, Retry becoming Retrying...): the focus moves to More, the row's one control
@@ -105,19 +125,22 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
     if (held && stranded(anchor.current)) { primaryFocused.current = false; primaryLostAt.current = 0; focusLanded(moreRef.current); }
   }, [primaryKey]);
 
-  const cancelId = `rh-confirm-cancel-${rowKey}`;
-  useEffect(() => {
-    if (confirming) document.getElementById(cancelId)?.focus({ preventScroll: true });
-  }, [confirming, cancelId]);
-
   const items = [
     ...menu.map((m) => ({ key: m.key, label: m.label, disabled: m.disabled, title: m.title, onSelect: () => { m.onSelect(); backToMore(); } })),
     ...(onRemove ? [{ key: 'remove', label: 'Remove', danger: true, onSelect: () => setConfirming(true) }] : []),
   ];
 
+  // A removal that takes a while (a joined machine's) keeps the question open as Removing...,
+  // with the focus on it, and closes it only once it is done; one that fails (its error shows on
+  // the row) leaves it open to try again or cancel. A second press while it runs does nothing.
   const remove = async () => {
+    if (removing) return;
+    setRemoving(true);
+    let done: unknown;
+    try { done = await onRemove?.(); } catch { done = false; }
+    setRemoving(false);
+    if (done === false) return;
     setConfirming(false);
-    await onRemove?.();
     backToMore();
   };
 
@@ -128,8 +151,10 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
         id={id}
         data-host-alias={alias}
         data-row-key={rowKey}
-        data-needs-look={needsLook ? 'true' : undefined}
+        data-needs-look={look ? 'true' : undefined}
         data-host-off={off ? 'true' : undefined}
+        data-menu-open={menuAt ? 'true' : undefined}
+        data-unsaved={unsaved ? 'true' : undefined}
         {...data}
         label={
           <span className="rh-row-name-line">
@@ -137,16 +162,20 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
             <span className="rh-host-name" title={name}>{name}</span>
             {sub}
             {tag}
+            {unsaved && <SettingsTag tone="warning" title="Walnut keeps it on this page until it saves">Not saved</SettingsTag>}
+            {look && <span className="rh-look-tag" data-testid="rh-look-tag">Needs a look</span>}
           </span>
         }
         help={<span className="rh-row-state" data-testid="rh-row-state">{state}</span>}
-        children={lines?.length ? <span className="rh-row-lines">{lines}</span> : undefined}
+        children={shownLines?.length ? <span className="rh-row-lines">{shownLines}</span> : undefined}
         control={
           <span className="rh-row-actions" ref={anchor}>
             <span className="rh-row-primary">
               {primary && (
                 <SettingsButton
                   disabled={primary.disabled}
+                  // Busy (Retrying..., Installing...) it stays where it is and keeps the focus.
+                  holdFocus
                   reserve={primary.reserve}
                   aria-label={primary.ariaLabel}
                   title={primary.title}
@@ -159,22 +188,38 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
                 </SettingsButton>
               )}
             </span>
-            <button
-              ref={moreRef}
-              type="button"
-              tabIndex={0}
-              className="rh-row-more"
-              aria-label={`More for ${name}`}
-              aria-haspopup="menu"
-              aria-expanded={!!menuAt}
-              data-testid="rh-row-more"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                setMenuAt(menuAt ? null : { x: r.left, y: r.bottom + 4 });
-              }}
-            >
-              <MoreGlyph />
-            </button>
+            {items.length > 0 ? (
+              <button
+                ref={moreRef}
+                type="button"
+                tabIndex={0}
+                className="rh-row-more"
+                aria-label={`More for ${name}`}
+                aria-haspopup="menu"
+                aria-expanded={!!menuAt}
+                data-testid="rh-row-more"
+                // WebKit focuses no button on a press: the focus (and its ring) would stay on the row
+                // the map landed on while this row's menu opens.
+                onPointerDown={(e) => { e.currentTarget.focus({ preventScroll: true }); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown' && !menuAt) {
+                    e.preventDefault();
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setMenuAt({ x: r.left, y: r.bottom + 4, keys: true });
+                  }
+                }}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  // A click the keyboard made (Enter, Space) has no pointer: its first item is highlighted.
+                  setMenuAt(menuAt ? null : { x: r.left, y: r.bottom + 4, keys: e.detail === 0 });
+                }}
+              >
+                <MoreGlyph />
+              </button>
+            ) : (
+              // A new host has no menu (its Cancel is its one action); the column keeps its width.
+              <span className="rh-row-more rh-row-more-space" aria-hidden="true" />
+            )}
           </span>
         }
       />
@@ -186,24 +231,18 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
           testId="rh-row-menu"
           className="rh-add-menu rh-row-menu"
           returnFocus={moreRef.current}
-          onClose={() => setMenuAt(null)}
+          highlightFirst={menuAt.keys}
+          onClose={() => { setMenuAt(null); backToMore(); }}
           items={items}
         />
       )}
       {confirming && (
-        <SettingsRow
-          indent
-          className="rh-row-confirm"
-          data-testid="rh-row-confirm"
-          label={`Remove ${name}?`}
-          help={removeNote}
-          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setConfirming(false); backToMore(); } }}
-          control={
-            <>
-              <SettingsButton id={cancelId} variant="text" onClick={() => { setConfirming(false); backToMore(); }} data-testid="rh-row-confirm-cancel">Cancel</SettingsButton>
-              <SettingsButton variant="danger" onClick={() => void remove()} data-testid="rh-row-confirm-remove" aria-label={`Remove ${name}`}>Remove</SettingsButton>
-            </>
-          }
+        <RemoveConfirmRow
+          question={`Remove ${name}?`}
+          note={removeNote}
+          busy={removing}
+          onCancel={() => { if (removing) return; setConfirming(false); requestAnimationFrame(() => focusLanded(moreRef.current)); }}
+          onConfirm={() => void remove()}
         />
       )}
       {panel}

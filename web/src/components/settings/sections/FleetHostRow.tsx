@@ -1,7 +1,8 @@
 /**
  * Settings > Remote Hosts: a machine of the list that has no SSH entry or join link to edit
  * (This Mac, the cloud companion's box): its reading only (useHostFleet.ts), its one action
- * when its reading asks for one (Set up), and Details.
+ * when its reading asks for one (Set up), and Details (This Mac's hold its session limit, which
+ * tasks may use it and the secrets copied to it).
  */
 import type { FleetHost } from '@/api/hosts-fleet';
 import { SettingsTag } from '../SettingsSection';
@@ -41,7 +42,16 @@ export function FleetHostRow({ card, now, detailsOpen, onDetails, boot, onBootSt
       primary={primary}
       menu={[{ key: 'details', label: detailsOpen ? 'Hide details' : 'Details', onSelect: () => onDetails(!detailsOpen) }]}
       needsLook={needsLook(card, now)}
-      panel={detailsOpen && <HostDetails alias={card.host} name={name} card={card} now={now} linked={false} profile={false} />}
+      report={{
+        // The way its reading says this Mac reaches it (a host read with no SSH entry here may still
+        // ride an SSH tunnel), so the map line says the same.
+        host: card.host, counted: true, online: live, off: false, local: card.local,
+        via: card.local ? 'local' : card.connection.kind === 'ssh-tunnel' ? 'ssh' : card.connection.kind === 'host-network' ? 'net' : 'bridge',
+        phone: card.server?.phone === 'connected',
+        rttMs: card.connection.connected ? card.connection.rttMs : null,
+        sessions: card.sessions.running, spendUsd: card.spend?.last30dUsd ?? null, sub: card.system?.os ?? '',
+      }}
+      panel={detailsOpen && <HostDetails alias={card.host} name={name} card={card} now={now} linked={false} kind={card.local ? 'local' : 'fleet'} />}
     />
   );
 }

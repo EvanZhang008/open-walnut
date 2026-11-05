@@ -1,7 +1,9 @@
 /**
- * The words on a Settings › Remote Hosts › Overview card
- * (web/src/components/settings/sections/host-fleet-model.ts): each reading in
- * plain words, a missing one saying why, and the day cells' tones.
+ * The facts table of a host's Details in Settings > Remote Hosts
+ * (web/src/components/settings/sections/host-fleet-model.ts): each reading in plain words, a
+ * missing one saying why, and the day cells' tones. Each fact once on the page (2026-11-04
+ * review): the system, sessions, spend and Walnut on the host are said elsewhere in Details, so
+ * the table has none of them, and the helper row says no build tool or service manager.
  */
 import { describe, expect, it } from 'vitest'
 import { dayTitle, dayTone, fleetRows, gb, pct, span, statusKind } from '../../web/src/components/settings/sections/host-fleet-model'
@@ -43,28 +45,25 @@ describe('formatting', () => {
 })
 
 describe('a full card', () => {
-  it('reads each row in plain words', () => {
+  it('reads each row in plain words, each fact once', () => {
     const h = host()
-    expect(value(h, 'system')?.value).toBe('Debian 12, x64, 32 CPUs, 128 GB, 2142 GB disk free')
-    expect(value(h, 'now')?.value).toBe('CPU 25%, load 6.16, 96 GB of 128 GB memory free, up 13 d')
-    expect(value(h, 'online')).toMatchObject({ value: '99.2% of the last 7 days, 1 down, 41 link drops, daemon started 15 times', tone: 'good' })
-    expect(value(h, 'sessions')?.value).toBe('19 open')
-    expect(value(h, 'spend')?.value).toBe('$1,234 at list price (not a bill)')
+    expect(fleetRows(h, NOW).map((r) => r.key)).toEqual(['now', 'online', 'connection', 'daemon'])
+    expect(value(h, 'now')?.value).toBe('13 d, load 6.16')
+    expect(value(h, 'online')).toMatchObject({ value: '99.2% of the last 7 days, 1 down, 41 link drops, Walnut helper started 15 times', tone: 'good' })
     expect(value(h, 'connection')?.value).toBe('SSH tunnel: connected 20 min, 38 ms')
-    expect(value(h, 'server')?.value).toBe('Replica, running, 0.6.20-abc1234, phone tunnel connected')
-    expect(value(h, 'daemon')).toMatchObject({ value: 'build 0123456789ab, bun, does not start by itself after a reboot', tone: 'warn' })
+    // The reboot problem is said once, as a problem: the helper row only gives the version.
+    expect(value(h, 'daemon')).toMatchObject({ label: 'Walnut helper', value: 'Version 0123456789ab' })
+    for (const gone of ['system', 'sessions', 'spend', 'server']) expect(value(h, gone)).toBeUndefined()
     expect(statusKind(h)).toBe('connected')
   })
 })
 
 describe('missing readings say why', () => {
-  it('an older daemon, a host never probed, nothing counted yet', () => {
+  it('an older helper, a host never read, nothing counted yet', () => {
     const h = host({ system: null, now: null, history: null, spend: null, sessions: { running: null }, daemon: { version: null, startedAt: null, startup: 'on-demand', startsAfterReboot: false, runtime: null, vitals: false } })
-    expect(value(h, 'system')?.value).toBe('Not probed yet (it is, once the host connects)')
-    expect(value(h, 'now')?.value).toBe('Its daemon is older than this view (it upgrades on the next connect)')
+    expect(value(h, 'now')?.value).toBe('Its Walnut helper is older than this view (it updates on the next connect)')
     expect(value(h, 'online')?.value).toBe('No record yet')
-    expect(value(h, 'sessions')?.value).toBe('Not known now')
-    expect(value(h, 'spend')?.value).toBe('Not counted yet')
+    expect(value(h, 'daemon')?.value).toBe('Version not reported yet')
   })
 
   it('a host that went away keeps its last reading, marked', () => {
@@ -80,8 +79,7 @@ describe('missing readings say why', () => {
   it('a ledger younger than a week names the time it covers; the Mac has no reboot line', () => {
     const h = host({ local: true, server: null, history: { ...host().history!, windows: [{ days: 7, minutes: 180, up: 170, linked: 170, online: 170 / 180, linkedShare: 1, drops: 0, downs: 1 }], daemonStarts: 1 } })
     expect(value(h, 'online')).toMatchObject({ value: '94.4% of the 3 hours recorded, 1 down', tone: 'warn' })
-    expect(value(h, 'daemon')?.value).toBe('build 0123456789ab, bun')
-    expect(value(h, 'server')).toBeUndefined()
+    expect(value(h, 'daemon')?.value).toBe('Version 0123456789ab')
   })
 })
 
@@ -98,12 +96,6 @@ describe('day cells', () => {
 })
 
 describe('words, never codes, on the card', () => {
-  it('the Walnut server row reads the phase in words', () => {
-    const h = host({ server: { enabled: true, program: 'replica', phase: 'waiting-for-host', phaseLabel: 'waiting for the host to connect', build: null, phone: null, message: null } })
-    expect(value(h, 'server')).toMatchObject({ value: 'Replica, waiting for the host to connect', tone: 'warn' })
-    expect(fleetRows(h, NOW).map((r) => r.value).join('\n')).not.toContain('waiting-for-host')
-  })
-
   it('a week recorded for less than an hour counts minutes, never "0 hours"', () => {
     const w = { days: 7, minutes: 10, up: 10, linked: 10, online: 1, linkedShare: 1, drops: 0, downs: 0 }
     const h = host({ history: { coverageFrom: NOW - 600_000, bucketMinutes: 1440, buckets: [], windows: [w], outages: [], boots: [], daemonStarts: 1 } })
@@ -112,20 +104,17 @@ describe('words, never codes, on the card', () => {
     expect(value(one, 'online')?.value).toBe('100% of the 1 minute recorded')
   })
 
-  it('the daemon row follows the server\'s reboot verdict (the cloud box reports on-demand yet comes back)', () => {
+  it('the helper row follows the server\'s reboot verdict, in plain words; how it starts is on hover', () => {
     const cloud = host({ connection: { kind: 'bridge', connected: true, phase: 'connected', phaseLabel: 'Connected', since: null, rttMs: 100, error: null }, daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', startsAfterReboot: true, runtime: 'bun', vitals: true } })
-    expect(value(cloud, 'daemon')).toMatchObject({ value: 'build 0123456789ab, bun, starts after a reboot', tone: undefined })
-  })
-
-  it('the daemon row reads the host\'s own reboot answer in the server\'s words; a setup in progress is no warning', () => {
+    expect(value(cloud, 'daemon')?.value).toBe('Version 0123456789ab, starts by itself after a reboot')
+    expect(value(cloud, 'connection')?.value).toBe('It connects in to this Mac: connected, 100 ms')
     const d = { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', runtime: 'binary', vitals: true }
-    const bs = { mode: 'none' as const, backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: NOW, setupRunning: false, setupError: null }
-    const cron = host({ daemon: { ...d, startsAfterReboot: true, bootStart: { ...bs, mode: 'boot', backend: 'cron', reason: null }, reboot: 'starts by itself after a reboot (from its crontab)' } })
-    expect(value(cron, 'daemon')).toMatchObject({ value: 'build 0123456789ab, binary, starts by itself after a reboot (from its crontab)', tone: undefined })
-    const busy = host({ daemon: { ...d, startsAfterReboot: false, bootStart: { ...bs, setupRunning: true }, reboot: 'Walnut is setting it up to start after a reboot' } })
-    expect(value(busy, 'daemon')).toMatchObject({ value: 'build 0123456789ab, binary, Walnut is setting it up to start after a reboot', tone: undefined })
-    const none = host({ daemon: { ...d, startsAfterReboot: false, bootStart: bs, reboot: 'does not start by itself after a reboot: nothing on it starts the daemon at boot' } })
-    expect(value(none, 'daemon')?.tone).toBe('warn')
+    const bs = { mode: 'boot' as const, backend: 'systemd-user', reason: null, checkedAt: NOW, setupRunning: false, setupError: null }
+    const svc = host({ daemon: { ...d, startsAfterReboot: true, bootStart: bs, reboot: 'starts by itself after a reboot as a systemd user service' } })
+    const row = value(svc, 'daemon')!
+    expect(row.value).toBe('Version 0123456789ab, starts by itself after a reboot')
+    expect(row.value).not.toMatch(/systemd|bun|binary|daemon/)
+    expect(row.title).toContain('as a systemd user service')
   })
 })
 

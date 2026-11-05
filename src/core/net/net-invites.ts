@@ -6,7 +6,7 @@
 import { log } from '../../logging/index.js'
 import { NetError } from './net-error.js'
 import { setJoined } from './net-rows.js'
-import { forgetLocalInvite, localInviteState, makeLocalInvite, resetLocalInvitesForTest } from './net-local.js'
+import { cancelLocalInvite, forgetLocalInvite, localInviteState, makeLocalInvite, resetLocalInvitesForTest } from './net-local.js'
 import { validMemberName } from './net-store.js'
 import { noteWhere } from './net-where.js'
 import { companionCall, errorOf, localDaemon, syncNet } from './net-mac.js'
@@ -24,7 +24,8 @@ export interface InviteState {
   /** Walnut for Windows to download, once the newest release carries it (with a Windows line only). */
   windowsApp?: string
   expiresAt: number
-  state: 'waiting' | 'joined' | 'expired' | 'failed'
+  /** `cancelled`: called back from Settings before a machine used it. */
+  state: 'waiting' | 'joined' | 'expired' | 'failed' | 'cancelled'
   member?: { id: string; name: string; platform?: string }
   error?: string
 }
@@ -109,6 +110,41 @@ export async function makeInvite(input: { name?: unknown }): Promise<InviteState
   inv.timer = setInterval(() => { void pollInvite(inv.id) }, POLL_MS)
   inv.timer.unref?.()
   invites.set(inv.id, inv)
+  return view(inv)
+}
+
+/**
+ * Call a link back (Settings > Remote Hosts, "Cancel link"): its code takes no machine in from
+ * now on. A link a machine already used comes back joined instead; one that ended comes back
+ * as it is. A companion older than this call cannot call one back: it says so, and the link
+ * keeps working until it ends.
+ */
+export async function cancelInvite(id: string): Promise<InviteState> {
+  const inv = invites.get(id)
+  if (!inv) throw new NetError(404, 'unknown_invite', 'No such link (a restart forgets them).')
+  if (inv.state !== 'waiting') return view(inv)
+  if (inv.local) {
+    if (await cancelLocalInvite(await localDaemon(), id) === 'joined') { await pollLocalInvite(inv); return view(inv) }
+  } else {
+    let answer: { status: number; body: Record<string, unknown> }
+    try {
+      answer = await companionCall(`/net/invites/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    } catch (err) {
+      if (err instanceof NetError && err.code === 'companion_too_old') {
+        throw new NetError(409, 'companion_too_old', 'Your cloud companion is too old to call a link back; the link works until it ends by itself.')
+      }
+      throw err
+    }
+    const { status, body } = answer
+    if (status === 404) { settle(inv, { state: 'expired' }); return view(inv) }
+    if (status !== 200) { const e = errorOf(body); throw new NetError(status, e.code, e.message) }
+    if (body.state === 'joined') { await pollInvite(id); return view(inv) }
+    if (body.state === 'expired') { settle(inv, { state: 'expired' }); return view(inv) }
+  }
+  // The poll may have settled it while this waited (a machine joined): that answer stands.
+  if (inv.state !== 'waiting') return view(inv)
+  settle(inv, { state: 'cancelled' })
+  log.session.info('net: a link was called back', { invite: id })
   return view(inv)
 }
 

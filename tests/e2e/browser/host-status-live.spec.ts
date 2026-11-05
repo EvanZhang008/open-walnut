@@ -441,7 +441,8 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   // The state line stays one short line; the failure is in the host's Details (spec 5.2).
   await expect(state).toHaveText(`Could not connect to ${HOST_LABEL}`)
   await expect(dot).toHaveAttribute('data-kind', 'failed')
-  await expect(connect).toHaveText('Retry')
+  // An SSH host's retry says it is SSH (2026-11-04 review: two buttons named Retry meant two things).
+  await expect(connect).toHaveText('Retry SSH')
   await expect(connect).toBeEnabled()
   await row.getByTestId('rh-row-more').click()
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()

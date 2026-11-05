@@ -2,7 +2,7 @@
  * Settings keeps a value it showed until a newer one arrives (2026-11-04 rule): a
  * failed read, a server that does not answer now or a restart says so beside the
  * last known value, never instead of it. The pure parts of three rows: Keep awake's
- * status, "Walnut on a host", and the cloud companion's Updates row.
+ * status, "Walnut on this host" (a host's Details), and the cloud companion's Updates row.
  */
 import { describe, expect, it } from 'vitest'
 import { KEEP_AWAKE_UNREAD, keepAwakeAfterRead, keepAwakeWithState, type KeepAwakeStatus } from '../../web/src/components/settings/sections/AdvancedSection.js'

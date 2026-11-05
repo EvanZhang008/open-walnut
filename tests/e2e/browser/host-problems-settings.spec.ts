@@ -4,7 +4,9 @@
  *
  *   one sentence   Key box (auth) renders the same HostFailureText in the
  *                  banner row, the picker note and the Settings row, with
- *                  Show SSH output, Retry and a quieter Open Settings (C7, C8, C27)
+ *                  Show SSH output, Retry and a quieter Open Settings (C7, C8, C27);
+ *                  the Settings row's own retry says Retry SSH (2026-11-04 review:
+ *                  two buttons named Retry on one page meant two things)
  *   the row        label title, alias, row id; Open Settings flashes it every
  *                  time (C68); the hint wraps whole in the host's Details, never
  *                  in the row's one state line (C78)
@@ -12,7 +14,9 @@
  *   off            an ephemeral fixture: every row is off, nothing to press (C24)
  *   autofix        the row's Update holds 'Updating Claude Code on Fix box...'
  *                  until the re-check answers (C29); a slow one shows its time
- *                  and, after 3 minutes, Still updating + Check again (C95)
+ *                  and, after 3 minutes, Still updating + Check again (C95);
+ *                  Details fold the command under "Update by hand", never a
+ *                  second Update
  *   elsewhere      the System pane's host row, an outdated Build box included (C71);
  *                  the rail dot when no banner is on screen (C67), lit by the
  *                  banner's own rows (a signed-out host, not a version floor)
@@ -24,7 +28,7 @@
  * Run: PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=webkit --workers=1
  */
-import { test, expect, type Locator, type Page } from '@playwright/test'
+import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { firstSentence } from '../../../src/core/hosts/host-problem'
 import {
   HEALTHY, bannerRow, bell, fixtureCounters, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
@@ -101,9 +105,10 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     await expect(page).toHaveURL(/\/settings#rh-host-keybox$/)
     const settingsRow = hostRow(page, 'keybox')
     await expect(settingsRow).toBeVisible({ timeout: 20_000 })
-    // The row: its one state line and its one action; the whole failure is in its Details.
+    // The row: its one state line and its one action; the whole failure is in its Details. The
+    // row's retry names its way in (the banner's stays Retry: it has one host per row).
     await expect(settingsRow.getByTestId('rh-row-state')).toHaveText('Could not connect to Key box')
-    await expect(settingsRow.getByTestId('rh-row-connect')).toHaveText('Retry')
+    await expect(settingsRow.getByTestId('rh-row-connect')).toHaveText('Retry SSH')
     await expect(settingsRow.getByTestId('rh-row-connect')).toBeEnabled()
     await expect(settingsRow.locator('.hft')).toHaveCount(0)
     const details = await openHostDetails(page, 'keybox')
@@ -214,7 +219,7 @@ test.describe('an ephemeral fixture: Settings says off and offers nothing', () =
     // Its Details say nothing about a failure or what Claude Code needs.
     await expect((await openHostDetails(page, 'keybox')).locator('.rh-readiness, .rh-failure')).toHaveCount(0)
     for (const host of hosts) {
-      await expect(hostRow(page, host).getByRole('button', { name: /^(Connect now|Retry|Update|Install|Check again)$/ })).toHaveCount(0)
+      await expect(hostRow(page, host).getByRole('button', { name: /^(Connect now|Retry|Retry SSH|Update|Install|Check again)$/ })).toHaveCount(0)
     }
     // Every OTHER row is a host switched off in Settings (the test server's own
     // `fixture-remote`): it reads Off and offers Turn on, never a connect (a Connect
@@ -229,7 +234,7 @@ test.describe('an ephemeral fixture: Settings says off and offers nothing', () =
       const r = hostRow(page, alias)
       await expect(r.getByTestId('rh-row-state')).toHaveText('Off: Walnut does not connect to it.')
       await expect(r.locator('.rh-row-primary button')).toHaveText(['Turn on'])
-      await expect(r.getByRole('button', { name: /^(Connect now|Retry|Update|Install|Check again)$/ })).toHaveCount(0)
+      await expect(r.getByRole('button', { name: /^(Connect now|Retry|Retry SSH|Update|Install|Check again)$/ })).toHaveCount(0)
       await expect(r.locator('.rh-row-line')).toHaveCount(0)
     }
     // The host rows' status lines: the fleet overview above them (2026-10-31) reads a host's
@@ -239,14 +244,19 @@ test.describe('an ephemeral fixture: Settings says off and offers nothing', () =
   })
 })
 
-/** The text of the Fix box row and its Details together, sampled until `until` matches or 20s pass. */
-async function sampleUntil(blocks: Locator[], until: RegExp, everyMs = 250, maxMs = 20_000): Promise<string[]> {
+/**
+ * The text of the Fix box row and its Details together, sampled until `until` matches or 20s pass,
+ * with how long the samples before the match covered (from the first to the last of them).
+ */
+async function sampleUntil(blocks: Locator[], until: RegExp, everyMs = 250, maxMs = 20_000): Promise<{ texts: string[]; spanMs: number }> {
   const out: string[] = []
+  const at: number[] = []
   const deadline = Date.now() + maxMs
   while (Date.now() < deadline) {
     const t = (await Promise.all(blocks.map((b) => b.innerText().catch(() => '')))).join('\n')
     out.push(t)
-    if (until.test(t)) return out
+    at.push(Date.now())
+    if (until.test(t)) return { texts: out, spanMs: at.length > 1 ? at[at.length - 2] - at[0] : 0 }
     await new Promise((r) => setTimeout(r, everyMs))
   }
   throw new Error(`never matched ${until}: last ${JSON.stringify(out.slice(-3))}`)
@@ -258,30 +268,49 @@ test.describe('Update on a host the server can fix', () => {
   })
   test.beforeEach(async ({ request }) => { await loadFixture(request, FIX_FILE) })
 
-  /** The row (its warning and its one action, Update) with its Details open (the whole message). */
-  async function openFixRow(page: Page): Promise<{ row: Locator; details: Locator; message: string }> {
+  /**
+   * The row (its warning and its one action, Update) with its Details open. The row's warning is
+   * the server's message (read from the wire); Details fold the command under "Update by hand"
+   * (2026-11-04 review: Details said the problem a second time, with a second fix beside the row's).
+   */
+  async function openFixRow(page: Page, request: APIRequestContext): Promise<{ row: Locator; details: Locator; message: string }> {
+    const problems = (await wireHost(request, 'fixbox')).readiness?.problems ?? []
+    const message = problems.find((p) => p.kind === 'claude_outdated')?.message ?? ''
+    expect(message, 'the fixture names the outdated Claude Code').not.toBe('')
     await loadApp(page, '/settings')
     await openRemoteHosts(page)
     const row = hostRow(page, 'fixbox')
     await expect(row.getByTestId('rh-readiness-fix-claude_outdated')).toHaveText('Update')
-    const details = await openHostDetails(page, 'fixbox')
-    const line = details.locator('.rh-readiness[data-problem="claude_outdated"]')
-    await expect(line).toBeVisible()
-    const message = (await line.innerText()).trim()
     await expect(row.getByTestId('rh-row-warning')).toHaveText(firstSentence(message))
-    // Details never repeat the row's one action.
+    const details = await openHostDetails(page, 'fixbox')
+    // Details never say it again, nor repeat the row's one action: the command by hand, folded,
+    // with its Check again.
+    await expect(details).not.toContainText(firstSentence(message))
     await expect(details.getByRole('button', { name: /^(Update|Install|Try again)$/ })).toHaveCount(0)
+    const byHand = details.locator('.rh-by-hand[data-problem="claude_outdated"]')
+    const toggle = byHand.getByTestId('rh-by-hand')
+    await expect(toggle).toHaveText('Update by hand')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(byHand.locator('.rh-by-hand-body')).toBeHidden()
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(byHand.locator('.rh-by-hand-body').getByRole('button', { name: 'Check again' })).toBeVisible()
+    await toggle.click()
+    await expect(byHand.locator('.rh-by-hand-body')).toBeHidden()
     return { row, details, message }
   }
 
   test('from Update until the re-check answers, the line only ever reads Updating Claude Code on Fix box... (C29)', async ({ page, request }) => {
-    const { row, details, message } = await openFixRow(page)
+    const { row, details, message } = await openFixRow(page, request)
     expect(message).toContain('Claude Code on Fix box is 2.1.220')
     await row.getByTestId('rh-readiness-fix-claude_outdated').click()
     // The row says what the fix did, once (its Details do not repeat it).
     const samples = await sampleUntil([row, details], /Updated Claude Code to 2\.1\.281\./)
-    const during = samples.slice(0, -1)
-    expect(during.length).toBeGreaterThan(8)
+    const during = samples.texts.slice(0, -1)
+    // The fixture's fix runs 2 s after a 0.3 s start: the samples saw most of it. A count of them
+    // was a clock in disguise (a loaded machine reads each one slower, and fewer fit).
+    expect(during.length).toBeGreaterThan(3)
+    expect(samples.spanMs).toBeGreaterThan(1_500)
     for (const t of during) {
       expect(t).toContain('Updating Claude Code on Fix box...')
       expect(t).not.toContain(firstSentence(message))
@@ -304,17 +333,18 @@ test.describe('Update on a host the server can fix', () => {
 
   test('a slow fix shows its time, then Still updating and Check again after 3 minutes (C95)', async ({ page, request }) => {
     await hostFixture(request, { action: 'autofix-slow', host: 'fixbox', ms: 200_000 })
-    const { row, details } = await openFixRow(page)
+    const { row, details } = await openFixRow(page, request)
     await row.getByTestId('rh-readiness-fix-claude_outdated').click()
     await expect(row.getByTestId('rh-readiness-fix-claude_outdated')).toHaveText('Updating...')
     await expect(row.getByTestId('rh-readiness-fix-claude_outdated')).toBeDisabled()
-    const running = details.locator('.rh-readiness[data-fix="running"]')
+    // The progress is the row's line (the row offers the fix, so the row says how it goes).
+    const running = row.getByTestId('rh-row-fixing')
     await expect(running).toHaveText(/^Updating Claude Code on Fix box\.\.\.$/)
     await page.waitForTimeout(6_000)
-    await expect(running).toHaveText(/^Updating Claude Code on .+\.\.\. \d+s$/)
-    await expect(row.getByTestId('rh-row-fixing')).toHaveText(/^Updating Claude Code on Fix box\.\.\. \d+s$/)
+    await expect(running).toHaveText(/^Updating Claude Code on Fix box\.\.\. \d+s$/)
     await hostFixture(request, { action: 'advance-clock', ms: 180_000 })
     await expect(running).toHaveText(/^Still updating Claude Code on Fix box\.\.\. 3m \d+s$/, { timeout: 5_000 })
+    // After 3 minutes Details offer Check again.
     await expect(details.getByRole('button', { name: 'Check again' })).toBeVisible()
     await details.screenshot({ path: `${SHOTS}/settings-still-updating.png` })
   })

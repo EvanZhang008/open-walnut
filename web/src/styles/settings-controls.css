@@ -325,11 +325,13 @@
   cursor: pointer;
 }
 
-.settings-button:hover:not(:disabled) {
+.settings-button:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--bg-hover);
 }
 
-.settings-button:disabled {
+/* holdFocus: an aria-disabled button reads as a disabled one, and keeps the focus. */
+.settings-button:disabled,
+.settings-button[aria-disabled='true'] {
   opacity: 0.45;
   cursor: default;
 }
@@ -347,13 +349,13 @@
   color: #fff;
 }
 
-.settings-button.settings-button-primary:hover:not(:disabled) {
+.settings-button.settings-button-primary:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--accent-hover, var(--accent));
 }
 
 /* A disabled default button loses its fill, as on macOS: every disabled push
    button reads the same, whatever its kind when live (N15). */
-.settings-button.settings-button-primary:disabled:not([aria-busy='true']) {
+.settings-button.settings-button-primary:is(:disabled, [aria-disabled='true']):not([aria-busy='true']) {
   background: var(--settings-group-bg, var(--card-bg));
   border-color: var(--border-strong);
   color: var(--fg);
@@ -371,8 +373,8 @@
   color: var(--settings-error-text, var(--error));
 }
 
-.settings-button.settings-button-text:hover:not(:disabled),
-.settings-button.settings-button-danger:hover:not(:disabled) {
+.settings-button.settings-button-text:hover:not(:disabled):not([aria-disabled='true']),
+.settings-button.settings-button-danger:hover:not(:disabled):not([aria-disabled='true']) {
   background: transparent;
   text-decoration: underline;
 }

@@ -1,8 +1,11 @@
 /**
  * Settings, Remote Hosts, "Removals to confirm" (docs/plan/walnut-replica-servers-impl.md,
  * section 4): a host's copy refused, three rounds in a row, a copy that would remove
- * most of its tasks. The row says how many would go; "Remove them there" takes two
- * clicks and posts exactly the refusal the user read (count and keys); the row then
+ * most of its tasks. The row says how many would go; "Remove them there" asks first,
+ * the page's one way ("Remove them from the copy on <host>?" with Cancel focused,
+ * Escape as Cancel, no timer: RemoveConfirmRow; 2026-11-04 review: it armed a red
+ * "Confirm remove" that turned back by itself after 3 s, with no Cancel), and its
+ * Remove posts exactly the refusal the user read (count and keys); the row then
  * says the next copy takes it. A 409 (the rows moved) says so under the row, until a
  * later read shows the refusal moved again. A copy too old to take the confirm says
  * to update it there first, with no button. No row at all while every copy works.
@@ -78,6 +81,14 @@ async function openRemoteHosts(page: Page): Promise<void> {
   await expect(nav).toHaveAttribute('aria-current', 'page')
 }
 
+/** "Remove them there", then the ask's Remove (RemoveConfirmRow under the row). */
+async function confirmRemoval(page: Page): Promise<void> {
+  await page.getByTestId(`replica-removal-confirm-${ROW}`).click()
+  const ask = page.getByTestId(`replica-removal-ask-${ROW}`)
+  await expect(ask).toBeVisible()
+  await ask.getByTestId(`replica-removal-ask-${ROW}-remove`).click()
+}
+
 async function shot(page: Page, name: string): Promise<void> {
   mkdirSync(SHOTS, { recursive: true })
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
@@ -101,7 +112,7 @@ test.describe('Removals to confirm (copies that held off)', () => {
     await expect(page.getByText('Removals to confirm')).toHaveCount(0)
   })
 
-  test('a refusal names the size; two clicks confirm exactly the rows read; the row then says the next copy takes it', async ({ page }) => {
+  test('a refusal names the size; it asks first, and its Remove confirms exactly the rows read; the row then says the next copy takes it', async ({ page }) => {
     const f: Fake = { state: 'refused', posts: [], conflict: false }
     await fakeReplicas(page, f)
     await openRemoteHosts(page)
@@ -119,13 +130,27 @@ test.describe('Removals to confirm (copies that held off)', () => {
     await shot(page, 'refused')
     const button = page.getByTestId(`replica-removal-confirm-${ROW}`)
     await expect(button).toHaveText('Remove them there')
-    // The first click only arms it: nothing is sent.
+    // A press only asks, under the row, Cancel focused: nothing is sent.
     await button.click()
-    await expect(button).toHaveText('Confirm remove')
+    const ask = page.getByTestId(`replica-removal-ask-${ROW}`)
+    await expect(ask).toContainText('Remove them from the copy on pw-rr-box?')
+    await expect(ask).toContainText('They are gone there too; this Mac keeps its own.')
+    await expect(ask.getByTestId(`replica-removal-ask-${ROW}-cancel`)).toBeFocused()
+    await expect(ask.getByTestId(`replica-removal-ask-${ROW}-remove`)).toHaveClass(/settings-button-danger/)
+    await shot(page, 'asking')
+    // Past the old 3 s timer it still asks; Escape is Cancel, and the focus goes back to the button.
+    await page.waitForTimeout(3_300)
+    await expect(ask).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(ask).toHaveCount(0)
+    await expect(button).toBeFocused()
     expect(f.posts).toEqual([])
+    // Asked again, its Remove sends exactly the refusal read.
     await button.click()
+    await ask.getByTestId(`replica-removal-ask-${ROW}-remove`).click()
     await expect.poll(() => f.posts).toEqual([{ target: TARGET, kind: 'tasks', entries: 3, keys: KEYS }])
     await expect(row).toHaveAttribute('data-removal', 'armed')
+    await expect(ask).toHaveCount(0)
     await expect(page.getByTestId(`replica-removal-text-${ROW}`)).toContainText('Confirmed: the next copy keeps only this Mac\'s 3 tasks there.')
     await expect(page.getByTestId(`replica-removal-confirm-${ROW}`)).toHaveCount(0)
     await shot(page, 'armed')
@@ -137,8 +162,7 @@ test.describe('Removals to confirm (copies that held off)', () => {
     await openRemoteHosts(page)
     const button = page.getByTestId(`replica-removal-confirm-${ROW}`)
     await expect(button).toBeVisible({ timeout: 30_000 })
-    await button.click()
-    await button.click()
+    await confirmRemoval(page)
     const row = page.getByTestId(`replica-removal-${ROW}`)
     // The row's error sits right under it (SettingsRow), inside the group.
     await expect(page.getByTestId('replica-removals-host').getByRole('alert')).toContainText('The numbers changed since you read this')
@@ -157,8 +181,7 @@ test.describe('Removals to confirm (copies that held off)', () => {
     await openRemoteHosts(page)
     const button = page.getByTestId(`replica-removal-confirm-${ROW}`)
     await expect(button).toBeVisible({ timeout: 30_000 })
-    await button.click()
-    await button.click()
+    await confirmRemoval(page)
     const group = page.getByTestId('replica-removals-host')
     const row = page.getByTestId(`replica-removal-${ROW}`)
     const text = page.getByTestId(`replica-removal-text-${ROW}`)
@@ -188,8 +211,7 @@ test.describe('Removals to confirm (copies that held off)', () => {
     await openRemoteHosts(page)
     const button = page.getByTestId(`replica-removal-confirm-${ROW}`)
     await expect(button).toBeVisible({ timeout: 30_000 })
-    await button.click()
-    await button.click()
+    await confirmRemoval(page)
     const row = page.getByTestId(`replica-removal-${ROW}`)
     // Armed, then the round sends it and that copy refuses it anyway (read every 5 s while armed).
     await expect(row).toHaveAttribute('data-removal', 'outdated', { timeout: 20_000 })

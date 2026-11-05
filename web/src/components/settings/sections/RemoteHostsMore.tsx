@@ -1,41 +1,32 @@
 /**
- * Remote Hosts > More settings: what a person changes rarely, folded under the Hosts list
- * (2026-11-04 review: the page showed the same hosts in five groups at once). Closed by
- * default; its line says what is inside and how many rows need a look, and each group keeps
- * reading while it is closed (SettingsFold). Open, each group is one folded line that says
- * what it holds (SettingsFoldGroup), so the whole of it reads at a glance.
+ * Remote Hosts > More settings: what belongs to the whole page, not to one host, folded under
+ * the Hosts list: the relay machines that joined with a link use, and the list of secrets. A
+ * host's own settings (its session limit, which tasks may use it, Walnut on it, which secrets
+ * are copied to it) live in its Details, under "This host" (2026-11-04 review: one host's
+ * settings sat in four groups here, away from the host). No count of its own: the page has one,
+ * at the top (HostNeedsLook.tsx).
  */
-import type { Config } from '@open-walnut/core';
 import type { NetOverview } from '@/api/hosts-net';
 import { SettingsFold } from '../SettingsFold';
 import { HostNetworkRelay } from './HostNetworkRelay';
-import { HostServersGroup } from './HostServersGroup';
-import { HostExecGrantsGroup } from './HostExecGrantsGroup';
 import { SecretsGroup } from './SecretsGroup';
-import { SessionLimitsGroup } from './RemoteHostLimits';
 
 interface Props {
-  hosts: Config['hosts'];
   hostLabels: Record<string, string>;
   net: NetOverview | null;
   onNetChanged: () => void;
-  limits: Record<string, string | number>;
-  onLimits: (update: (prev: Record<string, string | number>) => Record<string, string | number>) => void;
 }
 
-export function RemoteHostsMore({ hosts, hostLabels, net, onNetChanged, limits, onLimits }: Props) {
+export function RemoteHostsMore({ hostLabels, net, onNetChanged }: Props) {
   return (
     <SettingsFold
       id="remote-hosts-more"
       label="More settings"
-      summary="Relay, Walnut on a host, tasks using other hosts, secrets, session limits."
+      summary={net ? 'Relay and secrets. A host\'s own settings are in its Details.' : 'Secrets. A host\'s own settings are in its Details.'}
       data-testid="remote-hosts-more"
     >
       {net && <HostNetworkRelay net={net} onChanged={onNetChanged} />}
-      <HostServersGroup hosts={hosts} />
-      <HostExecGrantsGroup hostLabels={hostLabels} />
       <SecretsGroup hostLabels={hostLabels} />
-      <SessionLimitsGroup limits={limits} hostLabels={hostLabels} onChange={onLimits} />
     </SettingsFold>
   );
 }

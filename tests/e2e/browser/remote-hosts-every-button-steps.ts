@@ -1,12 +1,13 @@
 /**
  * The longer steps of remote-hosts-every-button.spec.ts: Add host (both ways, a slow and a
- * failing link included), the join link, and the groups under More settings. Each takes the
- * spec's context (its sweep and its `ran`, which checks every key against the spec's REGISTRY).
+ * failing link included, one draft per way in), the join link (closed, shown again, called back),
+ * and the groups under More settings. Each takes the spec's context (its sweep and its `ran`,
+ * which checks every key against the spec's REGISTRY).
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
 import {
-  ALPHA_URL, WINDOWS_APP, armThenCancel, expectCopied, expectOpensTab, flip, netCommand, netLink, netWindows, openGroup, openMore, shot, type PaneRoutes,
+  WINDOWS_APP, askThenCancel, expectCopied, expectOpensTab, netCommand, netLink, netWindows, openGroup, openMore, shot, type PaneRoutes,
 } from './remote-hosts-every-button-helpers'
 
 export interface StepCtx {
@@ -26,9 +27,44 @@ export async function expectRing(page: Page, el: ReturnType<Page['locator']>): P
   expect(await el.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe('none')
 }
 
-const addButton = (page: Page) => page.locator('[data-testid="remote-hosts-add"]:visible').first()
+export const addButton = (page: Page) => page.locator('[data-testid="remote-hosts-add"]:visible').first()
 
-/** Add host: a menu with two ways in, each landing in view at the top of the list. */
+/** Add host > Join a machine with a link, from the button's menu. */
+export async function joinPress(page: Page): Promise<void> {
+  await addButton(page).click()
+  await page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[0] }).click()
+}
+
+/**
+ * A link put away while it still works: the list says how long, in its place, with Cancel link;
+ * Cancel link calls it back (Cancelling..., then "Link cancelled." with Close focused), and Close
+ * gives the focus back to Add host (2026-11-04 review: Done left the link working, unseen).
+ */
+export async function callBack(ctx: StepCtx, id: string): Promise<void> {
+  const { page, routes } = ctx
+  const closed = page.getByTestId('host-network-closed')
+  if (await page.getByTestId('host-network-invite').count()) await page.getByTestId('host-network-done').click()
+  await expect(closed).toHaveAttribute('data-invite-state', 'waiting')
+  await expect(closed).toContainText(/Link still works for \d+ min\./)
+  const cancel = closed.getByTestId('host-network-cancel')
+  const deletes = routes.callsTo('DELETE', `/api/hosts/net/invites/${id}`).length
+  const release = routes.gate('cancel')
+  await cancel.click()
+  await expect(cancel).toHaveText('Cancelling...')
+  release()
+  await routes.nth('DELETE', `/api/hosts/net/invites/${id}`, deletes + 1)
+  await expect(closed).toHaveAttribute('data-invite-state', 'cancelled')
+  await expect(closed).toContainText('Link cancelled.')
+  const done = closed.getByTestId('host-network-closed-done')
+  await expectRing(page, done)
+  await ctx.sweep()
+  await done.click()
+  await expect(closed).toHaveCount(0)
+  await expectRing(page, addButton(page))
+  ctx.ran('Hosts/button#host-network-cancel', 'Hosts/button#host-network-closed-done')
+}
+
+/** Add host: a menu with two ways in, each landing in view at the top of the list; one draft per way in. */
 export async function checkAddHost(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
   // The pane header's, or the sticky bar's once the pane scrolled (the same button, moved).
@@ -46,12 +82,37 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect(add).toBeFocused()
+  // From the keyboard (Enter, Space, or ArrowDown on the closed button) the first item is
+  // highlighted at once, so Enter runs it (2026-11-04 review: nothing was).
+  for (const key of ['Enter', 'Space', 'ArrowDown']) {
+    await addButton(page).focus()
+    await page.keyboard.press(key)
+    await expect(menu).toBeVisible()
+    await expect(menu.getByRole('menuitem').first()).toHaveClass(/\bfocused\b/)
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(addButton(page)).toBeFocused()
+  }
+  // A scroll closes the menu; the focus stays on the button, also when the scroll moved it into
+  // the sticky bar (2026-11-04 review: it fell to the page).
+  await addButton(page).click()
+  await expect(menu).toBeVisible()
+  // The menu hears scrolls from the frame after it opened (ContextMenu.tsx): wait that frame out,
+  // as a person always does (WebKit's frames came half a second apart under load).
+  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+  // A scroll the pane can make from where it stands (WebKit's pane may sit at its end already).
+  await page.locator('.settings-pane').first().evaluate((el) => {
+    const max = el.scrollHeight - el.clientHeight
+    el.scrollTop += el.scrollTop > max / 2 ? -Math.min(24, el.scrollTop) : Math.min(24, max - el.scrollTop)
+  })
+  await expect(menu).toHaveCount(0)
+  await expect(addButton(page)).toBeFocused()
 
   // A link: "Making a link..." at once, in view and focused, while the link is made (2026-11-04
   // review: a slow host network showed nothing for 2.5 s); then the link, its Copy focused.
   const n = routes.invites + 1
   const release = routes.gate('invite')
-  await add.click()
+  await addButton(page).click()
   await menu.getByRole('menuitem', { name: ADD_ITEMS[0] }).click()
   const making = page.getByTestId('host-network-making')
   await expect(making).toBeVisible()
@@ -67,47 +128,80 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   expect(routes.invites).toBe(n)
   await shot(page, `add-host-join-${page.viewportSize()!.height}`)
 
-  // An SSH host: a new row at the top of the list, Hostname first and focused, Cancel on it.
+  // An SSH host: the untouched link closes (it still works, and the list says so), and a new row
+  // comes at the top of the list, Hostname first and focused, Cancel on it.
   const puts = routes.callsTo('PUT', '/api/config').length
-  await add.click()
+  await addButton(page).click()
   await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  const closed = page.getByTestId('host-network-closed')
+  await expect(page.getByTestId('host-network-invite')).toHaveCount(0)
+  await expect(closed).toHaveAttribute('data-invite-state', 'waiting')
   const hostname = page.locator('input[id^="rh-hostname-"]')
+  const alias = page.locator('input[id^="rh-alias-"]')
   await expect(hostname).toHaveCount(1)
   await expect(hostname).toHaveValue('')
   await expect(hostname).toBeFocused()
   await expect(hostname).toBeInViewport()
-  const draft = page.locator('#remote-hosts .rh-host-row').filter({ hasText: 'Add a hostname and an alias to save this host.' })
+  const draft = page.locator('#remote-hosts .rh-host-row[data-unsaved="true"]')
   await expect(draft).toHaveCount(1)
-  // It is the new host (never "Host 5"), and its one way out is the Cancel on the row.
+  await expect(draft.getByTestId('rh-row-state')).toHaveText('Add a hostname to save this host.')
+  // It is the new host (never "Host 5"); it says Not saved; its one way out is the Cancel on the
+  // row, and it has no More menu (nothing in it applies to a host not saved).
   await expect(draft.locator('.rh-host-name')).toHaveText('New SSH host')
+  await expect(draft).toContainText('Not saved')
+  await expect(draft.getByTestId('rh-row-more')).toHaveCount(0)
   await expect(page.getByTestId('rh-edit').getByRole('button', { name: /^(Cancel|Done)$/ })).toHaveCount(0)
   await expect(draft.getByTestId('rh-draft-cancel')).toHaveText('Cancel')
   // The alias it suggests is one no host has.
-  await expect(page.locator('input[id^="rh-alias-"]')).toHaveAttribute('placeholder', 'buildbox')
-  // A second press goes to the same empty row (2026-11-04 review: it made Host 5 and Host 6).
-  await hostname.press('Shift+Tab')
-  await add.click()
+  await expect(alias).toHaveAttribute('placeholder', 'buildbox')
+  // Tabbing through Alias refuses nothing (2026-11-04 review: "Give it an alias" on the way in).
+  await hostname.press('Tab')
+  await expect(alias).toBeFocused()
+  await alias.press('Tab')
+  await expect(page.getByTestId('rh-edit').locator('.settings-row-error')).toHaveCount(0)
+  // A second press goes to the same row, at its first empty field (2026-11-04 review: it made
+  // Host 5 and Host 6): here Hostname, with User typed.
+  await page.locator('input[id^="rh-user-"]').fill('sam')
+  await addButton(page).click()
   await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
   await expect(hostname).toHaveCount(1)
   await expect(hostname).toBeFocused()
   await ctx.sweep()
   await shot(page, `add-host-ssh-row-${page.viewportSize()!.height}`)
-  // Escape takes the untouched row away, with no confirm; the focus goes back to Add host.
+  // Escape keeps a row someone typed in (it is not saved yet); Cancel takes it away.
   await hostname.press('Escape')
-  await expect(draft).toHaveCount(0)
-  await expectRing(page, add)
-  // Cancel does the same.
-  await add.click()
-  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
-  await expect(hostname).toBeFocused()
+  await expect(draft).toHaveCount(1)
   await draft.getByTestId('rh-draft-cancel').click()
   await expect(draft).toHaveCount(0)
-  await expectRing(page, add)
+  await expectRing(page, addButton(page))
+  // Escape takes an untouched row away, with no confirm; the focus goes back to Add host.
+  await addButton(page).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await expect(hostname).toBeFocused()
+  await hostname.press('Escape')
+  await expect(draft).toHaveCount(0)
+  await expectRing(page, addButton(page))
+  // Join with a link closes an untouched SSH row, and shows the link that still works again
+  // (2026-11-04 review: a second press made a second link while the first still worked).
+  await addButton(page).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await expect(draft).toHaveCount(1)
+  await joinPress(page)
+  await expect(draft).toHaveCount(0)
+  await expect(page.getByTestId('host-network-command')).toHaveText(netCommand(n))
+  await expectRing(page, page.getByTestId('host-network-copy'))
+  expect(routes.invites).toBe(n)
   expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)
-  ctx.ran('Header/button#remote-hosts-add', 'Add host menu/menuitem[join]', 'Add host menu/menuitem[ssh]', 'Hosts/button#rh-draft-cancel')
+  // Close, then Cancel link: the next run of this check starts with no link.
+  await callBack(ctx, `ni-${n}`)
+  ctx.ran('Header/button#remote-hosts-add', 'Add host menu/menuitem[join]', 'Add host menu/menuitem[ssh]', 'Hosts/button#rh-draft-cancel', 'Hosts/button#host-network-done')
 }
 
-/** The join link made by Add host: each system's way, the notes folded, a failed second link, Done. */
+/**
+ * The join link made by Add host: each system's way, the notes folded, an expired link, Close and
+ * Join again (the same link), Cancel link, and the links that could not be made, each with the
+ * fix its reason names (2026-11-04 review: "not running on this Mac" offered only Try again).
+ */
 export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
   const card = page.getByTestId('host-network-invite')
@@ -119,6 +213,7 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   const cmd = page.getByTestId('host-network-command')
   expect(await cmd.evaluate((el) => [getComputedStyle(el).whiteSpace, el.scrollWidth <= el.clientWidth + 1])).toEqual(['pre-wrap', true])
   await expect(page.getByTestId('host-network-copy')).toHaveClass(/settings-button-default/)
+  await ctx.sweep()
   await expectCopied(page, page.getByTestId('host-network-copy'), netCommand(n))
   await page.getByTestId('host-network-os-linux').click()
   await expect(card).toHaveAttribute('data-os', 'linux')
@@ -149,7 +244,8 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
 
   // Ten minutes later: the link says it expired, and New link makes another.
   routes.expireInvites = true
-  await expect(card).toHaveAttribute('data-invite-state', 'expired', { timeout: 10_000 })
+  // The page reads a waiting link every 3 s; a loaded machine may answer late.
+  await expect(card).toHaveAttribute('data-invite-state', 'expired', { timeout: 20_000 })
   await expect(card).toContainText('This link expired.')
   await ctx.sweep()
   routes.expireInvites = false
@@ -158,61 +254,88 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   await expectRing(page, page.getByTestId('host-network-copy'))
   ctx.ran('Hosts/button#host-network-new-link')
 
-  // A second link that fails takes the first one's place, says why, and Try again holds the
-  // focus with the whole row flashed (2026-11-04 review: the old link stayed, still waiting).
-  routes.failInvites = 1
-  await addButton(page).click()
-  await page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[0] }).click()
+  // Close: the list says the link still works, in its place and focused; Join with a link shows
+  // the same link again, never a second one.
+  await page.getByTestId('host-network-done').click()
+  await expect(card).toHaveCount(0)
+  const closed = page.getByTestId('host-network-closed')
+  await expect(closed).toContainText(/Link still works for \d+ min\./)
+  await expectRing(page, closed)
+  await ctx.sweep()
+  await joinPress(page)
+  await expect(page.getByTestId('host-network-command')).toHaveText(netCommand(n + 1))
+  await expectRing(page, page.getByTestId('host-network-copy'))
+  expect(routes.invites).toBe(n + 1)
+  ctx.ran('Hosts/button#host-network-done')
+  await callBack(ctx, `ni-${n + 1}`)
+
+  // The host network did not run: the link's place says why, with Start the host network,
+  // focused, which starts it and makes the link (2026-11-04 review).
+  routes.failInvites = [{ error: 'The host network is not running on this Mac', code: 'net_unavailable' }]
+  await joinPress(page)
   const failed = page.getByTestId('host-network-invite-error')
   await expect(failed).toContainText('Could not make a link')
   await expect(failed).toContainText('The host network is not running on this Mac.')
+  await expect(failed).toHaveAttribute('data-fix', 'start')
   await expect(card).toHaveCount(0)
   await expect(failed).toBeInViewport()
   await expect(failed).toHaveClass(/rh-row-flash/)
-  const again = page.getByTestId('host-network-try-again')
-  await expectRing(page, again)
+  await expect(page.getByTestId('host-network-error-done')).toHaveText('Close')
+  await expect(page.getByTestId('host-network-try-again')).toHaveCount(0)
+  const start = page.getByTestId('host-network-start')
+  await expectRing(page, start)
   await shot(page, `add-host-link-failed-${page.viewportSize()!.height}`)
   await ctx.sweep()
-  await again.click()
+  const syncs = routes.callsTo('POST', '/api/hosts/net/sync').length
+  const started = routes.gate('net-start')
+  await start.click()
+  await expect(start).toHaveText('Starting...')
+  started()
+  expect((await routes.nth('POST', '/api/hosts/net/sync', syncs + 1)).body).toEqual({ enable: true })
   await expect(page.getByTestId('host-network-command')).toHaveText(netCommand(n + 2))
   await expect(failed).toHaveCount(0)
   await expectRing(page, page.getByTestId('host-network-copy'))
-  ctx.ran('Hosts/button#host-network-try-again')
-  // Done on the error puts it away; Done on a link too. The focus goes back to Add host.
-  routes.failInvites = 1
-  await addButton(page).click()
-  await page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[0] }).click()
+  ctx.ran('Hosts/button#host-network-start')
+  await callBack(ctx, `ni-${n + 2}`)
+
+  // A reason with no fix of its own (an older server sends no code): Try again, which keeps the
+  // focus when it fails again, and Close, which gives it back to Add host.
+  const why = 'The cloud companion did not answer'
+  routes.failInvites = [{ error: why }, { error: why }]
+  await joinPress(page)
+  await expect(failed).toHaveAttribute('data-fix', 'retry')
+  const again = page.getByTestId('host-network-try-again')
+  await expectRing(page, again)
+  await ctx.sweep()
+  await again.click()
+  await expect(failed).toContainText(`${why}.`)
+  await expectRing(page, again)
+  expect(routes.invites).toBe(n + 2)
   await page.getByTestId('host-network-error-done').click()
   await expect(failed).toHaveCount(0)
   await expectRing(page, addButton(page))
-  ctx.ran('Hosts/button#host-network-error-done')
-  await addButton(page).click()
-  await page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[0] }).click()
-  await expectRing(page, page.getByTestId('host-network-copy'))
+  ctx.ran('Hosts/button#host-network-try-again', 'Hosts/button#host-network-error-done')
+  // A link put away for the rest of the run: the list keeps saying it still works.
+  await joinPress(page)
+  await expect(page.getByTestId('host-network-command')).toHaveText(netCommand(n + 3))
   await page.getByTestId('host-network-done').click()
-  await expect(card).toHaveCount(0)
-  await expectRing(page, addButton(page))
-  ctx.ran('Hosts/button#host-network-done')
+  await expect(closed).toHaveAttribute('data-invite-state', 'waiting')
 }
 
-/** More settings: closed with what is inside and what needs a look; each group one line with its summary. */
+/** More settings: what belongs to the whole page (the relay, the secrets), each group one line. */
 export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
   const toggle = page.getByTestId('remote-hosts-more-toggle')
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  await expect(toggle).toContainText('Relay, Walnut on a host, tasks using other hosts, secrets, session limits.')
-  // Beta box's tunnel retries: the closed fold says something inside needs a look.
-  await expect(page.getByTestId('remote-hosts-more-needs')).toHaveText(/^\d+ needs? a look$/)
-  await expect(page.getByTestId('host-servers-toggle')).toBeHidden()
+  await expect(toggle).toContainText('Relay and secrets. A host\'s own settings are in its Details.')
+  // No count of its own: the page has one, in the header (2026-11-04 review: two counts).
+  await expect(page.getByTestId('remote-hosts-more-needs')).toHaveCount(0)
+  await expect(page.getByTestId('fleet-secrets-toggle')).toBeHidden()
   await openMore(page)
-  // Open, each group is one line that says what it holds (2026-11-04 review: five groups ran down the page).
   await expect(page.getByTestId('host-network-relay-summary')).toHaveText('Public relays')
-  await expect(page.getByTestId('host-servers-summary')).toHaveText(/^On for 2 of 2 hosts, \d+ needs? a look$/)
-  await expect(page.getByTestId('host-exec-grants-summary')).toHaveText('1 task allowed, 1 declined')
   await expect(page.getByTestId('fleet-secrets-summary')).toHaveText('1 secret')
-  await expect(page.getByTestId('rh-session-limits-summary')).toHaveText('Alpha box: 3')
-  // All five lines fit in the window under the opened fold.
-  await expect(page.getByTestId('rh-session-limits-toggle')).toBeInViewport()
+  // The groups that belong to one host are gone from here (their settings are in its Details).
+  for (const gone of ['host-servers-toggle', 'host-exec-grants-toggle', 'rh-session-limits-toggle']) await expect(page.getByTestId(gone)).toHaveCount(0)
   await ctx.sweep()
   ctx.ran('Pane/button#remote-hosts-more-toggle')
 
@@ -220,7 +343,11 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
   const relay = page.getByTestId('host-network-relay')
   const own = relay.locator('[data-relay="own"]')
   await expect(own).toBeDisabled()
-  await expect(own).toContainText('Pair a cloud companion first')
+  // Where a companion is paired: a real link to that page, by its name (2026-11-04 review: the
+  // text said "Settings > Cloud Companion", a page that is called Phones & Cloud).
+  const pair = relay.getByTestId('host-network-relay-pair')
+  await expect(pair).toHaveText('Phones & Cloud')
+  await expect(pair).toHaveAttribute('href', '/settings#cloud')
   for (const choice of ['none', 'public'] as const) {
     const radio = relay.locator(`[data-relay="${choice}"]`)
     const puts = routes.callsTo('PUT', '/api/hosts/net/relay').length
@@ -229,112 +356,19 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
     await expect(radio).toHaveAttribute('aria-checked', 'true')
   }
   await ctx.sweep()
-  ctx.ran('Relay/button#host-network-relay-toggle', 'Relay/radio[relay=own]', 'Relay/radio[relay=public]', 'Relay/radio[relay=none]')
-}
-
-export async function checkHostServers(ctx: StepCtx): Promise<void> {
-  const { page, routes } = ctx
-  await openGroup(page, 'host-servers')
-  ctx.ran('Walnut on a host/button#host-servers-toggle')
-  const saw = (key: string, take: (b: Record<string, unknown>) => unknown, want: (on: boolean) => unknown, also?: (on: boolean) => Promise<void>) => {
-    const base = routes.callsTo('PUT', `/api/host-servers/${key}`).length
-    let k = 0
-    return async (on: boolean) => {
-      expect(take((await routes.nth('PUT', `/api/host-servers/${key}`, base + ++k)).body as Record<string, unknown>)).toEqual(want(on))
-      await also?.(on)
-    }
-  }
-  await expectOpensTab(page, page.getByTestId('host-server-url-devbox'), ALPHA_URL)
-  await expectCopied(page, page.getByTestId('host-server-copy-url-devbox'), ALPHA_URL)
-  ctx.ran('Walnut on a host/link#host-server-url-<host>', 'Walnut on a host/button#host-server-copy-url-<host>')
-
-  // The 11 copy switches fold behind one line that says how many are on.
-  const kept = page.getByTestId('host-server-copies-toggle-devbox')
-  await expect(kept).toContainText('All 11 kinds copied')
-  // Folded rows stay mounted (hidden), like every SettingsDisclosure.
-  const copies = page.locator('[data-testid^="host-server-copy-devbox-"][role="switch"]')
-  await expect(copies.first()).toBeHidden()
-  await kept.click()
-  await expect(kept).toHaveAttribute('aria-expanded', 'true')
-  await expect(copies).toHaveCount(11)
-  for (const sw of await copies.all()) await expect(sw).toBeVisible()
-  await ctx.sweep()
-  for (const id of await copies.evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!))) {
-    const kind = id.replace('host-server-copy-devbox-', '')
-    // The line counts the switches that are on (one off can take a kind riding with it along).
-    await flip(page.getByTestId(id), saw('devbox', (b) => (b.copies as Record<string, boolean>)[kind], (on) => on, async () => {
-      await expect.poll(async () => {
-        const n = await copies.evaluateAll((els) => els.filter((el) => el.getAttribute('aria-checked') === 'true').length)
-        const text = (await kept.textContent()) ?? ''
-        return text.includes(n === 11 ? 'All 11 kinds copied' : `${n} of 11 copied`)
-      }).toBe(true)
-    }))
-  }
-  await kept.click()
-  await expect(copies.first()).toBeHidden()
-  ctx.ran('Walnut on a host/button#host-server-copies-toggle-<host>', 'Walnut on a host/switch#host-server-copy-<host>-<kind>')
-  await flip(page.getByTestId('host-server-expose-devbox'), saw('devbox', (b) => (b.expose as { enabled: boolean }).enabled, (on) => on))
-  ctx.ran('Walnut on a host/switch#host-server-expose-<host>')
-  await flip(page.getByTestId('host-server-enabled-downbox'), saw('downbox', (b) => b.enabled, (on) => on))
-  ctx.ran('Walnut on a host/switch#host-server-enabled-<host>')
-
-  const tunnelRetry = page.getByTestId('host-server-tunnel-retry-downbox')
-  await tunnelRetry.click()
-  await expect(page.getByTestId('host-server-tunnel-state-downbox')).toHaveText('Starting Test tunnel...')
-  expect(routes.callsTo('POST', '/api/host-servers/downbox/expose/retry')).toHaveLength(1)
-  ctx.ran('Walnut on a host/button#host-server-tunnel-retry-<host>')
-
-  // A running Walnut on an older build: its button says what it does (2026-11-04 review: "Try again").
-  const retry = page.getByTestId('host-server-retry-devbox')
-  await expect(retry).toHaveText('Update to this build')
-  const release = routes.gate('host-server')
-  await retry.click()
-  await expect(page.getByTestId('host-server-enabled-devbox')).toHaveAttribute('aria-busy', 'true')
-  release()
-  await expect(page.getByTestId('host-server-state-devbox')).toHaveText('Starting the new build...')
-  await expect(retry).toHaveCount(0)
-  ctx.ran('Walnut on a host/button#host-server-retry-<host>')
-}
-
-export async function checkExecGrants(ctx: StepCtx): Promise<void> {
-  const { page, routes } = ctx
-  await openGroup(page, 'host-exec-grants')
-  ctx.ran('Tasks using other hosts/button#host-exec-grants-toggle')
-  const ex = page.getByTestId('host-exec-grants')
-  // This Mac is a name here like every other host's (2026-11-04 review: "this Mac" and "This Mac").
-  await expect(ex.locator('[data-exec-host="__local__"] .settings-row-label')).toHaveText('This Mac')
-  const sw = ex.getByRole('switch', { name: 'Tasks on other hosts may use Alpha box' })
-  const execRow = ex.locator('[data-exec-host="devbox"]')
-  await expect(execRow).not.toContainText('Off:')
-  const base = routes.callsTo('PUT', '/api/v1/host-exec/hosts/devbox').length
-  let k = 0
-  await flip(sw, async (on) => {
-    expect((await routes.nth('PUT', '/api/v1/host-exec/hosts/devbox', base + ++k)).body).toEqual({ closed: !on })
-    // Only an Off host explains itself: the group's one line says what On means.
-    if (on) await expect(execRow).not.toContainText('Off:')
-    else await expect(execRow).toContainText('Off: nothing new starts there from another host.')
-  })
-  ctx.ran('Tasks using other hosts/switch:Tasks on other hosts may use <host>')
-  await ex.getByRole('button', { name: 'Revoke Nightly build on Alpha box' }).click()
-  await routes.nth('DELETE', '/api/v1/host-exec/grants/g-1', 1)
-  await expect(ex.locator('[data-grant-id="g-1"]')).toHaveCount(0)
-  ctx.ran('Tasks using other hosts/button:Revoke <task> on <host>')
-  await ctx.sweep()
-  await ex.getByRole('button', { name: 'Allow Lint job on Beta box' }).click()
-  expect((await routes.nth('POST', '/api/v1/host-exec/grants', 1)).body).toEqual({ task_id: 'task-lint', host: 'downbox' })
-  await expect(ex.locator('[data-denied]')).toHaveCount(0)
-  await expect(ex.getByRole('button', { name: 'Revoke Lint job on Beta box' })).toBeVisible()
-  ctx.ran('Tasks using other hosts/button:Allow <task> on <host>')
-  await ctx.sweep()
+  ctx.ran('Relay/button#host-network-relay-toggle', 'Relay/radio[relay=own]', 'Relay/radio[relay=public]', 'Relay/radio[relay=none]', 'Relay/link#host-network-relay-pair')
 }
 
 export async function checkSecrets(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
+  // Alpha box's "This host" switched this secret's copy before (remote-hosts-every-button-host.ts).
+  const puts = routes.callsTo('PUT', '/api/v1/secrets/github-read').length
   await openGroup(page, 'fleet-secrets')
   ctx.ran('Secrets/button#fleet-secrets-toggle')
   const sec = page.getByTestId('fleet-secrets')
   const editor = sec.getByTestId('secret-editor')
-  await sec.getByRole('button', { name: 'Edit github-read' }).click()
+  const edit = sec.getByRole('button', { name: 'Edit github-read' })
+  await edit.click()
   await expect(editor).toContainText('Value of github-read')
   await expect(editor.getByTestId('secret-value-saved')).toContainText('Saved in secrets, never synced.')
   // The Mac's own box is named as everywhere on the page.
@@ -354,28 +388,45 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   await eye.click()
   await expect(value).toHaveAttribute('type', 'password')
   ctx.ran('Secrets/button.secret-toggle')
-  await editor.getByRole('button', { name: 'Cancel' }).click()
+  // Escape is Cancel: nothing saved, the focus back on that secret's Edit (2026-11-04 review).
+  await value.press('Escape')
   await expect(editor).toHaveCount(0)
-  ctx.ran('Secrets/button:Cancel')
+  await expectRing(page, edit)
+  expect(routes.callsTo('PUT', '/api/v1/secrets/github-read')).toHaveLength(puts)
 
-  // Add focuses Name; a refused Save says why under the field it is about, and focuses it.
-  await sec.getByTestId('secret-add').click()
+  // Add focuses Name; Escape is Cancel and gives the focus back to Add.
+  const addBtn = sec.getByTestId('secret-add')
+  await addBtn.click()
   const name = editor.getByTestId('secret-name')
   await expect(name).toBeFocused()
+  await name.press('Escape')
+  await expect(editor).toHaveCount(0)
+  await expectRing(page, addBtn)
   ctx.ran('Secrets/button#secret-add')
+  // An empty Save: the first field it refuses comes into view, focused, with why beside it.
+  await addBtn.click()
   await editor.getByTestId('secret-save').click()
   const fieldError = editor.locator('.settings-row-error')
-  await expect(fieldError).toHaveText('A name is lower case letters, digits, . _ - (like github-read).')
+  await expect(fieldError).toHaveText('Give it a name, like github-read.')
   await expect(fieldError).toBeInViewport()
   await expect(name).toBeFocused()
+  await expect(name).toHaveAttribute('aria-invalid', 'true')
+  await name.fill('GitHub Read')
+  await editor.getByTestId('secret-save').click()
+  await expect(fieldError).toHaveText('A name is lower case letters, digits, . _ - (like github-read).')
   // Cancel takes the refusal with it, and so does opening the editor again (Codex review 1).
-  await editor.getByRole('button', { name: 'Cancel' }).click()
+  await editor.getByTestId('secret-cancel').click()
   await expect(editor).toHaveCount(0)
   await expect(sec.getByText('A name is lower case letters', { exact: false })).toHaveCount(0)
-  await sec.getByTestId('secret-add').click()
+  await expectRing(page, addBtn)
+  ctx.ran('Secrets/button#secret-cancel')
+  await addBtn.click()
   await expect(name).toBeFocused()
   await expect(editor.locator('.settings-row-error')).toHaveCount(0)
   await name.fill('deploy-key')
+  await editor.getByTestId('secret-save').click()
+  await expect(fieldError).toHaveText('Paste the value.')
+  await expect(editor.getByTestId('secret-value')).toBeFocused()
   await editor.getByTestId('secret-value').fill('v4lue')
   const toAlpha = editor.getByTestId('secret-host-devbox')
   await toAlpha.click()
@@ -394,40 +445,15 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   const added = sec.locator('[data-secret-name="deploy-key"]')
   await expect(added).toBeVisible()
   ctx.ran('Secrets/button#secret-save', 'Secrets/checkbox#secret-host-<host>', 'Secrets/checkbox#secret-sessions')
-  await armThenCancel(routes, sec.locator('[data-secret-name="github-read"] button[data-armed]'), 'Delete', 'Confirm delete')
+  // Delete asks the page's one way (Cancel focused, no timer); the delete removes the row.
+  await askThenCancel(page, routes, sec.getByRole('button', { name: 'Delete github-read' }), 'secret-delete-confirm', 'Delete github-read?')
+  await sec.getByRole('button', { name: 'Delete deploy-key' }).click()
+  const ask = page.getByTestId('secret-delete-confirm')
+  await expect(ask).toContainText('Its copy on every host is removed too.')
   await ctx.sweep()
-  const del = added.locator('button[data-armed]')
-  await del.click()
-  await del.click()
+  await ask.getByTestId('secret-delete-confirm-remove').click()
   await routes.nth('DELETE', '/api/v1/secrets/deploy-key', 1)
   await expect(added).toHaveCount(0)
-  ctx.ran('Secrets/button:Delete <secret>')
-}
-
-export async function checkSessionLimits(ctx: StepCtx): Promise<void> {
-  const { page, routes } = ctx
-  await openGroup(page, 'rh-session-limits')
-  ctx.ran('Session limits/button#rh-session-limits-toggle')
-  // Hosts by their names, and a host picked from a list (2026-11-04 review: "devbox", typed).
-  const limitRow = page.locator('[data-limit-host="devbox"]')
-  await expect(limitRow.locator('.settings-row-label')).toHaveText('Alpha box')
-  const puts = routes.callsTo('PUT', '/api/config').length
-  await limitRow.getByRole('button', { name: 'Remove the limit for Alpha box' }).click()
-  await expect(limitRow).toHaveCount(0)
-  expect((await routes.nth('PUT', '/api/config', puts + 1)).body as { session_limits: unknown }).toHaveProperty('session_limits', {})
-  ctx.ran('Session limits/button:Remove the limit for <host>')
-  const add = page.locator('.rh-limit-add').getByRole('button', { name: 'Add', exact: true })
-  await expect(add).toBeDisabled()
-  const picker = page.locator('#rh-limit-new-host')
-  const offered = await picker.locator('option:not([disabled])').allTextContents()
-  expect(offered.slice(0, 1)).toEqual(['This Mac'])
-  expect(offered).toEqual(expect.arrayContaining(['Alpha box', 'Beta box']))
-  expect(offered).not.toContain('devbox')
-  await picker.selectOption('devbox')
-  await page.locator('#rh-limit-new-max').fill('4')
-  await add.click()
-  await expect(page.locator('#rh-limit-devbox')).toHaveValue('4')
-  expect(((await routes.nth('PUT', '/api/config', puts + 2)).body as { session_limits: unknown }).session_limits).toEqual({ devbox: 4 })
-  ctx.ran('Session limits/combobox#rh-limit-new-host', 'Session limits/button:Add')
-  await ctx.sweep()
+  await expectRing(page, addBtn)
+  ctx.ran('Secrets/button:Delete <secret>', 'Secrets/button#secret-delete-confirm-cancel', 'Secrets/button#secret-delete-confirm-remove')
 }

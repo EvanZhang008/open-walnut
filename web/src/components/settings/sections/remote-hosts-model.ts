@@ -38,6 +38,8 @@ export interface HostEntry {
   excludeText?: string;
   /** The alias config.yaml had this row under when it was read; absent on a row added here. */
   savedAlias?: string;
+  /** A new row's alias still follows its hostname (aliasFromHostname): nobody typed one. */
+  aliasAuto?: boolean;
 }
 
 /** A found host Walnut does not connect to until the person says so (asked, or Not now). */

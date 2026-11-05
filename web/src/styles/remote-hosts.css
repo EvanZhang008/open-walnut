@@ -98,6 +98,48 @@ html body .wn-context-menu.rh-add-menu {
 .wn-context-menu.rh-row-menu { width: auto; min-width: 180px; }
 /* Remove asks once, naming the host; Cancel holds the focus. */
 .settings-row.rh-row-confirm .settings-row-label { font-weight: 500; }
+/* A new row's More column keeps its width with nothing in it. */
+.rh-row-more-space { visibility: hidden; cursor: default; }
+/* The row whose menu is open is the one marked (2026-11-04 review: a row the map landed on kept its ring). */
+.settings-row.rh-host-row[data-menu-open='true'] { box-shadow: inset 2px 0 0 var(--accent); }
+/* A row the header's count counts. */
+.rh-look-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--priority-important-text, var(--warning));
+}
+.rh-look-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* ── The header: the one "need a look" count beside Add host (it rides the sticky bar too) ── */
+.rh-header-actions { display: inline-flex; align-items: center; gap: 12px; }
+.rh-needs-look {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--priority-important-text, var(--warning));
+  cursor: pointer;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.rh-needs-look:hover { text-decoration: underline; }
+.rh-needs-look:focus-visible,
+.rh-needs-look[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rh-needs-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
 /* ── Details and Edit, open in place under their row ── */
 .rh-details,
@@ -171,6 +213,26 @@ html body .wn-context-menu.rh-add-menu {
 .rh-details :is(.hc-other, .hft-details):hover { text-decoration: underline; color: var(--accent); }
 .rh-details .rh-readiness-actions .settings-button-text,
 .rh-details .rh-host-detail .settings-button-text { padding-left: 0; padding-right: 0; }
+/* The System line with Probe again on its right, then when it was probed and read. */
+.rh-details .hf-card-sys-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
+.rh-details .hf-card-sys-row > .settings-button { flex: none; margin-top: -5px; }
+.rh-details .hf-card-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: -7px 0 0; font-size: 12px; line-height: 16px; color: var(--fg-muted); }
+.rh-details .hf-card-meta:empty { display: none; }
+.hf-probe-note[data-tone='bad'] { color: var(--error); }
+/* The command by hand, behind its own toggle (the row's button is the fix). */
+.rh-by-hand { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; width: 100%; }
+/* "This host": the host's own settings, a part of its Details under a small heading. */
+.rh-this-host-part { display: flex; flex-direction: column; min-width: 0; margin: 0 calc(-1 * var(--settings-row-pad-x, 14px)); }
+.rh-this-host-heading {
+  margin: 4px 0 2px;
+  padding: 0 var(--settings-row-pad-x, 14px);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--fg-secondary, var(--fg));
+}
+.rh-host-server-part { display: contents; }
+.rh-this-host-note { margin: 4px 0 0; padding: 0 var(--settings-row-pad-x, 14px); font-size: 12px; line-height: 16px; color: var(--fg-muted); }
 .rh-edit { padding-bottom: 4px; }
 .settings-row.rh-edit-done .settings-row-actions { margin-left: auto; }
 
@@ -216,6 +278,8 @@ html body .wn-context-menu.rh-add-menu {
 .settings-row.rh-join-making { outline: none; }
 .rh-join-making-label { display: inline-flex; align-items: center; gap: 8px; }
 .rh-join-error-text { color: var(--error); }
+.rh-join-error-why { color: var(--settings-help-fg, var(--fg-muted)); }
+a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-decoration: none; }
 .rh-join-wait { font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); font-variant-numeric: tabular-nums; }
 .rh-join-more {
   appearance: none;
@@ -244,6 +308,18 @@ html body .wn-context-menu.rh-add-menu {
 .hf-topo-node:focus-visible .hf-topo-box,
 .hf-topo-node[data-landed='true'] .hf-topo-box { stroke: var(--accent); stroke-width: 2.5px; }
 .hf-topo-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; }
+
+/* ── The network map sits inside its own box, under its heading ── */
+.hf-topo-panel { padding: 6px 10px 10px; }
+
+/* ── Desktop: the page may grow past the 680 px column (2026-11-04 review: Details and More
+   settings wrapped in 680 px with half the window empty). 700 px keeps the column. ── */
+@media (min-width: 1100px) {
+  .settings-container .settings-pane-inner:has(#remote-hosts) { max-width: 920px; }
+  .settings-container .settings-pane:has(#remote-hosts) .settings-pane-stickybar-inner {
+    padding-right: max(var(--settings-pane-pad-x, 0px), calc(100% + var(--settings-pane-pad-x, 0px) - 920px));
+  }
+}
 
 /* ── 700 px and under: one column; the action and More stay on the name line, 44 px tall ── */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {

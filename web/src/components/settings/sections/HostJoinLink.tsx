@@ -4,12 +4,17 @@
  * runs (macOS, Linux or Windows; the pick is remembered); the notes (Windows signing, the
  * PowerShell way, how the machines reach each other) fold under "More about this link".
  * 2026-11-04 review: six lines of notes stood before the command, so the command did not
- * stand out. Done puts the card away (there is no way to call a link back: it ends on its own
- * after 10 minutes). While a link is made, "Making a link..." holds its place; a link that
- * could not be made says why there, with Try again.
+ * stand out. Close puts the card away; a link that still waits keeps working, and the list says
+ * so in its place ("Link still works for 9 min", with Cancel link: HostJoinClosed). While a link
+ * is made, "Making a link..." holds its place; a link that could not be made says why there,
+ * with the fix its reason names (join-link-model.ts): start the host network, Phones & Cloud,
+ * or Try again.
  */
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState, type KeyboardEvent } from 'react';
+import { Link } from 'react-router-dom';
 import type { NetInvite, NetRelay } from '@/api/hosts-net';
+import { closedLinkNote, joinFix, type JoinFailure } from './join-link-model';
+import { focusLanded } from '@/utils/focus-landed';
 import { usePageView } from '@/utils/view-memory';
 import { oneOf } from '@/hooks/usePersistentState';
 import { SettingsRow } from '../SettingsSection';
@@ -51,6 +56,8 @@ interface Props {
   making: boolean;
   onNewLink: () => void;
   onDone: () => void;
+  /** The person did something with the card (copied, picked a system): it is no longer untouched. */
+  onTouched?: () => void;
 }
 
 /** The row in the link's place while it is made (in view, and focused, from the press). */
@@ -68,26 +75,116 @@ export function HostJoinMaking() {
   );
 }
 
-/** Why the link could not be made, in its place, with Try again (which takes the focus). */
-export function HostJoinError({ error, onRetry, onDone }: { error: string; onRetry: () => void; onDone: () => void }) {
+/** Why the link could not be made, in its place, with the fix its reason names (which takes the focus). */
+export function HostJoinError({ error, liveLink, starting, onRetry, onStart, onShowOpen, onDone }: {
+  error: JoinFailure;
+  /** A link made earlier still waits (out of sight). */
+  liveLink: boolean;
+  starting: boolean;
+  onRetry: () => void;
+  onStart: () => void;
+  onShowOpen: () => void;
+  onDone: () => void;
+}) {
+  const fix = joinFix(error.code, liveLink);
+  const pageLink = (words: string) => (
+    <Link className="settings-button settings-button-default rh-join-fix" to="/settings#cloud" data-testid="host-network-open-cloud">
+      <span className="settings-button-stack"><span className="settings-button-label">{words}</span></span>
+    </Link>
+  );
+  const why = fix === 'start' ? 'Start it here, and Walnut makes the link.'
+    : fix === 'pair' ? 'Pair a cloud companion in Phones & Cloud, then make the link.'
+    : fix === 'companion' ? 'Update your cloud companion in Phones & Cloud, then make the link.'
+    : fix === 'show-open' ? 'Your link made a moment ago still works.'
+    : null;
   return (
     <SettingsRow
       className="rh-join rh-join-error"
       state="error"
       data-testid="host-network-invite-error"
+      data-fix={fix}
       label="Could not make a link"
-      help={<span className="rh-join-error-text" role="alert">{error}.</span>}
+      help={
+        <span className="rh-join-error-text" role="alert">
+          {`${error.text}.`}
+          {why && <span className="rh-join-error-why"> {why}</span>}
+        </span>
+      }
       control={
         <>
-          <SettingsButton variant="text" onClick={onDone} data-testid="host-network-error-done">Done</SettingsButton>
-          <SettingsButton onClick={onRetry} data-testid="host-network-try-again">Try again</SettingsButton>
+          <SettingsButton variant="text" onClick={onDone} data-testid="host-network-error-done">Close</SettingsButton>
+          {fix === 'start' && (
+            <SettingsButton holdFocus busy={starting} busyLabel="Starting..." reserve={['Start the host network', 'Starting...']} onClick={onStart} data-testid="host-network-start">
+              Start the host network
+            </SettingsButton>
+          )}
+          {fix === 'pair' && pageLink('Open Phones & Cloud')}
+          {fix === 'companion' && pageLink('Open Phones & Cloud')}
+          {fix === 'show-open' && <SettingsButton onClick={onShowOpen} data-testid="host-network-show-open">Show the link</SettingsButton>}
+          {fix === 'retry' && <SettingsButton onClick={onRetry} data-testid="host-network-try-again">Try again</SettingsButton>}
         </>
       }
     />
   );
 }
 
-export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDone }: Props) {
+/**
+ * In the closed card's place: a link that still waits says how long it works, with Cancel link
+ * beside it; one called back says so, with Close. The minutes tick here, not in the section.
+ */
+export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: {
+  invite: NetInvite;
+  cancelling: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const waiting = invite.state === 'waiting';
+  const doneId = `rh-join-closed-${useId().replace(/:/g, '')}`;
+  useEffect(() => {
+    if (!waiting) return;
+    const clock = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(clock);
+  }, [waiting]);
+  // Cancel link went away with its press: the focus goes to Close, beside the words that say what it did.
+  const cancelled = invite.state === 'cancelled';
+  useEffect(() => {
+    if (!cancelled) return;
+    const raf = requestAnimationFrame(() => focusLanded(document.getElementById(doneId)));
+    return () => cancelAnimationFrame(raf);
+  }, [cancelled, doneId]);
+  if (cancelled) {
+    return (
+      <SettingsRow
+        className="rh-join rh-join-closed"
+        data-testid="host-network-closed"
+        data-invite-state="cancelled"
+        label={<span role="status">Link cancelled.</span>}
+        help="Its code takes no machine in now."
+        control={<SettingsButton variant="text" onClick={onDone} id={doneId} data-testid="host-network-closed-done">Close</SettingsButton>}
+      />
+    );
+  }
+  if (!waiting || now > invite.expiresAt) return null;
+  return (
+    <SettingsRow
+      className="rh-join rh-join-closed"
+      data-testid="host-network-closed"
+      data-invite-state="waiting"
+      label={closedLinkNote(invite.expiresAt, now)}
+      help="A machine that runs it still joins. Join with a link shows it again."
+      error={error ?? undefined}
+      control={
+        <SettingsButton variant="text" holdFocus busy={cancelling} busyLabel="Cancelling..." reserve={['Cancel link', 'Cancelling...']} onClick={onCancel} data-testid="host-network-cancel">
+          Cancel link
+        </SettingsButton>
+      }
+    />
+  );
+}
+
+export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDone, onTouched }: Props) {
   // The countdown ticks here, so only this row re-renders each second.
   const [now, setNow] = useState(() => Date.now());
   const waiting = invite.state === 'waiting';
@@ -108,7 +205,8 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
   if (state !== 'waiting') {
     const label = state === 'joined'
       ? `${invite.member?.name ?? 'The machine'} joined.`
-      : state === 'failed' ? `This link did not work${invite.error ? `: ${invite.error}` : '.'}` : 'This link expired.';
+      : state === 'failed' ? `This link did not work${invite.error ? `: ${invite.error}` : '.'}`
+      : state === 'cancelled' ? 'This link was cancelled.' : 'This link expired.';
     return (
       <SettingsRow
         className="rh-join"
@@ -118,7 +216,7 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
         help={state === 'joined' ? 'It is in the list below.' : 'A link works once, for 10 minutes.'}
         control={
           <>
-            <SettingsButton variant={state === 'joined' ? 'default' : 'text'} onClick={onDone} data-testid="host-network-done">Done</SettingsButton>
+            <SettingsButton variant={state === 'joined' ? 'default' : 'text'} onClick={onDone} data-testid="host-network-done">Close</SettingsButton>
             {state !== 'joined' && <SettingsButton onClick={onNewLink} disabled={making} data-testid="host-network-new-link">New link</SettingsButton>}
           </>
         }
@@ -133,6 +231,8 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
       data-testid="host-network-invite"
       data-invite-state="waiting"
       data-os={os}
+      onPointerDown={onTouched}
+      onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') onTouched?.(); }}
       wide
       label="Run this on the new machine"
       control={
@@ -172,7 +272,7 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
               {`Waiting for the machine... The link works once, for 10 minutes (${left(invite.expiresAt - now)} left).`}
               {companion === false && ' Keep this Mac awake and online until it joins.'}
             </span>
-            <SettingsButton onClick={onDone} title="Put this link away. It still works until it ends." data-testid="host-network-done">Done</SettingsButton>
+            <SettingsButton onClick={onDone} title="Put this link away. It still works until it ends, and you can cancel it." data-testid="host-network-done">Close</SettingsButton>
           </span>
           <button
             type="button"

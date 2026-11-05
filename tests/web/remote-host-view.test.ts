@@ -1,11 +1,11 @@
 /**
- * Settings › Remote Hosts, one row's status line and detail block, rendered in
- * every state (spec 5.2; checklist C6, C9, C24, C25, C27, C35, C78):
- * a connect failure reads 'Not connected' with Retry, and the SAME
- * HostFailureText the banner and picker use sits in its own block (never inside
- * .rh-status); a reconnect names its last cause and keeps Connect now enabled;
- * a test server says 'Off on this test server' with no button; a replica shows
- * no Retry / Connect now.
+ * Settings › Remote Hosts, one row's state line with its one action (useLinkedHostRow.tsx, as
+ * HostRow draws them) and its detail block, rendered in every state (spec 5.2; checklist C6,
+ * C9, C24, C25, C27, C35, C78): a connect failure offers Retry SSH (2026-11-04 review: two
+ * "Retry" buttons on the page meant different things), and the SAME HostFailureText the
+ * banner and picker use sits in its own block (never in the row's line); a reconnect keeps
+ * Connect now enabled; a host switched off says Off with no button; a test server says 'Off on
+ * this test server' with no button; a replica shows no Retry SSH / Connect now.
  */
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { parseHTML } from 'linkedom'
@@ -26,7 +26,18 @@ vi.mock('@/hooks/useHostStatus', () => ({
 vi.mock('@/api/hosts', () => ({ connectHost: async () => current, checkHostReadiness: async () => current }))
 vi.mock('@/api/config', () => ({ fetchIsCloudReplica: async () => replica }))
 
-const { RemoteHostStatus, RemoteHostDetail } = await import('../../web/src/components/settings/sections/RemoteHostStatus')
+const { RemoteHostDetail } = await import('../../web/src/components/settings/sections/RemoteHostStatus')
+const { useLinkedHostRow } = await import('../../web/src/components/settings/sections/useLinkedHostRow')
+
+/** The row's dot, its one state line and its one action, as HostRow.tsx draws them. */
+function Line({ enabled = true }: { enabled?: boolean }) {
+  const r = useLinkedHostRow({ alias: 'keybox', name: 'Key box', enabled, saved: true, now: clock })
+  return createElement('div', null,
+    r.dot,
+    createElement('span', { className: 'rh-row-state', title: r.stateTitle }, r.state),
+    r.primary ? createElement('button', { disabled: r.primary.disabled, 'data-testid': r.primary.testId }, r.primary.label) : null,
+    ...r.lines)
+}
 
 const base = {
   host: 'keybox', label: 'Key box', hostname: 'key.example.com', connected: false, phase: 'idle',
@@ -36,22 +47,22 @@ const HINT = 'Walnut runs `ssh alice@key.example.com` without a password prompt.
 const auth = { ...base, phase: 'failed', error: 'alice@key.example.com: Permission denied (publickey).', kind: 'auth', hint: HINT, retryable: false } as HostStatus
 const row = (s: HostStatus | undefined) => {
   current = s
-  const line = renderToStaticMarkup(createElement(RemoteHostStatus, { alias: 'keybox', name: 'Key box' }))
+  const line = renderToStaticMarkup(createElement(Line))
   const detail = renderToStaticMarkup(createElement(RemoteHostDetail, { alias: 'keybox', name: 'Key box' }))
   return { line, detail }
 }
 /** The row's connect button: its visible label (the reserve stack repeats labels in data attributes only) and state. */
 const button = (html: string) => {
   const b = html.match(/<button[\s\S]*?<\/button>/)?.[0]
-  return b ? { label: text(b.replace(/data-r\d="[^"]*"/g, '')).trim(), disabled: /<button[^>]*disabled/.test(b), cls: b.includes('rh-connect-btn') } : null
+  return b ? { label: text(b.replace(/data-r\d="[^"]*"/g, '')).trim(), disabled: /<button[^>]*disabled/.test(b), cls: b.includes('rh-row-connect') } : null
 }
 const text = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
 
 describe('connect failure (C6, C27, C78)', () => {
-  it('the line is short: "Not connected" + Retry (even when retryable is false), no countdown', () => {
+  it('the line is short, with Retry SSH (even when retryable is false), no countdown', () => {
     const { line, detail } = row(auth)
-    expect(text(line)).toContain('Not connected')
-    expect(button(line)).toMatchObject({ label: 'Retry', disabled: false, cls: true })
+    expect(text(line)).toContain('Key box')
+    expect(button(line)).toMatchObject({ label: 'Retry SSH', disabled: false, cls: true })
     expect(text(line + detail)).not.toMatch(/tries again in/)
     expect(text(line + detail)).not.toContain("isn't reachable right now")
   })
@@ -83,32 +94,30 @@ describe('reconnecting, connecting, healthy (C9)', () => {
     expect(text(detail)).toContain('Check the VPN.')
   })
 
-  it('an attempt in flight: the phase and a disabled "Retrying..." (never "Connecting...")', () => {
-    const { line } = row({ ...base, phase: 'ssh', phaseLabel: 'Opening an SSH connection to Key box…', attemptStartedAt: clock - 4_000 } as HostStatus)
-    expect(button(line)).toMatchObject({ label: 'Retrying...', disabled: true })
-    expect(text(line)).not.toContain('Connecting...')
+  it('an attempt in flight: the phase with its time, and a disabled "Connecting..."', () => {
+    const { line } = row({ ...base, phase: 'ssh', phaseLabel: 'Opening an SSH connection to Key box\u2026', attemptStartedAt: clock - 4_000 } as HostStatus)
+    expect(button(line)).toMatchObject({ label: 'Connecting...', disabled: true })
+    expect(text(line)).not.toContain('\u2026')
     expect(text(line)).toContain('4s')
   })
 
-  it('healthy: "Connected", no button, no detail', () => {
+  it('healthy: no button, no detail', () => {
     const { line, detail } = row({ ...base, connected: true, phase: 'connected', readiness: { checkedAt: clock, problems: [] } } as HostStatus)
-    expect(text(line)).toContain('Connected')
-    expect(line).not.toContain('rh-connect-btn')
+    expect(line).not.toContain('<button')
     expect(text(detail)).toBe('')
   })
 })
 
 describe('a host switched off in Settings', () => {
-  it('reads Disabled with no button and no detail, whatever the store still holds (never a Connect now that answers 409)', () => {
+  it('reads Off with no button, whatever the store still holds (never a Connect now that answers 409)', () => {
     for (const s of [undefined, auth, { ...base, connected: true, phase: 'connected' } as HostStatus]) {
       current = s
-      const line = renderToStaticMarkup(createElement(RemoteHostStatus, { alias: 'keybox', name: 'Key box', enabled: false }))
-      const detail = renderToStaticMarkup(createElement(RemoteHostDetail, { alias: 'keybox', name: 'Key box', enabled: false }))
-      expect(text(line)).toContain('Disabled')
+      const line = renderToStaticMarkup(createElement(Line, { enabled: false }))
+      // Details are not offered for a host switched off (RemoteHostSshRow passes linked = enabled).
+      expect(text(line)).toContain('Off: Walnut does not connect to it.')
       expect(text(line)).not.toContain('Not connected')
       expect(line).not.toContain('<button')
       expect(line).toContain('data-kind="off"')
-      expect(detail).toBe('')
     }
   })
 })
@@ -131,11 +140,41 @@ describe('test server and replica (C24, C25)', () => {
     const host = dom.document.createElement('div')
     dom.document.body.appendChild(host)
     const root = createRoot(host)
-    await act(async () => { root.render(createElement(RemoteHostStatus, { alias: 'keybox', name: 'Key box' })) })
+    await act(async () => { root.render(createElement(Line)) })
     await act(async () => { await Promise.resolve() })
-    expect(host.textContent).toContain('Not connected')
-    expect(host.querySelector('.rh-connect-btn')).toBeNull()
+    expect(host.textContent).toContain('Key box')
+    expect(host.querySelector('[data-testid="rh-row-connect"]')).toBeNull()
     await act(async () => { root.unmount() })
     replica = false
+  })
+})
+
+// Mounted after the replica test: useIsCloudReplica keeps the first answer it read.
+describe('what a finished fix did', () => {
+  it('reads on the row, and goes away when its 15 minutes run out, with no new push', async () => {
+    const { FIX_NOTE_MS } = await import('../../web/src/utils/host-readiness')
+    const dom = parseHTML('<!DOCTYPE html><html><head></head><body></body></html>')
+    const g = globalThis as unknown as Record<string, unknown>
+    g.window = dom.window; g.document = dom.document; g.IS_REACT_ACT_ENVIRONMENT = true
+    vi.useFakeTimers()
+    current = {
+      ...base, connected: true, phase: 'connected',
+      readiness: {
+        checkedAt: clock, problems: [], dtach: { found: true },
+        fixes: [{ action: 'install-compiler', ok: true, finishedAt: 1, ageMs: FIX_NOTE_MS - 60_000, text: 'Installed gcc' }],
+      },
+    } as unknown as HostStatus
+    const host = dom.document.createElement('div')
+    dom.document.body.appendChild(host)
+    const root = createRoot(host)
+    try {
+      await act(async () => { root.render(createElement(Line)) })
+      expect(host.querySelector('[data-testid="rh-row-fix-note"]')?.textContent).toBe('Installed gcc.')
+      await act(async () => { vi.advanceTimersByTime(61_000) })
+      expect(host.querySelector('[data-testid="rh-row-fix-note"]')).toBeNull()
+    } finally {
+      await act(async () => { root.unmount() })
+      vi.useRealTimers()
+    }
   })
 })

@@ -7,10 +7,11 @@
  *    may have been used just before, and a code works once;
  *  - joins a stopped run never read are handed back, then walnut-net forgets every invite
  *    this run did not make; a walnut-net that does not answer decides nothing;
- *  - at most 16 links are open (all walnut-net takes).
+ *  - at most 16 links are open (all walnut-net takes);
+ *  - a link called back is taken out of walnut-net, unless a machine already used it.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { clearLeftovers, forgetLocalInvite, leftoverJoins, localInviteState, makeLocalInvite, resetLocalInvitesForTest, type Daemon, type LocalJoin } from '../../../src/core/net/net-local.js'
+import { cancelLocalInvite, clearLeftovers, forgetLocalInvite, leftoverJoins, localInviteState, makeLocalInvite, resetLocalInvitesForTest, type Daemon, type LocalJoin } from '../../../src/core/net/net-local.js'
 import { decodeTicket } from '../../../src/core/net/join-ticket.js'
 import { netKey } from '../../helpers/net-keys.js'
 
@@ -59,6 +60,43 @@ describe('invites with no companion', () => {
     expect(d.held()).toEqual([inv.id])
     await forgetLocalInvite(d, inv.id)
     expect(d.held()).toEqual([])
+  })
+
+  it('a link called back leaves walnut-net; one a machine already used is kept as joined', async () => {
+    const d = fakeDaemon()
+    const a = await makeLocalInvite(d, { macId: MAC, relayMode: 'none' })
+    const b = await makeLocalInvite(d, { macId: MAC, relayMode: 'none' })
+    expect(await cancelLocalInvite(d, a.id)).toBe('cancelled')
+    expect(d.held()).toEqual([b.id])
+    expect((await localInviteState(d, a.id)).state).toBe('expired')
+    d.use(b.id, join)
+    expect(await cancelLocalInvite(d, b.id)).toBe('joined')
+    expect(d.held()).toEqual([b.id])
+    expect(await localInviteState(d, b.id)).toEqual({ state: 'joined', join })
+  })
+
+  it('a call back walnut-net did not take keeps the link working, and says why', async () => {
+    const d = fakeDaemon()
+    const inv = await makeLocalInvite(d, { macId: MAC, relayMode: 'none' })
+    const send = d.send.bind(d)
+    d.send = async (cmd, params) => (cmd === 'net.invites' ? { ok: false, error: 'busy' } : send(cmd, params))
+    await expect(cancelLocalInvite(d, inv.id)).rejects.toThrow(/did not take the invite: busy/)
+    d.send = send
+    expect(d.held()).toEqual([inv.id])
+    expect((await localInviteState(d, inv.id)).state).toBe('waiting')
+  })
+
+  it('a call back walnut-net does not answer to is refused, and the link keeps working (it may have been used)', async () => {
+    const d = fakeDaemon()
+    const inv = await makeLocalInvite(d, { macId: MAC, relayMode: 'none' })
+    const send = d.send.bind(d)
+    d.send = async (cmd, params) => (cmd === 'net.status' ? { ok: true, node: null } : send(cmd, params))
+    await expect(cancelLocalInvite(d, inv.id)).rejects.toMatchObject({ code: 'net_no_answer', message: expect.stringMatching(/did not answer, so the link was not called back/) })
+    d.send = async (cmd, params) => { if (cmd === 'net.status') throw new Error('timed out'); return send(cmd, params) }
+    await expect(cancelLocalInvite(d, inv.id)).rejects.toMatchObject({ code: 'net_no_answer' })
+    d.send = send
+    expect(d.held()).toEqual([inv.id])
+    expect((await localInviteState(d, inv.id)).state).toBe('waiting')
   })
 
   it('decides nothing while walnut-net does not answer, and pushes lists in order', async () => {

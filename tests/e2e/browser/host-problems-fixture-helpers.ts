@@ -78,7 +78,7 @@ export async function openRemoteHosts(page: Page): Promise<void> {
   await expect(page.locator('#remote-hosts')).toBeVisible({ timeout: 20_000 })
 }
 
-/** Remote Hosts' More settings (Relay, Walnut on a host, tasks, secrets, session limits): closed by default. */
+/** Remote Hosts' More settings (the relay and the secrets; a host's own settings are in its Details): closed by default. */
 export async function openRemoteHostsMore(page: Page): Promise<void> {
   const toggle = page.getByTestId('remote-hosts-more-toggle')
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()

@@ -2,7 +2,7 @@
  * Fixture server for editing hidden secrets in Settings: a plugin's settings
  * form (lists of secret keys, a URL with a password), the tunnel options form
  * (Phones & Cloud, Open from a browser) and the host server tunnel form
- * (Remote hosts, Walnut on a host).
+ * (Remote Hosts, a host's Details, Walnut on this host).
  *
  * Two fixture plugins written into a throwaway home's plugins/ dir: `acmeform`,
  * whose manifest declares the settings form and whose server registers a tunnel

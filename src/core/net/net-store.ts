@@ -274,6 +274,19 @@ export function redeemInvite(input: { code: unknown; endpointId: unknown; hostna
   }
 }
 
+/**
+ * The owner calls a link back before a machine used it: the code works no more. One already
+ * used stays joined (the machine is in), and an unknown id is refused like inviteStatus does.
+ */
+export function cancelInvite(id: string, now = Date.now()): { state: 'cancelled' | 'joined' | 'expired' } {
+  sweep(now)
+  const inv = invites.get(id)
+  if (!inv) throw new NetStoreError(404, 'unknown_invite', 'No such invite (it may have expired)')
+  if (inv.used) return { state: 'joined' }
+  invites.delete(id)
+  return { state: now > inv.expiresAt ? 'expired' : 'cancelled' }
+}
+
 export function inviteStatus(id: string, now = Date.now()): { state: 'waiting' | 'joined' | 'expired'; expiresAt: number; member?: { id: string; name: string; platform?: string } } {
   sweep(now)
   const inv = invites.get(id)

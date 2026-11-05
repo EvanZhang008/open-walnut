@@ -2,7 +2,7 @@
  * Settings > Remote Hosts: one machine that joined with a link, a row of the list beside the
  * SSH hosts (useHostNetwork.ts): its name, its system and how this Mac reaches it, a Link
  * tag, its state line and one action (useLinkedHostRow.tsx). Remove, in its menu, also takes
- * it off the companion's list.
+ * it off the list your cloud companion keeps.
  */
 import type { FleetHost } from '@/api/hosts-fleet';
 import type { NetMachine, NetRelay } from '@/api/hosts-net';
@@ -36,7 +36,7 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
   // "Linux x86_64, direct, 31 ms": the path reads on in the platform's sentence.
   const path = pathLabel(m, relay);
   const sub = [platformLabel(m.platform), path && path[0].toLowerCase() + path.slice(1)].filter(Boolean).join(', ');
-  const live = useLinkedHostRow({ alias: m.host, name, enabled: m.enabled, saved: true, card, now });
+  const live = useLinkedHostRow({ alias: m.host, name, enabled: m.enabled, saved: true, card, now, via: 'net' });
   return (
     <HostRow
       rowKey={`net:${m.host}`}
@@ -54,10 +54,15 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
         ...(live.hidden ? [{ key: 'show-again', label: 'Show again on the home page', onSelect: live.showOnBanner }] : []),
       ]}
       onRemove={onRemove}
-      removeNote="It leaves your machines (and the companion's list): joining again takes a new link."
+      removeNote="It leaves your machines, on this Mac and on your cloud companion: joining again takes a new link."
       needsLook={live.needsLook}
+      report={{
+        host: m.host, counted: true, online: live.online, off: !m.enabled, local: false, via: 'net', phone: card?.server?.phone === 'connected',
+        rttMs: live.online && typeof m.rttMs === 'number' ? Math.round(m.rttMs) : null,
+        sessions: card?.sessions.running ?? null, spendUsd: card?.spend?.last30dUsd ?? null, sub,
+      }}
       data={{ 'data-net-path': m.path }}
-      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked profile={false} />}
+      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked kind="net" />}
     />
   );
 }

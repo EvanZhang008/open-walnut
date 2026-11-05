@@ -281,7 +281,7 @@ test('N3-18: a stacked control starts at the label and spans the row', async ({ 
   await expect(page.locator('#plugin-store')).not.toContainText('On, with no sign-in state to report.')
 })
 
-test('N3-20, N3-21, N3-22: host row shows its address, Edit and Remove share its menu, limits are labelled rows, Shell setup stacks', async ({ page }) => {
+test('N3-20, N3-21, N3-22: host row shows its address, Edit and Remove share its menu, its limit is a labelled row, Shell setup stacks', async ({ page }) => {
   await recordWrites(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await openSettings(page)
@@ -297,11 +297,15 @@ test('N3-20, N3-21, N3-22: host row shows its address, Edit and Remove share its
   await expect(items.last()).toHaveText('Remove')
   await expect(items.last()).toHaveClass(/danger/)
   await page.keyboard.press('Escape')
-  // Session limits, under More settings: labelled rows, the last one adds.
-  await page.getByTestId('remote-hosts-more-toggle').click()
-  await page.getByTestId('rh-session-limits-toggle').click()
-  const add = page.locator('.rh-limit-add')
-  await expect(add.locator('.settings-row-label')).toHaveText('Add limit')
+  // Its session limit is a labelled row with its own box, in its Details under This host
+  // (2026-11-04 review: the limits sat in a group of their own under More settings, with an
+  // "Add limit" row); never a key/value editor.
+  await expect(page.getByTestId('rh-session-limits-toggle')).toHaveCount(0)
+  await host.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
+  const limit = page.getByTestId('rh-details').getByTestId('rh-host-limit')
+  await expect(limit.locator('.settings-row-label')).toHaveText('Session limit')
+  await expect(limit.locator('input[id^="rh-limit-"]')).toBeVisible()
   await expect(page.locator('.kv-editor')).toHaveCount(0)
   await host.getByTestId('rh-row-more').click()
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Edit', exact: true }).click()

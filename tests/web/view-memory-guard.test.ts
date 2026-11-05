@@ -70,6 +70,7 @@ const PASSING: Record<string, string> = {
   'components/common/PageFind.tsx#scope': 'the find bar, a passing search',
   'components/notes/MarkdownEditorPanel.tsx#rawMode': 'source editing of the note open now; its flush path assumes a note opens rendered',
   'components/settings/sections/ReposSection.tsx#showForm': 'the add-repository form, a dialog',
+  'components/settings/sections/useSshHostEditor.ts#aliasShown': 'which new rows say their alias refusal under the field, from a Save or a left field; the row\'s state line says it at all times',
   'components/settings/sections/SttModelRows.tsx#showAll': 'the list expanded past its first rows for one look',
   'components/settings/sections/TagsSection.tsx#filter': 'a typed search',
   'components/settings/sections/cloud/CompanionUpdatesRow.tsx#view': 'one update\'s notes, an overlay',

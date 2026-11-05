@@ -4,8 +4,10 @@
  * a copy of this Mac's data on another server (a host's Walnut, the cloud
  * companion) refused three rounds in a row a copy that would remove most of its
  * rows, in case this Mac lost them. One row per refusal says how many rows would
- * go; "Remove them there" (two clicks) confirms it for exactly the rows the user
- * read, and the row then says the next copy takes it. A copy too old to take
+ * go; "Remove them there" asks first, the page's one way ("Remove them from the copy on
+ * Beta box?", Cancel focused, Remove beside it: RemoveConfirmRow; 2026-11-04 review: it armed
+ * a red button that turned back by itself after 3 s, with no Cancel), confirms it for exactly
+ * the rows the user read, and the row then says the next copy takes it. A copy too old to take
  * the confirm says it must be updated there first, with no button. A row,
  * never a letter; nothing at all while every copy works. An error under a row
  * (a 409: the rows moved) is about what the row said when it came: a later
@@ -16,11 +18,13 @@
  * POST /api/replicas/confirm-removal with the refusal's count and keys.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '@/api/client';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
-import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { SettingsButton } from '../inputs/SettingsButton';
+import { focusLanded } from '@/utils/focus-landed';
+import { RemoveConfirmRow } from './RemoveConfirmRow';
 import { saveErrorMessage } from '../settings-pane-context';
 import { replicaRemovalRows, type ReplicaRemovalRow, type ReplicasStatusResponse, type ReplicaTargetKind } from './replica-removal-status';
 
@@ -29,6 +33,8 @@ const PATH = '/api/replicas/status';
 export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind; labels?: Record<string, string> }) {
   const [data, setData] = useState<ReplicasStatusResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** The row whose "Remove them there" asks now. */
+  const [asking, setAsking] = useState<string | null>(null);
   /** A row's error, and the row's `about` it was shown with. */
   const [errors, setErrors] = useState<Record<string, { text: string; about: string }>>({});
   /** This server keeps no follower's copies (a follower's own console answers 404): stop asking. */
@@ -93,6 +99,7 @@ export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind
     // The error is about the row as this read shows it (a 409 means it moved): a later change takes it away.
     const fresh = await load();
     setBusy(null);
+    setAsking(null);
     const text = failed;
     if (text === null) return;
     const shown = fresh ? replicaRemovalRows(fresh, only).find((r) => r.id === row.id) : row;
@@ -100,31 +107,46 @@ export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind
   };
 
   if (rows.length === 0) return null;
+  const backTo = (id: string) => requestAnimationFrame(() => focusLanded(document.querySelector<HTMLElement>(`[data-testid="replica-removal-confirm-${CSS.escape(id)}"]`)));
   return (
     <SettingsGroup heading="Removals to confirm" data-testid={`replica-removals${only ? `-${only}` : ''}`}>
-      {rows.map((row) => (
-        <SettingsRow
-          key={row.id}
-          data-testid={`replica-removal-${row.id}`}
-          data-removal={row.state}
-          state={row.state === 'armed' ? undefined : 'warning'}
-          label={labels?.[row.target] ?? row.label}
-          help={<span data-testid={`replica-removal-text-${row.id}`}>{row.text}</span>}
-          error={errors[row.id]?.about === row.about ? errors[row.id].text : undefined}
-          control={row.state === 'refused' ? (
-            <InlineConfirmButton
-              // Quiet until armed, like every Remove on the Remote Hosts page: red only in its Confirm.
-              quiet
-              label="Remove them there"
-              confirmLabel="Confirm remove"
-              disabled={busy === row.id}
-              aria-label={`Remove them from the copy on ${labels?.[row.target] ?? row.label}`}
-              data-testid={`replica-removal-confirm-${row.id}`}
-              onConfirm={() => confirm(row)}
+      {rows.map((row) => {
+        const name = labels?.[row.target] ?? row.label;
+        return (
+          <Fragment key={row.id}>
+            <SettingsRow
+              data-testid={`replica-removal-${row.id}`}
+              data-removal={row.state}
+              state={row.state === 'armed' ? undefined : 'warning'}
+              label={name}
+              help={<span data-testid={`replica-removal-text-${row.id}`}>{row.text}</span>}
+              error={errors[row.id]?.about === row.about ? errors[row.id].text : undefined}
+              control={row.state === 'refused' ? (
+                <SettingsButton
+                  variant="text"
+                  holdFocus
+                  disabled={asking === row.id || busy === row.id}
+                  aria-label={`Remove them from the copy on ${name}`}
+                  data-testid={`replica-removal-confirm-${row.id}`}
+                  onClick={() => setAsking(row.id)}
+                >
+                  Remove them there
+                </SettingsButton>
+              ) : undefined}
             />
-          ) : undefined}
-        />
-      ))}
+            {asking === row.id && row.state === 'refused' && (
+              <RemoveConfirmRow
+                question={`Remove them from the copy on ${name}?`}
+                note="They are gone there too; this Mac keeps its own."
+                busy={busy === row.id}
+                testId={`replica-removal-ask-${row.id}`}
+                onCancel={() => { setAsking(null); backTo(row.id); }}
+                onConfirm={() => void confirm(row)}
+              />
+            )}
+          </Fragment>
+        );
+      })}
     </SettingsGroup>
   );
 }

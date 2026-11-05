@@ -105,6 +105,11 @@ interface ContextMenuProps {
    * a narrow window's edge slid the menu under the neighbouring button, detached from its own.
    */
   anchorRef?: RefObject<HTMLElement | null>;
+  /**
+   * Opened from the keyboard (Enter, Space or ArrowDown on its button): the first item is
+   * highlighted at once, so Enter runs it (2026-11-04 Remote Hosts review: nothing was).
+   */
+  highlightFirst?: boolean;
 }
 
 /**
@@ -207,8 +212,22 @@ export function contextMenuReasonRows(rows: ContextMenuItem[]): Map<number, stri
   return out;
 }
 
+/**
+ * The anchor rides a sticky or fixed part of its pane (a settings pane's compact header): a scroll
+ * moves the content under it, never the anchor, so where the anchor sits says nothing about that
+ * scroll, and the old rule (a scroll of its pane closes the menu) stands.
+ */
+function pinnedInPane(el: HTMLElement): boolean {
+  for (let p: HTMLElement | null = el; p; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    if (cs.position === 'sticky' || cs.position === 'fixed') return true;
+    if (/(auto|scroll|overlay)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight) return false;
+  }
+  return false;
+}
+
 export function ContextMenu({
-  point, items, onClose, ariaLabel, testId, className, returnFocus, align = 'left', anchorRef,
+  point, items, onClose, ariaLabel, testId, className, returnFocus, align = 'left', anchorRef, highlightFirst,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
@@ -228,6 +247,8 @@ export function ContextMenu({
 
   useEffect(() => {
     menuRef.current?.focus({ preventScroll: true });
+    if (highlightFirst) setFocusIndex(rows.findIndex(isFocusable));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Dismissal. Scroll closes outright: the anchor is a viewport point, so after
@@ -278,7 +299,14 @@ export function ContextMenu({
     // clamp its list's scrollTop first).
     let anchor: RowAnchor | null = null;
     let scrollArmed = false;
-    const arm = requestAnimationFrame(() => { scrollArmed = true; anchor = rowAnchorOf(back.current); });
+    // A menu on a sticky or fixed control (pinnedInPane): a scroll moves the content under it, never
+    // the control, so a scroll of the pane holding it closes the menu as before.
+    let pinned = false;
+    const arm = requestAnimationFrame(() => {
+      scrollArmed = true;
+      anchor = rowAnchorOf(back.current);
+      pinned = !!back.current?.isConnected && pinnedInPane(back.current);
+    });
     const onScroll = (e: Event) => {
       if (!scrollArmed) return;
       if (menuRef.current?.contains(e.target as Node)) return;
@@ -291,6 +319,12 @@ export function ContextMenu({
       // (another task, project or tier changing) makes the browser's scroll anchoring shift scrollTop
       // to keep the row in place (2026-11-04, the folder menu's Sprint picker on a shared CI fixture).
       // With no anchor to reason about (a caller that passes no `returnFocus`), any scroll closes.
+      if (pinned) {
+        const scrolled = e.target;
+        if (anchor?.el.isConnected && scrolled instanceof Node && !scrolled.contains(anchor.el)) return;
+        close();
+        return;
+      }
       if (scrollMovedRow(anchor, e.target)) close();
     };
     window.addEventListener('keydown', claimEscape, true);

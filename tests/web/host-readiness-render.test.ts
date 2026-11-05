@@ -1,10 +1,15 @@
 /**
- * Settings › Remote Hosts, rendered: the readiness lines inside a host's row
+ * Settings › Remote Hosts, rendered: the readiness lines in a host's Details
  * (spec 5.3; checklist C29, C35, C41, C77, C95). The message reads verbatim
- * (it names the host already: never a `{alias}: ` prefix); an automatic fix
- * holds 'Updating Claude Code on {L}...' until the re-check answers; a failed
- * fix says 'Update failed: ...' with its command and Try again; informational
- * lines are grey notes with no button.
+ * (it names the host already: never a `{alias}: ` prefix). A Claude Code
+ * problem the host's row fixes (Install, Update, Try again: its one action, and
+ * its warning line says the problem) reads here only as "Install by hand" or
+ * "Update by hand", folded, with its command and Check again; while that fix
+ * runs the row says how it goes and Details add nothing until 3 minutes, then
+ * Check again (2026-11-04 review: Details said the problem a second time, with a
+ * second fix beside the row's). On a replica, whose row fixes nothing, the
+ * message reads in full. A fix of Walnut's own parts (gcc) reads on its own line;
+ * informational lines are grey notes with no button.
  *
  * The live store is not involved: status and the actions object are passed in.
  */
@@ -32,8 +37,9 @@ const idle: HostActions = {
   pending: null, failed: null, receipt: null, fixing: null, lastTriedAt: null,
 }
 const statusWith = (readiness: unknown, extra: Partial<HostStatus> = {}) => ({ ...base, readiness, ...extra }) as HostStatus
+/** `replica`: the host's row offers no fix (RemoteHostDetail passes rowFixes={!replica}). */
 const render = (status: HostStatus | undefined, actions: Partial<HostActions> = {}, replica = false) =>
-  renderToStaticMarkup(createElement(RemoteHostReadiness, { alias: 'buildbox', label: 'Build box', status, actions: { ...idle, ...actions }, replica }))
+  renderToStaticMarkup(createElement(RemoteHostReadiness, { alias: 'buildbox', label: 'Build box', status, actions: { ...idle, ...actions }, rowFixes: !replica }))
 const text = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
 
 const OUTDATED = { kind: 'claude_outdated', message: 'Claude Code on Build box is 2.1.220; this model needs 2.1.280 or newer.', commands: [] as string[] }
@@ -54,10 +60,19 @@ describe('RemoteHostReadiness: the problem line', () => {
     expect(html).not.toContain('rh-readiness-fix-claude_outdated')
   })
 
-  it('a native install offers Update + Check again; a replica shows Check again only (C25)', () => {
+  it('a native install: the row offers Update, so Details fold it to "Update by hand" with Check again; a replica reads it in full (C25)', () => {
     const s = statusWith({ checkedAt: 5, claude: claudeNative, problems: [OUTDATED] })
-    expect(render(s)).toContain('rh-readiness-fix-claude_outdated')
+    const html = render(s)
+    expect(html).toContain('data-testid="rh-by-hand"')
+    expect(text(html)).toContain('Update by hand')
+    // The row's warning says the problem; Details never say it again, nor offer a second Update.
+    expect(text(html)).not.toContain(OUTDATED.message)
+    expect(html).not.toContain('rh-readiness-fix-claude_outdated')
+    expect(html).toContain('rh-readiness-recheck')
+    // A replica's row fixes nothing: the message in full, with Check again only.
     const onReplica = render(s, {}, true)
+    expect(onReplica).not.toContain('rh-by-hand')
+    expect(text(onReplica)).toContain(OUTDATED.message)
     expect(onReplica).not.toContain('rh-readiness-fix-claude_outdated')
     expect(onReplica).toContain('rh-readiness-recheck')
   })
@@ -70,14 +85,17 @@ describe('RemoteHostReadiness: the problem line', () => {
 })
 
 describe('RemoteHostReadiness: automatic fixes (C29, C95)', () => {
-  it('while the fix runs, and after the server dropped `fixing` but before the re-check answered, the line holds', () => {
+  it('while the fix runs, and after the server dropped `fixing` but before the re-check answered, Details add nothing: the row says how it goes', () => {
     const running = statusWith({ checkedAt: 5, claude: claudeNative, problems: [{ ...OUTDATED, fix: { action: 'update-claude', state: 'running', text: 'Updating Claude Code' } }], fixing: { action: 'update-claude', text: 'Updating Claude Code', startedAt: clock } })
-    expect(text(render(running))).toContain('Updating Claude Code on Build box...')
-    // The gap: the server's fix is over, the old warning is still in the answer.
+    const during = render(running)
+    expect(text(during)).not.toContain('Updating Claude Code')
+    expect(text(during)).not.toContain(OUTDATED.message)
+    expect(during).not.toContain('rh-by-hand')
+    // The gap: the server's fix is over, the old warning is still in the answer; it never comes back here.
     const gap = statusWith({ checkedAt: 5, claude: claudeNative, problems: [OUTDATED] })
-    const held = text(render(gap, { fixing: { verb: 'update', startedAt: clock } }))
-    expect(held).toContain('Updating Claude Code on Build box...')
-    expect(held).not.toContain(OUTDATED.message)
+    const held = render(gap, { fixing: { verb: 'update', startedAt: clock } })
+    expect(text(held)).not.toContain(OUTDATED.message)
+    expect(held).not.toContain('rh-by-hand')
   })
 
   it('a fix of Walnut\'s own parts (gcc) never reads as installing Claude Code on the Claude line', () => {
@@ -86,32 +104,40 @@ describe('RemoteHostReadiness: automatic fixes (C29, C95)', () => {
       checkedAt: 5, problems: [MISSING, { ...GCC, fix: { action: 'install-compiler', state: 'running', text: 'Installing gcc' } }],
       fixing: { action: 'install-compiler', text: 'Installing gcc', startedAt: clock },
     })
-    const t = text(render(s, { fixing: { verb: 'install', startedAt: clock, action: 'install-compiler' } }))
+    const html = render(s, { fixing: { verb: 'install', startedAt: clock, action: 'install-compiler' } })
+    const t = text(html)
     expect(t).not.toContain('Installing Claude Code')
-    expect(t).toContain(MISSING.message)
-    // A click on that line's Install, before the server names its fix, still holds the line.
-    const clicked = text(render(statusWith({ checkedAt: 5, problems: [MISSING] }), { fixing: { verb: 'install', startedAt: clock } }))
-    expect(clicked).toContain('Installing Claude Code on Build box...')
+    expect(t).toContain('Installing gcc on Build box...')
+    // The Claude line is the row's to fix: here only its command by hand, folded.
+    expect(t).toContain('Install by hand')
+    expect(html).not.toContain('rh-readiness-fix-claude_missing')
+    // A click on the row's Install, before the server names its fix, takes the Claude line away
+    // here (the row says the progress)...
+    const clicked = render(statusWith({ checkedAt: 5, problems: [MISSING] }), { fixing: { verb: 'install', startedAt: clock } })
+    expect(clicked).not.toContain('rh-by-hand')
+    expect(text(clicked)).not.toContain(MISSING.message)
     // ...and so does a person's Install whose round sets up gcc first: no second Install to click.
     const asked = render(s, { fixing: { verb: 'install', startedAt: clock, action: 'install-compiler', asked: true } })
-    expect(text(asked)).toContain('Installing Claude Code on Build box...')
+    expect(asked).not.toContain('rh-by-hand')
     expect(asked).not.toContain('rh-readiness-fix-claude_missing')
   })
 
-  it('after 5s the elapsed time shows; after 3 minutes "Still updating" and Check again', () => {
+  it('the row says how long a fix runs; after 3 minutes Details offer Check again, and only then', () => {
     const gap = statusWith({ checkedAt: 5, claude: claudeNative, problems: [OUTDATED] })
-    const at6 = text(render(gap, { fixing: { verb: 'update', startedAt: clock - 6_000 } }))
-    expect(at6).toMatch(/Updating Claude Code on Build box\.\.\. \d+s/)
+    const at6 = render(gap, { fixing: { verb: 'update', startedAt: clock - 6_000 } })
+    expect(at6).not.toContain('rh-readiness-recheck')
+    expect(text(at6)).not.toContain('Updating Claude Code')
     const html = render(gap, { fixing: { verb: 'update', startedAt: clock - 181_000 } })
-    expect(text(html)).toMatch(/^Still updating Claude Code on Build box/)
     expect(html).toContain('rh-readiness-recheck')
+    expect(text(html)).not.toContain(OUTDATED.message)
   })
 
-  it('a failed fix: "Update failed: {fix.text}", the command chip, and Try again', () => {
+  it('a failed fix: Details say it did not work, with the command by hand; Try again is the row\'s', () => {
     const html = render(statusWith({ checkedAt: 6, claude: claudeNative, problems: [{ ...OUTDATED, commands: ['claude update'], fix: { action: 'update-claude', state: 'failed', text: 'the installer exited with 1' } }] }))
-    expect(text(html)).toContain('Update failed: the installer exited with 1')
+    expect(text(html)).toContain('The update did not work: the installer exited with 1')
+    expect(text(html)).toContain('Update by hand')
     expect(html).toContain('title="claude update"')
-    expect(text(html)).toContain('Try again')
+    expect(text(html)).not.toContain('Try again')
   })
 })
 
@@ -161,7 +187,7 @@ describe('RemoteHostReadiness: lines that leave on their own', () => {
     await act(async () => { root.render(el) })
     return { host, root }
   }
-  const view = (status: HostStatus) => createElement(RemoteHostReadiness, { alias: 'buildbox', label: 'Build box', status, actions: idle, replica: false })
+  const view = (status: HostStatus) => createElement(RemoteHostReadiness, { alias: 'buildbox', label: 'Build box', status, actions: idle, rowFixes: true })
 
   it('a cleared blocking problem reads "✓ Build box is ready (Claude Code 2.1.280)" for 3s, then nothing', async () => {
     vi.useFakeTimers()
@@ -173,15 +199,12 @@ describe('RemoteHostReadiness: lines that leave on their own', () => {
     await act(async () => { root.unmount() })
   })
 
-  it('a finished-fix note disappears when its 15 minutes run out, with no new push', async () => {
-    vi.useFakeTimers()
+  it('what a finished fix did is the row line, so Details say nothing of it (remote-host-view.test.ts has the row)', async () => {
     const s = statusWith({
       checkedAt: 7, problems: [], dtach: { found: true },
       fixes: [{ action: 'install-compiler', ok: true, finishedAt: 1, ageMs: FIX_NOTE_MS - 60_000, text: 'Installed gcc' }],
     })
     const { host, root } = await mount(view(s))
-    expect(host.textContent).toContain('Installed gcc.')
-    await act(async () => { vi.advanceTimersByTime(61_000) })
     expect(host.textContent).toBe('')
     await act(async () => { root.unmount() })
   })

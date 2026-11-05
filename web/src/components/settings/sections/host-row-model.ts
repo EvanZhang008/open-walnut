@@ -1,24 +1,98 @@
 /**
- * Settings > Remote Hosts: the words of the one list of machines (RemoteHostsSection.tsx and
- * HostRow.tsx), pure so each rule has a unit test (tests/web/host-row-model.test.ts): the
- * summary line, a live host's state line, the one action a row offers, and the new SSH host's
- * placeholder.
+ * Settings > Remote Hosts: the words and rules of the one list of machines (RemoteHostsSection.tsx
+ * and HostRow.tsx), pure so each rule has a unit test (tests/web/host-row-model.test.ts): the
+ * summary line and the network map, both read from what each row says (host-list-store.ts), the
+ * "need a look" stepper, a live host's state line, the one action a row offers, and a new SSH
+ * host's alias.
  */
 import type { FleetHost } from '@/api/hosts-fleet';
-import { isLive, problemsOf, type FleetSummary } from './host-fleet-dashboard-model';
+import { isLive, problemsOf } from './host-fleet-dashboard-model';
 import { pct, usd } from './host-fleet-model';
 import type { HostEntry } from './remote-hosts-model';
 
-/** The words of the summary line under the header, in order; a part not known yet is left out. */
-export interface SummaryWords { online: string; sessions: string | null; spend: string | null; needs: string | null }
+/**
+ * What one row of the list says about its machine, for the summary line, the "need a look"
+ * count and the network map: every surface reads the same rows, so none disagrees with the list
+ * (2026-11-04 review: the map drew a host green that its row said was Off, and the summary did
+ * not move when a host was turned on, added or removed).
+ */
+export interface RowReport {
+  key: string;
+  host: string;
+  name: string;
+  /** A machine of the fleet (not a draft, not a found host still waiting for a yes). */
+  counted: boolean;
+  online: boolean;
+  /** Switched off here: Walnut does not connect to it. */
+  off: boolean;
+  needsLook: boolean;
+  local: boolean;
+  /** How this Mac reaches it. */
+  via: 'local' | 'ssh' | 'net' | 'bridge';
+  rttMs: number | null;
+  sessions: number | null;
+  spendUsd: number | null;
+  /** A few words under its name on the map (its system). */
+  sub: string;
+  /** Its Walnut holds the phone tunnel. */
+  phone?: boolean;
+}
 
-export function summaryWords(s: FleetSummary): SummaryWords {
+export interface ListSummary { online: number; total: number; off: number; sessions: number | null; spendUsd: number | null; needs: number }
+
+/** The fleet as its rows say it: a host switched off is not in "N of M online", but is named as off. */
+export function listSummary(rows: RowReport[]): ListSummary {
+  let sessions: number | null = null;
+  let spendUsd: number | null = null;
+  const fleet = rows.filter((r) => r.counted);
+  for (const r of fleet) {
+    if (r.sessions !== null && !r.off) sessions = (sessions ?? 0) + r.sessions;
+    if (r.spendUsd !== null) spendUsd = (spendUsd ?? 0) + r.spendUsd;
+  }
+  return {
+    online: fleet.filter((r) => !r.off && r.online).length,
+    total: fleet.filter((r) => !r.off).length,
+    off: fleet.filter((r) => r.off).length,
+    sessions,
+    spendUsd,
+    needs: fleet.filter((r) => r.needsLook).length,
+  };
+}
+
+/** The words of the summary line under the header, in order; a part not known yet is left out. */
+export interface SummaryWords { online: string; off: string | null; sessions: string | null; spend: string | null }
+
+export function summaryWords(s: ListSummary): SummaryWords {
   return {
     online: `${s.online} of ${s.total} online`,
+    off: s.off ? `${s.off} off` : null,
     sessions: s.sessions === null ? null : `${s.sessions} ${s.sessions === 1 ? 'session' : 'sessions'} open`,
     spend: s.spendUsd === null ? null : `${usd(s.spendUsd)} in 30 days`,
-    needs: s.problems ? `${s.problems} ${s.problems === 1 ? 'needs' : 'need'} a look` : null,
   };
+}
+
+/**
+ * The header's one count: "3 need a look", then, once pressed, which of them is shown ("1 of 3
+ * need a look"). `at` is the index shown last (null before the first press).
+ */
+export function needsWords(count: number, at: number | null): string {
+  if (at === null || at >= count) return `${count} ${count === 1 ? 'needs' : 'need'} a look`;
+  return `${at + 1} of ${count} ${count === 1 ? 'needs' : 'need'} a look`;
+}
+
+/** The next host a press on the count shows: each press the next one, then back to the first. */
+export function nextLook(count: number, at: number | null): number {
+  if (count <= 0) return 0;
+  return at === null || at + 1 >= count ? 0 : at + 1;
+}
+
+/** How a map line reads: the same state the row has (Off, Not connected, or the way and its latency). */
+export function mapLinkLabel(r: Pick<RowReport, 'off' | 'online' | 'via' | 'rttMs' | 'local'>): string {
+  if (r.local) return 'This Mac';
+  if (r.off) return 'Off';
+  if (!r.online) return r.via === 'bridge' ? 'Not connected in' : 'Not connected';
+  const way = r.via === 'bridge' ? 'Through your cloud companion' : r.via === 'net' ? 'Host network' : 'SSH tunnel';
+  return typeof r.rttMs === 'number' && r.rttMs > 0 ? `${way}, ${Math.round(r.rttMs)} ms` : way;
 }
 
 /** A host the summary counts as needing a look: not connected, or a problem on its reading. */
@@ -37,10 +111,15 @@ export function liveLine(card: FleetHost | undefined, online = 'Online'): string
   return parts.join(', ');
 }
 
-/** The connect action of a host not connected: Retry after a failed try, else Connect now. */
-export function connectAction(failed: boolean, busy: boolean): { label: string; reserve: string[] } {
-  const label = failed ? (busy ? 'Retrying...' : 'Retry') : busy ? 'Connecting...' : 'Connect now';
-  return { label, reserve: failed ? ['Retry', 'Retrying...'] : ['Connect now', 'Connecting...'] };
+/**
+ * The connect action of a host not connected: Retry after a failed try, else Connect now. An SSH
+ * host's retry says it is SSH (2026-11-04 review: the row's Retry and Walnut on that host's Retry
+ * meant two different things).
+ */
+export function connectAction(failed: boolean, busy: boolean, via: 'ssh' | 'net' = 'ssh'): { label: string; reserve: string[] } {
+  const retry = via === 'ssh' ? 'Retry SSH' : 'Retry';
+  const label = failed ? (busy ? 'Retrying...' : retry) : busy ? 'Connecting...' : 'Connect now';
+  return { label, reserve: failed ? [retry, 'Retrying...'] : ['Connect now', 'Connecting...'] };
 }
 
 const PLACEHOLDERS = ['buildbox', 'workstation', 'gpu-server', 'lab-pc', 'server-2'];
@@ -48,6 +127,32 @@ const PLACEHOLDERS = ['buildbox', 'workstation', 'gpu-server', 'lab-pc', 'server
 /** An alias for the placeholder that no host has (the page would refuse one that is taken). */
 export function aliasPlaceholder(taken: ReadonlySet<string>): string {
   return PLACEHOLDERS.find((p) => !taken.has(p)) ?? `host-${taken.size + 1}`;
+}
+
+/**
+ * The alias a new SSH host gets from its hostname until the person types one (2026-11-04 review:
+ * a hostname with no alias was dropped when the pane closed): the first DNS label, lower case, any
+ * character an alias may not hold made a dash, and a number after it when another host has it.
+ * `build7.example.com` gives `build7`; an IP address keeps all of it (`10-0-0-9`).
+ */
+export function aliasFromHostname(hostname: string, taken: ReadonlySet<string> = new Set()): string {
+  // "sam@build7.example.com:2222" names the host build7.example.com.
+  const host = hostname.trim().replace(/^[^@]*@/, '').replace(/:\d*$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host) return '';
+  const ip = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+  const head = ip ? host : host.split('.')[0];
+  const base = head.replace(/[^a-z0-9_-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+  if (!base) return '';
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+/** Where a second "Add an SSH host" puts the focus in the draft already open: its first empty field. */
+export function firstEmptyField(h: Pick<HostEntry, 'hostname' | 'alias' | 'user'>, aliasRefused = false): 'hostname' | 'alias' | 'user' {
+  if (!h.hostname.trim()) return 'hostname';
+  if (!h.alias.trim() || aliasRefused) return 'alias';
+  if (!h.user.trim()) return 'user';
+  return 'hostname';
 }
 
 /** A new row nobody typed in yet: Cancel and Escape take it away with no confirm. */

@@ -46,7 +46,7 @@ export function usd(v: number): string {
 /** The local machine's name on Remote Hosts (the rest of the page says "this Mac" too). */
 export const THIS_MAC = 'This Mac';
 
-const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: THIS_MAC, 'ssh-tunnel': 'SSH tunnel', 'host-network': 'Host network', bridge: 'Bridge (it connects in)' };
+const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: THIS_MAC, 'ssh-tunnel': 'SSH tunnel', 'host-network': 'Host network', bridge: 'It connects in to this Mac' };
 
 /** One cell per day: how much of the minutes the ledger covered the host was up. */
 export function dayTone(b: FleetBucket): 'good' | 'warn' | 'bad' | 'none' {
@@ -109,40 +109,33 @@ export function canDoRow(h: FleetHost): FleetRow | null {
   return { key: 'can', label: 'Can do', value, tone: parts.length ? undefined : 'muted', ...(title ? { title } : {}) };
 }
 
+/**
+ * The facts table under a host's Details. Each fact is said once on the page (2026-11-04 review:
+ * the system line, sessions, spend and the reboot warning each showed two or three times): the
+ * system is the Details' first line, CPU and memory are its rings, sessions and spend its two
+ * numbers, a problem is its row's line or the Details' problem list, and Walnut on the host is in
+ * "This host". What is left is said here.
+ */
 export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   const rows: FleetRow[] = [];
-  const s = h.system;
-  rows.push({
-    key: 'system', label: 'System',
-    value: s ? [s.os, s.arch, s.cpus ? `${s.cpus} CPUs` : null, gb(s.memBytes), gb(s.diskFreeBytes) ? `${gb(s.diskFreeBytes)} disk free` : null].filter(Boolean).join(', ') || 'Probed, nothing reported'
-      : 'Not probed yet (it is, once the host connects)',
-    tone: s ? undefined : 'muted',
-  });
   const can = canDoRow(h);
   if (can) rows.push(can);
   if (h.now) {
     const n = h.now;
-    const parts = [
-      n.cpuUtil === null ? null : `CPU ${pct(n.cpuUtil)}`,
-      n.load ? `load ${n.load[0]}` : null,
-      n.memAvailBytes === null ? null : `${gb(n.memAvailBytes)} of ${gb(n.memTotalBytes)} memory free`,
-      `up ${span(n.uptimeSec * 1000)}`,
-    ].filter(Boolean);
-    rows.push({ key: 'now', label: 'Now', value: parts.join(', ') + (n.stale ? ` (last reading, ${span(now - n.at)} ago)` : ''), tone: n.stale ? 'muted' : undefined });
+    const parts = [span(n.uptimeSec * 1000), n.load ? `load ${n.load[0]}` : null].filter(Boolean);
+    rows.push({ key: 'now', label: 'Up for', value: parts.join(', ') + (n.stale ? ` (last reading, ${span(now - n.at)} ago)` : ''), tone: n.stale ? 'muted' : undefined });
   } else {
-    rows.push({ key: 'now', label: 'Now', tone: 'muted', value: h.daemon && !h.daemon.vitals ? 'Its daemon is older than this view (it upgrades on the next connect)' : h.connection.connected ? 'No reading yet' : 'Not connected' });
+    rows.push({ key: 'now', label: 'Up for', tone: 'muted', value: h.daemon && !h.daemon.vitals ? 'Its Walnut helper is older than this view (it updates on the next connect)' : h.connection.connected ? 'No reading yet' : 'Not connected' });
   }
   const week = h.history?.windows.find((w) => w.days === 7);
   if (week && week.online !== null) {
     const days = week.minutes / 1440;
     const over = days >= 6.95 ? 'the last 7 days' : `the ${recordedSpan(week.minutes)} recorded`;
-    const extra = [week.downs ? `${week.downs} down` : null, week.drops ? `${week.drops} link drops` : null, (week.daemonStarts ?? 0) > 1 ? `daemon started ${week.daemonStarts} times` : null].filter(Boolean);
+    const extra = [week.downs ? `${week.downs} down` : null, week.drops ? `${week.drops} link drops` : null, (week.daemonStarts ?? 0) > 1 ? `Walnut helper started ${week.daemonStarts} times` : null].filter(Boolean);
     rows.push({ key: 'online', label: 'Online', value: `${pct(week.online, 1)} of ${over}` + (extra.length ? `, ${extra.join(', ')}` : ''), tone: week.online >= 0.99 ? 'good' : week.online >= 0.9 ? 'warn' : 'bad' });
   } else {
     rows.push({ key: 'online', label: 'Online', tone: 'muted', value: h.history ? 'Recording started; a share shows after the first minutes' : 'No record yet' });
   }
-  rows.push({ key: 'sessions', label: 'Sessions', value: h.sessions.running === null ? 'Not known now' : `${h.sessions.running} open`, tone: h.sessions.running === null ? 'muted' : undefined });
-  rows.push({ key: 'spend', label: 'Spend, 30 days', value: h.spend ? `${usd(h.spend.last30dUsd)} at list price (not a bill)` : 'Not counted yet', tone: h.spend ? undefined : 'muted' });
   const c = h.connection;
   // "SSH tunnel: connected 20 min, 38 ms" (the way first, then how it is going).
   const link = [c.connected ? (c.since ? `connected ${span(now - c.since)}` : 'connected') : c.phaseLabel, c.rttMs ? `${c.rttMs} ms` : null].filter(Boolean).join(', ');
@@ -152,19 +145,14 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
       + (!c.connected && c.error ? ` (${c.error})` : ''),
     tone: c.connected ? undefined : 'bad',
   });
-  if (h.server) {
-    const sv = h.server;
-    rows.push({
-      key: 'server', label: 'Walnut server',
-      value: sv.enabled ? [sv.program === 'replica' ? 'Replica' : sv.program === 'fallback' ? 'Plain host server (fallback)' : sv.program ? 'Plain host server' : null, sv.phaseLabel, sv.build, sv.phone ? `phone tunnel ${sv.phone}` : null].filter(Boolean).join(', ') : 'Off',
-      tone: !sv.enabled ? 'muted' : sv.phase === 'running' ? undefined : 'warn',
-    });
-  }
   if (h.daemon) {
     const d = h.daemon;
-    const reboot = h.local ? null : d.reboot ?? (d.startsAfterReboot ? 'starts after a reboot' : 'does not start by itself after a reboot');
-    const settingUp = d.bootStart?.setupRunning === true;
-    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(', '), tone: reboot && !d.startsAfterReboot && !settingUp ? 'warn' : undefined });
+    // Not starting after a reboot is a problem, said once on its row or in the problem list.
+    // How it starts (crontab, a systemd user service) is the server's word: kept for the tooltip.
+    const reboot = !h.local && d.startsAfterReboot ? 'starts by itself after a reboot' : null;
+    const value = [d.version ? `version ${d.version.replace(/^walnut-daemon-/, '')}` : 'version not reported yet', reboot].filter(Boolean).join(', ');
+    const how = !h.local && d.startsAfterReboot && d.reboot ? `\nAfter a reboot: ${d.reboot.replace(/`/g, '')}` : '';
+    rows.push({ key: 'daemon', label: 'Walnut helper', value: value.charAt(0).toUpperCase() + value.slice(1), title: `The small program Walnut runs on the host to start and keep its sessions${how}` });
   }
   return rows;
 }

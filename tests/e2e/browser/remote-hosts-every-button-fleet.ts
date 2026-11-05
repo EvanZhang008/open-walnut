@@ -64,8 +64,9 @@ export function fleet(alphaFixed: boolean): Record<string, unknown>[] {
   ]
 }
 
-export function profile(host: string, cpus: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const at = new Date(Date.now() - 2 * 3_600_000).toISOString()
+/** A host's profile; `probedAt` is when its probe ran (two hours ago, unless a Probe again just ran). */
+export function profile(host: string, cpus: number, extra: Record<string, unknown> = {}, probedAt = Date.now() - 2 * 3_600_000): Record<string, unknown> {
+  const at = new Date(probedAt).toISOString()
   return {
     host, kind: 'dev-box', kindReasons: ['It answered over SSH with a home folder'], kindSetByUser: false, userNote: '',
     probed: { os: { prettyName: 'Ubuntu 24.04' }, arch: 'x64', cpus, memBytes: 64 * GB, diskFreeBytes: 200 * GB, tools: { git: '2.43.0', docker: null }, probedAt: at },

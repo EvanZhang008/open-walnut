@@ -1,16 +1,18 @@
 /**
- * What a host's Details show from its last reading (useHostFleet.ts): what it is, CPU, memory,
- * GPU (a host with one) and disk as rings, the last 12 hours as an online timeline with a
- * small chart each of CPU, memory, GPU and sessions under it, sessions and spend, what it can
- * do, every problem line, and the full key/value table. Words come from
+ * What a host's Details show from its last reading (useHostFleet.ts): what it is (one System
+ * line, with Probe again where Walnut probes it), CPU, memory, GPU (a host with one) and disk as
+ * rings, the last 12 hours as the one online bar with a small chart each of CPU, memory, GPU and
+ * sessions under it, sessions and spend, what it can do, the problems its row does not already
+ * name, and the facts table. Each fact once (2026-11-04 review). Words come from
  * host-fleet-dashboard-model.ts and host-fleet-model.ts.
  */
+import type { ReactNode } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
 import {
   capabilityChips, problemsOf, roleChips, sessionsTitle, sessionsUnknown, spendUnknown, gauges, sparkPaths, sparks, systemLine, timeline,
   type Chip, type Gauge, type Spark,
 } from './host-fleet-dashboard-model';
-import { dayTitle, dayTone, fleetRows, usd } from './host-fleet-model';
+import { fleetRows, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
 import { FleetNumber, UNKNOWN_MARK } from './FleetNumber';
 
@@ -66,16 +68,25 @@ function Chips({ list, className, testId }: { list: Chip[]; className: string; t
   );
 }
 
+/** The one System line: what the host is, its role chips, and on the right its action (Probe again). */
+export interface SystemLine { text: string; meta?: ReactNode; action?: ReactNode }
+
 /** The reading: system, rings, the last 12 hours, sessions and spend, what it can do. */
-export function FleetVitals({ host, now }: { host: FleetHost; now: number }) {
+export function FleetVitals({ host, now, system }: { host: FleetHost; now: number; system?: SystemLine }) {
   const segments = timeline(host, now);
   const read = readLabel(host, now);
   const failure = readFailure(host, now);
   return (
     <div className="hf-vitals-block" data-testid="host-fleet-card" data-host={host.host}>
-      <p className="hf-card-sys" data-testid="host-fleet-system">
-        {systemLine(host)}
-        <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" />
+      <div className="hf-card-sys-row">
+        <p className="hf-card-sys" data-testid="host-fleet-system">
+          <span data-testid="host-system-line">{system?.text ?? systemLine(host)}</span>
+          <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" />
+        </p>
+        {system?.action}
+      </div>
+      <p className="hf-card-meta">
+        {system?.meta}
         {read && (
           <span className="hf-read" data-testid="host-fleet-read-age" title={typeof host.readAt === 'number' ? `Read ${new Date(host.readAt).toLocaleString()}` : undefined}>{read}</span>
         )}
@@ -116,9 +127,9 @@ export function FleetVitals({ host, now }: { host: FleetHost; now: number }) {
   );
 }
 
-/** Every problem its reading shows, beyond the one the row names. */
-export function FleetProblems({ host, now }: { host: FleetHost; now: number }) {
-  const list = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale'));
+/** Every problem its reading shows, beyond the one the row names (`skip`). */
+export function FleetProblems({ host, now, skip }: { host: FleetHost; now: number; skip?: string | null }) {
+  const list = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale') && p.key !== skip);
   if (!list.length) return null;
   return (
     <ul className="hf-problem-list" data-testid="host-fleet-problems">
@@ -129,10 +140,12 @@ export function FleetProblems({ host, now }: { host: FleetHost; now: number }) {
   );
 }
 
-/** The full key/value table, the days it was up, and whether it fits a long job. */
+/** The facts table, and whether it fits a long job (when that adds to what the problems say). */
 export function FleetFacts({ host, now }: { host: FleetHost; now: number }) {
-  const days = host.history?.buckets ?? [];
   const fit = host.placement.longRunning;
+  // The reboot reason is already a problem line; the fit says only what it alone says.
+  const reasons = fit.reasons.filter((r) => !/does not start by itself after a reboot/.test(r));
+  const fitText = fit.ok ? 'Fits a job that must keep running.' : reasons.length ? `Not for a job that must keep running: ${reasons.join(' ')}` : null;
   return (
     <div className="hf-details" data-testid="host-fleet-details">
       <dl className="hf-rows">
@@ -143,14 +156,7 @@ export function FleetFacts({ host, now }: { host: FleetHost; now: number }) {
           </div>
         ))}
       </dl>
-      {days.length > 0 && (
-        <div className="hf-days" role="img" aria-label={`Up time per day, last ${days.length} days`} data-testid="host-fleet-days">
-          {days.map((b) => <i key={b.start} data-tone={dayTone(b)} title={dayTitle(b, host.history!.bucketMinutes)} />)}
-        </div>
-      )}
-      <p className="hf-fit" data-ok={fit.ok ? 'true' : 'false'} data-testid="host-fleet-fit">
-        {fit.ok ? 'Fits a job that must keep running.' : withCode(`Not for a job that must keep running: ${fit.reasons.join(' ')}`)}
-      </p>
+      {fitText && <p className="hf-fit" data-ok={fit.ok ? 'true' : 'false'} data-testid="host-fleet-fit">{withCode(fitText)}</p>}
     </div>
   );
 }

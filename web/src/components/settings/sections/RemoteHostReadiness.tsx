@@ -1,6 +1,10 @@
 /**
  * Settings › Remote Hosts: what a CONNECTED host still needs (spec 5.3), in that
- * host's Details. The fix itself (Install, Update, Try again) is the row's one action.
+ * host's Details. The fix itself (Install, Update, Try again) is the row's one action, and the
+ * row's warning line says the problem: here such a problem is only "Install by hand", folded,
+ * with its command to copy and Check again (2026-11-04 review: Details said "Claude Code is not
+ * installed" a second time with a second fix beside the row's Install). A problem the row does
+ * not fix reads in full here.
  *
  * - A problem reads the server's message verbatim (it already names the host:
  *   no `{alias}: ` prefix), its command as a chip with Copy, then Check again.
@@ -13,17 +17,19 @@
  * - Informational lines (daemon_dir_fallback, status.warnings) are grey notes
  *   with no button: nothing to do.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import {
   HOST_READY_HOLD_MS, autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadySentence, isClaudeFixAction,
 } from '@open-walnut/host-problem';
 import type { HostStatus } from '@/api/hosts';
 import { useServerTick } from '@/hooks/useServerTick';
 import { CHECK_FAILED_TEXT, type HostActions } from '@/hooks/useHostActions';
-import { hostReadinessInfoNotes, hostReadinessNotes, hostReadinessProblems, type HostReadinessProblem } from '@/utils/host-readiness';
+import { hostReadinessInfoNotes, hostReadinessProblems, type HostReadinessProblem } from '@/utils/host-readiness';
+import { useFixNotes } from '@/hooks/useFixNotes';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { ChevronGlyph } from '../settings-glyphs';
 import '@/styles/host-picker-settings.css';
 
 /** 'just now', '2m ago', '1h ago'. */
@@ -67,13 +73,15 @@ interface LineProps {
   now: number;
   /** When the server says the running fix began (for the elapsed timer). */
   fixStartedAt?: number;
+  /** The host's row offers the fix and says the problem (not on a replica, which fixes nothing). */
+  rowFixes: boolean;
 }
 
 function CheckAgainButton({ actions }: { actions: HostActions }) {
   const checking = actions.pending === 'check';
   return (
     <SettingsButton
-      variant="text" disabled={checking} reserve={['Check again', 'Checking...']}
+      variant="text" disabled={checking} holdFocus reserve={['Check again', 'Checking...']}
       onClick={() => { void actions.checkAgain(); }} data-testid="rh-readiness-recheck"
     >
       {checking ? 'Checking...' : 'Check again'}
@@ -81,25 +89,41 @@ function CheckAgainButton({ actions }: { actions: HostActions }) {
   );
 }
 
-function ProblemLine({ problem, alias, label, installMethod, actions, withRecheck, now, fixStartedAt }: LineProps) {
+/** The command for a problem the row fixes, folded: the fix by hand, then Check again. */
+function ByHand({ problem, verb, alias, actions, failed }: { problem: HostReadinessProblem; verb: 'install' | 'update'; alias: string; actions: HostActions; failed?: { text: string; detail?: string } }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <div className="rh-readiness-line rh-by-hand" data-tone={failed ? 'warn' : 'info'} data-host={alias} data-problem={problem.kind}>
+      {failed && <span className="rh-readiness" data-fix="failed" title={failed.detail}>{`The ${verb} did not work: ${failed.text}`}</span>}
+      <button type="button" tabIndex={0} className="rh-by-hand-toggle" aria-expanded={open} aria-controls={id} data-testid="rh-by-hand" onClick={() => setOpen(!open)}>
+        <ChevronGlyph size={10} className="settings-disclosure-chevron" />
+        {verb === 'install' ? 'Install by hand' : 'Update by hand'}
+      </button>
+      <div id={id} className="rh-by-hand-body" hidden={!open}>
+        <HostCommands commands={problem.commands} testId={`rh-readiness-commands-${problem.kind}`} />
+        <span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span>
+      </div>
+    </div>
+  );
+}
+
+function ProblemLine({ problem, alias, label, installMethod, actions, withRecheck, now, fixStartedAt, rowFixes }: LineProps) {
   const blocking = BLOCKING_READINESS_KINDS.includes(problem.kind);
-  const verb = blocking ? autofixVerbFor(problem, installMethod) : null;
+  const verb = blocking && rowFixes ? autofixVerbFor(problem, installMethod) : null;
   const serverRunning = problem.fix?.state === 'running';
   const common = { 'data-host': alias, 'data-problem': problem.kind };
   // A Claude line shows progress only for a Claude fix, or a person's Install / Update whose round
   // sets up gcc or dtach first: those set up by themselves are not it.
   const claudeFix = !!actions.fixing && (actions.fixing.asked || isClaudeFixAction(actions.fixing.action));
+  // The row offers this fix and says its progress: here only Check again, once it takes long.
   if (verb && (serverRunning || claudeFix)) {
-    const ownVerb = actions.fixing && isClaudeFixAction(actions.fixing.action) ? actions.fixing.verb : verb;
-    const p = autofixProgressText(ownVerb, label, actions.fixing?.startedAt ?? fixStartedAt, now);
-    return (
-      <div className="rh-readiness-line" data-tone="info">
-        <span className="rh-readiness" {...common} data-fix="running">
-          {p.base}{p.elapsed && <span aria-hidden="true">{` ${p.elapsed}`}</span>}
-        </span>
-        {p.showCheckAgain && <span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span>}
-      </div>
-    );
+    const p = autofixProgressText(verb, label, actions.fixing?.startedAt ?? fixStartedAt, now);
+    return p.showCheckAgain ? <div className="rh-readiness-line" data-tone="info"><span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span></div> : null;
+  }
+  if (verb) {
+    const failedFix = problem.fix?.state === 'failed' ? problem.fix : undefined;
+    return <ByHand problem={problem} verb={verb} alias={alias} actions={actions} failed={failedFix ? { text: failedFix.text, detail: failedFix.detail } : undefined} />;
   }
   if (serverRunning && problem.fix) {
     return (
@@ -126,24 +150,14 @@ export interface RemoteHostReadinessProps {
   label: string;
   status: HostStatus | undefined;
   actions: HostActions;
+  /** The row offers the fix (Install, Update): Details folds it to "Install by hand". */
+  rowFixes?: boolean;
 }
 
-export function RemoteHostReadiness({ alias, label, status, actions }: RemoteHostReadinessProps) {
+export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = true }: RemoteHostReadinessProps) {
   const problems = hostReadinessProblems(status);
   const info = hostReadinessInfoNotes(status);
-  // When THIS status arrived, on this browser's clock: a finished-fix note's age is
-  // the server's `ageMs` plus how long we held the snapshot (no clock comparison).
-  const receivedAt = useMemo(() => Date.now(), [status]);
-  const [, setExpiryTick] = useState(0);
-  const fixNotes = hostReadinessNotes(status, Date.now() - receivedAt);
-  const nextExpiry = fixNotes.reduce<number | null>(
-    (min, n) => (n.expiresInMs === undefined ? min : min === null ? n.expiresInMs : Math.min(min, n.expiresInMs)), null);
-  // A finished-fix note disappears on its own, even when no push arrives.
-  useEffect(() => {
-    if (nextExpiry === null) return;
-    const t = setTimeout(() => setExpiryTick((n) => n + 1), nextExpiry + 50);
-    return () => clearTimeout(t);
-  }, [nextExpiry, receivedAt]);
+  const fixNotes = useFixNotes(status);
   const ready = useReadyLine(status, label);
   const running = !!actions.fixing || problems.some((p) => p.fix?.state === 'running');
   const now = useServerTick(running);
@@ -151,7 +165,8 @@ export function RemoteHostReadiness({ alias, label, status, actions }: RemoteHos
   const checkedAt = status?.connected ? status.readiness?.checkedAt : undefined;
   const fixStartedAt = status?.readiness?.fixing?.startedAt;
   const installMethod = status?.readiness?.claude?.installMethod;
-  const recheckAt = problems.findIndex((p) => p.fix?.state !== 'running');
+  // A problem the row fixes carries its own Check again, folded with its command.
+  const recheckAt = problems.findIndex((p) => p.fix?.state !== 'running' && !(rowFixes && BLOCKING_READINESS_KINDS.includes(p.kind) && autofixVerbFor(p, installMethod)));
   const showLastChecked = typeof checkedAt === 'number' && (problems.length > 0 || actions.lastTriedAt !== null);
 
   if (problems.length === 0 && info.length === 0 && fixNotes.length === 0 && !ready && !actions.receipt && actions.failed !== 'check') {
@@ -162,7 +177,7 @@ export function RemoteHostReadiness({ alias, label, status, actions }: RemoteHos
       {problems.map((problem, idx) => (
         <ProblemLine
           key={problem.kind} problem={problem} alias={alias} label={label} installMethod={installMethod}
-          actions={actions} withRecheck={idx === recheckAt} now={now} fixStartedAt={fixStartedAt}
+          actions={actions} withRecheck={idx === recheckAt} now={now} fixStartedAt={fixStartedAt} rowFixes={rowFixes}
         />
       ))}
       {ready && !fixNotes.some((n) => n.kind === 'done') && (

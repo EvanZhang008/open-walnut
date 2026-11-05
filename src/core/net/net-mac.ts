@@ -80,7 +80,7 @@ export async function companionCall(p: string, init: { method: 'GET' | 'POST' | 
     import('../pairing-targets.js'), import('../../integrations/cloud-bridge-config.js'),
   ])
   const cloud = await getCloudPairingEndpointAsync()
-  if (!cloud) throw new NetError(400, 'no_companion', 'Adding machines goes through your cloud companion; pair one first (Settings > Cloud Companion).')
+  if (!cloud) throw new NetError(400, 'no_companion', 'Adding machines goes through your cloud companion; pair one first (Settings > Phones & Cloud).')
   const res = await fetch(`${cloud.origin}/api/v1${p}`, {
     method: init.method,
     headers: { Authorization: `Bearer ${cloud.token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...await machineProofHeaders() },
@@ -464,7 +464,7 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
 export async function setRelay(pick: unknown): Promise<NetState> {
   if (pick !== 'own' && pick !== 'public' && pick !== 'none') throw new NetError(400, 'bad_relay', 'The relay is own, public or none.')
   const companion = await companionPaired()
-  if (pick === 'own' && !companion) throw new NetError(400, 'no_companion', 'Your relay runs on your cloud companion; pair one first (Settings > Cloud Companion).')
+  if (pick === 'own' && !companion) throw new NetError(400, 'no_companion', 'Your relay runs on your cloud companion; pair one first (Settings > Phones & Cloud).')
   if (pick !== 'own' && companion) throw new NetError(400, 'companion_relay', "While a cloud companion is paired, your machines use its relay.")
   if (pick === 'none' && state.enabled) {
     const cut = cutOffByNoRelay(await machineLinks(await localDaemon()))

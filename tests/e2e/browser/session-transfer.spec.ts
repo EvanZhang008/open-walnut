@@ -336,7 +336,12 @@ test('Settings > Remote Hosts: "What Walnut knows" shows the profile and edits k
   const box = page.getByTestId(`host-profile-${HOST}`)
   await expect(box).toContainText('Cloud VM (private) (automatic)')
   await expect(box).toContainText('cloud metadata answered; no public address')
-  await expect(box.getByTestId('host-profile-system')).toHaveText('Ubuntu 24.04 LTS, arm64, 8 CPUs, 32 GB memory, 120 GB free')
+  // The probe's system is the Details' one System line, not a second copy in the profile
+  // (2026-11-04 review: the line showed twice, with two CPU counts).
+  await expect(details.getByTestId('host-system-line')).toHaveText('Ubuntu 24.04 LTS, arm64, 8 CPUs, 32 GB memory, 120 GB free')
+  await expect(details.getByTestId('host-system-line')).toHaveCount(1)
+  // Under it, how old that reading is.
+  await expect(details.getByTestId('host-probe-note')).toHaveText(/^Probed .+\.$/)
   await expect(box).toContainText('git 2.43.0, node 22.3.0')
   await expect(box).toContainText('Not found: docker')
   await expect(box).toContainText('/home/dev/walnut')
@@ -344,7 +349,10 @@ test('Settings > Remote Hosts: "What Walnut knows" shows the profile and edits k
   await expect(box).toContainText('From 4 sessions')
   await details.screenshot({ path: `${SHOTS}/5-host-profile.png` })
 
-  await box.getByRole('button', { name: 'Probe again' }).click()
+  // Probe again sits beside that System line, outside the profile box.
+  const probe = details.getByTestId('host-probe')
+  await expect(probe).toHaveText('Probe again')
+  await probe.click()
   await expect.poll(() => patches.length).toBe(1)
   expect(patches[0]).toEqual({ refresh: true })
 

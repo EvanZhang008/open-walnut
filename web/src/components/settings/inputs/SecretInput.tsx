@@ -21,6 +21,8 @@ interface SecretInputProps {
   /** Called when the user confirms Remove. Without it, no Remove button. */
   onRemove?: () => void | Promise<unknown>
   'aria-label'?: string
+  /** A refused value: the field shows it (its error is the row's). */
+  'aria-invalid'?: boolean
   'data-testid'?: string
 }
 
@@ -34,6 +36,7 @@ export function SecretInput({
   saved,
   onRemove,
   'aria-label': ariaLabel,
+  'aria-invalid': invalid,
   'data-testid': testId,
 }: SecretInputProps) {
   const [visible, setVisible] = useState(false)
@@ -79,6 +82,7 @@ export function SecretInput({
         spellCheck={false}
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
         data-testid={testId}
       />
       {/* Inside the field, and only when there is something to reveal (F33): the

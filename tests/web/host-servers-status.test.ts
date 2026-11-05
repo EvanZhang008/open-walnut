@@ -1,5 +1,6 @@
 /**
- * The "Walnut on a host" group's sentence per host and its poll interval
+ * The "Walnut on this host" row's sentence per host (a host's Details, This host:
+ * HostServersGroup.tsx HostServerPart) and its poll interval
  * (web/src/components/settings/sections/host-servers-status.ts).
  */
 import { describe, expect, it } from 'vitest'
@@ -30,8 +31,9 @@ describe('describeHostServer', () => {
     }
   })
 
-  it('an old daemon needs an update; an error offers Try again', () => {
-    expect(describeHostServer(entry({ phase: 'unsupported' }))).toMatchObject({ dot: 'action', retry: false })
+  it('an old helper needs an update; an error offers Start it again', () => {
+    // Plain words (2026-11-04 review): Walnut's helper there, not "its daemon".
+    expect(describeHostServer(entry({ phase: 'unsupported' }))).toMatchObject({ dot: 'action', retry: false, text: expect.stringContaining('Walnut\'s helper on this host needs an update first') })
     expect(describeHostServer(entry({ phase: 'error', message: 'npm failed' }))).toEqual({ dot: 'error', text: 'npm failed', retry: true })
   })
 
@@ -43,7 +45,7 @@ describe('describeHostServer', () => {
     expect(running({ kind: 'alone', why: 'no link' }).text).toContain('on its own')
   })
 
-  it('running an older build than this computer\'s says why and offers Try again', () => {
+  it('running an older build than this computer\'s says why and offers Update to this build', () => {
     const notice = 'It runs Walnut 0.6.6-aaa1111, the build before this computer\'s: 0.6.7-abc1234 did not answer on the host (boom). Try again to start 0.6.7-abc1234.'
     expect(describeHostServer(entry({ phase: 'running', server: { route: { kind: 'leader' } }, notice }))).toEqual({
       dot: 'action', text: `Running. A browser there reaches this Mac. ${notice}`, retry: true,

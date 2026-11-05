@@ -1,10 +1,14 @@
 /**
- * Settings › Remote Hosts › Secrets (SecretsGroup.tsx; server:
+ * Settings › Remote Hosts › More settings › Secrets (SecretsGroup.tsx; server:
  * src/core/secrets/fleet-secrets.ts): each secret with where its copies stand,
  * Add (name, value, what it is, hosts, env name, sessions) sending one PUT with
- * the value, the value never shown again, Edit to rotate or untick a host, and
- * Delete. The server side is mocked here (a test server keeps no secrets; the
- * real flow is tests/e2e/fleet-secrets-e2e.test.ts). Navigation is by clicks.
+ * the value, the value never shown again, Edit to rotate or untick a host, a
+ * refused Save that says why under the field it refuses and focuses it, Escape
+ * as Cancel, and Delete, after "Delete <name>?" (RemoveConfirmRow, the page's one
+ * way of asking: Cancel focused, Escape is Cancel, no timer; 2026-11-04 review: an
+ * armed "Confirm delete" turned back by itself after 3 s, with no Cancel). The
+ * server side is mocked here (a test server keeps no secrets; the real flow is
+ * tests/e2e/fleet-secrets-e2e.test.ts). Navigation is by clicks.
  * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
@@ -110,20 +114,52 @@ test('secrets: add with hosts and env, the value never shown again, rotate, unti
   expect(puts.at(-1)!.body.hosts).toEqual([])
   await expect(row('github-read')).toContainText('Kept on this Mac only')
 
-  // A bad name is caught before any request.
+  // A bad name is caught before any request, said under the Name field, which takes the focus.
   const before = puts.length
   await group.getByTestId('secret-add').click()
-  await editor.getByTestId('secret-name').fill('Bad Name')
+  const name = editor.getByTestId('secret-name')
+  await name.fill('Bad Name')
   await editor.getByTestId('secret-value').fill('x')
   await editor.getByTestId('secret-save').click()
-  await expect(group).toContainText('A name is lower case letters')
+  // The reason is the Name row's own error line, right under it.
+  const nameError = name.locator('xpath=ancestor::article[1]/following-sibling::*[1]')
+  await expect(nameError).toHaveClass(/settings-row-error/)
+  await expect(nameError).toContainText('A name is lower case letters')
+  await expect(name).toHaveAttribute('aria-invalid', 'true')
+  await expect(name).toBeFocused()
   expect(puts.length).toBe(before)
-  await editor.getByRole('button', { name: 'Cancel' }).click()
+  // Escape is Cancel: the editor and its refusal go, the focus goes back to Add.
+  await page.keyboard.press('Escape')
+  await expect(editor).toHaveCount(0)
+  await expect(group).not.toContainText('A name is lower case letters')
+  await expect(group.getByTestId('secret-add')).toBeFocused()
+  // Cancel does the same.
+  await group.getByTestId('secret-add').click()
+  await editor.getByTestId('secret-cancel').click()
+  await expect(editor).toHaveCount(0)
+  await expect(group.getByTestId('secret-add')).toBeFocused()
+  expect(puts.length).toBe(before)
 
-  // Delete asks once more, then sends the DELETE.
-  await row('npm-publish').getByRole('button', { name: 'Delete npm-publish' }).click()
-  await row('npm-publish').getByRole('button', { name: 'Confirm delete' }).click()
+  // Delete asks first ("Delete npm-publish?", Cancel focused); Escape is Cancel and nothing is
+  // sent, and nothing turns back on a timer.
+  const del = row('npm-publish').getByRole('button', { name: 'Delete npm-publish' })
+  await del.click()
+  const ask = group.getByTestId('secret-delete-confirm')
+  await expect(ask).toContainText('Delete npm-publish?')
+  await expect(ask).toContainText('Its copy on every host is removed too.')
+  await expect(ask.getByTestId('secret-delete-confirm-cancel')).toBeFocused()
+  await expect(ask.getByTestId('secret-delete-confirm-remove')).toHaveText('Delete')
+  await page.waitForTimeout(3_300)
+  await expect(ask).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(ask).toHaveCount(0)
+  await expect(del).toBeFocused()
+  expect(deletes).toEqual([])
+  // Asked again and answered: it sends the DELETE.
+  await del.click()
+  await ask.getByTestId('secret-delete-confirm-remove').click()
   await expect(row('npm-publish')).toHaveCount(0)
+  await expect(ask).toHaveCount(0)
   expect(deletes).toEqual(['npm-publish'])
   for (const r of await group.locator('[data-secret-name]').all()) {
     expect(await r.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)

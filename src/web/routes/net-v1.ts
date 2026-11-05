@@ -6,6 +6,7 @@
  *   PUT    /api/v1/net/self {endpointId, name}           the owner Mac says its own id
  *   POST   /api/v1/net/invites {name?}     the owner Mac -> {id, code, link, command, expiresAt}
  *   GET    /api/v1/net/invites/:id         the owner Mac -> {state, member?}
+ *   DELETE /api/v1/net/invites/:id         the owner Mac calls a link back -> {state}
  *   DELETE /api/v1/net/members/:id         the owner Mac removes a machine
  *   POST   /api/v1/net/join {code, endpointId, hostname, platform}
  *                                          the new machine, no token -> {name, relays, relayRoots, members}
@@ -26,7 +27,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import {
-  NetStoreError, inviteStatus, isMember, listMembers, makeInvite, peekInvite, redeemInvite, removeMember, restoreHostMember, setMacMember, validNetId,
+  NetStoreError, inviteStatus, cancelInvite, isMember, listMembers, makeInvite, peekInvite, redeemInvite, removeMember, restoreHostMember, setMacMember, validNetId,
 } from '../../core/net/net-store.js'
 import { joinScript } from '../../core/net/net-join-script.js'
 import { joinScriptWindows } from '../../core/net/net-join-ps1.js'
@@ -132,6 +133,13 @@ netV1Router.post('/net/invites', guard(async (req, res) => {
 
 netV1Router.get('/net/invites/:id', guard(async (req, res) => {
   res.json(inviteStatus(String(req.params.id ?? '')))
+}, { ownerOnly: true }))
+
+netV1Router.delete('/net/invites/:id', guard(async (req, res) => {
+  const id = String(req.params.id ?? '')
+  const r = cancelInvite(id)
+  log.web.info('net: invite called back', { id, state: r.state })
+  res.json(r)
 }, { ownerOnly: true }))
 
 netV1Router.put('/net/members/:id', guard(async (req, res) => {

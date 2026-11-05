@@ -1,13 +1,15 @@
 /**
  * Settings › Remote Hosts, in a host's Details (HostDetails.tsx): "What Walnut knows" about it.
  *
- * The host's learned profile (server: core/hosts/host-profile.ts): its kind and why, the
- * system, the tools it has, the repositories sessions used there, and what Walnut learned it
- * is used for (core/hosts/host-learning.ts, from the sessions that ran there). The person can
- * probe it again, name its kind (or hand that back to Walnut) and leave a one-line note. Each
+ * The host's learned profile (server: core/hosts/host-profile.ts): its kind and why, the tools it
+ * has, the repositories sessions used there, and what Walnut learned it is used for
+ * (core/hosts/host-learning.ts, from the sessions that ran there). The person can name its kind
+ * (or hand that back to Walnut) and leave a one-line note. Its system is the Details' one System
+ * line (`profileSystemLine`), with Probe again: Probing..., then the new line and its time, or why
+ * it could not (2026-11-04 review: the press showed nothing, and the line was said twice). Each
  * opening of Details reads the profile again (and the Details' opening reads the host again).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { fetchHostProfile, updateHostProfile, type HostKind, type HostProfile } from '@/api/transfer';
 import { ApiError } from '@/api/client';
 import { OptionPickerFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
@@ -43,15 +45,26 @@ function systemLine(p: HostProfile): string {
 
 const message = (err: unknown) => (err instanceof ApiError || err instanceof Error ? err.message : String(err));
 
-export function HostProfileDisclosure({ alias, name }: { alias: string; name: string }) {
+export interface HostProfileState {
+  profile: HostProfile | null;
+  error: string | null;
+  busy: 'probe' | 'kind' | 'note' | null;
+  /** What the last Probe again found: a new reading, nothing new, or why it could not. */
+  probe: { kind: 'done' | 'same' | 'failed'; text?: string } | null;
+  patch: (kind: 'probe' | 'kind' | 'note', body: Parameters<typeof updateHostProfile>[1]) => Promise<void>;
+  apply: (p: HostProfile) => void;
+  /** The note as typed, and the saved one it follows while untouched. */
+  note: string;
+  setNote: (t: string) => void;
+}
+
+/** The host's profile, read when Details open; its probe, kind and note writes. */
+export function useHostProfile(alias: string): HostProfileState {
   const [profile, setProfile] = useState<HostProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'probe' | 'kind' | 'note' | null>(null);
+  const [probe, setProbe] = useState<HostProfileState['probe']>(null);
   const [note, setNote] = useState('');
-  const noteRef = useRef<HTMLInputElement | null>(null);
-  const noteMic = useRef<BoxMicHandle | null>(null);
-  const [picker, setPicker] = useState<CursorPoint | null>(null);
-  const kindBtn = useRef<HTMLSpanElement>(null);
 
   // The note field follows the saved note only while the user has not typed in
   // it: a save of another field (the kind) must not wipe a note being written.
@@ -70,6 +83,62 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
       .catch((err) => { if (!cancelled) setError(message(err)); });
     return () => { cancelled = true; };
   }, [alias, apply]);
+
+  const patch = useCallback(async (kind: 'probe' | 'kind' | 'note', body: Parameters<typeof updateHostProfile>[1]) => {
+    setBusy(kind);
+    if (kind === 'probe') setProbe(null);
+    const before = profile?.probed?.probedAt;
+    try {
+      const next = (await updateHostProfile(alias, body)).profile;
+      apply(next);
+      if (kind === 'probe') setProbe({ kind: next.probed?.probedAt && next.probed.probedAt !== before ? 'done' : 'same' });
+      log.info('host-profile', 'updated', { host: alias, change: kind });
+    } catch (err) {
+      if (kind === 'probe') setProbe({ kind: 'failed', text: message(err).replace(/[.\s]*$/, '') });
+      else setError(message(err));
+      log.warn('host-profile', 'update failed', { host: alias, change: kind, error: message(err) });
+    } finally {
+      setBusy(null);
+    }
+  }, [alias, apply, profile?.probed?.probedAt]);
+
+  return { profile, error, busy, probe, patch, apply, note, setNote };
+}
+
+/** The Details' System line from the probe, with Probe again and what it found. */
+export function profileSystemLine(hp: HostProfileState, fallback: string): { text: string; meta: ReactNode; action: ReactNode } {
+  const { profile, busy, probe } = hp;
+  const at = profile?.probed?.probedAt;
+  const meta = probe?.kind === 'failed'
+    ? <span className="hf-probe-note" data-tone="bad" role="status" data-testid="host-probe-note">Could not probe it: {probe.text}.{at ? ` This is what it said ${timeAgo(at)}.` : ''}</span>
+    : probe?.kind === 'same'
+      ? <span className="hf-probe-note" role="status" data-testid="host-probe-note">The host did not answer the probe; this is what it said {at ? timeAgo(at) : 'before'}.</span>
+      : at ? <span className="hf-probe-note" role={probe ? 'status' : undefined} data-testid="host-probe-note">Probed {timeAgo(at)}.</span> : null;
+  return {
+    text: profile?.probed ? systemLine(profile) : fallback,
+    meta,
+    action: (
+      <SettingsButton
+        variant="text"
+        holdFocus
+        busy={busy === 'probe'}
+        busyLabel="Probing..."
+        reserve={['Probe again', 'Probe now', 'Probing...']}
+        onClick={() => void hp.patch('probe', { refresh: true })}
+        data-testid="host-probe"
+      >
+        {profile?.probed ? 'Probe again' : 'Probe now'}
+      </SettingsButton>
+    ),
+  };
+}
+
+export function HostProfileDisclosure({ hp, alias, name }: { hp: HostProfileState; alias: string; name: string }) {
+  const { profile, error, busy, note, setNote, patch } = hp;
+  const noteRef = useRef<HTMLInputElement | null>(null);
+  const noteMic = useRef<BoxMicHandle | null>(null);
+  const [picker, setPicker] = useState<CursorPoint | null>(null);
+  const kindBtn = useRef<HTMLSpanElement>(null);
 
   // The kind picker closes on a press outside it or Escape; Escape and a pick give focus back
   // to the Kind button (it fell to the page).
@@ -92,23 +161,10 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
     if (busy === 'kind' || !refocusKind.current) return;
     refocusKind.current = false;
     const active = document.activeElement;
-    if (!active || active === document.body) focusLanded(kindBtn.current?.querySelector('button'));
+    if (!active || active === document.body || !active.isConnected) focusLanded(kindBtn.current?.querySelector('button'));
   }, [busy]);
 
   const noteInFlight = useRef<string | null>(null);
-  const patch = useCallback(async (kind: 'probe' | 'kind' | 'note', body: Parameters<typeof updateHostProfile>[1]) => {
-    setBusy(kind);
-    try {
-      apply((await updateHostProfile(alias, body)).profile);
-      log.info('host-profile', 'updated', { host: alias, change: kind });
-    } catch (err) {
-      setError(message(err));
-      log.warn('host-profile', 'update failed', { host: alias, change: kind, error: message(err) });
-    } finally {
-      setBusy(null);
-    }
-  }, [alias, apply]);
-
   const tools = Object.entries(profile?.probed?.tools ?? {});
   const found = tools.filter(([, v]) => v).map(([k, v]) => `${k} ${v}`);
   const missing = tools.filter(([, v]) => !v).map(([k]) => k);
@@ -143,6 +199,7 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                     aria-haspopup="listbox"
                     aria-label={`Kind of ${name}`}
                     disabled={busy === 'kind'}
+                    holdFocus
                     onClick={() => {
                       const r = kindBtn.current?.getBoundingClientRect();
                       if (r) setPicker({ x: r.left, y: r.bottom + 2 });
@@ -154,18 +211,6 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                   </span>
                 }
               />
-              <SettingsRow
-                indent
-                label="System"
-                control={
-                  <SettingsButton variant="text" disabled={busy === 'probe'} reserve={['Probe again', 'Probe now', 'Probing...']} onClick={() => void patch('probe', { refresh: true })}>
-                    {busy === 'probe' ? 'Probing...' : profile?.probed ? 'Probe again' : 'Probe now'}
-                  </SettingsButton>
-                }
-              >
-                <p className="settings-row-help" data-testid="host-profile-system">{systemLine(profile)}</p>
-                {profile.probed?.probedAt && <p className="settings-row-help settings-addons-muted">Probed {timeAgo(profile.probed.probedAt)}</p>}
-              </SettingsRow>
               {tools.length > 0 && (
                 <SettingsRow indent label="Tools">
                   <p className="settings-row-help settings-addons-mono">{found.join(', ') || 'None found.'}</p>

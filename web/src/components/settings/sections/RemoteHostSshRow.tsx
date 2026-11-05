@@ -1,15 +1,21 @@
 /**
  * Settings > Remote Hosts: one SSH host in the list of machines (HostRow.tsx). Its one action
  * follows its state (useLinkedHostRow.tsx); a host found in ~/.ssh/config asks Connect (Not now
- * is in its menu); an untouched new row offers Cancel. Edit opens the fields in place: hostname,
- * alias, user and port first, the rest under More options. Escape closes them (and takes away
- * a new row nobody typed in).
+ * is in its menu); a new row offers Cancel. Edit opens the fields in place: hostname, alias, user
+ * and port first, the rest under More options. Escape closes them (and takes away a new row
+ * nobody typed in).
+ *
+ * A new row says "Not saved" and keeps its fields open until it saves (2026-11-04 review: a
+ * hostname with no alias turned into a normal-looking row and was dropped with the pane). Its
+ * alias follows the hostname until the person types one, and it saves once Hostname is left. It
+ * has no More menu: Cancel is its one way out. An empty alias is refused under the field only once
+ * the person typed in it and left it, or pressed Save (never on tabbing in).
  *
  * A row whose alias is refused (another host has it, or it has none) shows no status and no
  * row id: it is a draft until it has an alias of its own (remote-hosts-model.ts). An alias of
  * its own with no hostname yet already follows that alias's status (C42).
  */
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
 import { SettingsDisclosure, SettingsRow, SettingsTag } from '../SettingsSection';
 import { NumberInput } from '../inputs/NumberInput';
@@ -34,10 +40,14 @@ interface Props {
   refusal: string | null;
   /** The refusal holds the save (not the companion's alias on the host saved under it). */
   blocking: boolean;
+  /** An empty-alias refusal may show (left empty after typing, or Save pressed). */
+  aliasShown: boolean;
   /** config.yaml has this host under its alias now (only then is there anything to connect). */
   saved: boolean;
   /** The save that wrote it just landed: the row says Saved for a moment. */
   justSaved: boolean;
+  /** Its Hostname field holds the focus (a new row saves once it is left). */
+  typing: boolean;
   aliasPlaceholder: string;
   card?: FleetHost;
   now: number;
@@ -48,6 +58,12 @@ interface Props {
   onField: <K extends keyof HostEntry>(field: K, value: HostEntry[K]) => void;
   onKeep: (patch: Partial<ReplicaKeep>) => void;
   onRemove: () => void;
+  onTurnOn: () => void;
+  onTyping: (on: boolean) => void;
+  onAliasLeft: () => void;
+  /** A Turn on or Connect whose dial waits (Connecting...), and when it was asked. */
+  connecting: boolean;
+  pressedAt?: number;
   /** A found host's answer running now, and its refusal. */
   answering: 'yes' | 'not_now' | null;
   answerError: string | null;
@@ -67,11 +83,17 @@ export function RemoteHostSshRow(props: Props) {
   // Found in ~/.ssh/config and not connected yet: the question instead of a status.
   const found = saveable && waitsForYes(host) ? host.connect : null;
   const linked = saveable && saved;
+  // A new row not saved yet: "Not saved", its fields open, Cancel its one way out.
+  const unsaved = host.savedAlias === undefined && !linked;
   const live = useLinkedHostRow({
     alias: named ? host.alias : `draft-${host._key}`, name, enabled: host.enabled, saved: linked, card, now,
-    boot: props.boot, onBootStart: props.onBootStart,
+    boot: props.boot, onBootStart: props.onBootStart, via: 'ssh', connecting: props.connecting || props.answering === 'yes', pressedAt: props.pressedAt,
   });
   const fresh = untouchedDraft(host);
+  // The empty-alias refusal waits until the person left the field empty or pressed Save.
+  const emptyAlias = !host.alias.trim();
+  const aliasError = refusal && (!emptyAlias || props.aliasShown) ? refusal : null;
+  const open = editing || unsaved;
 
   let state: ReactNode = live.state;
   let primary: RowPrimary | null = live.primary;
@@ -84,19 +106,20 @@ export function RemoteHostSshRow(props: Props) {
     };
     if (props.answerError) lines.push(<RowLine key="ae" tone="bad">{props.answerError}</RowLine>);
   } else if (!linked) {
-    state = refusal && !editing ? refusal
-      : refusal && host.alias.trim() ? 'Not saved until it has an alias of its own.'
-      : saveable ? 'Saving...'
-      : `Add ${[!host.hostname.trim() && 'a hostname', !host.alias.trim() && 'an alias'].filter(Boolean).join(' and ')} to save this host.`;
-    primary = fresh ? { label: 'Cancel', testId: 'rh-draft-cancel', ariaLabel: 'Cancel the new host', onClick: props.onRemove } : null;
+    state = refusal && !emptyAlias ? 'Not saved until it has an alias of its own.'
+      : !host.hostname.trim() ? 'Add a hostname to save this host.'
+      : emptyAlias ? 'Add an alias to save this host.'
+      : props.typing ? `It saves as ${host.alias} when you leave the hostname.`
+      : 'Saving...';
+    primary = unsaved ? { label: 'Cancel', testId: 'rh-draft-cancel', ariaLabel: fresh ? 'Cancel the new host' : `Cancel ${name}: it is not saved`, onClick: props.onRemove } : null;
   } else if (!host.enabled) {
-    primary = { label: 'Turn on', testId: 'rh-turn-on', ariaLabel: `Turn on ${name}`, onClick: () => props.onField('enabled', true) };
+    primary = { label: 'Turn on', reserve: ['Turn on', 'Connecting...'], testId: 'rh-turn-on', ariaLabel: `Turn on ${name}`, onClick: props.onTurnOn };
   }
   // A refusal that does not hold the save (the companion's alias, kept): said under the state.
   if (refusal && !blocking && linked && !editing) lines.push(<RowLine key="rf" tone="warn">{refusal}</RowLine>);
   if (justSaved) lines.push(<RowLine key="saved" tone="good" testId="rh-row-saved">Saved.</RowLine>);
 
-  const menu: RowMenuItem[] = [
+  const menu: RowMenuItem[] = unsaved ? [] : [
     { key: 'edit', label: editing ? 'Done editing' : 'Edit', onSelect: () => props.onEdit(!editing) },
     ...(found === 'ask' ? [{ key: 'not-now', label: 'Not now', disabled: props.answering !== null, onSelect: () => props.onAnswer('not_now') }] : []),
     ...(linked && !found ? [{ key: 'details', label: detailsOpen ? 'Hide details' : 'Details', onSelect: () => props.onDetails(!detailsOpen) }] : []),
@@ -104,19 +127,23 @@ export function RemoteHostSshRow(props: Props) {
     ...(live.hidden ? [{ key: 'show-again', label: 'Show again on the home page', onSelect: live.showOnBanner }] : []),
   ];
 
+  // Escape closes the fields of a saved host; a new row keeps them open (it is not saved), and
+  // one nobody typed in goes.
   const closeEdit = (e: KeyboardEvent) => {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     e.preventDefault();
-    if (fresh) props.onRemove(); else props.onEdit(false);
+    if (fresh) props.onRemove(); else if (!unsaved) props.onEdit(false);
   };
 
+  // Typed in Alias since it took the focus: leaving it empty then is a refusal to show.
+  const typedAlias = useRef(false);
   const text = (field: TextField, label: string, placeholder: string, size: 'short' | 'long', mono = false) => (
     <SettingsRow
       label={label}
       htmlFor={`rh-${field}-${idx}`}
       indent
       wide={size === 'long'}
-      error={field === 'alias' ? refusal ?? undefined : undefined}
+      error={field === 'alias' ? aliasError ?? undefined : undefined}
       control={
         <input
           id={`rh-${field}-${idx}`}
@@ -124,32 +151,37 @@ export function RemoteHostSshRow(props: Props) {
           data-no-draft="autosave"
           className={`settings-input settings-input--${size}${mono ? ' settings-input--mono' : ''}`}
           value={host[field]}
-          onChange={(e) => props.onField(field, e.target.value)}
+          onChange={(e) => { if (field === 'alias') typedAlias.current = true; props.onField(field, e.target.value); }}
+          onFocus={() => { if (field === 'hostname') props.onTyping(true); if (field === 'alias') typedAlias.current = false; }}
+          onBlur={(e) => {
+            if (field === 'hostname') props.onTyping(false);
+            if (field === 'alias' && typedAlias.current && !e.currentTarget.value.trim()) props.onAliasLeft();
+          }}
           placeholder={placeholder}
           spellCheck={false}
-          aria-invalid={field === 'alias' && refusal ? true : undefined}
+          aria-invalid={field === 'alias' && aliasError ? true : undefined}
         />
       }
     />
   );
 
-  const edit = editing && (
+  const edit = open && (
     <div className="rh-edit" data-testid="rh-edit" onKeyDown={closeEdit}>
       {text('hostname', 'Hostname', 'host.example.com', 'long', true)}
       {text('alias', 'Alias', props.aliasPlaceholder, 'short', true)}
-      {text('user', 'User', 'SSH user name', 'short')}
+      {text('user', 'User', 'Your user name there', 'short')}
       <SettingsRow
         label="Port"
         htmlFor={`rh-port-${idx}`}
         indent
         control={<NumberInput id={`rh-port-${idx}`} value={host.port} onChange={(v) => props.onField('port', v)} placeholder="22" min={1} max={65535} />}
       />
-      <SettingsDisclosure id={`rh-more-options-${host._key}`} label="More options" summary="Label, shell setup, what it keeps" indent data-testid="rh-more-options">
+      <SettingsDisclosure id={`rh-more-options-${host._key}`} label="More options" summary="Label, setup commands, what it keeps" indent data-testid="rh-more-options">
         {text('label', 'Label', 'Display name', 'short')}
         <SettingsRow
-          label="Shell setup"
+          label="Setup commands"
           htmlFor={`rh-shell-${idx}`}
-          help="Runs before claude in remote sessions."
+          help="Run on the host before each session starts there."
           indent
           wide
           // Multi-line editor: label on top, editor across the group (N3-22).
@@ -177,13 +209,16 @@ export function RemoteHostSshRow(props: Props) {
           ownWork="Its sessions, their tasks, triggers, the team Board and replies are always kept."
         />
       </SettingsDisclosure>
-      <SettingsRow
-        indent
-        className="rh-edit-done"
-        help={linked ? 'Changes save as you type.' : 'It saves once it has a hostname and an alias of its own.'}
-        // An untouched new row's one way out is its Cancel, on the row (never a second one here).
-        control={fresh ? undefined : <SettingsButton variant="text" onClick={() => props.onEdit(false)} data-testid="rh-edit-done">Done</SettingsButton>}
-      />
+      {/* A new row's state line already says what it waits for, and its one way out is its
+          Cancel, on the row: no second note or button here. */}
+      {!unsaved && (
+        <SettingsRow
+          indent
+          className="rh-edit-done"
+          help={linked ? 'Changes save as you type.' : undefined}
+          control={<SettingsButton variant="text" onClick={() => props.onEdit(false)} data-testid="rh-edit-done">Done</SettingsButton>}
+        />
+      )}
     </div>
   );
 
@@ -205,15 +240,22 @@ export function RemoteHostSshRow(props: Props) {
       lines={[...live.lines, ...lines]}
       primary={primary}
       menu={menu}
-      onRemove={fresh ? undefined : props.onRemove}
+      onRemove={unsaved ? undefined : props.onRemove}
       removeNote={linked ? 'Walnut stops connecting to it. Its sessions stop; nothing on the host is deleted.' : undefined}
       off={!host.enabled && !found}
       needsLook={linked && !found && live.needsLook}
+      unsaved={unsaved}
+      report={linked && !found ? {
+        host: host.alias, counted: true, online: live.online, off: !host.enabled, local: false, via: 'ssh', phone: card?.server?.phone === 'connected',
+        rttMs: card?.connection.connected ? card.connection.rttMs ?? null : null,
+        sessions: card?.sessions.running ?? null, spendUsd: card?.spend?.last30dUsd ?? null,
+        sub: card?.system?.os ?? host.hostname,
+      } : undefined}
       data={{ 'data-found': found ?? undefined }}
       panel={
         <>
           {edit}
-          {detailsOpen && linked && <HostDetails alias={host.alias} name={name} card={card} now={now} linked={host.enabled} profile />}
+          {detailsOpen && linked && <HostDetails alias={host.alias} name={name} card={card} now={now} linked={host.enabled} profile kind="ssh" />}
         </>
       }
     />

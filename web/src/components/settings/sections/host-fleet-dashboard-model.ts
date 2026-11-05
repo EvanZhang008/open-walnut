@@ -54,9 +54,10 @@ function rebootProblem(h: FleetHost): Problem | null {
   const d = h.daemon;
   if (h.local || !d || d.startsAfterReboot) return null;
   const b = d.bootStart ?? null;
-  const detail = d.reboot ?? 'Its daemon does not start by itself after a reboot';
-  if (b?.setupRunning) return { key: 'reboot', text: 'Setting up start after a reboot', detail, tone: 'muted' };
-  const text = 'Daemon does not come back after a reboot';
+  const detail = d.reboot ?? 'Walnut\'s helper there does not start by itself after a reboot';
+  const name = h.label || h.host;
+  if (b?.setupRunning) return { key: 'reboot', text: `Setting up Walnut to restart on ${name} after a reboot`, detail, tone: 'muted' };
+  const text = `Walnut won't restart on ${name} after it reboots`;
   // The host's keeper says what a press can do (BootStartNext); an older server says nothing, so no button.
   // Only an SSH host has a keeper; the cloud box runs its own service.
   const next = (h.connection.kind === 'ssh-tunnel' || h.connection.kind === 'host-network') && h.connection.connected ? b?.next ?? null : null;
@@ -229,7 +230,7 @@ export function gauges(h: FleetHost): Gauge[] {
     key: 'disk', label: 'Disk', share: used,
     // Red goes by what is left, not the share: 10% of a 4 TB disk is plenty.
     tone: used === null ? 'muted' : free?.low ? 'bad' : used >= 0.9 ? 'warn' : 'good',
-    title: d ? `${size(d.totalBytes - d.freeBytes)} of ${size(d.totalBytes)} in use, ${size(d.freeBytes)} free` : free ? `${free.text} free (its daemon does not report the disk size yet)` : 'No disk reading',
+    title: d ? `${size(d.totalBytes - d.freeBytes)} of ${size(d.totalBytes)} in use, ${size(d.freeBytes)} free` : free ? `${free.text} free (its Walnut helper does not report the disk size yet)` : 'No disk reading',
     // Its size not known: the ring says the free space, which is known.
     ...(used === null && free ? { text: free.text, sub: 'free', subLow: free.low } : free ? { sub: `${free.text} free`, subLow: free.low } : {}),
   });
@@ -296,10 +297,10 @@ export interface Chip { key: string; text: string; title?: string; tone?: 'muted
 
 export function roleChips(h: FleetHost): Chip[] {
   const out: Chip[] = [];
-  if (h.local) out.push({ key: 'primary', text: 'Primary', title: 'The Walnut that leads: it keeps the tasks and links every host' });
-  if (h.connection.kind === 'bridge') out.push({ key: 'cloud', text: 'Cloud', title: 'The cloud companion: it connects in over a bridge' });
+  if (h.local) out.push({ key: 'primary', text: 'Leads', title: 'The Walnut that leads: it keeps the tasks and links every host' });
+  if (h.connection.kind === 'bridge') out.push({ key: 'cloud', text: 'Cloud', title: 'Your cloud companion: it connects in to this Mac' });
   if (h.capabilities?.alwaysOn) out.push({ key: 'always-on', text: 'Always on', title: 'Up all of its recorded time: fit for work that must keep running' });
-  if (h.server?.enabled && h.server.program === 'replica') out.push({ key: 'replica', text: 'Replica', title: 'Runs a copy of Walnut that serves while the Mac is away' });
+  if (h.server?.enabled && h.server.program === 'replica') out.push({ key: 'replica', text: 'Walnut runs here', title: 'Runs a copy of Walnut that serves while the Mac is away' });
   return out;
 }
 
@@ -325,7 +326,7 @@ export function capabilityChips(h: FleetHost): Chip[] {
 export function linkLabel(h: FleetHost): string {
   const c = h.connection;
   if (!c.connected) return c.kind === 'bridge' ? 'Not connected in' : 'Not connected';
-  const kind = c.kind === 'bridge' ? 'Bridge' : c.kind === 'host-network' ? 'Host network' : 'SSH tunnel';
+  const kind = c.kind === 'bridge' ? 'Through your cloud companion' : c.kind === 'host-network' ? 'Host network' : 'SSH tunnel';
   return c.rttMs ? `${kind}, ${c.rttMs} ms` : kind;
 }
 
@@ -340,19 +341,23 @@ export interface TopoNode { host: string; x: number; y: number; side: 'left' | '
 
 export const TOPO = { width: 760, nodeW: 150, nodeH: 46, rowGap: 64, pad: 16 } as const;
 
+/** A host the diagram draws: the list's row (online as the row says it) or a reading. */
+export type TopoItem = { host: string; local: boolean; live: boolean } | FleetHost;
+const liveOf = (h: TopoItem) => ('live' in h ? h.live : isLive(h));
+
 /** The primary in the centre; every other host on the left and right, half each, top to bottom in order. */
-export function topologyLayout(hosts: FleetHost[]): { height: number; centre: TopoNode | null; nodes: TopoNode[] } {
+export function topologyLayout(hosts: TopoItem[]): { height: number; centre: TopoNode | null; nodes: TopoNode[] } {
   const primary = hosts.find((h) => h.local) ?? null;
   const others = hosts.filter((h) => h !== primary);
   const left = others.filter((_, i) => i % 2 === 0);
   const right = others.filter((_, i) => i % 2 === 1);
   const rows = Math.max(1, left.length, right.length);
   const height = Math.max(150, TOPO.pad * 2 + (rows - 1) * TOPO.rowGap + TOPO.nodeH);
-  const column = (list: FleetHost[], side: 'left' | 'right') => {
+  const column = (list: TopoItem[], side: 'left' | 'right') => {
     const span = (list.length - 1) * TOPO.rowGap;
     const top = height / 2 - span / 2;
     const x = side === 'left' ? TOPO.pad + TOPO.nodeW / 2 : TOPO.width - TOPO.pad - TOPO.nodeW / 2;
-    return list.map((h, i) => ({ host: h.host, x, y: top + i * TOPO.rowGap, side, live: isLive(h) }));
+    return list.map((h, i) => ({ host: h.host, x, y: top + i * TOPO.rowGap, side, live: liveOf(h) }));
   };
   return {
     height,

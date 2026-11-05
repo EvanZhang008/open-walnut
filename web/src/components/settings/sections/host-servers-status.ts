@@ -153,7 +153,7 @@ function describeHostServerNow(entry: HostServerEntry): HostServerLine {
     case 'waiting-for-host':
       return { dot: 'pending', text: v.message ?? 'Starts when Walnut next connects to this host.', retry: false };
     case 'unsupported':
-      return { dot: 'action', text: v.message ?? 'This host\'s Walnut daemon needs an update first.', retry: false };
+      return { dot: 'action', text: v.message ?? 'Walnut\'s helper on this host needs an update first: it updates the next time Walnut connects.', retry: false };
     case 'checking':
     case 'installing':
     case 'starting':

@@ -119,7 +119,9 @@ test('clearing a remote host alias to retype it renames the host, never deletes 
   await clickNav(page, 'remote-hosts')
   const row = page.locator('.rh-host-row[data-host-alias="devbox"]')
   await expect(row).toBeVisible({ timeout: 20_000 })
-  await row.getByRole('button', { name: 'Edit' }).click()
+  // Edit is in the row's More menu.
+  await row.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Edit', exact: true }).click()
   const alias = page.locator('#rh-alias-0')
   await alias.fill('')
   // Well past the autosave delay: a save now would drop the host.

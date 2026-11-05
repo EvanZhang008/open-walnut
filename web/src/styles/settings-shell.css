@@ -95,7 +95,8 @@
   border-radius: 2px;
 }
 
-.settings-build-line-action:disabled {
+.settings-build-line-action:disabled,
+.settings-build-line-action[aria-disabled='true'] {
   cursor: progress;
 }
 
