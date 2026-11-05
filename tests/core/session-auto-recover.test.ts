@@ -767,3 +767,82 @@ describe('config', () => {
     expect(make(w, { enabled: false }).noteLoss(rec, 'server_restart', before, { requireInfra: false })).toBe(false)
   })
 })
+
+// ── The host-shutdown check (sessions/shutdown-death.ts) ──
+
+describe('shutdown check: a death while the computer shuts down', () => {
+  /** A death edge of a session no one stopped, mid-turn; the host's answer may never come. */
+  function edge(w: World, sid: string, snapshot: SessionSnapshot | null | 'never' = snap({ turnActive: true, lastResult: null })) {
+    const { rec } = dead(w, sid, 'IN_PROGRESS', { snapshot: snapshot === 'never' ? null : snapshot, lastActiveAt: new Date(w.t - 20_000).toISOString() })
+    const r = { ...rec, status_reason: 'daemon_reported_exit' } as SessionRecord
+    w.records.set(sid, r)
+    return r
+  }
+
+  it('stamps the loss on disk before it waits for anything, a host that never answers included', async () => {
+    const w = new World()
+    const r = edge(w, 'hang')
+    const sar = new SessionAutoRecover(CFG, { ...w.deps(), fetchSnapshot: () => new Promise(() => {}) })
+    expect(sar.holdForShutdownCheck(r, async () => null, 15_000)).toBe(true)
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    expect(w.loss('hang')).toMatchObject({ state: 'pending', cause: 'server_restart', before: { status: 'running' } })
+    expect(sar.holdsHandBack(w.records.get('hang')!)).toBe(true)
+    // No witness in the window, still no answer: it died on its own, handed back.
+    await w.advance(16_000)
+    expect(w.loss('hang')).toMatchObject({ state: 'skipped' })
+    expect(w.handBacks).toEqual(['task-hang'])
+  })
+
+  it("this server's own stop leaves the stamp pending for the next boot, which knows the reboot", async () => {
+    const w = new World()
+    const r = edge(w, 'stop')
+    const sar = make(w)
+    expect(sar.holdForShutdownCheck(r, async () => 'server_stopping', 15_000)).toBe(true)
+    await w.advance(2_000)
+    expect(w.loss('stop')).toMatchObject({ state: 'pending' })
+    expect(w.handBacks).toEqual([])
+    // The next boot classifies it: the reboot came after its last activity.
+    const next = new SessionAutoRecover(CFG, { ...w.deps(), bootTimeMs: () => w.t + 60_000 })
+    w.t += 120_000
+    expect(await next.resumeUnfinished()).toBe(1)
+    await w.advance(1_000)
+    expect(w.loss('stop')).toMatchObject({ state: 'queued', cause: 'machine_reboot', verdict: 'resume' })
+  })
+
+  it("the host link going down classifies it at once; a crash with no witness is handed back", async () => {
+    const w = new World()
+    const down = edge(w, 'down')
+    const crash = edge(w, 'crash')
+    const sar = make(w)
+    expect(sar.holdForShutdownCheck(down, async () => 'host_link_down', 15_000)).toBe(true)
+    expect(sar.holdForShutdownCheck(crash, async () => null, 15_000)).toBe(true)
+    // A second edge of the same death joins the check already running.
+    expect(sar.holdForShutdownCheck(crash, async () => null, 15_000)).toBe(true)
+    await w.advance(3_000)
+    expect(w.loss('down')).toMatchObject({ state: 'queued', verdict: 'resume' })
+    expect(w.handBacks).toEqual([])
+    await w.advance(14_000)
+    expect(w.loss('crash')).toMatchObject({ state: 'skipped' })
+    expect(w.handBacks).toEqual(['task-crash'])
+  })
+
+  it('an error the process lived through keeps its own hand-back', async () => {
+    const w = new World()
+    const r = edge(w, 'alive', snap({ cliState: 'idle' as SessionSnapshot['cliState'] }))
+    const sar = make(w)
+    expect(sar.holdForShutdownCheck(r, async () => null, 15_000)).toBe(true)
+    await w.advance(2_000)
+    expect(w.loss('alive')).toMatchObject({ state: 'skipped', reason: 'process is alive' })
+    expect(w.handBacks).toEqual(['task-alive'])
+  })
+
+  it('a queued loss from before this boot learns of the reboot', async () => {
+    const w = new World()
+    const { rec } = dead(w, 'q', 'IN_PROGRESS')
+    w.records.set('q', { ...rec, restartLoss: { at: new Date(w.t).toISOString(), cause: 'server_restart', lost: ['turn'], state: 'queued', verdict: 'resume' } })
+    const next = new SessionAutoRecover(CFG, { ...w.deps(), bootTimeMs: () => w.t + 60_000 })
+    w.t += 120_000
+    expect(await next.resumeUnfinished()).toBe(1)
+    expect(w.loss('q')).toMatchObject({ state: 'queued', cause: 'machine_reboot' })
+  })
+})
