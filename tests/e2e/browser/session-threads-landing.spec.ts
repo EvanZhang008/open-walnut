@@ -345,7 +345,8 @@ test.describe('Question stack landing', () => {
     await page.addInitScript((key) => localStorage.setItem(key, 'stack'), VIEW_MODE_DEFAULT_KEY)
     await seedColumns(page, [DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION])
     // Three columns explicitly (Auto's breakpoints measure the strip beside the
-    // chat slot); set back to Auto at the end.
+    // chat slot); set back to the fixture's default of 2 at the end (Auto would
+    // leave one column under 1400px for every later spec that reads the count).
     await setPanelMode(page, '3')
     await boot(page)
     const ids = [DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION]
@@ -425,6 +426,6 @@ test.describe('Question stack landing', () => {
     await page.waitForTimeout(10_000)
     await expect(toast).toHaveCount(1)
     await page.mouse.move(p1.x + 20, p1.y + 200)
-    await setPanelMode(page, 'Auto')
+    await setPanelMode(page, '2')
   })
 })
