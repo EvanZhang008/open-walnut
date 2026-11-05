@@ -1117,7 +1117,7 @@ function runWnMinimal(argv, stdinText) {
   var wnRunOps = { host_exec: { field: 'job_id', prefix: 'hx-' }, host_exec_pinned: { field: 'job_id', prefix: 'hx-' }, host_copy: { field: 'copy_id', prefix: 'hc-' } };
   var wnRunId = null;
   var wnShellWord = function (t) { return "'" + t.replace(/'/g, "'\\\\''") + "'"; };
-  var wnLostRun = function () {
+  var wnLostRunJob = function () {
     if (!wnRunId) return;
     if (wnRunId.op === 'host_copy') {
       errOut('walnut: host_copy may have started as copy ' + wnRunId.id + ': do not start it again. Read it first:');
@@ -1129,6 +1129,28 @@ function runWnMinimal(argv, stdinText) {
     errOut('walnut: host_exec may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:');
     errOut('  walnut tools call host_exec_read ' + wnShellWord(readArgs));
     errOut('walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ': host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)");
+  };
+  // Mirror of src/lib/op-call-id.ts: every call's id, sent beside its name, so a resend runs it
+  // at most once and op_result reads what it did when its answer is lost.
+  var wnCallId = null;
+  var wnCallIdRe = /^oc-[A-Za-z0-9_-]{8,48}$/;
+  var wnNewCallId = function () { return 'oc-' + crypto.randomUUID().replace(/-/g, ''); };
+  // Twin of op-call-id.ts callIdInJsonText: null = none named, '' = not a string.
+  var wnCallIdInText = function (t) {
+    var at = t.indexOf('"_call_id"');
+    if (at === -1) return null;
+    var i = at + 10;
+    while (i < t.length && (t[i] === ' ' || t[i] === ':' || t.charCodeAt(i) === 9 || t.charCodeAt(i) === 10 || t.charCodeAt(i) === 13)) i++;
+    if (t[i] !== '"') return '';
+    var end = t.indexOf('"', i + 1);
+    return end === -1 ? '' : t.slice(i + 1, end);
+  };
+  var wnLostRun = function () {
+    wnLostRunJob();
+    if (!wnCallId || !args || typeof args.name !== 'string') return;
+    errOut('walnut: no answer came back for ' + args.name + ' (call ' + wnCallId + '). If it changes something, it may have run: do not run it again as a new call. Read what happened:');
+    errOut('  walnut tools call op_result ' + wnShellWord(JSON.stringify({ call_id: wnCallId })));
+    errOut('walnut: to run it again safely, add "_call_id":"' + wnCallId + '" to the same arguments; it runs at most once.');
   };
   // A server older than the run id refuses it as an unknown argument, before anything ran.
   var wnRefusedRunId = function (msg) {
@@ -1257,19 +1279,33 @@ function runWnMinimal(argv, stdinText) {
           // pulls the file back from this host's daemon in bounded byte ranges
           // (core/peers/gateway-args-file.ts). Keeps a 100MB letter body off the
           // one NDJSON line + one WS frame this request would otherwise be.
-          args = { name: rest[0], argsFile: wnArgsFile };
+          // A file names its own call with "_call_id" (the server takes it from there): this call is that one.
+          var wnFileText = '';
+          try { wnFileText = fs.readFileSync(wnArgsFile, 'utf-8'); } catch (e) { /* the server reads it and says */ }
+          var wnNamed = wnCallIdInText(wnFileText);
+          if (wnNamed !== null && !wnCallIdRe.test(wnNamed)) { errOut('walnut: _call_id must be a call id a Walnut client printed'); return exitWn(2); }
+          wnCallId = wnNamed || wnNewCallId();
+          args = { name: rest[0], argsFile: wnArgsFile, callId: wnCallId };
         } else {
           var parsedCall = wnParseToolArgs(rawText);
           if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
           var wnCut = process.env.WALNUT_TEXT_CHECK === '0' || src.kind !== 'inline' ? null : wnStrippedText(parsedCall.args, '', 0);
           if (wnCut) { errOut('walnut: ' + wnStrippedMessage(wnCut)); return exitWn(2); }
+          // A caller re-running a lost call names it with "_call_id"; never one of the op's own arguments.
+          if (Object.prototype.hasOwnProperty.call(parsedCall.args, '_call_id')) {
+            var wnGivenCall = parsedCall.args._call_id;
+            delete parsedCall.args._call_id;
+            if (typeof wnGivenCall !== 'string' || !wnCallIdRe.test(wnGivenCall)) { errOut('walnut: _call_id must be a call id a Walnut client printed'); return exitWn(2); }
+            wnCallId = wnGivenCall;
+          }
+          if (!wnCallId) wnCallId = wnNewCallId();
           var wnRunOp = Object.prototype.hasOwnProperty.call(wnRunOps, rest[0]) ? wnRunOps[rest[0]] : null;
           if (wnRunOp) {
             var wnGiven = parsedCall.args[wnRunOp.field];
             if (!(typeof wnGiven === 'string' && wnGiven)) parsedCall.args[wnRunOp.field] = wnRunOp.prefix + crypto.randomUUID();
             wnRunId = { op: rest[0], field: wnRunOp.field, host: String(parsedCall.args.host), id: parsedCall.args[wnRunOp.field] };
           }
-          args = { name: rest[0], args: parsedCall.args };
+          args = { name: rest[0], args: parsedCall.args, callId: wnCallId };
         }
       }
     } else { errOut('walnut: ' + usage); return exitWn(2); }

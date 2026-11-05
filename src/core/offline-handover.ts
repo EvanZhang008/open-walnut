@@ -27,6 +27,7 @@ import type { SessionRequest } from './session-requests.js';
 import { VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from './types.js';
 import { APPLIED_V2_KINDS, RefusedWrite, applyV2, devicePaired, v2TaskIdOf, type V2Record } from './offline-merge/apply-v2.js';
 import { recordRemap } from './offline-merge/ledger.js';
+import { journalCallId } from '../lib/op-call-id.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -397,6 +398,15 @@ function scheduleRetry(conn: HandoverConnection, ms: number): void {
   }, ms);
   t.unref?.();
   retryTimers.set(conn.hostKey, t);
+}
+
+/**
+ * The call id a record's op is replayed under (src/lib/op-call-id.ts): a try after one whose
+ * answer was lost meets that try's writes instead of applying them twice.
+ */
+function recordCall(host: string, record: OfflineRecord): { callId?: string } {
+  const opId = recordOpId(record);
+  return opId ? { callId: journalCallId(host, opId, Number((record as { rev?: unknown }).rev) || 1) } : {};
 }
 
 function recordOpId(record: OfflineRecord): string | undefined {
@@ -979,7 +989,7 @@ async function applyRecord(
       if (record.op.startsWith('board_') || record.op.startsWith('trigger_')) {
         const { executeOp } = await import('../ops/index.js');
         const { hostOrigin } = await import('../lib/caller-origin.js');
-        const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host) });
+        const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host), ...recordCall(host, record) });
         // A create needs the host's daemon and the routines engine right now: an answer that
         // says either is away (a 5xx, a timeout) is tried again, never taken as a refusal that
         // would lift the hold of a trigger the host has run for hours.
@@ -1018,7 +1028,7 @@ async function applyRecord(
       }
       const { executeOp } = await import('../ops/index.js');
       const { hostOrigin } = await import('../lib/caller-origin.js');
-      const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host) });
+      const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host), ...recordCall(host, record) });
       // The server's own words; the log line and the caller's notice name the op.
       // A refusal is the server's answer (a 5xx is carded by its route); no
       // answer at all is Walnut failing its own write.

@@ -116,6 +116,12 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
 
   /** One request line to the daemon's agent gateway, one answer line back. */
   function gateway(socketPath: string, sid: string, op: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    // An op call's id (src/lib/op-call-id.ts; no import here, this function's source is inlined
+    // into the source daemon): a lost answer names it, so the job can read it with op_result.
+    const callId = op === 'tools.call' && typeof args.name === 'string'
+      ? `oc-${deps.now().toString(36)}${Math.random().toString(36).slice(2, 12).padEnd(10, '0')}` : ''
+    if (callId) args = { ...args, callId }
+    const lostLine = callId ? ` (call ${callId}: it may have run; read it with op_result {"call_id":"${callId}"} before calling it again)` : ''
     return new Promise((resolve, reject) => {
       const sock = deps.net.connect(socketPath)
       const chunks: Buffer[] = []
@@ -128,8 +134,9 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
         fn()
       }
       const timer = deps.setTimer(() => finish(() => {
-        const err = new Error(`no answer from Walnut within ${OP_TIMEOUT_MS / 1000} s`) as Error & { code?: string }
+        const err = new Error(`no answer from Walnut within ${OP_TIMEOUT_MS / 1000} s${lostLine}`) as Error & { code?: string; callId?: string }
         err.code = 'hub_timeout'
+        if (callId) err.callId = callId
         reject(err)
       }), OP_TIMEOUT_MS)
       sock.on('connect', () => { sock.write(JSON.stringify({ v: 1, op, sid, args }) + '\n') })
@@ -143,8 +150,9 @@ export function createPluginJobHarness(deps: PluginJobHarnessDeps) {
           try { reply = JSON.parse(text) } catch { reject(new Error('malformed answer from the Walnut daemon')); return }
           if (reply.ok === true) { resolve(reply.result ?? {}); return }
           const e = reply.error ?? {}
-          const err = new Error(e.message || 'the Walnut op failed') as Error & { code?: string; detail?: unknown }
+          const err = new Error((e.message || 'the Walnut op failed') + (e.code === 'hub_timeout' ? lostLine : '')) as Error & { code?: string; detail?: unknown; callId?: string }
           err.code = e.code || 'internal'
+          if (callId) err.callId = callId
           if (e.detail !== undefined) err.detail = e.detail
           reject(err)
         })

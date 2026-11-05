@@ -254,9 +254,20 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         return
       }
     }
+    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once, and op_result reads
+    // what it did when its answer is lost. A caller re-running a lost call passes "_call_id".
+    const { callIdFor, lostCallDetail, lostCallLines, newCallId } = await import('../lib/op-call-id.js')
+    const given = callIdFor(parsed)
+    if (given.bad) {
+      console.error(given.bad)
+      process.exitCode = 2
+      return
+    }
+    let callId = given.callId
     // A host_exec run's id chosen here, so an answer that never comes back still leaves one to read.
     const { awayLines, callerRunId, dropRunId, lostRunLines, refusedRunId } = await import('../providers/host-exec-run-id.js')
     let runId = callerRunId(name, parsed)
+    const lostLines = () => [...(runId ? lostRunLines(name, parsed, runId) : []), ...lostCallLines(name, parsed, callId)].join('\n')
     // A message from a session goes through its host daemon first, on the Mac as
     // on any host: a message between two sessions on one host is that host's to
     // deliver, and the daemon hands everything else to the server itself. Only
@@ -264,13 +275,17 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // reach) leaves the call to the HTTP path below; nothing was delivered then.
     if (name === 'task_send' || name === 'session_send') {
       const { callHostDaemonTool, formatErrorLines, errorToExitCode } = await import('../providers/wn-cli.js')
-      const resp = await callHostDaemonTool(name, parsed)
+      const resp = await callHostDaemonTool(name, parsed, process.env, callId)
       if (resp && !(resp.ok === false && (resp.error.code === 'hub_unreachable' || resp.error.code === 'unknown_caller'))) {
         if (resp.ok) {
           console.log(JSON.stringify(resp.result, null, 2))
           return
         }
         console.error(formatErrorLines(resp.error).join('\n'))
+        if (resp.error.code === 'hub_timeout') {
+          console.error(lostLines())
+          if (resp.error.detail === undefined) console.log(JSON.stringify(lostCallDetail(name, callId), null, 2))
+        }
         process.exitCode = errorToExitCode(resp.error.code)
         return
       }
@@ -280,25 +295,29 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // Outside every session and with no terminal, the call is a script's, never the user's.
     const { cliAutomationSender } = await import('../lib/cli-sender.js')
     const sender = cliAutomationSender()
-    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...(sender ? { sender } : {}) })
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!r.ok && runId && refusedRunId(name, r.message)) {
       dropRunId(name, parsed)
       runId = null
-      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+      // Other arguments, so another call: nothing of the first ran.
+      callId = newCallId()
+      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...(sender ? { sender } : {}) })
     }
     if (!r.ok && r.unreachable) {
       const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
-      const code = await callThroughHostDaemon(name, parsed)
+      // The same call id: a write the server took before its connection reset runs once.
+      const code = await callThroughHostDaemon(name, { ...parsed, _call_id: callId })
       if (code !== null) { process.exitCode = code; return }
     }
     if (!r.ok) {
       if (r.result !== undefined) console.log(JSON.stringify(r.result, null, 2))
       console.error(r.message)
-      // No answer at all (a timeout, a dropped connection): the run may have started all the same.
+      // No answer at all (a timeout, a dropped connection): the call may have run all the same.
       // A server that refused the connection never saw the call: nothing ran.
-      if (runId && r.result === undefined && /^Walnut request (timed out|failed)/.test(r.message)) {
-        console.error(lostRunLines(name, parsed, runId).join('\n'))
+      if (r.result === undefined && (r.lost || /^Walnut request (timed out|failed)/.test(r.message))) {
+        console.error(lostLines())
+        console.log(JSON.stringify(lostCallDetail(name, callId), null, 2))
       } else if (r.unreachable) {
         const lines = awayLines(name, parsed)
         if (lines.length) console.error(lines.join('\n'))

@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { getOp, listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
 import { opInputJsonSchema } from '../ops/registry.js'
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
+import { callIdFor, lostCallLines } from '../lib/op-call-id.js'
 
 export { resolveApiBase }
 
@@ -84,8 +85,7 @@ function registerOpGateway(server: McpServer, base: string, readonly: boolean): 
       return fail('tool_call args must be an object of the tool\'s arguments')
     }
     const opArgs = (given ?? {}) as Record<string, unknown>
-    const r = await executeOp(op.name, opArgs, { apiBase: base, origin: LOCAL_ORIGIN })
-    return r.ok ? ok(r.result) : r.result !== undefined ? { ...ok(r.result), isError: true } : fail(r.message)
+    return runWithCallId(op.name, opArgs, base)
   }
   server.registerTool('tool_help', {
     title: 'List Walnut tools, or show one tool\'s arguments',
@@ -102,6 +102,21 @@ function registerOpGateway(server: McpServer, base: string, readonly: boolean): 
     ...(readonly ? { annotations: { readOnlyHint: true } } : {}),
   }, call)
   return new Map<string, GatewayHandler>([['tool_help', help as GatewayHandler], ['tool_call', call as GatewayHandler]])
+}
+
+/**
+ * One op call with its own call id (src/lib/op-call-id.ts): a write runs at most once per id,
+ * and a call whose answer was lost says so, with the id to read it by (op_result) and the way
+ * to run it again safely, never a bare timeout. A model re-running a lost call passes "_call_id".
+ */
+async function runWithCallId(name: string, given: Record<string, unknown>, base: string): Promise<CallToolResult> {
+  const args = { ...given }
+  const { callId, bad } = callIdFor(args)
+  if (bad) return fail(bad)
+  const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId })
+  if (r.ok) return ok(r.result)
+  if (r.result !== undefined) return { ...ok(r.result), isError: true }
+  return fail(r.lost || r.unreachable ? [r.message, ...lostCallLines(name, args, callId)].join('\n') : r.message)
 }
 
 /**
@@ -138,8 +153,7 @@ export function registerWalnutTools(
       _meta: { 'anthropic/alwaysLoad': true },
     }, async (args: Record<string, unknown>) => {
       // A separate process: the server re-judges its socket, and can only lower this.
-      const r = await executeOp(op.name, args ?? {}, { apiBase: base, origin: LOCAL_ORIGIN })
-      return r.ok ? ok(r.result) : r.result !== undefined ? { ...ok(r.result), isError: true } : fail(r.message)
+      return runWithCallId(op.name, args ?? {}, base)
     })
   }
   const gateway = options.core ? registerOpGateway(server, base, !!options.readonly) : undefined
@@ -150,8 +164,6 @@ export function registerWalnutTools(
     if (viaGateway) return viaGateway(params.arguments ?? {})
     const op = getOp(params.name)
     if (!op || !callable.has(op.name) || (options.readonly && !op.tags.readonly)) return fail(`Tool ${params.name} not found`)
-    const result = await executeOp(op.name, params.arguments ?? {}, { apiBase: base, origin: LOCAL_ORIGIN })
-    return result.ok ? ok(result.result)
-      : result.result !== undefined ? { ...ok(result.result), isError: true } : fail(result.message)
+    return runWithCallId(op.name, params.arguments ?? {}, base)
   })
 }

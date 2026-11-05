@@ -25,6 +25,7 @@ import { unqueueableFields, type FieldWrite } from './task-fields.js';
 import { RefusedWrite } from './patch-check.js';
 import { frozenFieldTimes } from '../task-field-times.js';
 import { recordRemap } from './ledger.js';
+import { journalCallId } from '../../lib/op-call-id.js';
 import { applyFields, entryBase, exactTask, opKeyOf, pairValidator, resolveTaskId } from './apply-fields.js';
 
 export { RefusedWrite };
@@ -364,7 +365,9 @@ async function applyBoard(ctx: V2Context, record: V2Record): Promise<void> {
   // under the Mac's own id, is named by the id the host minted (as task-fields records are).
   const args = { ...((record.args ?? {}) as Record<string, unknown>) };
   if (typeof args.task === 'string' && args.task) args.task = resolveTaskId(ctx.hostKey, args.task, ctx.remap);
-  const r = await executeOp(op, args, await actorOptions(ctx.hostKey, record.actor));
+  // A try after one whose answer was lost meets that try's writes (src/lib/op-call-id.ts).
+  const callId = record.opId ? journalCallId(ctx.hostKey, record.opId, record.rev ?? 1) : undefined;
+  const r = await executeOp(op, args, { ...(await actorOptions(ctx.hostKey, record.actor)), ...(callId ? { callId } : {}) });
   if (!r.ok) throw r.unreachable ? new Error(r.message) : new RefusedWrite(r.message);
   ctx.result.replayed++;
   log.session.info('offline handover: board write applied', { host: ctx.hostKey, op, boardTaskId: args.task, seq: record.seq, opId: record.opId });

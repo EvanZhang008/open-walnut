@@ -32,6 +32,7 @@ import Database, { type Database as DatabaseType } from '../../lib/sqlite.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
 import { log } from '../../logging/index.js';
+import { SECRET_KEYS } from '../../lib/secret-keys.js';
 
 /** The host a write came through: a daemon's host key, or LOCAL_HOST for this server's own clients. */
 export const LOCAL_HOST = 'local';
@@ -39,12 +40,10 @@ export const LOCAL_HOST = 'local';
 export const LEDGER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** A stored HTTP answer larger than this keeps only its status (the duplicate gets a short body). */
 const MAX_STORED_BODY = 16 * 1024;
-/**
- * A JSON answer naming any of these keys is never stored: a duplicate gets its status and
- * a short body. A device pairing answers its live bearer token once, and the token itself
- * is never kept anywhere (device-store.ts); the ledger must not become the place it is.
- */
-const SECRET_KEYS = /"(token|accessToken|refreshToken|bearer|secret|clientSecret|password|passphrase|apiKey|api_key|pairingURI|pairingUri|privateKey|private_key|credentials?)"\s*:/i;
+// A JSON answer naming a secret key (src/lib/secret-keys.ts SECRET_KEYS) is never stored: a
+// duplicate gets its status and a short body. A device pairing answers its live bearer token
+// once, and the token itself is never kept anywhere (device-store.ts); the ledger must not
+// become the place it is.
 
 export interface LedgerKey {
   hostKey: string;
@@ -284,6 +283,52 @@ export function reserveOp(key: LedgerKey): Reserved {
 /** Is a request with this op id running right now? */
 export function opInFlight(key: LedgerKey): boolean {
   return inFlight.has(flightKey(key));
+}
+
+/** One write recorded or running under an op id that starts with a call's id (src/lib/op-call-id.ts writeOpId). */
+export interface CallWrite {
+  opId: string;
+  hostKey: string;
+  /** `running`: its request has not answered yet. */
+  state: 'recorded' | 'running';
+  entry?: LedgerEntry;
+}
+
+/**
+ * Every write of one op call: the rows whose op id starts with `<callId>-` under `home`
+ * (any host), and the requests with such an id still running. What `op_result` reads
+ * when the call itself is not (or no longer) in memory. Expired rows read as absent.
+ */
+export function writesOfCall(home: string, callId: string, now = Date.now()): CallWrite[] {
+  const prefix = `${callId}-`;
+  const out: CallWrite[] = [];
+  const seen = new Set<string>();
+  const push = (hostKey: string, opId: string, entry: LedgerEntry): void => {
+    const k = `${hostKey}\u0000${opId}`;
+    if (seen.has(k) || now - entry.appliedAt >= LEDGER_TTL_MS) return;
+    seen.add(k);
+    out.push({ opId, hostKey, state: 'recorded', entry });
+  };
+  const handle = open();
+  if (handle) {
+    try {
+      // A range on op_id, so the op_id index answers it (a LIKE would scan the table).
+      const rows = handle.prepare('SELECT host_key, op_id, applied_at, outcome FROM applied_ops WHERE op_id >= ? AND op_id < ? AND home = ? LIMIT 200')
+        .all(prefix, `${callId}.`, home) as Array<{ host_key: string; op_id: string; applied_at: number; outcome: string }>;
+      for (const r of rows) push(r.host_key, r.op_id, { ...(JSON.parse(r.outcome) as LedgerOutcome), appliedAt: r.applied_at });
+    } catch (err) {
+      log.web.warn('applied-ops ledger: read of a call\'s writes failed', { callId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  for (const [k, entry] of memoryRows) {
+    const [h, hm, op] = JSON.parse(k) as [string, string, string];
+    if (hm === home && op.startsWith(prefix)) push(h, op, entry);
+  }
+  for (const k of inFlight.keys()) {
+    const [h, hm, op] = JSON.parse(k) as [string, string, string];
+    if (hm === home && op.startsWith(prefix) && !seen.has(`${h}\u0000${op}`)) out.push({ opId: op, hostKey: h, state: 'running' });
+  }
+  return out.sort((a, b) => (a.entry?.appliedAt ?? Infinity) - (b.entry?.appliedAt ?? Infinity));
 }
 
 /** Tests only: point the ledger at a file (or back to the default) and forget everything in memory. */

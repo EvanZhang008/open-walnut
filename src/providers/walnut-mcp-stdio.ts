@@ -27,6 +27,7 @@ import type { GatewayError, GatewayOp, GatewayResponse } from './gateway-core.js
 import { GATEWAY_INLINE_ARGS_MAX_BYTES } from './tool-args-source.js'
 import { walnutMcpInstructions } from '../mcp/instructions.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
+import { callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -144,8 +145,13 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     if (typeof given !== 'object' || given === null || Array.isArray(given)) return toolError('arguments must be an object')
     // A run's id chosen here (host_exec), so an answer lost on the way back still leaves one to read.
     const args = { ...given } as Record<string, unknown>
+    // Every call's id (src/lib/op-call-id.ts): a resend runs it at most once, and op_result reads
+    // what it did when its answer is lost. A model re-running a lost call passes "_call_id".
+    const chosen = callIdFor(args)
+    if (chosen.bad) return toolError(chosen.bad)
+    let callId = chosen.callId
     let runId = callerRunId(name, args)
-    const lost = (lines: string) => (runId ? [lines, ...lostRunLines(name, args, runId)].join('\n') : lines)
+    const lost = (lines: string) => [lines, ...(runId ? lostRunLines(name, args, runId) : []), ...lostCallLines(name, args, callId)].join('\n')
     // A payload the gateway line cannot carry goes as a file the hub pulls, as the CLI's does.
     const raw = JSON.stringify(args)
     let spilled: string | undefined
@@ -155,12 +161,14 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       fs.writeFileSync(spilled, raw, { encoding: 'utf-8', mode: 0o600 })
     }
     try {
-      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled } : { name, args })
+      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled, callId } : { name, args, callId })
       // A server older than the run id refused it before anything ran: the same call without it.
       if (!resp.ok && runId && !spilled && refusedRunId(name, resp.error.message)) {
         dropRunId(name, args)
         runId = null
-        resp = await deps.request('tools.call', { name, args })
+        // Other arguments, so another call: nothing of the first ran.
+        callId = newCallId()
+        resp = await deps.request('tools.call', { name, args, callId })
       }
       if (resp.ok) return { content: [{ type: 'text', text: text(resp.result) }] }
       const message = deps.formatError(resp.error).join('\n')

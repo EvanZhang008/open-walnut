@@ -34,6 +34,7 @@ import {
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
+import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
 import {
   MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
@@ -636,12 +637,14 @@ export async function callHostDaemonTool(
   name: string,
   args: Record<string, unknown>,
   env: NodeJS.ProcessEnv = process.env,
+  callId?: string,
 ): Promise<GatewayResponse | null> {
   const socket = (env.WALNUT_AGENT_SOCKET ?? '').trim()
   const sid = (env.WALNUT_SESSION_ID ?? '').trim()
   if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
   try {
-    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args } })
+    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once.
+    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) } })
   } catch (err) {
     // A timeout is no proof nothing was delivered: it is the answer, not a miss.
     if (err instanceof WalnutCliTimeoutError) return { ok: false, error: { code: 'hub_timeout', message: err.message } }
@@ -812,9 +815,25 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   let argsFile: string | undefined
   let spilledArgsFile: string | undefined
   let runId: string | null = null
-  // The run may have started even though no answer came: say under which id, and how to read it.
-  const lostRun = () => {
-    if (runId && parsed.kind === 'tools.call') process.stderr.write(lostRunLines(parsed.name, callArgs, runId).join('\n') + '\n')
+  // Every call's id (src/lib/op-call-id.ts), sent beside its name: a resend runs it at most
+  // once, and op_result reads what it did when its answer is lost.
+  let callId = ''
+  // The call may have run even though no answer came: say under which id, and how to read it,
+  // on stderr and, unless something else is printed there, as JSON on stdout.
+  const lostRun = (stdout = true) => {
+    if (parsed.kind !== 'tools.call' || !callId) return
+    const lines = [...(runId ? lostRunLines(parsed.name, callArgs, runId) : []), ...lostCallLines(parsed.name, argsFile === undefined ? callArgs : undefined, callId)]
+    process.stderr.write(lines.join('\n') + '\n')
+    if (stdout) process.stdout.write(JSON.stringify(lostCallDetail(parsed.name, callId), null, 2) + '\n')
+  }
+  // Arguments in a file name their own call with "_call_id" (the server takes it from there):
+  // this call is that one. '' = none named; false = a bad one, already said.
+  const fileCallId = (text: string): string | false => {
+    const named = callIdInJsonText(text)
+    if (named === null) return ''
+    if (isCallId(named)) return named
+    process.stderr.write(`walnut: ${CALL_ID_ARG} must be a call id a Walnut client printed\n`)
+    return false
   }
   if (parsed.kind === 'tools.call') {
     const source = classifyArgsSource(parsed.rawJson, process.stdin.isTTY === true)
@@ -840,6 +859,9 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
           return 2
         }
         argsFile = spilledArgsFile
+        const named = fileCallId(rawJson)
+        if (named === false) return 2
+        callId = named
       }
     } else if (source.kind === 'file') {
       const abs = path.resolve(source.path)
@@ -854,6 +876,10 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       }
       if (size > GATEWAY_INLINE_ARGS_MAX_BYTES) {
         argsFile = abs
+        let named: string | false = ''
+        try { named = fileCallId(fs.readFileSync(abs, 'utf-8')) } catch { /* the server reads it and says */ }
+        if (named === false) return 2
+        callId = named
       } else {
         try {
           rawJson = fs.readFileSync(abs, 'utf-8')
@@ -872,6 +898,13 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         return 2
       }
       callArgs = args.args
+      // A caller re-running a lost call names it with "_call_id"; taken out of the op's arguments.
+      const given = callIdFor(callArgs)
+      if (given.bad) {
+        process.stderr.write(`walnut: ${given.bad}\n`)
+        return 2
+      }
+      callId = given.callId
       // A run's id chosen here, so an answer lost on the way back still leaves one to read.
       runId = callerRunId(parsed.name, callArgs)
       // A "$14.99" the shell already turned into ".99" on the command line: refused, nothing sent.
@@ -898,6 +931,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       ? {
         name: parsed.name,
         ...(argsFile !== undefined ? { argsFile } : { args: callArgs }),
+        // Arguments in a file keep a "_call_id" of their own there (the server takes it out).
+        callId: callId || (callId = newCallId()),
         ...testRunArg(),
       }
       : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' } }
@@ -921,6 +956,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     if (!resp.ok && runId && parsed.kind === 'tools.call' && refusedRunId(parsed.name, resp.error.message)) {
       dropRunId(parsed.name, callArgs)
       runId = null
+      // Other arguments, so another call: nothing of the first ran.
+      args.callId = callId = newCallId()
       resp = await requestRidingRestart(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
     }
   } catch (err) {
@@ -947,15 +984,18 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
 
   if ('json' in parsed && parsed.json) {
     await writeStdout(JSON.stringify(resp) + '\n')
+    // The call's id goes to stderr, so stdout stays one JSON document.
+    if (!resp.ok && resp.error.code === 'hub_timeout') lostRun(false)
     return resp.ok ? 0 : errorToExitCode(resp.error.code)
   }
 
   if (!resp.ok) {
-    if (parsed.kind === 'tools.call' && resp.error.detail !== undefined && !stoppingAnswer(resp)) {
+    const detail = parsed.kind === 'tools.call' && resp.error.detail !== undefined && !stoppingAnswer(resp)
+    if (detail) {
       await writeStdout(JSON.stringify(resp.error.detail, null, 2) + '\n')
     }
     process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
-    if (resp.error.code === 'hub_timeout') lostRun()
+    if (resp.error.code === 'hub_timeout') lostRun(!detail)
     if (resp.error.code === 'hub_unreachable' && parsed.kind === 'tools.call') {
       const lines = awayLines(parsed.name, callArgs)
       if (lines.length) process.stderr.write(lines.join('\n') + '\n')
@@ -1030,11 +1070,16 @@ async function runMcpCli(argv: string[]): Promise<number> {
   }
   const { socketPath, sid } = endpoint
   const callOp = async (name: string, args: Record<string, unknown>): Promise<GatewayResponse | number> => {
+    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once, op_result reads it.
+    const callId = newCallId()
     try {
-      return await requestRidingRestart(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args } })
+      const resp = await requestRidingRestart(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, callId } })
+      if (!resp.ok && resp.error.code === 'hub_timeout') process.stderr.write(lostCallLines(name, undefined, callId).join('\n') + '\n')
+      return resp
     } catch (err) {
       if (err instanceof WalnutCliTimeoutError) {
         process.stderr.write('walnut: hub_timeout: no reply from the Walnut daemon within 30s\n')
+        process.stderr.write(lostCallLines(name, undefined, callId).join('\n') + '\n')
         return 5
       }
       process.stderr.write(`walnut: Walnut daemon socket unreachable at ${socketPath}: ${err instanceof Error ? err.message : String(err)}\n`)
@@ -1173,9 +1218,13 @@ export function testRunArg(env: NodeJS.ProcessEnv = process.env): { testRun?: st
  */
 function gatewayOpCall(socketPath: string, sid: string) {
   return async (name: string, args: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; message?: string; status?: number; code?: string }> => {
+    // A new id per call, never per arguments: the loops poll waits that are writes
+    // (approval_wait, password_wait), and each poll must run. The id lets the daemon's own
+    // resend of this one call run it at most once (src/lib/op-call-id.ts).
+    const callId = newCallId()
     let resp: GatewayResponse
     try {
-      resp = await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, ...testRunArg() } })
+      resp = await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, callId, ...testRunArg() } })
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }

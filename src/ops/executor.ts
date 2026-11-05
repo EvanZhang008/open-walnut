@@ -30,6 +30,8 @@ import {
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, unknownKeyHint } from './arg-hints.js'
+import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
+import { runOnce } from './op-calls.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -47,9 +49,15 @@ export function resolveApiBase(override?: string): string {
 }
 
 export type OpOutcome =
-  | { ok: true; result: unknown }
-  /** `unreachable`: nothing answered at all (a session's CLI may ask its host daemon instead). */
-  | { ok: false; message: string; result?: unknown; unreachable?: true }
+  /** `retry`: a self-call on the way got no answer or one a retry may change, though the op answered ok. */
+  | { ok: true; result: unknown; retry?: true }
+  /**
+   * `unreachable`: nothing answered at all (a session's CLI may ask its host daemon instead).
+   * `lost`: the request went but its answer did not come back (a timeout, a dropped
+   * connection), so a write may have applied. `retry`: a self-call was answered with a status a
+   * retry may change (5xx, 408, 429): a copy of the same call runs again (op-calls.ts).
+   */
+  | { ok: false; message: string; result?: unknown; unreachable?: true; lost?: true; retry?: true }
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -63,7 +71,39 @@ export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
  * trust class the self-call carries (src/lib/caller-origin.ts): the receiving
  * route may LOWER trust on it, never raise it.
  */
-interface CallerProvenance { sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string; proof?: string }
+interface CallerProvenance {
+  sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string; proof?: string
+  /** The op call's id (src/lib/op-call-id.ts): each write it makes carries an op id derived from it. */
+  callId?: string
+  /** Writes made so far per route, for those op ids. */
+  writes?: Map<string, number>
+  /** The op ids this run sent its writes under. */
+  writtenIds?: string[]
+  /** Set when a self-call of this run got no answer: a failure then may hide a write that applied. */
+  lostAny?: boolean
+  /** Set when a self-call was answered with a status a retry may change (the ledger's `settles`), or reached no server. */
+  unsettled?: boolean
+}
+
+/** The op id of the next write of this call to `method path` (src/lib/op-call-id.ts writeOpId). */
+function nextWriteOpId(prov: CallerProvenance, method: string, path: string): string | undefined {
+  if (!prov.callId || method === 'GET' || method === 'HEAD') return undefined
+  const route = `${method} ${path.split('?')[0]}`
+  prov.writes ??= new Map()
+  const seq = prov.writes.get(route) ?? 0
+  prov.writes.set(route, seq + 1)
+  const id = writeOpId(prov.callId, method, path, seq)
+  ;(prov.writtenIds ??= []).push(id)
+  return id
+}
+
+/** The op-id header the applied-ops ledger dedups a write by (src/web/middleware/op-id.ts). */
+const OP_ID_HEADER = 'x-walnut-op-id'
+
+/** An error a handler op's self-call throws, carrying whether its answer was lost. */
+class SelfCallError extends Error {
+  constructor(message: string, readonly lost: boolean) { super(message) }
+}
 
 /**
  * Who is calling, for ops whose server side stamps provenance (the human inbox
@@ -129,6 +169,7 @@ async function rawRequest(
   const selfToken = self && resolveApiBase(self) === base ? getSelfCallToken() : null
   let res: Response
   if (method !== 'GET' && method !== 'HEAD') await prov.beforeMutation?.()
+  const opId = nextWriteOpId(prov, method, path)
   try {
     res = await fetch(url, {
       method,
@@ -141,6 +182,8 @@ async function rawRequest(
         // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
         ...(!prov.sid && prov.sender ? { [CALLER_KIND_HEADER]: 'automation', [SENDER_LABEL_HEADER]: prov.sender } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
+        // A retry of the same call meets this write's first answer instead of applying it twice.
+        ...(opId ? { [OP_ID_HEADER]: opId } : {}),
         ...testRunHeader(),
         // A relayed call's deadline (src/lib/answer-by.ts), so a route that holds an answer lets go in time.
         ...answerByHeader(),
@@ -152,22 +195,37 @@ async function rawRequest(
     })
   } catch (err) {
     const code = fetchErrorCode(err)
-    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ECONNRESET') {
+    // Refused or not found: the request never reached a server, so it ran nothing; a copy of
+    // the call still runs again. A reset may come after the server took the request: lost.
+    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+      prov.unsettled = true
       return { ok: false, unreachable: true, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
     }
-    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      return { ok: false, message: `Walnut request timed out after ${timeoutMs}ms: ${method} ${path}` }
+    prov.lostAny = true
+    if (code === 'ECONNRESET') {
+      return { ok: false, unreachable: true, lost: true, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
     }
-    return { ok: false, message: `Walnut request failed: ${err instanceof Error ? err.message : String(err)}` }
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      return { ok: false, lost: true, message: `Walnut request timed out after ${timeoutMs}ms: ${method} ${path}` }
+    }
+    return { ok: false, lost: true, message: `Walnut request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 
-  const text = await res.text().catch(() => '')
+  // The headers came, the body did not (a reset, a timeout mid-answer): the answer was lost.
+  let text = ''
+  try {
+    text = await res.text()
+  } catch (err) {
+    prov.lostAny = true
+    return { ok: false, lost: true, message: `Walnut request failed reading its answer (${res.status}): ${err instanceof Error ? err.message : String(err)}: ${method} ${path}` }
+  }
   let parsed: unknown = undefined
   if (text) {
     try { parsed = JSON.parse(text) } catch { parsed = text }
   }
 
   if (!res.ok) {
+    if (res.status >= 500 || res.status === 408 || res.status === 429) prov.unsettled = true
     const body = parsed as { error?: { code?: unknown; message?: unknown } | string; code?: unknown } | undefined
     const e = body?.error
     // Two shapes answer an error: { error: { code, message } } and { error: "<message>", code }.
@@ -239,6 +297,12 @@ export interface ExecuteOpOptions {
   callerSid?: string
   /** Human clicks never inherit a session id from headers or the process environment. */
   callerMode?: 'session' | 'human'
+  /**
+   * The call's id, chosen by its caller (src/lib/op-call-id.ts). A write op runs at most
+   * once per id (op-calls.ts), and each write it makes carries an op id derived from it.
+   * A caller re-running a call may give it as `_call_id` in the arguments instead.
+   */
+  callId?: string
   /** The CLI's automation label when no session and no person stands behind the call (cli-sender.ts). */
   sender?: string
   /** Recheck a frozen human plan immediately before each mutation self-call. */
@@ -353,20 +417,66 @@ export async function executeOp(
   const refused = originRefusal(op, origin)
   if (refused) return { ok: false, message: refused }
 
-  const parsed = parseOpArgs(op, rawArgs)
+  // A caller re-running a call names it with `_call_id`: never one of the op's own arguments.
+  let given = rawArgs
+  let callId = isCallId(options.callId) ? options.callId : undefined
+  if (isPlainObject(rawArgs) && Object.hasOwn(rawArgs, '_call_id')) {
+    given = { ...rawArgs }
+    const taken = takeCallIdArg(given)
+    if (taken.bad) return { ok: false, message: `Invalid arguments for ${op.name}: ${taken.bad}` }
+    callId = taken.callId ?? callId
+  }
+  const parsed = parseOpArgs(op, given)
   if (!parsed.ok) return parsed
   const args = parsed.args
 
   const base = resolveApiBase(options.apiBase)
   const human = options.callerMode === 'human' || humanCallerScope.getStore() === true
-  return humanCallerScope.run(human, () => runOp(op, args, base, {
-    sid: options.callerMode === 'human' || humanCallerScope.getStore() ? undefined : resolveCallerSid(options.callerSid),
-    host: options.callerHost?.trim() || undefined,
-    beforeMutation: options.beforeMutation,
-    origin,
-    ...(options.sender ? { sender: options.sender } : {}),
-    ...(options.callerProof ? { proof: options.callerProof } : {}),
-  }))
+  const sid = options.callerMode === 'human' || humanCallerScope.getStore() ? undefined : resolveCallerSid(options.callerSid)
+  // A read runs again freely; a write runs once per call id.
+  const once = callId && op.tags.readonly !== true ? callId : undefined
+  const run = async (): Promise<OpOutcome> => {
+    const prov: CallerProvenance = {
+      sid,
+      host: options.callerHost?.trim() || undefined,
+      beforeMutation: options.beforeMutation,
+      origin,
+      ...(options.sender ? { sender: options.sender } : {}),
+      ...(options.callerProof ? { proof: options.callerProof } : {}),
+      ...(once ? { callId: once } : {}),
+    }
+    const outcome = await humanCallerScope.run(human, () => runOp(op, args, base, prov))
+    // A handler that caught a lost or refused-for-now self-call and answered ok (a bulk op's
+    // failed row): a copy must run it again, and the ledger answers the rows that applied.
+    if (outcome.ok) return prov.lostAny || prov.unsettled ? { ...outcome, retry: true } : outcome
+    // A handler that caught a lost self-call and failed another way still may have written.
+    if (prov.lostAny && !outcome.lost) return { ...outcome, lost: true }
+    if (prov.unsettled && !outcome.lost) return { ...outcome, retry: true }
+    // A re-run whose handler stops before its write (it read the state the first try's write
+    // made, say an edit already applied) is told what that first try already applied.
+    return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
+  }
+  return once ? runOnce(once, op.name, args, sid, run) : run()
+}
+
+/**
+ * A handler op's failure under a call id whose earlier try's writes applied (the try whose
+ * answer was lost, before a restart too): the failure says so, with those writes, because
+ * they, not this run, are what the call did. Writes this run made itself are not counted.
+ */
+async function withEarlierWrites(outcome: Extract<OpOutcome, { ok: false }>, base: string, prov: CallerProvenance): Promise<OpOutcome> {
+  if (!prov.callId) return outcome
+  const mine = new Set(prov.writtenIds ?? [])
+  const read = await rawRequest(base, 'GET', `/op-calls/${encodeURIComponent(prov.callId)}`, undefined, 5_000, { origin: prov.origin, ...(prov.sid ? { sid: prov.sid } : {}) })
+  const writes = read.ok ? ((read.result as { writes?: Array<{ route?: string; status?: number; outcome?: string; state?: string; opId?: string }> })?.writes ?? []) : []
+  const earlier = writes.filter((w) => w.state === 'recorded' && w.outcome === 'applied' && (!w.opId || !mine.has(w.opId)))
+  if (!earlier.length) return outcome
+  const list = earlier.map((w) => `${w.route ?? 'a write'} (${w.status ?? 'applied'})`).join(', ')
+  return {
+    ok: false,
+    message: `${outcome.message} An earlier try of this call (${prov.callId}) already applied ${list}, whose answer was lost; that is what this call did, and likely why running it again now fails. Do not run it again.`,
+    result: { ...(isPlainObject(outcome.result) ? outcome.result : {}), call_id: prov.callId, earlier_writes: earlier },
+  }
 }
 
 async function runOp(
@@ -382,7 +492,7 @@ async function runOp(
         const refused = selfCallRefusal(op.name, method, path, prov.origin)
         if (refused) throw new Error(refused)
         const r = await rawRequest(base, method, path, body, timeoutMs, prov)
-        if (!r.ok) throw new Error(r.message)
+        if (!r.ok) throw new SelfCallError(r.message, r.lost === true)
         return r.result
       }
       // A handler that runs another op in-process (a plugin's walnut.ops.call)
@@ -391,7 +501,9 @@ async function runOp(
       const message = op.resultError?.(result)
       return message ? { ok: false, message, result } : { ok: true, result }
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) }
+      // A write of this call whose answer was lost (also inside a handler) may have applied.
+      const lost = err instanceof SelfCallError && err.lost
+      return { ok: false, message: err instanceof Error ? err.message : String(err), ...(lost ? { lost: true as const } : {}) }
     }
   }
 

@@ -322,6 +322,48 @@ defineOp({
 });
 
 defineOp({
+  name: 'op_result',
+  title: 'Read what an op call did, by its call id',
+  description:
+    'When an op call got no answer back (`hub_timeout`, a timeout, a dropped connection), the `walnut` CLI and the MCP '
+    + 'server print its call id (oc-…). This reads what that call did on the Walnut server: running, done (with the '
+    + 'answer it would have given), lost (its own write got no answer: `writes` says what applied), applied (the call '
+    + 'is no longer held but its writes are), or unknown (it never reached the server, or only read: nothing was '
+    + 'written). To run a call again safely, send the same arguments with "_call_id":"oc-…": it runs at most once.',
+  input: {
+    call_id: z.string().regex(/^oc-[A-Za-z0-9_-]{8,48}$/).describe('The call id (oc-…) the CLI or the MCP server printed'),
+  },
+  bind: { method: 'GET', path: '/op-calls/:call_id' },
+  mapResult: ({ body }) => {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const id = String(b.call_id ?? '');
+    const op = typeof b.op === 'string' ? b.op : 'the op';
+    const writes = Array.isArray(b.writes) ? b.writes.length : 0;
+    const again = `To run it again, send the same arguments with "_call_id":"${id}": it runs at most once.`;
+    const outcome = b.state === 'running'
+      ? `${op} is still running on the Walnut server. Do not run it again.`
+      : b.state === 'done'
+        ? (b.not_kept ? `${op} ran${b.ok ? ' and succeeded' : ' and failed'}, but its answer was not kept (${String(b.not_kept)}).`
+          : b.answer_withheld ? `${op} ran${b.ok ? ' and succeeded' : ' and failed'}; its answer goes only to the session that made the call.`
+            : b.ok ? `${op} ran and succeeded: \`result\` is the answer it gave.` : `${op} ran and failed: ${String(b.message ?? '')}`)
+        : b.state === 'lost'
+          ? `${op} ran, but its own write to the server's API got no answer: ${writes ? `${writes} write(s) below applied` : 'nothing it wrote is recorded'}.`
+          : b.state === 'applied'
+            ? `The server no longer holds this call, but ${writes} write(s) of it applied: see \`writes\`, each with its answer.`
+            : 'This server has no record of the call: it never reached the server, or it only read. Nothing it would write was applied here.';
+    const next = b.state === 'running'
+      ? `Carry on with other work and read it again in a minute (op_result {"call_id":"${id}"}).`
+      : b.state === 'done'
+        ? (b.not_kept ? `To get its answer, run it again with "_call_id":"${id}": a write it made is not repeated.` : 'Nothing else is required: do not send it again.')
+        : b.state === 'unknown'
+          ? `Run it again. ${again}`
+          : `If it must run again, the writes that applied are not repeated. ${again}`;
+    return withOutcome({ ...b }, outcome, next);
+  },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
   name: 'message_send_now',
   title: 'Send a queued message now',
   description:

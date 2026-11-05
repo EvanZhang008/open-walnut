@@ -58,9 +58,16 @@ export async function runMcpClient(argv: string[], options: { apiUrl?: string } 
 
   const { executeOp } = await import('../ops/index.js')
   const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
-  const run = (name: string, args: Record<string, unknown>) => executeOp(name, args, {
-    origin: LOCAL_ORIGIN, ...(options.apiUrl ? { apiBase: options.apiUrl } : {}),
-  })
+  // Each call's id (src/lib/op-call-id.ts): a lost answer says how to read it, never a bare timeout.
+  const { lostCallLines, newCallId } = await import('../lib/op-call-id.js')
+  const run = async (name: string, args: Record<string, unknown>) => {
+    const callId = newCallId()
+    const r = await executeOp(name, args, {
+      origin: LOCAL_ORIGIN, callId, ...(options.apiUrl ? { apiBase: options.apiUrl } : {}),
+    })
+    if (!r.ok && r.lost) console.error(lostCallLines(name, args, callId).join('\n'))
+    return r
+  }
   let outcome
   if (parsed.kind === 'mcp.servers') outcome = await run('mcp_servers', {})
   else if (parsed.kind === 'mcp.call') {

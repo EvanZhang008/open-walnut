@@ -2536,6 +2536,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Unified send surface (additive): POST /messages (session_send core) +
   // GET /requests/:id (expect_reply status). Primary-only — 501 on a replica.
   app.use('/api/v1', messagesV1Router)
+  // What one op call did, by its caller's call id (op_result; src/lib/op-call-id.ts).
+  app.use('/api/v1', (await import('./routes/op-calls-v1.js')).opCallsV1Router)
   // Task Boards (additive): one html document per task + threads + marks.
   // Reads work on a replica; writes are primary-only (501).
   app.use('/api/v1', boardV1Router)

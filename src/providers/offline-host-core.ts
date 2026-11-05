@@ -1685,7 +1685,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     // on the request and the replier's task, where the Board reads Partial.
     if (args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined) return null
     if (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId)) {
-      payload.args = { ...args, messageId: `qm-host-${deps.randomHex(8)}` }
+      // From the caller's call id when it sent one (src/lib/op-call-id.ts): a retry of the same
+      // call then carries the same message id, here and at the server, and is written once.
+      const callId = typeof payload.callId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(payload.callId) ? payload.callId : ''
+      const stable = callId ? callId.slice(3).split('_').join('-') : ''
+      payload.args = { ...args, messageId: stable ? `qm-host-${stable}` : `qm-host-${deps.randomHex(8)}` }
     }
     const mid = String((payload.args as Record<string, unknown>).messageId)
     try {

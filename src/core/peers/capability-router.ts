@@ -266,9 +266,19 @@ async function handleToolsCall(
   // The daemon's word on the asking process (caller-proof-v1), for the approvals route to read.
   const { holdRelayProof } = await import('../approvals/relay-proof.js');
   const proofToken = holdRelayProof(payload.callerProof, callerSid, host);
+  // The call's id, chosen by the caller's client (src/lib/op-call-id.ts): a resend of the
+  // same call runs it at most once, and op_result reads what it did.
+  const { isCallId } = await import('../../lib/op-call-id.js');
+  const callId = isCallId(payload.callId) ? payload.callId : undefined;
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
-    callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}),
-  }));
+  callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(callId ? { callId } : {}),
+}));
+  // The server's own call to its API went out and got no answer: the caller hears the answer
+  // was lost (hub_timeout), so its client names the call id and the read, never a bare error.
+  // Nothing answering at all (a refused connection) ran nothing and stays `internal`.
+  if (!r.ok && r.lost) {
+    return err('hub_timeout', `the Walnut server's own call to its API got no answer, so ${name} may have run: ${r.message}`, r.result === undefined ? undefined : { detail: r.result });
+  }
   if (!r.ok) return err('internal', r.message, r.result === undefined ? undefined : { detail: r.result });
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))
