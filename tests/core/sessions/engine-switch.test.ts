@@ -18,6 +18,8 @@ const edges = vi.hoisted(() => ({
   /** The old session's history cannot be read (a remote host dropped). */
   failHistory: false,
   nextSid: 0,
+  /** Each history read, and whether that session was stopped by then. */
+  reads: [] as Array<{ sid: string; stopped: boolean }>,
   history: {} as Record<string, Array<Record<string, unknown>>>,
   gate: undefined as Promise<void> | undefined,
   /** Sessions whose finished turn left a background command running. */
@@ -55,6 +57,7 @@ vi.mock('../../../src/core/transfer/daemon-transfer-client.js', () => ({
 vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
   readProviderSessionHistory: async (sid: string) => {
     if (edges.failHistory) throw new Error('the host dropped the connection');
+    edges.reads.push({ sid, stopped: edges.stops.includes(sid) });
     return { messages: edges.history[sid] ?? [] };
   },
   terminateSession: async (sid: string) => {
@@ -107,7 +110,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
+  edges.reads.length = 0; edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
 });
@@ -491,6 +494,80 @@ describe('engine switch inside a task', () => {
     expect(rows[0].message).toContain('PELICAN');
     expect((await getSessionByClaudeId(res.sessionId!))?.switchContext).toBeUndefined();
   });
+
+  it('a second switch with no message carries the context the first one left unread', async () => {
+    // Review round 3: Claude -> Pi -> Codex with nothing typed. Pi ran no turn, so its own history
+    // is empty; the context Claude's conversation left on Pi goes on to Codex.
+    const { taskId } = await taskOn('claude');
+    const pi = await requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    expect((await getSessionByClaudeId(pi.sessionId!))?.switchContext?.text).toContain('PELICAN');
+    const codex = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    expect(codex.state).toBe('done');
+    const ctx = (await getSessionByClaudeId(codex.sessionId!))?.switchContext?.text ?? '';
+    expect(ctx).toContain('PELICAN');
+    expect(parseHinted(`${ctx}\n\nhello`).text).toBe('hello');
+    expect(edges.starts.every((p) => p.idle === true)).toBe(true);
+  });
+
+  it('deleting the queued message that carried the context puts the context back for the next send', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    await mutateStore((st) => {
+      st.queues[sid] = [{ id: 'qm-x', sessionId: sid, message: 'soon deleted', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    const row = ((await getStore()).queues[res.sessionId!] ?? [])[0];
+    expect(row.message).toContain('PELICAN');
+    const { deleteMessage } = await import('../../../src/core/session-message-queue.js');
+    expect(await deleteMessage(res.sessionId!, row.id)).toBe(true);
+    expect((await getSessionByClaudeId(res.sessionId!))?.switchContext?.text).toContain('PELICAN');
+  });
+
+  it('deleting it with another message queued moves the context onto that one', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    const at = new Date().toISOString();
+    await mutateStore((st) => {
+      st.queues[sid] = [
+        { id: 'qm-a', sessionId: sid, message: 'first', status: 'pending', enqueuedAt: at },
+        { id: 'qm-b', sessionId: sid, message: 'second', status: 'pending', enqueuedAt: at },
+      ] as never;
+    }, false, true);
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    const { deleteMessage } = await import('../../../src/core/session-message-queue.js');
+    expect(await deleteMessage(res.sessionId!, 'qm-a')).toBe(true);
+    const rows = (await getStore()).queues[res.sessionId!] ?? [];
+    expect(rows.map((r) => parseHinted(r.message).text)).toEqual(['second']);
+    expect(rows[0].message).toContain('PELICAN');
+    expect((await getSessionByClaudeId(res.sessionId!))?.switchContext).toBeUndefined();
+  });
+
+  it('a moved slash command stays as typed: the context rides the next message, or the record', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    const at = new Date().toISOString();
+    await mutateStore((st) => {
+      st.queues[sid] = [{ id: 'qm-c', sessionId: sid, message: '/compact', status: 'pending', enqueuedAt: at }] as never;
+    }, false, true);
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    expect(((await getStore()).queues[res.sessionId!] ?? []).map((r) => r.message)).toEqual(['/compact']);
+    expect((await getSessionByClaudeId(res.sessionId!))?.switchContext?.text).toContain('PELICAN');
+  });
+
+  it('a task with no session yet: a switch with no message starts the engine idle', async () => {
+    const { task } = await addTask({ title: 'Fresh task', project: 'Marina', cwd: '/work/repo' } as never);
+    const res = await requestEngineSwitch({ taskId: task.id, engine: 'pi', source: 'test' });
+    expect(res.state).toBe('done');
+    expect(edges.starts[0]).toMatchObject({ engine: 'pi', idle: true, message: '' });
+  });
+
+  it('a turn that ignores the Stop: its process is stopped before the context is read', async () => {
+    // Review round 3: the read ran while the old turn went on, so a step it finished then was missing.
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    expect(res.state).toBe('done');
+    const reads = edges.reads.filter((r) => r.sid === sid);
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((r) => r.stopped)).toBe(true);
+    expect(String((await getSessionByClaudeId(res.sessionId!))?.switchContext?.text)).toContain('turn was stopped');
+  }, 40_000);
 
   /** The CLI ends its turn on the Stop a switch sends. */
   const endTurnOnInterrupt = (name: string) => bus.subscribe(name, async (e) => {

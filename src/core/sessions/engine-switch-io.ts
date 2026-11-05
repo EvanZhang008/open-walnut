@@ -6,6 +6,8 @@
 import type { SessionRecord, Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
+import { HINT_AUTHOR, HINT_TAG } from '../hints/hint-format.js';
+import { ENGINE_SWITCH_HINT } from './engine-switch-context.js';
 
 /** A path on the old session's host, as the new session reads it (another host's path says where it lives). */
 export function hostPath(p: string, fromHost: string, toHost: string): string {
@@ -98,11 +100,30 @@ export async function putQueuedRows(sessionId: string, rows: HeldRow[]): Promise
  * (they reach the queue without a send); otherwise the session record holds it for the next send.
  */
 export async function stashSwitchContext(sessionId: string, text: string, switchId: string, rows: HeldRow[]): Promise<HeldRow[]> {
-  const first = rows.findIndex((r) => r.status !== 'parked');
+  // A slash command row stays as typed (a hint in front would make it a plain prompt).
+  const first = rows.findIndex((r) => r.status !== 'parked' && !r.message.trimStart().startsWith('/'));
   if (first >= 0) return rows.map((r, i) => (i === first ? { ...r, message: `${text}\n\n${r.message}` } : r));
   const { updateSessionRecord } = await import('../session-tracker.js');
   await updateSessionRecord(sessionId, { switchContext: { text, switchId, at: new Date().toISOString() } });
   return rows;
+}
+
+/** The engine switch's hint blocks a queued message carries (stashSwitchContext put them in front). */
+export function switchContextIn(message: string): string | null {
+  const re = new RegExp(`<${HINT_TAG}>\\n${HINT_AUTHOR} \\(${ENGINE_SWITCH_HINT}\\): [\\s\\S]*?\\n</${HINT_TAG}>`, 'g');
+  const blocks = message.match(re);
+  return blocks?.length ? blocks.join('\n') : null;
+}
+
+/**
+ * A queued message holding the carried context was deleted before the session read it (review
+ * round 3): the context goes to the next queued message (`moveTo`, done by the caller in the same
+ * store write), else back onto the record for the next send. Never lost, never sent twice.
+ */
+export async function keepSwitchContext(sessionId: string, text: string): Promise<void> {
+  const { updateSessionRecordConditionally } = await import('../session-tracker.js');
+  await updateSessionRecordConditionally(sessionId, { switchContext: { text, switchId: 'kept', at: new Date().toISOString() } } as Partial<SessionRecord>,
+    (current) => !current.switchContext, { preserveLastActiveAt: true }).catch(() => {});
 }
 
 /** The carried context the session's next message takes along (session-message-queue.ts), once. */

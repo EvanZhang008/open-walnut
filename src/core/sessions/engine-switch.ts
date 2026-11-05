@@ -212,6 +212,8 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
       taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
       callerSid: req.callerSid, expectReply: false, source: req.source,
       ...(req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
+      // Nothing to say: the task's description is not run as if it were (the same as a switch).
+      ...(message.trim() ? {} : { idle: true }),
     });
     return { state: 'done', taskId: task.id, switchId, sessionId: started.sessionId, engine, host: normalizeHost(req.host) };
   }
@@ -638,7 +640,15 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   }, Math.floor(window * CARRY_WINDOW_SHARE));
   const { composeHinted, renderHintBlock } = await import('../hints/hint-format.js');
   const cut = (state.background_cut ? `\n\n${BACKGROUND_CUT_NOTE}` : '') + (turnCut ? `\n\n${TURN_CUT_NOTE}` : '');
-  const blocks = [renderHintBlock(ENGINE_SWITCH_HINT, carried.text + cut)];
+  // A context an earlier switch left for this session's next message, never read (review round 3:
+  // Claude -> Pi -> Codex with no message lost Claude's conversation): it goes along. A session
+  // holding one ran no turn since, so its own history adds nothing but what it resumed with.
+  const tracker = await import('../session-tracker.js');
+  const unread = (await tracker.getSessionByClaudeId(old.claudeSessionId).catch(() => undefined))?.switchContext?.text;
+  const blocks = unread
+    ? [...(ctx.messages.some((m) => m.role === 'user' || m.role === 'assistant') ? [renderHintBlock(ENGINE_SWITCH_HINT, carried.text)] : []),
+      unread, ...(cut ? [renderHintBlock(ENGINE_SWITCH_HINT, cut)] : [])]
+    : [renderHintBlock(ENGINE_SWITCH_HINT, carried.text + cut)];
   if (carried.trimmedTurns > 0) {
     // The user is told in the session (a system row) as well as the model in its context.
     log.session.info('engine switch: carried context trimmed to fit the target window', {
@@ -684,7 +694,7 @@ async function switchWords(state: EngineSwitchState): Promise<string> {
 /**
  * Stop the session's running turn the way the Stop button does, and wait (bounded) for it to
  * end, so the context read next holds the whole turn. A turn still running after
- * SWITCH_TURN_STOP_MS ends with the process (retire stops it).
+ * SWITCH_TURN_STOP_MS ends with its process, stopped here before the read.
  */
 async function stopTurnForSwitch(sessionId: string): Promise<void> {
   const { bus, EventNames } = await import('../event-bus.js');
@@ -699,7 +709,21 @@ async function stopTurnForSwitch(sessionId: string): Promise<void> {
       return;
     }
   }
+  // Stopped before the context is read (review round 3): a turn that ran on during the read could
+  // finish a step the read misses, and the new engine would do it again.
   log.session.warn('engine switch: the running turn did not stop in time; its process is stopped', { sessionId, waitedMs: SWITCH_TURN_STOP_MS });
+  try {
+    const { terminateSession } = await import('./session-lifecycle.js');
+    await terminateSession(sessionId, { force: true });
+  } catch (err) {
+    log.session.warn('engine switch: stopping the old process failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  }
+  const settled = Date.now() + SWITCH_TURN_STOP_MS;
+  while (Date.now() < settled) {
+    const rec = await tracker.getSessionByClaudeId(sessionId).catch(() => null);
+    if (!rec || !LIVE.has(rec.process_status)) return;
+    await new Promise((r) => setTimeout(r, 250));
+  }
 }
 
 /** A switch that did not start: the old session is the task's session again, with its rows. */

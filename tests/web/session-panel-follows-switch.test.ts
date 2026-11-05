@@ -78,7 +78,9 @@ describe('a session panel follows the task to its new session in every host', ()
   it('a panel opened on a replaced session follows, unless opened on purpose from the earlier sessions', () => {
     const sw = read('web/src/components/sessions/EngineSwitch.tsx');
     expect(sw).toContain("session?.archive_reason?.startsWith('engine_switched:')");
-    expect(sw).toContain('openedOnPurpose.has(sessionId)');
+    // The panel that opens it takes the mark: another panel on the same id still follows.
+    expect(sw).toContain('on: openedOnPurpose.delete(sessionId)');
+    expect(sw).toContain('|| onPurpose) return;');
     const earlier = read('web/src/components/sessions/TaskEarlierSessions.tsx');
     expect(earlier).toContain('markOpenedOnPurpose(row.session_id); onOpen(row.session_id);');
   });

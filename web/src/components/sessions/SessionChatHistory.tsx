@@ -5844,7 +5844,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {staleBannerText(stale)}
           </div>
         )}
-        {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && (
+        {/* A session an engine switch started idle shows its task's earlier sessions instead. */}
+        {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && !earlierSessionsTaskId && (
           <div className="session-history-empty">
             <p className="text-muted">No conversation history found</p>
           </div>
@@ -5860,6 +5861,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {!onQuestionPage && hiddenOnPage === 0 && earlierSessionsTaskId && (
           <TaskEarlierSessions taskId={earlierSessionsTaskId} sessionId={sessionId} sessionCwd={sessionCwd} onOpenSession={onOpenEarlierSession} />
+        )}
+        {!onQuestionPage && earlierSessionsTaskId && !error && !hasContent && !loading && !phase2Pending && !loadingFrom && (
+          <p className="text-muted session-switch-ready" role="status" data-testid="session-switch-ready">
+            The conversation came along. Send a message to continue it here.
+          </p>
         )}
         {/* Persisted history messages — truncated to tail for performance.
             Full messages[] stays in memory; only the visible slice is rendered as DOM. */}

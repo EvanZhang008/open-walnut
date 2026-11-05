@@ -590,7 +590,9 @@ export async function editMessage(
  * deleting it would race the delivery points' own scoped removal).
  */
 export async function deleteMessage(sessionId: string, messageId: string): Promise<boolean> {
-  return mutateStore((s) => {
+  const { switchContextIn, keepSwitchContext } = await import('./sessions/engine-switch-io.js');
+  let keep: string | null = null;
+  const deleted = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
 
@@ -598,7 +600,15 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (idx === -1) return false;
     if (queue[idx].status === 'processing') return false;
 
-    queue.splice(idx, 1);
+    const [removed] = queue.splice(idx, 1);
+    // The engine switch's carried context rode this row: the next queued row takes it, else the
+    // session record keeps it for the next send (engine-switch-io.ts).
+    const carried = switchContextIn(removed.message);
+    if (carried) {
+      const next = queue.find((m) => m.status === 'pending' && !m.message.trimStart().startsWith('/'));
+      if (next && !next.message.includes(carried)) next.message = `${carried}\n\n${next.message}`;
+      else if (!next) keep = carried;
+    }
     if (queue.length === 0) {
       delete s.queues[sessionId];
     }
@@ -608,6 +618,8 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (fateOf(s, messageId) || isPhoneMessageId(messageId)) setFate(s, messageId, 'removed');
     return true;
   }, false, true);
+  if (deleted && keep) await keepSwitchContext(sessionId, keep);
+  return deleted;
 }
 
 /**

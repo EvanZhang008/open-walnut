@@ -196,13 +196,16 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   const [sendError, setSendError] = useState<string | null>(null);
   const [redirectedTo, setRedirectedTo] = useState<string | null>(null);
   useEffect(() => { setRedirectedTo(null); }, [activeSessionId]);
+  // The session the panel shows now: a send's late answer never moves a panel that went elsewhere.
+  const shownRef = useRef(activeSessionId);
+  shownRef.current = activeSessionId;
   // A send the server delivered to the task's current session (this one was replaced): the bubble
   // belongs there, and the panel follows (SessionPanel).
   const followRedirect = useCallback((res: { deliveredTo?: string } | undefined, tempId: string, sentTo: string | null | undefined): boolean => {
     if (!res?.deliveredTo || res.deliveredTo === sentTo) return false;
     log.info('send', 'delivered to the session that replaced this one', { sessionId: sentTo, deliveredTo: res.deliveredTo });
     setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
-    setRedirectedTo(res.deliveredTo);
+    if (shownRef.current === sentTo) setRedirectedTo(res.deliveredTo);
     return true;
   }, []);
 

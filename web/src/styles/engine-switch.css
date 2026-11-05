@@ -75,3 +75,10 @@
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* A session an engine switch started idle: one line under the earlier conversation. */
+.session-switch-ready {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 12px;
+}

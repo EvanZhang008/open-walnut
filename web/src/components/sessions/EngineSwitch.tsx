@@ -66,8 +66,12 @@ export function useEngineSwitchPick(opts: {
   // Asked for and not yet seen on the server: the line says it starts at once.
   const [sending, setSending] = useState<string | null>(null);
   useEffect(() => { setPick(null); setRefused(null); setSending(null); }, [sessionId]);
-  // An on-purpose open holds while this panel shows that session; once it moves on, the session follows again.
-  useEffect(() => () => { openedOnPurpose.delete(sessionId); }, [sessionId]);
+  // An on-purpose open belongs to the panel that showed the session next (review round 3: a shared
+  // mark held a second panel on it, and closing that one cleared the first's): it takes the mark,
+  // and holds while it shows that session; once it moves on, the session follows again.
+  const purposeRef = useRef<{ sid: string; on: boolean } | null>(null);
+  if (purposeRef.current?.sid !== sessionId) purposeRef.current = { sid: sessionId, on: openedOnPurpose.delete(sessionId) };
+  const onPurpose = purposeRef.current.on;
   const current = resolveEngine(session?.engine);
   // A task's own session switches; a chat lane (Ask Walnut) and a replaced session do not.
   const enabled = !!session?.taskId && !session.lane && !session.archive_reason?.startsWith('engine_switched:');
@@ -139,10 +143,10 @@ export function useEngineSwitchPick(opts: {
   // reload): the task's current session is the one to show.
   const replacedBy = session?.archive_reason?.startsWith('engine_switched:') && session.taskId === task?.id ? newSid : undefined;
   useEffect(() => {
-    if (!onSessionReplaced || !replacedBy || replacedBy === sessionId || openedOnPurpose.has(sessionId)) return;
+    if (!onSessionReplaced || !replacedBy || replacedBy === sessionId || onPurpose) return;
     log.info('engine-switch', 'panel opened on a replaced session follows the task to its current one', { sessionId, newSessionId: replacedBy, taskId: task?.id });
     onSessionReplaced(sessionId, replacedBy);
-  }, [onSessionReplaced, replacedBy, sessionId, task?.id]);
+  }, [onSessionReplaced, replacedBy, sessionId, task?.id, onPurpose]);
 
   return {
     enabled, pick, setPick, onProviderSwitch, providerLockReason, armed, sendOptions, server, markSent, commit, refused, sending,
