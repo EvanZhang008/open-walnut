@@ -11,11 +11,13 @@ import type { HostFixAction } from '../../providers/host-fix-core.js'
 import { claudeVersionAtLeast, type ClaudeCliFloor } from './claude-version-floor.js'
 import { asPackageManager, compilerInstallCommands } from './compiler-install.js'
 
-export type ReadinessProblemKind =
-  | 'claude_missing' | 'claude_needs_node' | 'claude_error' | 'claude_outdated' | 'claude_not_logged_in'
-  | 'compiler_missing' | 'dtach_missing'
-  // From the connect itself, not the preflight (host-status.ts connectReadinessProblems).
-  | 'daemon_dir_fallback' | 'disk_low'
+/** Every readiness kind (the last two come from the connect itself: host-status.ts connectReadinessProblems). */
+export const READINESS_PROBLEM_KINDS = [
+  'claude_missing', 'claude_needs_node', 'claude_error', 'claude_outdated', 'claude_not_logged_in',
+  'compiler_missing', 'dtach_missing',
+  'daemon_dir_fallback', 'disk_low',
+] as const
+export type ReadinessProblemKind = typeof READINESS_PROBLEM_KINDS[number]
 
 export interface ReadinessProblem {
   kind: ReadinessProblemKind

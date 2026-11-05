@@ -9,6 +9,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-readiness'))
 
+import { _setHostsUsedForSessions } from '../../src/core/hosts/host-session-use.js'
 import {
   clearHostReadiness,
   getHostReadiness,
@@ -201,15 +202,24 @@ describe('wireHostReadiness', () => {
     const emit = vi.fn()
     const conn = fakeConn(READY).conn
     const refresh = vi.fn((host: string) => refreshHostReadiness(host, { getConnection: () => conn }))
-    const off = wireHostReadiness({ onConnected, isKnownHost: (h) => h === 'devbox', emit, refresh })
+    let used = new Set<string>()
+    const read = vi.fn(async () => used)
+    const off = wireHostReadiness({ onConnected, isKnownHost: (h) => h === 'devbox', emit, refresh, sessionUse: { read, everyMs: 20 } })
     fire!('__local__')
     fire!('direct:ws://127.0.0.1:1')
     fire!('devbox')
     expect(refresh.mock.calls).toEqual([['devbox']])
     await refresh.mock.results[0].value
     expect(emit).toHaveBeenCalledWith('devbox')
+    // Whether anything uses the host for sessions rides its readiness, and a flip re-pushes it.
+    await vi.waitFor(() => expect(getHostReadiness('devbox')?.usedForSessions).toBe(false))
+    emit.mockClear()
+    used = new Set(['devbox'])
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('devbox'))
+    expect(getHostReadiness('devbox')?.usedForSessions).toBe(true)
     off()
     expect(fire).toBeNull()
+    _setHostsUsedForSessions(null)
   })
 })
 

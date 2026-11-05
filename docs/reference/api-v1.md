@@ -2211,7 +2211,9 @@ directory on that host.
   host and no cwd keeps the host it would use unless that host is over a cap and
   another has room; its answer then carries `placement: { host, from, moved,
   reason, cwd?, setUp? }`. Mac-only work (iOS, the Mac app, the user's screen)
-  stays on the Mac, and so does a task with an isolated workspace. Placement holds
+  stays on the Mac, and so does a task with an isolated workspace. A remote host is
+  taken only once Walnut has checked its Claude Code and found it able to start a
+  session (installed, signed in, new enough; additive, 2026-11-05). Placement holds
   a start at most `WALNUT_PLACE_SETUP_MS` (25000); past it the start stays where it
   would have run.
 

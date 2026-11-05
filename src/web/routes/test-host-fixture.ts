@@ -217,6 +217,13 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
       h.autofixSlowMs = typeof body.ms === 'number' ? body.ms : 0
       return { host }
     }
+    case 'set-used': {
+      // Whether a project or an open task uses the host for sessions (host-session-use.ts).
+      const { host, h } = hostOf(body)
+      h.spec = { ...h.spec, usedForSessions: body.used !== false }
+      push(host)
+      return { host }
+    }
     case 'check-slow': {
       // How long a Check again takes to answer.
       const { host, h } = hostOf(body)

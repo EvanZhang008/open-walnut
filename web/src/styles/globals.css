@@ -18864,6 +18864,12 @@ a.task-kebab-info:hover {
   background: transparent;
 }
 
+/* The selected engine on a host that cannot run it: still selected, dimmed, with the lock mark. */
+.provider-rail-item-unavailable > svg:first-child {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+
 .provider-rail-lock {
   position: absolute;
   right: 2px;

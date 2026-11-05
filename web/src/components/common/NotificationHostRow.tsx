@@ -50,9 +50,11 @@ function HostStatusLine({ daemon, disabled }: { daemon: DaemonHealth; disabled: 
     : null;
   const phase = disabled ? DISABLED_TEXT : connected ? hostConnectedWords(status, serverNow()) : connecting ? hostStatusText(status) : failure ?? 'Disconnected';
   const label = hostDisplayLabel(daemon.host, undefined, daemon.label);
-  // Only a banner problem wears the warn colour; a version floor for one model is a quiet
-  // note (the user's rule, N14). A failed connect's words take its red dot's tone (N3-15).
-  const bannerKind = problem?.type === 'readiness' && BANNER_READINESS_KINDS.includes(problem.problem.kind);
+  // Only a banner problem wears the warn colour; a version floor for one model, or a problem on
+  // a host nothing uses for sessions, is a quiet note (the user's rule, N14). A failed connect's
+  // words take its red dot's tone (N3-15).
+  const bannerKind = problem?.type === 'readiness' && BANNER_READINESS_KINDS.includes(problem.problem.kind)
+    && status?.readiness?.usedForSessions !== false;
   const tone = disabled ? 'muted' : blocking ? (bannerKind ? 'warn' : '') : connected ? (hostFlapOf(status, serverNow()) ? 'warn' : 'ok') : connecting ? '' : failure ? 'error' : 'muted';
   return (
     <li className="notification-detail-row nfc-daemon-row" data-host={daemon.host}>

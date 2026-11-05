@@ -308,3 +308,24 @@ describe('C45: the model has no dashes and no node imports', () => {
     expect(src.split('\n').length).toBeLessThan(500)
   })
 })
+
+describe('a host nothing uses for sessions: its Claude Code problem is a quiet line (2026-11-05)', () => {
+  const host = (usedForSessions?: boolean): HostStatusInput => ({
+    host: 'fleet', label: 'Fleet Mac', connected: true, phase: 'connected', connectedAt: 1, at: 2,
+    readiness: {
+      checkedAt: 2, problems: [{ kind: 'claude_missing', message: 'Claude Code is not installed on Fleet Mac.', commands: [] }],
+      ...(usedForSessions === undefined ? {} : { usedForSessions }),
+    },
+  })
+
+  it('no banner problem when unused; one when used or not said (an older server)', () => {
+    expect(bannerReadinessProblem(host(false))).toBeUndefined()
+    expect(hostProblemOf(host(false), { surface: 'banner' })).toBeNull()
+    for (const s of [host(true), host(undefined)]) expect(bannerReadinessProblem(s)?.kind).toBe('claude_missing')
+  })
+
+  it('Start, the picker and Settings still read the problem', () => {
+    expect(hostProblemOf(host(false))).toMatchObject({ type: 'readiness', blocking: true })
+    expect(hostDotOf(host(false), { now: 3 }).kind).toBe('warn')
+  })
+})

@@ -157,6 +157,12 @@ import { createTransferPack, type TransferPackDeps } from '../../../src/provider
 import { createTransferCore, type TransferCoreDeps } from '../../../src/providers/transfer-core.js';
 import { recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js';
 import { __setHostLoadProberForTesting } from '../../../src/core/hosts/placement.js';
+import { clearHostReadiness, setHostReadinessForTest } from '../../../src/core/hosts/host-readiness.js';
+// Cloud as a host Walnut has seen able to start Claude Code (placement picks only such a host).
+const cloudClaude = (claude: Record<string, unknown> = {}) => setHostReadinessForTest('cloud', {
+  ok: true, claude: { found: true, path: '/usr/bin/claude', kind: 'native', needsNode: false, version: '2.1.300', auth: 'ok', ...claude },
+  compiler: { found: true, name: 'gcc' }, dtach: { found: true },
+} as never, { hostLabel: 'cloud' });
 import { placeStartByLoad } from '../../../src/core/sessions/start-placement.js';
 import { HostsFullError } from '../../../src/core/sessions/host-admission.js';
 import { __setPathsCheckerForTesting } from '../../../src/core/hosts/named-paths.js';
@@ -390,6 +396,16 @@ describe('task_move', () => {
       : { cpus: 48, load: [3, 3, 3], cpuBusy: 0.05, memTotalBytes: 192 * GB, memAvailBytes: 150 * GB, diskPath: '/', diskFreeBytes: 2000 * GB, diskTotalBytes: 3000 * GB, at: now }));
     try {
       const task = await getTask(taskId);
+      // Walnut picks only a host it has seen able to start Claude Code (2026-11-05).
+      for (const [claude, why] of [[null, 'not checked'], [{ found: false }, 'missing'], [{ auth: 'not-logged-in' }, 'signed out'], [{ auth: 'unknown' }, 'sign-in unknown']] as const) {
+        if (claude) cloudClaude(claude); else clearHostReadiness('cloud');
+        const stays = { host: '', cwd: shared, message: 'x' };
+        const kept = await placeStartByLoad(task, {}, stays, 'claude');
+        expect(kept, why).toMatchObject({ host: '', moved: false });
+        expect(kept!.reason, why).toMatch(/; cloud has room but \S/);
+        expect(stays, why).toEqual({ host: '', cwd: shared, message: 'x' });
+      }
+      cloudClaude({});
       // Review round 3: the slot on the target is taken before anything is set up there, so a
       // full target leaves nothing behind (each refused try once made a new clone). Moved for
       // load, the start then stays where it was, over a cap but with room (review round 4).
@@ -456,6 +472,7 @@ describe('task_move', () => {
       ? { cpus: 14, load: [macLoad, 4, 4], cpuBusy: 0.2, memTotalBytes: 48 * GB, memAvailBytes: 20 * GB, diskPath: '/', diskFreeBytes: 200 * GB, diskTotalBytes: 1000 * GB, at: now }
       : { cpus: 48, load: [3, 3, 3], cpuBusy: 0.05, memTotalBytes: 192 * GB, memAvailBytes: 150 * GB, diskPath: '/', diskFreeBytes: 2000 * GB, diskTotalBytes: 3000 * GB, at: now }));
     macAt(4);
+    cloudClaude();
     try {
       const task = await getTask(taskId);
       const brief = `${W.homes.cloud}/.local/state/open-walnut/tasks/parent-task/review-brief-codex.md`;
@@ -594,6 +611,7 @@ describe('task_move', () => {
       expect(cloneFirst.message).toContain('Set the repository up first');
     } finally {
       __setHostLoadProberForTesting(null);
+      clearHostReadiness('cloud');
     }
   }, 120_000);
 

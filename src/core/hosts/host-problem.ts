@@ -59,7 +59,7 @@ export interface HostStatusInput {
     problems?: HostReadinessProblemInput[]
     checkedAt?: number
     claude?: { version?: string; minVersion?: string; installMethod?: string }
-    fixing?: { action: string; text: string; startedAt?: number }
+    fixing?: { action: string; text: string; startedAt?: number }; usedForSessions?: boolean // false: nothing uses it (host-session-use.ts)
   }
 }
 
@@ -288,9 +288,9 @@ export function blockingReadinessProblem(s: HostStatusInput | undefined): HostRe
   return s?.readiness?.problems?.find((p) => BLOCKING_READINESS_KINDS.includes(p.kind))
 }
 
-/** The first readiness problem the home banner shows for a host (BANNER_READINESS_KINDS). */
+/** The banner's readiness problem (BANNER_READINESS_KINDS); none on a host nothing uses for sessions (2026-11-05). */
 export function bannerReadinessProblem(s: HostStatusInput | undefined): HostReadinessProblemInput | undefined {
-  return s?.readiness?.problems?.find((p) => BANNER_READINESS_KINDS.includes(p.kind))
+  return s?.readiness?.usedForSessions === false ? undefined : s?.readiness?.problems?.find((p) => BANNER_READINESS_KINDS.includes(p.kind))
 }
 
 export function readinessDismissKey(s: HostStatusInput, kind: string): string {

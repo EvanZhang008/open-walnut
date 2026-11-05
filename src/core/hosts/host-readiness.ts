@@ -29,14 +29,15 @@ import {
   agentsAsked, agentsAskedNow, attempted, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
   prebuiltFor, prebuiltUnusable, problemCtx, readinessProbeSkipped, rounds, setFixState, store, type HostReadiness,
 } from './host-readiness-store.js'
+import { wireHostSessionUse } from './host-session-use.js'
 
 export type { HostFixAction, HostFixing, HostFixRecord }
 export { parsePreflight, readinessProblems }
 export type { ReadinessProblem, ReadinessProblemKind } from './host-readiness-problems.js'
 // The store and the floor judgements live in their own modules; this stays their import path.
 export {
-  clearHostReadiness, getHostReadiness, onHostReadinessChange, resetHostAutofixAttempts, setReadinessProbeSkip,
-  type HostReadiness,
+  claudeSessionBlocker, claudeUnusableProblem, clearHostReadiness, getHostReadiness, onHostReadinessChange,
+  resetHostAutofixAttempts, setReadinessProbeSkip, type HostReadiness,
 } from './host-readiness-store.js'
 export {
   hostReadinessForLaunch, hostReadinessForModel, recomputeHostReadinessFloors, setClaudeFloorOverride, setHostReadinessForTest,
@@ -379,8 +380,11 @@ export function refreshHostReadiness(
 }
 
 /**
- * Server wiring: probe every configured host right after its handshake, and
- * re-push its status when the answer lands. Returns one unsubscribe for both.
+ * Server wiring: probe every configured host right after its handshake, re-push its status
+ * when the answer lands, and keep `usedForSessions` current (host-session-use.ts), re-pushing
+ * a host whose answer flips. (A card whose cause was fixed by hand goes at the next re-ask:
+ * the page re-asks every blocked host when its window comes back, useHostStatus.ts.)
+ * Returns one unsubscribe.
  */
 export function wireHostReadiness(opts: {
   onConnected: (cb: (host: string) => void) => () => void
@@ -388,6 +392,8 @@ export function wireHostReadiness(opts: {
   emit: (host: string) => void
   /** Test seam; defaults to refreshHostReadiness against the live pool. */
   refresh?: (host: string) => Promise<unknown>
+  /** Test seams for host-session-use; false leaves it unwired. */
+  sessionUse?: false | { everyMs?: number; read?: () => Promise<Set<string>> }
 }): () => void {
   const refresh = opts.refresh ?? ((host: string) => refreshHostReadiness(host))
   const offConnected = opts.onConnected((host) => {
@@ -395,7 +401,11 @@ export function wireHostReadiness(opts: {
     void refresh(host)
   })
   const offChange = onHostReadinessChange((host) => opts.emit(host))
-  return () => { offConnected(); offChange() }
+  const offUse = opts.sessionUse === false ? () => {} : wireHostSessionUse(
+    (host) => { if (store.has(host)) notify(host) },
+    { hosts: () => store.keys(), ...(opts.sessionUse ?? {}) },
+  )
+  return () => { offConnected(); offChange(); offUse() }
 }
 
 // ── The spawn gate's sentence (C5) ──

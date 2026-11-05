@@ -423,3 +423,32 @@ describe('attention banner model: one host alone (hostRowFor, the System list)',
     expect(hostRowFor(connected('keybox', 'Key box'), { now: NOW }, attempt)).toBeNull()
   })
 })
+
+describe('a host nothing uses for sessions takes no card for its Claude Code (2026-11-05)', () => {
+  const unused = (s: S): S => ({ ...s, readiness: { ...s.readiness!, usedForSessions: false } })
+  const used = (s: S): S => ({ ...s, readiness: { ...s.readiness!, usedForSessions: true } })
+
+  it('missing or signed out on a host no project or open task uses: no row, here or in the System list', () => {
+    for (const s of [unused(missing('fleet', 'Fleet Mac')), unused(signedOut('fleet', 'Fleet Mac'))]) {
+      expect(nextBanner(input([s])).view.rows).toEqual([])
+      expect(hostRowFor(s, { now: NOW })).toBeNull()
+      // Start there is still refused: the picker and Settings read the plain problem.
+      expect(hostProblemOf(s)?.type).toBe('readiness')
+    }
+  })
+
+  it('the same host used for sessions (or an older server that does not say) keeps its row', () => {
+    for (const s of [used(missing('fleet', 'Fleet Mac')), missing('fleet', 'Fleet Mac')]) {
+      expect(nextBanner(input([s])).view.rows.map((r) => r.id)).toEqual([bannerHostRowId('fleet')])
+    }
+  })
+
+  it('the row goes by itself once nothing uses the host, and comes back when something does', () => {
+    const shown = run([input([used(missing('fleet', 'Fleet Mac'))])])
+    expect(shown.view.rows).toHaveLength(1)
+    const gone = nextBanner(input([unused(missing('fleet', 'Fleet Mac'))]), shown.state)
+    expect(gone.view.rows).toEqual([])
+    const back = nextBanner(input([used(missing('fleet', 'Fleet Mac'))]), gone.state)
+    expect(back.view.rows.map((r) => r.id)).toEqual([bannerHostRowId('fleet')])
+  })
+})

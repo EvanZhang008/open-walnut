@@ -64,6 +64,8 @@ export interface HostStatusReadiness {
   /** The automatic fix running on the host right now. */
   fixing?: { action: string; text: string; startedAt?: number };
   fixes?: unknown[];
+  /** false: no project or open task uses the host for sessions, so its Claude Code problem takes no card. */
+  usedForSessions?: boolean;
 }
 
 export interface HostStatus {

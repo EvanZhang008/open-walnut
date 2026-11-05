@@ -201,6 +201,9 @@ export function ProviderRail({ active, onSwitch, lockReason }: {
           ?? unavailable
           ?? (onSwitch ? null : `This session runs on ${activeLabel} — start a new session to use ${label}`);
         const locked = !isActive && reason !== null;
+        // The selected engine stays selected, but says so when the host cannot run it (a draft on
+        // a host without Claude Code, 2026-11-05: it read as available, with no reason).
+        const activeUnavailable = isActive ? lockReason?.(id) ?? null : null;
         const Icon = PROVIDER_ICONS[id] ?? GenericEngineMark;
         return (
           <button
@@ -209,13 +212,13 @@ export function ProviderRail({ active, onSwitch, lockReason }: {
             role="tab"
             aria-selected={isActive}
             aria-disabled={locked || undefined}
-            className={`provider-rail-item${isActive ? ' provider-rail-item-active' : ''}${locked ? ' provider-rail-item-locked' : ''}`}
-            title={locked ? reason! : label}
+            className={`provider-rail-item${isActive ? ' provider-rail-item-active' : ''}${locked ? ' provider-rail-item-locked' : ''}${activeUnavailable ? ' provider-rail-item-unavailable' : ''}`}
+            title={locked ? reason! : activeUnavailable ?? label}
             data-provider={id}
             onClick={() => { if (!isActive && !locked) onSwitch?.(id); }}
           >
             <Icon />
-            {locked && (
+            {(locked || activeUnavailable) && (
               <span className="provider-rail-lock" aria-hidden>
                 <svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.4">
                   <rect x="5" y="11" width="14" height="9" rx="2" />
@@ -347,6 +350,8 @@ export function ModelPicker({
   // Which of the two panes shows is a CAPABILITY question: an engine whose model
   // list is provider-advertised has no static catalog and no get_settings.
   const engineCatalog = useEngineCatalog();
+  // The selected engine on a host that cannot run it: said at the top of the pane, in the lock's words.
+  const activeEngineUnavailable = providerLockReason?.(engine) ?? null;
   const engineUi = engineCaps(engine, engineCatalog);
   const isAcpPane = engineUi.providerModelCatalog;
   // The last strip this page pulled for the session draws in the first frame; the pull refreshes it.
@@ -1002,6 +1007,7 @@ export function ModelPicker({
       <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} />
       <div className="model-picker-pane">
       {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
+      {activeEngineUnavailable && <div className="model-picker-switch-note" role="status" data-testid="model-picker-engine-unavailable">{activeEngineUnavailable}</div>}
       {isAcpPane ? acpPane : (<>
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>

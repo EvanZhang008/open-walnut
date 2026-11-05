@@ -25,6 +25,7 @@ import { credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../sessions/host-c
 import { buildHostStatus, type HostDef, type HostStatus } from './host-status.js'
 import { getHostReadiness, setClaudeFloorOverride, setHostReadinessForTest, setReadinessProbeSkip, type HostReadiness } from './host-readiness.js'
 import { withFixState, type HostFixing, type HostFixRecord } from './host-autofix.js'
+import { setHostSessionUseOverride } from './host-session-use.js'
 
 export interface FixtureClaude { found?: boolean; version?: string; auth?: 'ok' | 'not-logged-in' | 'unknown'; installMethod?: 'native' | 'npm' | 'homebrew' | 'other'; kind?: string; needsNode?: boolean; nodeFound?: boolean; error?: string; path?: string }
 
@@ -45,6 +46,8 @@ export interface FixtureHostSpec {
   platform?: 'linux' | 'darwin'
   wsl?: string
   enabled?: boolean
+  /** false: no project or open task uses the host for sessions (default: used, as the specs were written). */
+  usedForSessions?: boolean
 }
 
 export interface FixtureFile {
@@ -204,6 +207,8 @@ export function loadFixtureState(file: FixtureFile): void {
   setClaudeFloorOverride({ configured: fixtureFloor, forModel: fixtureFloorFor })
   // The MockDaemon behind a fixture host has no host.preflight: never probe one for real.
   setReadinessProbeSkip(isFixtureHost)
+  // Its stores hold no projects or tasks: the spec says whether a host is used for sessions.
+  setHostSessionUseOverride((host) => { const h = st.hosts.get(host); return h ? h.spec.usedForSessions !== false : undefined })
   st.offsetMs = Number(process.env.WALNUT_TEST_CLOCK_OFFSET_MS) || 0
   st.counters = emptyCounters()
   st.hosts.clear()
@@ -220,6 +225,7 @@ export function resetFixtureState(): void {
   st.modelFloors.clear()
   setClaudeFloorOverride(null)
   setReadinessProbeSkip(null)
+  setHostSessionUseOverride(null)
   st.hosts.clear()
   st.counters = emptyCounters()
   st.offsetMs = Number(process.env.WALNUT_TEST_CLOCK_OFFSET_MS) || 0

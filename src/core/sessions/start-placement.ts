@@ -139,6 +139,13 @@ export async function placeStartByLoad(
       const { switchHostBlocker } = await import('./engine-switch.js');
       const blocked = await switchHostBlocker(host, engine ?? 'claude');
       if (blocked) return blocked;
+      // Walnut picks only a host it has seen able to start Claude Code (installed, signed in,
+      // new enough); a person may still pick any host, and Start says what is wrong there.
+      if ((engine ?? 'claude') === 'claude') {
+        const { claudeSessionBlocker } = await import('../hosts/host-readiness.js');
+        const unready = claudeSessionBlocker(host);
+        if (unready) return unready;
+      }
       // A new task directory of its own there; the files it names were checked already (keeps).
       // Moved for load only while its own directory here holds nothing: a brief written there
       // and read by a relative path would stay behind (review round 3, Sol).

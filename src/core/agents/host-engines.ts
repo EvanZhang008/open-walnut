@@ -70,10 +70,32 @@ async function askRemote(host: string, dial: boolean): Promise<HostAnswer | null
   return out;
 }
 
+/**
+ * Claude Code on another host, from that host's preflight (host-readiness.ts) rather than the
+ * daemon's word, which never named it: every remote host read as able to run it, so placement
+ * and the engine picker offered a host with none installed (2026-11-05). Missing, needing a
+ * node it lacks, or broken is not installed; an old or signed-out one is still installed (Start
+ * says so, and may go ahead); a check that could not tell gives no row. No answer yet changes nothing.
+ */
+async function withClaudeReadiness(host: string, answer: HostAnswer): Promise<HostAnswer> {
+  const { claudeUnusableProblem, getHostReadiness } = await import('../hosts/host-readiness.js');
+  const r = getHostReadiness(host);
+  if (!r) return answer;
+  // A check that could not tell is no answer (unknown, never "not installed"), as below.
+  if (r.claude.unknown) { const { claude: _unknown, ...rest } = answer; return rest; }
+  const p = claudeUnusableProblem(host);
+  const version = r.claude.version ?? null;
+  return { ...answer, claude: p ? { installed: false, version, reason: p.message.replace(/\.\s*$/, '') } : { installed: true, version, reason: null } };
+}
+
 /** Every engine's availability on `host` that is known within the deadline. */
 export async function hostEnginesAvailability(hostIn: string | undefined | null, opts: HostEnginesOpts = {}): Promise<HostAnswer> {
   const host = normalizeHost(hostIn ?? undefined);
   if (host === LOCAL_HOST) return Object.fromEntries(await probeEngines()) as HostAnswer;
+  return withClaudeReadiness(host, await askedEngines(host, opts));
+}
+
+async function askedEngines(host: string, opts: HostEnginesOpts): Promise<HostAnswer> {
   const hit = cache.get(host);
   if (hit && Date.now() - hit.at < (hit.failed ? FAILED_TTL_MS : TTL_MS)) return hit.value;
   let work = inFlight.get(host);

@@ -9,6 +9,8 @@ import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import { withFixState, type HostFixAction, type HostFixing, type HostFixRecord } from './host-autofix.js'
 import type { ReadinessProblem } from './host-readiness-problems.js'
 import { forgetAllHostFixes, forgetHostFixes } from './host-fix-memory.js'
+import { hostUsedForSessions } from './host-session-use.js'
+import { BLOCKING_READINESS_KINDS } from './host-problem.js'
 
 export interface HostReadiness extends HostPreflightResult {
   /** When the host was last ASKED (success or failure): the UI's "is this answer new" key. */
@@ -28,6 +30,12 @@ export interface HostReadiness extends HostPreflightResult {
    * a fix line against its own clock (server and browser clocks may differ).
    */
   fixes: Array<HostFixRecord & { ageMs: number }>
+  /**
+   * false: nothing points this host's sessions anywhere (no project starts there, no open
+   * task last started there, no session open there), so a Claude Code problem here is a
+   * Settings line, not an attention card (host-session-use.ts). Absent until first read.
+   */
+  usedForSessions?: boolean
 }
 
 /** What the store keeps: the preflight answer; fix state is merged on read. */
@@ -73,11 +81,45 @@ export function getHostReadiness(host: string, now: number = Date.now()): HostRe
   const fixes = fx?.fixes ?? []
   const fixing = fx?.fixing
   const problems = withFixState(base.problems, base, fixing, fixes)
+  const usedForSessions = hostUsedForSessions(host)
   return {
     ...base, problems,
     fixes: fixes.map((f) => ({ ...f, ageMs: Math.max(0, now - f.finishedAt) })),
     ...(fixing ? { fixing } : {}),
+    ...(usedForSessions !== undefined ? { usedForSessions } : {}),
   }
+}
+
+/** The readiness kinds that mean Claude Code cannot start at all on the host (not just an override away). */
+const CLAUDE_UNUSABLE_KINDS: readonly string[] = ['claude_missing', 'claude_needs_node', 'claude_error']
+
+/**
+ * Why Walnut must not pick this remote host for a Claude Code session ON ITS OWN, or null
+ * (2026-11-05: placement read every remote host as able to run Claude Code, so a fleet Mac
+ * with none installed scored like any other). Only a host whose last check said yes to all
+ * of it is picked: Claude Code found, signed in, its version read and new enough, and the
+ * check itself answered. A refusal (BLOCKING_READINESS_KINDS) gives its own sentence; an
+ * answer that could not tell (a timed-out sign-in or version probe, an older daemon that
+ * does not report one, a re-check that failed) keeps the host out too. A person may still
+ * pick any host; the picker and Start say what is wrong there.
+ */
+export function claudeSessionBlocker(host: string): string | null {
+  if (!host || host === '__local__') return null
+  const r = store.get(host)
+  if (!r) return `Walnut has not checked Claude Code on ${host} yet`
+  const p = r.problems.find((x) => BLOCKING_READINESS_KINDS.includes(x.kind))
+  if (p) return p.message.replace(/\.\s*$/, '')
+  const c = r.claude
+  if (r.checkError) return `Walnut's last check of Claude Code on ${host} did not answer`
+  if (c.unknown || !c.found) return `Walnut could not tell whether Claude Code runs on ${host}`
+  if (c.auth !== 'ok') return `Walnut could not tell whether Claude Code on ${host} is signed in`
+  if (!c.version || (c.minVersion && c.versionOk !== true)) return `Walnut could not read which Claude Code ${host} runs`
+  return null
+}
+
+/** The stored problem that means Claude Code cannot start on the host at all, or undefined. */
+export function claudeUnusableProblem(host: string): ReadinessProblem | undefined {
+  return store.get(host)?.problems.find((x) => CLAUDE_UNUSABLE_KINDS.includes(x.kind))
 }
 
 /**
