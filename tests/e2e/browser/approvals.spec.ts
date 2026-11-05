@@ -295,11 +295,13 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await page.locator('.sidebar-collapse-btn').first().click()
   // A narrow window with the sidebar open: still right of the page's left column, narrower.
   await page.setViewportSize({ width: 800, height: 600 })
+  // Polled as its numbers, so a failure says where the card and the column really were.
   await expect.poll(async () => {
     const n = (await page.locator('.settings-nav').boundingBox())!
     const b = (await card.boundingBox())!
-    return Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 240
-  }).toBe(true)
+    const fits = Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 240
+    return fits ? 'fits' : `card x${Math.round(b.x)} w${Math.round(b.width)}; nav x${Math.round(n.x)} w${Math.round(n.width)} h${Math.round(n.height)}; stack ${await page.getByTestId('corner-stack').getAttribute('class')}`
+  }).toBe('fits')
   await page.setViewportSize(vp)
 
   // The notification center open: it lists the approval (and the toast) itself, so the corner's

@@ -118,7 +118,8 @@
     align-items: center;
     column-gap: 10px;
   }
-  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-header { flex: 0 0 100%; }
+  /* min-width 0: its title's words never widen it past the toast (the x stays inside). */
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-header { flex: 0 0 100%; min-width: 0; }
   .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-body {
     flex: 1 1 0;
     min-width: 0;
@@ -132,7 +133,110 @@
     flex: none;
     margin: 0 0 0 auto;
   }
+  /* Details opened: the whole text on rows of its own, the buttons after it. */
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast.is-open:not(.nfc-perm-toast) .notification-toast-body { flex: 0 0 100%; white-space: normal; margin-bottom: 4px; }
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-header ~ .notification-toast-log { flex: 0 0 100%; margin: 0 0 4px; }
+  /* Opened, its tools stay at the right where the closed toast had them, so Copy does not move. */
+  .corner-stack:is(.is-compact, .has-approval) .notification-toast.is-open:not(.nfc-perm-toast) .notice-tools { margin: 0 0 0 auto; }
 }
+
+/* A notice's command reads as code, with its own Copy (NoticeText.tsx). */
+.notice-cmd { white-space: normal; }
+/* A command breaks only between its words; a word longer than the line wraps inside itself. */
+.notice-cmd-word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; vertical-align: top; }
+.notice-cmd-code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95em;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.notice-cmd-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  vertical-align: -4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.notice-cmd-copy:hover { background: var(--bg-hover); color: var(--fg); }
+/* "Details" / "Less": the rest of a notice cut to its few lines. */
+.notice-details-toggle {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2px 0;
+  margin: 0 0 6px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.notice-details-toggle:hover { color: var(--fg); }
+/* Its other label, unseen, keeps "Details" and "Less" (and "Copy command" and "Copied") one width. */
+.notice-cmd-copy-words { display: inline-flex; flex-direction: column; align-items: flex-start; }
+:is(.notice-details-toggle, .notice-cmd-copy-words)::after { content: attr(data-other); height: 0; overflow: hidden; visibility: hidden; }
+.notice-details-toggle:last-child { margin-bottom: 0; }
+/* Details and the command's Copy, one row under the words. */
+.notice-tools { display: flex; align-items: center; gap: 12px; margin: 0 0 6px; }
+.notice-tools:last-child { margin-bottom: 0; }
+.notice-tools .notice-details-toggle { margin: 0; }
+.notice-cmd-copy--label {
+  width: auto;
+  height: auto;
+  gap: 4px;
+  padding: 2px 4px;
+  margin: 0;
+  vertical-align: baseline;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+.nfc-perm-cmd-tools .notice-details-toggle { margin: 0; }
+/* The raw line behind a toast (the record's detail), opened from Details, under its label. */
+.notification-toast-log { flex: 0 0 100%; min-width: 0; margin: 2px 0 6px; cursor: text; }
+.notification-toast-log-label { font-size: 11px; font-weight: 500; color: var(--fg-muted); margin-bottom: 2px; }
+.notification-toast-detail {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: min(30vh, 180px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: text;
+}
+/* A board toast: three lines, then Details (a long task title). */
+.corner-stack .kanban-toast-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.corner-stack .kanban-toast-text.is-open { display: block; overflow: visible; }
+.corner-stack .kanban-toast-main .notice-details-toggle { margin: 0 auto 0 0; }
 
 /* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
 [data-corner-room]::after {
@@ -180,6 +284,20 @@
   /* One row (its mark, its title, its close) while it lies over the page at the bottom; a tap
      opens the notification center with the whole text and its buttons. A permission prompt
      keeps its words and buttons: it is answered from them. */
-  .corner-stack .notification-toast:not(.nfc-perm-toast) :is(.notification-toast-body, .notification-toast-action, .nfc-notice-actions, .nfc-card-actions) { display: none; }
+  .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) :is(.notification-toast-body, .notification-toast-action, .nfc-notice-actions, .nfc-card-actions) { display: none; }
+  /* Its Details sits under the title; opened, the toast shows its words and buttons. */
+  .corner-stack .notification-toast:not(.nfc-perm-toast) .notice-tools { margin: 2px 0 0; }
+  .corner-stack .notification-toast:not(.nfc-perm-toast) .notice-tools > button { min-height: 32px; }
+  .corner-stack .notification-toast-header > .notice-details-toggle { flex: none; margin: -6px 0; min-height: 32px; padding: 0 4px; }
+  /* Closed, a toast is one row: its title's first line, Details and its x. */
+  .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .notification-toast-title { -webkit-line-clamp: 1; }
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .notification-toast-header { margin-bottom: 4px; }
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .notification-toast-detail { max-height: min(25vh, 160px); }
   .corner-stack .notification-toast:not(.nfc-perm-toast) .notification-toast-header { margin-bottom: 0; }
+  /* Its one row: the title, Details and the x on one center line. */
+  .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .notification-toast-header { align-items: center; }
+  /* Opened on a phone, the words and their Copy come first; the log is under them. */
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) { display: flex; flex-direction: column; }
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) > :is(.notification-toast-header, .notification-toast-body, .notice-tools) { order: -1; }
+  .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) > .notice-tools { margin: 0 0 6px; }
 }

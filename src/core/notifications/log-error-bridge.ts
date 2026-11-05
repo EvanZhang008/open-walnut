@@ -123,6 +123,15 @@ function buildDetail(payload: ErrorNotifyPayload): string | undefined {
   return clean.length > MAX_BODY ? `${clean.slice(0, MAX_BODY)}…` : clean;
 }
 
+/** The record's detail, led by the whole log line when the title shows only its head. */
+export function withWholeLine(title: string, message: string, detail: string | undefined): string | undefined {
+  const line = (message ?? '').replace(/\s+/g, ' ').trim();
+  if (!title.endsWith('…') || !line || line.endsWith('…')) return detail;
+  const head = redactSensitiveText(line);
+  const out = detail ? `${head}\n${detail}` : head;
+  return out.length > MAX_BODY ? `${out.slice(0, MAX_BODY)}…` : out;
+}
+
 /** Bound the humanized body to the same read-time cap the feed applies. */
 function capBody(text: string): string | undefined {
   if (!text) return undefined;
@@ -372,6 +381,9 @@ export function installLogErrorNotifications(
       ...(payload.meta ? { meta: payload.meta } : {}),
     }, { sanitize: redactSensitiveText });
     const title = human.title.length > 120 ? `${human.title.slice(0, 120)}…` : human.title;
+    // A title cut to its 120 characters loses the rest of the line (2026-11-05: the command a
+    // daemon error named ended in "on…"), so the whole line leads the Details text.
+    const fullDetail = withWholeLine(title, payload.message, detail);
     // On the cloud companion the sentence also says where this happened: the
     // feed is read on the Mac too, where the same card would read as a Mac failure.
     const body = capBody(withOriginNote(human.message));
@@ -404,7 +416,7 @@ export function installLogErrorNotifications(
         kind: 'operation-error', severity: 'error', title, body,
         timestamp: now, dedupKey,
         category: human.category,
-        ...(detail ? { detail } : {}),
+        ...(fullDetail ? { detail: fullDetail } : {}),
         // An outage card is about the host, not one of the sessions it stopped.
         ...(sessionId && !outageHost ? { sessionId } : {}),
         ...(taskId && !outageHost ? { taskId } : {}),

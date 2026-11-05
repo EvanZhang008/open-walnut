@@ -26,7 +26,7 @@
  * end for exactly the asks that most needed answering.
  */
 
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -45,6 +45,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverlayHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
+import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
 
 /** Downward travel that dismisses a toast on the phone (it sits at the bottom of the screen). */
@@ -104,6 +105,9 @@ const SHORT_WINDOW_PX = 720;
 /** Toasts in sight while an approval card is in the corner: the request a script waits on leads. */
 const WITH_APPROVAL_SHOWN = 1;
 
+/** At this width and below the phone keeps a closed toast to its title row (corner-stack.css). */
+const PHONE_TITLE_ONLY_PX = 640;
+
 /** How long an answered permission toast stays up before self-dismissing. */
 const RESOLVED_DISMISS_MS = 1500;
 
@@ -121,9 +125,15 @@ export function NotificationToaster() {
   // A permission a session waits on stays in sight whatever the count; the rest fill what is left.
   const asking = (t: (typeof allToasts)[number]) => t.kind === 'permission' && !t.resolved;
   const kept = new Set(allToasts.filter((t) => !asking(t)).slice(-Math.max(0, shownCount - allToasts.filter(asking).length)));
+  // "N more ›" opens the notification center, which lists only what it keeps. A toast it does not
+  // keep (an Undo after a column closed) is shown in place instead: the count unfolds the stack.
+  const [unfolded, setUnfolded] = useState(false);
+  const folded = phone ? [] : allToasts.filter((t) => !asking(t) && !kept.has(t));
+  const foldsEphemeral = folded.some((t) => !t.persistent);
+  useEffect(() => { if (!foldsEphemeral && unfolded) setUnfolded(false); }, [foldsEphemeral, unfolded]);
   const toasts = phone
     ? phoneVisibleToasts(allToasts, (sid) => isPhoneOverlayOpen(`session:${sid}`))
-    : allToasts.filter((t) => asking(t) || kept.has(t));
+    : unfolded && foldsEphemeral ? allToasts : allToasts.filter((t) => asking(t) || kept.has(t));
   // The older ones stay in the notification center (on the phone they also wait their turn); one
   // line says how many and opens it.
   const older = allToasts.length - toasts.length;
@@ -132,7 +142,9 @@ export function NotificationToaster() {
   // The count rides the top toast's title row (a link, not a card of its own); only a stack of
   // permission prompts, which have their own head, keeps it as a line above them.
   const moreHost = toasts.find((t) => !(t.kind === 'permission' && !t.resolved))?.id;
-  const openCenter = () => window.dispatchEvent(new CustomEvent('notification:open-center'));
+  const openCenter = foldsEphemeral
+    ? () => setUnfolded(true)
+    : () => window.dispatchEvent(new CustomEvent('notification:open-center'));
   const moreWords = older === 1 ? '1 more ›' : `${older} more ›`;
 
   return (
@@ -165,88 +177,154 @@ export function NotificationToaster() {
             />
           );
         }
-        // Persistent toasts live in the feed too, so the body is a shortcut into
-        // the notification center. Ephemeral ones (sort/audio) aren't — inert body.
-        const opensCenter = toast.persistent;
         return (
-        <SwipeToast key={toast.id} phone={phone} onDismiss={() => dismissToast(toast.id)}>
-        <div
-          className={`notification-toast notification-toast--${toast.severity}${opensCenter ? ' notification-toast--clickable' : ''}`}
-          role={toast.severity === 'error' || toast.severity === 'warning' ? 'alert' : 'status'}
-          onClick={opensCenter ? () => {
-            window.dispatchEvent(new CustomEvent('notification:open-center'));
-            dismissToast(toast.id);
-          } : undefined}
-          title={opensCenter ? 'Open notification center' : undefined}
-        >
-          <div className="notification-toast-header">
-            <span className="notification-toast-icon">{SEVERITY_ICON[toast.severity]}</span>
-            <span className="notification-toast-title">{toast.title}</span>
-            {older > 0 && toast.id === moreHost && (
-              <button
-                type="button"
-                className="notification-toast-more"
-                data-testid="notification-toaster-more"
-                title={older === 1 ? '1 more notification in the notification center' : `${older} more notifications in the notification center`}
-                onClick={(e) => { e.stopPropagation(); openCenter(); }}
-              >
-                {moreWords}
-              </button>
-            )}
-            <button
-              className="notification-toast-close"
-              onClick={(e) => { e.stopPropagation(); dismissToast(toast.id); }}
-              aria-label="Dismiss"
-            >
-              &times;
-            </button>
-          </div>
-          {toast.body && <div className="notification-toast-body">{toast.body}</div>}
-          {/* A record with a button LIST (a plugin reminder's Done / Snooze):
-              up to three, an `op` runs the plugin's op. Once the human pressed
-              one the reminder is dealt with: the toast goes and the record is
-              read. Touching a button pins the toast so a slow op cannot lose it. */}
-          {toast.actions && toast.actions.length > 0 ? (
-            <NotificationActionButtons
-              n={toast}
-              actions={displayActionsOf(toast)}
-              variant="toast"
-              onNavigate={(to) => navigateToTarget(to, navigate)}
-              onInteract={() => pinToast(toast.id)}
-              onDone={() => {
-                dismissToast(toast.id);
-                if (toast.persistent) markReadByKey([toast.dedupKey]);
-              }}
+          <SwipeToast key={toast.id} phone={phone} onDismiss={() => dismissToast(toast.id)}>
+            <MessageToast
+              toast={toast}
+              phone={phone}
+              more={older > 0 && toast.id === moreHost ? { words: moreWords, older, open: openCenter, inPlace: foldsEphemeral } : null}
+              onDismiss={() => dismissToast(toast.id)}
+              onPin={() => pinToast(toast.id)}
+              onRead={() => { if (toast.persistent) markReadByKey([toast.dedupKey]); }}
+              navigate={navigate}
             />
-          ) : toast.action && (
-            <button
-              className="notification-toast-action"
-              onClick={(e) => {
-                e.stopPropagation();  // action has its own target — don't also open the center
-                const a = toast.action;
-                if (a?.kind === 'navigate' && a.to) {
-                  // Session deep links open on the home page's session columns
-                  // (primary surface) instead of the /sessions page.
-                  navigateToTarget(a.to, navigate);
-                } else if (a?.kind === 'callback') {
-                  toast.onAction?.();
-                } else {
-                  // Malformed action (e.g. navigate without `to`) — do nothing and
-                  // leave the toast up rather than silently dismissing on a no-op.
-                  return;
-                }
-                dismissToast(toast.id);
-              }}
-            >
-              {toast.action.label}
-            </button>
-          )}
-        </div>
-        </SwipeToast>
+          </SwipeToast>
         );
       })}
     </div>
     </CornerSlot>
+  );
+}
+
+/**
+ * A toast's message: its title (a few lines), its body (a few more), and Details when either
+ * is cut or the record keeps more (the raw line behind it). Details opens the whole text in
+ * place and keeps the toast up until it is closed: reading must not race its timer.
+ */
+function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate }: {
+  toast: Notification;
+  phone: boolean;
+  more: { words: string; older: number; open: () => void; inPlace: boolean } | null;
+  onDismiss: () => void;
+  onPin: () => void;
+  onRead: () => void;
+  navigate: (to: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const titleRef = useRef<HTMLSpanElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // A title the server cut shows whole (its few lines, then Details); the raw rest stays detail.
+  const whole = wholeTitle(toast.title, toast.detail);
+  const cut = useCutOff([titleRef, bodyRef], `${whole.title}\n${toast.body ?? ''}\n${phone}`);
+  const detail = whole.detail && whole.detail !== toast.body ? whole.detail : '';
+  const commands = noticeCommands(whole.title, toast.body);
+  // One command: one "Copy command" beside Details, no second copy icon in the words.
+  const oneCopy = commands.length === 1;
+  // Opened, nothing is cut any more: the toggle keeps the name it had when closed.
+  const cutClosed = useRef(cut);
+  if (!open) cutClosed.current = cut;
+  // A narrow phone shows a toast's title alone; its body is what Details opens there.
+  const titleOnly = phone && window.innerWidth <= PHONE_TITLE_ONLY_PX;
+  const wordsCut = (open ? cutClosed.current : cut) || (titleOnly && !!toast.body);
+  const hasMore = wordsCut || !!detail;
+  const toggle = (
+    <NoticeDetailsToggle open={open} log={!wordsCut && !!detail} onToggle={() => { if (!open) onPin(); setOpen(!open); }} />
+  );
+  const toolsInHeader = titleOnly && !open && hasMore;
+  // Persistent toasts live in the feed too, so the body is a shortcut into
+  // the notification center. Ephemeral ones (sort/audio) aren't — inert body.
+  const opensCenter = toast.persistent;
+  return (
+    <div
+      className={`notification-toast notification-toast--${toast.severity}${opensCenter ? ' notification-toast--clickable' : ''}${open ? ' is-open' : ''}`}
+      role={toast.severity === 'error' || toast.severity === 'warning' ? 'alert' : 'status'}
+      data-testid="notification-toast"
+      onClick={opensCenter ? (e) => {
+        // Selecting words to copy them is not a click on the toast.
+        if (window.getSelection()?.toString()) return;
+        if ((e.target as Element).closest('.notice-cmd')) return;
+        window.dispatchEvent(new CustomEvent('notification:open-center'));
+        onDismiss();
+      } : undefined}
+      title={opensCenter && !open ? 'Open notification center' : undefined}
+    >
+      <div className="notification-toast-header">
+        <span className="notification-toast-icon">{SEVERITY_ICON[toast.severity]}</span>
+        <span ref={titleRef} className="notification-toast-title"><NoticeWords text={whole.title} copy={!oneCopy} /></span>
+        {more && (
+          <button
+            type="button"
+            className="notification-toast-more"
+            data-testid="notification-toaster-more"
+            title={more.inPlace
+              ? (more.older === 1 ? 'Show 1 more notification here' : `Show ${more.older} more notifications here`)
+              : (more.older === 1 ? '1 more notification in the notification center' : `${more.older} more notifications in the notification center`)}
+            onClick={(e) => { e.stopPropagation(); more.open(); }}
+          >
+            {more.words}
+          </button>
+        )}
+        {/* The phone keeps a closed toast to one row: its Details sits in the title row. */}
+        {toolsInHeader && toggle}
+        <button
+          className="notification-toast-close"
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          aria-label="Dismiss"
+        >
+          &times;
+        </button>
+      </div>
+      {toast.body && <div ref={bodyRef} className="notification-toast-body"><NoticeWords text={toast.body} copy={!oneCopy} /></div>}
+      {open && detail && (
+        <div className="notification-toast-log" onClick={(e) => e.stopPropagation()}>
+          <div className="notification-toast-log-label">Log</div>
+          <pre className="notification-toast-detail" data-testid="notification-toast-detail">{prettyDetail(detail)}</pre>
+        </div>
+      )}
+      {!toolsInHeader && (hasMore || open || oneCopy) && (
+        <div className="notice-tools">
+          {(hasMore || open) && toggle}
+          {/* The command it names, in one place, one click away whether the words are cut or open. */}
+          {oneCopy && <CopyCommandButton command={commands[0]} label />}
+        </div>
+      )}
+      {/* A record with a button LIST (a plugin reminder's Done / Snooze):
+          up to three, an `op` runs the plugin's op. Once the human pressed
+          one the reminder is dealt with: the toast goes and the record is
+          read. Touching a button pins the toast so a slow op cannot lose it. */}
+      {toast.actions && toast.actions.length > 0 ? (
+        <NotificationActionButtons
+          n={toast}
+          actions={displayActionsOf(toast)}
+          variant="toast"
+          onNavigate={(to) => navigateToTarget(to, navigate)}
+          onInteract={onPin}
+          onDone={() => { onDismiss(); onRead(); }}
+        />
+      ) : toast.action && (
+        <button
+          className="notification-toast-action"
+          onClick={(e) => {
+            e.stopPropagation();  // action has its own target — don't also open the center
+            const a = toast.action;
+            if (a?.kind === 'navigate' && a.to) {
+              // Session deep links open on the home page's session columns
+              // (primary surface) instead of the /sessions page.
+              navigateToTarget(a.to, navigate);
+            } else if (a?.kind === 'callback') {
+              toast.onAction?.();
+            } else {
+              // Malformed action (e.g. navigate without `to`) — do nothing and
+              // leave the toast up rather than silently dismissing on a no-op.
+              return;
+            }
+            onDismiss();
+          }}
+        >
+          {toast.action.label}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -394,9 +472,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
       {context && <div className="nfc-perm-context">{context}</div>}
 
       {/* What is actually being asked. */}
-      {detail.type === 'bash' && (
-        <code className="nfc-perm-cmd">{detail.command}</code>
-      )}
+      {detail.type === 'bash' && <PermCommand command={detail.command} onOpen={pinOnce} />}
       {/* Only when the form ISN'T rendering the questions itself — the form prints
           every question text, so a preview line above it would say it twice. */}
       {detail.type === 'question' && !questionForm && (
@@ -407,9 +483,9 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
       {detail.type === 'generic' && (
         /* The over-ceiling case: `preview` is all that survived of the input, so
            show it — this branch used to render nothing about the ask. Clamped by
-           .nfc-perm-cmd; the panel card is where it expands. */
+           .nfc-perm-cmd, with Details to open it and Copy beside it. */
         detail.preview
-          ? <code className="nfc-perm-cmd">{detail.preview}</code>
+          ? <PermCommand command={detail.preview} onOpen={pinOnce} />
           : n.body ? <div className="notification-toast-body">{n.body}</div> : null
       )}
 
@@ -484,6 +560,23 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
       {!settled && failed && (
         <div className="nfc-perm-error nfc-perm-error--block">Failed. Open the session to respond.</div>
       )}
+    </div>
+  );
+}
+
+/** The command a permission asks about: two lines, Details for the rest, and Copy. */
+function PermCommand({ command, onOpen }: { command: string; onOpen: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLElement>(null);
+  const cut = useCutOff([ref], command);
+  return (
+    <div className="nfc-perm-cmd-wrap">
+      {/* The box keeps its padding; the words inside clamp, so no sliver of a third line shows. */}
+      <code className={`nfc-perm-cmd${open ? ' is-open' : ''}`}><span ref={ref} className="nfc-perm-cmd-text">{command}</span></code>
+      <div className="nfc-perm-cmd-tools">
+        {(cut || open) && <NoticeDetailsToggle open={open} onToggle={() => { onOpen(); setOpen(!open); }} />}
+        <CopyCommandButton command={command} label />
+      </div>
     </div>
   );
 }

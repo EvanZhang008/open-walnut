@@ -11,6 +11,7 @@
 import '@/styles/board-kanban-controls.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
+import { NoticeDetailsToggle, NoticeWords, useCutOff } from '@/components/common/NoticeText';
 import { log } from '@/utils/log';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import type { KanbanToast, KanbanToastAction, KanbanToastsProps, UseKanbanToasts } from './kanban-contract';
@@ -61,6 +62,7 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
 
   // A new toast starts its clock; a gone one drops it.
   useEffect(() => {
+    for (const id of [...reading.current]) if (!toasts.some((t) => t.id === id)) reading.current.delete(id);
     setClocks((prev) => syncClocks(prev, toasts, Date.now(), hovered.current));
     if (toasts.length <= 3) setExpanded(false);
   }, [toasts]);
@@ -76,7 +78,18 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
   }, [clocks]);
 
   const pause = useCallback(() => { hovered.current = true; setClocks((c) => pauseClocks(c, Date.now())); }, []);
-  const resume = useCallback(() => { hovered.current = false; setClocks((c) => resumeClocks(c, Date.now())); }, []);
+  // A toast whose Details is open keeps every clock stopped until it closes: reading it must not race them.
+  const reading = useRef(new Set<string>());
+  const resume = useCallback(() => {
+    hovered.current = false;
+    if (reading.current.size > 0) return;
+    setClocks((c) => resumeClocks(c, Date.now()));
+  }, []);
+  const read = useCallback((id: string, open: boolean) => {
+    if (open) { reading.current.add(id); pause(); return; }
+    reading.current.delete(id);
+    if (!hovered.current) resume();
+  }, [pause, resume]);
 
   const run = (toast: KanbanToastItem, action: KanbanToastAction) => {
     onDismiss(toast.id);
@@ -110,7 +123,7 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
         <div key={t.id} className={`kanban-toast${t.tone === 'error' ? ' is-error' : ''}`} data-testid="kanban-toast" data-toast-id={t.id}>
           {/* R3-18: text and actions wrap among themselves; the close button keeps the top right. */}
           <div className="kanban-toast-main">
-          <span className="kanban-toast-text">{t.text}</span>
+          <KanbanToastText text={t.text} onRead={(open) => read(t.id, open)} />
           {(t.actions ?? []).map((a) => (
             <button
               key={a.label}
@@ -138,6 +151,19 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
       )}
     </div>
     </CornerSlot>
+    </>
+  );
+}
+
+/** A board toast's words: three lines, Details for the rest (a long task title). */
+function KanbanToastText({ text, onRead }: { text: string; onRead: (open: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  const cut = useCutOff([ref], text);
+  return (
+    <>
+      <span ref={ref} className={`kanban-toast-text${open ? ' is-open' : ''}`}><NoticeWords text={text} /></span>
+      {(cut || open) && <NoticeDetailsToggle open={open} onToggle={() => { onRead(!open); setOpen(!open); }} />}
     </>
   );
 }

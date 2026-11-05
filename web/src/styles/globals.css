@@ -16250,8 +16250,10 @@ a.task-kebab-info:hover {
 
 .notification-toast-header {
   display: flex;
-  align-items: center;
+  /* A title of two lines keeps its icon and its x on its first line. */
+  align-items: flex-start;
   gap: 6px;
+  min-width: 0;
   margin-bottom: 4px;
 }
 
@@ -16265,15 +16267,22 @@ a.task-kebab-info:hover {
 .notification-toast--warning .notification-toast-icon { color: var(--warning); }
 .notification-toast--error .notification-toast-icon { color: var(--danger, #d94a38); }
 
+/* A few lines, then Details (NoticeText.tsx): never one ellipsized line that hides the rest
+   (2026-11-05: a daemon error's command was cut off and its x pushed out of the toast). */
 .notification-toast-title {
   font-size: 12px;
   font-weight: 600;
+  line-height: 16px;
   color: var(--fg);
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
+.notification-toast-icon { height: 16px; }
 
 .notification-toast--warning .notification-toast-title { color: var(--warning); }
 .notification-toast--error .notification-toast-title { color: var(--danger, #d94a38); }
@@ -16296,8 +16305,19 @@ a.task-kebab-info:hover {
   font-size: 13px;
   color: var(--fg-secondary);
   line-height: 1.4;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Details opened: the whole text. */
+.notification-toast.is-open :is(.notification-toast-title, .notification-toast-body) {
+  display: block;
+  -webkit-line-clamp: none;
+  overflow: visible;
+  white-space: normal;
 }
 
 .notification-toast-body:last-child { margin-bottom: 0; }
@@ -31149,16 +31169,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   font-size: 11px;
   color: var(--fg-muted);
   margin-bottom: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .nfc-perm-cmd {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  display: block;
   padding: 5px 7px;
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
@@ -31167,9 +31182,19 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   font-size: 11px;
   line-height: 1.4;
   color: var(--fg);
-  word-break: break-all;
-  margin-bottom: 8px;
+  overflow-wrap: anywhere;
 }
+/* Closed: two whole lines inside the box's padding, never a sliver of the third. */
+.nfc-perm-cmd:not(.is-open) .nfc-perm-cmd-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-height: calc(2 * 1.4em);
+}
+.nfc-perm-cmd.is-open { max-height: 40vh; overflow: auto; white-space: pre-wrap; }
+.nfc-perm-cmd-wrap { margin-bottom: 8px; }
+.nfc-perm-cmd-tools { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 
 .nfc-perm-ask {
   font-size: 12.5px;

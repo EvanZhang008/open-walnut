@@ -394,6 +394,27 @@ const RULES: Rule[] = [
     },
   },
   {
+    // A host's daemon runs another version than this Walnut's, and Walnut left it in place
+    // (daemon-connection.ts). The card says that plainly and gives the command to run there.
+    id: 'managed-daemon-update-deferred',
+    category: CATEGORY_SESSIONS,
+    // Both producers: a remote host's (daemon-connection.ts) and this machine's (local-daemon.ts).
+    match: (i) => has(i.title, 'update was deferred') && has(i.title, 'daemon'),
+    render: (i) => {
+      const local = has(i.title, 'local daemon');
+      const host = str(i.meta?.host);
+      const remote = str(i.meta?.remoteVersion);
+      const expected = str(i.meta?.expected);
+      const versions = remote && expected ? `It runs ${remote}, Walnut ${expected}.` : 'It runs another version than Walnut.';
+      const command = /`([^`]+)`/.exec(i.title)?.[1] ?? 'walnut daemon install --yes --executable <daemon binary>';
+      return {
+        title: local ? 'This machine\'s daemon needs an update' : host ? `The daemon on ${host} needs an update` : 'A host\'s daemon needs an update',
+        // What to fill in leads, so a toast cut to its first lines still says it before Copy.
+        message: `${command.includes('<daemon binary>') ? 'Set <daemon binary> to the new daemon file\'s path, then run' : 'Run'} on ${local ? 'this machine' : host ?? 'that host'}: \`${command}\`. ${versions}`,
+      };
+    },
+  },
+  {
     id: 'session-delivery-failed',
     category: CATEGORY_SESSIONS,
     match: (i) => starts(i.title, 'Session Delivery Failed'),
