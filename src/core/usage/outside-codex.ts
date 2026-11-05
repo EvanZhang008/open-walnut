@@ -66,7 +66,7 @@ export async function collectOutsideCodex(opts: {
         for (const name of scan.failed ?? []) unreadable.add(name);
         if (!scan.next) { complete = true; break; }
         cursor = scan.next;
-        if (Date.now() > deadline) break;
+        if (Date.now() >= deadline) break;
       }
     } catch (error) {
       failed++;
