@@ -14,6 +14,7 @@ import {
 } from './retry.js';
 import { DEFAULT_BASE_URLS } from './defaults.js';
 import { log } from '../../logging/index.js';
+import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js';
 
 export class AnthropicAdapter implements ProtocolAdapter {
   readonly protocol: ApiProtocol = 'anthropic-messages';
@@ -22,7 +23,8 @@ export class AnthropicAdapter implements ProtocolAdapter {
 
   private getClient(apiKey?: string, baseUrl?: string, authHeader?: boolean): Anthropic {
     // Recreate if config changed (use key suffix to avoid storing full secret)
-    const configKey = `${apiKey?.slice(-6) ?? ''}:${baseUrl}:${authHeader}`;
+    const tag = walnutRequestTagHeaders();
+    const configKey = `${apiKey?.slice(-6) ?? ''}:${baseUrl}:${authHeader}:${Object.keys(tag).length}`;
     if (this.client && this.lastConfig === configKey) return this.client;
 
     const opts: ConstructorParameters<typeof Anthropic>[0] = {};
@@ -30,10 +32,11 @@ export class AnthropicAdapter implements ProtocolAdapter {
     if (baseUrl) opts.baseURL = baseUrl;
     else opts.baseURL = DEFAULT_BASE_URLS['anthropic-messages'];
 
+    // session.tag_requests (the tag): a proxy in front of the provider can tell Walnut's own calls apart.
+    const headers: Record<string, string> = { ...tag };
     // Some Anthropic-compat providers use Authorization header instead of x-api-key
-    if (authHeader && apiKey) {
-      opts.defaultHeaders = { Authorization: `Bearer ${apiKey}` };
-    }
+    if (authHeader && apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    if (Object.keys(headers).length > 0) opts.defaultHeaders = headers;
 
     this.client = new Anthropic(opts);
     this.lastConfig = configKey;

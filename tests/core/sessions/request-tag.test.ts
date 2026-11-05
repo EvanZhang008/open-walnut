@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  REQUEST_TAG_HEADER, noteRequestTagConfig, requestTagOn, requestTagValue, withCodexRequestTag, withRequestTagHeaders,
+  REQUEST_TAG_HEADER, noteRequestTagConfig, requestTagOn, requestTagValue, walnutRequestTagHeaders, withCodexRequestTag, withOneShotRequestTag, withRequestTagHeaders,
 } from '../../../src/core/sessions/request-tag.js'
 import { resolveCodexEngine } from '../../../src/providers/codex-engine-config.js'
 
@@ -53,12 +53,61 @@ describe('session.tag_requests', () => {
     expect(withCodexRequestTag({ model: 'gpt' }, 't3')).toEqual({ model: 'gpt' })
   })
 
+  it('one-shot claude -p: the tag rides the env and the inline --settings env, the user\'s lines kept', () => {
+    const plain = withOneShotRequestTag({ args: ['-p', '--model', 'm'], env: { HOME: '/h' } }, undefined)
+    expect(plain.env.ANTHROPIC_CUSTOM_HEADERS).toBe(`${REQUEST_TAG_HEADER}: walnut`)
+    expect(plain.args.slice(0, 3)).toEqual(['-p', '--model', 'm'])
+    expect(JSON.parse(plain.args[plain.args.indexOf('--settings') + 1]).env.ANTHROPIC_CUSTOM_HEADERS).toBe(`${REQUEST_TAG_HEADER}: walnut`)
+    // An inline --settings keeps its own keys; the user's settings.json header lines are kept.
+    const slim = withOneShotRequestTag({ args: ['-p', '--settings', JSON.stringify({ env: { A: '1' }, x: 2 })], env: {} }, 'X-Team: blue')
+    const settings = JSON.parse(slim.args[2])
+    expect(settings).toEqual({ x: 2, env: { A: '1', ANTHROPIC_CUSTOM_HEADERS: `X-Team: blue\n${REQUEST_TAG_HEADER}: walnut` } })
+    expect(slim.args.filter((a) => a === '--settings')).toHaveLength(1)
+    // A settings file path is left alone; the env still carries the tag.
+    const file = withOneShotRequestTag({ args: ['--settings', '/tmp/s.json'], env: { ANTHROPIC_CUSTOM_HEADERS: 'X-A: 1' } }, undefined)
+    expect(file.args).toEqual(['--settings', '/tmp/s.json'])
+    expect(file.env.ANTHROPIC_CUSTOM_HEADERS).toBe(`X-A: 1\n${REQUEST_TAG_HEADER}: walnut`)
+  })
+
+  it('Walnut\'s own server-side model calls: the walnut tag while on, nothing while off', () => {
+    expect(walnutRequestTagHeaders({ session: { tag_requests: true } })).toEqual({ [REQUEST_TAG_HEADER]: 'walnut' })
+    expect(walnutRequestTagHeaders({})).toEqual({})
+  })
+
+  it('every model client Walnut builds in the server carries the tag (a new one fails here)', () => {
+    // Ollama is a local model server, never behind the user's provider proxy.
+    const exempt = new Set(['src/model/providers/adapter-ollama.ts'])
+    const files: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${e.name}`
+        if (e.isDirectory()) walk(rel)
+        else if (/\.tsx?$/.test(e.name) && /new (Anthropic|AnthropicBedrock|OpenAI)\(/.test(fs.readFileSync(path.join(ROOT, rel), 'utf8'))) files.push(rel)
+      }
+    }
+    walk('src')
+    expect(files.length).toBeGreaterThanOrEqual(4)
+    const untagged = files.filter((f) => !exempt.has(f) && !fs.readFileSync(path.join(ROOT, f), 'utf8').includes('walnutRequestTagHeaders('))
+    expect(untagged).toEqual([])
+  })
+
   it('every spawn path tags its requests: the Claude Code settings env and the Codex adapter config', () => {
     const claude = fs.readFileSync(path.join(ROOT, 'src/providers/claude-code-session.ts'), 'utf8')
     expect(claude).toMatch(/ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders\(/)
     expect(claude).toMatch(/\.\.\.walnutEnv, \.\.\.tagEnv \}/)
     const acp = fs.readFileSync(path.join(ROOT, 'src/providers/acp-session.ts'), 'utf8')
     expect(acp).toMatch(/requestTagOn\(walnutConfig\) \? \{ tag: requestTagValue\(this\.taskId\) \}/)
+    // Every other ACP engine (dsh and the rest on the Anthropic SDK) gets the header in its env.
+    expect(acp).toMatch(/ownHeaders = overlay\?\.ANTHROPIC_CUSTOM_HEADERS/)
+    expect(acp).toMatch(/ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders\(ownHeaders, requestTagValue\(this\.taskId\)\)/)
+    // Every Walnut one-shot (titles, summaries, placement, micro-Claude, inline subagents) starts through startOneShot.
+    const oneshot = fs.readFileSync(path.join(ROOT, 'src/providers/oneshot-client.ts'), 'utf8')
+    expect(oneshot).toMatch(/spec = tag\.withOneShotRequestTag\(spec,/)
+    // A pooled micro-Claude child is booted before its run, so it is tagged before its pool key.
+    const warm = fs.readFileSync(path.join(ROOT, 'src/providers/micro-claude-warm.ts'), 'utf8')
+    const tagAt = warm.indexOf('withOneShotRequestTag({ args, env: buildChildEnv() }')
+    expect(tagAt).toBeGreaterThan(0)
+    expect(tagAt).toBeLessThan(warm.indexOf('const warmKey ='))
     const manager = fs.readFileSync(path.join(ROOT, 'src/core/config-manager.ts'), 'utf8')
     expect(manager).toMatch(/noteRequestTagConfig\(config\)/)
   })

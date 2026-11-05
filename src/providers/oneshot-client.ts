@@ -266,6 +266,12 @@ function newRunId(): string {
  * `error`.
  */
 export async function startOneShot(spec: OneShotSpec, listeners: OneShotListeners): Promise<OneShotHandle> {
+  // session.tag_requests: Walnut's own one-shot model calls carry the tag too (sessions/request-tag.ts).
+  const tag = await import('../core/sessions/request-tag.js')
+  if (tag.requestTagOn()) {
+    const { readUserSettingsEnv } = await import('./inline-subagent.js')
+    spec = tag.withOneShotRequestTag(spec, readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS)
+  }
   const runId = newRunId()
   const conn = await daemonConn()
   const body = conn ? payload(spec) : null

@@ -15,6 +15,7 @@ import type {
 import { MAX_RETRIES, sleep, abortedResult } from './retry.js';
 import { DEFAULT_BASE_URLS } from './defaults.js';
 import { log } from '../../logging/index.js';
+import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js';
 
 // ── Message conversion helpers ──
 
@@ -178,7 +179,10 @@ export class OpenAIAdapter implements ProtocolAdapter {
   private client: OpenAI | null = null;
   private lastConfig: string | null = null;
 
-  private getClient(apiKey?: string, baseUrl?: string, headers?: Record<string, string>): OpenAI {
+  private getClient(apiKey?: string, baseUrl?: string, own?: Record<string, string>): OpenAI {
+    // session.tag_requests: a proxy in front of the provider can tell Walnut's own calls apart.
+    const tag = walnutRequestTagHeaders();
+    const headers = Object.keys(tag).length > 0 ? { ...(own ?? {}), ...tag } : own;
     const configKey = `${apiKey?.slice(-6) ?? ''}:${baseUrl}:${JSON.stringify(headers)}`;
     if (this.client && this.lastConfig === configKey) return this.client;
 

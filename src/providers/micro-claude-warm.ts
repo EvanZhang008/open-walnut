@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { log } from '../logging/index.js';
+import { requestTagOn, withOneShotRequestTag } from '../core/sessions/request-tag.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import {
   readUserSettingsEnv,
@@ -135,7 +136,13 @@ function buildSpawn(spec: WarmSpec): { command: string; args: string[]; cwd: str
   const settings = slimChildSettingsArg();
   if (settings) args.push('--settings', settings);
   const cwd = tmpdir();
-  const env = buildChildEnv();
+  // session.tag_requests: tagged here, before the pool key, so a pooled child booted
+  // before the run carries the tag, and turning the switch boots a new one.
+  const tagged = requestTagOn()
+    ? withOneShotRequestTag({ args, env: buildChildEnv() }, readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS)
+    : { args, env: buildChildEnv() };
+  const env = tagged.env;
+  args.splice(0, args.length, ...tagged.args);
   // The pool key is the command line plus the login: a child booted on another
   // argv (another model, prompt, tool set, override) or other credentials never
   // answers this call. The pool lives in the daemon and outlives a server

@@ -60,6 +60,7 @@ import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { permissionsApplicable } from '../../core/permissions/applicable.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
+import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -221,7 +222,7 @@ configRouter.post('/test-connection', async (req: Request, res: Response, next: 
       model: 'global.anthropic.claude-haiku-5-5',
       max_tokens: 1,
       messages: [{ role: 'user', content: 'hi' }],
-    })
+    }, { headers: walnutRequestTagHeaders(config) })
     const latencyMs = Date.now() - start
 
     res.json({ ok: true, latencyMs, authMethod })

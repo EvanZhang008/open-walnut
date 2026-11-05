@@ -14,6 +14,7 @@ import {
 } from './retry.js';
 import { CredentialProcessCache } from '../../core/aws-credential-process.js';
 import { log } from '../../logging/index.js';
+import { walnutRequestTagHeaders } from '../../core/sessions/request-tag.js';
 
 interface ClientConfig {
   region?: string;
@@ -35,11 +36,15 @@ export class BedrockAdapter implements ProtocolAdapter {
 
   private createClient(config: ClientConfig): AnthropicBedrock {
     const effectiveRegion = config.region ?? process.env.AWS_REGION ?? 'us-west-2';
+    // session.tag_requests: a proxy in front of Bedrock can tell Walnut's own calls apart.
+    const tag = walnutRequestTagHeaders();
+    const tagged = Object.keys(tag).length > 0 ? { defaultHeaders: tag } : {};
 
     // Bearer token auth (Identity Center / SSO)
     if (config.bearerToken) {
       return new AnthropicBedrock({
         awsRegion: effectiveRegion,
+        ...tagged,
         skipAuth: true,
         authToken: config.bearerToken,
       } as unknown as ConstructorParameters<typeof AnthropicBedrock>[0]);
@@ -49,6 +54,7 @@ export class BedrockAdapter implements ProtocolAdapter {
     if (config.accessKey && config.secretKey) {
       return new AnthropicBedrock({
         awsRegion: effectiveRegion,
+        ...tagged,
         awsAccessKey: config.accessKey,
         awsSecretKey: config.secretKey,
         ...(config.sessionToken && { awsSessionToken: config.sessionToken }),
@@ -59,6 +65,7 @@ export class BedrockAdapter implements ProtocolAdapter {
     if (config.profile) {
       return new AnthropicBedrock({
         awsRegion: effectiveRegion,
+        ...tagged,
         providerChainResolver: () =>
           import('@aws-sdk/credential-providers').then(({ fromNodeProviderChain }) =>
             fromNodeProviderChain({ profile: config.profile }),
@@ -67,13 +74,13 @@ export class BedrockAdapter implements ProtocolAdapter {
     }
 
     // Default: AWS credential chain (env vars → ~/.aws/credentials → instance metadata)
-    return new AnthropicBedrock({ awsRegion: effectiveRegion });
+    return new AnthropicBedrock({ awsRegion: effectiveRegion, ...tagged });
   }
 
   private getClient(config: ClientConfig): AnthropicBedrock {
     // Session token in the key: a refreshed temp cred (new session token) must
     // NOT reuse the client built with the stale one.
-    const configKey = `${config.region}:${config.bearerToken?.slice(-6) ?? ''}:${config.accessKey?.slice(-4) ?? ''}:${config.sessionToken?.slice(-8) ?? ''}:${config.profile ?? ''}`;
+    const configKey = `${config.region}:${config.bearerToken?.slice(-6) ?? ''}:${config.accessKey?.slice(-4) ?? ''}:${config.sessionToken?.slice(-8) ?? ''}:${config.profile ?? ''}:${Object.keys(walnutRequestTagHeaders()).length}`;
     if (this.client && this.lastConfig === configKey) return this.client;
     this.client = this.createClient(config);
     this.lastConfig = configKey;

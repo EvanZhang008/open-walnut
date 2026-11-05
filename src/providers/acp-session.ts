@@ -56,7 +56,7 @@ import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
-import { requestTagOn, requestTagValue } from '../core/sessions/request-tag.js'
+import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
 import { singleFile, type SingleFile } from '../lib/single-file.js'
 import type {
   AcpCapabilitySnapshot,
@@ -1429,7 +1429,14 @@ export class AcpSession {
       const provider = this.engineId === 'pi' && providerExecutable
         ? { PI_ACP_PI_COMMAND: providerExecutable }
         : undefined
-      return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) }
+      // session.tag_requests: an engine on the Anthropic SDK (dsh, say) reads ANTHROPIC_CUSTOM_HEADERS,
+      // so the task's tag rides its requests beside any headers the engine's env sets.
+      // A null there is '' in the overlay (engineEnvOverlayFromConfig): none of the server's lines.
+      const ownHeaders = overlay?.ANTHROPIC_CUSTOM_HEADERS ?? (this.remote ? undefined : process.env.ANTHROPIC_CUSTOM_HEADERS)
+      const tagged = requestTagOn(await (await import('./codex-engine-source.js')).codexWalnutConfig().catch(() => ({})))
+        ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(ownHeaders, requestTagValue(this.taskId)) }
+        : undefined
+      return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}), ...(tagged ?? {}) }
     }
     const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
     // engines.codex (provider, default model and effort) merged under the user's own

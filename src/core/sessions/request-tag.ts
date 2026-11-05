@@ -44,6 +44,14 @@ export function withRequestTagHeaders(existing: string | undefined, value: strin
 }
 
 /**
+ * Headers for Walnut's own model calls from the server (the model adapters, a connection test):
+ * `x-walnut-session: walnut` while the tag is on, none otherwise.
+ */
+export function walnutRequestTagHeaders(config?: unknown): Record<string, string> {
+  return requestTagOn(config) ? { [REQUEST_TAG_HEADER]: 'walnut' } : {}
+}
+
+/**
  * A Codex config with the tag on the provider its threads go to (`model_provider`),
  * when the config defines that provider; codex's built-in providers take no header here.
  */
@@ -63,4 +71,29 @@ export function withCodexRequestTag(config: Record<string, unknown> | undefined,
       [id]: { ...def, http_headers: { ...own, [REQUEST_TAG_HEADER]: value } },
     },
   }
+}
+
+/**
+ * A Walnut one-shot `claude -p` (titles, summaries, placement, micro-Claude, inline
+ * subagents) with the tag on: in its env, and in its `--settings` env too, because a
+ * settings.json env that names ANTHROPIC_CUSTOM_HEADERS is applied over the process env.
+ * `userHeaders` is that settings value, kept beside the tag. A `--settings` that is not
+ * inline JSON is left as it is.
+ */
+export function withOneShotRequestTag<T extends { args: string[]; env: Record<string, string | undefined> }>(
+  spec: T, userHeaders: string | undefined,
+): T {
+  const headers = withRequestTagHeaders(userHeaders ?? spec.env.ANTHROPIC_CUSTOM_HEADERS, 'walnut')
+  const args = [...spec.args]
+  const at = args.indexOf('--settings')
+  if (at < 0) {
+    args.push('--settings', JSON.stringify({ env: { ANTHROPIC_CUSTOM_HEADERS: headers } }))
+  } else {
+    try {
+      const parsed = JSON.parse(args[at + 1] ?? '') as Record<string, unknown>
+      const env = parsed.env && typeof parsed.env === 'object' ? parsed.env as Record<string, unknown> : {}
+      args[at + 1] = JSON.stringify({ ...parsed, env: { ...env, ANTHROPIC_CUSTOM_HEADERS: headers } })
+    } catch { /* a settings file path: the env below still carries it */ }
+  }
+  return { ...spec, args, env: { ...spec.env, ANTHROPIC_CUSTOM_HEADERS: headers } }
 }

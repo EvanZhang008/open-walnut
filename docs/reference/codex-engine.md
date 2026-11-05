@@ -179,5 +179,9 @@ request, wherever the session works:
 - Codex sessions send it through the `http_headers` of the provider their threads use
   (`engines.codex.provider`, or a provider your own `CODEX_CONFIG` defines). Codex's built-in
   providers get no header.
+- Other ACP engines (dsh, and any engine on the Anthropic SDK) get the same
+  `ANTHROPIC_CUSTOM_HEADERS`, beside any header lines their `engines.<id>.env` sets.
+- Walnut's own one-shot calls (titles, summaries, placement, quick answers, inline subagents)
+  send `x-walnut-session: walnut`, since they belong to no one task.
 
 It is off by default, so nothing extra leaves the machine unless you ask for it.
