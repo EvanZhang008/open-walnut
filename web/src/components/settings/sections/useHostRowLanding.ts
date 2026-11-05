@@ -116,9 +116,9 @@ export function useHostRowLanding({ hostsRef, rowKeys, network, rowCount }: {
       return;
     }
     if (focusAfter.startsWith('more:')) {
-      // Still in the fields that close (WebKit can keep the focus on a field it removed).
+      // Still in the fields or the Details that close (WebKit can keep the focus on what it removed).
       const a = document.activeElement;
-      if (!lost(a) && !a!.closest('.rh-edit')) return;
+      if (!lost(a) && !a!.closest('.rh-edit, .rh-details')) return;
       focusLanded(rowEl(focusAfter.slice(5))?.querySelector<HTMLElement>('[data-testid="rh-row-more"]'));
       return;
     }

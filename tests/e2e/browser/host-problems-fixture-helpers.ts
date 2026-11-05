@@ -98,21 +98,45 @@ export async function hostMenuPick(page: Page, alias: string, item: string | Reg
   await expect(menu).toHaveCount(0)
 }
 
-/** Opens a host's Details (closed by default) and returns them. */
+/** Opens a host's Details (closed by default), with every part of them open, and returns them. */
 export async function openHostDetails(page: Page, alias: string): Promise<Locator> {
   const details = hostDetails(page, alias)
   if (!(await details.count())) await hostMenuPick(page, alias, 'Details')
   await expect(details).toBeVisible()
+  await openHostParts(details)
   return details
 }
 
-/** Opens one More settings group (each is one folded line under More settings). */
+/**
+ * Opens the folded parts of a host's Details (HostDetails.tsx: Status is open; This host and
+ * What Walnut knows are folded until opened). `parts`: only these (`this-host`, `knows`, `status`).
+ */
+export async function openHostParts(details: Locator, parts?: string[]): Promise<void> {
+  const toggles = details.locator('[data-testid^="rh-details-part-"]')
+  const n = await toggles.count()
+  for (let i = 0; i < n; i++) {
+    const t = toggles.nth(i)
+    const part = (await t.getAttribute('data-testid'))!.replace('rh-details-part-', '')
+    if (parts && !parts.includes(part)) continue
+    if ((await t.getAttribute('aria-expanded')) !== 'true') await t.click()
+    await expect(t).toHaveAttribute('aria-expanded', 'true')
+  }
+}
+
+/**
+ * Opens More settings and returns one of its groups. Relay and Secrets are plain groups there,
+ * with no fold of their own (2026-11-05 review); a group that still has a toggle is opened.
+ */
 export async function openMoreGroup(page: Page, testId: string): Promise<Locator> {
   await openRemoteHostsMore(page)
+  const group = page.getByTestId(testId)
+  await expect(group).toBeVisible({ timeout: 20_000 })
   const toggle = page.getByTestId(`${testId}-toggle`)
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  return page.getByTestId(testId)
+  if (await toggle.count()) {
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  }
+  return group
 }
 /** The Ask Walnut slot's card: only under slotLayout (the task panel hidden, the slot shown). */
 export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')

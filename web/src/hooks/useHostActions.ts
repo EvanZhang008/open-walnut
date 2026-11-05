@@ -32,6 +32,8 @@ export interface HostActions {
   checkAgain: () => Promise<void>;
   pending: HostActionPending;
   failed: HostActionFailed;
+  /** Why the last connect request failed (plain words, no closing period). */
+  failedReason: string | null;
   /** 'Tried again just now: same result' / 'Checked just now: still 2.1.220', for 5s. */
   receipt: string | null;
   fixing: HostFixingView | null;
@@ -63,6 +65,6 @@ export function useHostActions(alias: string): HostActions {
   return {
     retry, connectNow: retry, update, checkAgain,
     pending: pending === 'fix' ? (fixing ? 'fix' : null) : pending ?? (fixing ? 'fix' : null),
-    failed: snap.failed, receipt: snap.receipt, fixing, lastTriedAt: snap.lastTriedAt,
+    failed: snap.failed, failedReason: snap.failedReason, receipt: snap.receipt, fixing, lastTriedAt: snap.lastTriedAt,
   };
 }

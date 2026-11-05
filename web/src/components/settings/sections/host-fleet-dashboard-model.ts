@@ -297,7 +297,8 @@ export interface Chip { key: string; text: string; title?: string; tone?: 'muted
 
 export function roleChips(h: FleetHost): Chip[] {
   const out: Chip[] = [];
-  if (h.local) out.push({ key: 'primary', text: 'Leads', title: 'The Walnut that leads: it keeps the tasks and links every host' });
+  // "Leads" read as jargon (2026-11-05 review): what it is to you.
+  if (h.local) out.push({ key: 'primary', text: 'Your main Walnut', title: 'The Walnut that keeps your tasks and links every host' });
   if (h.connection.kind === 'bridge') out.push({ key: 'cloud', text: 'Cloud', title: 'Your cloud companion: it connects in to this Mac' });
   if (h.capabilities?.alwaysOn) out.push({ key: 'always-on', text: 'Always on', title: 'Up all of its recorded time: fit for work that must keep running' });
   if (h.server?.enabled && h.server.program === 'replica') out.push({ key: 'replica', text: 'Walnut runs here', title: 'Runs a copy of Walnut that serves while the Mac is away' });

@@ -49,10 +49,10 @@ describe('a full card', () => {
     const h = host()
     expect(fleetRows(h, NOW).map((r) => r.key)).toEqual(['now', 'online', 'connection', 'daemon'])
     expect(value(h, 'now')?.value).toBe('13 d, load 6.16')
-    expect(value(h, 'online')).toMatchObject({ value: '99.2% of the last 7 days, 1 down, 41 link drops, Walnut helper started 15 times', tone: 'good' })
+    expect(value(h, 'online')).toMatchObject({ value: '99.2% of the last 7 days, 1 down, 41 link drops, session helper started 15 times', tone: 'good' })
     expect(value(h, 'connection')?.value).toBe('SSH tunnel: connected 20 min, 38 ms')
     // The reboot problem is said once, as a problem: the helper row only gives the version.
-    expect(value(h, 'daemon')).toMatchObject({ label: 'Walnut helper', value: 'Version 0123456789ab' })
+    expect(value(h, 'daemon')).toMatchObject({ label: 'Session helper', value: 'Build 0123456789ab' })
     for (const gone of ['system', 'sessions', 'spend', 'server']) expect(value(h, gone)).toBeUndefined()
     expect(statusKind(h)).toBe('connected')
   })
@@ -61,9 +61,9 @@ describe('a full card', () => {
 describe('missing readings say why', () => {
   it('an older helper, a host never read, nothing counted yet', () => {
     const h = host({ system: null, now: null, history: null, spend: null, sessions: { running: null }, daemon: { version: null, startedAt: null, startup: 'on-demand', startsAfterReboot: false, runtime: null, vitals: false } })
-    expect(value(h, 'now')?.value).toBe('Its Walnut helper is older than this view (it updates on the next connect)')
+    expect(value(h, 'now')?.value).toBe('Its session helper is older than this view (it updates on the next connect)')
     expect(value(h, 'online')?.value).toBe('No record yet')
-    expect(value(h, 'daemon')?.value).toBe('Version not reported yet')
+    expect(value(h, 'daemon')?.value).toBe('Build not reported yet')
   })
 
   it('a host that went away keeps its last reading, marked', () => {
@@ -79,7 +79,7 @@ describe('missing readings say why', () => {
   it('a ledger younger than a week names the time it covers; the Mac has no reboot line', () => {
     const h = host({ local: true, server: null, history: { ...host().history!, windows: [{ days: 7, minutes: 180, up: 170, linked: 170, online: 170 / 180, linkedShare: 1, drops: 0, downs: 1 }], daemonStarts: 1 } })
     expect(value(h, 'online')).toMatchObject({ value: '94.4% of the 3 hours recorded, 1 down', tone: 'warn' })
-    expect(value(h, 'daemon')?.value).toBe('Version 0123456789ab')
+    expect(value(h, 'daemon')?.value).toBe('Build 0123456789ab')
   })
 })
 
@@ -106,13 +106,13 @@ describe('words, never codes, on the card', () => {
 
   it('the helper row follows the server\'s reboot verdict, in plain words; how it starts is on hover', () => {
     const cloud = host({ connection: { kind: 'bridge', connected: true, phase: 'connected', phaseLabel: 'Connected', since: null, rttMs: 100, error: null }, daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', startsAfterReboot: true, runtime: 'bun', vitals: true } })
-    expect(value(cloud, 'daemon')?.value).toBe('Version 0123456789ab, starts by itself after a reboot')
+    expect(value(cloud, 'daemon')?.value).toBe('Build 0123456789ab, starts by itself after a reboot')
     expect(value(cloud, 'connection')?.value).toBe('It connects in to this Mac: connected, 100 ms')
     const d = { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', runtime: 'binary', vitals: true }
     const bs = { mode: 'boot' as const, backend: 'systemd-user', reason: null, checkedAt: NOW, setupRunning: false, setupError: null }
     const svc = host({ daemon: { ...d, startsAfterReboot: true, bootStart: bs, reboot: 'starts by itself after a reboot as a systemd user service' } })
     const row = value(svc, 'daemon')!
-    expect(row.value).toBe('Version 0123456789ab, starts by itself after a reboot')
+    expect(row.value).toBe('Build 0123456789ab, starts by itself after a reboot')
     expect(row.value).not.toMatch(/systemd|bun|binary|daemon/)
     expect(row.title).toContain('as a systemd user service')
   })

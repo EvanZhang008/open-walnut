@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { grantSummary } from '../../web/src/components/settings/sections/HostThisPart'
-import { hostServerLook } from '../../web/src/components/settings/sections/host-settings-data'
+import { hostServerLook, hostServerLookWords } from '../../web/src/components/settings/sections/host-settings-data'
 import { secretRefusal } from '../../web/src/components/settings/sections/SecretsGroup'
 import { topoKind } from '../../web/src/components/settings/sections/HostFleetTopology'
 import type { HostServerEntry } from '../../web/src/components/settings/sections/host-servers-status'
@@ -40,6 +40,15 @@ describe('hostServerLook: Walnut on a host counts in the one count', () => {
     expect(hostServerLook(entry('running'), false)).toBe(false)
     expect(hostServerLook(entry('starting'), false)).toBe(false)
     expect(hostServerLook(entry('error', { enabled: false }), true)).toBe(false)
+  })
+  // 2026-11-05 review: the row said only "Walnut on this host needs a look: see Details", never what.
+  it('the row says what needs a look, and where its fix is', () => {
+    const where = 'The fix is under This host, in Details.'
+    expect(hostServerLookWords(entry('running', {}, 'It runs 0.6.20; this Mac runs 0.6.25.'))).toBe(`Walnut on this host: It runs 0.6.20; this Mac runs 0.6.25. ${where}`)
+    expect(hostServerLookWords(entry('running'), 'The host did not answer.')).toBe(`Walnut on this host: The host did not answer. ${where}`)
+    expect(hostServerLookWords({ ...entry('error'), view: { ...entry('error').view!, message: 'port 4100 is taken' } as never })).toBe(`Walnut on this host stopped: port 4100 is taken. ${where}`)
+    expect(hostServerLookWords(entry('error'))).toBe(`Walnut on this host stopped. ${where}`)
+    expect(hostServerLookWords(entry('running', { expose: { enabled: true, provider: null, options: {} } }))).toBe(`Walnut on this host cannot be opened from anywhere: its tunnel is down. ${where}`)
   })
 })
 

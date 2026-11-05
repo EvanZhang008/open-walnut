@@ -138,7 +138,9 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
     land.join();
     void network.add();
   };
-  const closeJoin = () => { network.dismiss(); land.after(liveInvite(network.invite) ? 'join-closed' : 'add'); };
+  // Close (or Escape) gives the focus back to Add host; a link that still works says so in its
+  // place, read out as it appears (HostJoinClosed).
+  const closeJoin = () => { network.dismiss(); land.after('add'); };
 
   const removeHost = (h: HostEntry) => {
     // A new row not saved yet (its Cancel, or Escape on an empty one) gives the focus back to Add
@@ -161,7 +163,7 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
     detailsOpen: details === rowKey,
     onDetails: (open: boolean) => {
       setDetails(open ? rowKey : null);
-      if (open) { fleet.refresh([host]); land.row(rowKey); }
+      if (open) { fleet.refresh([host]); land.row(rowKey); } else land.after(`more:${rowKey}`);
     },
   });
   const editOf = (h: HostEntry) => (open: boolean) => {
@@ -183,8 +185,9 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
         blocking={refusalBlocks(host, refusal ?? undefined, savedUnderCompanion)}
         aliasShown={editor.aliasShown.has(host._key)}
         saved={savedAliases.has(host.alias) && !!host.hostname}
-        justSaved={editor.justSaved.has(host._key)}
-        typing={editor.typing === host._key}
+        hostShown={editor.hostShown.has(host._key)}
+        adding={editor.committed.has(host._key) && editor.isNewRow(host) && !(savedAliases.has(host.alias) && !!host.hostname)}
+        addError={editor.addError?.key === host._key ? editor.addError.text : null}
         aliasPlaceholder={aliasPlaceholder(new Set([...savedAliases, ...hosts.map((h) => h.alias)]))}
         card={fleet.card(host.alias)}
         now={fleet.now}
@@ -195,10 +198,12 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
         onKeep={(patch) => editor.updateKeep(host._key, patch)}
         onRemove={() => removeHost(host)}
         onTurnOn={() => editor.turnOn(host._key)}
-        onTyping={(on) => editor.setTyping((cur) => (on ? host._key : cur === host._key ? null : cur))}
+        onHostnameLeft={() => editor.hostnameLeft(host._key)}
         onAliasLeft={() => editor.showAliasRefusal(host._key)}
+        onAdd={() => editor.addNew(host._key)}
         connecting={editor.dialPending.has(host.alias) && editor.dialing.has(host.alias)}
         pressedAt={editor.dialing.get(host.alias)}
+        askedAs={editor.askOf(host.alias)}
         answering={editor.answering?.alias === host.alias ? editor.answering.answer : null}
         answerError={editor.answerError?.alias === host.alias ? editor.answerError.text : null}
         onAnswer={(answer) => void editor.answerFound(host.alias, answer)}

@@ -34,7 +34,7 @@ const base = {
 } as HostStatus
 const idle: HostActions = {
   retry: async () => {}, connectNow: async () => {}, update: async () => {}, checkAgain: async () => {},
-  pending: null, failed: null, receipt: null, fixing: null, lastTriedAt: null,
+  pending: null, failed: null, failedReason: null, receipt: null, fixing: null, lastTriedAt: null,
 }
 const statusWith = (readiness: unknown, extra: Partial<HostStatus> = {}) => ({ ...base, readiness, ...extra }) as HostStatus
 /** `replica`: the host's row offers no fix (RemoteHostDetail passes rowFixes={!replica}). */

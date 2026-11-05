@@ -4,7 +4,8 @@
  * host's own settings (its session limit, which tasks may use it, Walnut on it, which secrets
  * are copied to it) live in its Details, under "This host" (2026-11-04 review: one host's
  * settings sat in four groups here, away from the host). No count of its own: the page has one,
- * at the top (HostNeedsLook.tsx).
+ * at the top (HostNeedsLook.tsx). Open, it is one box with Relay and Secrets inside it, each a
+ * plain group (2026-11-05 review: a fold that opened two more folds, drawn as sibling cards).
  */
 import type { NetOverview } from '@/api/hosts-net';
 import { SettingsFold } from '../SettingsFold';

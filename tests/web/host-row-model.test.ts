@@ -9,7 +9,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  aliasFromHostname, aliasPlaceholder, connectAction, firstEmptyField, listSummary, liveLine, mapLinkLabel, needsLook, needsWords, nextLook, summaryWords, untouchedDraft,
+  aliasFromHostname, aliasPlaceholder, connectAction, firstEmptyField, hostnameProblem, listSummary, liveLine, mapLinkLabel, needsLook, needsWords, nextLook,
+  parseHostInput, summaryWords, untouchedDraft,
   type RowReport,
 } from '../../web/src/components/settings/sections/host-row-model'
 import { emptyHost } from '../../web/src/components/settings/sections/remote-hosts-model'
@@ -37,35 +38,74 @@ function row(over: Partial<RowReport> = {}): RowReport {
   return { key: 'ssh:1', host: 'devbox', name: 'Dev box', counted: true, online: true, off: false, needsLook: false, local: false, via: 'ssh', rttMs: 38, sessions: 2, spendUsd: 10, sub: 'Linux', ...over }
 }
 
-describe('listSummary and summaryWords: one line, from the rows', () => {
-  it('counts what the rows say: an off host is named, not in "N of M online"; drafts are not counted', () => {
+describe('listSummary and summaryWords: one line, from the rows, adding up to the rows shown', () => {
+  it('puts every row in one count: online, not connected, off, found; drafts are no host yet', () => {
     const rows = [
       row({ key: 'fleet:__local__', host: '__local__', local: true, via: 'local', sessions: 3, spendUsd: 200 }),
       row({ key: 'ssh:1', online: true, sessions: 1, spendUsd: 41 }),
       row({ key: 'ssh:2', host: 'beta', online: false, needsLook: true, sessions: null, spendUsd: null }),
       row({ key: 'ssh:3', host: 'big', off: true, online: false, sessions: 5, spendUsd: 1 }),
+      row({ key: 'ssh:5', host: 'lab-mac', counted: false, found: true, online: false, sessions: null, spendUsd: null }),
       row({ key: 'ssh:4', host: 'draft', counted: false, online: false }),
     ]
     const s = listSummary(rows)
-    expect(s).toEqual({ online: 2, total: 3, off: 1, sessions: 4, spendUsd: 242, needs: 1 })
-    expect(summaryWords(s)).toEqual({ online: '2 of 3 online', off: '1 off', sessions: '4 sessions open', spend: '$242 in 30 days' })
+    expect(s).toEqual({ hosts: 5, online: 2, down: 1, off: 1, found: 1, sessions: 4, spendUsd: 242, needs: 1 })
+    // 2026-11-05 review: "2 of 4 online, 1 off" sat above 6 rows. The counts now add up to the hosts.
+    expect(s.online + s.down + s.off + s.found).toBe(s.hosts)
+    expect(summaryWords(s)).toEqual({
+      hosts: '5 hosts', online: '2 online', down: '1 not connected', off: '1 off', found: '1 found in ~/.ssh/config', sessions: '4 sessions open', spend: '$242 in 30 days',
+    })
+  })
+
+  it('never counts a host turned off as needing a look (2026-11-05 review: an Off host still "needed a look")', () => {
+    expect(listSummary([row({ off: true, online: false, needsLook: true }), row({ key: 'b', online: false, needsLook: true })]).needs).toBe(1)
   })
 
   it('moves at once with the rows: Turn on, Add, Remove', () => {
     const before = [row({ key: 'a' }), row({ key: 'b', off: true, online: false })]
-    expect(summaryWords(listSummary(before)).online).toBe('1 of 1 online')
+    expect(summaryWords(listSummary(before))).toMatchObject({ hosts: '2 hosts', online: '1 online', down: null, off: '1 off' })
     // Turned on, still dialling: counted, not online yet.
     const on = [row({ key: 'a' }), row({ key: 'b', online: false })]
-    expect(summaryWords(listSummary(on))).toMatchObject({ online: '1 of 2 online', off: null })
+    expect(summaryWords(listSummary(on))).toMatchObject({ online: '1 online', down: '1 not connected', off: null })
     // A host added and saved.
-    expect(summaryWords(listSummary([...on, row({ key: 'c' })])).online).toBe('2 of 3 online')
+    expect(summaryWords(listSummary([...on, row({ key: 'c' })]))).toMatchObject({ hosts: '3 hosts', online: '2 online' })
     // Removed.
-    expect(summaryWords(listSummary([row({ key: 'a' })])).online).toBe('1 of 1 online')
+    expect(summaryWords(listSummary([row({ key: 'a' })]))).toMatchObject({ hosts: '1 host', online: '1 online' })
   })
 
   it('leaves out what no row knows', () => {
-    expect(summaryWords(listSummary([row({ sessions: null, spendUsd: null })]))).toEqual({ online: '1 of 1 online', off: null, sessions: null, spend: null })
+    expect(summaryWords(listSummary([row({ sessions: null, spendUsd: null })]))).toEqual({ hosts: '1 host', online: '1 online', down: null, off: null, found: null, sessions: null, spend: null })
     expect(summaryWords(listSummary([row({ sessions: 1 })])).sessions).toBe('1 session open')
+  })
+})
+
+describe('parseHostInput and hostnameProblem: a hostname is a host, or it says why not', () => {
+  it('refuses what is no host, in words saying what one looks like (2026-11-05 review: "not a host!!" was saved)', () => {
+    expect(hostnameProblem('not a host!!')).toBe('A hostname has no spaces. Type one like build7.example.com.')
+    expect(hostnameProblem('nothost!!')).toBe('A hostname holds letters, digits, dots and dashes only ("!" is not one). Type one like build7.example.com.')
+    expect(hostnameProblem('-bad.example.com')).toMatch(/starts and ends with a letter or digit/)
+    expect(hostnameProblem('a..b')).toMatch(/starts and ends with a letter or digit/)
+    expect(hostnameProblem('300.1.1.1')).not.toBeNull()
+    expect(hostnameProblem('host:99999')).toBe('The part after ":" is the port: a number from 1 to 65535.')
+    expect(hostnameProblem('host:')).toBe('The part after ":" is the port: a number from 1 to 65535.')
+    expect(hostnameProblem('bad user@host')).toBe('A hostname has no spaces. Type one like build7.example.com.')
+    expect(hostnameProblem('@host')).toMatch(/before "@" is the user/)
+    expect(hostnameProblem('sam@')).toMatch(/Type the host after the "@"/)
+    expect(hostnameProblem('[nothex]:22')).toMatch(/Brackets hold an IPv6 address/)
+    // Empty is not refused here: the row says it waits for a hostname.
+    expect(hostnameProblem('')).toBeNull()
+    expect(hostnameProblem('   ')).toBeNull()
+  })
+
+  it('takes names, addresses, ssh config names, a user and a port', () => {
+    for (const ok of ['build7.example.com', 'devbox', 'my_box', 'Build7.Example.COM', 'host.example.com.', '10.0.0.9', '::1', 'fe80::1', '[2001:db8::1]', 'xn--bcher-kva.example']) {
+      expect(hostnameProblem(ok), ok).toBeNull()
+    }
+    expect(parseHostInput('sam@build7.example.com:2222')).toEqual({ ok: true, value: { host: 'build7.example.com', user: 'sam', port: 2222 } })
+    expect(parseHostInput('build7:22')).toEqual({ ok: true, value: { host: 'build7', port: 22 } })
+    expect(parseHostInput('[2001:db8::1]:2200')).toEqual({ ok: true, value: { host: '2001:db8::1', port: 2200 } })
+    expect(parseHostInput('fe80::1')).toEqual({ ok: true, value: { host: 'fe80::1' } })
+    expect(parseHostInput('  devbox  ')).toEqual({ ok: true, value: { host: 'devbox' } })
   })
 })
 

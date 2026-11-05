@@ -28,10 +28,10 @@ async function openRemoteHosts(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-remote-hosts').click()
-  // The group sits under More settings, both closed by default.
+  // The group sits under More settings (closed by default), a plain group with no fold of its own.
   await page.getByTestId('remote-hosts-more-toggle').click()
-  await page.getByTestId('fleet-secrets-toggle').click()
-  await expect(page.getByTestId('fleet-secrets-toggle')).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByTestId('fleet-secrets')).toBeVisible()
+  await expect(page.getByTestId('fleet-secrets-toggle')).toHaveCount(0)
 }
 
 test('secrets: add with hosts and env, the value never shown again, rotate, untick, delete', async ({ page }) => {

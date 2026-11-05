@@ -12,12 +12,12 @@
  */
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { FleetSecret, SecretChange } from '@/api/secrets';
-import { SettingsRow } from '../SettingsSection';
-import { SettingsFoldGroup } from '../SettingsFoldGroup';
+import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SecretInput } from '../inputs/SecretInput';
 import { focusLanded } from '@/utils/focus-landed';
+import { landOnRow } from '@/utils/scroll-land';
 import { RemoveConfirmRow } from './RemoveConfirmRow';
 import { useHostSettings } from './host-settings-data';
 import { mergeSecretHosts, tickSecretHost } from './secret-hosts';
@@ -38,7 +38,7 @@ export function copiesLine(s: FleetSecret, label: (host: string) => string): str
   });
   // A host's part can carry its own commas (an error), so the parts are kept apart by a semicolon.
   if (s.deletedAt) return `Deleted. ${parts.join('; ')}`;
-  return parts.length ? parts.join('; ') : 'Kept on this Mac only: tick a host to copy it there';
+  return parts.length ? parts.join('; ') : 'Kept on this Mac only: no session gets it until you tick a host';
 }
 
 /** Which field a refusal is about: it shows under that field, which takes the focus. */
@@ -100,15 +100,21 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
       const id = focusField === 'name-new' ? 'secret-name' : focusField === 'form' ? null : FIELD_ID[focusField];
       const el = id ? root.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`) : null;
       // The field may sit under the sticky header or below the fold: its row comes into view first.
-      if (focusField !== 'name-new') (el?.closest('.settings-row') ?? el)?.scrollIntoView({ block: 'center' });
+      // A new secret's form comes up whole, its start at the top of the pane, so its Save and
+      // Cancel are in view too (2026-11-05 review, 700x800: only Name showed, at the window's foot).
+      if (focusField === 'name-new') { if (root.current) landOnRow(root.current, { focus: false }); }
+      else (el?.closest('.settings-row') ?? el)?.scrollIntoView({ block: 'center' });
       focusLanded(el);
     });
     return () => cancelAnimationFrame(raf);
   }, [focusField]);
 
   if (!data || state === null) return null;
-  // A host's name, as its row says it (This Mac is a name here, like the others).
+  // A host's name, as its row says it. Ticking This Mac gives the secret to the sessions that run
+  // on this Mac (it is kept here either way, where no session reads it): said in so many words
+  // (2026-11-05 review: "Copy to This Mac" read as nonsense beside "kept on this Mac").
   const label = (host: string) => (host === LOCAL ? 'This Mac' : hostLabels[host] || host);
+  const tickLabel = (host: string) => (host === LOCAL ? "This Mac's own sessions" : label(host));
   // What Copy to shows ticked: the ticks made here over the server's hosts now, so a host's own
   // copy switch flipped while this is open is not undone by its Save (review).
   const isNew = editing === '';
@@ -173,15 +179,13 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     }
   };
 
-  const live = state.secrets.filter((s) => !s.deletedAt).length;
-  const secretsSummary = !state.active ? 'Off on a test server' : live ? `${live} ${live === 1 ? 'secret' : 'secrets'}` : 'None yet';
   const footer = state.active
-    ? 'Kept on this Mac and copied only to the hosts you tick, readable only by your account there, so a task there keeps working while the Mac is away. A value is never shown again, logged or synced. A session already running keeps the environment it started with: restart it after a rotate or revoke.'
+    ? 'Walnut keeps each secret on this Mac, where no session reads it, and gives it only to the hosts you tick (This Mac\'s own sessions included), readable only by your account there, so a task there keeps working while the Mac is away. A value is never shown again, logged or synced. A session already running keeps the environment it started with: restart it after a rotate or revoke.'
     : 'This Walnut is a test or throwaway server: secrets live with your own Walnut.';
   const invalid = (f: Field) => (error?.field === f ? true : undefined);
 
   return (
-    <SettingsFoldGroup id="rh-more-secrets" heading="Secrets" data-testid="fleet-secrets" footer={footer} summary={secretsSummary}>
+    <SettingsGroup heading="Secrets" data-testid="fleet-secrets" footer={footer}>
       <div ref={group} className="settings-rows-contents">
         {error && editing === null && <p className="hf-error" role="status">{error.text}</p>}
         {state.active && state.secrets.length === 0 && editing === null && (
@@ -238,9 +242,9 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
               <input id="secret-description" type="text" data-no-draft="secret" className="settings-input settings-input--short" value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="GitHub, read only" data-testid="secret-description" />
             } />
-            <SettingsRow label="Copy to" help="Only these hosts get a copy; unticking one removes it there." />
+            <SettingsRow label="Who gets it" help="Sessions on the hosts ticked here can use it; unticking one removes its copy there." />
             {hostKeys.map((h) => (
-              <SettingsCheckbox key={h} checked={shownHosts.includes(h)} label={label(h)} data-testid={`secret-host-${h}`}
+              <SettingsCheckbox key={h} checked={shownHosts.includes(h)} label={tickLabel(h)} data-testid={`secret-host-${h}`}
                 onChange={(on) => tick(h, on)} />
             ))}
             <SettingsRow label="Environment name" htmlFor="secret-env" help="Optional: the variable a session on those hosts gets it as." error={error?.field === 'env' ? error.text : undefined} control={
@@ -249,7 +253,8 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
             } />
             <SettingsCheckbox checked={draft.sessions} label="Give it to every new session on those hosts" data-testid="secret-sessions"
               onChange={(on) => setDraft({ ...draft, sessions: on })} />
-            <SettingsRow error={error?.field === 'form' ? error.text : undefined} control={
+            {/* Held at the window's foot while the form is taller than it (Sol review, 700x800). */}
+            <SettingsRow className="secret-editor-actions" error={error?.field === 'form' ? error.text : undefined} control={
               <>
                 <SettingsButton variant="text" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>
                 <SettingsButton variant="primary" holdFocus busy={busy} busyLabel="Saving..." onClick={() => void save()} data-testid="secret-save">Save</SettingsButton>
@@ -258,6 +263,6 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
           </div>
         )}
       </div>
-    </SettingsFoldGroup>
+    </SettingsGroup>
   );
 }

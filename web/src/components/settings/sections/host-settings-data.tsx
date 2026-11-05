@@ -144,6 +144,15 @@ function useServers(hosts: Config['hosts']): HostServers {
   return { data, busy, errors, optionErrors, setOptionError, call, write, drafts, setDrafts };
 }
 
+/**
+ * Whether a read may put what it read on screen: no write of its kind ran when it was sent, none
+ * began since, and none runs now (a read sent while a write ran can carry the state from before
+ * it, answered after it).
+ */
+export function readStillCurrent(sent: { seq: number; inFlight: number }, now: { seq: number; inFlight: number }): boolean {
+  return sent.inFlight === 0 && sent.seq === now.seq && now.inFlight === 0;
+}
+
 function useExec(): ExecGrants {
   const [grants, setGrants] = useState<ExecGrant[] | null>(null);
   const [denied, setDenied] = useState<ExecDenied[]>([]);
@@ -151,16 +160,24 @@ function useExec(): ExecGrants {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ExecGrants['error']>(null);
   // Switch writes in order: only the newest answer is shown, and a read that began before a
-  // write (or while one is in flight) never puts an older stop back on screen.
+  // write (or while one is in flight) never puts an older stop back on screen. Checked when the
+  // read starts AND when it lands (2026-11-05: a read sent while a switch's write ran, answered
+  // after it, put Off back on screen for a moment, and the rows under it jumped mid-click).
   const switchSeq = useRef(0);
   const switchesInFlight = useRef(0);
+  // The same for Revoke and Allow: a read from before one landed never puts the old list back.
+  const grantSeq = useRef(0);
+  const grantsInFlight = useRef(0);
   const load = useCallback(async () => {
-    const seq = switchSeq.current;
+    const switches = { seq: switchSeq.current, inFlight: switchesInFlight.current };
+    const grantWrites = { seq: grantSeq.current, inFlight: grantsInFlight.current };
     try {
       const r = await fetchExecGrants();
-      setGrants(r.grants);
-      setDenied(r.denied ?? []);
-      if (seq === switchSeq.current && switchesInFlight.current === 0) setClosed(r.closedHosts ?? []);
+      if (readStillCurrent(grantWrites, { seq: grantSeq.current, inFlight: grantsInFlight.current })) {
+        setGrants(r.grants);
+        setDenied(r.denied ?? []);
+      }
+      if (readStillCurrent(switches, { seq: switchSeq.current, inFlight: switchesInFlight.current })) setClosed(r.closedHosts ?? []);
     } catch (err) {
       log.warn('settings', 'host exec grants read failed', { error: String(err) });
     }
@@ -173,6 +190,8 @@ function useExec(): ExecGrants {
   const revoke = useCallback(async (g: ExecGrant) => {
     setBusy(g.id);
     setError(null);
+    grantSeq.current += 1;
+    grantsInFlight.current += 1;
     try {
       await revokeExecGrant(g.id);
       setGrants((prev) => (prev ? prev.filter((x) => x.id !== g.id) : prev));
@@ -180,18 +199,28 @@ function useExec(): ExecGrants {
     } catch (err) {
       setError({ host: g.host, text: `Could not revoke: ${err instanceof Error ? err.message : String(err)}` });
     } finally {
+      grantsInFlight.current -= 1;
       setBusy(null);
     }
   }, []);
   const allow = useCallback(async (d: ExecDenied) => {
     setBusy(`${d.taskId}:${d.host}`);
     setError(null);
+    grantSeq.current += 1;
+    grantsInFlight.current += 1;
+    let allowed = false;
     try {
       await allowExecGrant(d.taskId, d.host);
+      allowed = true;
       log.info('settings', 'host exec grant allowed after a deny', { taskId: d.taskId, host: d.host });
-      await load();
     } catch (err) {
       setError({ host: d.host, text: `Could not allow: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      grantsInFlight.current -= 1;
+    }
+    // Read once the write landed (a read begun while it ran would be refused above).
+    try {
+      if (allowed) await load();
     } finally {
       setBusy(null);
     }
@@ -271,10 +300,23 @@ export function useHostSettingsLook(host: string | undefined): string | null {
   const ctx = useContext(Ctx);
   if (!ctx || !host) return null;
   const entry = ctx.servers.data?.hosts.find((h) => h.hostKey === host);
-  if (entry && hostServerLook(entry, !!ctx.servers.errors[host])) return 'Walnut on this host needs a look: see Details.';
+  if (entry && hostServerLook(entry, !!ctx.servers.errors[host])) return hostServerLookWords(entry, ctx.servers.errors[host]);
   const stuck = (ctx.secrets.state?.secrets ?? []).find((s) => !s.deletedAt && s.hosts.includes(host) && !!s.copies[host]?.error);
-  if (stuck) return `The secret ${stuck.name} could not be copied here: see Details.`;
+  if (stuck) return `The secret ${stuck.name} is not copied here yet: ${stuck.copies[host]!.error}. Details, This host has it.`;
   return null;
+}
+
+/**
+ * What needs a look about Walnut on a host, in its own words (2026-11-05 review: the row said
+ * only "Walnut on this host needs a look: see Details", never what).
+ */
+export function hostServerLookWords(entry: HostServerEntry, error?: string | null): string {
+  const v = entry.view;
+  const where = 'The fix is under This host, in Details.';
+  if (error) return `Walnut on this host: ${error.replace(/[.\s]+$/, '')}. ${where}`;
+  if (v?.phase === 'running' && v.notice) return `Walnut on this host: ${v.notice.replace(/[.\s]+$/, '')}. ${where}`;
+  if (v?.phase === 'error') return `Walnut on this host stopped${v.message ? `: ${v.message.replace(/[.\s]+$/, '')}` : ''}. ${where}`;
+  return `Walnut on this host cannot be opened from anywhere: its tunnel is down. ${where}`;
 }
 
 /** Walnut on a host offers a retry (it stopped, or runs an older build), or its tunnel does. */

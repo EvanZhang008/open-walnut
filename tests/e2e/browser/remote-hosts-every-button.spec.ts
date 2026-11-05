@@ -21,8 +21,8 @@
  *      walnut-dev run npx playwright test remote-hosts-every-button --project=chromium-host-fixture
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { fixtureCounters, hostFixture, resetServerHostFixture } from './host-problems-fixture-helpers'
-import { askThenCancel, expectFocusKept, flip, isChromium, openFixturePane, paneKeys, pick, row } from './remote-hosts-every-button-helpers'
+import { fixtureCounters, hostFixture, openHostParts, resetServerHostFixture } from './host-problems-fixture-helpers'
+import { askThenCancel, expectFocusKept, flip, isChromium, openFixturePane, paneKeys, pick, row, shot } from './remote-hosts-every-button-helpers'
 import {
   checkAddHost, checkJoinLink, checkMoreSettings, checkSecrets, expectRing, joinPress, type StepCtx,
 } from './remote-hosts-every-button-steps'
@@ -75,14 +75,15 @@ test.describe('Settings > Remote Hosts: every button', () => {
     page.on('pageerror', (e) => errors.push(e.message))
     const ctx = await setUp(page, request)
     const { routes, sweep, ran } = ctx
-    const online = page.getByTestId('rh-summary-online')
-    const off = page.getByTestId('rh-summary-off')
+    // The fleet's counts, as the summary line says them: every row in one of them.
+    const counts = page.locator('[data-testid="rh-summary"] .rh-summary-line')
     await sweep()
 
     await test.step('the list: one line for the fleet, one row per machine, one action each', async () => {
-      // One fleet: the summary counts the machines the list shows (2026-11-04 review: two fixtures).
-      await expect(online).toHaveText('2 of 4 online')
-      await expect(off).toHaveText('1 off')
+      // One fleet: the summary counts the rows the list shows, each row once, so the counts add up
+      // to the rows (2026-11-04 review: two fixtures; 2026-11-05: "2 of 4 online, 1 off" over 6 rows).
+      await expect(counts).toContainText('6 hosts: 2 online, 2 not connected, 1 off, 1 found in ~/.ssh/config, ')
+      await expect(page.locator('[data-testid="remote-hosts-list"] .rh-host-row')).toHaveCount(6)
       await expect(page.getByTestId('rh-summary-sessions')).toHaveText('4 sessions open')
       await expect(page.getByTestId('rh-summary-spend')).toHaveText('$241 in 30 days')
       for (const alias of ['__local__', 'devbox', 'downbox', 'gpu-box', 'lab-mac', 'fixture-remote']) await expect(row(page, alias)).toHaveCount(1)
@@ -235,15 +236,23 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await pick(page, alpha, 'Turn off')
       expect(((await routes.nth('PUT', '/api/config', puts + 1)).body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(false)
       await expect(alpha.getByTestId('rh-row-state')).toHaveText('Off: Walnut does not connect to it.')
-      await expect(online).toHaveText('1 of 3 online')
-      await expect(off).toHaveText('2 off')
+      await expect(counts).toContainText('6 hosts: 1 online, 2 not connected, 2 off, 1 found in ~/.ssh/config, ')
+      // An Off host is off on purpose: no Needs a look, no look line, not in the header's count
+      // (2026-11-05 review: a host turned off still read "Needs a look").
+      await expect(alpha.getByTestId('rh-look-tag')).toHaveCount(0)
+      await expect(alpha).not.toHaveAttribute('data-needs-look', 'true')
+      await expect(alpha).not.toContainText('needs a look')
+      // It says it is off, and nothing older (its Set up note went with it).
+      await expect(alpha.locator('.rh-row-line')).toHaveCount(0)
+      // Its name keeps its contrast (Sol review: the off row's name was drawn at 45%).
+      expect(Number(await alpha.locator('.rh-host-name').evaluate((el) => getComputedStyle(el).opacity))).toBe(1)
+      await shot(page, 'alpha-turned-off')
       await expect(page.locator('[data-testid="host-fleet-topo-node"][data-host="devbox"]')).toHaveAttribute('data-kind', 'off')
       await sweep()
       await alpha.getByTestId('rh-turn-on').click()
       expect(((await routes.nth('PUT', '/api/config', puts + 2)).body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(true)
       await expect(alpha.getByTestId('rh-turn-on')).toHaveCount(0)
-      await expect(online).toHaveText('2 of 4 online')
-      await expect(off).toHaveText('1 off')
+      await expect(counts).toContainText('6 hosts: 2 online, 2 not connected, 1 off, 1 found in ~/.ssh/config, ')
       await expectFocusKept(page)
       ran('Row menu/menuitem[turn-off]')
 
@@ -310,15 +319,34 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await output.click()
       await expect(details.locator('.hft-more')).toHaveCount(0)
       ran('Hosts/button.hft-details')
+      // The timeout is said once in Details, its ssh output folded (2026-11-05 review: on the row,
+      // as a heading, and as a red Connection line), and a host Walnut cannot reach is not judged
+      // for long jobs (the review: "Not for jobs that must keep running" twice).
+      expect(await details.evaluate((el) => (el.textContent!.match(/timed out/gi) ?? []).length)).toBe(1)
+      await expect(details.locator('[data-row="connection"]')).toHaveCount(0)
+      await expect(details.getByTestId('host-fleet-fit')).toHaveCount(0)
+      expect(await details.evaluate((el) => /must keep running/.test(el.textContent!))).toBe(false)
       await checkBetaThisHost(ctx, details)
-      await pick(page, beta, 'Hide details')
+      await details.scrollIntoViewIfNeeded()
+      await shot(page, 'beta-details')
+      // Hide details at their top closes them, the focus back on the row's More (the review: they
+      // closed only from the row's menu).
+      await details.getByTestId('rh-details-hide').click()
+      await expect(details).toHaveCount(0)
+      await expect(beta.getByTestId('rh-row-more')).toBeFocused()
+      ran('Hosts/button#rh-details-hide')
 
-      await expect(beta.getByTestId('rh-banner-hidden')).toHaveText('You hid this problem on the home page.')
-      await pick(page, beta, 'Show again on the home page', sweep)
-      await expect(beta.getByTestId('rh-banner-hidden')).toHaveCount(0)
+      // Hidden from the home page: said once, its way back beside it (the review: "You hid this
+      // problem on the home page." with the fix in the row's menu).
+      const hiddenLine = beta.getByTestId('rh-banner-hidden')
+      await expect(hiddenLine).toHaveText('Hidden from the home page. Show it there again')
+      await expect(menu(page)).toHaveCount(0)
+      await sweep()
+      await hiddenLine.getByTestId('rh-show-again').click()
+      await expect(hiddenLine).toHaveCount(0)
       expect(await page.evaluate(() => localStorage.getItem('open-walnut-host-banner-dismissed') ?? '')).not.toContain('downbox')
       await expectFocusKept(page)
-      ran('Row menu/menuitem[show-again]')
+      ran('Hosts/button#rh-show-again')
 
       // Its retry says it is an SSH one (2026-11-04 review: two "Retry" buttons on the page);
       // it fails the same way again, and the row keeps the focus and the reason.
@@ -333,13 +361,18 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expectFocusKept(page)
 
       // Turn on dials it: Retrying... while its save lands, then Connected. The summary moves at
-      // once each way (lab-mac, connected just now, counts too: read it, not a fixed number).
-      const counts = async () => (await online.textContent())!.match(/^(\d+) of (\d+) online$/)!.slice(1).map(Number)
-      const [up, of] = await counts()
+      // once each way, every row in one count (lab-mac's fixture status may flip back from the
+      // Connected its routed answer seeded: read the off count and the sum, not fixed numbers).
+      const num = async (id: string) => { const el = page.getByTestId(id); return (await el.count()) ? Number((await el.textContent())!.match(/^(\d+)/)![1]) : 0 }
+      const fleetNow = async () => ({ online: await num('rh-summary-online'), down: await num('rh-summary-down'), off: await num('rh-summary-off'), found: await num('rh-summary-found'), hosts: await num('rh-summary-hosts') })
+      const adds = (f: Awaited<ReturnType<typeof fleetNow>>) => f.online + f.down + f.off + f.found === f.hosts
+      const before = await fleetNow()
+      expect(adds(before)).toBe(true)
       const puts = routes.callsTo('PUT', '/api/config').length
       await pick(page, beta, 'Turn off')
       await routes.nth('PUT', '/api/config', puts + 1)
-      await expect.poll(counts).toEqual([up, of - 1])
+      await expect.poll(async () => (await fleetNow()).off).toBe(before.off + 1)
+      expect(adds(await fleetNow())).toBe(true)
       await hostFixture(request, { action: 'set-next-connect', host: 'downbox', result: 'ok' })
       const saving = routes.gate('config-put')
       await beta.getByTestId('rh-turn-on').click()
@@ -347,7 +380,8 @@ test.describe('Settings > Remote Hosts: every button', () => {
       saving()
       await expect(beta.getByTestId('host-fleet-action-note')).toHaveText('Connected.', { timeout: 15_000 })
       expect((await fixtureCounters(request)).connect.downbox).toBe(tries + 2)
-      await expect.poll(counts).toEqual([up + 1, of])
+      await expect.poll(async () => (await fleetNow()).off).toBe(before.off)
+      expect(adds(await fleetNow())).toBe(true)
       await expectFocusKept(page)
       ran('Hosts/button#rh-turn-on')
     })
@@ -403,14 +437,67 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await menu(page).getByRole('menuitem', { name: 'Details' }).click()
       const details = page.locator('[data-testid="rh-details"][data-host="__local__"]')
       await expect(details.getByTestId('host-fleet-card')).toBeVisible()
+      // Details in parts (2026-11-05 review: one long page): Status, This host (and, on a saved
+      // SSH host, What Walnut knows), each folding on its own; which are open is remembered for
+      // the browser session (Alpha box's and Beta box's opened This host here; a fresh page has
+      // it folded: remote-hosts-narrow.spec.ts). Folded, a part says what is inside.
+      const partToggle = (id: string) => details.getByTestId(`rh-details-part-${id}`)
+      await expect(partToggle('status')).toHaveAttribute('aria-expanded', 'true')
+      if ((await partToggle('this-host').getAttribute('aria-expanded')) === 'true') await partToggle('this-host').click()
+      await expect(partToggle('this-host')).toHaveAttribute('aria-expanded', 'false')
+      await expect(partToggle('this-host')).toContainText('Session limit, tasks from other hosts, secrets')
+      await expect(details.getByTestId('rh-this-host-__local__')).toHaveCount(0)
+      await sweep()
+      await partToggle('status').click()
+      await expect(details.getByTestId('host-fleet-card')).toHaveCount(0)
+      await partToggle('status').click()
+      await expect(details.getByTestId('host-fleet-card')).toBeVisible()
+      await openHostParts(details)
       const part = details.getByTestId('rh-this-host-__local__')
-      await expect(part.locator('#rh-limit-__local__')).toHaveAttribute('placeholder', '7')
+      // An empty limit reads as the default, not as a field turned off (the review: "Empty: 7").
+      await expect(part.locator('#rh-limit-__local__')).toHaveAttribute('placeholder', '7 (default)')
       await expect(part.getByRole('switch', { name: 'Tasks on other hosts may use This Mac' })).toBeVisible()
-      await expect(part.getByRole('switch', { name: 'Copy github-read to This Mac' })).toBeVisible()
+      // Ticking This Mac gives a secret to the sessions here (secretsForHost(LOCAL)): said so.
+      await expect(part.getByRole('switch', { name: 'Give github-read to sessions on This Mac' })).toBeVisible()
       // Walnut runs here already: no "Walnut on this host" part for this Mac.
       await expect(part.getByTestId('host-server-part')).toHaveCount(0)
       await sweep()
-      await pick(page, mac, 'Hide details')
+      await shot(page, 'this-mac-details-parts')
+      ran('Hosts/button#rh-details-part-status', 'Hosts/button#rh-details-part-this-host')
+      // The name and Hide details stay at the top while Details scroll (sticky head).
+      const head = details.locator('.rh-details-head')
+      await page.locator('.settings-pane').first().evaluate((el, y) => { el.scrollTop += y }, 500)
+      await expect(details.getByTestId('rh-details-hide')).toBeInViewport()
+      expect(await head.evaluate((el) => getComputedStyle(el).position)).toBe('sticky')
+      // Held right under the pane's bar, never under it or with a gap the parts show through.
+      const bar = (await page.locator('.settings-pane-stickybar.is-compact .settings-pane-stickybar-inner').boundingBox())!
+      await expect.poll(async () => Math.round((await head.boundingBox())!.y - (bar.y + bar.height))).toBeGreaterThanOrEqual(-1)
+      expect(Math.round((await head.boundingBox())!.y - (bar.y + bar.height))).toBeLessThanOrEqual(2)
+      await shot(page, 'this-mac-details-scrolled')
+      // Escape inside Details closes them, the focus back on More.
+      await part.locator('#rh-limit-__local__').focus()
+      await page.keyboard.press('Escape')
+      await expect(details).toHaveCount(0)
+      await expect(mac.getByTestId('rh-row-more')).toBeFocused()
+    })
+
+    await test.step('Big remote host, off: Turn on, and a dial that fails says why, in the words of Turn on', async () => {
+      // 2026-11-05 review: after Turn on the row said only "Could not retry right now.", for a Retry
+      // nobody pressed. (Here the save stays in the page's routes, so the server still has the
+      // host off and refuses the dial: the words say that.)
+      const big = row(page, 'fixture-remote')
+      const turnOn = big.getByTestId('rh-turn-on')
+      await expect(turnOn).toHaveText('Turn on')
+      const puts = routes.callsTo('PUT', '/api/config').length
+      await turnOn.click()
+      expect(((await routes.nth('PUT', '/api/config', puts + 1)).body as { hosts: Record<string, { enabled: boolean }> }).hosts['fixture-remote'].enabled).toBe(true)
+      await expect(big.getByTestId('host-fleet-action-error')).toHaveText(/^Turned on, but Walnut could not connect: Walnut has it turned off here\.( .+ tries again\.)?$/, { timeout: 15_000 })
+      await expect(big).not.toContainText('Could not retry right now')
+      await expectFocusKept(page)
+      // Off again, as the rest of the run has it.
+      await pick(page, big, 'Turn off')
+      await routes.nth('PUT', '/api/config', puts + 2)
+      await expect(big.getByTestId('rh-turn-on')).toBeVisible()
     })
 
     await test.step('More settings: Relay', async () => { await checkMoreSettings(ctx) })
@@ -450,6 +537,7 @@ test.describe('Settings > Remote Hosts: every button', () => {
 
     await test.step('Details\' note mic (last: it leaves the pane)', async () => {
       await pick(page, row(page, 'devbox'), 'Details')
+      await openHostParts(page.locator('[data-testid="rh-details"][data-host="devbox"]'), ['knows'])
       const mic = page.getByTestId('host-profile-devbox').locator('button.mic-btn')
       await expect(page.locator('[data-testid="rh-details"][data-host="devbox"]').getByTestId('host-system-line')).toBeVisible()
       // Linux WebKit has no recorder, so no mic; Chromium must show it.

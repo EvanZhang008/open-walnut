@@ -71,7 +71,13 @@ export interface ContextMenuPoint {
 interface ContextMenuProps {
   point: ContextMenuPoint;
   items: ContextMenuItem[];
-  onClose: () => void;
+  /**
+   * `why` = 'anchor': the press that closed it landed on the element it opened from (`returnFocus`,
+   * else `anchorRef`), under the backdrop. Its owner swallows the click that follows, which WebKit
+   * delivers to that button and which would open the menu again (2026-11-05 review: a second
+   * click on Remote Hosts' Add host left its menu open).
+   */
+  onClose: (why?: 'anchor') => void;
   /** Accessible name — say what the menu acts on ("Note tab actions"). */
   ariaLabel?: string;
   testId?: string;
@@ -470,7 +476,12 @@ export function ContextMenu({
     <>
       <div
         className="wn-context-backdrop"
-        onPointerDown={onClose}
+        onPointerDown={(e) => {
+          const own = back.current ?? anchorRef?.current ?? null;
+          const r = own?.isConnected ? own.getBoundingClientRect() : null;
+          const onOwn = !!r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+          onClose(onOwn ? 'anchor' : undefined);
+        }}
         onContextMenu={(e) => { e.preventDefault(); onClose(); }}
         // A WHEEL over the page behind CLOSES the menu, which is the same rule the `scroll` listener
         // above already states: the anchor is a frozen viewport point, so once the list moves the menu
@@ -478,7 +489,7 @@ export function ContextMenu({
         // scroller sees it, so without this a flick over the list neither scrolled the list nor closed
         // the menu and the gesture was silently inert. The menu is a SIBLING of this, so a wheel over
         // the menu itself still scrolls the menu.
-        onWheel={onClose}
+        onWheel={() => onClose()}
       />
       <div
         ref={menuRef}

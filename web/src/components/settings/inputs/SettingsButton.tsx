@@ -5,6 +5,7 @@
  * widest one reserves the space without a hardcoded pixel width.
  */
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { keepPress } from './press-keeps-target'
 import '@/styles/settings-controls.css'
 
 export interface SettingsButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -41,6 +42,7 @@ export function SettingsButton({
   disabled,
   holdFocus = false,
   onClick,
+  onPointerDown,
   ...rest
 }: SettingsButtonProps) {
   const off = disabled || busy
@@ -59,6 +61,8 @@ export function SettingsButton({
       aria-disabled={off && holdFocus ? true : rest['aria-disabled']}
       aria-busy={busy ? true : rest['aria-busy']}
       onClick={(e) => { if (off && holdFocus) { e.preventDefault(); return } onClick?.(e) }}
+      // A press keeps this button even if the row moves under it before the release (press-keeps-target.ts).
+      onPointerDown={(e) => { onPointerDown?.(e); if (!e.defaultPrevented) keepPress(e.currentTarget, e) }}
     >
       <span className="settings-button-stack" data-r1={r1 || undefined} data-r2={r2 || undefined}>
         <span className="settings-button-label">{showing}</span>

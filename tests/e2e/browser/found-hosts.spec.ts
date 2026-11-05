@@ -26,11 +26,13 @@ function foundRows(): Record<string, Record<string, unknown>> {
   }
 }
 
-interface Seen { answers: Array<{ host: string; answer: string }>; saves: unknown[] }
+interface Seen { answers: Array<{ host: string; answer: string }>; saves: unknown[]; stored?: () => Record<string, Record<string, unknown>> }
 
 /** The server's config with the found hosts laid over it; answers and saves change them as the server would. */
 async function serveFound(page: Page, seen: Seen) {
   const found = foundRows()
+  // What the server holds for the found hosts now (its answer route and the saves write it).
+  seen.stored = () => found
   let slowNextRead = false
   await page.route((url) => url.pathname === '/api/config', async (route: Route) => {
     if (route.request().method() === 'PUT') {
@@ -105,7 +107,8 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
   // Its kind tag (SSH) says where it was found; the question says the rest.
   await expect(lab.locator('.settings-tag', { hasText: 'SSH' })).toHaveAttribute('title', 'Found in ~/.ssh/config: Walnut reaches it with ssh')
   await expect(lab.getByTestId('rh-found-question')).toHaveText('Walnut found lab-mac in ~/.ssh/config. Connect to it?')
-  await expect(lab.getByTestId('rh-found-connect')).toHaveText('Connect')
+  // One name for one act: "Connect now", as on every other row (2026-11-05 review).
+  await expect(lab.getByTestId('rh-found-connect')).toHaveText('Connect now')
   // Nothing about this host suggests it is in use until the person says yes: no Turn off, no Details.
   expect(await menuItems(page, lab)).toEqual(['Edit', 'Not now', 'Remove'])
   await expect(lab).toHaveAttribute('data-found', 'ask')
@@ -132,12 +135,14 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
   expect(seen.answers).toEqual([{ host: 'lab-mac', answer: 'not_now' }, { host: 'lab-mac', answer: 'yes' }])
   await shot(page, '3-connected', hostsGroup)
 
-  // The editor's own save carries the answers, so a later save never undoes them.
+  // The server holds the yes (its answer route writes it), and no save of the editor undoes it: the
+  // next one, below, still carries it. Whether the editor sends a save of its own right now depends
+  // on when the late read of the Not now save comes back (before the answer: it saves the yes; after
+  // it: the read already says yes and there is nothing to save), so this waits on the server's state.
   const lastSaved = () => (seen.saves.at(-1) as { hosts?: Record<string, { connect?: string; enabled?: boolean; label?: string }> } | undefined)?.hosts
-  await expect.poll(() => lastSaved()?.['lab-mac']?.connect, { timeout: 15_000 }).toBe('yes')
-  const last = { hosts: lastSaved()! }
-  expect(last.hosts['lab-mac']).toMatchObject({ connect: 'yes', enabled: true })
-  expect(last.hosts['home-pc']).toMatchObject({ connect: 'ask', enabled: false })
+  await expect.poll(() => seen.stored!()['lab-mac']?.connect, { timeout: 15_000 }).toBe('yes')
+  expect(seen.stored!()['lab-mac']).toMatchObject({ connect: 'yes', enabled: true })
+  expect(seen.stored!()['home-pc']).toMatchObject({ connect: 'ask', enabled: false })
 
   // Editing a host that waits is no yes: a new label is saved, and the question stays.
   const home = row(page, 'home-pc')
@@ -149,6 +154,9 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
   await page.getByTestId('rh-edit-done').click()
   await expect.poll(() => lastSaved()?.['home-pc']?.label, { timeout: 15_000 }).toBe('Home PC')
   expect(lastSaved()!['home-pc']).toMatchObject({ connect: 'ask', enabled: false })
+  // That later save keeps lab-mac's yes (the editor's rows took the answer).
+  expect(lastSaved()!['lab-mac']).toMatchObject({ connect: 'yes', enabled: true })
+  expect(seen.stored!()['lab-mac']).toMatchObject({ connect: 'yes', enabled: true })
   await expect(home.getByTestId('rh-found-question')).toBeVisible()
   expect(seen.answers).toEqual([{ host: 'lab-mac', answer: 'not_now' }, { host: 'lab-mac', answer: 'yes' }])
   expect(errors).toEqual([])

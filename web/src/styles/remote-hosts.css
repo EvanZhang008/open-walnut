@@ -29,7 +29,7 @@ html body .wn-context-menu.rh-add-menu {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 0;
+  gap: 2px 16px;
   margin: 0;
   font-size: 13px;
   line-height: 20px;
@@ -54,7 +54,8 @@ html body .wn-context-menu.rh-add-menu {
 .rh-summary-refresh:hover { text-decoration: underline; }
 .rh-summary-needs:focus-visible,
 .rh-summary-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-.rh-summary-read { display: inline-flex; align-items: baseline; gap: 10px; margin-left: auto; padding-left: 16px; color: var(--fg-muted); font-size: 12.5px; }
+.rh-summary-counts { min-width: 0; }
+.rh-summary-read { display: inline-flex; align-items: baseline; gap: 10px; margin-left: auto; color: var(--fg-muted); font-size: 12.5px; }
 .rh-summary-note { margin: 4px 0 0; font-size: 12.5px; line-height: 17px; color: var(--fg-muted); }
 .rh-summary-note[data-tone='bad'] { color: var(--error); }
 
@@ -323,7 +324,9 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 
 /* ── 700 px and under: one column; the action and More stay on the name line, 44 px tall ── */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .rh-summary-read { margin-left: 0; padding-left: 0; flex-basis: 100%; }
+  /* Read and Refresh follow the counts on the line, wrapping only when they must (2026-11-05
+     review: Refresh sat alone on its own line with a wide gap). */
+  .rh-summary-read { margin-left: 0; }
   /* A 44 px action spans the name and state lines, inside the row (never over its hairline). */
   .rh-row-more { width: 44px; height: 44px; }
   .rh-details { padding-left: var(--settings-row-pad-x, 14px); }
@@ -335,3 +338,110 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 
 /* The Kind picker's button (HostProfileDisclosure.tsx): its chevron points down, at the words. */
 .rh-kind-chevron { margin-left: 4px; transform: rotate(90deg); vertical-align: -1px; }
+
+/* ── 700 px with a mouse: a row's buttons stay 28 px (2026-11-05 review: every row button grew
+   to a 44 px box and the rows read heavy). A finger (a coarse pointer) keeps its 44 px. ── */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* The phone layout's query (phone-media-query-ratchet), then a mouse inside it. */
+  @media (pointer: fine) {
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-host-row .settings-button,
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-summary .settings-button,
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-details-head .settings-button,
+    .app-shell-navigation .settings-layout[data-phone-settings] #remote-hosts .settings-pane-header .settings-button { min-height: 28px; }
+    /* Refresh is a link in the line: no padding of a box around it. */
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-summary .settings-button { padding-left: 0; padding-right: 0; min-width: 0; }
+    .rh-row-more { width: 28px; height: 28px; }
+  }
+}
+
+/* ── Details (HostDetails.tsx): the host's name and Hide details stay at the top while the
+   Details scroll by; three parts with one indent and one divider between them ── */
+[data-testid='remote-hosts-list'] .settings-group:has(.rh-details) { overflow: clip; }
+.rh-details { gap: 10px; }
+.rh-details-head {
+  position: sticky;
+  /* Under the pane's 44 px bar. Sticky insets by the scroller's top padding, so take it back
+     (the bar itself does the same: settings-shell.css). */
+  top: calc(var(--rh-sticky-top, 44px) - var(--settings-pane-pad-top, 0px));
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 calc(-1 * var(--settings-row-pad-x, 14px)) 0 calc(-1 * var(--settings-row-indent, 36px));
+  padding: 4px var(--settings-row-pad-x, 14px) 4px var(--settings-row-indent, 36px);
+  background: var(--settings-group-bg, var(--card-bg));
+  border-bottom: 1px solid var(--settings-hairline);
+}
+.rh-details-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; font-weight: 600; }
+.rh-details-head > .settings-button { flex: none; }
+.rh-details-part { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.rh-details-part + .rh-details-part { border-top: 1px solid var(--settings-hairline); padding-top: 10px; }
+.rh-details-part-toggle {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-height: 24px;
+  margin: 0 0 0 -18px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.rh-details-part-toggle .settings-disclosure-chevron { flex: none; width: 10px; }
+.rh-details-part-toggle[aria-expanded='true'] .settings-disclosure-chevron { transform: rotate(90deg); }
+.rh-details-part-toggle:focus-visible,
+.rh-details-part-toggle[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.rh-details-part-title { font-size: 13px; line-height: 18px; font-weight: 600; }
+.rh-details-part-summary { font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); }
+.rh-details-part-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* One divider per part: the facts table draws none of its own inside Details. */
+.rh-details .hf-details { border-top: 0; padding-top: 0; }
+.rh-details .hf-rows .hf-fit { margin: 0; font-size: inherit; color: inherit; }
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* The phone bar sits above the pane's scroller, which shows no bar of its own. */
+  .app-shell-navigation .settings-layout[data-phone-settings] .rh-details-head { --rh-sticky-top: 0px; }
+  .rh-details-head { margin-left: calc(-1 * var(--settings-row-pad-x, 14px)); padding-left: var(--settings-row-pad-x, 14px); }
+  /* No indent to hang the chevron in: it starts the line (it was cut off at the card's edge). */
+  .rh-details-part-toggle { margin-left: 0; }
+}
+
+/* ── More settings, open: one box, Relay and Secrets inside it as plain groups ── */
+.settings-fold[data-testid='remote-hosts-more'][data-open='true'] {
+  border: 1px solid var(--settings-group-border);
+  border-radius: 10px;
+  overflow: clip;
+}
+.settings-fold[data-testid='remote-hosts-more'][data-open='true'] > .settings-fold-toggle {
+  margin-bottom: 0;
+  border: 0;
+  border-bottom: 1px solid var(--settings-hairline);
+  border-radius: 10px 10px 0 0;
+}
+.settings-fold[data-testid='remote-hosts-more'] > .settings-fold-body { padding: 14px 14px 2px; }
+.settings-fold[data-testid='remote-hosts-more'] > .settings-fold-body > .settings-group-block:last-child { margin-bottom: 8px; }
+
+/* ── A way back written into a row's line ("Show it there again") ── */
+.rh-inline-link {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+.rh-inline-link:hover { text-decoration: underline; }
+.rh-inline-link:focus-visible,
+.rh-inline-link[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* ── A secret's Save and Cancel stay in view at the window's foot while its form is taller than
+   the window (Sol review: at 700x800 only Name showed). `clip`, not `hidden`: sticky needs it. ── */
+[data-testid='fleet-secrets'] .settings-group:has(.secret-editor-actions) { overflow: clip; }
+.secret-editor-actions { position: sticky; bottom: 0; z-index: 2; background: var(--settings-group-bg, var(--card-bg)); }

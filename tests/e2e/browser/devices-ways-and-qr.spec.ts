@@ -238,6 +238,69 @@ test('with nothing for away, Phones & Cloud opens Devices and says the phone can
   await expect(page.locator('#cloud').getByTestId('devices-now')).toHaveCount(0)
 })
 
+// 2026-11-05 (found-hosts.spec.ts in WebKit): Phones & Cloud waits for Tailscale's first probe before
+// it opens a tab, and shows the bar meanwhile. A tab pressed in that wait, with the answer coming in
+// before the release, did nothing: the page moved to Devices under the held pointer, the press and the
+// release landed on two different tabs, and no click happened. The tab the person pressed opens.
+
+/** Opens Phones & Cloud with Tailscale's answer held, presses the Browser link tab, then lets it answer. */
+async function pressWhileItDecides(page: Page) {
+  await mockDevices(page, { cloud: false })
+  // The first read has no Tailscale answer yet (Phones & Cloud waits for it); the next one, the
+  // page's own ask a few seconds later, is held until the pointer is down on a tab.
+  let reads = 0
+  let answer!: () => void
+  const answered = new Promise<void>((r) => { answer = r })
+  await page.route((url) => url.pathname === '/api/devices', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    reads++
+    if (reads > 1) await answered
+    return json(route, { devices: DEVICES, cloudDevices: [], targets: [LAN], ...(reads > 1 ? { tailscale: { installed: false, running: false } } : {}) })
+  })
+  await openSettings(page)
+  await page.getByTestId('settings-nav-devices').click()
+  await expect(page).toHaveURL(/#devices$/, { timeout: 30_000 })
+  const tab = page.getByTestId('pc-tab-devices-browser')
+  await expect(tab).toContainText('On', { timeout: 30_000 })
+  // The ask that settles it has gone out (and waits): press the tab now, then let it answer.
+  await expect.poll(() => reads, { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
+  const box = (await tab.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  answer()
+  // The answer is in: Phones & Cloud either waits for the press to end, or (the bug) moved already.
+  await expect.poll(() => page.evaluate(() => document.querySelector('[data-landing-waits="press"]') ? 'waits'
+    : document.getElementById('devices-phones') ? 'moved' : 'deciding'), { timeout: 30_000 }).not.toBe('deciding')
+  return { tab, box }
+}
+
+const framesPass = (page: Page, n: number) => page.evaluate((count) => new Promise<void>((done) => {
+  let left = count
+  const tick = () => (--left <= 0 ? done() : requestAnimationFrame(tick))
+  requestAnimationFrame(tick)
+}), n)
+
+test('a tab pressed while Phones & Cloud still decides where to open is the tab that opens', async ({ page }) => {
+  const { tab } = await pressWhileItDecides(page)
+  await page.mouse.up()
+  await expect(page).toHaveURL(/#devices-browser$/, { timeout: 10_000 })
+  await expect(page.locator('#devices-browser')).toBeVisible()
+  await expect(tab).toHaveAttribute('aria-current', 'page')
+  // And the landing never takes it back afterwards.
+  await framesPass(page, 5)
+  await expect(page).toHaveURL(/#devices-browser$/)
+})
+
+// WebKit ends a dragged link with dragstart and dragend alone, no pointerup or pointercancel: a wait
+// for the press to end must not hang on it.
+test('a press dragged off the tab is no pick: Phones & Cloud then opens the tab in use', async ({ page }) => {
+  const { box } = await pressWhileItDecides(page)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 300, { steps: 4 })
+  await page.mouse.up()
+  await expect(page).toHaveURL(/#devices-phones$/, { timeout: 10_000 })
+  await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
+})
+
 test('the cloud tab pairs a phone this way: Devices opens with the companion picked for the QR', async ({ page }) => {
   await mockDevices(page)
   const cloud = await openPhonesCloud(page)

@@ -27,7 +27,8 @@ export type HostActionKind = 'retry' | 'fix' | 'check';
  * clicked Install / Update (always a Claude Code line's), kept while the round runs gcc or dtach first.
  */
 export interface HostFixStart { verb: 'update' | 'install'; at: number; action?: string; asked?: true }
-export interface HostActionSnapshot { pending: HostActionPending; failed: HostActionFailed; receipt: string | null; fixStart: HostFixStart | null; lastTriedAt: number | null }
+/** `failedReason`: why the last connect request failed, in plain words (a row says it after its own words). */
+export interface HostActionSnapshot { pending: HostActionPending; failed: HostActionFailed; failedReason: string | null; receipt: string | null; fixStart: HostFixStart | null; lastTriedAt: number | null }
 export interface HostActionEvent { alias: string; kind: 'receipt' | 'failed'; text: string }
 /**
  * `posted`: the request came back. A connect attempt settles only after it: the
@@ -39,7 +40,22 @@ interface Attempt { mode: 'connect' | 'readiness'; before: HostStatus | undefine
 type Timer = ReturnType<typeof setTimeout>;
 interface Entry { snap: HostActionSnapshot; attempt: Attempt | null; sawServerFix: boolean; release: (() => void) | null; timers: { cap?: Timer; receipt?: Timer; fix?: Timer } }
 
-const EMPTY: HostActionSnapshot = { pending: null, failed: null, receipt: null, fixStart: null, lastTriedAt: null };
+const EMPTY: HostActionSnapshot = { pending: null, failed: null, failedReason: null, receipt: null, fixStart: null, lastTriedAt: null };
+
+/**
+ * Why a connect request failed, in plain words with no closing period (2026-11-05 review: Turn on
+ * and Connect now said only "Could not retry right now.", which named a button nobody pressed and
+ * no reason). The server's own sentence, except for the refusals it words for an agent.
+ */
+export function connectFailureReason(err: unknown): string {
+  const e = err as { status?: unknown; body?: { code?: unknown } } | null;
+  const code = typeof e?.body?.code === 'string' ? e.body.code : null;
+  const text = (err instanceof Error ? err.message : String(err)).trim().replace(/[.\s]+$/, '');
+  if (code === 'host_disabled') return 'Walnut has it turned off here';
+  if (e?.status === 404 && /^Unknown host/i.test(text)) return 'Walnut has not saved it yet';
+  if (err instanceof TypeError || e?.status === undefined) return `this page could not reach Walnut (${text || 'no answer'})`;
+  return text || 'Walnut gave no reason';
+}
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 const eventListeners = new Set<(e: HostActionEvent) => void>();
@@ -71,9 +87,9 @@ function syncStatusListener(): void {
 
 const settleAll = (): void => { for (const alias of [...entries.keys()]) settleHostAction(alias); };
 
-function endAttempt(e: Entry, alias: string, failed: HostActionFailed): void {
+function endAttempt(e: Entry, alias: string, failed: HostActionFailed, failedReason: string | null = null): void {
   e.attempt = null; clearTimeout(e.timers.cap);
-  patch(e, { pending: null, failed });
+  patch(e, { pending: null, failed, failedReason: failed ? failedReason : null });
   if (failed) emit({ alias, kind: 'failed', text: failed === 'check' ? CHECK_FAILED_TEXT : RETRY_FAILED_TEXT });
 }
 
@@ -140,7 +156,7 @@ export async function runHostAction(alias: string, kind: HostActionKind, verb: '
   // A user Retry reads as theirs on every surface (and lets a discovered host take a banner row).
   if (kind === 'retry' && !e.release) e.release = markUserRetry([alias]);
   clearTimeout(e.timers.receipt);
-  patch(e, { pending: kind, failed: null, receipt: null, lastTriedAt: at, ...(kind === 'fix' ? { fixStart: { verb, at, asked: true as const } } : {}) });
+  patch(e, { pending: kind, failed: null, failedReason: null, receipt: null, lastTriedAt: at, ...(kind === 'fix' ? { fixStart: { verb, at, asked: true as const } } : {}) });
   if (kind === 'fix') holdFix(e, before);
   // A request that never gets an answer frame still ends (the check has its own server deadline).
   else e.timers.cap = setTimeout(() => { if (e.attempt === attempt) endAttempt(e, alias, null); }, kind === 'check' ? CHECK_CAP_MS : CONNECT_CAP_MS);
@@ -151,7 +167,7 @@ export async function runHostAction(alias: string, kind: HostActionKind, verb: '
     settleHostAction(alias);
   } catch (err) {
     log.warn('host-actions', kind === 'check' ? 'readiness check request failed' : 'connect request failed', { host: alias, error: String(err) });
-    if (e.attempt === attempt) endAttempt(e, alias, kind === 'check' ? 'check' : 'retry');
+    if (e.attempt === attempt) endAttempt(e, alias, kind === 'check' ? 'check' : 'retry', kind === 'check' ? null : connectFailureReason(err));
   }
 }
 

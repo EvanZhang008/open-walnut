@@ -115,6 +115,25 @@ describe('host action store', () => {
     expect(store.getHostActionSnapshot('devbox').failed).toBeNull()
   })
 
+  it('a failed request keeps the server\'s reason, in plain words, until the next run (2026-11-05 review: "Could not retry right now." after Turn on)', async () => {
+    const refusal = (status: number, message: string, code?: string) => Object.assign(new Error(message), { status, body: code ? { error: message, code } : { error: message } })
+    connect.mockRejectedValueOnce(refusal(409, 'devbox is disabled; enable it in Settings > Remote Hosts first', 'host_disabled'))
+    await store.runHostAction('devbox', 'retry')
+    expect(store.getHostActionSnapshot('devbox')).toMatchObject({ failed: 'retry', failedReason: 'Walnut has it turned off here' })
+    connect.mockRejectedValueOnce(refusal(404, 'Unknown host: devbox'))
+    await store.runHostAction('devbox', 'retry')
+    expect(store.getHostActionSnapshot('devbox').failedReason).toBe('Walnut has not saved it yet')
+    connect.mockRejectedValueOnce(refusal(409, 'Remote hosts are off on this test server.', 'host_off'))
+    await store.runHostAction('devbox', 'retry')
+    expect(store.getHostActionSnapshot('devbox').failedReason).toBe('Remote hosts are off on this test server')
+    connect.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await store.runHostAction('devbox', 'retry')
+    expect(store.getHostActionSnapshot('devbox').failedReason).toBe('this page could not reach Walnut (Failed to fetch)')
+    connect.mockImplementation(async () => { clock += 500; return failed(clock) })
+    await store.runHostAction('devbox', 'retry')
+    expect(store.getHostActionSnapshot('devbox')).toMatchObject({ failed: null, failedReason: null })
+  })
+
   it('an attempt no frame answers ends at its cap (20s check), and the status listener goes', async () => {
     check.mockImplementation(() => new Promise(() => {}))
     void store.runHostAction('devbox', 'check')

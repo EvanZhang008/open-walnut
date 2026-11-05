@@ -194,10 +194,10 @@ describe('gauges, disk and chips', () => {
     expect(diskFree(host({ system: { ...host().system!, diskFreeBytes: 12 * GB } }))).toEqual({ text: '12 GB', low: true })
     expect(diskFree(host({ system: null }))).toBeNull()
   })
-  it('role chips in plain words: Leads, Cloud, Always on, Walnut runs here', () => {
+  it('role chips in plain words: Your main Walnut, Cloud, Always on, Walnut runs here', () => {
     const h = host({ local: true, server: { enabled: true, program: 'replica', phase: 'running', phaseLabel: 'running', build: null, phone: null, message: null } })
     h.capabilities = { tags: [], alwaysOn: true, placement: null, os: null, ios: null, browsers: [], mcp: [], clis: [], declared: [], unknown: [] }
-    expect(roleChips(h).map((c) => c.text)).toEqual(['Leads', 'Always on', 'Walnut runs here'])
+    expect(roleChips(h).map((c) => c.text)).toEqual(['Your main Walnut', 'Always on', 'Walnut runs here'])
   })
   it('capability chips name what a task can use', () => {
     const h = host()

@@ -8,7 +8,7 @@
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type Locator } from '@playwright/test'
-import { ALPHA_URL, expectCopied, expectOpensTab, flip } from './remote-hosts-every-button-helpers'
+import { ALPHA_URL, expectCopied, expectOpensTab, flip, isChromium, row } from './remote-hosts-every-button-helpers'
 import type { StepCtx } from './remote-hosts-every-button-steps'
 
 /** Each PUT a switch sends to `path`, read with `take`, is `want(on)`. */
@@ -21,36 +21,85 @@ function saw(ctx: StepCtx, path: string, take: (b: Record<string, unknown>) => u
   }
 }
 
+/**
+ * A press held down while the row above loses a line still acts (2026-11-05, WebKit on a loaded
+ * host: Revoke sent nothing). Check again leaves "Checked just now: same result" on the row for a
+ * few seconds; the press goes down on `control`, stays down until that line goes (everything
+ * below it moves up a line under the still pointer: WebKit keeps the scroll where it was), and
+ * comes up where it went down.
+ */
+async function pressWhileTheRowShrinks(ctx: StepCtx, details: Locator, control: Locator): Promise<void> {
+  const { page } = ctx
+  const receipt = row(page, 'devbox').locator('.rh-row-line', { hasText: 'Checked just now: same result' })
+  const check = details.getByTestId('rh-readiness-recheck')
+  await check.click()
+  await expect(receipt).toHaveCount(1, { timeout: 15_000 })
+  await control.scrollIntoViewIfNeeded()
+  const at = (await control.boundingBox())!
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2)
+  await page.mouse.down()
+  await expect(receipt).toHaveCount(0, { timeout: 15_000 })
+  if (!isChromium(page)) {
+    // The control is no longer under the pointer (Chromium's scroll anchoring may keep it there).
+    const now = (await control.boundingBox())!
+    expect(Math.abs(now.y - at.y), 'the control moved out from under the pointer').toBeGreaterThan(at.height / 2)
+  }
+  await page.mouse.up()
+}
+
 export async function checkAlphaThisHost(ctx: StepCtx, details: Locator): Promise<void> {
   const { routes, ran } = ctx
   const part = details.getByTestId('rh-this-host-devbox')
-  await expect(part.locator('.rh-this-host-heading')).toHaveText('This host')
+  // The part's own toggle is its title (the review: a heading inside it said it again).
+  await expect(details.getByTestId('rh-details-part-this-host')).toContainText('This host')
+  await expect(part.locator('.rh-this-host-heading')).toHaveCount(0)
 
   // Its session limit, saved with the hosts; empty is the default, said in the box.
   const limit = part.locator('#rh-limit-devbox')
   await expect(limit).toHaveValue('3')
   const puts = routes.callsTo('PUT', '/api/config').length
   const limits = async (n: number) => ((await routes.nth('PUT', '/api/config', puts + n)).body as { session_limits: unknown }).session_limits
+  // The echo of the first save comes back only after the box was cleared (2026-11-05, WebKit on a
+  // loaded host: that echo put 4 back in the box, and the cleared value never saved). The box
+  // never shows 4 again, and the clearing saves.
+  const releaseEcho = routes.holdEcho()
   await limit.fill('4')
   expect(await limits(1)).toEqual({ devbox: 4 })
   await limit.fill('')
+  const shown = await limit.evaluateHandle((el: HTMLInputElement) => {
+    const seen: string[] = []
+    const t = window.setInterval(() => { if (seen[seen.length - 1] !== el.value) seen.push(el.value) }, 10)
+    window.setTimeout(() => window.clearInterval(t), 30_000)
+    return seen
+  })
+  releaseEcho()
   expect(await limits(2)).toEqual({})
-  await expect(limit).toHaveAttribute('placeholder', '20')
+  await expect(limit).toHaveValue('')
+  expect(await shown.evaluate((seen) => seen.filter((v) => v !== '')), 'the box after it was cleared').toEqual([])
+  await expect(limit).toHaveAttribute('placeholder', '20 (default)')
   await limit.fill('3')
   expect(await limits(3)).toEqual({ devbox: 3 })
 
-  // Tasks on other hosts may use it: only Off explains itself.
+  // Tasks on other hosts may use it: only Off explains itself. The first flip is pressed while
+  // the row above loses a line (the press still flips it).
   const exec = part.getByTestId('rh-host-exec')
-  await flip(part.getByRole('switch', { name: 'Tasks on other hosts may use Alpha box' }), saw(ctx, '/api/v1/host-exec/hosts/devbox', (b) => b, (on) => ({ closed: !on }), async (on) => {
-    if (on) await expect(exec).not.toContainText('Off:')
-    else await expect(exec).toContainText('Off: nothing new starts here from another host.')
-  }))
+  const execSwitch = part.getByRole('switch', { name: 'Tasks on other hosts may use Alpha box' })
+  const execPuts = routes.callsTo('PUT', '/api/v1/host-exec/hosts/devbox').length
+  await pressWhileTheRowShrinks(ctx, details, execSwitch)
+  await expect(execSwitch).toHaveAttribute('aria-checked', 'false')
+  expect((await routes.nth('PUT', '/api/v1/host-exec/hosts/devbox', execPuts + 1)).body).toEqual({ closed: true })
+  await expect(exec).toContainText('Off: nothing new starts here from another host.')
+  await execSwitch.click()
+  await expect(execSwitch).toHaveAttribute('aria-checked', 'true')
+  expect((await routes.nth('PUT', '/api/v1/host-exec/hosts/devbox', execPuts + 2)).body).toEqual({ closed: false })
+  await expect(exec).not.toContainText('Off:')
   ran('Hosts/switch#rh-host-exec-switch-<host>')
   // A grant's line names no host: it is this host's part.
   const grant = part.locator('[data-grant-id="g-1"]')
   await expect(grant).toContainText(/Allowed .*; 3 uses, last .*: make test/)
   await expect(grant).not.toContainText('Alpha box')
-  await part.getByRole('button', { name: 'Revoke Nightly build on Alpha box' }).click()
+  // Revoke, pressed while the row above loses a line (the review's failure: it sent nothing).
+  await pressWhileTheRowShrinks(ctx, details, part.getByRole('button', { name: 'Revoke Nightly build on Alpha box' }))
   await routes.nth('DELETE', '/api/v1/host-exec/grants/g-1', 1)
   await expect(grant).toHaveCount(0)
   await expect(part).toContainText('No task from another host has used it yet.')
@@ -90,7 +139,13 @@ export async function checkAlphaThisHost(ctx: StepCtx, details: Locator): Promis
   // A running Walnut on an older build: Update to this build, busy, then the new build starting;
   // the row's line that sent here goes with it (one count on the page).
   const alphaRow = ctx.page.locator('[data-testid="remote-hosts-list"] .rh-host-row[data-host-alias="devbox"]')
-  await expect(alphaRow.getByTestId('rh-row-settings-look')).toHaveText('Walnut on this host needs a look: see Details.')
+  // The row says what needs a look, and where its fix is (2026-11-05 review: "needs a look: see
+  // Details", never what). One warning line on a row: while its Claude Code warning shows, this
+  // one is said by the tag (the review: four status lines stacked on one row).
+  const lookWords = /Walnut on this host: .+\. The fix is under This host, in Details\.$/
+  await expect(alphaRow.getByTestId('rh-row-warning')).toHaveCount(1)
+  await expect(alphaRow.getByTestId('rh-row-settings-look')).toHaveCount(0)
+  await expect(alphaRow.getByTestId('rh-look-tag')).toHaveAttribute('title', new RegExp(`^Also: ${lookWords.source}`))
   const retry = part.getByTestId('host-server-retry-devbox')
   await expect(retry).toHaveText('Update to this build')
   // A switch's write on the same host leaves the button's words alone, and holds its press
@@ -116,6 +171,7 @@ export async function checkAlphaThisHost(ctx: StepCtx, details: Locator): Promis
   await expect(part.getByTestId('host-server-state-devbox')).toHaveText('Starting the new build...')
   await expect(retry).toHaveCount(0)
   await expect(alphaRow.getByTestId('rh-row-settings-look')).toHaveCount(0)
+  await expect.poll(() => alphaRow.getByTestId('rh-look-tag').getAttribute('title')).toBeNull()
   ran('Hosts/button#host-server-retry-<host>')
 
   // The secrets copied here, each with its own switch.

@@ -46,6 +46,8 @@ export async function callBack(ctx: StepCtx, id: string): Promise<void> {
   if (await page.getByTestId('host-network-invite').count()) await page.getByTestId('host-network-done').click()
   await expect(closed).toHaveAttribute('data-invite-state', 'waiting')
   await expect(closed).toContainText(/Link still works for \d+ min\./)
+  // It names the menu item by its own words (the review: "Join with a link shows it again").
+  await expect(closed).toContainText('Add host, Join a machine with a link, shows it again.')
   const cancel = closed.getByTestId('host-network-cancel')
   const deletes = routes.callsTo('DELETE', `/api/hosts/net/invites/${id}`).length
   const release = routes.gate('cancel')
@@ -55,6 +57,7 @@ export async function callBack(ctx: StepCtx, id: string): Promise<void> {
   await routes.nth('DELETE', `/api/hosts/net/invites/${id}`, deletes + 1)
   await expect(closed).toHaveAttribute('data-invite-state', 'cancelled')
   await expect(closed).toContainText('Link cancelled.')
+  await expect(closed).toContainText('No machine can join with it now.')
   const done = closed.getByTestId('host-network-closed-done')
   await expectRing(page, done)
   await ctx.sweep()
@@ -236,6 +239,29 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   await expect(page.getByTestId('host-network-windows-command')).toBeHidden()
   await page.getByTestId('host-network-os-mac').click()
   await expect(card).toHaveAttribute('data-os', 'mac')
+  // From the keyboard the arrows move the pick, and the picked one shows its ring (2026-11-05
+  // review: WebKit drew none).
+  const macSeg = page.getByTestId('host-network-os-mac')
+  const linuxSeg = page.getByTestId('host-network-os-linux')
+  await macSeg.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(card).toHaveAttribute('data-os', 'linux')
+  await expect(linuxSeg).toBeFocused()
+  expect(await linuxSeg.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none')
+  await page.keyboard.press('ArrowLeft')
+  await expect(card).toHaveAttribute('data-os', 'mac')
+  await expect(macSeg).toBeFocused()
+  // Escape there is Close (Sol review: it did nothing, the focus on a hidden radio): the card goes,
+  // the link still works and says so (nothing is called back), the focus is on Add host.
+  const deletes = routes.calls.filter((c) => c.method === 'DELETE').length
+  await page.keyboard.press('Escape')
+  await expect(card).toHaveCount(0)
+  await expect(page.getByTestId('host-network-closed')).toContainText(/Link still works for \d+ min\./)
+  await expectRing(page, addButton(page))
+  expect(routes.calls.filter((c) => c.method === 'DELETE')).toHaveLength(deletes)
+  await joinPress(page)
+  await expect(cmd).toHaveText(netCommand(n))
+  expect(routes.invites).toBe(n)
   ctx.ran(
     'Hosts/radio#host-network-os-mac', 'Hosts/radio#host-network-os-linux', 'Hosts/radio#host-network-os-windows',
     'Hosts/button#host-network-copy', 'Hosts/button#host-network-windows-link-copy', 'Hosts/button#host-network-windows-copy',
@@ -254,13 +280,14 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   await expectRing(page, page.getByTestId('host-network-copy'))
   ctx.ran('Hosts/button#host-network-new-link')
 
-  // Close: the list says the link still works, in its place and focused; Join with a link shows
-  // the same link again, never a second one.
+  // Close: the list says the link still works, in its place, and the focus goes back to Add host
+  // (Sol review: Close and Escape are one act); Join with a link shows the same link again,
+  // never a second one.
   await page.getByTestId('host-network-done').click()
   await expect(card).toHaveCount(0)
   const closed = page.getByTestId('host-network-closed')
   await expect(closed).toContainText(/Link still works for \d+ min\./)
-  await expectRing(page, closed)
+  await expectRing(page, addButton(page))
   await ctx.sweep()
   await joinPress(page)
   await expect(page.getByTestId('host-network-command')).toHaveText(netCommand(n + 1))
@@ -322,7 +349,12 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   await expect(closed).toHaveAttribute('data-invite-state', 'waiting')
 }
 
-/** More settings: what belongs to the whole page (the relay, the secrets), each group one line. */
+/**
+ * More settings: what belongs to the whole page (the relay, the secrets). Open, it is one box with
+ * Relay and Secrets inside it as plain groups, no fold of their own (2026-11-05 review: a fold that
+ * opened two more folds, drawn as sibling cards); your own relay is said once, and who runs the
+ * public relays is a line further, on request (the review: two own-relay rows, and jargon).
+ */
 export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
   const toggle = page.getByTestId('remote-hosts-more-toggle')
@@ -330,10 +362,21 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
   await expect(toggle).toContainText('Relay and secrets. A host\'s own settings are in its Details.')
   // No count of its own: the page has one, in the header (2026-11-04 review: two counts).
   await expect(page.getByTestId('remote-hosts-more-needs')).toHaveCount(0)
-  await expect(page.getByTestId('fleet-secrets-toggle')).toBeHidden()
+  await expect(page.getByTestId('fleet-secrets')).toBeHidden()
   await openMore(page)
-  await expect(page.getByTestId('host-network-relay-summary')).toHaveText('Public relays')
-  await expect(page.getByTestId('fleet-secrets-summary')).toHaveText('1 secret')
+  const box = page.getByTestId('remote-hosts-more')
+  for (const gone of ['host-network-relay-toggle', 'fleet-secrets-toggle', 'host-network-relay-summary', 'fleet-secrets-summary']) await expect(page.getByTestId(gone)).toHaveCount(0)
+  await expect(box.getByTestId('host-network-relay')).toBeVisible()
+  await expect(box.getByTestId('fleet-secrets')).toBeVisible()
+  // One bordered box around both groups.
+  const [outer, relayBox, secretsBox] = await Promise.all([box.boundingBox(), box.getByTestId('host-network-relay').boundingBox(), box.getByTestId('fleet-secrets').boundingBox()])
+  for (const inner of [relayBox!, secretsBox!]) {
+    expect(inner.x).toBeGreaterThan(outer!.x)
+    expect(inner.x + inner.width).toBeLessThan(outer!.x + outer!.width)
+    expect(inner.y + inner.height).toBeLessThanOrEqual(outer!.y + outer!.height)
+  }
+  expect(await box.evaluate((el) => getComputedStyle(el).borderTopStyle)).not.toBe('none')
+  await shot(page, 'more-settings-open')
   // The groups that belong to one host are gone from here (their settings are in its Details).
   for (const gone of ['host-servers-toggle', 'host-exec-grants-toggle', 'rh-session-limits-toggle']) await expect(page.getByTestId(gone)).toHaveCount(0)
   await ctx.sweep()
@@ -341,13 +384,26 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
 
   await openGroup(page, 'host-network-relay')
   const relay = page.getByTestId('host-network-relay')
-  const own = relay.locator('[data-relay="own"]')
-  await expect(own).toBeDisabled()
+  // No companion: your own relay is not a greyed choice, it is said once with the way to get one.
+  await expect(relay.locator('[data-relay="own"]')).toHaveCount(0)
+  await expect(relay.getByTestId('host-network-relay-own')).toHaveCount(1)
+  await expect(relay.getByTestId('host-network-relay-own')).toContainText('Your own relay')
   // Where a companion is paired: a real link to that page, by its name (2026-11-04 review: the
   // text said "Settings > Cloud Companion", a page that is called Phones & Cloud).
   const pair = relay.getByTestId('host-network-relay-pair')
   await expect(pair).toHaveText('Phones & Cloud')
   await expect(pair).toHaveAttribute('href', '/settings#cloud')
+  // Plain words; who runs the public relays only on request.
+  await expect(relay.locator('[data-relay="public"]')).toContainText('A free public service passes the traffic on')
+  await expect(relay).not.toContainText('n0')
+  await expect(relay).not.toContainText('iroh')
+  const about = relay.getByTestId('host-network-relay-about')
+  await expect(about).toHaveAttribute('aria-expanded', 'false')
+  await about.click()
+  await expect(about).toHaveAttribute('aria-expanded', 'true')
+  await expect(relay).toContainText('n0, the makers of iroh')
+  await about.click()
+  await expect(relay).not.toContainText('n0')
   for (const choice of ['none', 'public'] as const) {
     const radio = relay.locator(`[data-relay="${choice}"]`)
     const puts = routes.callsTo('PUT', '/api/hosts/net/relay').length
@@ -356,7 +412,7 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
     await expect(radio).toHaveAttribute('aria-checked', 'true')
   }
   await ctx.sweep()
-  ctx.ran('Relay/button#host-network-relay-toggle', 'Relay/radio[relay=own]', 'Relay/radio[relay=public]', 'Relay/radio[relay=none]', 'Relay/link#host-network-relay-pair')
+  ctx.ran('Relay/button#host-network-relay-about', 'Relay/radio[relay=public]', 'Relay/radio[relay=none]', 'Relay/link#host-network-relay-pair')
 }
 
 export async function checkSecrets(ctx: StepCtx): Promise<void> {
@@ -364,7 +420,6 @@ export async function checkSecrets(ctx: StepCtx): Promise<void> {
   // Alpha box's "This host" switched this secret's copy before (remote-hosts-every-button-host.ts).
   const puts = routes.callsTo('PUT', '/api/v1/secrets/github-read').length
   await openGroup(page, 'fleet-secrets')
-  ctx.ran('Secrets/button#fleet-secrets-toggle')
   const sec = page.getByTestId('fleet-secrets')
   const editor = sec.getByTestId('secret-editor')
   const edit = sec.getByRole('button', { name: 'Edit github-read' })

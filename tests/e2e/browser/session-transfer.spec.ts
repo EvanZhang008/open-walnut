@@ -333,6 +333,9 @@ test('Settings > Remote Hosts: "What Walnut knows" shows the profile and edits k
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
   const details = page.locator(`[data-testid="rh-details"][data-host="${HOST}"]`)
   await expect(details.getByTestId(`host-profile-heading-${HOST}`)).toHaveText('What Walnut knows')
+  // A folded part of Details until opened.
+  const knows = details.getByTestId('rh-details-part-knows')
+  if ((await knows.getAttribute('aria-expanded')) !== 'true') await knows.click()
   const box = page.getByTestId(`host-profile-${HOST}`)
   await expect(box).toContainText('Cloud VM (private) (automatic)')
   await expect(box).toContainText('cloud metadata answered; no public address')

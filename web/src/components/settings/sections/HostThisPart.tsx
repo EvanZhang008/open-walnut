@@ -70,21 +70,20 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
 
   return (
     <section className="rh-this-host-part" data-testid={`rh-this-host-${host}`} aria-label={`Settings of ${name}`}>
-      <h4 className="rh-this-host-heading">This host</h4>
       {limitKey && (
         <SettingsRow
           label="Session limit"
           htmlFor={`rh-limit-${id}`}
           help={zero
-            ? `Most sessions it works on at once. Saved as 0, which counts as 1. Empty: ${fallback}, the default.`
-            : `Most sessions it works on at once. Empty: ${fallback}, the default.`}
+            ? `Most sessions it works on at once. Saved as 0, which counts as 1. Leave it empty for the default, ${fallback}.`
+            : `Most sessions it works on at once. Leave it empty for the default, ${fallback}.`}
           data-testid="rh-host-limit"
           control={
             <NumberInput
               id={`rh-limit-${id}`}
               data-testid={`rh-limit-${id}`}
               value={limitValue}
-              placeholder={String(fallback)}
+              placeholder={`${fallback} (default)`}
               min={1}
               unit="sessions"
               onChange={(v) => limits.set((prev) => {
@@ -173,7 +172,11 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
           ? <SettingsRow label="Secrets" help="No secret yet: add one under More settings, Secrets, and copy it here." data-testid="rh-host-secrets" />
           : (
             <>
-              <SettingsRow label="Secrets copied here" help="A task here reads them while your Mac is away." data-testid="rh-host-secrets" />
+              <SettingsRow
+                label={host === '__local__' ? 'Secrets its sessions get' : 'Secrets copied here'}
+                help={host === '__local__' ? 'A session on this Mac gets the ones switched on (Walnut keeps them all here either way).' : 'A task here reads them, also while your Mac is away.'}
+                data-testid="rh-host-secrets"
+              />
               {live.map((s) => {
                 const on = s.hosts.includes(host);
                 const key = `${s.name}:${host}`;
@@ -189,7 +192,7 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
                       <ToggleSwitch
                         checked={on}
                         busy={ctx.secrets.busy === key}
-                        aria-label={`Copy ${s.name} to ${name}`}
+                        aria-label={host === '__local__' ? `Give ${s.name} to sessions on ${name}` : `Copy ${s.name} to ${name}`}
                         data-testid={`rh-secret-copy-${s.name}-${id}`}
                         onChange={(v) => {
                           ctx.secrets.setBusy(key);

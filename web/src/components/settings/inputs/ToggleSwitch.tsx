@@ -6,6 +6,7 @@
  * after each flip so native form listeners (autosave) still fire.
  */
 import { useEffect, useRef } from 'react'
+import { keepPress } from './press-keeps-target'
 import '@/styles/settings-controls.css'
 
 interface ToggleSwitchProps {
@@ -65,6 +66,8 @@ export function ToggleSwitch({
         if (name) flipped.current = true
         onChange(!checked)
       }}
+      // A press keeps this switch even if the row moves under it before the release (press-keeps-target.ts).
+      onPointerDown={(e) => keepPress(e.currentTarget, e)}
     >
       <span className="toggle-thumb" />
     </button>

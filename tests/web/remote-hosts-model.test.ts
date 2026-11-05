@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Config } from '../../src/core/types'
 import {
-  aliasRefusals, emptyHost, entriesToHosts, hiddenAsTwin, hostsFromConfig, refusalBlocks, refusalBlocksSave, type HostEntry,
+  aliasRefusals, emptyHost, entriesToHosts, hiddenAsTwin, hostsFromConfig, limitsRead, refusalBlocks, refusalBlocksSave, type HostEntry,
 } from '../../web/src/components/settings/sections/remote-hosts-model'
 
 const config = {
@@ -113,5 +113,31 @@ describe('of two rows with one alias, the host saved under it keeps it', () => {
     expect(hiddenAsTwin(found, twins, refusals.get(found._key))).toBe(true)
     expect(refusals.get(typed._key)).toMatch(/^studio-mac is already/)
     expect(hiddenAsTwin(typed, twins, refusals.get(typed._key))).toBe(false)
+  })
+})
+
+// 2026-11-05 (WebKit, a loaded host): Session limit 4 saved, then the box cleared; the echo of the
+// first save came back after the clearing, put 4 back in the box, and the cleared value never saved.
+describe('limitsRead: a config read never takes a session limit typed and not saved yet', () => {
+  const L = (o: Record<string, number>) => JSON.stringify(o)
+  it('the first look fills the boxes', () => {
+    expect(limitsRead({ incoming: L({ devbox: 3 }), seen: null, shown: L({}), sent: [] })).toEqual({ take: true, sent: [] })
+  })
+  it('the echo of an earlier save, after the next value was typed, keeps the typed value', () => {
+    const r = limitsRead({ incoming: L({ devbox: 4 }), seen: L({ devbox: 3 }), shown: L({}), sent: [L({ devbox: 4 })] })
+    expect(r).toEqual({ take: false, sent: [] })
+  })
+  it('two saves in flight: the first echo keeps the second save, and drops only itself', () => {
+    const r = limitsRead({ incoming: L({ devbox: 4 }), seen: L({ devbox: 3 }), shown: L({}), sent: [L({ devbox: 4 }), L({})] })
+    expect(r).toEqual({ take: false, sent: [L({})] })
+  })
+  it('a change from elsewhere fills the boxes when nothing typed waits', () => {
+    expect(limitsRead({ incoming: L({ devbox: 9 }), seen: L({ devbox: 3 }), shown: L({ devbox: 3 }), sent: [] }).take).toBe(true)
+  })
+  it('a change from elsewhere while a value waits for its save keeps the typed value (it saves and wins)', () => {
+    expect(limitsRead({ incoming: L({ devbox: 9 }), seen: L({ devbox: 3 }), shown: L({ devbox: 5 }), sent: [] }).take).toBe(false)
+  })
+  it('a read about something else changes nothing', () => {
+    expect(limitsRead({ incoming: L({ devbox: 3 }), seen: L({ devbox: 3 }), shown: L({ devbox: 5 }), sent: [] }).take).toBe(false)
   })
 })

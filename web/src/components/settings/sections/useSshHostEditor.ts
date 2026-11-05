@@ -11,12 +11,19 @@
  * the save, and any draft row. So does the echo of ANY save sent and not read back yet (two
  * can be in flight: the first one's echo must not undo the typing the second one carries).
  * A real change from elsewhere rebuilds them, keeping the host being edited open and every
- * new row not saved yet.
+ * new row not saved yet. The session limits take a read only when nothing typed waits for its
+ * save (limitsRead).
  *
  * Typed input is never lost (2026-11-04 review: a hostname typed with no alias was dropped when
  * the pane closed): a new row's alias follows its hostname until the person types one
- * (aliasFromHostname), it saves once the Hostname field is left (never a half-typed hostname),
- * and the rows not saved yet outlive the pane (ssh-draft-store.ts).
+ * (aliasFromHostname), and the rows not saved yet outlive the pane (ssh-draft-store.ts).
+ *
+ * A new row saves only when the person says so: Add and connect, or Enter in one of its fields
+ * (2026-11-05 review: a half-typed "half" became a host, tagged Needs a look and counted, as soon
+ * as the focus left Hostname for Add host's menu). That save dials it at once, so a new host reads
+ * Connecting... and never "Not connected" before anyone tried it. A hostname that is no host ("not
+ * a host!!") is refused under its field and never saved (parseHostInput); "sam@build7:2222" fills
+ * User and Port when the field is left.
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
@@ -26,15 +33,13 @@ import { answerFoundHost } from '@/api/hosts';
 import { seedHostStatus } from '@/hooks/useHostStatus';
 import { runHostAction } from '@/utils/host-action-store';
 import {
-  aliasRefusals, emptyHost, entriesToHosts, hostsFromConfig, normalizeHosts, normalizeLimits, refusalBlocks, refusalBlocksSave, type HostEntry,
+  aliasRefusals, emptyHost, entriesToHosts, hostsFromConfig, limitsRead, normalizeHosts, normalizeLimits, refusalBlocks, refusalBlocksSave, type HostEntry,
 } from './remote-hosts-model';
-import { aliasFromHostname } from './host-row-model';
+import { aliasFromHostname, hostnameProblem, parseHostInput } from './host-row-model';
 import { readSshDrafts, writeSshDrafts, type SavedHosts } from './ssh-draft-store';
 
 /** Saves sent and not yet read back: the echo of each keeps the rows as typed. */
 const ECHOES_KEPT = 8;
-/** How long a row whose save just landed says Saved. */
-const SAVED_NOTE_MS = 3_000;
 /** A Turn on or a found host's Connect reads as "Connecting..." until its dial starts, at most this long. */
 const DIAL_WAIT_MS = 30_000;
 
@@ -47,26 +52,26 @@ export function useSshHostEditor({ config, onSave, netAliases }: {
   netAliases: Record<string, string>;
 }) {
   // Hydrated on the first render so the auto-save fingerprint matches its baseline at mount; the
-  // new rows kept from an earlier visit join at the top.
-  const restored = useRef<number[]>([]);
-  const [hosts, setHosts] = useState<HostEntry[]>(() => {
-    const kept = readSshDrafts(savedHostsOf(config));
-    restored.current = kept.map((h) => h._key);
-    return [...hostsFromConfig(config), ...kept];
-  });
+  // new rows kept from an earlier visit join at the top (still drafts: they save on Add and connect).
+  const [hosts, setHosts] = useState<HostEntry[]>(() => [...hostsFromConfig(config), ...readSshDrafts(savedHostsOf(config))]);
   /** The `_key` of the host whose fields are open. */
   const [editing, setEditing] = useState<number | null>(null);
   // Per-host concurrency caps (config.session_limits), keyed by the hosts' aliases (plus "local").
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
-  const [justSaved, setJustSaved] = useState<ReadonlySet<number>>(new Set());
-  /** A new row whose Hostname field holds the focus: it saves once that field is left. */
-  const [typing, setTyping] = useState<number | null>(null);
+  /** New rows the person pressed Add and connect (or Enter) on: only those save. */
+  const [committed, setCommitted] = useState<ReadonlySet<number>>(new Set());
   /** Rows whose empty-alias refusal is shown (left empty after typing, or a Save pressed). */
   const [aliasShown, setAliasShown] = useState<ReadonlySet<number>>(new Set());
+  /** Rows whose hostname refusal is shown (the field left holding no host, or Add pressed). */
+  const [hostShown, setHostShown] = useState<ReadonlySet<number>>(new Set());
+  /** A new row's Add and connect that could not save, and why. */
+  const [addError, setAddError] = useState<{ key: number; text: string } | null>(null);
   /** Hosts a Turn on or a found Connect asked to dial, and when (for "Connected."). */
   const [dialing, setDialing] = useState<ReadonlyMap<string, number>>(new Map());
   /** Of those, the ones whose dial waits for their save. */
   const dialAfterSave = useRef(new Set<string>());
+  /** The last Turn on or Add and connect of each host, for the words of a failure after it. */
+  const asks = useRef(new Map<string, { as: 'turn-on' | 'add'; at: number }>());
   /** The new rows this page saved (by key): saved, though they keep no savedAlias. */
   const savedKeys = useRef(new Set<number>());
   const hostsRef = useRef(hosts);
@@ -75,6 +80,12 @@ export function useSshHostEditor({ config, onSave, netAliases }: {
   editingRef.current = editing;
 
   const sentHosts = useRef<string[]>([]);
+  // The same for the session limits: the saves not seen back, what config.yaml said at the last
+  // look, and what the boxes hold now (the effect below must not drop a value not saved yet).
+  const sentLimits = useRef<string[]>([]);
+  const seenLimits = useRef<string | null>(null);
+  const limitsRef = useRef(sessionLimits);
+  limitsRef.current = sessionLimits;
   // The hosts config.yaml had at the last look: a config change about something else (the
   // session limits saving on their own, another pane) never touches the rows.
   const seenHosts = useRef<string | null>(null);
@@ -94,7 +105,11 @@ export function useSshHostEditor({ config, onSave, netAliases }: {
       setHosts(next);
       if (open) setEditing(open.savedAlias === undefined && drafts.includes(open) ? open._key : next.find((h) => h.alias === (open.savedAlias ?? open.alias))?._key ?? null);
     }
-    setSessionLimits(config.session_limits ?? {});
+    const limitsIn = JSON.stringify(normalizeLimits(config.session_limits ?? {}));
+    const read = limitsRead({ incoming: limitsIn, seen: seenLimits.current, shown: JSON.stringify(normalizeLimits(limitsRef.current)), sent: sentLimits.current });
+    sentLimits.current = read.sent;
+    seenLimits.current = limitsIn;
+    if (read.take) setSessionLimits(config.session_limits ?? {});
   }, [config]);
 
   // An alias another host has, or none beside a hostname, is refused next to its field, and
@@ -167,6 +182,7 @@ export function useSshHostEditor({ config, onSave, netAliases }: {
     const h = hostsRef.current.find((x) => x._key === key);
     if (!h) return;
     updateHost(key, 'enabled', true);
+    asks.current.set(h.alias, { as: 'turn-on', at: Date.now() });
     dialAfterSave.current.add(h.alias);
     markDialing(h.alias, true);
   };
@@ -181,53 +197,88 @@ export function useSshHostEditor({ config, onSave, netAliases }: {
   const removeHost = (key: number) => {
     setHosts((prev) => prev.filter((h) => h._key !== key));
     setEditing((cur) => (cur === key ? null : cur));
-    if (typing === key) setTyping(null);
+    setCommitted((cur) => { if (!cur.has(key)) return cur; const next = new Set(cur); next.delete(key); return next; });
+    setAddError((cur) => (cur?.key === key ? null : cur));
   };
   /** An empty alias left after typing in it says so under the field (never on tabbing in). */
   const showAliasRefusal = (key: number) => setAliasShown((cur) => (cur.has(key) ? cur : new Set(cur).add(key)));
+  /**
+   * The Hostname field was left: "sam@build7:2222" puts sam in User and 2222 in Port (when those
+   * are empty or say the same), and a hostname that is no host says why under the field.
+   */
+  const hostnameLeft = (key: number) => {
+    const h = hostsRef.current.find((x) => x._key === key);
+    if (!h || !h.hostname.trim()) return;
+    const parsed = parseHostInput(h.hostname);
+    if (!parsed.ok) { setHostShown((cur) => (cur.has(key) ? cur : new Set(cur).add(key))); return; }
+    const { host, user, port } = parsed.value;
+    const userFits = !user || !h.user.trim() || h.user.trim() === user;
+    const portFits = port === undefined || h.port === undefined || h.port === port;
+    if (!userFits || !portFits || (host === h.hostname.trim() && !user && port === undefined)) return;
+    updateHost(key, 'hostname', host);
+    if (user) updateHost(key, 'user', user);
+    if (port !== undefined) updateHost(key, 'port', port);
+  };
 
   const blocked = (h: HostEntry) => refusalBlocks(h, refusals.get(h._key), savedUnderCompanion);
   // A row this page saved keeps no savedAlias (the rows stay as typed), so its key says it is saved.
   const isNewRow = (h: HostEntry) => h.savedAlias === undefined && !savedKeys.current.has(h._key);
-  // A new row is left out of a save until it is a host to write: both fields, an alias of its
-  // own, and its Hostname field left ("build7.exa" is no host to dial) unless Save was pressed.
-  // The other hosts' changes save meanwhile (review: a half-typed new row, kept across visits,
-  // held every other change back, unsaved, with nothing saying so).
-  const draftWaits = (h: HostEntry, pressed: boolean) => isNewRow(h) && (
-    !h.alias || !h.hostname || blocked(h) || (!pressed && h._key === typing && savedHosts.get(h.alias) !== h.hostname));
-  const toSend = (pressed: boolean) => entriesToHosts(hosts.filter((h) => !draftWaits(h, pressed)), savedAliases);
+  /** What a new row still needs before Add and connect can save it (the field to go to), or null. */
+  const newRowNeeds = (h: HostEntry): 'hostname' | 'alias' | null =>
+    !h.hostname.trim() || hostnameProblem(h.hostname) ? 'hostname' : !h.alias.trim() || blocked(h) ? 'alias' : null;
+  // A new row is left out of every save until the person pressed Add and connect on it and it is
+  // a host to write. The other hosts' changes save meanwhile (review: a half-typed new row, kept
+  // across visits, held every other change back, unsaved, with nothing saying so).
+  const draftWaits = (h: HostEntry) => isNewRow(h) && (!committed.has(h._key) || newRowNeeds(h) !== null);
+  const toSend = () => entriesToHosts(hosts.filter((h) => !draftWaits(h)), savedAliases);
   // A saved row with an alias or a hostname but not both is mid-edit: saving then would drop it
   // from `hosts`, so clearing an alias to retype it deleted the host (Remove is the way to delete
-  // one); a saved row whose alias is refused holds them too. The session limits still save.
-  const held = hosts.some((h) => !isNewRow(h) && (!h.alias !== !h.hostname || blocked(h)));
+  // one); a saved row whose alias is refused, or whose hostname is no host, holds them too. The
+  // session limits still save.
+  const held = hosts.some((h) => !isNewRow(h) && (!h.alias !== !h.hostname || blocked(h) || !!hostnameProblem(h.hostname)));
   const limits = normalizeLimits(sessionLimits);
   const savedLimits = normalizeLimits(config.session_limits ?? {});
   const baselineHosts = normalizeHosts(config.hosts);
 
-  const savedTimer = useRef<number | null>(null);
-  useEffect(() => () => { if (savedTimer.current !== null) window.clearTimeout(savedTimer.current); }, []);
   const save = async (pressed: boolean) => {
-    const waiting = pressed && hosts.some((h) => draftWaits(h, true));
+    const waiting = pressed && hosts.some((h) => isNewRow(h) && committed.has(h._key) && newRowNeeds(h) !== null);
+    const limitsSent = JSON.stringify(limits);
     if (held || waiting) {
-      if (JSON.stringify(limits) !== JSON.stringify(savedLimits)) await onSave({ session_limits: limits });
+      if (limitsSent !== JSON.stringify(savedLimits)) {
+        sentLimits.current = [...sentLimits.current, limitsSent].slice(-ECHOES_KEPT);
+        await onSave({ session_limits: limits });
+      }
       if (pressed) {
         setAliasShown(new Set(refusals.keys()));
-        throw new Error(refused ? 'A host needs an alias of its own before it can be saved.' : 'Give the host being edited both an alias and a hostname, or remove it.');
+        setHostShown(new Set(hosts.filter((h) => hostnameProblem(h.hostname)).map((h) => h._key)));
+        throw new Error(refused ? 'A host needs an alias of its own before it can be saved.'
+          : hosts.some((h) => hostnameProblem(h.hostname)) ? 'A hostname is not one Walnut can reach: fix it under its field.'
+            : 'Give the host being edited both an alias and a hostname, or remove it.');
       }
       return;
     }
-    const sent = toSend(pressed);
+    const sent = toSend();
     // The rows this save writes for the first time: they say Saved once it lands.
     const fresh = hosts.filter((h) => !savedAliases.has(h.alias) && Object.hasOwn(sent, h.alias)).map((h) => h._key);
     sentHosts.current = [...sentHosts.current, JSON.stringify(normalizeHosts(sent))].slice(-ECHOES_KEPT);
-    await onSave({ hosts: sent, session_limits: limits });
+    sentLimits.current = [...sentLimits.current, limitsSent].slice(-ECHOES_KEPT);
+    try {
+      await onSave({ hosts: sent, session_limits: limits });
+    } catch (err) {
+      // A new host whose save failed is a draft again, with the reason on its row; its dial waits.
+      const added = hosts.filter((h) => isNewRow(h) && committed.has(h._key) && Object.hasOwn(sent, h.alias));
+      if (added.length) {
+        setCommitted((cur) => { const next = new Set(cur); for (const h of added) next.delete(h._key); return next; });
+        for (const h of added) { dialAfterSave.current.delete(h.alias); markDialing(h.alias, false); }
+        setAddError({ key: added[0]._key, text: `Not saved: ${err instanceof Error ? err.message : String(err)}` });
+      }
+      throw err;
+    }
     if (fresh.length) {
       for (const k of fresh) savedKeys.current.add(k);
-      // Saved: its alias is its own from now on, whatever its hostname becomes.
+      // Saved: its alias is its own from now on, whatever its hostname becomes. The header's
+      // "Saved" is the one receipt (2026-11-05 review: the row said "Saved." beside it).
       setHosts((prev) => prev.map((h) => (fresh.includes(h._key) ? { ...h, aliasAuto: false } : h)));
-      setJustSaved(new Set(fresh));
-      if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
-      savedTimer.current = window.setTimeout(() => { savedTimer.current = null; setJustSaved(new Set()); }, SAVED_NOTE_MS);
     }
     for (const alias of [...dialAfterSave.current]) {
       if (!sent[alias]?.enabled) continue;
@@ -238,22 +289,32 @@ export function useSshHostEditor({ config, onSave, netAliases }: {
     }
   };
   useSettingsAutoSave({
-    current: JSON.stringify({ hosts: held ? baselineHosts : toSend(false), limits }),
+    current: JSON.stringify({ hosts: held ? baselineHosts : toSend(), limits }),
     baseline: JSON.stringify({ hosts: baselineHosts, limits: savedLimits }),
     save: () => save(false),
   });
-  // A new row kept from an earlier visit saves now (the autosave never writes on a pane's mount).
-  const restoredSaved = useRef(false);
-  useEffect(() => {
-    if (restoredSaved.current || !restored.current.length) return;
-    restoredSaved.current = true;
-    if (!held && JSON.stringify(toSend(false)) !== JSON.stringify(baselineHosts)) void save(false).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+
+  /**
+   * Add and connect (or Enter) on a new row: the field it still needs takes the focus, with why
+   * under it; else the row joins the next save (the autosave, a moment later, the page's one
+   * save path), and once that lands Walnut dials it. Returns the field it still needs, or null.
+   */
+  const addNew = (key: number): 'hostname' | 'alias' | null => {
+    const h = hostsRef.current.find((x) => x._key === key);
+    if (!h || !isNewRow(h)) return null;
+    const needs = newRowNeeds(h);
+    setAddError((cur) => (cur?.key === key ? null : cur));
+    if (needs === 'hostname') { setHostShown((cur) => new Set(cur).add(key)); return needs; }
+    if (needs === 'alias') { showAliasRefusal(key); return needs; }
+    setCommitted((cur) => new Set(cur).add(key));
+    if (h.enabled) { asks.current.set(h.alias, { as: 'add', at: Date.now() }); dialAfterSave.current.add(h.alias); markDialing(h.alias, true); }
+    return null;
+  };
 
   return {
     hosts, hostsRef, isNewRow, editing, setEditing, updateHost, updateKeep, answerFound, answering, answerError, addHost, removeHost,
-    savedAliases, savedHosts, savedUnderCompanion, refusals, justSaved, save, sessionLimits, setSessionLimits,
-    typing, setTyping, aliasShown, showAliasRefusal, turnOn, dialing, dialPending: dialAfterSave.current,
+    savedAliases, savedHosts, savedUnderCompanion, refusals, save, sessionLimits, setSessionLimits,
+    aliasShown, showAliasRefusal, hostShown, hostnameLeft, addNew, committed, addError, turnOn, dialing, dialPending: dialAfterSave.current,
+    askOf: (alias: string) => asks.current.get(alias),
   };
 }

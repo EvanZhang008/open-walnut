@@ -161,7 +161,7 @@ export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: 
         data-testid="host-network-closed"
         data-invite-state="cancelled"
         label={<span role="status">Link cancelled.</span>}
-        help="Its code takes no machine in now."
+        help="No machine can join with it now."
         control={<SettingsButton variant="text" onClick={onDone} id={doneId} data-testid="host-network-closed-done">Close</SettingsButton>}
       />
     );
@@ -172,8 +172,8 @@ export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: 
       className="rh-join rh-join-closed"
       data-testid="host-network-closed"
       data-invite-state="waiting"
-      label={closedLinkNote(invite.expiresAt, now)}
-      help="A machine that runs it still joins. Join with a link shows it again."
+      label={<span role="status">{closedLinkNote(invite.expiresAt, now)}</span>}
+      help="A machine that runs it still joins. Add host, Join a machine with a link, shows it again."
       error={error ?? undefined}
       control={
         <SettingsButton variant="text" holdFocus busy={cancelling} busyLabel="Cancelling..." reserve={['Cancel link', 'Cancelling...']} onClick={onCancel} data-testid="host-network-cancel">
@@ -232,7 +232,12 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
       data-invite-state="waiting"
       data-os={os}
       onPointerDown={onTouched}
-      onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') onTouched?.(); }}
+      onKeyDown={(e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') onTouched?.();
+        // Escape is Close, like every other card on the page (2026-11-05 reviews): the link keeps
+        // working and the list says so in its place.
+        if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onDone(); }
+      }}
       wide
       label="Run this on the new machine"
       control={

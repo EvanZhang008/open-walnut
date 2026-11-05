@@ -303,6 +303,9 @@ test('N3-20, N3-21, N3-22: host row shows its address, Edit and Remove share its
   await expect(page.getByTestId('rh-session-limits-toggle')).toHaveCount(0)
   await host.getByTestId('rh-row-more').click()
   await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
+  // This host is a folded part of Details until opened.
+  const thisHost = page.getByTestId('rh-details').getByTestId('rh-details-part-this-host')
+  if ((await thisHost.getAttribute('aria-expanded')) !== 'true') await thisHost.click()
   const limit = page.getByTestId('rh-details').getByTestId('rh-host-limit')
   await expect(limit.locator('.settings-row-label')).toHaveText('Session limit')
   await expect(limit.locator('input[id^="rh-limit-"]')).toBeVisible()

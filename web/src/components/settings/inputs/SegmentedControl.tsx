@@ -51,24 +51,32 @@ export function SegmentedControl<V extends string>({
   const rootRef = useRef<HTMLDivElement>(null)
   const selectedIndex = options.findIndex((o) => o.value === value)
 
-  const select = (index: number) => {
+  // From the keyboard the segment that takes the focus shows its ring (data-keyed): WebKit draws no
+  // :focus-visible for a script's focus after a mouse press (2026-11-05 review: arrow keys moved
+  // the pick with no ring to see).
+  const select = (index: number, byKey = false) => {
     const opt = options[index]
     if (!opt || disabled) return
     if (opt.value !== value) onChange(opt.value)
     const seg = rootRef.current?.querySelectorAll<HTMLElement>('[role="radio"]')[index]
+    if (byKey && seg) {
+      seg.setAttribute('data-keyed', 'true')
+      const clear = () => { seg.removeAttribute('data-keyed'); seg.removeEventListener('blur', clear) }
+      seg.addEventListener('blur', clear)
+    }
     seg?.focus()
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>, index: number) => {
     if (e.key === ' ' || e.key === 'Enter') {
       e.preventDefault()
-      select(index)
+      select(index, true)
       return
     }
     const next = segmentIndexForKey(e.key, index, options.length)
     if (next === null) return
     e.preventDefault()
-    select(next)
+    select(next, true)
   }
 
   return (
@@ -105,6 +113,9 @@ export function SegmentedControl<V extends string>({
               aria-hidden="true"
               className="settings-segment-input"
               onChange={() => onChange(opt.value)}
+              // A click on the segment focuses this hidden radio (label activation): the focus goes
+              // to the segment itself, which carries the ring and the arrow keys (2026-11-05 review).
+              onFocus={(e) => (e.currentTarget.parentElement as HTMLElement | null)?.focus({ preventScroll: true })}
             />
             <span className="settings-segment-label">{opt.label}</span>
           </label>

@@ -125,13 +125,13 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     const parts = [span(n.uptimeSec * 1000), n.load ? `load ${n.load[0]}` : null].filter(Boolean);
     rows.push({ key: 'now', label: 'Up for', value: parts.join(', ') + (n.stale ? ` (last reading, ${span(now - n.at)} ago)` : ''), tone: n.stale ? 'muted' : undefined });
   } else {
-    rows.push({ key: 'now', label: 'Up for', tone: 'muted', value: h.daemon && !h.daemon.vitals ? 'Its Walnut helper is older than this view (it updates on the next connect)' : h.connection.connected ? 'No reading yet' : 'Not connected' });
+    rows.push({ key: 'now', label: 'Up for', tone: 'muted', value: h.daemon && !h.daemon.vitals ? 'Its session helper is older than this view (it updates on the next connect)' : h.connection.connected ? 'No reading yet' : 'Not connected' });
   }
   const week = h.history?.windows.find((w) => w.days === 7);
   if (week && week.online !== null) {
     const days = week.minutes / 1440;
     const over = days >= 6.95 ? 'the last 7 days' : `the ${recordedSpan(week.minutes)} recorded`;
-    const extra = [week.downs ? `${week.downs} down` : null, week.drops ? `${week.drops} link drops` : null, (week.daemonStarts ?? 0) > 1 ? `Walnut helper started ${week.daemonStarts} times` : null].filter(Boolean);
+    const extra = [week.downs ? `${week.downs} down` : null, week.drops ? `${week.drops} link drops` : null, (week.daemonStarts ?? 0) > 1 ? `session helper started ${week.daemonStarts} times` : null].filter(Boolean);
     rows.push({ key: 'online', label: 'Online', value: `${pct(week.online, 1)} of ${over}` + (extra.length ? `, ${extra.join(', ')}` : ''), tone: week.online >= 0.99 ? 'good' : week.online >= 0.9 ? 'warn' : 'bad' });
   } else {
     rows.push({ key: 'online', label: 'Online', tone: 'muted', value: h.history ? 'Recording started; a share shows after the first minutes' : 'No record yet' });
@@ -150,9 +150,10 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     // Not starting after a reboot is a problem, said once on its row or in the problem list.
     // How it starts (crontab, a systemd user service) is the server's word: kept for the tooltip.
     const reboot = !h.local && d.startsAfterReboot ? 'starts by itself after a reboot' : null;
-    const value = [d.version ? `version ${d.version.replace(/^walnut-daemon-/, '')}` : 'version not reported yet', reboot].filter(Boolean).join(', ');
+    const value = [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : 'build not reported yet', reboot].filter(Boolean).join(', ');
     const how = !h.local && d.startsAfterReboot && d.reboot ? `\nAfter a reboot: ${d.reboot.replace(/`/g, '')}` : '';
-    rows.push({ key: 'daemon', label: 'Walnut helper', value: value.charAt(0).toUpperCase() + value.slice(1), title: `The small program Walnut runs on the host to start and keep its sessions${how}` });
+    // "Walnut helper Version 0123456789ab" read as jargon (2026-11-05 review): what it does, then its build.
+    rows.push({ key: 'daemon', label: 'Session helper', value: value.charAt(0).toUpperCase() + value.slice(1), title: `The small program Walnut runs on the host to start and keep its sessions${how}` });
   }
   return rows;
 }

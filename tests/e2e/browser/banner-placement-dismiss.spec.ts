@@ -202,7 +202,7 @@ test.describe('expiry, undo and the way back', () => {
     expect(await storedKeys(page)).toContain('netbox|connect')
   })
 
-  test('BP-C55: Settings says the problem was hidden on the home page, with Show again (its More menu) for a dismissed host only; Show again brings the row back', async ({ page, request }) => {
+  test('BP-C55: Settings says the problem was hidden on the home page, with Show it there again beside it, for a dismissed host only; it brings the row back', async ({ page, request }) => {
     await isolatePrefs(page)
     await page.addInitScript((k) => localStorage.removeItem(k), DISMISS_KEY)
     await loadFixture(request, 'host-problems')
@@ -212,17 +212,19 @@ test.describe('expiry, undo and the way back', () => {
     await cardRow(tasksBanner(page), 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(cardRow(tasksBanner(page), 'certbox')).toHaveCount(0)
     await openRemoteHosts(page)
-    await expect(hostRow(page, 'certbox').getByTestId('rh-banner-hidden')).toHaveText('You hid this problem on the home page.')
-    await expect(hostRow(page, 'keybox')).not.toContainText('You hid this problem on the home page.')
-    // Only the hidden host's menu offers Show again.
-    await hostRow(page, 'keybox').getByTestId('rh-row-more').click()
-    await expect(page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Show again on the home page' })).toHaveCount(0)
+    // Said once, with its way back beside it (2026-11-05 review: the fix was in the row's menu).
+    await expect(hostRow(page, 'certbox').getByTestId('rh-banner-hidden')).toHaveText('Hidden from the home page. Show it there again')
+    await expect(hostRow(page, 'keybox').getByTestId('rh-banner-hidden')).toHaveCount(0)
+    await expect(hostRow(page, 'keybox').getByTestId('rh-show-again')).toHaveCount(0)
+    // No menu item says it a second time.
+    await hostRow(page, 'certbox').getByTestId('rh-row-more').click()
+    await expect(page.getByTestId('rh-row-menu').getByRole('menuitem', { name: /Show again/ })).toHaveCount(0)
     await page.keyboard.press('Escape')
     await hostRow(page, 'certbox').screenshot({ path: `${BP_SHOTS}/c55-settings-hidden.png` })
-    await hostMenuPick(page, 'certbox', 'Show again on the home page')
-    await expect(hostRow(page, 'certbox')).not.toContainText('You hid this problem on the home page.')
-    // The focus went back to the row's More, never to the page.
-    await expect(hostRow(page, 'certbox').getByTestId('rh-row-more')).toBeFocused()
+    await hostRow(page, 'certbox').getByTestId('rh-show-again').click()
+    await expect(hostRow(page, 'certbox').getByTestId('rh-banner-hidden')).toHaveCount(0)
+    // The focus stays on the page, never on body.
+    await expect.poll(() => page.evaluate(() => !!document.activeElement && document.activeElement !== document.body)).toBe(true)
     await goRail(page, 'home')
     await expandSystemAttention(page)
     await expect(cardRow(tasksBanner(page), 'certbox')).toBeVisible({ timeout: 20_000 })

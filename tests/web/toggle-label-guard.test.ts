@@ -33,7 +33,7 @@ const OWN_WORDS: Record<string, string> = {
   'components/settings/sections/HooksSection.tsx#s.label': 'a hook\'s boolean setting: the setting\'s own title from the hook',
   'components/settings/sections/ReplicaCopyRows.tsx#row.label': 'what the companion keeps a copy of ("Notes"): the switch\'s own words',
   'components/settings/sections/CalendarSection.tsx#display.name': 'a checklist of calendars to show: the calendar\'s name is the option, and showing it is all the tick does',
-  'components/settings/sections/SecretsGroup.tsx#label(h)': 'a picker of hosts to copy a secret to: taken only by Save',
+  'components/settings/sections/SecretsGroup.tsx#tickLabel(h)': 'a picker of hosts to give a secret to (This Mac\'s own sessions, or a host to copy it to): taken only by Save',
   'components/agents/AgentForm.tsx#def.label': 'a picker of context sources in the agent form: taken only by Save',
   'components/tasks/TasksColumnsMenu.tsx#def.label': 'a column picker: the column\'s name is the option',
   'components/org/OrgInlineAnswer.tsx#o.label': 'an answer option the user picks: its text is the option',

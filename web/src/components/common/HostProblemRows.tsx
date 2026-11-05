@@ -417,7 +417,7 @@ export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onD
   }, [hostsKey]);
   const actions: HostActions = {
     retry: retryAll, connectNow: retryAll, update: async () => {}, checkAgain: async () => {},
-    pending: pending ? 'retry' : null, failed: failed ? 'retry' : null, receipt, fixing: null, lastTriedAt: null,
+    pending: pending ? 'retry' : null, failed: failed ? 'retry' : null, failedReason: null, receipt, fixing: null, lastTriedAt: null,
   };
   const mine = pending || row.by === 'user';
   const labels = row.hosts.length > 1 ? RETRY_ALL_LABELS : RETRY_LABELS;

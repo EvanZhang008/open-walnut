@@ -51,7 +51,6 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
       primary={live.primary}
       menu={[
         { key: 'details', label: detailsOpen ? 'Hide details' : 'Details', onSelect: () => onDetails(!detailsOpen) },
-        ...(live.hidden ? [{ key: 'show-again', label: 'Show again on the home page', onSelect: live.showOnBanner }] : []),
       ]}
       onRemove={onRemove}
       removeNote="It leaves your machines, on this Mac and on your cloud companion: joining again takes a new link."
@@ -62,7 +61,7 @@ export function NetMachineRow({ machine: m, name, relay, error, card, now, detai
         sessions: card?.sessions.running ?? null, spendUsd: card?.spend?.last30dUsd ?? null, sub,
       }}
       data={{ 'data-net-path': m.path }}
-      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked kind="net" />}
+      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked kind="net" onClose={() => onDetails(false)} />}
     />
   );
 }

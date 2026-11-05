@@ -18,6 +18,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openHostParts } from './host-problems-fixture-helpers'
 import { pick, row } from './remote-hosts-every-button-helpers'
 import { expectRing } from './remote-hosts-every-button-steps'
 import { cssColorToRgba } from './css-color'
@@ -171,6 +172,8 @@ async function openDetails(page: Page, alias: string): Promise<Locator> {
   await pick(page, row(page, alias), 'Details')
   await expect(details(page, alias)).toBeVisible()
   await expect(page.getByTestId('rh-details')).toHaveCount(1)
+  // Every part open (This host and What Walnut knows are folded by default).
+  await openHostParts(details(page, alias))
   return details(page, alias)
 }
 
@@ -279,10 +282,10 @@ test('a fleet of five: the summary line, a row per host, the network map, and De
   await see(page, { 'host-fleet-read': 'Read 12 min ago', 'host-fleet-reading': 0 })
   await expect.poll(() => asks).toEqual([['__local__']])
   // The summary line (the old stat tiles), beside the groups, never inside one (settings-layout.spec.ts F10).
-  // It counts the list's rows: the saved host switched off is not in "of 5", it is "1 off".
+  // It counts the list's rows, each once: the saved host switched off is "1 off", not "not connected".
   const summary = page.getByTestId('rh-summary')
   expect(await summary.evaluate((el) => !!el.closest('.settings-group'))).toBe(false)
-  await see(summary, { 'rh-summary-online': '3 of 5 online', 'rh-summary-off': '1 off', 'rh-summary-sessions': '34 sessions open', 'rh-summary-spend': '$5,205 in 30 days' })
+  await see(summary, { 'rh-summary-hosts': '6 hosts', 'rh-summary-online': '3 online', 'rh-summary-down': '2 not connected', 'rh-summary-off': '1 off', 'rh-summary-sessions': '34 sessions open', 'rh-summary-spend': '$5,205 in 30 days' })
   await expect(summary.getByTestId('rh-summary-spend')).toHaveAttribute('title', 'At list price, not a bill')
   // The "need a look" count is the header's, not the summary's (2026-11-04 review: it scrolled
   // away under the pinned bar after the first press).
@@ -377,15 +380,21 @@ test('a fleet of five: the summary line, a row per host, the network map, and De
   // uptime is its row's line, not said again here).
   const mac = await openDetails(page, '__local__')
   await see(mac, {
-    'host-fleet-roles': 'Leads', '[data-gauge="gpu"] .hf-gauge-value': '18%', '[data-gauge="disk"] .hf-gauge-value': '95%', 'host-fleet-disk-free': '50 GB free',
+    'host-fleet-roles': 'Your main Walnut', '[data-gauge="gpu"] .hf-gauge-value': '18%', '[data-gauge="disk"] .hf-gauge-value': '95%', 'host-fleet-disk-free': '50 GB free',
     '[data-gauge]': 4, '[data-spark]': 4, '[data-testid="host-fleet-caps"] .hf-chip': ['iOS simulator', 'Browser', '1 MCP server'],
-    'host-fleet-problem': ['Laptop: not for jobs that must keep running'],
+    // Its laptop verdict is said once, as the facts' Long jobs row, not again as a problem
+    // (2026-11-05 reviews: "not for jobs that must keep running" twice).
+    'host-fleet-problem': 0, 'host-fleet-fit': 'Not a good fit: It is a laptop: a job here stops while it sleeps.',
   })
   await expect(mac.locator('[data-spark="gpu"]')).toHaveAttribute('title', /^GPU over the last 12 hours/)
   // The two hosts away: why, with the error; an older daemon's empty reading; each unknown says why.
-  await see(await openDetails(page, 'homepc'), { '[data-row="connection"] dd': 'SSH tunnel: Could not reach Home PC (ssh: connection timed out)' })
+  // Why it is away, said once in its Details (here its Connection row: this row draws no failure
+  // block of its own), and no long-job verdict for a host Walnut cannot reach.
+  const home = await openDetails(page, 'homepc')
+  await see(home, { '[data-row="connection"] dd': 'SSH tunnel: Could not reach Home PC (ssh: connection timed out)', 'host-fleet-fit': 0 })
+  expect(await home.evaluate((el) => (el.textContent!.match(/connection timed out/g) ?? []).length)).toBe(1)
   await expectEveryUnknownSaysWhy(page)
-  await see(await openDetails(page, 'olddev'), { '[data-row="now"] dd': 'Its Walnut helper is older than this view (it updates on the next connect)' })
+  await see(await openDetails(page, 'olddev'), { '[data-row="now"] dd': 'Its session helper is older than this view (it updates on the next connect)' })
   await expectEveryUnknownSaysWhy(page)
   await expectNoOverflow(page)
   await shot(page, '1-fleet-1280', page.getByTestId('remote-hosts-list'))
@@ -511,14 +520,15 @@ test('Connect: the row waits, then comes back live; a refusal stays on its row; 
     release()
   }
   await press()
-  await see(r, { 'host-fleet-action-error': 'Could not retry right now.', 'rh-row-state': failed })
+  // Why, in the words of the button pressed, and what tries again (2026-11-05 review: "Could not retry right now.").
+  await see(r, { 'host-fleet-action-error': 'Could not connect: Home PC refused the sign-in. Retry SSH tries again.', 'rh-row-state': failed })
   await expect(connect).toBeEnabled()
   refuse = false
   await press()
   await see(r, { 'rh-row-state': /^Online, 5% CPU/, 'host-fleet-action-note': 'Connected.', 'host-fleet-action-error': 0, 'rh-row-connect': 0 })
   // Its Retry SSH went away with its state: the focus is on the row's More.
   await expect(r.getByTestId('rh-row-more')).toBeFocused()
-  await see(page, { 'rh-summary-online': '4 of 5 online' })
+  await see(page, { 'rh-summary-online': '4 online', 'rh-summary-down': '1 not connected' })
   await expect(state(page, 'olddev')).toHaveText(STATES.olddev) // the other host away stays as it was
   await page.getByTestId('remote-hosts-map-toggle').click()
   await expect(page.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveAttribute('data-live', 'true')
@@ -634,7 +644,7 @@ test('a reopened page shows the last readings at once, before the server answers
   answer = 'later'
   await openRemoteHosts(page)
   await expect(devState).toHaveText(DEV_LIVE, { timeout: 10_000 })
-  await see(page, { 'rh-summary-online': '2 of 2 online', 'host-fleet-reading': 0 })
+  await see(page, { 'rh-summary-online': '2 online', 'rh-summary-down': 0, 'host-fleet-reading': 0 })
   release()
   hold = null
   // The server's answer replaces them; three hours old, every value stays, with its age.
@@ -710,13 +720,13 @@ test('a truly first run: the summary says it is reading, then each row as its ow
   stage = 2
   await expect(state(page, '__local__')).toHaveText(STATES.__local__, { timeout: 10_000 })
   expect((await aliases(page))[0]).toBe('__local__')
-  await see(page, { 'rh-summary-online': '1 of 1 online', 'host-fleet-reading': 'Reading 2 more hosts...' })
+  await see(page, { 'rh-summary-online': '1 online', 'host-fleet-reading': 'Reading 2 more hosts...' })
   await expect(row(page, 'devbox')).toHaveCount(0)
   await shot(page, '8-first-run', page.getByTestId('remote-hosts-list'))
   stage = 3
   await expect(state(page, 'devbox')).toHaveText(DEV_LIVE, { timeout: 10_000 })
   await expect(state(page, 'olddev')).toHaveText(STATES.olddev)
-  await see(page, { 'host-fleet-reading': 0, 'rh-summary-online': '2 of 3 online' })
+  await see(page, { 'host-fleet-reading': 0, 'rh-summary-online': '2 online', 'rh-summary-down': '1 not connected' })
   expect(asks).toHaveLength(1) // read once, not again on every poll
 })
 

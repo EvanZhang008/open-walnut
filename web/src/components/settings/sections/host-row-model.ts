@@ -22,6 +22,8 @@ export interface RowReport {
   name: string;
   /** A machine of the fleet (not a draft, not a found host still waiting for a yes). */
   counted: boolean;
+  /** Found in ~/.ssh/config and waiting for a yes: a row of the list, not a machine of the fleet yet. */
+  found?: boolean;
   online: boolean;
   /** Switched off here: Walnut does not connect to it. */
   off: boolean;
@@ -38,9 +40,25 @@ export interface RowReport {
   phone?: boolean;
 }
 
-export interface ListSummary { online: number; total: number; off: number; sessions: number | null; spendUsd: number | null; needs: number }
+export interface ListSummary {
+  /** Every row the list shows that is a host (a draft not saved yet is not). */
+  hosts: number;
+  online: number;
+  /** On here and not connected (also while it connects). */
+  down: number;
+  off: number;
+  /** Found in ~/.ssh/config, waiting for a yes. */
+  found: number;
+  sessions: number | null;
+  spendUsd: number | null;
+  needs: number;
+}
 
-/** The fleet as its rows say it: a host switched off is not in "N of M online", but is named as off. */
+/**
+ * The fleet as its rows say it, every row in exactly one count, so the counts add up to the rows
+ * shown (2026-11-05 review: "2 of 4 online, 1 off" sat above 6 rows). A host switched off is not
+ * online and not "not connected", and never needs a look (it was turned off on purpose).
+ */
 export function listSummary(rows: RowReport[]): ListSummary {
   let sessions: number | null = null;
   let spendUsd: number | null = null;
@@ -49,23 +67,37 @@ export function listSummary(rows: RowReport[]): ListSummary {
     if (r.sessions !== null && !r.off) sessions = (sessions ?? 0) + r.sessions;
     if (r.spendUsd !== null) spendUsd = (spendUsd ?? 0) + r.spendUsd;
   }
+  const found = rows.filter((r) => !r.counted && r.found).length;
   return {
+    hosts: fleet.length + found,
     online: fleet.filter((r) => !r.off && r.online).length,
-    total: fleet.filter((r) => !r.off).length,
+    down: fleet.filter((r) => !r.off && !r.online).length,
     off: fleet.filter((r) => r.off).length,
+    found,
     sessions,
     spendUsd,
-    needs: fleet.filter((r) => r.needsLook).length,
+    needs: fleet.filter((r) => r.needsLook && !r.off).length,
   };
 }
 
-/** The words of the summary line under the header, in order; a part not known yet is left out. */
-export interface SummaryWords { online: string; off: string | null; sessions: string | null; spend: string | null }
+/** The words of the summary line under the header, in order; a part not known yet, or none, is left out. */
+export interface SummaryWords {
+  hosts: string;
+  online: string;
+  down: string | null;
+  off: string | null;
+  found: string | null;
+  sessions: string | null;
+  spend: string | null;
+}
 
 export function summaryWords(s: ListSummary): SummaryWords {
   return {
-    online: `${s.online} of ${s.total} online`,
+    hosts: `${s.hosts} ${s.hosts === 1 ? 'host' : 'hosts'}`,
+    online: `${s.online} online`,
+    down: s.down ? `${s.down} not connected` : null,
     off: s.off ? `${s.off} off` : null,
+    found: s.found ? `${s.found} found in ~/.ssh/config` : null,
     sessions: s.sessions === null ? null : `${s.sessions} ${s.sessions === 1 ? 'session' : 'sessions'} open`,
     spend: s.spendUsd === null ? null : `${usd(s.spendUsd)} in 30 days`,
   };
@@ -120,6 +152,70 @@ export function connectAction(failed: boolean, busy: boolean, via: 'ssh' | 'net'
   const retry = via === 'ssh' ? 'Retry SSH' : 'Retry';
   const label = failed ? (busy ? 'Retrying...' : retry) : busy ? 'Connecting...' : 'Connect now';
   return { label, reserve: failed ? [retry, 'Retrying...'] : ['Connect now', 'Connecting...'] };
+}
+
+/** A hostname as typed: "sam@build7.example.com:2222" names the host, its user and its port. */
+export interface HostInput { host: string; user?: string; port?: number }
+
+const DNS_LABEL = /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/i;
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const IPV6 = /^[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}$/i;
+const USER = /^[a-z0-9._-]+$/i;
+
+/**
+ * What a Hostname field holds, or why it is no host (2026-11-05 review: "not a host!!" saved as
+ * a host named not-a-host, with a green Saved). A name (letters, digits, dots, dashes; ssh
+ * config names may hold "_"), an IPv4 or IPv6 address, each with an optional "user@" before it
+ * and ":port" after it (an IPv6 address takes a port only in brackets: [::1]:2222).
+ */
+export function parseHostInput(text: string): { ok: true; value: HostInput } | { ok: false; problem: string } {
+  const t = text.trim();
+  if (!t) return { ok: false, problem: 'Type the host Walnut reaches with ssh, like build7.example.com.' };
+  if (/\s/.test(t)) return { ok: false, problem: 'A hostname has no spaces. Type one like build7.example.com.' };
+  let rest = t;
+  let user: string | undefined;
+  const at = rest.lastIndexOf('@');
+  if (at >= 0) {
+    user = rest.slice(0, at);
+    rest = rest.slice(at + 1);
+    if (!user || !USER.test(user)) return { ok: false, problem: 'The part before "@" is the user: letters, digits, dots, dashes only.' };
+  }
+  let port: number | undefined;
+  let portText: string | undefined;
+  const bracket = /^\[([^\]]*)\](?::(\d*))?$/.exec(rest);
+  if (bracket) {
+    rest = bracket[1];
+    portText = bracket[2];
+    if (!IPV6.test(rest)) return { ok: false, problem: 'Brackets hold an IPv6 address, like [2001:db8::1].' };
+  } else if ((rest.match(/:/g) ?? []).length === 1) {
+    const colon = rest.indexOf(':');
+    portText = rest.slice(colon + 1);
+    rest = rest.slice(0, colon);
+  }
+  if (portText !== undefined) {
+    port = /^\d{1,5}$/.test(portText) ? Number(portText) : NaN;
+    if (!(port >= 1 && port <= 65535)) return { ok: false, problem: 'The part after ":" is the port: a number from 1 to 65535.' };
+  }
+  const host = rest.replace(/\.$/, '');
+  if (!host) return { ok: false, problem: 'Type the host after the "@", like sam@build7.example.com.' };
+  const v4 = IPV4.exec(host);
+  const valid = v4 ? v4.slice(1).every((n) => Number(n) <= 255)
+    : host.includes(':') ? IPV6.test(host)
+      : host.length <= 253 && host.split('.').every((label) => DNS_LABEL.test(label));
+  if (!valid) {
+    const bad = [...host].find((c) => !/[a-z0-9._:-]/i.test(c));
+    return { ok: false, problem: bad
+      ? `A hostname holds letters, digits, dots and dashes only ("${bad}" is not one). Type one like build7.example.com.`
+      : 'That is no hostname: each part between dots starts and ends with a letter or digit, like build7.example.com.' };
+  }
+  return { ok: true, value: { host, ...(user ? { user } : {}), ...(port !== undefined ? { port } : {}) } };
+}
+
+/** Why a Hostname field is no host, or null (an empty field is not refused here: its row says what it waits for). */
+export function hostnameProblem(text: string): string | null {
+  if (!text.trim()) return null;
+  const r = parseHostInput(text);
+  return r.ok ? null : r.problem;
 }
 
 const PLACEHOLDERS = ['buildbox', 'workstation', 'gpu-server', 'lab-pc', 'server-2'];

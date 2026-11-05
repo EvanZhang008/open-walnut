@@ -127,9 +127,9 @@ export function FleetVitals({ host, now, system }: { host: FleetHost; now: numbe
   );
 }
 
-/** Every problem its reading shows, beyond the one the row names (`skip`). */
+/** Every problem its reading shows, beyond the one the row names (`skip`); a long job's fit is a fact (FleetFacts). */
 export function FleetProblems({ host, now, skip }: { host: FleetHost; now: number; skip?: string | null }) {
-  const list = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale') && p.key !== skip);
+  const list = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale') && p.key !== skip && p.key !== 'long-running');
   if (!list.length) return null;
   return (
     <ul className="hf-problem-list" data-testid="host-fleet-problems">
@@ -140,23 +140,38 @@ export function FleetProblems({ host, now, skip }: { host: FleetHost; now: numbe
   );
 }
 
-/** The facts table, and whether it fits a long job (when that adds to what the problems say). */
-export function FleetFacts({ host, now }: { host: FleetHost; now: number }) {
+/**
+ * The facts table, its last row whether it fits a long job, each said once (2026-11-05 review:
+ * "Not for jobs that must keep running" showed as a problem and again under the table). `omit`:
+ * facts said elsewhere (a host not connected says its connection in its failure, once). `fit`:
+ * false for a host Walnut cannot reach, which fits nothing.
+ */
+export function FleetFacts({ host, now, omit = [], fit: judge = true }: { host: FleetHost; now: number; omit?: string[]; fit?: boolean }) {
   const fit = host.placement.longRunning;
-  // The reboot reason is already a problem line; the fit says only what it alone says.
+  // The reboot reason is already a problem line; the fit says only what it alone says, and never
+  // "starts again after a reboot" beside that line (a reading older than the fit's).
+  const rebootGap = !host.local && !!host.daemon && !host.daemon.startsAfterReboot;
+  const ok = fit.ok && !rebootGap;
   const reasons = fit.reasons.filter((r) => !/does not start by itself after a reboot/.test(r));
-  const fitText = fit.ok ? 'Fits a job that must keep running.' : reasons.length ? `Not for a job that must keep running: ${reasons.join(' ')}` : null;
+  const fitText = !judge ? null : ok ? 'Good fit: it stays up, and Walnut starts again after a reboot' : reasons.length ? `Not a good fit: ${reasons.join(' ')}` : null;
+  const rows = fleetRows(host, now).filter((r) => !omit.includes(r.key));
+  if (!rows.length && !fitText) return null;
   return (
     <div className="hf-details" data-testid="host-fleet-details">
       <dl className="hf-rows">
-        {fleetRows(host, now).map((r) => (
+        {rows.map((r) => (
           <div className="hf-row" key={r.key} data-row={r.key} data-tone={r.tone}>
             <dt>{r.label}</dt>
             <dd title={r.title}>{r.value}</dd>
           </div>
         ))}
+        {fitText && (
+          <div className="hf-row" data-row="fit" data-tone={ok ? undefined : 'muted'}>
+            <dt>Long jobs</dt>
+            <dd className="hf-fit" data-ok={ok ? 'true' : 'false'} data-testid="host-fleet-fit">{withCode(fitText)}</dd>
+          </div>
+        )}
       </dl>
-      {fitText && <p className="hf-fit" data-ok={fit.ok ? 'true' : 'false'} data-testid="host-fleet-fit">{withCode(fitText)}</p>}
     </div>
   );
 }

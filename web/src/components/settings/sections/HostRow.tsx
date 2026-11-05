@@ -15,12 +15,13 @@
  * Each row says what it shows to the list's store (`report`, host-list-store.ts): the summary
  * line, the count and the network map read it from there.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { isValidElement, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { focusLanded } from '@/utils/focus-landed';
 import { RemoveConfirmRow } from './RemoveConfirmRow';
+import { useMenuButton } from './useMenuButton';
 import { useRowReport } from './host-list-store';
 import { useHostSettingsLook } from './host-settings-data';
 import type { RowReport } from './host-row-model';
@@ -102,15 +103,22 @@ const stranded = (within: HTMLElement | null) => {
 export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, primary, menu, onRemove, removeNote, panel, off, needsLook, report, unsaved, data }: Props) {
   const moreRef = useRef<HTMLButtonElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number; keys: boolean } | null>(null);
+  // The More menu's one owner (useMenuButton.ts): a second press closes it, a close gives the
+  // focus back to More with its ring, and no late focus move closes a menu opened since.
+  const moreMenu = useMenuButton(() => moreRef.current, (el) => focusLanded(el));
+  const menuAt = moreMenu.menu;
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
   const backToMore = () => requestAnimationFrame(() => { if (fell()) focusLanded(moreRef.current); });
   // Its own settings (Walnut on it, a secret's copy) count with the rest: one count on the page.
-  const settingsLook = useHostSettingsLook(report?.counted ? (report.local ? '__local__' : alias) : undefined);
-  const look = (!!needsLook || !!settingsLook) && !!report?.counted;
+  // A host turned off needs no look: it was turned off on purpose (2026-11-05 review).
+  const settingsLook = useHostSettingsLook(report?.counted && !off ? (report.local ? '__local__' : alias) : undefined);
+  const look = (!!needsLook || !!settingsLook) && !!report?.counted && !off;
   useRowReport(report ? { ...report, key: rowKey, name, needsLook: look } : null);
-  const shownLines = settingsLook ? [...(lines ?? []), <RowLine key="settings-look" tone="warn" testId="rh-row-settings-look">{settingsLook}</RowLine>] : lines;
+  // Every row the count counts says what to look at, in one line: its own warning, else what its
+  // settings need (2026-11-05 review: four status lines stacked on one row).
+  const warned = (lines ?? []).some((l) => isValidElement<{ tone?: string }>(l) && (l.props.tone === 'warn' || l.props.tone === 'bad'));
+  const shownLines = settingsLook && !warned ? [...(lines ?? []), <RowLine key="settings-look" tone="warn" testId="rh-row-settings-look">{settingsLook}</RowLine>] : lines;
 
   // A primary action that went away or turned busy while it held the focus (Connect on a host
   // that came up, Retry becoming Retrying...): the focus moves to More, the row's one control
@@ -163,7 +171,7 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
             {sub}
             {tag}
             {unsaved && <SettingsTag tone="warning" title="Walnut keeps it on this page until it saves">Not saved</SettingsTag>}
-            {look && <span className="rh-look-tag" data-testid="rh-look-tag">Needs a look</span>}
+            {look && <span className="rh-look-tag" data-testid="rh-look-tag" title={settingsLook && warned ? `Also: ${settingsLook}` : undefined}>Needs a look</span>}
           </span>
         }
         help={<span className="rh-row-state" data-testid="rh-row-state">{state}</span>}
@@ -200,19 +208,10 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
                 data-testid="rh-row-more"
                 // WebKit focuses no button on a press: the focus (and its ring) would stay on the row
                 // the map landed on while this row's menu opens.
-                onPointerDown={(e) => { e.currentTarget.focus({ preventScroll: true }); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowDown' && !menuAt) {
-                    e.preventDefault();
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setMenuAt({ x: r.left, y: r.bottom + 4, keys: true });
-                  }
-                }}
-                onClick={(e) => {
-                  const r = e.currentTarget.getBoundingClientRect();
-                  // A click the keyboard made (Enter, Space) has no pointer: its first item is highlighted.
-                  setMenuAt(menuAt ? null : { x: r.left, y: r.bottom + 4, keys: e.detail === 0 });
-                }}
+                // The press also keeps the button if the row moves before the release (useMenuButton).
+                onPointerDown={(e) => { e.currentTarget.focus({ preventScroll: true }); moreMenu.buttonProps.onPointerDown(e); }}
+                onKeyDown={moreMenu.buttonProps.onKeyDown}
+                onClick={moreMenu.buttonProps.onClick}
               >
                 <MoreGlyph />
               </button>
@@ -232,7 +231,7 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
           className="rh-add-menu rh-row-menu"
           returnFocus={moreRef.current}
           highlightFirst={menuAt.keys}
-          onClose={() => { setMenuAt(null); backToMore(); }}
+          onClose={moreMenu.close}
           items={items}
         />
       )}

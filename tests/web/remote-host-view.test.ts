@@ -151,30 +151,51 @@ describe('test server and replica (C24, C25)', () => {
 
 // Mounted after the replica test: useIsCloudReplica keeps the first answer it read.
 describe('what a finished fix did', () => {
-  it('reads on the row, and goes away when its 15 minutes run out, with no new push', async () => {
+  // 2026-11-05 review: a finished install stayed on the row as a fourth status line for 15
+  // minutes. The row says it for ROW_FIX_NOTE_MS (the receipt); Details keep it the 15 minutes.
+  it('reads on the row for its receipt time, then goes away with no new push; an old one is not drawn', async () => {
     const { FIX_NOTE_MS } = await import('../../web/src/utils/host-readiness')
+    const { ROW_FIX_NOTE_MS } = await import('../../web/src/components/settings/sections/useLinkedHostRow')
     const dom = parseHTML('<!DOCTYPE html><html><head></head><body></body></html>')
     const g = globalThis as unknown as Record<string, unknown>
     g.window = dom.window; g.document = dom.document; g.IS_REACT_ACT_ENVIRONMENT = true
     vi.useFakeTimers()
-    current = {
+    const withFix = (ageMs: number) => ({
       ...base, connected: true, phase: 'connected',
       readiness: {
         checkedAt: clock, problems: [], dtach: { found: true },
-        fixes: [{ action: 'install-compiler', ok: true, finishedAt: 1, ageMs: FIX_NOTE_MS - 60_000, text: 'Installed gcc' }],
+        fixes: [{ action: 'install-compiler', ok: true, finishedAt: 1, ageMs, text: 'Installed gcc' }],
       },
-    } as unknown as HostStatus
+    } as unknown as HostStatus)
+    current = withFix(1_000)
     const host = dom.document.createElement('div')
     dom.document.body.appendChild(host)
     const root = createRoot(host)
     try {
       await act(async () => { root.render(createElement(Line)) })
       expect(host.querySelector('[data-testid="rh-row-fix-note"]')?.textContent).toBe('Installed gcc.')
-      await act(async () => { vi.advanceTimersByTime(61_000) })
+      await act(async () => { vi.advanceTimersByTime(ROW_FIX_NOTE_MS) })
       expect(host.querySelector('[data-testid="rh-row-fix-note"]')).toBeNull()
-    } finally {
       await act(async () => { root.unmount() })
+      current = withFix(FIX_NOTE_MS - 60_000)
+      const again = createRoot(host)
+      await act(async () => { again.render(createElement(Line)) })
+      expect(host.querySelector('[data-testid="rh-row-fix-note"]')).toBeNull()
+      await act(async () => { again.unmount() })
+    } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// 2026-11-05 review: a failed Turn on or Connect now said only "Could not retry right now.", for a
+// Retry nobody pressed. The line says what was pressed, why it failed, and what tries again.
+describe('connectFailedLine: why a dial failed, in the words of the button pressed', () => {
+  it('names the press, the reason and the next step', async () => {
+    const { connectFailedLine } = await import('../../web/src/components/settings/sections/useLinkedHostRow')
+    expect(connectFailedLine('turn-on', 'Walnut has it turned off here', 'Retry SSH')).toBe('Turned on, but Walnut could not connect: Walnut has it turned off here. Retry SSH tries again.')
+    expect(connectFailedLine('add', 'ssh: Could not resolve hostname x', 'Connect now')).toBe('Added, but Walnut could not connect: ssh: Could not resolve hostname x. Connect now tries again.')
+    expect(connectFailedLine('connect', 'Home PC refused the sign-in', 'Retry SSH')).toBe('Could not connect: Home PC refused the sign-in. Retry SSH tries again.')
+    expect(connectFailedLine('connect', null, null)).toBe('Could not connect: Walnut gave no reason.')
   })
 })

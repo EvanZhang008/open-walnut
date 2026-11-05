@@ -138,8 +138,21 @@ export class PaneRoutes {
   secrets: Record<string, unknown>[] = [{ name: 'github-read', description: 'GitHub, read only', hosts: ['devbox'], env: 'GH_TOKEN', sessions: true, version: 1, createdAt: Date.now() - DAY, updatedAt: Date.now() - DAY, copies: { devbox: { version: 1, at: Date.now() - DAY } } }]
   readonly profiles = new Map<string, Record<string, unknown>>()
   private gates = new Map<string, { promise: Promise<void>; release: () => void }>()
+  /** Armed by holdEcho: the next config save hands it to the read that follows it. */
+  private echoHeld: Promise<void> | null = null
+  private echoGate: Promise<void> | null = null
 
   constructor(private readonly page: Page) {}
+
+  /**
+   * The read of config that follows the next config save waits until the returned release: the
+   * save's echo comes back late (a loaded machine), after the person typed the next value.
+   */
+  holdEcho(): () => void {
+    let release!: () => void
+    this.echoHeld = new Promise<void>((r) => { release = r })
+    return release
+  }
 
   /** The next request through gate `name` waits until the returned release is called. */
   gate(name: string): () => void {
@@ -169,26 +182,36 @@ export class PaneRoutes {
     return this.calls.filter((c) => c.method === method && (typeof path === 'string' ? c.path === path : path.test(c.path)))
   }
 
-  /** Waits for the n-th (1-based) call matching, and answers it. */
+  /** The WebKit page crashed (it answers nothing more, and sends nothing). */
+  crashed = false
+
+  /** Waits for the n-th (1-based) call matching, and answers it; a crashed page says so at once. */
   async nth(method: string, path: string | RegExp, n: number): Promise<Call> {
-    await expect.poll(() => this.callsTo(method, path).length, { message: `${method} ${String(path)} #${n}`, timeout: 15_000 }).toBeGreaterThanOrEqual(n)
+    await expect.poll(() => (this.crashed ? 'crashed' : this.callsTo(method, path).length >= n ? 'sent' : 'waiting'), { message: `${method} ${String(path)} #${n}`, timeout: 15_000 }).toMatch(/^(sent|crashed)$/)
+    if (this.crashed) throw new Error(`${method} ${String(path)} #${n} was never sent: the page crashed first (Linux WebKit)`)
     return this.callsTo(method, path)[n - 1]
   }
 
   async install(): Promise<void> {
     const page = this.page
+    // A crashed page answers nothing: every wait below would read as "the press did nothing".
+    page.on('crash', () => { this.crashed = true; console.error(`[pane-routes] the page crashed at ${new Date().toISOString()}`) })
     await page.route('**/api/stt/status', (route) => route.fulfill({ json: { engine: null, available: false } }))
     // Typed drafts (the Add limit row) stay in this page: the fixture server is shared by every spec.
     await page.route((url) => url.pathname.startsWith('/api/drafts'), (route) => route.fulfill({ json: route.request().method() === 'GET' ? { drafts: {} } : { ok: true } }))
     await page.route((url) => url.pathname === '/api/config', async (route) => {
       if (route.request().method() === 'PUT') {
         const call = this.record(route)
+        if (this.echoHeld) { this.echoGate = this.echoHeld; this.echoHeld = null }
         await this.pass('config-put')
         const body = call.body as { hosts?: Record<string, Record<string, unknown>>; session_limits?: Record<string, number> }
         if (body.hosts) this.hosts = body.hosts
         if (body.session_limits) this.limits = body.session_limits
         return route.fulfill({ json: { ok: true } })
       }
+      const echo = this.echoGate
+      this.echoGate = null
+      if (echo) await echo
       const res = await route.fetch()
       const body = await res.json() as { config: Record<string, unknown> }
       const real = (body.config.hosts ?? {}) as Record<string, unknown>
@@ -460,7 +483,8 @@ export async function openFixturePane(page: Page, request: APIRequestContext): P
 export async function openPane(page: Page): Promise<void> {
   await openRemoteHosts(page)
   await expect(page.locator('#rh-host-devbox')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('rh-summary-online')).toHaveText('2 of 4 online', { timeout: 20_000 })
+  await expect(page.getByTestId('rh-summary-hosts')).toHaveText('6 hosts', { timeout: 20_000 })
+  await expect(page.getByTestId('rh-summary-online')).toHaveText('2 online')
   await expect(page.getByTestId('rh-summary-off')).toHaveText('1 off')
   await expect(page.locator('[data-host-alias="gpu-box"]')).toBeVisible({ timeout: 20_000 })
   for (const id of ['remote-hosts-list', 'replica-removals-host', 'remote-hosts-more']) {
@@ -468,20 +492,23 @@ export async function openPane(page: Page): Promise<void> {
   }
 }
 
-/** The More settings groups (what belongs to the whole page), each folded to one line until opened. */
+/**
+ * The More settings groups (what belongs to the whole page). Plain groups inside the one More
+ * settings fold, with no fold of their own (2026-11-05 review: a fold that opened two more folds,
+ * drawn as cards beside it).
+ */
 export const MORE_GROUPS = ['host-network-relay', 'fleet-secrets']
 
-/** Opens More settings (closed by default) and waits for its groups' lines. */
+/** Opens More settings (closed by default) and waits for its groups. */
 export async function openMore(page: Page): Promise<void> {
   await openRemoteHostsMore(page)
-  for (const id of MORE_GROUPS) await expect(page.getByTestId(`${id}-toggle`)).toBeVisible({ timeout: 20_000 })
+  for (const id of MORE_GROUPS) await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
 }
 
-/** Opens one More settings group (its line is a toggle). */
+/** A More settings group is open once More settings is: it has no toggle of its own (kept for older callers). */
 export async function openGroup(page: Page, id: string): Promise<void> {
-  const toggle = page.getByTestId(`${id}-toggle`)
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByTestId(`${id}-toggle`)).toHaveCount(0)
+  await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
 }
 
 /** A row of the list by its alias (`net:`/`fleet:` rows too). */

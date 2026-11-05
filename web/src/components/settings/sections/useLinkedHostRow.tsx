@@ -20,11 +20,11 @@ import {
 } from '@open-walnut/host-problem';
 import type { FleetHost } from '@/api/hosts-fleet';
 import { serverNow, useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
-import { useHostActions, RETRY_FAILED_TEXT } from '@/hooks/useHostActions';
+import { useHostActions } from '@/hooks/useHostActions';
 import { useServerTick } from '@/hooks/useServerTick';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { formatElapsed, hostStatusText } from '@/utils/host-connect';
-import { hostReadinessProblems } from '@/utils/host-readiness';
+import { FIX_NOTE_MS, hostReadinessProblems } from '@/utils/host-readiness';
 import { useFixNotes } from '@/hooks/useFixNotes';
 import { getHostDismissed, hostHiddenFromBanner, restoreHost, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
@@ -47,6 +47,17 @@ export function rowProblemKey(card: FleetHost, now: number, status: ReturnType<t
 /** A host that came up within this long of a press here says so, for CONNECTED_NOTE_MS. */
 const CONNECT_WATCH_MS = 60_000;
 const CONNECTED_NOTE_MS = 8_000;
+/** How long a finished fix's result stays on the row (Details keep it longer). */
+export const ROW_FIX_NOTE_MS = 20_000;
+
+/**
+ * The words a failed connect request gets on its row: what the press was, why it failed, and the
+ * one next step (2026-11-05 review: "Could not retry right now." after a Turn on).
+ */
+export function connectFailedLine(as: 'turn-on' | 'add' | 'connect', reason: string | null, next: string | null): string {
+  const lead = as === 'turn-on' ? 'Turned on, but Walnut could not connect' : as === 'add' ? 'Added, but Walnut could not connect' : 'Could not connect';
+  return `${lead}: ${reason ?? 'Walnut gave no reason'}.${next ? ` ${next} tries again.` : ''}`;
+}
 
 export interface LinkedRowInput {
   alias: string;
@@ -64,6 +75,8 @@ export interface LinkedRowInput {
   connecting?: boolean;
   /** When this page last asked it to connect outside the Retry button (a found host's Connect). */
   pressedAt?: number;
+  /** The last Turn on or Add and connect, and when: the words of a failure that follows it. */
+  askedAs?: { as: 'turn-on' | 'add'; at: number };
 }
 
 export interface LinkedRow {
@@ -80,7 +93,7 @@ export interface LinkedRow {
   showOnBanner: () => void;
 }
 
-export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot, onBootStart, via = 'ssh', connecting: asked = false, pressedAt }: LinkedRowInput): LinkedRow {
+export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot, onBootStart, via = 'ssh', connecting: asked = false, pressedAt, askedAs }: LinkedRowInput): LinkedRow {
   const status = useHostStatus(alias);
   const hydration = useHostStatusHydration();
   const actions = useHostActions(alias);
@@ -115,8 +128,24 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
   const verb = blocking && !replica ? autofixVerbFor(blocking, status?.readiness?.claude?.installMethod) : null;
   const claudeFix = !!actions.fixing && (actions.fixing.asked || isClaudeFixAction(actions.fixing.action));
   const fixRunning = !!blocking && (blocking.fix?.state === 'running' || claudeFix);
-  // What a finished fix did, until its note runs out (on its own, with no new push).
-  const notes = useFixNotes(status).filter((n) => n.kind !== 'running');
+  // What a finished fix did, on the row for ROW_FIX_NOTE_MS (Details keep it longer).
+  const notes = useFixNotes(status).filter((n) => n.kind !== 'running' && FIX_NOTE_MS - (n.expiresInMs ?? FIX_NOTE_MS) < ROW_FIX_NOTE_MS);
+  const [, rowNoteTick] = useState(0);
+  const youngest = notes.reduce<number | null>((min, n) => {
+    const left = ROW_FIX_NOTE_MS - (FIX_NOTE_MS - (n.expiresInMs ?? FIX_NOTE_MS));
+    return min === null ? left : Math.min(min, left);
+  }, null);
+  useEffect(() => {
+    if (youngest === null) return;
+    const t = window.setTimeout(() => rowNoteTick((n) => n + 1), Math.max(0, youngest) + 50);
+    return () => window.clearTimeout(t);
+  }, [youngest]);
+  // A Claude Code fix that just finished: its result replaces the progress line, the warning it
+  // fixed and its button until the next reading (2026-11-05 review: "Installing..." and
+  // "Installed Claude Code 2.1.281." showed at once, under a button still reading Installing...).
+  const justFixed = notes.find((n) => n.kind === 'done' && isClaudeFixAction(n.key.replace(/^done-/, '')));
+  // The row's own Connect now / Retry, for the words of a failure (a Turn on and an Add have theirs).
+  const [pressed, setPressed] = useState(0);
 
   const lines: ReactNode[] = [];
   let state: string;
@@ -125,7 +154,7 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
   let dot = hostDotOf(status, { hydrating, now: serverNow(), label });
   const connect = (failed: boolean, kind: 'retry' | 'connectNow') => {
     const a = connectAction(failed, busy, via);
-    return { label: a.label, reserve: a.reserve, disabled: busy, testId: 'rh-row-connect', ariaLabel: `${a.label.replace(/\.\.\.$/, '')}: ${label}`, onClick: () => { void (kind === 'retry' ? actions.retry() : actions.connectNow()); } };
+    return { label: a.label, reserve: a.reserve, disabled: busy, testId: 'rh-row-connect', ariaLabel: `${a.label.replace(/\.\.\.$/, '')}: ${label}`, onClick: () => { setPressed(Date.now()); void (kind === 'retry' ? actions.retry() : actions.connectNow()); } };
   };
 
   if (!enabled) {
@@ -136,8 +165,10 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     state = 'Not saved yet.';
     if (!status) dot = { kind: 'unknown', title: `${label}: Not saved yet` };
   } else if (!status) {
-    state = asked ? `Connecting to ${label}...` : hydrating ? 'Checking...' : 'Not connected';
-    if (!hydrating || asked) primary = connect(false, 'connectNow');
+    // A dial this page started reads as one until it answers, also before the host's first
+    // status frame (2026-11-05 review: a new host read "Not connected" beside "Connecting...").
+    state = busy ? `Connecting to ${label}...` : hydrating ? 'Checking...' : 'Not connected';
+    if (!hydrating || busy) primary = connect(false, 'connectNow');
   } else if (problem?.type === 'off') {
     state = OFF_PHASE_LABEL;
     stateTitle = 'This test server never dials remote hosts. Start it with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to test one.';
@@ -156,11 +187,13 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     // Green: connected. What it still needs is the warning line under it.
     if (dot.kind === 'warn') dot = { kind: 'connected', title: `${label}: Connected` };
     const fleetProblem = card ? problemsOf(card, now).find((p) => p.tone === 'warn' || p.tone === 'bad') : undefined;
-    if (fixRunning && verb) {
+    // The fix's result, then the next thing the host needs (its Set up), never the fixed warning.
+    if (justFixed) lines.push(<Line key="fixed" tone="good" testId="rh-row-fix-note">{`${justFixed.text}.`}</Line>);
+    if (fixRunning && verb && !justFixed) {
       const own = actions.fixing && isClaudeFixAction(actions.fixing.action) ? actions.fixing.verb : verb;
       lines.push(<Line key="fix" tone="note" testId="rh-row-fixing">{autofixProgressText(own, label, actions.fixing?.startedAt ?? status.readiness?.fixing?.startedAt, tick).text}</Line>);
       primary = { label: verb === 'install' ? 'Installing...' : 'Updating...', disabled: true, reserve: ['Install', 'Installing...', 'Try again'], onClick: () => {}, testId: `rh-readiness-fix-${blocking!.kind}` };
-    } else if (blocking) {
+    } else if (blocking && !justFixed) {
       lines.push(<Line key="ready" tone="warn" testId="rh-row-warning">{firstSentence(blocking.message)}</Line>);
       if (verb) {
         const failedFix = blocking.fix?.state === 'failed';
@@ -190,17 +223,35 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
   }
   if (replica && primary?.testId === 'rh-row-connect') primary = null;
 
-  if (justUp && status?.connected) lines.push(<Line key="up" tone="good" testId="host-fleet-action-note">Connected.</Line>);
-  if (actions.failed === 'retry') lines.push(<Line key="rf" tone="bad" testId="host-fleet-action-error">{RETRY_FAILED_TEXT}</Line>);
-  if (actions.receipt) lines.push(<Line key="rc" tone="note">{actions.receipt}</Line>);
-  for (const n of notes) {
-    lines.push(<Line key={n.key} tone={n.kind === 'failed' ? 'bad' : 'note'} testId="rh-row-fix-note">{`${n.text}.`}</Line>);
+  // At most one line says what a press did, newest kind first: the failure, the result, a receipt.
+  if (!enabled) {
+    // A host turned off says only that (2026-11-05 review: an Off row kept an old Set up note).
+  } else if (justUp && status?.connected) lines.push(<Line key="up" tone="good" testId="host-fleet-action-note">Connected.</Line>);
+  else if (actions.failed === 'retry') {
+    const as = askedAs && askedAs.at > pressed ? askedAs.as : 'connect';
+    lines.push(<Line key="rf" tone="bad" testId="host-fleet-action-error">{connectFailedLine(as, actions.failedReason, primary?.testId === 'rh-row-connect' ? primary.label : null)}</Line>);
+  } else if (boot?.error) lines.push(<Line key="be" tone="bad" testId="host-fleet-action-error">{boot.error}</Line>);
+  else if (boot?.note) lines.push(<Line key="bn" tone="note" testId="host-fleet-action-note">{boot.note}</Line>);
+  else if (actions.receipt) lines.push(<Line key="rc" tone="note">{actions.receipt}</Line>);
+  else {
+    const failedFix = notes.find((n) => n.kind === 'failed');
+    if (failedFix) lines.push(<Line key={failedFix.key} tone="bad" testId="rh-row-fix-note">{`${failedFix.text}.`}</Line>);
+    else if (!justFixed) for (const n of notes.slice(0, 1)) lines.push(<Line key={n.key} tone="note" testId="rh-row-fix-note">{`${n.text}.`}</Line>);
   }
-  if (boot?.note) lines.push(<Line key="bn" tone="note" testId="host-fleet-action-note">{boot.note}</Line>);
-  if (boot?.error) lines.push(<Line key="be" tone="bad" testId="host-fleet-action-error">{boot.error}</Line>);
-  if (hidden) lines.push(<Line key="hidden" tone="note" testId="rh-banner-hidden">You hid this problem on the home page.</Line>);
+  // The home page's banner leaves this host out: said once, with the way back beside it.
+  if (hidden) {
+    lines.push(
+      <Line key="hidden" tone="note" testId="rh-banner-hidden">
+        Hidden from the home page.{' '}
+        <button type="button" className="rh-inline-link rh-show-again-btn" data-testid="rh-show-again" onClick={() => restoreHost(alias)}>Show it there again</button>
+      </Line>,
+    );
+  }
 
-  const look = enabled && saved && (card ? cardNeedsLook(card, now) : !status?.connected) || !!blocking;
+  // Not while it connects, and never before anyone tried it (2026-11-05 review: a new host read
+  // "Needs a look" and counted before the person had tried anything).
+  const trying = busy || connecting || (asked && !status?.connected);
+  const look = !trying && (enabled && saved && (card ? cardNeedsLook(card, now) : !status?.connected) || (!!blocking && !justFixed));
   return {
     dot: <HostStatusDot dot={dot} host={alias} />,
     online: enabled && saved && !!status?.connected,

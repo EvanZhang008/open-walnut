@@ -203,3 +203,18 @@ export function normalizeLimits(raw: Record<string, string | number>): Record<st
   for (const [k, v] of Object.entries(raw)) out[k] = typeof v === 'number' ? v : parseInt(v, 10) || 0;
   return out;
 }
+
+/**
+ * Whether a config read puts its session limits in the boxes (useSshHostEditor). Not the echo of
+ * a save this page sent, not a read that says what the last one said, and never while a value is
+ * typed and not saved yet: that value saves a moment later and wins (2026-11-05: the echo of one
+ * save came back after the next value was typed, put the old value back in the box, and the typed
+ * one never saved). Each argument is a normalizeLimits fingerprint; `sent` lists the saves not
+ * seen back yet, oldest first, and the answer's `sent` drops the echo and every save before it.
+ */
+export function limitsRead(read: { incoming: string; seen: string | null; shown: string; sent: readonly string[] }): { take: boolean; sent: string[] } {
+  const echo = read.sent.indexOf(read.incoming);
+  const sent = echo >= 0 ? read.sent.slice(echo + 1) : [...read.sent];
+  if (read.seen === null) return { take: true, sent };
+  return { take: echo < 0 && read.incoming !== read.seen && read.shown === read.seen, sent };
+}

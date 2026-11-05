@@ -142,17 +142,25 @@ export function HostProfileDisclosure({ hp, alias, name }: { hp: HostProfileStat
 
   // The kind picker closes on a press outside it or Escape; Escape and a pick give focus back
   // to the Kind button (it fell to the page).
+  // At once, while the list still holds the focus (2026-11-05 review: once, WebKit left it on the
+  // page), and again a frame later for a focus that fell meanwhile.
   const backToKind = useCallback(() => {
+    const kind = kindBtn.current?.querySelector('button');
+    focusLanded(kind);
     setPicker(null);
-    requestAnimationFrame(() => focusLanded(kindBtn.current?.querySelector('button')));
+    requestAnimationFrame(() => {
+      const a = document.activeElement;
+      if (!a || a === document.body || !a.isConnected) focusLanded(kindBtn.current?.querySelector('button'));
+    });
   }, []);
   useEffect(() => {
     if (!picker) return;
     const close = (e: Event) => { if (!(e.target as HTMLElement | null)?.closest?.('.task-kebab-project-flyout')) setPicker(null); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') backToKind(); };
+    // Escape here is the list's own: it does not also close the Details around it.
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); backToKind(); } };
     document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey); };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey, true); };
   }, [picker, backToKind]);
   // A pick disables the button while it saves (a disabled button takes no focus), so the
   // focus comes back once the save rendered, unless the person moved it since.
@@ -182,7 +190,6 @@ export function HostProfileDisclosure({ hp, alias, name }: { hp: HostProfileStat
 
   return (
     <>
-      <p className="rh-details-heading" data-testid={`host-profile-heading-${alias}`}>What Walnut knows</p>
       <div className="settings-disclosure-content" data-testid={`host-profile-${alias}`}>
           {error && <SettingsRow indent label="Could not read this host" help={error} />}
           {!profile && !error && <SettingsRow indent label="Reading..." />}

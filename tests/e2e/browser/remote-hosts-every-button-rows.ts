@@ -6,7 +6,7 @@
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type Page } from '@playwright/test'
-import { fixtureCounters } from './host-problems-fixture-helpers'
+import { fixtureCounters, openHostParts } from './host-problems-fixture-helpers'
 import { expectFocusKept, pick, row } from './remote-hosts-every-button-helpers'
 import { expectRing, type StepCtx } from './remote-hosts-every-button-steps'
 import { checkAlphaThisHost } from './remote-hosts-every-button-host'
@@ -34,6 +34,17 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   const details = page.locator('[data-testid="rh-details"][data-host="devbox"]')
   await expect(details).toBeVisible()
   expect((await routes.nth('POST', '/api/v1/hosts/refresh', reads + 1)).body).toEqual({ hosts: ['devbox'] })
+  // Its parts: Status open, This host and What Walnut knows folded until opened (this one's
+  // summary says its kind while folded).
+  const knows = details.getByTestId('rh-details-part-knows')
+  if ((await knows.getAttribute('aria-expanded')) !== 'true') await expect(knows).toContainText('Kind: Dev box (automatic)')
+  await openHostParts(details)
+  ran('Hosts/button#rh-details-part-knows')
+  // Whether it fits a long job is said once, as the facts' last row (2026-11-05 review: twice).
+  expect(await details.getByTestId('host-fleet-fit').count()).toBeLessThanOrEqual(1)
+  expect(await details.evaluate((el) => (el.textContent!.match(/must keep running/g) ?? []).length)).toBeLessThanOrEqual(1)
+  // The helper's row in plain words (the review: "Walnut helper Version 0123456789ab").
+  await expect(details.locator('[data-row="daemon"] dt')).toHaveText('Session helper')
   await expect(details.getByTestId('host-fleet-card')).toBeVisible()
   // The read it started is the summary's one Refreshing...; Details say how old what they show is.
   await expect(details.getByTestId('host-fleet-read-age')).toHaveText(/^Read /)
@@ -130,11 +141,18 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   expect((await asked).postDataJSON()).toEqual({ agents: true })
   await expect(alpha.getByTestId('rh-row-fixing')).toContainText('Installing Claude Code on Alpha box')
   await expect(alpha.getByTestId('rh-row-fix-note')).toContainText('Installed Claude Code', { timeout: 20_000 })
+  // The result replaces the progress line and the button at once (2026-11-05 review: both showed,
+  // under a button still reading Installing...), and the row stacks no settings line on top.
+  await expect(alpha.getByTestId('rh-row-fixing')).toHaveCount(0)
+  await expect(alpha.getByTestId('rh-readiness-fix-claude_missing')).toHaveCount(0)
+  await expect(alpha.getByTestId('rh-row-settings-look')).toHaveCount(0)
+  expect(await alpha.locator('.rh-row-line').count()).toBeLessThanOrEqual(2)
   await expect(details.locator('.rh-readiness-ready')).toHaveCount(0)
   // Said once on the page: the row's line, never again in its open Details.
   await expect(alpha.getByTestId('rh-row-fix-note')).toHaveCount(1)
   await expect(details).not.toContainText('Installed Claude Code')
-  for (const line of await alpha.locator('.rh-row-line').allTextContents()) expect(line).toMatch(/[.:)]$|^Connected/)
+  // Every note is a sentence (a warning is a headline: "Walnut won't restart on ... after it reboots").
+  for (const line of await alpha.locator('.rh-row-line:not([data-tone="warn"])').allTextContents()) expect(line).toMatch(/[.:)]$|^Connected/)
   await expect(install).toHaveCount(0)
   await expectFocusKept(page)
   ran('Hosts/button#rh-readiness-fix-claude_missing')
@@ -152,6 +170,9 @@ export async function checkAlphaRow(ctx: StepCtx): Promise<void> {
   expect(routes.callsTo('POST', '/api/v1/hosts/devbox/boot-start')).toHaveLength(1)
   await expectFocusKept(page)
   ran('Hosts/button#host-fleet-fix')
+
+  // The receipt goes: the row's note lasts its few seconds (Details keep what the fix did).
+  await expect(alpha.getByTestId('rh-row-fix-note')).toHaveCount(0, { timeout: 30_000 })
 
   await pick(page, alpha, 'Hide details')
   await expect(details).toHaveCount(0)

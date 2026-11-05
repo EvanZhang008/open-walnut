@@ -20,6 +20,17 @@ show inline after the open ones, other completed hits that show the query fold i
 
 ## Invariants you must not break (even without reading the skill)
 
+- **A press keeps its control** (`components/settings/inputs/press-keeps-target.ts`). The browser
+  clicks only what is under both the press and the release; a Settings row that changes height
+  between them (a receipt's few seconds running out) moves the control from under a still
+  pointer and the click is lost (2026-11-05: Remote Hosts' Revoke sent nothing in WebKit).
+  `SettingsButton`, `ToggleSwitch` and `useMenuButton` call `keepPress` on pointerdown: a release
+  where the press went down is that control's click. A raw `<button>` in a pane whose rows change
+  height on their own calls it too. A page that moves on its own (a landing that redirects once
+  its reads answer) waits while a press on it is down, and only moves a location nobody changed
+  meanwhile (`components/settings/sections/PhonesCloudLanding.tsx`; 2026-11-05: a tab pressed
+  as the answer came in did nothing). WebKit ends a dragged link with `dragstart`/`dragend` and
+  no `pointerup`.
 - **Streaming blocks are APPEND-ONLY.** No event handler deletes blocks. Absorption is a
   render-time filter (`web/src/stream/render-filter.ts`), never a mutation. A missed match may
   render a block twice briefly; it must never vanish.
