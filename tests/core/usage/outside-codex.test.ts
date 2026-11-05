@@ -21,6 +21,20 @@ const M = 1_000_000;
 
 let dir: string, home: string, store: ResponseUsageStore;
 
+/**
+ * One run per page whatever the machine's speed. A page's budget is measured on Date.now, and a
+ * fast machine reads these small files in under a millisecond, so a tiny budget alone let a page
+ * read every run (2026-11-05, the push gate on GitHub's runners: no resume point was left). Each
+ * read of the clock during the scan moves it on by one millisecond, so the page stops after its
+ * first run.
+ */
+async function scanOnePerPage(p: Parameters<OutsideReader['readCodexOutside']>[0]) {
+  const real = Date.now;
+  let t = real();
+  Date.now = () => (t += 1);
+  try { return await scanCodexOutside({ ...p, codexHome: home, budgetMs: 0.0001 }); } finally { Date.now = real; }
+}
+
 function meta(id: string, over: Record<string, unknown> = {}) {
   return { timestamp: '2026-11-04T10:00:00.000Z', type: 'session_meta', payload: { id, cwd: '/work/marina/src', originator: 'codex_exec', model_provider: 'amazon-bedrock', ...over } };
 }
@@ -134,7 +148,7 @@ describe('codex runs outside Walnut', () => {
   it('follows pages until the daemon says it is done', async () => {
     for (let i = 1; i <= 4; i++) rollout(`p${i}`, [meta(`p${i}`), ctx, count(100, 1 * M, 0, 0, `2026-11-0${i}T18:00:00.000Z`)], `2026-11-0${i}`);
     const pages: unknown[] = [];
-    const tiny: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => { pages.push(p); return scanCodexOutside({ ...p, codexHome: home, budgetMs: 0.0001 }); } });
+    const tiny: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => { pages.push(p); return scanOnePerPage(p); } });
     const result = await collect({ reader: tiny });
     expect(result.runs).toBe(4);
     expect(pages.length).toBeGreaterThan(1);
@@ -227,7 +241,7 @@ describe('days a bill covers and files a pass could not read', () => {
     for (let i = 1; i <= 3; i++) rollout(`r${i}`, [meta(`r${i}`), ctx, count(100, 1 * M, 0, 0, `2026-11-0${i}T18:00:00.000Z`)], `2026-11-0${i}`);
     let page = 0;
     const flaky: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => {
-      const scan = await scanCodexOutside({ ...p, codexHome: home, budgetMs: 0.0001 });
+      const scan = await scanOnePerPage(p);
       return page++ === 0 ? { ...scan, failed: ['rollout-old.jsonl'] } : scan; // the first page could not read one file
     } });
     await collect({ reader: flaky, passBudgetMs: 0 });
@@ -293,7 +307,7 @@ describe('a pass cut short by its time budget', () => {
     const asked: { cursor?: string; since?: string }[] = [];
     const slow: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => {
       asked.push({ cursor: p.cursor, since: p.since });
-      return scanCodexOutside({ ...p, codexHome: home, budgetMs: 0.0001 }); // one run per page
+      return scanOnePerPage(p); // one run per page
     } });
     // A pass budget of zero stops after the first page; each collection moves on.
     for (let pass = 0; pass < 8 && store.rollup.outsideScan('__local__').at === ''; pass++) {
@@ -310,7 +324,7 @@ describe('a pass cut short by its time budget', () => {
 
   it('starts over when the price bands changed while a pass was half done', async () => {
     for (let i = 1; i <= 3; i++) rollout(`r${i}`, [meta(`r${i}`), ctx, count(100, 1 * M, 0, 0, `2026-11-0${i}T18:00:00.000Z`)], `2026-11-0${i}`);
-    const slow: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => scanCodexOutside({ ...p, codexHome: home, budgetMs: 0.0001 }) });
+    const slow: (h: string) => OutsideReader = () => ({ readCodexOutside: async (p) => scanOnePerPage(p) });
     await collect({ reader: slow, passBudgetMs: 0 });
     expect(store.rollup.outsideResume('__local__')).toBeDefined();
     store.rollup.setThresholds([...priceThresholds(), 123_456]);
