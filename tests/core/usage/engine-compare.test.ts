@@ -393,6 +393,61 @@ describe('round-9 counting', () => {
     expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 1, notStarted: 1, errored: 1, timedDone: 1 });
   });
 
+  it('a Claude Code session that errored mid-work and then ran turns is finished work, before any usage or summary arrives', () => {
+    // Claude Code writes no contextTokens; its prompt cache facts or a turn end in its moves show a turn ran.
+    const byCache = task({ id: 'cc-cache', phase: 'COMPLETE', session_ids: ['s-cache'], completed_at: '2026-11-03T01:00:00.000Z' });
+    const byMoves = task({ id: 'cc-moves', phase: 'COMPLETE', session_ids: ['s-moves'], completed_at: '2026-11-03T01:00:00.000Z' });
+    const inp = input([byCache, byMoves], {});
+    (inp.sessions as Map<string, object>).set('s-cache', { engine: 'claude', startedAt: '2026-11-03T00:00:00.000Z', process_status: 'error', errorCount: 1,
+      promptCache: { requestAt: '2026-11-03T00:40:00.000Z' } });
+    (inp.sessions as Map<string, object>).set('s-moves', { engine: 'claude', startedAt: '2026-11-03T00:00:00.000Z', errorCount: 1, status_history: [
+      { process_status: 'idle', reason: 'turn_completed', timestamp: '2026-11-03T00:50:00.000Z' },
+      { process_status: 'error', reason: 'api_error', timestamp: '2026-11-03T00:10:00.000Z' }] });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks.map((x) => [x.taskId, x.done, !!x.notStarted])).toEqual([['cc-cache', true, false], ['cc-moves', true, false]]);
+    expect(out.rows[0]).toMatchObject({ done: 2, notStarted: 0 });
+  });
+
+  it('a Claude Code CLI that died before its first reply, closed in October, resumed under the same id and finished in November, counts in November', () => {
+    // The retry resumes the record the dead spawn left (newest move first, as session-tracker keeps them).
+    const t = task({ id: 'resumed', phase: 'COMPLETE', session_ids: ['s-one'], reopens: 1,
+      first_completed_at: '2026-10-10T00:05:00.000Z', completed_at: '2026-11-03T01:00:00.000Z' });
+    const inp = input([t], { resumed: { costUsd: 3 } }, { range: { start: '2026-11-01', end: '2026-11-30' } });
+    (inp.sessions as Map<string, object>).set('s-one', { engine: 'claude', startedAt: '2026-10-10T00:00:00.000Z', errorCount: 1,
+      promptCache: { requestAt: '2026-11-03T00:49:00.000Z' }, status_history: [
+        { process_status: 'stopped', reason: 'normal_completion', timestamp: '2026-11-03T01:00:00.000Z' },
+        { process_status: 'idle', reason: 'turn_completed', timestamp: '2026-11-03T00:50:00.000Z' },
+        { process_status: 'running', reason: 'message_sent', timestamp: '2026-11-03T00:00:00.000Z' },
+        { process_status: 'error', reason: 'process_exited_no_result', timestamp: '2026-10-10T00:01:00.000Z' },
+        { process_status: 'running', reason: 'session_started', timestamp: '2026-10-10T00:00:00.000Z' }] });
+    const out = aggregateEngineCompare(inp);
+    expect(out.taskCount).toBe(1);
+    expect(out.tasks[0]).toMatchObject({ done: true, hours: 1, reopens: 0 });
+  });
+
+  it('a session that ran a turn before its first close keeps that close, and the reopen counts', () => {
+    const t = task({ id: 'real-reopen', phase: 'COMPLETE', session_ids: ['s-r'], reopens: 1,
+      first_completed_at: '2026-11-02T01:00:00.000Z', completed_at: '2026-11-03T01:00:00.000Z' });
+    const inp = input([t], { 'real-reopen': { costUsd: 3 } });
+    (inp.sessions as Map<string, object>).set('s-r', { engine: 'claude', startedAt: '2026-11-02T00:00:00.000Z', errorCount: 1, status_history: [
+      { process_status: 'idle', reason: 'turn_completed', timestamp: '2026-11-03T00:50:00.000Z' },
+      { process_status: 'idle', reason: 'turn_completed', timestamp: '2026-11-02T00:50:00.000Z' },
+      { process_status: 'error', reason: 'api_error', timestamp: '2026-11-02T00:10:00.000Z' }] });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks[0]).toMatchObject({ done: true, hours: 1, reopens: 1 });
+  });
+
+  it('lists open tasks newest started first, after the finished ones', () => {
+    const older = task({ id: 'open-old', phase: 'IN_PROGRESS', session_ids: ['s-old'] });
+    const newer = task({ id: 'open-new', phase: 'IN_PROGRESS', session_ids: ['s-new'] });
+    const fin = task({ id: 'fin', phase: 'COMPLETE', session_ids: ['s-fin'], completed_at: '2026-11-02T05:00:00.000Z' });
+    const inp = input([older, newer, fin], {});
+    (inp.sessions as Map<string, object>).set('s-old', { engine: 'claude', startedAt: '2026-11-02T01:00:00.000Z', summary: 'x' });
+    (inp.sessions as Map<string, object>).set('s-new', { engine: 'claude', startedAt: '2026-11-02T03:00:00.000Z', summary: 'x' });
+    (inp.sessions as Map<string, object>).set('s-fin', { engine: 'claude', startedAt: '2026-11-02T00:00:00.000Z', summary: 'x' });
+    expect(aggregateEngineCompare(inp).tasks.map((x) => x.taskId)).toEqual(['fin', 'open-new', 'open-old']);
+  });
+
   it('a failed start kept as history, closed in October, retried and finished in November, counts in November', () => {
     // The failed start's empty session (2026-10-10) stays in legacy_session_ids; the work ran in November.
     const t = task({ id: 'retry', phase: 'COMPLETE', session_ids: ['s-work'], legacy_session_ids: ['s-empty'], reopens: 1, start_failures: 1,

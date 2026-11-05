@@ -187,6 +187,27 @@ describe('the engine split', () => {
     expect(r.body.tasks[0]).toMatchObject({ taskId: placeholder.id, notStarted: true })
   }, 90_000)
 
+  it('a CLI that died before its first reply, closed, reopened and then really worked, is finished work with no reopen', async () => {
+    const placeholder = await op('task_create', { title: 'Dies, then works', project: 'Revived', record_only: true })
+    daemon.setCliCommand(path.resolve(import.meta.dirname, '../helpers/cli-dies-before-reply.mjs'))
+    try {
+      await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
+      await expect.poll(async () => (await getSessionsForTask(placeholder.id))[0]?.process_status, { timeout: 30_000 }).toBe('error')
+    } finally { daemon.setCliCommand(MOCK_CLI) }
+    expect((await api('PATCH', `/api/tasks/${placeholder.id}`, { phase: 'COMPLETE' })).status).toBe(200)
+    expect((await api('PATCH', `/api/tasks/${placeholder.id}`, { phase: 'IN_PROGRESS' })).status).toBe(200)
+    await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Try again', expectReply: false })
+    // The retried run ends a real turn (Claude Code records it in its status moves and prompt cache facts).
+    await expect.poll(async () => (await getSessionsForTask(placeholder.id)).some((s) =>
+      !!s.promptCache?.requestAt || !!s.status_history?.some((h) => h.reason === 'turn_completed')), { timeout: 30_000 }).toBe(true)
+    expect((await api('PATCH', `/api/tasks/${placeholder.id}`, { phase: 'COMPLETE' })).status).toBe(200)
+    const r = await api('GET', '/api/usage/engines?project=Revived')
+    expect(r.body.rows).toHaveLength(1)
+    expect(r.body.rows[0]).toMatchObject({ done: 1, notStarted: 0, reopens: 0 })
+    expect(r.body.tasks[0]).toMatchObject({ taskId: placeholder.id, done: true, reopens: 0 })
+    expect(r.body.tasks[0].notStarted).toBeFalsy()
+  }, 120_000)
+
   it('counts a reopen of a completed task and compares the work on GET /api/usage/engines', async () => {
     const done = await op('task_create', { title: 'Finish and reopen', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
     expect((await api('PATCH', `/api/tasks/${done.id}`, { phase: 'COMPLETE' })).status).toBe(200)

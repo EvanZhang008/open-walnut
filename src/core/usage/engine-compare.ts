@@ -155,8 +155,9 @@ export interface CompareInput {
   tasks: readonly Task[];
   /** By session id: what Walnut's record says. */
   sessions: ReadonlyMap<string, { engine?: SessionEngine; startedAt?: string; model?: string; cliModel?: string; acpModel?: string;
-    process_status?: string; status_history?: { process_status?: string }[]; errorCount?: number;
-    contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number }>;
+    process_status?: string; status_history?: { process_status?: string; reason?: string; timestamp?: string }[]; errorCount?: number;
+    contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number;
+    promptCache?: { requestAt?: string } }>;
   spend: ReadonlyMap<string, TaskSpend>;
   followUps: (taskId: string) => number;
   range: { start?: string; end?: string };
@@ -179,12 +180,36 @@ function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
   return `${builderLabel({ engine: b.engine })} · ${fam}${b.model ? ` (${b.model})` : ''}`;
 }
 
-/** A session that ran at least one turn: it holds context, a summary, a compaction or a reply. */
-function sessionRanTurn(s: CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R | undefined : never): boolean {
+type SessionFacts = CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R : never;
+
+/** The session record's own ring of status moves keeps this many, newest first (session-tracker.ts). */
+const STATUS_HISTORY_KEPT = 10;
+
+/**
+ * A session that ran at least one turn: a main-loop request (Claude Code's prompt cache facts, written at
+ * every turn), a turn end in its status moves, context (an ACP engine's), a summary or a compaction.
+ */
+function sessionRanTurn(s: SessionFacts | undefined): boolean {
   if (!s) return false;
-  const r = s as { contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number };
   // Not messageCount: Claude Code counts a spawn that got its pid, before any turn ran.
-  return r.contextTokens != null || !!r.lastCompactUuid || !!r.summary;
+  return s.contextTokens != null || !!s.lastCompactUuid || !!s.summary || !!s.promptCache?.requestAt
+    || !!s.status_history?.some((h) => h.reason === 'turn_completed');
+}
+
+/**
+ * When a session's work began, for a task first closed at `firstClose`. A Claude Code session whose CLI
+ * died before its first reply keeps its record, and a retry resumes that same id: when its kept moves
+ * reach back to its spawn and show only an error before that close (no turn end, no request), the
+ * work began with its first move after the close. Otherwise its start.
+ */
+function workStartOf(s: SessionFacts, firstClose: string | undefined): string | undefined {
+  const at = s.startedAt;
+  const moves = s.status_history;
+  if (!at || !firstClose || firstClose <= at || !moves || moves.length >= STATUS_HISTORY_KEPT) return at;
+  if (s.promptCache?.requestAt && s.promptCache.requestAt <= firstClose) return at;
+  const before = moves.filter((m) => !!m.timestamp && m.timestamp <= firstClose);
+  if (!before.some((m) => m.process_status === 'error') || before.some((m) => m.reason === 'turn_completed')) return at;
+  return moves.map((m) => m.timestamp).filter((ts): ts is string => !!ts && ts > firstClose).sort()[0] ?? at;
 }
 
 function median(xs: number[]): number | null {
@@ -212,8 +237,8 @@ function sessionsOf(t: Task): string[] {
 }
 
 /**
- * When the task's work began: the earliest start among its sessions that ran a turn, so a failed
- * start's empty session (kept in legacy_session_ids after a retry) never dates or times the work;
+ * When the task's work began: the earliest work start among its sessions that ran a turn, so a failed
+ * start's empty session (kept in legacy_session_ids after a retry, or resumed by it) never dates or times the work;
  * with no session showing a turn (an older record, an engine that reports none), the earliest of all.
  */
 function firstStart(t: Task, sessions: CompareInput['sessions']): string | undefined {
@@ -222,9 +247,10 @@ function firstStart(t: Task, sessions: CompareInput['sessions']): string | undef
   for (const id of sessionsOf(t)) {
     const s = sessions.get(id);
     const at = s?.startedAt;
-    if (!at) continue;
+    if (!s || !at) continue;
     if (!first || at < first) first = at;
-    if (sessionRanTurn(s) && (!firstRan || at < firstRan)) firstRan = at;
+    const workAt = sessionRanTurn(s) ? workStartOf(s, t.first_completed_at) : undefined;
+    if (workAt && (!firstRan || workAt < firstRan)) firstRan = workAt;
   }
   return firstRan ?? first;
 }
@@ -247,7 +273,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   }
   // A column: `key` names it; `familyKey` is the engine + model family it belongs to (the All view's columns).
   type Group = { key: string; familyKey: string; engine: string; family: ModelFamily; label: string };
-  type Candidate = EngineCompareTask & { finishedAt: string; byCost: Group; byPick: Group | null; everDone: boolean; notStarted: boolean };
+  type Candidate = EngineCompareTask & { byCost: Group; byPick: Group | null; everDone: boolean; notStarted: boolean; sortAt: string };
   const entryLabel = new Map(splitBuilders(input.config).map((b) => [b.key, entryLabelOf(b)]));
   const candidates: Candidate[] = [];
   for (const t of input.tasks) {
@@ -314,7 +340,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - (closedUnrun ? 1 : 0)), errored, split: !!t.engine_pick,
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
-      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!firstDone), notStarted, finishedAt: done ? t.completed_at! : '',
+      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!firstDone), notStarted, sortAt: done ? t.completed_at! : startedAt,
     });
   }
   const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: entryLabelOf(b), weight: b.weight }));
@@ -365,10 +391,11 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   }
   rows.sort((a, b) => b.done - a.done || b.open - a.open || a.label.localeCompare(b.label));
   const tasks = [...picked]
-    // Finished first (newest first), then open, then the ones that never started.
-    .sort((a, b) => Number(b.done) - Number(a.done) || Number(a.notStarted) - Number(b.notStarted) || b.finishedAt.localeCompare(a.finishedAt))
+    // Finished first, then open, then the ones that never started; newest first in each part
+    // (finished by when they finished, the others by when they started).
+    .sort((a, b) => Number(b.done) - Number(a.done) || Number(a.notStarted) - Number(b.notStarted) || b.sortAt.localeCompare(a.sortAt))
     .slice(0, TASKS_MAX)
-    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, ...t }) => t);
+    .map(({ sortAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, ...t }) => t);
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,
     projects: [...projects].sort((a, b) => b[1] - a[1]).map(([project, n]) => ({ project, tasks: n })),
