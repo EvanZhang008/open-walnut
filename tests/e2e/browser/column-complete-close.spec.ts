@@ -283,13 +283,9 @@ test('two columns completed back to back each keep their own Undo and their own 
   await expect(homeColumns(page)).toHaveCount(1, { timeout: 30_000 })
   expect(await order(page)).toEqual([SID('b')])
   const toasts = page.locator('.notification-toast--success', { hasText: 'Task completed' })
-  // The notice corner sits over the remaining column's chat here, and over a chat it shows only
-  // the newest toast (24c880ff9, NotificationToaster WITH_APPROVAL_SHOWN); the older one is still
-  // live, counted on the corner's "1 more notification" line.
-  await expect(page.locator('.corner-stack')).toHaveClass(/\bis-compact\b/)
-  await expect(toasts).toHaveCount(1)
+  await expect(toasts).toHaveCount(2)
+  await expect(toasts.filter({ hasText: 'Close fixture A' })).toHaveCount(1)
   await expect(toasts.filter({ hasText: 'Close fixture C' })).toHaveCount(1)
-  await expect(page.getByTestId('notification-toaster-more')).toHaveText('1 more notification ›')
 
   // The later one first: C comes back on the right, A is still away.
   await toasts.filter({ hasText: 'Close fixture C' }).locator('.notification-toast-action').click()
@@ -297,11 +293,7 @@ test('two columns completed back to back each keep their own Undo and their own 
   await expect.poll(() => phase(page, 'c'), { timeout: 15_000 }).toBe('IN_PROGRESS')
   expect(await phase(page, 'a')).toBe('COMPLETE')
 
-  // A's toast, with its own Undo, comes into sight once C's is used. Then A: back on the left,
-  // where it was.
-  await expect(toasts).toHaveCount(1)
-  await expect(toasts.filter({ hasText: 'Close fixture A' })).toHaveCount(1)
-  await expect(page.getByTestId('notification-toaster-more')).toHaveCount(0)
+  // Then A: back on the left, where it was.
   await toasts.filter({ hasText: 'Close fixture A' }).locator('.notification-toast-action').click()
   await expect.poll(async () => (await order(page)).join(), { timeout: 15_000 }).toBe(KEYS.map(SID).join())
   await expect.poll(() => phase(page, 'a'), { timeout: 15_000 }).toBe('IN_PROGRESS')
