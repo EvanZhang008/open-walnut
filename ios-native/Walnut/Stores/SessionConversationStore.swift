@@ -135,6 +135,9 @@ final class SessionConversationStore {
     /// the page has not seen where it began (the next snapshot finds it).
     private struct TurnMark: Equatable { var floorID: String?; var accounted: Int }
     @ObservationIgnored private var turnMark: TurnMark?
+    /// Follows the replay that comes right after a snapshot of a turn in flight (`SessionReplayTwin`).
+    @ObservationIgnored private var replayTwin: SessionReplayTwin?
+    @ObservationIgnored private var replayHoldTask: Task<Void, Never>?
     /// A snapshot is setting `streaming`: it says nothing about where the turn began.
     @ObservationIgnored private var seeding = false
 
@@ -197,7 +200,7 @@ final class SessionConversationStore {
     /// already coalesced (8Hz flush); these two flags were the leak.
     private func setStreaming(_ value: Bool) {
         if value, !streaming, !seeding { markTurnStart() }
-        if !value { turnMark = nil; clearStopRequest() }
+        if !value { turnMark = nil; endReplayTwin(release: false); clearStopRequest() }
         if streaming != value { streaming = value }
     }
 
@@ -1940,6 +1943,15 @@ final class SessionConversationStore {
                 applySeed(Self.computeSeed(snap))
             }
         case "turn-start":
+            if var twin = replayTwin {
+                if twin.untouched, !twin.turnStartSeen, clock.now() <= twin.until {
+                    // The snapshot's turn once more: its text is placed already.
+                    twin.noteTurnStart()
+                    replayTwin = twin
+                    break
+                }
+                endReplayTwin()
+            }
             awaitingFirstTurn = false // the real turn takes over the indicator
             setStreaming(true)
             markTurnStart()
@@ -1952,7 +1964,7 @@ final class SessionConversationStore {
         case "text-delta":
             if let p = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
                 setStreaming(true)
-                appendDelta(p.delta)
+                appendReplayAware(p.delta)
             }
         case "status":
             if let p = try? JSONDecoder().decode(StatusPayload.self, from: data) {
@@ -2147,6 +2159,10 @@ final class SessionConversationStore {
         clearLiveThinking()
         liveText = seededLiveText(seed)
         liveTextTruncated = seed.liveTextTruncated
+        endReplayTwin(release: false)
+        replayTwin = streaming && !seed.liveTextTruncated
+            ? SessionReplayTwin(snapshotText: seed.liveText, until: clock.now() + SessionReplayTwin.window)
+            : nil
         setActivity(seed.activityName)
         FreezeContext.shared.setLiveText(chars: liveText.utf8.count, truncated: liveTextTruncated)
         FreezeContext.shared.note("snapshot-seeded", liveText.utf8.count)
@@ -2258,6 +2274,51 @@ final class SessionConversationStore {
         scheduleLiveFlush()
     }
 
+    /// A streamed delta. Right after a snapshot the stream says the end of its turn once more
+    /// (`SessionReplayTwin`): those words are kept back until they are known to be the snapshot's own,
+    /// and dropped; anything else goes on the live region as it always did.
+    private func appendReplayAware(_ delta: String) {
+        guard var twin = replayTwin else { return appendDelta(delta) }
+        if twin.untouched, clock.now() > twin.until {
+            replayTwin = nil
+            return appendDelta(delta)
+        }
+        let first = twin.untouched
+        switch twin.take(delta) {
+        case .held:
+            replayTwin = twin
+            if first { armReplayHold() }
+        case .finished(let rest):
+            endReplayTwin(release: false)
+            if !rest.isEmpty { appendDelta(rest) }
+        case .differs(let release):
+            endReplayTwin(release: false)
+            for words in release { appendDelta(words) }
+        }
+    }
+
+    /// The replay is not going to end where the snapshot does: what was kept back is new text.
+    private func endReplayTwin(release: Bool = true) {
+        replayHoldTask?.cancel()
+        replayHoldTask = nil
+        guard var twin = replayTwin else { return }
+        replayTwin = nil
+        if release { for words in twin.release() { appendDelta(words) } }
+    }
+
+    /// What is kept back waits a little for the replay to run to its end; a stream that goes quiet in
+    /// between gets its words shown.
+    private func armReplayHold() {
+        replayHoldTask?.cancel()
+        let clock = self.clock
+        replayHoldTask = Task { [weak self] in
+            try? await clock.sleep(seconds: SessionReplayTwin.holdSpan)
+            guard !Task.isCancelled, let self, self.isActive else { return }
+            self.replayHoldTask = nil
+            self.endReplayTwin()
+        }
+    }
+
     /// One coalescing timer for BOTH live buffers (reply text and reasoning):
     /// they arrive interleaved from the same stream, and two timers would just
     /// double the invalidation rate of the same views.
@@ -2366,6 +2427,7 @@ final class SessionConversationStore {
 
     private func finalizeTurnTracked() {
         awaitingFirstTurn = false // covers a turn-end with no observed turn-start
+        endReplayTwin() // words kept back in case they were a replay are the turn's own now
         flushPendingDelta() // `finished` below must include the delta tail
         flushLiveThinking() // …and the reasoning row must show its last delta
         deltaFlushTask?.cancel()

@@ -163,9 +163,12 @@ enum TimelineTurnShape {
         m.kind == .notification && m.source == "interrupt"
     }
 
-    /// A call the person stopped: its result is the CLI's abort line, which is what they asked for.
+    /// A call the person stopped: its result is the CLI's abort line, or the line it writes for a call the
+    /// person turned down (a Stop during a command leaves that one). Either is what they asked for.
     static func isInterruptedCall(_ m: ChatMessage) -> Bool {
-        m.kind == .tool && (m.resultPreview ?? "").drop(while: \.isWhitespace).hasPrefix("[Request interrupted by user")
+        guard m.kind == .tool else { return false }
+        let result = (m.resultPreview ?? "").drop(while: \.isWhitespace)
+        return result.hasPrefix("[Request interrupted by user") || result.hasPrefix("The user doesn't want to proceed with this tool use")
     }
 
     /// A failed step the reader must be able to see: a tool error, an error card. A call the

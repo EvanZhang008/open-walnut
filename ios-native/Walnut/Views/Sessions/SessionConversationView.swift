@@ -100,6 +100,7 @@ struct SessionConversationView: View {
         let queue = SessionQueueModel(sessionId: sessionId)
         queue.onWithdrawn = { [weak store] id in store?.queuedMessageWithdrawn(id) }
         queue.onEdited = { [weak store] id, text in store?.queuedMessageEdited(id, text: text) }
+        queue.onRowsLeft = { [weak store] in store?.requestTranscriptRefresh() }
         store.onInterruptAccepted = { [weak queue] id in queue?.hideWhileGoingOut(id) }
         return queue
     }

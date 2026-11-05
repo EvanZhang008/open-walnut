@@ -135,7 +135,7 @@ final class SessionStopSteerUITests: XCTestCase {
         element(app, "chat.send").tap()
         let strip = element(app, "session.queue.strip")
         XCTAssertTrue(strip.waitForExistence(timeout: 20), "the queued message is not listed")
-        XCTAssertTrue(element(app, "session.queue.headline").label.contains("Waiting to go in"),
+        XCTAssertTrue(element(app, "session.queue.headline").label.contains("Sends after this turn"),
                       "the strip says when it goes out")
         XCTAssertFalse(element(app, "chat.queuedBadge").exists, "the message is listed once: no second copy in the conversation")
         XCTAssertTrue(text(app, containing: "Skip the slow shards").exists, "the strip shows the words")
@@ -344,6 +344,34 @@ final class SessionStopSteerUITests: XCTestCase {
         attach(app, "15-both-back")
     }
 
+    func testTheFullListHasACrossToWithdrawAndOffersUndo() throws {
+        let app = openLongSession()
+        let rows = elements(app, beginningWith: "session.queue.row.")
+        for (index, words) in ["Alpha waiting words", "Bravo waiting words", "Charlie waiting words"].enumerated() {
+            type(words, in: app)
+            element(app, "chat.send").tap()
+            let deadline = Date().addingTimeInterval(25)
+            while rows.count < min(index + 1, 2) && Date() < deadline { usleep(200_000) }
+            sleep(2)
+        }
+        element(app, "session.queue.showAll").tap()
+        let cross = elements(app, beginningWith: "session.queue.list.withdraw.")
+        XCTAssertTrue(cross.firstMatch.waitForExistence(timeout: 10), "the list rows have no cross")
+        XCTAssertEqual(cross.count, 3)
+        attach(app, "16-list-with-crosses")
+        cross.element(boundBy: 1).tap()
+        // The strip behind the sheet offers its own Undo: the one that can be tapped is the list's.
+        let undos = app.buttons.matching(NSPredicate(format: "label == 'Undo'"))
+        XCTAssertTrue(undos.firstMatch.waitForExistence(timeout: 10), "no way to take it back")
+        guard let undo = undos.allElementsBoundByIndex.first(where: { $0.isHittable }) else {
+            return XCTFail("no Undo the finger can reach")
+        }
+        XCTAssertFalse(text(app, containing: "Bravo waiting words").exists, "the withdrawn message is still listed")
+        attach(app, "17-after-the-cross")
+        undo.tap()
+        XCTAssertTrue(text(app, containing: "Bravo waiting words").waitForExistence(timeout: 30), "Undo did not bring it back")
+    }
+
     // MARK: - Stop with a message waiting
 
     func testStopSetsTheWaitingMessageAsideAndSendPutsItBack() throws {
@@ -448,7 +476,7 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(element(app, "chat.stop").waitForExistence(timeout: 5), "the turn was stopped anyway")
         XCTAssertEqual(element(app, "chat.stop").label, "Stop")
         XCTAssertTrue(row.exists, "the waiting message went away")
-        XCTAssertTrue(element(app, "session.queue.headline").label.contains("Waiting to go in"))
+        XCTAssertTrue(element(app, "session.queue.headline").label.contains("Sends after this turn"))
     }
 
     // MARK: - Interrupt & send

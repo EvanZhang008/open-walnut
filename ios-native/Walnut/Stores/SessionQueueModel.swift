@@ -34,6 +34,9 @@ final class SessionQueueModel {
     @ObservationIgnored var onWithdrawn: ((String) -> Void)?
     /// The queue row with this id now holds these words (server confirmed).
     @ObservationIgnored var onEdited: ((String, String) -> Void)?
+    /// A row left the line without the person taking it off: it went out, so the turn it started has its
+    /// message in the transcript now, and the page should read it.
+    @ObservationIgnored var onRowsLeft: (() -> Void)?
 
     /// Rows move under the finger when one goes or comes back: a row action right behind another
     /// one (the second tap of a double tap, Undo then a cross) would land on a different row.
@@ -103,8 +106,10 @@ final class SessionQueueModel {
             guard started == generation, !restoring else { return }
             let next = withKeptTimes(fetched.filter { !isHidden($0.id) })
             failures = 0
+            let left = loaded && rows.contains { row in !next.contains { $0.id == row.id } }
             if next != rows { rows = next }
             loaded = true
+            if left { onRowsLeft?() }
         } catch {
             if let e = error as? APIError, e.isCancelled { return }
             failures += 1
@@ -379,7 +384,7 @@ extension Array where Element == SessionQueuedMessage {
     func headline(turnRunning: Bool) -> String {
         if contains(where: { $0.status == "processing" }) { return "Going out now" }
         if contains(where: { $0.status == "pending" }) {
-            return turnRunning ? "Waiting to go in" : "Going out now"
+            return turnRunning ? "Sends after this turn" : "Going out now"
         }
         if contains(where: { $0.status == "parked" }) { return turnRunning ? "Not sent" : "Stopped \u{00B7} not sent" }
         if contains(where: { $0.status == "held" }) { return "Waiting for your Mac" }

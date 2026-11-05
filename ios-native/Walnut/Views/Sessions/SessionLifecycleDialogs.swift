@@ -37,7 +37,7 @@ struct SessionLifecycleDialogs: ViewModifier {
                 Button("Cancel", role: .cancel) {}
                     .accessibilityIdentifier("session.terminate.cancel")
             } message: {
-                Text("Its process stops now. The task and the conversation stay.")
+                Text("This ends the session itself, not just the turn it is on. The task and the conversation stay, and a new message starts it again. To only stop what the agent is doing right now, use Stop instead.")
             }
             .alert("Session owns scheduled routines", isPresented: Binding(
                 get: { forceTerminateMessage != nil },

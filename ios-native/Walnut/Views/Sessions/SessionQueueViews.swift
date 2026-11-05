@@ -351,6 +351,12 @@ struct SessionQueuedMessageSheet: View {
     /// Sending it now while a turn runs stops that turn: asked first, because the sheet's other
     /// buttons sit right beside it and a stop cannot be taken back.
     @State private var askInterrupt = false
+    /// The words as the sheet opened with them: what the person has changed is measured against these, also
+    /// after the row has left the queue.
+    @State private var original = ""
+    /// The row went out while the person had unsaved changes: their words are kept on screen until they
+    /// choose what to do with them.
+    @State private var strandedWords: String?
     @FocusState private var focused: Bool
 
     private var row: SessionQueuedMessage? { queue.rows.first { $0.id == rowID } }
@@ -406,6 +412,7 @@ struct SessionQueuedMessageSheet: View {
                         if row.canWithdraw {
                             Button(role: .destructive) {
                                 Task {
+                                    saving = true
                                     await queue.withdraw(row)
                                     dismiss()
                                 }
@@ -421,6 +428,8 @@ struct SessionQueuedMessageSheet: View {
                         }
                     }
                     Spacer(minLength: 0)
+                } else if let words = strandedWords {
+                    strandedView(words)
                 } else {
                     ContentUnavailableView(
                         "No longer queued", systemImage: "checkmark.circle",
@@ -434,7 +443,7 @@ struct SessionQueuedMessageSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
-                        if changed { askDiscard = true } else { dismiss() }
+                        if changed || strandedWords != nil { askDiscard = true } else { dismiss() }
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -448,7 +457,7 @@ struct SessionQueuedMessageSheet: View {
             }
         }
         .presentationBackground(Color(.systemBackground))
-        .interactiveDismissDisabled(changed)
+        .interactiveDismissDisabled(changed || strandedWords != nil)
         .alert("Interrupt the agent?", isPresented: $askInterrupt) {
             Button("Keep waiting", role: .cancel) {}
             Button("Interrupt & send", role: .destructive) {
@@ -458,25 +467,79 @@ struct SessionQueuedMessageSheet: View {
             Text("It stops what it is doing right now, and this message goes in as its next turn.")
         }
         .alert("Discard your changes?", isPresented: $askDiscard) {
-            Button("Keep editing", role: .cancel) {}
-            Button("Discard changes", role: .destructive) { dismiss() }
+            Button(strandedWords == nil ? "Keep editing" : "Keep my words", role: .cancel) {}
+            Button(strandedWords == nil ? "Discard changes" : "Discard them", role: .destructive) { dismiss() }
         } message: {
-            Text("Your changes to this message have not been saved yet.")
+            Text(strandedWords == nil ? "Your changes to this message have not been saved yet."
+                                      : "The message already went out; these words would be lost.")
         }
         .onAppear {
             if !seeded, let row {
                 text = row.message
+                original = row.message
                 seeded = true
                 queue.notice = nil
             }
         }
-        // The row left the queue while the sheet was open (it went out): say so, briefly.
+        // The row left the queue while the sheet was open (it went out): say so, briefly. Words the person
+        // changed and had not saved stay on screen: the message went out as it was, and these are theirs.
         .onChange(of: row == nil) { _, gone in
             guard gone, seeded, !saving else { return }
+            if let words = Self.strandedWords(text: text, original: original) {
+                strandedWords = words
+                return
+            }
             Task {
                 try? await Task.sleep(for: .seconds(1.2))
                 dismiss()
             }
+        }
+    }
+
+    /// The person's words when the message left the line with changes in the box that were never saved;
+    /// nil when there is nothing of theirs to keep (nothing typed, or the box still holds the sent words).
+    static func strandedWords(text: String, original: String) -> String? {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty, words != original.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return words
+    }
+
+    /// The message left before the change was saved: offer the new words back in the message box.
+    private func strandedView(_ words: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Already sent", systemImage: "paperplane.fill")
+                .font(.headline)
+            Text("This message went out before you saved your change, so the agent got the old words. Your new words were not sent.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text(words)
+                .font(.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .accessibilityIdentifier("session.queue.stranded.words")
+            Button {
+                let key = "session:\(queue.sessionId)"
+                let now = ComposerDrafts.shared.draft(key)
+                ComposerDrafts.shared.setDraft(now.isEmpty ? words : now + "\n" + words, key: key)
+                dismiss()
+            } label: {
+                Label("Put my words in the message box", systemImage: "square.and.pencil")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.tint)
+            .accessibilityIdentifier("session.queue.stranded.keep")
+            Button(role: .destructive) {
+                dismiss()
+            } label: {
+                Text("Discard them")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("session.queue.stranded.discard")
+            Spacer(minLength: 0)
         }
     }
 
@@ -485,7 +548,7 @@ struct SessionQueuedMessageSheet: View {
         switch row.status {
         case "pending":
             return turnRunning
-                ? "Waiting to go in. Tap the words to change them until it does."
+                ? "It sends by itself when the agent finishes this turn. Tap the words to change them until then."
                 : "About to go out."
         case "processing": return "This message is with the agent now."
         case "parked": return "Not sent: you stopped the agent first. Edit it if you like, then send it."
@@ -501,6 +564,8 @@ struct SessionQueuedMessageSheet: View {
     }
 
     private func sendNow(_ row: SessionQueuedMessage) async {
+        saving = true
+        defer { saving = false }
         // Words edited but not saved go with it: what is on screen is what is sent.
         if changed, row.canEdit, !(await queue.edit(row, to: text)) { return }
         if await queue.sendNow(row, interrupt: turnRunning) { dismiss() }

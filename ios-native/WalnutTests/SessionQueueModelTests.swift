@@ -92,6 +92,45 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertTrue(m.loaded)
     }
 
+    func testARowThatLeavesTheLineByItselfTellsThePageToReadTheTranscript() async {
+        let t = Transport()
+        t.rows = [row("qm-a"), row("qm-b")]
+        let m = model(t)
+        var told = 0
+        m.onRowsLeft = { told += 1 }
+        await m.refresh()
+        XCTAssertEqual(told, 0, "the first read only shows the line")
+        t.rows = [row("qm-b")]
+        await m.refresh()
+        XCTAssertEqual(told, 1, "qm-a went out")
+        await m.refresh()
+        XCTAssertEqual(told, 1)
+        t.rows.append(row("qm-c"))
+        await m.refresh()
+        XCTAssertEqual(told, 1, "a message coming in is not one leaving")
+    }
+
+    func testAWithdrawalTheLineAlreadyShowsDoesNotTellThePage() async {
+        let t = Transport()
+        t.rows = [row("qm-a"), row("qm-b")]
+        let m = model(t)
+        var told = 0
+        m.onRowsLeft = { told += 1 }
+        await m.refresh()
+        await m.withdraw(row("qm-a"))
+        await m.refresh()
+        XCTAssertEqual(told, 0)
+    }
+
+    func testUnsavedWordsAreKeptWhenTheirMessageWentOutFirst() {
+        typealias Sheet = SessionQueuedMessageSheet
+        XCTAssertEqual(Sheet.strandedWords(text: "  R: reply with R-NEW \n", original: "R: reply with R-ORIG"),
+                       "R: reply with R-NEW")
+        XCTAssertNil(Sheet.strandedWords(text: "R: reply with R-ORIG", original: "R: reply with R-ORIG"), "nothing changed")
+        XCTAssertNil(Sheet.strandedWords(text: " R: reply with R-ORIG\n", original: "R: reply with R-ORIG"), "only spacing")
+        XCTAssertNil(Sheet.strandedWords(text: "   ", original: "R: reply with R-ORIG"), "an emptied box has nothing to keep")
+    }
+
     func testAFailedReadKeepsWhatWasShown() async {
         let t = Transport()
         t.rows = [row("qm-a")]
@@ -306,7 +345,7 @@ final class SessionQueueModelTests: XCTestCase {
     }
 
     func testTheHeadlineSaysWhatIsAboutToHappen() {
-        XCTAssertEqual([row("a")].headline(turnRunning: true), "Waiting to go in")
+        XCTAssertEqual([row("a")].headline(turnRunning: true), "Sends after this turn")
         XCTAssertEqual([row("a")].headline(turnRunning: false), "Going out now")
         XCTAssertEqual([row("a", status: "processing")].headline(turnRunning: true), "Going out now")
         XCTAssertEqual([row("a", status: "parked")].headline(turnRunning: false), "Stopped \u{00B7} not sent")
@@ -314,7 +353,7 @@ final class SessionQueueModelTests: XCTestCase {
                        "a turn runs again: the words say what is still true of the rows, not that the session is stopped")
         XCTAssertEqual([row("a", status: "held")].headline(turnRunning: false), "Waiting for your Mac")
         // A message that will go out wins over one that was set aside: the line is true of the next delivery.
-        XCTAssertEqual([row("a", status: "parked"), row("b")].headline(turnRunning: true), "Waiting to go in")
+        XCTAssertEqual([row("a", status: "parked"), row("b")].headline(turnRunning: true), "Sends after this turn")
     }
 
     func testAFailedWithdrawBringsTheRowBackWithAReason() async {

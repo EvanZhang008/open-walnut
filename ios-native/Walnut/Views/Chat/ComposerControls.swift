@@ -29,7 +29,7 @@ import SwiftUI
 /// the keyboard away and the next tap opens the menu: there is no room above a
 /// pill that sits on the keyboard.
 ///
-/// Text size: at the accessibility sizes the name wraps instead of truncating
+/// Text size: from the largest standard size up the name wraps instead of truncating
 /// (gate r2 D2: "GPT-6 Astra" read "GP…" at AX5, and a name the user cannot read
 /// is not a control).
 struct ComposerModelPill: View {
@@ -51,7 +51,7 @@ struct ComposerModelPill: View {
                 // looks live is the failure that state exists to avoid.
                 glyph: controls.unreachable ? .warning : (controls.readOnly ? .none : .chevron),
                 state: controls.combinedPillState,
-                wraps: dynamicTypeSize.isAccessibilitySize,
+                wraps: dynamicTypeSize >= .xxxLarge,
                 rawID: controls.pillLabelIsRawID,
                 menu: controls.combinedMenu,
                 menuID: "model",
@@ -89,7 +89,7 @@ struct ComposerModePill: View {
             text: label,
             glyph: away ? .none : (failed ? .warning : .chevron),
             state: away ? .lastKnown : mode.pillState,
-            wraps: dynamicTypeSize.isAccessibilitySize,
+            wraps: dynamicTypeSize >= .xxxLarge,
             rawID: false,
             menu: mode.menu,
             menuID: "mode",

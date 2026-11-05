@@ -43,11 +43,11 @@ struct SessionQueueSheet: View {
                         }
                     } footer: {
                         if queue.rows.contains(where: { $0.status == "parked" }) {
-                            Text("Messages marked Not sent were held back when you stopped the agent. Tap one to send it; swipe to withdraw.")
+                            Text("Messages marked Not sent were held back when you stopped the agent. Tap one to send it; withdraw with the cross or a swipe.")
                         } else {
                             Text(turnRunning
-                                 ? "Waiting messages go in as soon as the session can take them. Tap one to edit it or send it now; swipe to withdraw."
-                                 : "Pending messages are about to go out. Tap one to edit it or send it now; swipe to withdraw.")
+                                 ? "Waiting messages go out by themselves when the agent finishes this turn. Tap one to edit it or send it now; withdraw with the cross or a swipe."
+                                 : "Pending messages are about to go out. Tap one to edit it or send it now; withdraw with the cross or a swipe.")
                         }
                     }
                 }
@@ -77,8 +77,41 @@ struct SessionQueueSheet: View {
         }
     }
 
-    @ViewBuilder
     private func queueRow(_ message: SessionQueuedMessage) -> some View {
+        HStack(spacing: 4) {
+            openButton(message)
+            if message.canWithdraw, !queue.busyIds.contains(message.id) {
+                Button {
+                    guard queue.takeRowTap() else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task { await queue.withdraw(message) }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Theme.secondaryOnCard)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Withdraw")
+                .accessibilityIdentifier("session.queue.list.withdraw.\(message.id)")
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            if message.canWithdraw {
+                Button(role: .destructive) {
+                    Task { await queue.withdraw(message) }
+                } label: {
+                    Label("Withdraw", systemImage: "trash")
+                }
+                .tint(Theme.danger)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func openButton(_ message: SessionQueuedMessage) -> some View {
         Button {
             managing = QueueRowRef(id: message.id)
         } label: {
@@ -109,16 +142,6 @@ struct SessionQueueSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("session.queue.row.\(message.id)")
-        .swipeActions(edge: .trailing) {
-            if message.canWithdraw {
-                Button(role: .destructive) {
-                    Task { await queue.withdraw(message) }
-                } label: {
-                    Label("Withdraw", systemImage: "trash")
-                }
-                .tint(Theme.danger)
-            }
-        }
     }
 }
 

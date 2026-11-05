@@ -280,6 +280,11 @@ final class TurnFoldTests: XCTestCase {
                         kind: .notification, source: "interrupt")
         }
         let cut = tool("Bash", "sleep 25", isError: true, result: "[Request interrupted by user for tool use]")
+        // What the CLI writes for a command a Stop cut short.
+        let refused = tool("Bash", "sleep 25", isError: true,
+                           result: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.")
+        XCTAssertFalse(TimelineTurnShape.isFailure(refused))
+        XCTAssertEqual(TimelineToolRunFold.failCount([refused]), 0)
         let broken = tool("Bash", "make", isError: true, result: "make: *** [all] Error 2")
         XCTAssertFalse(TimelineTurnShape.isFailure(cut))
         XCTAssertTrue(TimelineTurnShape.isFailure(broken), "a real error still counts")

@@ -1139,11 +1139,11 @@ struct ComposerBar: View {
             plusButton
             // The pills are the only flexible thing on this row: the three buttons
             // carry fixed 32pt frames, so an absurdly long model name truncates
-            // rather than shoving send off the edge. At the accessibility sizes the
-            // names wrap instead. Mode, then model (with its effort): the web
+            // rather than shoving send off the edge. From the largest standard text size up the
+            // names wrap instead (the model's effort is part of what the pill says). Mode, then model (with its effort): the web
             // composer's order, on every composer.
             if showsModePill || showsModelPill {
-                Self.pillLayout(stacked: dynamicTypeSize.isAccessibilitySize) {
+                Self.pillLayout(stacked: dynamicTypeSize >= .xxxLarge) {
                     if showsModePill {
                         // Short and safety-relevant: it keeps its word at the large sizes,
                         // and the longer model name gives way first.
