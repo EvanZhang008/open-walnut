@@ -214,6 +214,10 @@ export interface EngineCompareRow {
   medianHours: number | null;
   costUsd: number;
   partialCost: number;
+  /** Tasks with no usage recorded (an older server leaves it out). */
+  noUsage?: number;
+  /** Tasks the split assigned whose cost mostly ran on another engine. */
+  switched?: number;
   medianCostUsd: number | null;
   tokens: number;
   medianTokens: number | null;
@@ -244,6 +248,8 @@ export interface EngineCompareTask {
   reopens: number;
   errored: boolean;
   split: boolean;
+  noUsage?: boolean;
+  switched?: boolean;
 }
 
 export interface EngineCompare {
@@ -254,13 +260,20 @@ export interface EngineCompare {
   split: { on: boolean; entries: { key: string; label: string; weight: number }[] };
   /** How many tasks the rows count (an older server leaves it out). */
   taskCount?: number;
+  /** Only tasks the engine split assigned were counted. */
   splitOnly?: boolean;
+  /** Tasks in the period (and project) the split assigned, whichever tasks are counted. */
+  splitTasks?: number;
 }
 
-/** `project`: one project's tasks ('' = Inbox); absent counts every project. `splitOnly`: only tasks the split assigned. */
-export function fetchEngineCompare(range: { start?: string; end?: string }, project?: string, splitOnly = false): Promise<EngineCompare> {
+/**
+ * `project`: one project's tasks ('' = Inbox); absent counts every project. `which`: every task,
+ * only the ones the split assigned, or 'auto' (the server picks the split's own once there are enough).
+ */
+export function fetchEngineCompare(range: { start?: string; end?: string }, project?: string, which: 'all' | 'split' | 'auto' = 'all'): Promise<EngineCompare> {
   const q: Record<string, string> = {};
-  if (splitOnly) q.split = '1';
+  if (which === 'split') q.split = '1';
+  else if (which === 'auto') q.split = 'auto';
   if (range.start) q.start = range.start;
   if (range.end) q.end = range.end;
   if (project !== undefined) q.project = project;

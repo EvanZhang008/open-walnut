@@ -51,21 +51,31 @@ interface Metric {
 
 const ownPartial = (r: EngineCompareRow) => r.partialCost;
 const reviewPartial = (r: EngineCompareRow) => r.reviewPartialCost ?? 0;
-const partialNote = (n: number) => `${n} task${n === 1 ? '' : 's'} used a model with no price: the cost leaves those requests out`;
+const noUsage = (r: EngineCompareRow) => r.noUsage ?? 0;
+const tasksWord = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
+/** The tooltip of a value that is a floor: which of its tasks it leaves out, and why. */
+function partialNote(m: Metric, r: EngineCompareRow): string {
+  const none = noUsage(r);
+  if (m.partial === noUsage) return `${tasksWord(none)} had no usage recorded: their tokens are unknown`;
+  const unpriced = m.partial!(r) - (m.partial === ownPartial ? none : 0);
+  return [unpriced > 0 && `${tasksWord(unpriced)} used a model with no price`, m.partial === ownPartial && none > 0 && `${tasksWord(none)} had no usage recorded`]
+    .filter(Boolean).join(', ') + ': the cost leaves those out';
+}
 
 const METRICS: Metric[] = [
-  { id: 'done', label: 'Tasks finished', help: 'Completed in the period, counted under the engine and model that carried most of their cost.', value: (r) => r.done, show: (n) => String(n ?? 0) },
+  { id: 'done', label: 'Tasks finished', help: 'Completed in the period, counted under the engine and model that carried most of their cost (only the split\'s tasks: the engine it assigned).', value: (r) => r.done, show: (n) => String(n ?? 0) },
   { id: 'open', label: 'Still open', value: (r) => r.open, show: (n) => String(n ?? 0) },
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
   { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true },
   { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: ownPartial },
   { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => r.costUsd, show: (n) => money(n ?? 0), partial: ownPartial },
-  { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true },
+  { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: noUsage },
   { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a title starting with "Review" or naming a reviewer): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.', value: (r) => r.reviewCostPerTask, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of its finished tasks that were reopened.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
+  { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counting only the split\'s tasks, a task stays in the column it was assigned to.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
 ];
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
@@ -86,24 +96,19 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
   const [project, setProject] = usePageView<string>('usage', 'engines-project', ALL_PROJECTS, isProject);
   const [which, setWhich] = usePageView<Which>('usage', 'engines-which', 'auto', isWhich);
   const [data, setData] = useState<EngineCompare | null>(null);
-  // Auto: the split's own tasks once it assigned enough of them to compare, else every task.
-  const [splitHas, setSplitHas] = useState<number | null>(null);
-  const splitOnly = which === 'split' || (which === 'auto' && (splitHas ?? 0) >= 2 * FEW);
+  // Auto: the server counts the split's own tasks once it is on and assigned enough of them, else every task.
+  const splitOnly = !!data?.splitOnly;
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let live = true;
     setLoading(true);
-    fetchEngineCompare(range, project === ALL_PROJECTS ? undefined : project, splitOnly)
-      .then((d) => {
-        if (!live) return;
-        setData(d); setError('');
-        if (!d.splitOnly) setSplitHas(d.rows.reduce((n, r) => n + r.split, 0));
-      })
+    fetchEngineCompare(range, project === ALL_PROJECTS ? undefined : project, which)
+      .then((d) => { if (live) { setData(d); setError(''); } })
       .catch((err) => { if (live) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [range.start, range.end, project, splitOnly, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [range.start, range.end, project, which, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const best = useMemo(() => new Map(METRICS.map((m) => [m.id, data && ready ? bestOf(data.rows, m) : null])), [data, ready]);
   const label = (key: string) => data?.rows.find((r) => r.key === key)?.label ?? key;
 
@@ -119,7 +124,8 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
           <p className="usage-ec-split" data-testid="usage-engines-split" data-on={split?.on || undefined}>
             {splitLine}{split && !split.on && <> <a href="#sessions">Open Sessions</a></>}
           </p>
-          {split?.on && (
+          {/* Shown whenever the choice changes anything: a split since turned off still has its tasks to count. */}
+          {(split?.on || splitOnly || (data?.splitTasks ?? 0) > 0) && (
             <span className="usage-ec-which">
               <SegmentedControl<'all' | 'split'> aria-label="Which tasks" value={splitOnly ? 'split' : 'all'} onChange={(v) => setWhich(v)}
                 options={[{ value: 'all', label: 'All tasks', testId: 'usage-engines-all' }, { value: 'split', label: 'Assigned by the split', testId: 'usage-engines-split-only' }]} />
@@ -160,7 +166,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                       <td title={m.help}>{m.label}</td>
                       {data.rows.map((r) => (
                         <td key={r.key} className="num" data-best={best.get(m.id) === r.key || undefined}
-                          data-partial={(m.partial && m.partial(r) > 0) || undefined} title={m.partial && m.partial(r) > 0 ? partialNote(m.partial(r)) : undefined}>
+                          data-partial={(m.partial && m.partial(r) > 0) || undefined} title={m.partial && m.partial(r) > 0 ? partialNote(m, r) : undefined}>
                           {m.show(m.value(r), r)}{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
                         </td>
                       ))}
@@ -170,7 +176,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
               </table>
             </div>
             <p className="usage-bd-foot">
-              {`A task counts under the engine and model that carried most of its cost. Finished tasks count by the day they finished, open ones by the day they started. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a cost that leaves out requests to a model with no price.`}
+              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} Finished tasks count by the day they finished, open ones by the day they started. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
             </p>
             {!data.splitOnly && split?.on && (
               <p className="usage-bd-foot" data-testid="usage-engines-bias">Counting every task: a lead may have picked an engine by hand for some of them, so this is not a fair test. "Assigned by the split" is.</p>

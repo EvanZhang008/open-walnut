@@ -162,6 +162,47 @@ describe('aggregateEngineCompare', () => {
     expect(aggregateEngineCompare(inp).rows[0].key).toBe('codex|GPT');
   });
 
+  it("'auto' counts the split's own tasks only while it is on and assigned enough, and lists projects of what it counts", () => {
+    const pick = { key: 'claude', engine: 'claude' as const, at: '2026-11-02T00:00:00.000Z' };
+    const tasks = [
+      ...Array.from({ length: 10 }, (_, i) => done(`p${i}`, 1, { engine_pick: pick })),
+      done('hand1', 1, { project: 'Idea' }), done('hand2', 1, { project: 'Idea' }),
+    ];
+    const on = { config: { defaults: { engine_split: ['claude', 'codex'] } } };
+    const auto = aggregateEngineCompare(input(tasks, {}, { ...on, splitOnly: 'auto' }));
+    expect(auto).toMatchObject({ splitOnly: true, taskCount: 10, splitTasks: 10 });
+    // The project list counts what the rows count: no "Idea (2)" that would show nothing.
+    expect(auto.projects).toEqual([{ project: 'Walnut', tasks: 10 }]);
+    // Turned off: 'auto' counts every task, while asking for the split's own still works.
+    expect(aggregateEngineCompare(input(tasks, {}, { splitOnly: 'auto' }))).toMatchObject({ splitOnly: false, taskCount: 12, splitTasks: 10 });
+    expect(aggregateEngineCompare(input(tasks, {}, { splitOnly: true }))).toMatchObject({ splitOnly: true, taskCount: 10 });
+    // Too few assigned yet: every task.
+    expect(aggregateEngineCompare(input(tasks.slice(5), {}, { ...on, splitOnly: 'auto' }))).toMatchObject({ splitOnly: false, taskCount: 7, splitTasks: 5 });
+  });
+
+  it('a top-level task titled "Review ..." is work of its own, not a reviewer', () => {
+    const out = aggregateEngineCompare(input([done('own', 1, { title: 'Review the onboarding flow end to end' })], {}));
+    expect(out.tasks.map((t) => t.taskId)).toEqual(['own']);
+  });
+
+  it('a task with no usage recorded has an unknown cost and tokens, never a zero that wins', () => {
+    const tasks = [done('pi', 1), task({ id: 'rvpi', parent_task_id: 'pi', title: 'Review the change', session_id: 's-rvpi' })];
+    const out = aggregateEngineCompare(input(tasks, {}));
+    expect(out.tasks[0]).toMatchObject({ noUsage: true, partialCost: true, reviewPartialCost: true });
+    expect(out.rows[0]).toMatchObject({ noUsage: 1, partialCost: 1, reviewPartialCost: 1 });
+  });
+
+  it("counting only the split's tasks keeps a rescued task in the column it was assigned, and counts the move", () => {
+    const pick = { key: 'codex', engine: 'codex' as const, at: '2026-11-02T00:00:00.000Z' };
+    const tasks = [done('rescued', 2, { engine_pick: pick }), done('stayed', 1, { engine_pick: { ...pick, key: 'claude', engine: 'claude' as const } })];
+    const inp = input(tasks, { rescued: { costUsd: 9, engine: 'claude' }, stayed: { costUsd: 3 } });
+    const all = aggregateEngineCompare(inp);
+    expect(all.rows.map((r) => [r.key, r.done, r.switched])).toEqual([['claude|Claude', 2, 1]]);
+    const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
+    expect(Object.fromEntries(fair.rows.map((r) => [r.key, [r.done, r.switched]]))).toEqual({ 'codex|GPT': [1, 1], 'claude|Claude': [1, 0] });
+    expect(fair.tasks.find((t) => t.taskId === 'rescued')).toMatchObject({ key: 'codex|GPT', switched: true });
+  });
+
   it('reports the split as configured', () => {
     expect(aggregateEngineCompare(input([], {})).split).toEqual({ on: false, entries: [] });
     const on = aggregateEngineCompare(input([], {}, { config: { defaults: { engine_split: ['claude', { engine: 'codex', weight: 2 }] } } }));

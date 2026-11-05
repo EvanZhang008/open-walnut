@@ -31,14 +31,22 @@ are offered: an ACP engine the launch host has not reported installed is skipped
 Code always can). A model on an ACP entry is ignored; set `engines.<id>.model` instead.
 
 The pick is kept on the task (`engine_pick`) and in `WALNUT_HOME/cache/engine-split.json`,
-and the start's outcome names it with the shares it saw.
+and the start's outcome names it with the shares it saw. A start that waited (the queue, a
+workspace) or is tried again runs on that pick, as long as the split still lists it; a pick
+whose entry was since removed is made again. A pick counts from the moment it is made, so a
+start refused after it (a host that went away) still took its turn.
 
 ## Comparing them
 
-Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&project`):
+Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&project&split`):
 per engine and model family, the tasks finished in the period, still open, assigned by the
 split, median time to done, median and total cost, median tokens, review subtasks per task
-(subtasks with "review" in the title), the user's messages per task, reopens after
-completion, and tasks whose session had an error. A task counts under the engine and model
-that carried most of its cost. Code: `src/core/agents/engine-split.ts`,
+(subtasks with "review" in the title; a top-level task so named is work of its own), the
+user's messages per task, reopens after completion, and tasks whose session had an error. A
+task counts under the engine and model that carried most of its cost.
+
+`split=1` counts only the tasks the split assigned, the fair test (a lead may have picked an
+engine by hand for the rest). `split=auto`, the card's default, does so while the split is on
+and has assigned at least 10 tasks in the period, else counts every task; the answer says
+which (`splitOnly`) and how many the split assigned (`splitTasks`). Code: `src/core/agents/engine-split.ts`,
 `src/core/usage/engine-compare.ts`.

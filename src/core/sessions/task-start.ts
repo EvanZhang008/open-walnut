@@ -236,16 +236,19 @@ async function noteEngineFallback(task: Task, note: EngineFallbackNote | undefin
  * a workspace being made) runs on it when it replays, and a retry after a failed start too.
  */
 async function splitPick(task: Task, params: SessionStartParams) {
-  // A task that holds a conversation continues it on the engine it has.
-  if (task.session_id || task.exec_session_id || task.session_ids?.length) return null;
+  // A task that holds a conversation continues it on the engine it has. A session whose spawn
+  // failed before a turn is no conversation: its retry keeps the split's pick.
+  if ((task.session_id || task.exec_session_id || task.session_ids?.length) && await taskConversation(task.id)) return null;
   const { splitApplies, splitBuilders, pickSplitEngine, recordPick } = await import('../agents/engine-split.js');
   const named = params.engine !== undefined || !!params.effort || (!!params.model && params.model !== 'default');
   // A second start of a task already starting is refused just after this (alreadyStarted): it never picks.
   if (pendingStarts.has(task.id)) return null;
-  if (task.engine_pick && !named) return { ...task.engine_pick, reused: true };
-  if (!splitApplies(task, params)) return null;
   const { getConfig } = await import('../config-manager.js');
   const builders = splitBuilders(await getConfig());
+  // Reused while the split still lists it: an entry since removed from the config (one that kept
+  // failing, say) is not tried again on every retry.
+  if (task.engine_pick && !named && builders.some((b) => b.key === task.engine_pick!.key)) return { ...task.engine_pick, reused: true };
+  if (!splitApplies(task, params)) return null;
   if (builders.length < 2) return null;
   // Asked of the host this start would use; placement later moves only to a host that runs the engine.
   const host = await resolveTaskLaunchReadOnly(task, params).then((l) => l.host, () => undefined);
@@ -259,8 +262,9 @@ async function splitPick(task: Task, params: SessionStartParams) {
   if (!pick) return null;
   const kept = { key: pick.key, engine: pick.engine, ...(pick.model ? { model: pick.model } : {}), at: pick.at };
   try {
-    // Written only while the task has none: of two starts at once, the first pick stands.
-    const wrote = await updateTaskRaw(task.id, { engine_pick: kept }, { source: 'task-start', shouldUpdate: (current) => !current.engine_pick });
+    // Written only while the task still holds the pick this start read: of two starts at once, the first pick stands.
+    const stale = task.engine_pick?.key;
+    const wrote = await updateTaskRaw(task.id, { engine_pick: kept }, { source: 'task-start', shouldUpdate: (current) => current.engine_pick?.key === stale });
     if (!wrote.changed) {
       const current = await getTask(task.id);
       if (current.engine_pick) return { ...current.engine_pick, reused: true };

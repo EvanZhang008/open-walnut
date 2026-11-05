@@ -54,7 +54,7 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
   } catch (err) { next(err) }
 })
 
-// GET /api/usage/engines?start&end&project&split=1: engines compared on finished work (engine-compare.ts).
+// GET /api/usage/engines?start&end&project&split=1|auto: engines compared on finished work (engine-compare.ts).
 // Local reads only (tasks, sessions, the per-day sums, the user-asks files), no host round trip.
 usageRouter.get('/engines', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -82,7 +82,7 @@ usageRouter.get('/engines', async (req: Request, res: Response, next: NextFuncti
     const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: store.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
     const project = typeof req.query.project === 'string' && req.query.project !== '*' ? req.query.project : undefined
     res.json(aggregateEngineCompare({
-      tasks, sessions: byId, spend, followUps: (id) => followUps.get(id) ?? 0, config, project, splitOnly: req.query.split === '1',
+      tasks, sessions: byId, spend, followUps: (id) => followUps.get(id) ?? 0, config, project, splitOnly: req.query.split === '1' ? true : req.query.split === 'auto' ? 'auto' : false,
       range: { start: parseDate(req.query.start), end: parseDate(req.query.end) },
       dayOf: (iso) => { const d = new Date(iso); return Number.isFinite(d.getTime()) ? fmt.format(d) : '' },
     }))

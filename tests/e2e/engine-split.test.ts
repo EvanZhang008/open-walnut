@@ -103,6 +103,26 @@ describe('the engine split', () => {
     await expect.poll(async () => (await getSessionsForTask(placeholder.id))[0]?.cliModel ?? '', { timeout: 20_000 }).toMatch(/sonnet/i)
   }, 60_000)
 
+  it('a start that failed before a turn is retried on the engine the split gave it', async () => {
+    const placeholder = await op('task_create', { title: 'Failed first start', project: 'Marina', record_only: true })
+    await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: path.join(WALNUT_HOME, 'missing'), message: 'Ready', expectReply: false })).rejects.toThrow()
+    const first = (await task(placeholder.id)).engine_pick
+    expect(first?.key).toBeTruthy()
+    const retried = await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
+    expect(retried.enginePick).toMatchObject({ key: first!.key, reused: true })
+    await expect.poll(async () => (await getSessionsForTask(placeholder.id)).at(-1)?.cliModel ?? '', { timeout: 20_000 })
+      .toSatisfy((m: string) => /sonnet/i.test(m) === (first!.key === 'claude:sonnet'))
+  }, 60_000)
+
+  it('a kept pick the split no longer lists is picked again, not retried forever', async () => {
+    const placeholder = await op('task_create', { title: 'Pick since removed', project: 'Marina', record_only: true })
+    await updateTaskRaw(placeholder.id, { engine_pick: { key: 'claude:retired-model', engine: 'claude', model: 'retired-model', at: new Date().toISOString() } })
+    const started = await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
+    expect(started.enginePick?.reused).toBeFalsy()
+    expect(['claude', 'claude:sonnet']).toContain(started.enginePick?.key)
+    expect((await task(placeholder.id)).engine_pick?.key).toBe(started.enginePick?.key)
+  }, 60_000)
+
   it('two starts of one task at once keep one pick, the one its session runs on', async () => {
     const placeholder = await op('task_create', { title: 'Double start', project: 'Marina', record_only: true })
     const both = await Promise.allSettled([
@@ -135,11 +155,11 @@ describe('the engine split', () => {
     expect(finished).toMatchObject({ done: true, reopens: 1, reviews: 1, split: true })
     const row = r.body.rows.find((x: { key: string }) => x.key === finished.key)
     expect(row).toMatchObject({ engine: 'claude', done: 1, reopens: 1, reviewsPerTask: 1 })
-    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(8)
-    expect(r.body.taskCount).toBe(8)
+    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(10)
+    expect(r.body.taskCount).toBe(10)
     // Only the split's own picks: the starts that named an engine or a model drop out.
     const fair = await api('GET', '/api/usage/engines?project=Marina&split=1')
-    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 6 })
+    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 8 })
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
     expect(r.body.projects).toEqual([{ project: 'Marina', tasks: expect.any(Number) }])
   }, 60_000)
