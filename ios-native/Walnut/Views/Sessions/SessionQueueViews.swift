@@ -140,13 +140,13 @@ struct SessionQueueStrip: View {
         // instead of being cut short.
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                title
+                titleGroup
                 Spacer(minLength: 8)
                 headline.lineLimit(1)
                 sendAllButton
             }
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) { title }
+                titleGroup
                 HStack(spacing: 8) {
                     headline
                     Spacer(minLength: 8)
@@ -158,7 +158,13 @@ struct SessionQueueStrip: View {
         .padding(.horizontal, 14)
         .padding(.top, 9)
         .padding(.bottom, 3)
-        .accessibilityElement(children: .combine)
+    }
+
+    /// The icon, the word and the count read as one; the status and the Send all button stay their own
+    /// elements, so the button can be reached and activated by itself.
+    private var titleGroup: some View {
+        HStack(spacing: 6) { title }
+            .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -189,7 +195,9 @@ struct SessionQueueStrip: View {
                     .padding(.horizontal, 10)
                     .frame(minHeight: 32)
                     .background(Theme.tintSoft, in: Capsule())
-                    .contentShape(Capsule())
+                    .padding(6)
+                    .contentShape(Rectangle())
+                    .padding(-6)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("session.queue.sendAll")
@@ -257,7 +265,8 @@ struct SessionQueueStrip: View {
                         .padding(.horizontal, 10)
                         .frame(minWidth: 44, minHeight: 32)
                         .background(Theme.tintSoft, in: Capsule())
-                        .contentShape(Capsule())
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .padding(.trailing, 4)
                 }
                 .buttonStyle(.plain)
@@ -339,6 +348,9 @@ struct SessionQueuedMessageSheet: View {
     @State private var seeded = false
     @State private var saving = false
     @State private var askDiscard = false
+    /// Sending it now while a turn runs stops that turn: asked first, because the sheet's other
+    /// buttons sit right beside it and a stop cannot be taken back.
+    @State private var askInterrupt = false
     @FocusState private var focused: Bool
 
     private var row: SessionQueuedMessage? { queue.rows.first { $0.id == rowID } }
@@ -379,15 +391,15 @@ struct SessionQueuedMessageSheet: View {
                     VStack(spacing: 10) {
                         if row.canSendNow {
                             Button {
-                                Task { await sendNow(row) }
+                                if turnRunning { askInterrupt = true } else { Task { await sendNow(row) } }
                             } label: {
                                 Label(turnRunning ? "Interrupt & send now" : "Send now", systemImage: "bolt.fill")
                                     .font(.body.weight(.semibold))
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.bordered)
                             .tint(Theme.tint)
-                            .foregroundStyle(Theme.onTint)
+                            .foregroundStyle(Theme.tint)
                             .disabled(saving || queue.busyIds.contains(row.id) || emptied)
                             .accessibilityIdentifier("session.queue.sendNow")
                         }
@@ -437,6 +449,14 @@ struct SessionQueuedMessageSheet: View {
         }
         .presentationBackground(Color(.systemBackground))
         .interactiveDismissDisabled(changed)
+        .alert("Interrupt the agent?", isPresented: $askInterrupt) {
+            Button("Keep waiting", role: .cancel) {}
+            Button("Interrupt & send", role: .destructive) {
+                if let row { Task { await sendNow(row) } }
+            }
+        } message: {
+            Text("It stops what it is doing right now, and this message goes in as its next turn.")
+        }
         .alert("Discard your changes?", isPresented: $askDiscard) {
             Button("Keep editing", role: .cancel) {}
             Button("Discard changes", role: .destructive) { dismiss() }
@@ -465,7 +485,7 @@ struct SessionQueuedMessageSheet: View {
         switch row.status {
         case "pending":
             return turnRunning
-                ? "Waiting to go in. You can edit it until it does."
+                ? "Waiting to go in. Tap the words to change them until it does."
                 : "About to go out."
         case "processing": return "This message is with the agent now."
         case "parked": return "Not sent: you stopped the agent first. Edit it if you like, then send it."

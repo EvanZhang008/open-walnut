@@ -100,6 +100,7 @@ struct SessionConversationView: View {
         let queue = SessionQueueModel(sessionId: sessionId)
         queue.onWithdrawn = { [weak store] id in store?.queuedMessageWithdrawn(id) }
         queue.onEdited = { [weak store] id, text in store?.queuedMessageEdited(id, text: text) }
+        store.onInterruptAccepted = { [weak queue] id in queue?.hideWhileGoingOut(id) }
         return queue
     }
 
@@ -427,13 +428,15 @@ struct SessionConversationView: View {
             let now = ComposerDrafts.shared.draft(key)
             ComposerDrafts.shared.setDraft(now.isEmpty ? words : now + "\n" + words, key: key)
         }
+        queue.beginRestore(gone: gone)
         for step in plan.steps {
             if let id = step.pullRowID {
                 guard let current = queue.rows.first(where: { $0.id == id }) else { continue }
                 guard await queue.pullForRequeue(current) else { continue }
             }
-            guard await store.sendFromComposer(step.text) else { return }
+            if !(await store.sendFromComposer(step.text)) { break }
         }
+        await queue.endRestore(plan: plan)
     }
 
     /// Messages waiting in line that a Stop would set aside.

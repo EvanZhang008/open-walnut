@@ -39,6 +39,19 @@ final class SessionQueueModel {
     /// one (the second tap of a double tap, Undo then a cross) would land on a different row.
     @ObservationIgnored private var rowTaps = SeatTapGuard(span: 1.0)
 
+    /// While Undo puts messages back in line (it takes the ones behind them off and sends all again so the
+    /// order is what it was), the list stands as it will end up: reading the server in between would show a
+    /// half-done line. `restoreBefore` holds the ids from before it began; `keptTimes` the time each message
+    /// had when it first went in, shown instead of the new row's.
+    @ObservationIgnored private var restoring = false
+    @ObservationIgnored private var restoreBefore: Set<String> = []
+    @ObservationIgnored private var keptTimes: [String: String] = [:]
+    /// Rows an interrupting send put in line for the moment before they go out: their bubble is on the page
+    /// already, and a second copy under "Going out now" would only repeat it. Shown again when the time
+    /// runs out, so a send that sticks is not hidden.
+    @ObservationIgnored private var hiddenUntil: [String: Date] = [:]
+    nonisolated(unsafe) static var goingOutSpan: TimeInterval = 4
+
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var failures = 0
     /// Bumps per accepted write so a slower GET that started before it cannot put the
@@ -83,10 +96,12 @@ final class SessionQueueModel {
     }
 
     func refresh() async {
+        guard !restoring else { return }
         let started = generation
         do {
-            let next = try await api.sessionQueue(id: sessionId)
-            guard started == generation else { return }
+            let fetched = try await api.sessionQueue(id: sessionId)
+            guard started == generation, !restoring else { return }
+            let next = withKeptTimes(fetched.filter { !isHidden($0.id) })
             failures = 0
             if next != rows { rows = next }
             loaded = true
@@ -173,12 +188,65 @@ final class SessionQueueModel {
         generation += 1
         do {
             try await api.deleteQueuedMessage(sessionId: sessionId, messageId: row.id)
-            rows.removeAll { $0.id == row.id }
+            if !restoring { rows.removeAll { $0.id == row.id } }
             onWithdrawn?(row.id)
             return true
         } catch {
             await refresh()
             return false
+        }
+    }
+
+    func hideWhileGoingOut(_ id: String) {
+        hiddenUntil[id] = Date().addingTimeInterval(Self.goingOutSpan)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.goingOutSpan + 0.1))
+            await self?.refresh()
+        }
+    }
+
+    private func isHidden(_ id: String) -> Bool {
+        guard let until = hiddenUntil[id] else { return false }
+        if until > Date() { return true }
+        hiddenUntil[id] = nil
+        return false
+    }
+
+    /// Undo begins: show the line as it will stand once the messages are back, each at the place its time gives it.
+    func beginRestore(gone: WithdrawnQueuedMessage) {
+        restoring = true
+        generation += 1
+        restoreBefore = Set(rows.map(\.id))
+        let back = gone.all.filter { !$0.wasSetAside }.map {
+            SessionQueuedMessage(id: $0.id, message: $0.text, status: "pending", enqueuedAt: $0.enqueuedAt)
+        }
+        func time(_ row: SessionQueuedMessage) -> Date { row.enqueuedDate ?? .distantPast }
+        rows = (rows + back).enumerated().sorted {
+            time($0.element) == time($1.element) ? $0.offset < $1.offset : time($0.element) < time($1.element)
+        }.map(\.element)
+    }
+
+    /// Undo is done (or stopped short): read the server again, and keep each returned message's first time.
+    func endRestore(plan: RestorePlan) async {
+        restoring = false
+        generation += 1
+        await refresh()
+        let fresh = rows.filter { !restoreBefore.contains($0.id) }
+        if fresh.count == plan.steps.count {
+            for (row, step) in zip(fresh, plan.steps) {
+                if let at = step.enqueuedAt { keptTimes[row.id] = at }
+            }
+            rows = withKeptTimes(rows)
+        }
+        restoreBefore = []
+    }
+
+    private func withKeptTimes(_ list: [SessionQueuedMessage]) -> [SessionQueuedMessage] {
+        guard !keptTimes.isEmpty else { return list }
+        keptTimes = keptTimes.filter { id, _ in list.contains { $0.id == id } }
+        return list.map { row in
+            guard let at = keptTimes[row.id] else { return row }
+            return SessionQueuedMessage(id: row.id, message: row.message, status: row.status, enqueuedAt: at)
         }
     }
 
@@ -278,13 +346,15 @@ struct WithdrawnQueuedMessage: Equatable {
         let waiting = items.filter { !$0.wasSetAside }
         let gone = Set(items.map(\.id))
         func time(_ iso: String?) -> Date { WalnutTask.parseISO(iso) ?? .distantPast }
-        var entries: [(at: Date, step: RestorePlan.Step)] = waiting.map { (time($0.enqueuedAt), .init(text: $0.text, pullRowID: nil)) }
+        var entries: [(at: Date, step: RestorePlan.Step)] = waiting.map {
+            (time($0.enqueuedAt), .init(text: $0.text, pullRowID: nil, enqueuedAt: $0.enqueuedAt))
+        }
         var seen = Set<String>()
         for item in waiting {
             for later in item.followers where !gone.contains(later.id) && seen.insert(later.id).inserted {
                 // Its words as they are now (it may have been edited meanwhile); gone from the line = gone.
                 guard let current = rows.first(where: { $0.id == later.id }) else { continue }
-                entries.append((time(current.enqueuedAt), .init(text: current.message, pullRowID: current.id)))
+                entries.append((time(current.enqueuedAt), .init(text: current.message, pullRowID: current.id, enqueuedAt: current.enqueuedAt)))
             }
         }
         let ordered = entries.enumerated().sorted {
@@ -298,6 +368,7 @@ struct RestorePlan: Equatable {
     struct Step: Equatable {
         let text: String
         let pullRowID: String?
+        var enqueuedAt: String? = nil
     }
     let draftText: String?
     let steps: [Step]
@@ -310,7 +381,7 @@ extension Array where Element == SessionQueuedMessage {
         if contains(where: { $0.status == "pending" }) {
             return turnRunning ? "Waiting to go in" : "Going out now"
         }
-        if contains(where: { $0.status == "parked" }) { return "Stopped \u{00B7} not sent" }
+        if contains(where: { $0.status == "parked" }) { return turnRunning ? "Not sent" : "Stopped \u{00B7} not sent" }
         if contains(where: { $0.status == "held" }) { return "Waiting for your Mac" }
         return ""
     }

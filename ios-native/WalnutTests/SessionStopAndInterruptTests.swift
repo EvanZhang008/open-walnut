@@ -177,6 +177,17 @@ final class SessionStopAndInterruptTests: XCTestCase {
         XCTAssertEqual(transport.sendCallCount, 1)
     }
 
+    func testOnlyAnInterruptingSendTellsThePageItIsGoingOutThisMoment() async {
+        let (store, transport) = store("going-out")
+        await store.open()
+        var told: [String] = []
+        store.onInterruptAccepted = { told.append($0) }
+        _ = await store.send("steer", interrupt: true)
+        _ = await store.send("plain")
+        let ids = transport.messageIds.compactMap { $0 }
+        XCTAssertEqual(told, [ids[0]], "only the interrupting one, under the id the server holds it by")
+    }
+
     func testAPlainSendDoesNotInterrupt() async {
         let (store, transport) = store("plain")
         await store.open()

@@ -477,6 +477,9 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(sendNow.waitForExistence(timeout: 10), "no Send now in the sheet")
         XCTAssertTrue(sendNow.label.contains("Interrupt"), "a running turn: the button says it interrupts")
         sendNow.tap()
+        let confirm = app.alerts.buttons["Interrupt & send"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a stop is asked first")
+        confirm.tap()
         XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 30), "Send now was not answered")
         XCTAssertTrue(element(app, "session.queue.strip").waitForNonExistence(timeout: 10))
     }

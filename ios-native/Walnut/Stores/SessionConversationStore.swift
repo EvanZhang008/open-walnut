@@ -83,6 +83,9 @@ final class SessionConversationStore {
     /// The server stops the turn only on the FIRST arrival of the bubble's id, so a retry
     /// after a lost answer cannot cut off the turn its own first send started.
     @ObservationIgnored private var interruptBubbleIDs: Set<String> = []
+    /// The server took an interrupting send under this id: it goes out this very moment, so the queue list
+    /// need not show it beside its bubble (the page wires this to `SessionQueueModel.hideWhileGoingOut`).
+    @ObservationIgnored var onInterruptAccepted: ((String) -> Void)?
     /// Bubbles sent while the page may be mid-turn without "Interrupt & send": every attempt
     /// carries `afterTurn: true`, so the server holds the message in its queue (editable and
     /// withdrawable) until the running turn ends instead of writing it into that turn. With
@@ -1405,6 +1408,7 @@ final class SessionConversationStore {
             // they landed. A failure here is a failure of this attempt like any
             // other (the ladder below), and a retry resumes where this one stopped.
             let wireText = try await textWithUploadedFiles(bubbleID: bubbleID, text: text)
+            let interrupting = interruptBubbleIDs.contains(bubbleID)
             let receipt = try await api.sendSessionMessage(
                 id: sessionId, text: wireText, images: payloads, messageId: messageId,
                 voice: voiceBubbleIDs.contains(bubbleID), interrupt: interruptBubbleIDs.contains(bubbleID),
@@ -1413,6 +1417,7 @@ final class SessionConversationStore {
             voiceBubbleIDs.remove(bubbleID)
             interruptBubbleIDs.remove(bubbleID)
             afterTurnBubbleIDs.remove(bubbleID)
+            if interrupting, let messageId { onInterruptAccepted?(messageId) }
             // Accepted: the server holds the message under this bubble's id, so
             // what follows is written whatever the page is doing: on screen, in the
             // background, closed, or this attempt's task cancelled (a manual retry

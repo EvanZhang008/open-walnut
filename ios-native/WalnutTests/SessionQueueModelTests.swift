@@ -242,6 +242,45 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertNil(m.withdrawn, "the pull is part of an Undo, not a withdrawal")
     }
 
+    func testWhileUndoPutsMessagesBackTheLineStandsAsItWillEndUpAndKeepsTheirFirstTimes() async {
+        let t = Transport()
+        let a = timed("qm-a", "first", 1), b = timed("qm-b", "second", 2)
+        t.rows = [b]
+        let m = model(t)
+        await m.refresh()
+        let gone = WithdrawnQueuedMessage(id: "qm-a", text: "first", followers: [b], wasSetAside: false, enqueuedAt: a.enqueuedAt)
+        let plan = gone.restorePlan(rows: m.rows)
+        m.beginRestore(gone: gone)
+        XCTAssertEqual(m.rows.map(\.id), ["qm-a", "qm-b"], "the returning message stands where its time puts it")
+        // Half way: the server holds nothing (b was taken off, a not yet sent). The list must not show that.
+        t.rows = []
+        await m.refresh()
+        XCTAssertEqual(m.rows.map(\.id), ["qm-a", "qm-b"], "a read in between changes nothing")
+        // Both sent again, with new ids and the time of now.
+        t.rows = [SessionQueuedMessage(id: "qm-x", message: "first", status: "pending", enqueuedAt: "2026-11-04T12:00:00Z"),
+                  SessionQueuedMessage(id: "qm-y", message: "second", status: "pending", enqueuedAt: "2026-11-04T12:00:01Z")]
+        await m.endRestore(plan: plan)
+        XCTAssertEqual(m.rows.map(\.id), ["qm-x", "qm-y"])
+        XCTAssertEqual(m.rows.map(\.enqueuedAt), [a.enqueuedAt, b.enqueuedAt], "each shows the time it first went in")
+        // And the next read keeps them.
+        await m.refresh()
+        XCTAssertEqual(m.rows.map(\.enqueuedAt), [a.enqueuedAt, b.enqueuedAt])
+    }
+
+    func testARowAnInterruptingSendJustPutInLineStaysOutOfTheListUntilTheSpanEnds() async {
+        SessionQueueModel.goingOutSpan = 0.3
+        defer { SessionQueueModel.goingOutSpan = 4 }
+        let t = Transport()
+        t.rows = [row("qm-a"), row("qm-b")]
+        let m = model(t)
+        m.hideWhileGoingOut("qm-a")
+        await m.refresh()
+        XCTAssertEqual(m.rows.map(\.id), ["qm-b"], "its bubble is on the page: no second copy under the list")
+        let deadline = Date().addingTimeInterval(3)
+        while m.rows.count < 2, Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(m.rows.map(\.id), ["qm-a", "qm-b"], "a send that sticks is shown after all")
+    }
+
     func testTheOfferToTakeItBackLapses() async {
         SessionQueueModel.undoWindow = 0.05
         defer { SessionQueueModel.undoWindow = 15 }
@@ -271,6 +310,8 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertEqual([row("a")].headline(turnRunning: false), "Going out now")
         XCTAssertEqual([row("a", status: "processing")].headline(turnRunning: true), "Going out now")
         XCTAssertEqual([row("a", status: "parked")].headline(turnRunning: false), "Stopped \u{00B7} not sent")
+        XCTAssertEqual([row("a", status: "parked")].headline(turnRunning: true), "Not sent",
+                       "a turn runs again: the words say what is still true of the rows, not that the session is stopped")
         XCTAssertEqual([row("a", status: "held")].headline(turnRunning: false), "Waiting for your Mac")
         // A message that will go out wins over one that was set aside: the line is true of the next delivery.
         XCTAssertEqual([row("a", status: "parked"), row("b")].headline(turnRunning: true), "Waiting to go in")
