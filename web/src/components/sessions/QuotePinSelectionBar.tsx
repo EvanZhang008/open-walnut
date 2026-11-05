@@ -254,7 +254,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
    *  down and rebuilt per state change. */
   const stateRef = useRef<PillState | null>(null);
   stateRef.current = state;
-  // The buttons hang just above where the gesture ended. The Comment box and the
+  // The buttons hang just above the passage, at the column where the gesture ended. The Comment box and the
   // Ask choice open in a gap made for them in the text, under the block the passage
   // ends in and lined up with the message column (comment-gap.ts), and stay inside
   // the timeline: they cover no words, not the passage, not what follows it, never
@@ -279,8 +279,24 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     const x = width <= column ? anchor.columnLeft : Math.max(anchor.columnLeft + column - width, room ? room.left + 12 : 0);
     return { width, anchor: { x, y: anchor.blockBottom, bottom: anchor.blockBottom } };
   }, [anchor, inGap, containerRef]);
+  // The button bar hangs off the WHOLE passage: above its first line, or under its
+  // last when there is no room above, never on its words. Hung off the line the
+  // gesture ended on, a passage over several lines (a table cell's wrapped words, a
+  // sentence dragged downwards) had its first lines under the bar, and a flip went
+  // onto the release line itself (2026-11-05, the user: "why sitll fucking broekn").
+  // A passage taller than the timeline's visible part keeps the release line: there
+  // is no edge of it in sight to hang from.
+  const barAnchor = useMemo(() => {
+    if (!anchor) return null;
+    const { passageTop: top, passageBottom: bottom } = anchor;
+    const room = containerRef.current?.getBoundingClientRect();
+    if (top === undefined || bottom === undefined || (room && (top < room.top || bottom > room.bottom))) {
+      return { x: anchor.x, y: anchor.y, bottom: anchor.lineBottom ?? anchor.y };
+    }
+    return { x: anchor.x, y: top, bottom };
+  }, [anchor, containerRef]);
   const placement = useMenuPlacement(!!state, noTrigger, pillRef, {
-    anchorPoint: gapBox?.anchor ?? anchor,
+    anchorPoint: gapBox?.anchor ?? barAnchor,
     align: gapBox ? 'start' : 'center',
     preferSide: 'up',
     ...(gapBox ? { side: 'down' as const, boundsRef: containerRef, bounds: 'visual' as const } : {}),
