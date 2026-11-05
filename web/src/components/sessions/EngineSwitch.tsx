@@ -79,9 +79,16 @@ export function useEngineSwitchPick(opts: {
   const current = resolveEngine(session?.engine);
   // A task's own session switches; a chat lane (Ask Walnut) and a replaced session do not.
   const enabled = !!session?.taskId && !session.lane && !session.archive_reason?.startsWith('engine_switched:');
+  // A pick of this panel's still unanswered (sent, no word from Walnut yet: it may be restarting).
+  const unanswered = useRef<string | null>(null);
+  // The person picked the task's engine again while such a pick still waits: closing the picker
+  // withdraws it (review round 6: the older pick kept retrying and switched once Walnut was back).
+  const withdraw = useRef(false);
   const onProviderSwitch = useCallback((provider: string) => {
     setRefused(null);
-    setPick(resolveEngine(provider) === current ? null : { engine: resolveEngine(provider) });
+    const back = resolveEngine(provider) === current;
+    withdraw.current = back && !!unanswered.current;
+    setPick(back ? null : { engine: resolveEngine(provider) });
   }, [current]);
   // Greyed out: an engine the session's host cannot run (this Mac: its own probe).
   const hostEngines = useHostEngineAvailability(session?.host);
@@ -113,16 +120,26 @@ export function useEngineSwitchPick(opts: {
   // The picker closed: a pick of another engine switches now.
   const taskId = task?.id;
   const commitNow = useCallback(() => {
-    const p = pickRef.current;
+    const picked = pickRef.current;
+    const back = !picked && withdraw.current;
+    withdraw.current = false;
+    // A withdrawal asks for the engine the task is on, so the older pick stops and a switch the
+    // server already took is turned back.
+    const p = picked ?? (back ? { engine: current } : null);
     if (!p || !taskId) return;
     // Taken now, so a second close in the same tick (Escape, then the anchor) posts nothing.
     pickRef.current = null;
     setPick(null);
-    setSending(p.engine);
+    setSending(back ? null : p.engine);
     sentOver.current = serverIdRef.current;
     watched.current = 'sent';
-    log.info('engine-switch', 'picker closed on another engine: switching now', { sessionId, taskId, engine: p.engine, model: p.model });
-    switchTaskEngine(taskId, p).catch((err: unknown) => {
+    log.info('engine-switch', back ? 'picker closed on the current engine: withdrawing the unanswered pick' : 'picker closed on another engine: switching now', { sessionId, taskId, engine: p.engine, model: p.model });
+    const mark = `${p.engine}:${Date.now()}`;
+    unanswered.current = mark;
+    switchTaskEngine(taskId, p, back ? { withdraw: true } : {}).then(() => {
+      if (unanswered.current === mark) unanswered.current = null;
+    }, (err: unknown) => {
+      if (unanswered.current === mark) unanswered.current = null;
       log.warn('engine-switch', 'switch refused', { sessionId, taskId, engine: p.engine, error: errorText(err) });
       // The panel moved on meanwhile (the switch took, and it followed), or a newer pick replaced
       // this one: this answer is not the panel's to show.
@@ -131,7 +148,7 @@ export function useEngineSwitchPick(opts: {
       setSending(null);
       setRefused({ engine: p.engine, error: errorText(err), ...(noAnswer(err) ? { unconfirmed: true } : {}) });
     });
-  }, [sessionId, taskId]);
+  }, [sessionId, taskId, current]);
   const commitRef = useRef(commitNow);
   commitRef.current = commitNow;
   // Run after React applied the close's own pick (a model row sets the model, then closes).

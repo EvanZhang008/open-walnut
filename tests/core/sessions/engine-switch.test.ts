@@ -343,6 +343,50 @@ describe('engine switch inside a task', () => {
     edges.gate = undefined;
   });
 
+  it('two picks queued behind a running switch: only the newest runs, the older is told it was replaced', async () => {
+    // Review round 6: both passed the in-flight check, and the newer was answered with the older's switch.
+    const { taskId } = await taskOn('claude');
+    let release!: () => void;
+    edges.gate = new Promise<void>((r) => { release = r; });
+    const first = requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    await vi.waitFor(() => expect(edges.starts).toHaveLength(1));
+    const older = requestEngineSwitch({ taskId, engine: 'pi', source: 'test' }).then((r) => ({ r }), (e: unknown) => ({ e }));
+    const newest = requestEngineSwitch({ taskId, engine: 'opencode', source: 'test' });
+    edges.gate = undefined;
+    release();
+    await first;
+    const last = await newest;
+    expect(await older).toMatchObject({ e: { code: 'switch_superseded' } });
+    expect(last).toMatchObject({ state: 'done', engine: 'opencode' });
+    expect(edges.starts).toHaveLength(2);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(last.sessionId);
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done', session_id: last.sessionId });
+  });
+
+  it('a pick of the engine the task is on, queued behind a switch, turns it back; once there, it reads as done', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    let release!: () => void;
+    edges.gate = new Promise<void>((r) => { release = r; });
+    const first = requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    await vi.waitFor(() => expect(edges.starts).toHaveLength(1));
+    const back = requestEngineSwitch({ taskId, engine: 'claude', source: 'test' });
+    edges.gate = undefined;
+    release();
+    await first;
+    expect(await back).toMatchObject({ state: 'done', engine: 'claude', sessionId: sid, resumed: true });
+    // Asked again while the task already runs there, after waiting on a pick: done, not a refusal.
+    let release2!: () => void;
+    edges.gate = new Promise<void>((r) => { release2 = r; });
+    const toPi = requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    await vi.waitFor(() => expect(edges.starts.length).toBeGreaterThan(1));
+    const piAgain = requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    edges.gate = undefined;
+    release2();
+    const onPi = await toPi;
+    expect(await piAgain).toMatchObject({ state: 'done', engine: 'pi', sessionId: onPi.sessionId });
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done', session_id: onPi.sessionId });
+  });
+
   it('a person\'s second pick while a switch runs follows it: claude, then codex, then pi', async () => {
     const { taskId, sid } = await taskOn('claude');
     let release!: () => void;

@@ -169,18 +169,47 @@ export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<Eng
     throw new EngineSwitchError(err instanceof Error ? err.message : String(err), 404, 'task_not_found');
   });
   const task = await readTask();
-  // A person picking again while the last pick still starts: the newest pick follows it, from the
-  // session that one made. Its answer may come after the caller stopped waiting (the web posts with
-  // `detach`), so a refusal is put on the task, where the panel on that session reads it.
-  if (isSwitching(task.id) && !req.callerSid) {
-    await awaitSwitch(task.id);
-    return switchFrom(req, await readTask()).catch(async (err: unknown) => {
-      await noteRefusedAfterWait(req, err);
-      throw err;
-    });
+  if (req.callerSid) return switchFrom(req, task);
+  // A person's picks for one task run one at a time, read to start, and only the newest of those
+  // waiting runs (review round 6: two picks queued behind a third both passed the in-flight check,
+  // and the newer one was answered with the older one's switch). Each follows the one before it,
+  // from the session that one made. Its answer may come after the caller stopped waiting (the web
+  // posts with `detach`), so a refusal is put on the task, where the panel on that session reads it.
+  const chain = personPicks.get(task.id) ?? { tail: Promise.resolve(), latest: 0, open: 0 };
+  personPicks.set(task.id, chain);
+  const generation = ++chain.latest;
+  const behind = chain.open > 0 || isSwitching(task.id);
+  chain.open++;
+  const turn = chain.tail.then(async () => {
+    if (isSwitching(task.id)) await awaitSwitch(task.id);
+    if (chain.latest !== generation) {
+      throw new EngineSwitchError('A newer engine pick for this task took the place of this one', 409, 'switch_superseded');
+    }
+    return switchFrom(req, behind ? await readTask() : task);
+  });
+  chain.tail = turn.catch(() => {});
+  try {
+    return await turn;
+  } catch (err) {
+    if (!behind || (err instanceof EngineSwitchError && err.code === 'switch_superseded')) throw err;
+    // The pick waited, and the task is now on the engine it asked for: that is what the person wanted.
+    if (err instanceof EngineSwitchError && err.code === 'same_engine') {
+      const { taskConversation } = await import('./task-session-claim.js');
+      const now = await taskConversation(task.id).catch(() => null);
+      return {
+        state: 'done', taskId: task.id, switchId: `es-${randomUUID()}`, engine: resolveEngine(req.engine),
+        host: normalizeHost(now?.host), ...(now ? { sessionId: now.claudeSessionId } : {}),
+      };
+    }
+    await noteRefusedAfterWait(req, err);
+    throw err;
+  } finally {
+    if (--chain.open === 0 && personPicks.get(task.id) === chain) personPicks.delete(task.id);
   }
-  return switchFrom(req, task);
 }
+
+/** A person's picks per task, run in order (requestEngineSwitch). */
+const personPicks = new Map<string, { tail: Promise<unknown>; latest: number; open: number }>();
 
 /** A refusal of a pick that waited for another switch, as a failed switch from the task's current session. */
 async function noteRefusedAfterWait(req: EngineSwitchRequest, err: unknown): Promise<void> {

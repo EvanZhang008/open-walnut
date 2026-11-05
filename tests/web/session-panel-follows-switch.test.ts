@@ -70,7 +70,7 @@ describe('a session panel follows the task to its new session in every host', ()
     expect(pill).not.toMatch(/setPickerOpen\(\(v\) => !v\)/);
     expect(pill).toContain('onAnchorLost={() => { setPickerOpen(false); onPickerCancel?.(); }}');
     const sw = read('web/src/components/sessions/EngineSwitch.tsx');
-    expect(sw).toMatch(/switchTaskEngine\(taskId, p\)/);
+    expect(sw).toMatch(/switchTaskEngine\(taskId, p[,)]/);
     const api = read('web/src/api/engine-switch.ts');
     expect(api).toContain("when: 'now', detach: true");
   });

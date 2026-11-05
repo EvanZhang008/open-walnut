@@ -72,7 +72,9 @@ export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000];
  * the earlier attempt took effect reads as that: the task already on the engine (`same_engine`),
  * or the switch still running (`switch_in_progress`).
  */
-export async function switchTaskEngine(taskId: string, pick: { engine: string; model?: string; effort?: string }): Promise<SwitchEngineAnswer> {
+export async function switchTaskEngine(
+  taskId: string, pick: { engine: string; model?: string; effort?: string }, opts: { withdraw?: boolean } = {},
+): Promise<SwitchEngineAnswer> {
   const deadline = Date.now() + SWITCH_RETRY_TOTAL_MS;
   const opId = mintOpId();
   // A newer pick for the task ends this one's retries (review round 5: a Pi pick still retrying
@@ -89,7 +91,10 @@ export async function switchTaskEngine(taskId: string, pick: { engine: string; m
       }, { timeoutMs: Math.max(1000, Math.min(30_000, left)), opId });
     } catch (err) {
       const code = err instanceof ApiError ? (err.body as { code?: unknown } | undefined)?.code : undefined;
-      if (attempt > 0 && code === 'same_engine') return { state: 'done', taskId };
+      // A newer pick took this one's place (here, or queued on the server): its answer is not this one's.
+      if (code === 'switch_superseded' || latestPick.get(taskId) !== generation) throw new SwitchSuperseded();
+      // A withdrawal (the person picked the engine the task is on again): the task staying there is the answer.
+      if ((attempt > 0 || opts.withdraw) && code === 'same_engine') return { state: 'done', taskId };
       if (attempt > 0 && code === 'switch_in_progress') return { state: 'switching', taskId };
       const wait = SWITCH_RETRY_DELAYS_MS[Math.min(attempt, SWITCH_RETRY_DELAYS_MS.length - 1)];
       if (!writeRetryable(err) || Date.now() + wait >= deadline) throw err;

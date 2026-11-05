@@ -81,6 +81,23 @@ describe('an engine switch across a server restart', () => {
     expect(calls).toHaveLength(2)
   })
 
+  it('a withdrawal (the engine the task is on, picked again) stops the older pick, and same_engine reads as done', async () => {
+    // Review round 6: picking Claude again sent nothing, so the Pi pick switched once Walnut was back.
+    answers.push('network', { status: 400, body: { error: 'This task already runs on Claude Code', code: 'same_engine' } })
+    const pi = switchTaskEngine('t1', { engine: 'pi' }).then((ok) => ({ ok }), (err) => ({ err }))
+    await vi.advanceTimersByTimeAsync(10)
+    const back = await settle(switchTaskEngine('t1', { engine: 'claude' }, { withdraw: true }))
+    expect(back).toEqual({ ok: { state: 'done', taskId: 't1' } })
+    expect('err' in (await pi) && (await pi as { err: unknown }).err).toBeInstanceOf(SwitchSuperseded)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('the server says a newer pick replaced this one: it reads as superseded, never as a refusal', async () => {
+    answers.push({ status: 409, body: { error: 'replaced', code: 'switch_superseded' } })
+    const r = await settle(switchTaskEngine('t1', { engine: 'pi' }))
+    expect('err' in r && r.err).toBeInstanceOf(SwitchSuperseded)
+  })
+
   it('a server that never comes back: it gives up within 90 seconds of the pick, with the network error', async () => {
     const t0 = Date.now()
     const at: number[] = []
