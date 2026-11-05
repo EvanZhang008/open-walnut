@@ -191,8 +191,10 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   test runner, a data home in a temp dir or a task dir, a HOME that is not the account's own)
   loads the embedding model, about 2.2 GB per worker lane plus a full re-embed of the copied
   data, or downloads the Qwen3-ASR voice model (2.3 to 3.2 GB) into its HOME
-  (`src/core/search/semantic-default.ts`). Opt in with `WALNUT_SEARCH_V2_SEMANTIC=1` and
-  `WALNUT_STT_AUTO_SETUP=1`.
+  (`src/core/search/semantic-default.ts`). Nor does it start, adopt or call a speech process, load
+  a speech model or record the microphone or system audio, even on a Mac that has the model
+  (`src/core/stt/voice-here.ts`, ratchet `tests/core/stt-voice-here-ratchet.test.ts`). Opt in with
+  `WALNUT_SEARCH_V2_SEMANTIC=1` and `WALNUT_STT_AUTO_SETUP=1`.
 
 Plugins still load with the copied settings, so a test that sends mail or a chat message
 through one sends it for real.

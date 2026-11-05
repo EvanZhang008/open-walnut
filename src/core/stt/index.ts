@@ -21,6 +21,7 @@ import { createQwenEngine } from './engine-qwen.js';
 import { writeRecordingSecondary } from './recordings.js';
 import { vocabWords } from './vocab.js';
 import { correctTranscript } from './corrections.js';
+import { voiceOffHere } from './voice-here.js';
 
 export type { SttEngine, SttRequest, SttResult } from './types.js';
 
@@ -162,6 +163,12 @@ export function getOrCreateSecondaryEngine(config: Config): SttEngine | null {
  * still works). Engines without warmup (one-shot CLIs) are skipped.
  */
 export async function prewarmSttEngines(config: Config): Promise<void> {
+  // A prewarm_on_start copied into an isolated server's data must not load the models there.
+  const off = voiceOffHere();
+  if (off) {
+    log.stt.info(`STT prewarm skipped: ${off}`);
+    return;
+  }
   const engines = [getOrCreateEngine(config), getOrCreateSecondaryEngine(config)];
   await Promise.all(engines.map(async engine => {
     if (!engine?.warmup) return;

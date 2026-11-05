@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import express from 'express'
 import request from 'supertest'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { optInToVoice } from '../helpers/voice-opt-in.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('stt-live'))
 const engine = vi.hoisted(() => vi.fn())
@@ -305,6 +306,7 @@ describe('live transcript', () => {
 })
 
 describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
+  optInToVoice()
   const app = express().use(express.json({ limit: '2mb' })).use('/api/v1', voiceArchiveV1Router)
   const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 

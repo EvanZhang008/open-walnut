@@ -27,6 +27,9 @@ import { isConformingWav } from '../../src/core/stt/audio-convert.js';
 import type { SttEngine } from '../../src/core/stt/types.js';
 import type { Config } from '../../src/core/types.js';
 import { removeTempTree } from '../helpers/temp-home.js';
+import { optInToVoice } from '../helpers/voice-opt-in.js';
+
+optInToVoice();
 
 const ASR_MODEL = 'fake/asr-model';
 const CLEANUP_MODEL = 'fake/cleanup-model';

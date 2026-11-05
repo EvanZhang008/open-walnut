@@ -18,6 +18,7 @@ import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
 import { PYTHON_STDIN_SCRIPT, feedDaemonSource } from './daemon-source.js';
 import { validateCleanup } from './cleanup-guard.js';
+import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { Config } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -145,6 +146,8 @@ function cleanupCfg(config: Config) {
 }
 
 export async function isCleanupAvailable(config: Config): Promise<{ available: boolean; error?: string }> {
+  const off = voiceOffHere();
+  if (off) return { available: false, error: off };
   const cfg = cleanupCfg(config);
   if (!cfg.pythonPath) return { available: false, error: 'stt.mlx_python_path not configured' };
   if (!state.importOk) {
@@ -181,6 +184,8 @@ async function ensureDaemon(config: Config): Promise<number> {
 }
 
 async function startDaemon(cfg: { pythonPath: string; model: string; port: number }): Promise<number> {
+  // Before the probe: adopting (or retiring) the user's own server's daemon is running voice too.
+  assertVoiceHere();
   const found = await probe(cfg.port, cfg.model);
   if (found === 'ours') {
     state.port = cfg.port;

@@ -16,6 +16,7 @@ import { getConfig } from './config-manager.js'
 import { log } from '../logging/index.js'
 import { loadComponent, markInstalledBroken, resolveComponent } from './components/index.js'
 import { bunCommand } from '../lib/runtime.js'
+import { assertVoiceHere, voiceOffHere } from './stt/voice-here.js'
 
 // Persistent state file — if this file exists, recording should be active.
 // Written on start(), deleted on stop(). Server reads it on startup to auto-resume.
@@ -220,6 +221,14 @@ class AudioCaptureService {
    */
   private refreshPermissionsInBackground(): void {
     if (this.permissionsRefreshing) return
+    // The probe runs the capture addon against macOS's screen recording
+    // permission: an isolated server starts no capture process (stt/voice-here.ts).
+    const off = voiceOffHere()
+    if (off) {
+      this.permissionsCache = { granted: false, message: off }
+      this.permissionsCheckedAt = Date.now()
+      return
+    }
     this.permissionsRefreshing = true
     let addonPath: string
     try {
@@ -288,6 +297,11 @@ class AudioCaptureService {
    *  child process wedging for minutes costs nothing; it's killed on timeout. */
   private refreshAppsInBackground(): void {
     if (this.appsRefreshing) return
+    if (voiceOffHere()) {
+      this.appsCache = []
+      this.appsCheckedAt = Date.now()
+      return
+    }
     this.appsRefreshing = true
     const startedAt = Date.now()
     let addonPath: string
@@ -339,6 +353,8 @@ class AudioCaptureService {
    * Start recording audio.
    */
   async start(options: RecordingOptions): Promise<{ recordingId: string }> {
+    // An isolated server records nothing on the user's Mac (stt/voice-here.ts).
+    assertVoiceHere()
     if (this.recording) {
       throw new Error('Already recording. Stop current recording first.')
     }
@@ -871,6 +887,13 @@ class AudioCaptureService {
    * Called once during server startup.
    */
   async resume(): Promise<void> {
+    // A copied data home carries the user's recording state: an isolated server
+    // leaves it as it is and starts nothing (stt/voice-here.ts).
+    const off = voiceOffHere()
+    if (off) {
+      if (fs.existsSync(RECORDING_STATE_FILE)) log.audio.info('recording not resumed', { reason: off })
+      return
+    }
     try {
       if (!fs.existsSync(RECORDING_STATE_FILE)) return
       const raw = fs.readFileSync(RECORDING_STATE_FILE, 'utf-8')

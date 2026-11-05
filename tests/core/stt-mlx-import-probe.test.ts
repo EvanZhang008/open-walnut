@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMlxEngine } from '../../src/core/stt/engine-mlx.js';
 import { removeTempTree } from '../helpers/temp-home.js';
+import { optInToVoice } from '../helpers/voice-opt-in.js';
 
 const dirs: string[] = [];
 afterEach(async () => { for (const d of dirs.splice(0)) await removeTempTree(d); });
@@ -27,6 +28,7 @@ async function fakePython(body: string): Promise<string> {
 }
 
 describe('mlx engine: import probe', () => {
+  optInToVoice();
   it('a probe that times out is not "not installed"', async () => {
     const engine = createMlxEngine({ pythonPath: await fakePython('exec sleep 5'), importProbeTimeoutMs: 300 });
     expect(await engine.isAvailable()).toEqual({ available: true });

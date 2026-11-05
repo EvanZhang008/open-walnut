@@ -6,6 +6,7 @@ import { dropLiveForward, finishOnMac, hasLiveForward } from './live-forward.js'
 import { cafToWav, cafDataLayout } from './caf-to-wav.js'
 import { isConformingWav } from './audio-convert.js'
 import { wavPcm } from './wav-segment.js'
+import { voiceOffHere } from './voice-here.js'
 
 export interface VoiceTranscript { text: string; via?: string; recordingId: string; primarySaved?: boolean; storage: 'companion' | 'primary'; asr?: VoiceAsr }
 const reply = (record: VoiceRecord): VoiceTranscript => ({ text: record.text ?? '', via: record.via, recordingId: record.id, primarySaved: record.primarySaved, storage: record.storage, ...(record.asr ? { asr: record.asr } : {}) })
@@ -163,6 +164,8 @@ function languageValue(body: unknown): string | undefined {
  * only holds them, in case the Mac leaves before the take is done.
  */
 export async function liveRole(): Promise<{ takes: boolean; now: boolean }> {
+  // An isolated server runs no engine of its own: pieces held for one would never be used.
+  if (voiceOffHere()) return { takes: false, now: false }
   if (FOLLOWER) {
     // Pieces held for an engine that is not installed would never be used.
     if (!(await localReady())) return { takes: false, now: false }

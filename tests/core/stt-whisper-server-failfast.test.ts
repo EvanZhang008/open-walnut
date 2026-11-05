@@ -13,6 +13,7 @@ import { writeFile, chmod, rm, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWhisperServerEngine } from '../../src/core/stt/engine-whisper-server.js';
+import { optInToVoice } from '../helpers/voice-opt-in.js';
 
 let workDir: string | null = null;
 
@@ -38,6 +39,7 @@ async function makeExitingBinary(): Promise<{ bin: string; model: string }> {
 }
 
 describe('whisper-server engine fail-fast', () => {
+  optInToVoice();
   it('fails within ~2s (not 30s) when the daemon exits during startup, surfacing its stderr', async () => {
     const { bin, model } = await makeExitingBinary();
     const engine = createWhisperServerEngine({ binaryPath: bin, modelPath: model });

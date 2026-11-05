@@ -11,7 +11,8 @@
  *
  * Never on an isolated server (tests, ephemeral children, a data home in a temp
  * dir or a task dir, a HOME that is not the account's own): each would download
- * gigabytes into a throwaway place. WALNUT_STT_AUTO_SETUP=1 opts one in. A person who picked
+ * gigabytes into a throwaway place. WALNUT_STT_AUTO_SETUP=1 opts one in, and is
+ * also what lets such a server run the engines it installed (voice-here.ts). A person who picked
  * an engine keeps it. A failure retries with backoff, and the state is shown by
  * GET /api/stt/status so the settings page and the phone can say "installing".
  */
@@ -52,10 +53,9 @@ export function getQwenSetupStatus(): QwenSetupStatus {
 
 /** Tests, an ephemeral child, a temp or task-dir data home, a fake HOME: the same rule search uses for its model. */
 export async function isIsolatedServer(): Promise<boolean> {
-  const { semanticLaneDecision } = await import('../search/semantic-default.js');
-  const { IS_EPHEMERAL, WALNUT_HOME } = await import('../../constants.js');
-  const env = { ...process.env, WALNUT_SEARCH_V2_SEMANTIC: undefined };
-  return !semanticLaneDecision({ env, isEphemeral: IS_EPHEMERAL, walnutHome: WALNUT_HOME }).on;
+  // One reading of the rule for the install and for every voice process (voice-here.ts).
+  const { isolatedHere } = await import('./voice-here.js');
+  return isolatedHere() !== null;
 }
 
 export function hostFacts(): HostFacts {

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
+import { assertVoiceHere } from './voice-here.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -29,6 +30,7 @@ let current: { proc: ChildProcess; wavPath: string; startedAt: number; killTimer
  * devices are skipped, any remaining "microphone" wins, else device 0.
  */
 async function findMicDevice(): Promise<string> {
+  assertVoiceHere();
   try {
     // -list_devices exits non-zero by design; the listing is on stderr either way.
     const out = await execFileAsync('ffmpeg', ['-f', 'avfoundation', '-list_devices', 'true', '-i', ''], {
@@ -52,6 +54,8 @@ export function isMicRecording(): boolean {
 
 /** Start a mic recording. Throws if one is already running. */
 export async function startMicRecording(): Promise<{ startedAt: number }> {
+  // An isolated server records nothing: its microphone is the user's (voice-here.ts).
+  assertVoiceHere();
   if (current) throw new Error('A dictation recording is already in progress');
   const dir = await mkdtemp(join(tmpdir(), 'walnut-dictate-'));
   const wavPath = join(dir, 'rec.wav');

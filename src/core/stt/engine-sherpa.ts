@@ -9,6 +9,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { log } from '../../logging/index.js';
 import { convertToWav, cleanupTempFile, isFfmpegAvailable } from './audio-convert.js';
+import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 interface SherpaConfig {
@@ -100,6 +101,8 @@ function buildRecognizerConfig(cfg: SherpaConfig) {
 }
 
 async function getRecognizer(cfg: SherpaConfig) {
+  // The model loads into this process and stays there (voice-here.ts).
+  assertVoiceHere();
   // Return cached if model dir and type haven't changed
   if (cachedRecognizer && cachedModelDir === cfg.modelDir && cachedModelType === cfg.modelType) {
     return cachedRecognizer;
@@ -143,6 +146,8 @@ export function createSherpaEngine(cfg: SherpaConfig): SttEngine {
     name: 'sherpa-onnx',
 
     async isAvailable() {
+      const off = voiceOffHere();
+      if (off) return { available: false, error: off };
       if (!(await dirExists(cfg.modelDir))) {
         return { available: false, error: `Model directory not found: ${cfg.modelDir}` };
       }
@@ -162,6 +167,7 @@ export function createSherpaEngine(cfg: SherpaConfig): SttEngine {
     },
 
     async transcribe(req: SttRequest): Promise<SttResult> {
+      assertVoiceHere();
       const t0 = Date.now();
 
       // Convert to WAV for sherpa-onnx

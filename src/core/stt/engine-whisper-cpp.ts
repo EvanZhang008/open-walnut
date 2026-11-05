@@ -10,6 +10,7 @@ import { stat } from 'node:fs/promises';
 import { log } from '../../logging/index.js';
 import { convertToWav, cleanupTempFile, isFfmpegAvailable } from './audio-convert.js';
 import { sttSpawnEnv } from './spawn-env.js';
+import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -51,6 +52,8 @@ export function createWhisperCppEngine(cfg: WhisperCppConfig): SttEngine {
     name: 'whisper-cpp',
 
     async isAvailable() {
+      const off = voiceOffHere();
+      if (off) return { available: false, error: off };
       resolvedBinaryPath = await resolveBinary(cfg.binaryPath);
       if (!resolvedBinaryPath) {
         return { available: false, error: `whisper-cpp binary not found: ${cfg.binaryPath}` };
@@ -68,6 +71,8 @@ export function createWhisperCppEngine(cfg: WhisperCppConfig): SttEngine {
     },
 
     async transcribe(req: SttRequest): Promise<SttResult> {
+      // Each call runs whisper-cli with the model: a voice process (voice-here.ts).
+      assertVoiceHere();
       const t0 = Date.now();
 
       const wavPath = await convertToWav(req.audio, req.format);

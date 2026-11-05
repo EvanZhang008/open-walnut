@@ -31,6 +31,7 @@ import { convertToWav, cleanupTempFile } from './audio-convert.js';
 import {
   probeDaemonPatiently, identifyWalnutDaemon, retireDaemon, isDaemonConnectionLost, QUICK_PROBE_MS,
 } from './daemon-health.js';
+import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -307,6 +308,9 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   }
 
   async function startServer(): Promise<number> {
+    // Before the adopt probe too: an isolated server must not take over the warm
+    // daemon the user's own server keeps on the shared port (voice-here.ts).
+    assertVoiceHere();
     let port = cfg.port ?? DEFAULT_MLX_PORT;
 
     // A previous walnut server (we redeploy many times a day) may have left a
@@ -415,6 +419,8 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     },
 
     async isAvailable() {
+      const off = voiceOffHere();
+      if (off) return { available: false, error: off };
       if (!(await fileExists(cfg.pythonPath))) {
         return { available: false, error: `Python interpreter not found: ${cfg.pythonPath}` };
       }

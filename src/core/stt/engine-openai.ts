@@ -3,6 +3,11 @@
  *
  * Works with OpenAI, Groq, Fireworks AI, and any provider
  * that implements the /v1/audio/transcriptions endpoint.
+ *
+ * Not gated by voice-here.ts on an isolated server: it starts no local process,
+ * loads no model and records nothing, and the isolation rule is about this
+ * machine's memory, processes and microphone. A key copied with the data home
+ * still makes real calls, as a copied plugin's settings do.
  */
 
 import { log } from '../../logging/index.js';

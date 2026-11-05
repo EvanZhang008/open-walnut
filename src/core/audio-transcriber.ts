@@ -12,6 +12,7 @@ import { getConfig } from './config-manager.js'
 import { transcribeAudio } from './stt/index.js'
 import { log } from '../logging/index.js'
 import type { RecordingChunkMeta } from './audio-capture.js'
+import { voiceOffHere } from './stt/voice-here.js'
 
 // Simple serial queue — process one chunk at a time to avoid concurrent STT calls
 let processing = false
@@ -120,6 +121,12 @@ async function transcribeChunk(
  * Initialize the audio transcriber — subscribe to chunk-saved events.
  */
 export function initAudioTranscriber(): void {
+  // An isolated server records nothing and runs no engine, so it has nothing to transcribe.
+  const off = voiceOffHere()
+  if (off) {
+    log.audio.info('audio transcriber not started', { reason: off })
+    return
+  }
   bus.subscribe('audio-transcriber', (event) => {
     if (event.name !== EventNames.AUDIO_CHUNK_SAVED) return
 

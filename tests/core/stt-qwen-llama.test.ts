@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { optInToVoice } from '../helpers/voice-opt-in.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-test-stt-qwen'));
 
@@ -322,6 +323,7 @@ describe('installLlama', () => {
 });
 
 describe('llama-server engine', () => {
+  optInToVoice();
   let home = '';
   let spawns = '';
   const pids: number[] = [];

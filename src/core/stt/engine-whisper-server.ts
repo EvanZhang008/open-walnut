@@ -29,6 +29,7 @@ import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
 import { isFfmpegAvailable } from './audio-convert.js';
 import { probeDaemonPatiently, waitForPortReleased } from './daemon-health.js';
+import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -185,6 +186,7 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
   }
 
   async function startServer(): Promise<number> {
+    assertVoiceHere();
     const bin = resolvedBinaryPath ?? cfg.binaryPath;
     const port = cfg.port ?? await findFreePort();
 
@@ -292,6 +294,8 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     },
 
     async isAvailable() {
+      const off = voiceOffHere();
+      if (off) return { available: false, error: off };
       resolvedBinaryPath = await resolveBinary(cfg.binaryPath);
       if (!resolvedBinaryPath) {
         return { available: false, error: `whisper-server binary not found: ${cfg.binaryPath}` };

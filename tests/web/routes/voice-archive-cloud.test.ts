@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { rm, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createMockConstants } from '../../helpers/mock-constants.js'
+import { optInToVoice } from '../../helpers/voice-opt-in.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('voice-archive-cloud', { CLOUD_MODE: true }))
 const bridge = vi.hoisted(() => vi.fn())
 const activity = vi.hoisted(() => new Set<() => void>())
@@ -47,6 +48,9 @@ async function unansweredProbe(id: string): Promise<void> {
   probeMacForTake(id)
   await new Promise((r) => setTimeout(r, MAC_SILENCE_MS + 200))
 }
+// Its engine is mocked, but the live-piece routing asks the voice gate first.
+optInToVoice()
+
 let primaryHome: string
 let primary: VoiceArchiveStore
 beforeEach(async () => {

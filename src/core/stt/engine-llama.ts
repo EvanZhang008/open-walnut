@@ -33,6 +33,7 @@ import { convertToWav, cleanupTempFile } from './audio-convert.js';
 import { isDaemonConnectionLost } from './daemon-health.js';
 import { segmentBoundaries, wavPcm, pcmToWav, joinSegmentTexts, SAMPLE_RATE } from './wav-segment.js';
 import { llamaHome, llamaServerPath, llamaModelPaths, isLlamaInstalled } from './llama-runtime.js';
+import { assertVoiceHere, voiceOffHere } from './voice-here.js';
 import type { LlamaTarget, QwenSize } from './qwen-plan.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
@@ -119,6 +120,8 @@ export function createLlamaEngine(cfg: LlamaEngineConfig): SttEngine {
   }
 
   async function start(): Promise<void> {
+    // Before the probe: adopting the user's own server's daemon is running voice too (voice-here.ts).
+    assertVoiceHere();
     const found = await probe();
     if (found === 'ours' || found === 'loading') {
       if (found === 'loading') await waitHealthy(Date.now() + STARTUP_TIMEOUT_MS, null);
@@ -205,6 +208,8 @@ export function createLlamaEngine(cfg: LlamaEngineConfig): SttEngine {
   }
 
   async function transcribeSerial(req: SttRequest, t0: number): Promise<SttResult> {
+    // Before the conversion too: on a server that runs no voice nothing of a take is done.
+    assertVoiceHere();
     req.signal?.throwIfAborted();
     const wavPath = await convertToWav(req.audio, req.format);
     try {
@@ -241,6 +246,8 @@ export function createLlamaEngine(cfg: LlamaEngineConfig): SttEngine {
     model: `Qwen3-ASR-${cfg.size}`,
 
     async isAvailable() {
+      const off = voiceOffHere();
+      if (off) return { available: false, error: off };
       if (!(await isLlamaInstalled(cfg.target, cfg.size, home))) {
         const { getQwenSetupStatus } = await import('./auto-setup.js');
         return getQwenSetupStatus().state === 'installing'

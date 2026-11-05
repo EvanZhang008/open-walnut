@@ -26,6 +26,7 @@ import { createMlxEngine } from '../../src/core/stt/engine-mlx.js';
 import { probeDaemon, probeDaemonPatiently, isDaemonConnectionLost } from '../../src/core/stt/daemon-health.js';
 import type { SttEngine } from '../../src/core/stt/types.js';
 import { removeTempTree } from '../helpers/temp-home.js';
+import { optInToVoice } from '../helpers/voice-opt-in.js';
 
 const MODEL = 'fake/asr-model';
 
@@ -197,6 +198,7 @@ afterEach(async () => {
 });
 
 describe('mlx engine: slow is not dead', () => {
+  optInToVoice();
   it('keeps an adopted daemon whose health probe answers late, instead of retiring it mid-dictation', async () => {
     const pythonPath = await makeFakePython();
     const port = await freePort();
