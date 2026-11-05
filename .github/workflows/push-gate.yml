@@ -1,0 +1,152 @@
+name: Push gate
+
+# The test gate a push to main waits on (scripts/push-gate.sh, run by .husky/pre-push when
+# `git config walnut.pushGate` is true). The hook pushes the commit to a `gate/<sha>` branch;
+# this runs CI's quick and frontend tiers on it, and the browser specs the commit touches, on
+# the same runners and with the same commands as ci.yml, and writes the verdict as commit
+# statuses: one per tier, and `walnut/push-gate` for the whole. The hook pushes main only when
+# that reads success, then deletes the branch.
+#
+# Why: every team pushed to main without CI's checks, so one team's red test turned every later
+# run red and mailed "Run failed" each hour (2026-11-04, the user: "this happens every day").
+# Run on a shared dev host instead, the same tiers took 41 minutes and reported 15 failures, all
+# but one from the host's load and toolchain; these runners are CI's own.
+#
+# The test steps may fail without failing the run (a verdict is a status, never a red run that
+# mails anyone). tests/scripts/push-gate-workflow.test.ts pins the tiers to ci.yml's.
+
+on:
+  push:
+    branches: ['gate/**']
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: push-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  test:
+    name: Gate (${{ matrix.tier }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ci.yml's quick and frontend legs, command for command.
+          - tier: quick 1/3
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=1/3
+          - tier: quick 2/3
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=2/3
+          - tier: quick 3/3
+            cmd: bun run test:baseline -- --maxWorkers=1 --shard=3/3
+          - tier: frontend
+            cmd: bun run test:frontend:ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - run: bun run build:plugins
+      - name: ${{ matrix.tier }} tests
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ${{ matrix.cmd }} 2>&1 | tee "$RUNNER_TEMP/out.txt"
+      # Not for a cancelled run: a newer gate of the same commit replaced it, and only that
+      # one's verdict counts.
+      - name: Status
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.tests.outcome }}
+          CONTEXT: walnut/push-gate (${{ matrix.tier }})
+        run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
+
+  browser:
+    name: Gate (browser specs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      # GitHub's main, to tell which browser specs this commit touches (two trees are enough).
+      - run: git fetch -q --depth=1 origin main
+      - id: specs
+        run: |
+          specs=$(bash scripts/push-gate.sh --specs FETCH_HEAD HEAD)
+          echo "specs=$specs" >> "$GITHUB_OUTPUT"
+          echo "browser specs: ${specs:-none}"
+      # The Playwright runner runs on Node, as in ci.yml's browser job.
+      - uses: actions/setup-node@v5
+        if: steps.specs.outputs.specs != ''
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        if: steps.specs.outputs.specs != ''
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache@v4
+        if: steps.specs.outputs.specs != ''
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        if: steps.specs.outputs.specs != ''
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - run: bun run build && (cd web && bun x vite build)
+        if: steps.specs.outputs.specs != ''
+      # WebKit too: the *.webkit.spec.ts specs launch it themselves, as in ci.yml.
+      - run: bun x playwright install --with-deps chromium webkit
+        if: steps.specs.outputs.specs != ''
+      - name: browser specs
+        id: tests
+        if: steps.specs.outputs.specs != ''
+        continue-on-error: true
+        env:
+          PW_IGNORE_LOAD: '1'
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-browser
+        run: |
+          set -o pipefail
+          bun scripts/browser-baseline.mjs check --run --retries=1 ${{ steps.specs.outputs.specs }} 2>&1 | tee "$RUNNER_TEMP/out.txt"
+      # Not for a cancelled run: a newer gate of the same commit replaced it, and only that
+      # one's verdict counts.
+      - name: Status
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.specs.outcome == 'success' && steps.specs.outputs.specs == '' && 'success' || steps.tests.outcome }}
+          CONTEXT: walnut/push-gate (browser specs)
+        run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
+
+  verdict:
+    name: Gate verdict
+    needs: [test, browser]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ needs.test.result }} ${{ needs.browser.result }}
+        run: bash scripts/push-gate-status.sh --verdict
