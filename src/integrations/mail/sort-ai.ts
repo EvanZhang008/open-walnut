@@ -23,6 +23,7 @@
 import type { MailSortStore, ScanRow, AiVerdict } from './sort-store.js'
 import type { SortFeatures } from './sort-types.js'
 import { IMPORTANT_LABEL, NOT_IMPORTANT_LABEL } from './sort-classify.js'
+import { mapSliced } from './sort-recompute.js'
 import {
   SUMMARY_MAX_TOKENS, SUMMARY_SYSTEM, parseSummaries, summaryPrompt, type GroupDigest, type SummaryGroupInput,
 } from './sort-group-summary.js'
@@ -350,7 +351,11 @@ export class MailSortLabeler {
       const context = await this.deps.context()
       const rows = await this.deps.store.aiCandidates(context.rev, this.now() - AI_WINDOW_MS, AI_BATCH)
       if (rows.length === 0) return true
-      const ask = rows.filter((row) => !context.decides(row))
+      // Rule tests are synchronous; sliced like the re-sort (sort-recompute.ts), since rules times rows
+      // of near-cap patterns can hold the loop for longer than one slice.
+      const decided = await mapSliced(rows, (row) => context.decides(row))
+      if (this.disposed) return false
+      const ask = rows.filter((_, n) => !decided[n])
       let answers = new Map<number, ParsedLabel>()
       if (ask.length > 0) {
         const text = await this.ask(model, LABEL_SYSTEM, labelPrompt(ask, context), MAX_TOKENS)

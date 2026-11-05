@@ -53,6 +53,7 @@ const config = mergeConfig(
         '@open-walnut/walnut-added': path.resolve(import.meta.dirname, 'src/lib/walnut-added.ts'),
         '@open-walnut/send-targets': path.resolve(import.meta.dirname, 'src/lib/send-targets.ts'),
         '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
+        '@open-walnut/mail-subject-pattern': path.resolve(import.meta.dirname, 'src/integrations/mail/sort-regex-safety.ts'),
       },
     },
     test: {

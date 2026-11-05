@@ -230,6 +230,8 @@ export interface CatalogItem {
 export interface RuleView extends Rule {
   id: string
   summary: string
+  /** Set on a rule loaded switched off (a subject pattern Walnut will not run): the sentence its row shows. */
+  offReason?: string
 }
 
 export interface RulesResponse {

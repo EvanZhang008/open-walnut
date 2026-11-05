@@ -127,6 +127,8 @@ export interface MailServiceSortHook {
   prepareIngest(accountId: string, envelopes: ReadonlyArray<MailEnvelope>): Promise<(write: MessageWrite) => NonNullable<MessageWrite['sort']> & { moveOut?: string }>
   sortDtoOf(row: MessageRow): NonNullable<MailMessageDto['sort']>
   notifyGroupsChanged(pairs: ReadonlyArray<{ accountId: string; mailboxId: string }>): void
+  /** Sort these rows again from what they are now (an ingest verdict whose inputs moved). */
+  reclassify(accountId: string, messageIds: ReadonlyArray<string>): Promise<number>
 }
 
 export class MailService {
@@ -808,6 +810,7 @@ export class MailService {
         return write
       }
     }
+    const updatedWithSort: string[] = []
     for (const envelope of envelopes) {
       const existing = known.get(envelope.messageId)
       const hash = envelopeHashOf(envelope)
@@ -835,6 +838,7 @@ export class MailService {
           : existing
         const write = withSort(this.toWrite(accountId, envelope, hash, carried))
         await this.deps.store.updateMessage(existing.rowid, write, this.now)
+        if (write.sort) updatedWithSort.push(write.messageId)
         // Only the envelope fields are re-indexed, and ONLY when there is no stored body: an
         // envelope-only update used to overwrite the FTS row with an empty `body_text`, so a
         // changed subject silently deleted the body from search.
@@ -859,8 +863,19 @@ export class MailService {
       result.sortedPairs = [...sorted.values()]
       this.deps.sort?.notifyGroupsChanged(result.sortedPairs)
     }
-    if (moveOut.length > 0 && this.deps.filters) {
-      await this.deps.filters.queue(moveOut).catch((error) => {
+    // A row the labeler or a hint wrote while this page was being written kept its verdict out
+    // (`updateMessage`): sorted again from what it is now, and moved, if at all, by that sort.
+    const skipped = this.deps.sort && updatedWithSort.length > 0
+      ? new Set(await this.deps.store.sortSkipped(accountId, updatedWithSort).catch(() => []))
+      : new Set<string>()
+    if (skipped.size > 0) {
+      await this.deps.sort?.reclassify(accountId, [...skipped]).catch((error) => {
+        this.deps.log?.warn?.('mail re-sort after ingest failed', { accountId, error: String(error).slice(0, 200) })
+      })
+    }
+    const moves = moveOut.filter((one) => !skipped.has(one.messageId))
+    if (moves.length > 0 && this.deps.filters) {
+      await this.deps.filters.queue(moves).catch((error) => {
         this.deps.log?.warn?.('mail filter moves not queued', { accountId, error: String(error).slice(0, 200) })
       })
     }

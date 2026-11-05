@@ -28,6 +28,7 @@ import type { GroupsResponse, RulesResponse } from '../../src/integrations/mail/
 import type { MailEnvelope } from '../../src/integrations/mail/types.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { setPluginFastTextOverride } from '../../src/core/plugins/plugin-fast-text.js'
+import { PATTERN_TOO_BIG, RULE_OFF_TOO_BIG } from '../../src/integrations/mail/sort-regex-safety.js'
 
 const PROVIDER = 'sortfake'
 const MARINA = `${PROVIDER}:marina`
@@ -557,5 +558,40 @@ describe('the rules routes', () => {
     expect(engine.groupedOn()).toBe(false)
     expect((await send('PUT', '/groups/pref', { on: 'yes' })).status).toBe(400)
     expect((await send<{ on: boolean }>('PUT', '/groups/pref', { on: true })).body).toEqual({ on: true })
+  })
+
+  it('a rule an older Walnut saved with a pattern now too big loads switched off; a save keeps it; a new one is refused', async () => {
+    const before = (await get<RulesResponse>('/rules')).body
+    const big = '(?:.{0,299}){20}'
+    const doc = yaml.load(await fsp.readFile(rulesFile(), 'utf8')) as { rules: Array<Record<string, unknown>> }
+    doc.rules.push({ when: { subject: { re: big } }, then: 'Notifications', source: 'user' })
+    await fsp.writeFile(rulesFile(), yaml.dump(doc))
+    await engine.reloadRules()
+    const loaded = (await get<RulesResponse>('/rules')).body
+    expect(loaded.error).toBeUndefined()
+    expect(loaded.rules).toHaveLength(before.rules.length + 1)
+    expect(loaded.rules.at(-1)).toMatchObject({ when: { subject: { re: big } }, offReason: RULE_OFF_TOO_BIG })
+    expect(loaded.rules.slice(0, -1).some((rule) => rule.offReason)).toBe(false)
+    // An off rule decides nothing, so it moves no verdict.
+    expect(loaded.rulesRev).toBe(before.rulesRev)
+    // A client sends the rules back as it read them, offReason included (an older one does not know it).
+    const kept = await send<{ fileRev: string }>('PUT', '/rules', {
+      baseRev: loaded.fileRev, groups: loaded.groups, rules: loaded.rules.map(({ summary: _s, ...rule }) => rule),
+    })
+    expect(kept.status).toBe(200)
+    const onDisk = yaml.load(await fsp.readFile(rulesFile(), 'utf8')) as { rules: Array<{ when: { subject?: { re: string } }; offReason?: string }> }
+    expect(onDisk.rules.at(-1)!.when.subject!.re).toBe(big)
+    expect(onDisk.rules.some((rule) => 'offReason' in rule)).toBe(false)
+    // A new too-big pattern is refused, as before.
+    const now = (await get<RulesResponse>('/rules')).body
+    const fresh = now.rules.map(({ summary: _s, offReason: _o, ...rule }) => rule)
+    const refused = await send<{ errors: Array<{ index: number; field: string; message: string }> }>('PUT', '/rules', {
+      baseRev: now.fileRev, groups: now.groups, rules: [...fresh, { when: { subject: { re: '(?=(?:\\w{0,299}x){5})' } }, then: 'Notifications', source: 'user' }],
+    })
+    expect(refused.status).toBe(400)
+    expect(refused.body.errors).toEqual([expect.objectContaining({ index: fresh.length, field: 'when.subject', message: PATTERN_TOO_BIG })])
+    const restored = await send('PUT', '/rules', { baseRev: now.fileRev, groups: now.groups, rules: fresh.slice(0, -1) })
+    expect(restored.status).toBe(200)
+    await engine.idle()
   })
 })

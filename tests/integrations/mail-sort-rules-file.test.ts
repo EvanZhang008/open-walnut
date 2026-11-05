@@ -13,7 +13,10 @@ import {
   LAST_GOOD_META_KEY, MISSING_FILE_REV, MailRulesFile, RULES_CHANGED_ON_DISK, dumpRulesDoc, fileRevOf, parseRulesYaml,
   type RulesFileState,
 } from '../../src/integrations/mail/sort-rules-file.js'
-import { PATTERN_TOO_SLOW } from '../../src/integrations/mail/sort-regex-safety.js'
+import { ruleIsOn } from '../../src/integrations/mail/sort-classify.js'
+import {
+  PATTERN_BACKREFERENCE, PATTERN_TOO_BIG, RULE_OFF_BACKREFERENCE, RULE_OFF_TOO_BIG, patternTooLong, ruleOffInvalid, ruleOffReason, ruleOffTooLong,
+} from '../../src/integrations/mail/sort-regex-safety.js'
 import { SKIP_INBOX_NEEDS_GROUP, THEN_REQUIRED, WHEN_EMPTY, validateRulesDoc } from '../../src/integrations/mail/sort-rules-schema.js'
 
 let dir: string
@@ -109,13 +112,22 @@ describe('reading the file', () => {
     expect(rules.current.doc.rules[0]!.id).toBe('r-7f3a2c')
   })
 
-  it('one bad regex makes the whole file invalid', async () => {
-    write(`version: 1\nrules:\n  - when: { from: "a@*" }\n    then: Important\n  - when: { subject: { re: "(a+)+$" } }\n    then: Important\n`)
+  it('one regex Walnut will not run turns that rule off, never the whole file; a new one is still refused', async () => {
+    const text = `version: 1\nrules:\n  - when: { from: "a@*" }\n    then: Important\n  - when: { subject: { re: "(a)\\\\1" } }\n    then: Important\n`
+    write(text)
     const rules = makeFile()
     await rules.start()
-    expect(rules.current.error?.message).toBe(PATTERN_TOO_SLOW)
-    expect(rules.current.error?.line).toBe(5)
-    expect(rules.current.doc.rules).toEqual([])
+    expect(rules.current.error).toBeUndefined()
+    expect(rules.current.doc.rules).toHaveLength(2)
+    expect(ruleIsOn(rules.current.doc.rules[0]!)).toBe(true)
+    expect(ruleOffReason(rules.current.doc.rules[1]!.when)).toBe(RULE_OFF_BACKREFERENCE)
+    // Pasted as a new rule (the current rules do not hold it), it is refused with its line.
+    rules.dispose()
+    write('version: 1\nrules: []\n')
+    const empty = makeFile()
+    await empty.start()
+    expect(empty.validateText(text)).toEqual([expect.objectContaining({ message: PATTERN_BACKREFERENCE, line: 5 })])
+    empty.dispose()
   })
 })
 
@@ -296,5 +308,85 @@ describe('skipInbox ("keep out of the Inbox")', () => {
     const typed = validateRulesDoc({ rules: [{ when: { from: 'a@b.example.invalid' }, then: 'Shop news', skipInbox: 'yes' }] })
     expect(typed.ok).toBe(false)
     if (!typed.ok) expect(typed.errors[0]).toMatchObject({ field: 'skipInbox', message: 'skipInbox must be true or false.' })
+  })
+})
+
+describe('a subject pattern Walnut will not run (too big, as an older Walnut accepted, or any a hand edit wrote)', () => {
+  // About 12,000 states: refused by this matcher, accepted before it.
+  const BIG = '(?:.{0,299}){20}'
+  const WITH_BIG = `${GOOD}  - id: r-big001
+    when: { subject: { re: "${BIG}" } }
+    then: Notifications
+    source: user
+`
+
+  it('loads switched off with its reason; the rest of the file works and becomes the last good copy', async () => {
+    write(WITH_BIG)
+    const rules = makeFile()
+    await rules.start()
+    expect(rules.current.error).toBeUndefined()
+    expect(rules.current.doc.rules.map((rule) => rule.id)).toEqual(['r-7f3a2c', 'r-big001'])
+    expect(ruleOffReason(rules.current.doc.rules[1]!.when)).toBe(RULE_OFF_TOO_BIG)
+    expect(ruleIsOn(rules.current.doc.rules[1]!)).toBe(false)
+    expect(ruleIsOn(rules.current.doc.rules[0]!)).toBe(true)
+    expect(JSON.parse(meta.get(LAST_GOOD_META_KEY)!).doc.rules).toHaveLength(2)
+  })
+
+  it('a last good copy holding one still loads when the file is broken at boot', async () => {
+    meta.set(LAST_GOOD_META_KEY, JSON.stringify({ doc: parseRulesYaml(WITH_BIG), at: now - 60_000 }))
+    write('version: 1\nrules:\n  - when: { from: "a@*"\n')
+    const rules = makeFile()
+    await rules.start()
+    expect(rules.current.error?.message).toMatch(/^The file is not valid YAML: /)
+    expect(rules.current.doc.rules.map((rule) => rule.id)).toEqual(['r-7f3a2c', 'r-big001'])
+  })
+
+  it('a save keeps it byte for byte; a new or changed too-big pattern is refused', async () => {
+    write(WITH_BIG)
+    const rules = makeFile()
+    await rules.start()
+    const asRead = rules.current.doc.rules.map((rule) => ({ ...rule, ...(ruleOffReason(rule.when) ? { offReason: ruleOffReason(rule.when) } : {}) }))
+    const kept = await rules.save({ groups: rules.current.doc.groups, rules: asRead }, rules.current.fileRev)
+    expect(kept.ok).toBe(true)
+    const text = fs.readFileSync(file(), 'utf8')
+    expect((parseRulesYaml(text) as { rules: Array<{ when: { subject?: { re: string } } }> }).rules[1]!.when.subject!.re).toBe(BIG)
+    expect(text).not.toContain('offReason')
+    expect(rules.validateText(text)).toEqual([])
+    for (const re of ['(?:.{0,299}){21}', '(?=(?:\\w{0,299}x){5})']) {
+      const added = await rules.save({ groups: [], rules: [...rules.current.doc.rules, { when: { subject: { re } }, then: 'Important', source: 'user' }] }, rules.current.fileRev)
+      expect(added.ok, re).toBe(false)
+      if (!added.ok) expect(added.json.errors).toEqual([expect.objectContaining({ index: 2, field: 'when.subject', message: PATTERN_TOO_BIG })])
+      expect(rules.validateText(`${text}  - when: { subject: { re: "${re.replace(/\\/g, '\\\\')}" } }\n    then: Important\n`)).toEqual([expect.objectContaining({ message: PATTERN_TOO_BIG })])
+    }
+    const changed = rules.current.doc.rules.map((rule) => (rule.id === 'r-big001' ? { ...rule, when: { subject: { re: '(?:.{0,299}){19}' } } } : rule))
+    const refused = await rules.save({ groups: [], rules: changed }, rules.current.fileRev)
+    expect(refused.ok).toBe(false)
+  })
+
+  // A hand edit may write any of these; each loads switched off with its own line, as a too-big one does.
+  it.each([
+    ['an invalid one', '(unclosed', ruleOffInvalid('a ( has no matching ). Close it, or write \\( to match a bracket.'), 'This pattern is not a valid regular expression: '],
+    ['one over 200 characters', 'a'.repeat(218), ruleOffTooLong(218), patternTooLong(219)],
+    // Written for YAML's double quotes: the file holds (a)\1.
+    ['a back-reference', '(a)\\\\1', RULE_OFF_BACKREFERENCE, PATTERN_BACKREFERENCE],
+  ])('%s loads switched off with its own line; the rest works; a save keeps it byte for byte; a new one is refused', async (_kind, re, line, refusal) => {
+    write(`${GOOD}  - id: r-held01\n    when: { subject: { re: "${re}" } }\n    then: Notifications\n    source: user\n`)
+    const rules = makeFile()
+    await rules.start()
+    expect(rules.current.error, re).toBeUndefined()
+    const held = rules.current.doc.rules[1]!
+    expect(ruleOffReason(held.when)).toBe(line)
+    expect(ruleIsOn(held)).toBe(false)
+    expect(ruleIsOn(rules.current.doc.rules[0]!)).toBe(true)
+    expect(JSON.parse(meta.get(LAST_GOOD_META_KEY)!).doc.rules).toHaveLength(2)
+    const stored = (held.when.subject as { re: string }).re
+    const kept = await rules.save({ groups: rules.current.doc.groups, rules: rules.current.doc.rules.map((rule) => (rule.id === 'r-held01' ? { ...rule, note: 'kept' } : rule)) }, rules.current.fileRev)
+    expect(kept.ok).toBe(true)
+    const text = fs.readFileSync(file(), 'utf8')
+    expect((parseRulesYaml(text) as { rules: Array<{ when: { subject?: { re: string } }; note?: string }> }).rules[1]).toMatchObject({ when: { subject: { re: stored } }, note: 'kept' })
+    const added = await rules.save({ groups: [], rules: [...rules.current.doc.rules, { when: { subject: { re: `${stored}x` } }, then: 'Important', source: 'user' }] }, rules.current.fileRev)
+    expect(added.ok).toBe(false)
+    if (!added.ok) expect(added.json.errors).toEqual([expect.objectContaining({ index: 2, field: 'when.subject', message: expect.stringContaining(refusal) })])
+    rules.dispose()
   })
 })

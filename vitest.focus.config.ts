@@ -40,6 +40,7 @@ const config = mergeConfig(
         '@open-walnut/brief-fresh': path.resolve(import.meta.dirname, 'src/core/sessions/brief-fresh.ts'),
         '@open-walnut/companion-keep': path.resolve(import.meta.dirname, 'src/core/replication/companion-keep.ts'),
         '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
+        '@open-walnut/mail-subject-pattern': path.resolve(import.meta.dirname, 'src/integrations/mail/sort-regex-safety.ts'),
       },
     },
     test: {

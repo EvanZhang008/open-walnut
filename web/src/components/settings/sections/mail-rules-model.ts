@@ -4,9 +4,11 @@
  *
  * No React and no network, so every sentence is graded in the node tier
  * (`tests/web/mail-rules-model.test.ts`). The words the server owns (a rule's summary, a validation
- * message) are passed through untouched.
+ * message) are passed through untouched; a subject pattern is checked with the server's own module.
  */
-import type { MailRule, MailRuleView, MailRuleWhen, MailRulesError } from '@/api/mail-groups';
+import { compileSubjectPattern, heldPatternLine, ruleOffReason, type PatternHint } from '@open-walnut/mail-subject-pattern';
+import type { MailPreviewResponse, MailRule, MailRuleView, MailRuleWhen, MailRulesError } from '@/api/mail-groups';
+import { movesPhrase } from '@/utils/mail-preview-moves';
 
 export const COPY = {
   crossLink: 'Inbox Triage reads only Important when grouping is on.',
@@ -16,10 +18,8 @@ export const COPY = {
   commentsNote: "Saving from here rewrites the file. Comments outside a rule's note are not kept; the previous version is kept as sort-rules.yaml.bak.",
   fixFirst: 'Fix the file first, or reload it after fixing.',
   empty: 'No rules yet. Use "Important…" or "Not important…" on a mail in Mail to teach Walnut, or add one here.',
-  builtinNote: 'Your rules above run first.',
   changedOnDisk: 'The rules file changed on disk.',
   changedOnSave: 'The rules file changed on disk. Reload to see the new version.',
-  addedByYou: 'Added by you',
   pluginOff: 'This panel is from Mail, which is off.',
 } as const;
 
@@ -63,12 +63,14 @@ export function shortDay(created: string | undefined): string | null {
   return month ? `${month} ${Number(match[3])}` : null;
 }
 
-/** `Learned Sep 28 · "note"`, or `Added by you`. */
+/**
+ * The line under a rule: `Learned Sep 28 · note` for one Walnut learned, the note alone for one of
+ * the user's (every rule there is theirs unless it says otherwise), '' for one of theirs with none.
+ */
 export function provenanceLine(rule: Pick<MailRule, 'source' | 'created' | 'note'>): string {
-  if (rule.source !== 'learned') return COPY.addedByYou;
-  const day = shortDay(rule.created);
-  const head = day ? `Learned ${day}` : 'Learned';
-  return rule.note ? `${head} · "${rule.note}"` : head;
+  const day = rule.source === 'learned' ? shortDay(rule.created) : null;
+  const head = rule.source === 'learned' ? (day ? `Learned ${day}` : 'Learned') : '';
+  return [head, rule.note?.trim() ?? ''].filter(Boolean).join(' \u00b7 ');
 }
 
 /** The list with one item moved by `delta`; the same list when the move would leave the ends. */
@@ -81,10 +83,60 @@ export function moveItem<T>(list: readonly T[], index: number, delta: -1 | 1): T
   return next;
 }
 
-/** What goes back to the server: the view-only `summary` dropped. */
+/** What goes back to the server: the view-only `summary` and `offReason` dropped. */
 export function storedRule(rule: MailRuleView | MailRule): MailRule {
-  const { summary: _summary, ...rest } = rule as MailRuleView;
+  const { summary: _summary, offReason: _offReason, ...rest } = rule as MailRuleView;
   return rest;
+}
+
+/** A row shows this much of a subject pattern; the rest is in its tooltip and in the editor. */
+export const PATTERN_SHOWN_CHARS = 60;
+
+/**
+ * A rule's summary in parts: its subject pattern (`/.../` as sort-rule-summary.ts writes it) as code
+ * without the slashes, so a long pattern stays in its own box instead of breaking mid-word in the
+ * sentence, and the ` \u2192 target` tail on one line (`nowrap`). A pattern over `PATTERN_SHOWN_CHARS`
+ * shows its head and an ellipsis, the whole pattern in `full` (2026-11-05: a 241-character one took
+ * six lines of the list).
+ */
+export interface SummaryPart { text: string; code?: true; full?: string; nowrap?: true }
+
+export function summaryParts(rule: Pick<MailRuleView, 'summary' | 'when'>): SummaryPart[] {
+  const { summary } = rule;
+  // `→ Build results` stays on one line: a target is never split from its arrow or across lines.
+  const target = (rest: string): SummaryPart[] => {
+    const arrow = rest.lastIndexOf(' \u2192 ');
+    return arrow < 0 ? (rest ? [{ text: rest }] : []) : [
+      ...(arrow > 0 ? [{ text: rest.slice(0, arrow) }] : []), { text: ' ' }, { text: rest.slice(arrow + 1), nowrap: true as const },
+    ];
+  };
+  const subject = rule.when.subject;
+  const marker = subject && typeof subject === 'object' ? `matching /${subject.re}/` : null;
+  const at = marker ? summary.indexOf(marker) : -1;
+  if (!marker || at < 0 || !subject || typeof subject !== 'object') return target(summary);
+  // The pattern as code, without the slashes the editor asks people to leave out.
+  const { re } = subject;
+  let cut = PATTERN_SHOWN_CHARS - 1;
+  // Never cut between the two halves of a surrogate pair.
+  if (/[\uD800-\uDBFF]/.test(re[cut - 1] ?? '')) cut -= 1;
+  const code: SummaryPart = re.length > PATTERN_SHOWN_CHARS
+    ? { text: `${re.slice(0, cut)}\u2026`, code: true, full: re }
+    : { text: re, code: true };
+  return [{ text: summary.slice(0, at + 'matching '.length) }, code, ...target(summary.slice(at + marker.length))];
+}
+
+/** The preview line; for a rule the user switched off, what it would match once on. */
+export function previewSentence(answer: Pick<MailPreviewResponse, 'matches' | 'moves' | 'partial'>, off = false): string {
+  const n = answer.matches;
+  const count = `${answer.partial ? 'at least ' : ''}${n.toLocaleString('en-US')} ${n === 1 ? 'mail' : 'mails'}`;
+  if (off) return `This rule is switched off; saving keeps it off. Switched on, it would match ${count}`;
+  const moves = movesPhrase(answer.matches, answer.moves);
+  return moves ? `Matches ${count} \u00b7 ${moves}` : `Matches ${count}`;
+}
+
+/** `A group named Build results already exists; …` for a new group typed with an existing name. */
+export function existingGroupLine(name: string): string {
+  return `A group named ${name} already exists; this rule sends mail to it.`;
 }
 
 /** `r-` + 6 hex. */
@@ -150,25 +202,52 @@ export function rowsOfWhen(when: MailRuleWhen, nextKey: () => number): Condition
   return rows;
 }
 
-/** A pattern that can backtrack for ever (a quantified group holding a quantifier, or a back-reference). */
-export function riskyPattern(source: string): boolean {
-  if (/\\[1-9]|\\k</.test(source)) return true;
-  return /\((?:[^()\\]|\\.)*(?:[+*]|\{\d+,?\d*\})(?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d+,?\d*\})/.test(source)
-    || /\(([^()|]+)\|\1\)[+*]/.test(source);
+/**
+ * The subject pattern a rule keeps although Walnut will not run it (too big, as an older Walnut
+ * accepted, or invalid, too long or with a back-reference, as a hand edit may write): that rule is
+ * off, and its own pattern, unchanged, is no problem on a save (the server keeps it too,
+ * sort-rules-schema.ts). Undefined for any other rule.
+ */
+export function heldPatternOf(rule: MailRule | null | undefined): string | undefined {
+  const subject = rule?.when.subject;
+  if (!subject || typeof subject !== 'object' || !ruleOffReason(rule!.when)) return undefined;
+  return subject.re;
 }
 
-export const RISKY_PATTERN = 'This pattern could take too long to run. Remove the repeated group.';
+/** The fields typed into a text box; switching between two of them keeps what was typed. */
+export const TEXT_FIELDS: ReadonlySet<ConditionField> = new Set(['from', 'subject', 'subjectRe', 'listId', 'group', 'message']);
+
+export interface RowsJudged {
+  when: MailRuleWhen;
+  /** What keeps the rule from saving, per row key (-1: the rule as a whole). */
+  problems: Map<number, string>;
+  /** A row holding the rule's own pattern that keeps it off: the calm line under it. */
+  off: Map<number, string>;
+  /** A pattern that runs but will not match as it seems meant to: a line under it that blocks nothing. */
+  hints: Map<number, PatternHint>;
+  /** A row that replaced the rule's own held pattern with one Walnut runs: saving turns the rule on. */
+  turnsOn: Set<number>;
+}
 
 /**
  * The rows as a rule `when`, with any problem Walnut can see before asking the server, per row.
- * An empty `when` would match every mail, so it is a problem too (key -1).
+ * An empty `when` would match every mail, so it is a problem too (key -1). Text is kept as typed
+ * where the matcher compares it as written (a subject's text or pattern, a list id, a message id):
+ * a space there is part of what matches, so `^re: ` stays `^re: ` and a stored rule round-trips
+ * byte for byte. Only a sender's entries and a group name are trimmed, which their matchers ignore
+ * anyway. A value of only spaces is empty. `held` is the rule's own pattern that keeps it off
+ * (`heldPatternOf`): a row holding exactly it is kept as written and listed in `off` with
+ * `heldPatternLine`, never as a problem; a changed one is judged like any typed pattern.
  */
-export function whenOfRows(rows: readonly ConditionRow[]): { when: MailRuleWhen; problems: Map<number, string> } {
+export function whenOfRows(rows: readonly ConditionRow[], held?: string): RowsJudged {
   const when: MailRuleWhen = {};
   const problems = new Map<number, string>();
+  const off = new Map<number, string>();
+  const hints = new Map<number, PatternHint>();
+  const turnsOn = new Set<number>();
   for (const row of rows) {
-    const value = row.value.trim();
-    if (!value && row.field !== 'cc') { problems.set(row.key, 'Type a value.'); continue; }
+    const value = row.value;
+    if (!value.trim() && row.field !== 'cc') { problems.set(row.key, 'Type a value.'); continue; }
     switch (row.field) {
       case 'from': {
         const list = value.split(',').map((one) => one.trim()).filter(Boolean);
@@ -177,9 +256,17 @@ export function whenOfRows(rows: readonly ConditionRow[]): { when: MailRuleWhen;
       }
       case 'subject': when.subject = value; break;
       case 'subjectRe': {
-        if (value.length > 200) { problems.set(row.key, 'A pattern is at most 200 characters.'); break; }
-        if (riskyPattern(value)) { problems.set(row.key, RISKY_PATTERN); break; }
-        try { new RegExp(value, 'i'); } catch { problems.set(row.key, 'This pattern does not work as a regular expression.'); break; }
+        if (held !== undefined && value === held) {
+          when.subject = { re: held };
+          off.set(row.key, heldPatternLine(held) ?? '');
+          break;
+        }
+        // The server's own check (linear matcher, same refusals and sentences), before any preview.
+        // The server checks again on save; only a cause the shared scan does not know reads differently here.
+        const compiled = compileSubjectPattern(value);
+        if (!compiled.ok) { problems.set(row.key, compiled.message); break; }
+        if (compiled.hint) hints.set(row.key, compiled.hint);
+        if (held !== undefined) turnsOn.add(row.key);
         when.subject = { re: value };
         break;
       }
@@ -187,11 +274,11 @@ export function whenOfRows(rows: readonly ConditionRow[]): { when: MailRuleWhen;
       case 'addressedToMe': when.addressedToMe = value === 'true'; break;
       case 'cc': when.cc = true; break;
       case 'sender': when.sender = value as NonNullable<MailRuleWhen['sender']>; break;
-      case 'group': when.group = value; break;
+      case 'group': when.group = value.trim(); break;
       case 'account': when.account = value; break;
       case 'message': when.message = value; break;
     }
   }
   if (rows.length === 0) problems.set(-1, 'Add at least one condition, or the rule would match every mail.');
-  return { when, problems };
+  return { when, problems, off, hints, turnsOn };
 }

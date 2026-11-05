@@ -60,6 +60,8 @@ export default defineConfig({
       '@open-walnut/walnut-added': path.resolve(__dirname, '../src/lib/walnut-added.ts'),
       '@open-walnut/send-targets': path.resolve(__dirname, '../src/lib/send-targets.ts'),
       '@open-walnut/three-way-merge': path.resolve(__dirname, '../src/lib/three-way-merge.ts'),
+      // Same reason: the Settings rule editor refuses a subject pattern with the server's own check.
+      '@open-walnut/mail-subject-pattern': path.resolve(__dirname, '../src/integrations/mail/sort-regex-safety.ts'),
     },
   },
   server: {

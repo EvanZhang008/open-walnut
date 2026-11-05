@@ -108,7 +108,12 @@ export interface MailRule {
   skipInbox?: boolean;
 }
 
-export interface MailRuleView extends MailRule { id: string; summary: string }
+export interface MailRuleView extends MailRule {
+  id: string;
+  summary: string;
+  /** Set when the server loaded the rule switched off (a subject pattern Walnut will not run): the row's line. */
+  offReason?: string;
+}
 
 export interface MailCatalogItem { id: MailGroupId; label: string; source: 'reserved' | 'group' | 'rule' }
 

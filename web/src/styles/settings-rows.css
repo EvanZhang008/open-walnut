@@ -69,6 +69,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+.settings-group-description.settings-subcard-desc,
+.settings-group-description {
+  margin: -2px 0 6px;
+  padding: 0 calc(var(--settings-row-pad-x) + 1px);
+  max-width: 72ch;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
 .settings-group-footer.settings-subcard-desc,
 .settings-group-footer {
   margin: 6px 0 0;

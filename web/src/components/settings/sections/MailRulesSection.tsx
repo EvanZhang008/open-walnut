@@ -8,7 +8,7 @@
  * open (`plugin:mail:rules-changed`) refreshes it when nothing is being edited, and otherwise says so
  * and lets the person choose between the file and their unsaved edit.
  */
-import { clearDraft } from '@/utils/drafts';
+import { discardDraft } from '@/utils/drafts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -38,6 +38,8 @@ import './mail-rules.css';
 const MOVED_MS = 1_500;
 const FLASH_MS = 300;
 const NEW_RULE = '__new-rule__';
+/** What the server accepts as a rule id (sort-rules-schema.ts). */
+const RULE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 
 function reasonOf(error: unknown): string {
   const body = (error as { body?: { message?: unknown } })?.body;
@@ -215,11 +217,14 @@ function MailRulesPanel() {
     const { newGroup, ...fields } = input;
     const index = editing === NEW_RULE ? -1 : viewRules.findIndex((one) => one.id === editing);
     const base = index >= 0 ? viewRules[index]! : null;
-    const id = base?.id && /^r-[0-9a-f]{6}$/.test(base.id) ? base.id : newRuleId();
+    // An edited rule keeps its id, a hand-written one too (the file's ids are unique, and toggle,
+    // move and delete keep them); only a new rule gets one.
+    const id = base?.id && RULE_ID.test(base.id) ? base.id : newRuleId();
     const rule: MailRule = {
       id,
       source: base?.source ?? 'user',
-      ...(base?.created ? { created: base.created } : { created: todayIso() }),
+      // Only a new rule is stamped: an edited one keeps the file's `created`, or none if it had none.
+      ...(base ? (base.created ? { created: base.created } : {}) : { created: todayIso() }),
       ...fields,
     };
     const stored = viewRules.map(storedRule);
@@ -232,7 +237,9 @@ function MailRulesPanel() {
     setServerErrors([]);
     queue.save({ groups, rules: nextRules }).then(
       async () => {
-        clearDraft(editorDraft);
+        // Discarded, not just emptied: a save the editor still owes from the last keystrokes (Enter
+        // right after typing) would else write the saved rule back as a draft when it unmounts.
+        discardDraft(editorDraft);
         setEditorSaving(false);
         setEditing(null);
         dirty.current = false;
@@ -335,7 +342,7 @@ function MailRulesPanel() {
           onClick={() => { setServerErrors([]); setEditing(NEW_RULE); }}>
           Add rule
         </SettingsButton>
-      } footer="The first rule that matches a mail decides where it goes. A rule's note is also shown to Walnut's model when it sorts new mail.">
+      } footer={"The first rule that matches a mail decides where it goes; yours come before the built\u2011in ones. Walnut's model also reads a rule's note when it sorts new mail."}>
         {editing === NEW_RULE && <div className="mail-rule-row mail-rule-row-new">{editorFor(NEW_RULE)}</div>}
         <MailRulesRulesList
           rules={viewRules}

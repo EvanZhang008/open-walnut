@@ -12,7 +12,7 @@ import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js'
 import { MAIL_MIGRATIONS, MailDatabase } from '../../src/integrations/mail/db.js'
 import { MailSortEngine } from '../../src/integrations/mail/sort-engine.js'
 import { MailSortRecompute, RECOMPUTE_BATCH } from '../../src/integrations/mail/sort-recompute.js'
-import type { ScanRow, Verdict } from '../../src/integrations/mail/sort-store.js'
+import { basisOf, type ScanRow, type Verdict } from '../../src/integrations/mail/sort-store.js'
 import { MailStore } from '../../src/integrations/mail/store.js'
 
 const ROWS = 3_000
@@ -148,7 +148,7 @@ describe('the runner', () => {
     let seen = 0
     const first = new MailSortRecompute({
       store: rows(),
-      verdictOf: (row) => ({ rowid: row.rowid, group: 'important', reason: 'test', rev: 'rev-a', senderKey: 'k' }),
+      verdictOf: (row) => ({ rowid: row.rowid, group: 'important', reason: 'test', rev: 'rev-a', senderKey: 'k', label: 'x', basis: basisOf(row) }),
       yieldNow: async () => { seen += 1; if (seen === 2) first.dispose() },
     })
     await first.start('rev-a')
@@ -156,7 +156,7 @@ describe('the runner', () => {
     const visited: number[] = []
     const second = new MailSortRecompute({
       store: rows(),
-      verdictOf: (row) => { visited.push(row.rowid); return { rowid: row.rowid, group: 'important', reason: 'test', rev: 'rev-a', senderKey: 'k' } },
+      verdictOf: (row) => { visited.push(row.rowid); return { rowid: row.rowid, group: 'important', reason: 'test', rev: 'rev-a', senderKey: 'k', label: 'x', basis: basisOf(row) } },
     })
     await second.start('rev-a')
     expect(await pending('rev-a')).toBe(0)
@@ -170,7 +170,7 @@ describe('the runner', () => {
     const sortedRevs: string[] = []
     const runner: MailSortRecompute = new MailSortRecompute({
       store: rows(),
-      verdictOf: (row) => ({ rowid: row.rowid, group: 'notifications', reason: 'test', rev, senderKey: 'k' }),
+      verdictOf: (row) => ({ rowid: row.rowid, group: 'notifications', reason: 'test', rev, senderKey: 'k', label: 'x', basis: basisOf(row) }),
       events: { sortProgress: () => undefined, sorted: (value) => { sortedRevs.push(value) }, groupsChanged: () => undefined },
       yieldNow: async () => {
         batches += 1

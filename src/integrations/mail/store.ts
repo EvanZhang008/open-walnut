@@ -105,8 +105,30 @@ export interface MessageWrite {
    * The sort verdict, written in the SAME statement as the envelope so a new mail is in its group
    * from the first frame. Absent (no engine) leaves the columns NULL for the recompute to fill.
    */
-  sort?: { group: string; reason: string; rev: string; senderKey: string; label: string }
+  sort?: { group: string; reason: string; rev: string; senderKey: string; label: string; inputs: StoredSortInputs }
 }
+
+/**
+ * What an ingest verdict read from the database besides the envelope it writes: the model's answer
+ * and the hints, read once per page (`prepareIngest`) while the page's rows are written one by one,
+ * each after an await. `updateMessage` writes the verdict only while the row still has them; else it
+ * writes the envelope, clears `sort_rev` and the caller sorts the row again (`sortSkipped`).
+ */
+export interface StoredSortInputs {
+  aiRev: string | null
+  aiLabel: string | null
+  aiImportant: number | null
+  gmailCategory: string | null
+  listHeadersJson: string | null
+}
+
+/** The stored inputs still hold (`i` is the CTE of the values read; `?` binds the new folder). */
+const INGEST_INPUTS_HOLD =
+  'messages.ai_rev IS i.ar AND messages.ai_label IS i.al AND messages.ai_important IS i.ai'
+  + ' AND (SELECT h.gmail_category FROM mail_sort_hints h WHERE h.account_id = messages.account_id'
+  + ' AND h.mailbox_id = i.mb AND h.message_id = messages.message_id) IS i.gc'
+  + ' AND (SELECT h.list_headers_json FROM mail_sort_hints h WHERE h.account_id = messages.account_id'
+  + ' AND h.mailbox_id = i.mb AND h.message_id = messages.message_id) IS i.lh'
 
 export interface DraftRow extends Record<string, unknown> {
   draft_id: string
@@ -498,20 +520,42 @@ export class MailStore {
   }
 
   async updateMessage(rowid: number, write: MessageWrite, now: number): Promise<void> {
+    const sort = write.sort
+    // SET reads the row as it was, so each CASE compares the stored model answer with the one read.
+    const held = (value: string, otherwise: string): string => `CASE WHEN ${INGEST_INPUTS_HOLD} THEN ${value} ELSE ${otherwise} END`
     await this.db.run(
-      'UPDATE messages SET rfc_message_id = ?, mailbox_id = ?, thread_id = ?, from_addr = ?,'
+      (sort ? 'WITH i AS (SELECT ? AS ar, ? AS al, ? AS ai, ? AS gc, ? AS lh, ? AS mb) ' : '')
+      + 'UPDATE messages SET rfc_message_id = ?, mailbox_id = ?, thread_id = ?, from_addr = ?,'
       + ' subject = ?, snippet = ?, sent_at = ?, received_at = ?, flags_json = ?, seen = ?,'
       + ' attachments_json = ?, payload = ?, updated_at = ?, envelope_hash = ?'
-      + (write.sort ? ', sort_group = ?, sort_reason = ?, sort_rev = ?, sender_key = ?, sort_label = ?' : '')
-      + ' WHERE rowid = ?',
+      + (sort
+        ? `, sort_group = ${held('?', 'sort_group')}, sort_reason = ${held('?', 'sort_reason')}, sort_rev = ${held('?', 'NULL')},`
+          + ` sender_key = ${held('?', 'sender_key')}, sort_label = ${held('?', 'sort_label')} FROM i`
+        : '')
+      + ' WHERE messages.rowid = ?',
       [
+        ...(sort ? [sort.inputs.aiRev, sort.inputs.aiLabel, sort.inputs.aiImportant, sort.inputs.gmailCategory, sort.inputs.listHeadersJson, write.mailboxId] : []),
         write.rfcMessageId, write.mailboxId, write.threadId, write.fromAddr, write.subject,
         write.snippet, write.sentAt, write.receivedAt, write.flagsJson, seenOf(write.flagsJson),
         write.attachmentsJson, write.payload, now, write.envelopeHash,
-        ...(write.sort ? [write.sort.group, write.sort.reason, write.sort.rev, write.sort.senderKey, write.sort.label] : []),
+        ...(sort ? [sort.group, sort.reason, sort.rev, sort.senderKey, sort.label] : []),
         rowid,
       ],
     )
+  }
+
+  /**
+   * Of the rows an ingest page wrote with a verdict, the ones whose verdict was not written because
+   * the model's answer or a hint changed after the page read them (`updateMessage`): to sort again.
+   */
+  async sortSkipped(accountId: string, messageIds: ReadonlyArray<string>): Promise<string[]> {
+    if (messageIds.length === 0) return []
+    const rows = await this.db.all<{ message_id: string }>(
+      'SELECT message_id FROM messages WHERE account_id = ? AND sort_rev IS NULL'
+      + ' AND message_id IN (SELECT value FROM json_each(?))',
+      [accountId, JSON.stringify(messageIds)],
+    )
+    return rows.map((row) => row.message_id)
   }
 
   /**

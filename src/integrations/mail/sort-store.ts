@@ -92,6 +92,45 @@ export interface ScanRow extends Record<string, unknown> {
   sort_label: string | null
   /** The folder's role (`inbox`, `sent`, ...), NULL when the folder row is gone. */
   mailbox_role: string | null
+  /** Changes with every envelope write (ingest), and `body_ref` with every body write: see `VerdictBasis`. */
+  envelope_hash?: string | null
+  body_ref?: string | null
+}
+
+/**
+ * The columns of a row a verdict is computed from, as they were read: the envelope (its hash covers
+ * subject, sender, recipients, dates, flags and folder), `seen`, the folder, the sender address and
+ * body (a body write can fill both), the model's answer, and the hints. `applyVerdicts` writes a
+ * verdict only while the row still has them, so one computed from an older row (a re-sort that gave
+ * the event loop back mid-batch while the labeler, ingest or a hint wrote the row) never overwrites
+ * what was written since, stamped with the current revision and so never done again.
+ */
+export interface VerdictBasis {
+  envelopeHash: string | null
+  seen: number
+  mailboxId: string
+  fromAddr: string
+  bodyRef: string | null
+  aiRev: string | null
+  aiLabel: string | null
+  aiImportant: number | null
+  gmailCategory: string | null
+  listHeadersJson: string | null
+}
+
+export function basisOf(row: ScanRow): VerdictBasis {
+  return {
+    envelopeHash: row.envelope_hash ?? null,
+    seen: Number(row.seen),
+    mailboxId: row.mailbox_id,
+    fromAddr: row.from_addr,
+    bodyRef: row.body_ref ?? null,
+    aiRev: row.ai_rev ?? null,
+    aiLabel: row.ai_label ?? null,
+    aiImportant: row.ai_important ?? null,
+    gmailCategory: row.gmail_category ?? null,
+    listHeadersJson: row.list_headers_json ?? null,
+  }
 }
 
 /** The model's answer for one row. All three NULL = asked, nothing usable came back. */
@@ -132,6 +171,8 @@ export interface Verdict {
   senderKey: string
   /** What the group is called, stored beside it (`sort_label`). */
   label: string
+  /** The row as the verdict was computed from it: the write happens only while it still holds. */
+  basis: VerdictBasis
 }
 
 const SCAN_COLUMNS =
@@ -140,7 +181,36 @@ const SCAN_COLUMNS =
   + ' m.sort_group AS sort_group, m.sort_reason AS sort_reason, m.sender_key AS sender_key, m.seen AS seen,'
   + ' m.sent_at AS sent_at, m.received_at AS received_at, h.gmail_category AS gmail_category,'
   + ' h.list_headers_json AS list_headers_json, m.ai_label AS ai_label, m.ai_important AS ai_important,'
-  + ' m.ai_why AS ai_why, m.ai_rev AS ai_rev, m.sort_label AS sort_label, b.role AS mailbox_role'
+  + ' m.ai_why AS ai_why, m.ai_rev AS ai_rev, m.sort_label AS sort_label, b.role AS mailbox_role,'
+  + ' m.envelope_hash AS envelope_hash, m.body_ref AS body_ref'
+
+/** The verdicts of a write, each with its basis (`VerdictBasis`), as a CTE `v`. */
+const VERDICTS_CTE =
+  'WITH v AS (SELECT json_extract(value, \'$[0]\') AS r, json_extract(value, \'$[1]\') AS g,'
+  + ' json_extract(value, \'$[2]\') AS why, json_extract(value, \'$[3]\') AS rev, json_extract(value, \'$[4]\') AS sk,'
+  + ' json_extract(value, \'$[5]\') AS lbl, json_extract(value, \'$[6]\') AS eh, json_extract(value, \'$[7]\') AS sn,'
+  + ' json_extract(value, \'$[8]\') AS mb, json_extract(value, \'$[9]\') AS fa, json_extract(value, \'$[10]\') AS br,'
+  + ' json_extract(value, \'$[11]\') AS ar, json_extract(value, \'$[12]\') AS al, json_extract(value, \'$[13]\') AS ai,'
+  + ' json_extract(value, \'$[14]\') AS gc, json_extract(value, \'$[15]\') AS lh FROM json_each(?))'
+
+const HINT_OF = (column: string): string =>
+  `(SELECT h.${column} FROM mail_sort_hints h WHERE h.account_id = messages.account_id`
+  + ' AND h.mailbox_id = messages.mailbox_id AND h.message_id = messages.message_id)'
+
+/** The row still has the basis its verdict was computed from (NULL-safe `IS`). */
+const BASIS_HOLDS =
+  'messages.envelope_hash IS v.eh AND messages.seen IS v.sn AND messages.mailbox_id IS v.mb'
+  + ' AND messages.from_addr IS v.fa AND messages.body_ref IS v.br AND messages.ai_rev IS v.ar'
+  + ` AND messages.ai_label IS v.al AND messages.ai_important IS v.ai AND ${HINT_OF('gmail_category')} IS v.gc`
+  + ` AND ${HINT_OF('list_headers_json')} IS v.lh`
+
+function verdictsJson(verdicts: ReadonlyArray<Verdict>): string {
+  return JSON.stringify(verdicts.map((one) => [
+    one.rowid, one.group, one.reason, one.rev, one.senderKey, one.label,
+    one.basis.envelopeHash, one.basis.seen, one.basis.mailboxId, one.basis.fromAddr, one.basis.bodyRef,
+    one.basis.aiRev, one.basis.aiLabel, one.basis.aiImportant, one.basis.gmailCategory, one.basis.listHeadersJson,
+  ]))
+}
 
 const HINTS_JOIN =
   ' LEFT JOIN mail_sort_hints h ON h.account_id = m.account_id AND h.mailbox_id = m.mailbox_id'
@@ -313,20 +383,34 @@ export class MailSortStore {
 
   /**
    * Many verdicts in ONE statement (there is no multi-statement transaction in the plugin
-   * database), so a batch is all-or-nothing and costs one worker round trip.
+   * database), so a batch is all-or-nothing and costs one worker round trip. Each is written only
+   * while its row still has the verdict's basis (`VerdictBasis`); `stale` lists the rows that
+   * changed since they were read, for the caller to sort again from the row as it is now.
    */
-  async applyVerdicts(verdicts: ReadonlyArray<Verdict>): Promise<number> {
-    if (verdicts.length === 0) return 0
+  async applyVerdicts(verdicts: ReadonlyArray<Verdict>): Promise<{ changes: number; stale: number[] }> {
+    if (verdicts.length === 0) return { changes: 0, stale: [] }
+    const json = verdictsJson(verdicts)
     const result = await this.db.run(
-      'WITH v AS (SELECT json_extract(value, \'$[0]\') AS r, json_extract(value, \'$[1]\') AS g,'
-      + ' json_extract(value, \'$[2]\') AS why, json_extract(value, \'$[3]\') AS rev, json_extract(value, \'$[4]\') AS sk,'
-      + ' json_extract(value, \'$[5]\') AS lbl'
-      + ' FROM json_each(?))'
-      + ' UPDATE messages SET sort_group = v.g, sort_reason = v.why, sort_rev = v.rev, sender_key = v.sk, sort_label = v.lbl'
-      + ' FROM v WHERE messages.rowid = v.r',
-      [JSON.stringify(verdicts.map((one) => [one.rowid, one.group, one.reason, one.rev, one.senderKey, one.label]))],
+      `${VERDICTS_CTE} UPDATE messages SET sort_group = v.g, sort_reason = v.why, sort_rev = v.rev, sender_key = v.sk,`
+      + ` sort_label = v.lbl FROM v WHERE messages.rowid = v.r AND ${BASIS_HOLDS}`,
+      [json],
     )
-    return result.changes
+    if (result.changes >= verdicts.length) return { changes: result.changes, stale: [] }
+    // Fewer written than sent: the rows still there whose basis moved (a deleted row is no work).
+    const stale = await this.db.all<{ r: number }>(
+      `${VERDICTS_CTE} SELECT v.r AS r FROM v JOIN messages ON messages.rowid = v.r WHERE NOT (${BASIS_HOLDS})`,
+      [json],
+    )
+    return { changes: result.changes, stale: stale.map((row) => Number(row.r)) }
+  }
+
+  /** Rows by rowid, with hints: a stale verdict's row, read again. */
+  rowsByRowids(rowids: ReadonlyArray<number>): Promise<ScanRow[]> {
+    if (rowids.length === 0) return Promise.resolve([])
+    return this.db.all<ScanRow>(
+      `SELECT ${SCAN_COLUMNS} FROM messages m${HINTS_JOIN} WHERE m.rowid IN (SELECT value FROM json_each(?)) ORDER BY m.rowid`,
+      [JSON.stringify(rowids)],
+    )
   }
 
   // ── the model's labels ──

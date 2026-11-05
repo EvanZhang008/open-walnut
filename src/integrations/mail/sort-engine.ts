@@ -12,21 +12,22 @@ import type { MessagePayload } from './service-dto.js'
 import { parseJson } from './service-dto.js'
 import {
   AI_PENDING_REASON, AI_REASON, BUILTIN_REV, IMPORTANT, IMPORTANT_LABEL, NOT_IMPORTANT, NOT_IMPORTANT_LABEL,
-  classify, compileRules, groupIdForName, labelOfBuiltin, reservedGroupId, senderGroupId, whyOf,
+  classify, compileRules, groupIdForName, labelOfBuiltin, reservedGroupId, ruleIsOn, senderGroupId, whyOf,
 } from './sort-classify.js'
+import { SUBJECT_MATCHER_REV } from './sort-regex-safety.js'
 import { AI_PROMPT_REV, MAX_AI_LABEL_CHARS, MailSortLabeler, type LabelContext, type LabelModel } from './sort-ai.js'
 import { SUMMARY_MAILS, staleGroups, type GroupDigest, type SummaryGroupInput } from './sort-group-summary.js'
 import { correspondentKeysOf, featuresOf, identityOf, type AccountIdentity, type SortHints } from './sort-features.js'
-import { MailSortRecompute } from './sort-recompute.js'
+import { MAX_STALE_PASSES, MailSortRecompute, mapSliced } from './sort-recompute.js'
 import { summarizeRule } from './sort-rule-summary.js'
 import { MailRulesFile, type RulesFileState, type RulesSaveOutcome } from './sort-rules-file.js'
 import { senderKey, senderLabel } from './sort-sender.js'
-import type { ScanRow, Verdict } from './sort-store.js'
+import { basisOf, type ScanRow, type Verdict } from './sort-store.js'
 import type {
   AiStatus, CatalogItem, ClassifyResult, CompiledRule, FolderPair, GroupId, Rule, RulesError, RulesFileDoc,
   SortDto, SortFeatures,
 } from './sort-types.js'
-import type { MailStore } from './store.js'
+import type { MailStore, StoredSortInputs } from './store.js'
 import type { MailEnvelope, MailListHeaders } from './types.js'
 
 export const GROUPED_META_KEY = 'grouped_on'
@@ -62,6 +63,8 @@ export interface SortColumns {
   rev: string
   senderKey: string
   label: string
+  /** What the verdict read from the database: `updateMessage` writes it only while these hold. */
+  inputs: StoredSortInputs
   /** The `skipInbox` rule that wants this new inbox mail moved to the archive (never stored). */
   moveOut?: string
 }
@@ -93,7 +96,7 @@ function unreadOf(flagsJson: string | null | undefined): boolean {
 
 /** The labeling revision: the prompt, and everything the model is told about the person. */
 export function computeAiRev(rules: ReadonlyArray<Rule>, identities: ReadonlyMap<string, AccountIdentity>): string {
-  const taught = rules.filter((rule) => rule.enabled !== false).map((rule) => [rule.when, rule.then, rule.note ?? ''])
+  const taught = rules.filter(ruleIsOn).map((rule) => [rule.when, rule.then, rule.note ?? ''])
   const people = [...identities.entries()].sort(([a], [b]) => a.localeCompare(b))
     .map(([id, me]) => [id, me.address, me.displayName])
   return `a${AI_PROMPT_REV}-${crypto.createHash('sha1').update(JSON.stringify([taught, people])).digest('hex').slice(0, 10)}`
@@ -116,10 +119,13 @@ export function computeRulesRev(
   identities: ReadonlyMap<string, AccountIdentity>,
   idFor: (name: string) => GroupId = groupIdForName,
 ): string {
-  const enabled = rules.filter((rule) => rule.enabled !== false).map((rule) => [rule.when, idFor(rule.then)])
+  const on = rules.filter(ruleIsOn)
+  const enabled = on.map((rule) => [rule.when, idFor(rule.then)])
   const people = [...identities.entries()].sort(([a], [b]) => a.localeCompare(b))
     .map(([id, me]) => [id, me.address, me.displayName, me.separatesCc])
-  return crypto.createHash('sha1').update(JSON.stringify([BUILTIN_REV, enabled, people])).digest('hex').slice(0, 12)
+  // What a subject pattern matches is part of a verdict: a new matcher sorts those rules' mail again.
+  const matcher = on.some((rule) => typeof rule.when.subject === 'object') ? [SUBJECT_MATCHER_REV] : []
+  return crypto.createHash('sha1').update(JSON.stringify([BUILTIN_REV, enabled, people, ...matcher])).digest('hex').slice(0, 12)
 }
 
 export class MailSortEngine {
@@ -553,7 +559,31 @@ export class MailSortEngine {
       rev: this.currentRev,
       senderKey: senderKey(features.fromAddr, features.fromName),
       label: verdict.label,
+      basis: basisOf(row),
     }
+  }
+
+  /**
+   * Sort `rows` now and write the verdicts, giving the loop back while it computes (`mapSliced`).
+   * A row another writer changed during a yield is not written (`VerdictBasis`): it is read again
+   * and sorted from what it is now, at most MAX_STALE_PASSES more times. Returns what was written.
+   */
+  private async sortRows(rows: ReadonlyArray<ScanRow>): Promise<{ changed: number; rows: ScanRow[]; verdicts: Verdict[] }> {
+    const done = { changed: 0, rows: [] as ScanRow[], verdicts: [] as Verdict[] }
+    let pending = rows
+    for (let pass = 0; pending.length > 0 && pass <= MAX_STALE_PASSES; pass += 1) {
+      const verdicts = await mapSliced(pending, (row) => this.verdictOf(row))
+      if (this.disposed) break
+      const written = await this.deps.store.sort.applyVerdicts(verdicts)
+      done.changed += written.changes
+      const stale = new Set(written.stale)
+      pending.forEach((row, k) => {
+        if (!stale.has(row.rowid)) { done.rows.push(row); done.verdicts.push(verdicts[k]!) }
+      })
+      if (stale.size === 0 || this.disposed) break
+      pending = await this.deps.store.sort.rowsByRowids([...stale])
+    }
+    return done
   }
 
   /** The `sort` DTO field for a stored verdict. NULL group = still sorting, shown in Important. */
@@ -590,10 +620,10 @@ export class MailSortEngine {
       list.push(envelope.messageId)
       byFolder.set(envelope.mailboxId, list)
     }
-    const hints = new Map<string, SortHints | undefined>()
+    const hints = new Map<string, { gmail_category: string | null; list_headers_json: string | null }>()
     for (const [mailboxId, ids] of byFolder) {
       for (const row of await this.deps.store.sort.getHints(accountId, mailboxId, ids).catch(() => [])) {
-        hints.set(`${row.mailbox_id}\u0000${row.message_id}`, hintsOf(row))
+        hints.set(`${row.mailbox_id}\u0000${row.message_id}`, row)
       }
     }
     // A row the model already labeled keeps that label when a flag or a move re-sorts it.
@@ -605,10 +635,11 @@ export class MailSortEngine {
       const payload = parseJson<MessagePayload>(write.payload, {})
       if (sent.has(`${accountId}\u0000${write.mailboxId}`)) this.learnCorrespondents(accountId, payload)
       if (!this.withCc.has(accountId) && payload.cc?.length) this.withCc.add(accountId)
+      const hint = hints.get(`${write.mailboxId}\u0000${write.messageId}`)
       const features = featuresOf(
         { account_id: accountId, rfc_message_id: write.rfcMessageId, from_addr: write.fromAddr, subject: write.subject },
         payload,
-        hints.get(`${write.mailboxId}\u0000${write.messageId}`),
+        hint ? hintsOf(hint) : undefined,
         this.identityFor(accountId),
         this.correspondents.get(accountId),
       )
@@ -627,6 +658,10 @@ export class MailSortEngine {
       const moveOut = this.moveOutRule(verdict.reason, inInbox, at)
       return {
         ...verdict, rev: this.currentRev, senderKey: senderKey(features.fromAddr, features.fromName),
+        inputs: {
+          aiRev: stored?.ai_rev ?? null, aiLabel: stored?.ai_label ?? null, aiImportant: stored?.ai_important ?? null,
+          gmailCategory: hint?.gmail_category ?? null, listHeadersJson: hint?.list_headers_json ?? null,
+        },
         ...(moveOut ? { moveOut } : {}),
       }
     }
@@ -641,7 +676,7 @@ export class MailSortEngine {
       .filter((one) => one.name || one.address)
     const notes: string[] = []
     for (const rule of this.rules().rules) {
-      if (rule.enabled === false) continue
+      if (!ruleIsOn(rule)) continue
       const summary = this.summarize(rule)
       notes.push(rule.note?.trim() ? `${rule.note.trim()} (rule: ${summary})` : `Rule: ${summary}`)
     }
@@ -696,9 +731,8 @@ export class MailSortEngine {
   /** Re-sort rows the labeler just answered for. */
   private async resort(rows: ReadonlyArray<ScanRow>): Promise<void> {
     if (rows.length === 0) return
-    const verdicts = rows.map((row) => this.verdictOf(row))
-    await this.deps.store.sort.applyVerdicts(verdicts)
-    this.moveOutOf(rows, verdicts)
+    const sorted = await this.sortRows(rows)
+    this.moveOutOf(sorted.rows, sorted.verdicts)
     this.notifyGroupsChanged(pairsOfRows(rows), false)
   }
 
@@ -791,11 +825,10 @@ export class MailSortEngine {
     await this.start().catch(() => undefined)
     const rows = await this.deps.store.sort.rowsByIds(accountId, messageIds)
     if (rows.length === 0) return 0
-    const verdicts = rows.map((row) => this.verdictOf(row))
-    const changed = await this.deps.store.sort.applyVerdicts(verdicts)
-    this.moveOutOf(rows, verdicts)
+    const sorted = await this.sortRows(rows)
+    this.moveOutOf(sorted.rows, sorted.verdicts)
     this.notifyGroupsChanged(pairsOfRows(rows))
-    return changed
+    return sorted.changed
   }
 
   /** Store the provider's category lists and re-sort only the rows whose category moved. */

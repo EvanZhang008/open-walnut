@@ -3,9 +3,23 @@
  * where the mail goes, an optional note, and a live preview over every inbox.
  *
  * Pickers are custom portalled lists placed by `useMenuPlacement`, never a native `<select>` (web/src/
- * AGENTS.md, menus): the portal stops pointerdown, and the outside closer ignores its own list. The
- * preview waits 400 ms after the last keystroke and is not sent at all while the rows have a problem
- * Walnut can already see (a pattern that could run for ever never reaches the server's matcher).
+ * AGENTS.md, menus): the portal stops pointerdown, and the outside closer ignores its own list.
+ *
+ * A condition being typed is judged once typing pauses (SETTLE_MS) or its field loses focus: an
+ * unfinished pattern (`(?`, `[a`, `\`) is not shown as an error on every keystroke. Until then no
+ * preview is sent and Save is off, as it is while a problem shows. The preview then goes out
+ * (at least 400 ms after the last change), never while the rows have a problem Walnut can already
+ * see (a subject pattern the server would refuse is refused here, in its words). From the moment a
+ * condition changes, the old count is gone: "Checking…" holds its place while the input waits to be
+ * judged (Save off), "Counting mails…" once it passed and its count is on its way (Save on), and an
+ * answer for an older input never shows. A rule that is off because
+ * its own stored pattern is too big keeps that pattern through an edit of anything else: the
+ * editor says once, calmly, that it stays off until the pattern is made smaller (the row's own
+ * line is hidden meanwhile), and nothing is previewed for it; a changed pattern is judged as new,
+ * and once it passes the editor says that saving turns the rule on. A rule the user switched off
+ * stays off through a save, and its preview says so. Under a pattern that runs, a hint says when
+ * the rule would not do what it seems to (in the warning colour), with a button that rewrites the
+ * pattern where one fix is plain; the preview lists up to five of the mails it matches on request.
  */
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
@@ -15,6 +29,7 @@ import {
   type MailPreviewResponse,
   type MailRule,
   type MailRuleValidationError,
+  type MailSample,
 } from '@/api/mail-groups';
 import type { MailAccountDto } from '@/api/mail';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
@@ -29,14 +44,32 @@ import {
   FIELD_ORDER,
   SENDER_KINDS,
   defaultValueOf,
+  existingGroupLine,
   fieldOfError,
+  heldPatternOf,
+  previewSentence,
   rowsOfWhen,
+  TEXT_FIELDS,
   whenOfRows,
   type ConditionField,
   type ConditionRow,
 } from './mail-rules-model';
 
 export const PREVIEW_DEBOUNCE_MS = 400;
+const PLACEHOLDERS: Partial<Record<ConditionField, string>> = {
+  from: 'issues@*, Survey Desk',
+  subject: 'invoice',
+  subjectRe: 'invoice #\\d+',
+  group: 'Ticket updates',
+};
+/** Under an empty or fine subject pattern: what the field takes, in one line. */
+export const PATTERN_HELP = 'A regular expression; case is ignored.';
+/** Under a text condition that holds only spaces. */
+export const SPACES_ONLY = 'Spaces alone count as empty.';
+/** Under a rule's own pattern Walnut kept off, once it was replaced by one Walnut runs. */
+export const TURNS_ON = 'Saving turns this rule on.';
+/** How long typing in a condition pauses before it is judged. */
+export const SETTLE_MS = 600;
 const NEW_GROUP = '__new-group__';
 
 export interface PickerOption { value: string; label: string; hint?: string }
@@ -121,12 +154,6 @@ export interface MailRuleEditorProps {
   onDirty: (dirty: boolean) => void;
 }
 
-function previewSentence(answer: MailPreviewResponse): string {
-  const n = answer.matches;
-  const head = `Matches ${answer.partial ? 'at least ' : ''}${n.toLocaleString('en-US')} ${n === 1 ? 'mail' : 'mails'}`;
-  return answer.moves < answer.matches ? `${head} · moves ${answer.moves.toLocaleString('en-US')}` : head;
-}
-
 interface RuleForm { rows: ConditionRow[]; then: string; newGroup: string; note: string; skipInbox: boolean }
 
 /** The form for a rule as stored (or a new one). Row keys count from 1, so the same rule gives the same form. */
@@ -160,12 +187,20 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   const setNewGroup = (value: string) => form.setValue((f) => ({ ...f, newGroup: value }));
   const setNote = (value: string) => form.setValue((f) => ({ ...f, note: value }));
   const setSkipInbox = (value: boolean) => form.setValue((f) => ({ ...f, skipInbox: value }));
-  const [preview, setPreview] = useState<{ text: string; error?: string } | null>(null);
+  // The last answer, with the input it answers: it shows only while that is still the input.
+  const [preview, setPreview] = useState<{ key: string; text: string; samples?: MailSample[]; error?: string } | null>(null);
+  // The matching mails under the preview line, once asked for; they stay listed while the rule changes.
+  const [samplesOn, setSamplesOn] = useState(false);
+  const userOff = props.initial?.enabled === false;
   const noteId = useId();
   const noteRef = useRef<HTMLInputElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
   const dirtyRef = useRef(false);
-  const markDirty = () => { if (!dirtyRef.current) { dirtyRef.current = true; props.onDirty(true); } };
+  const lastEditAt = useRef(0);
+  const markDirty = () => {
+    lastEditAt.current = Date.now();
+    if (!dirtyRef.current) { dirtyRef.current = true; props.onDirty(true); }
+  };
   // A kept draft is an edit in progress from the first render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (form.dirty) markDirty(); }, []);
@@ -187,43 +222,77 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   const target = then === NEW_GROUP ? newGroup.trim() : then;
   // Keep out of the Inbox needs a group to show the mail in when a move fails (the server refuses it otherwise).
   const reservedTarget = /^(important|not important)$/i.test(target);
-  const { when, problems } = whenOfRows(rows);
+  // Compiling a subject pattern is not free: once per change of the rows, never per render.
+  const held = useMemo(() => heldPatternOf(props.initial), [props.initial]);
+  const { when, problems, off, hints, turnsOn } = useMemo(() => whenOfRows(rows, held), [rows, held]);
+  // A blank text condition: nothing to judge or count until something is typed.
+  const blank = rows.some((row) => TEXT_FIELDS.has(row.field) && !row.value.trim());
 
-  // The live preview: 400 ms after the last change, over every inbox, never with a local problem.
-  const whenKey = JSON.stringify(when);
+  // Typed rows are judged once typing pauses or the field is left; a picker's change at once.
+  const rowsKey = JSON.stringify(rows);
+  const [settledKey, setSettledKey] = useState(rowsKey);
+  const typedRef = useRef(false);
+  const pending = rowsKey !== settledKey;
   useEffect(() => {
-    if (problems.size > 0 || !target) { setPreview(null); return; }
+    if (!pending) return;
+    const timer = setTimeout(() => setSettledKey(rowsKey), typedRef.current ? SETTLE_MS : 0);
+    return () => clearTimeout(timer);
+  }, [rowsKey, pending]);
+  const settleNow = () => setSettledKey(rowsKey);
+
+  // The live preview, over every inbox: never while typing, with a local problem, or for a rule off.
+  // `when` is compared by its JSON, so an unchanged rule does not preview twice.
+  const previewKey = `${JSON.stringify(when)}\n${target}`;
+  const previewWanted = problems.size === 0 && off.size === 0 && !!target;
+  useEffect(() => {
+    if (pending || !previewWanted) return;
     const control = new AbortController();
+    const key = previewKey;
+    const wait = Math.max(0, PREVIEW_DEBOUNCE_MS - (Date.now() - lastEditAt.current));
     const timer = setTimeout(() => {
       previewMailRule({ scope: { role: 'inbox' }, when, then: target }, control.signal).then(
-        (answer) => setPreview({ text: previewSentence(answer) }),
+        (answer) => { if (!control.signal.aborted) setPreview({ key, text: previewSentence(answer, userOff), samples: answer.samples }); },
         (error: unknown) => {
           if (control.signal.aborted) return;
           const body = (error as { body?: { message?: unknown; errors?: Array<{ message?: unknown }> } })?.body;
           const said = body?.errors?.[0]?.message ?? body?.message;
-          setPreview({ text: '', error: typeof said === 'string' ? said : 'Walnut could not count the matching mail.' });
+          setPreview({ key, text: '', error: typeof said === 'string' ? said : 'Walnut could not count the matching mail.' });
         },
       );
-    }, PREVIEW_DEBOUNCE_MS);
+    }, wait);
     return () => { clearTimeout(timer); control.abort(); };
-    // `when` is compared by its JSON, so an unchanged rule does not preview twice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [whenKey, target, problems.size]);
+  }, [previewKey, pending, previewWanted]);
+  // An answer shows only for the input it was asked for (a late one for an older input never does);
+  // from the moment a condition changes until its answer comes, a neutral line holds the place.
+  const answer = !pending && preview?.key === previewKey ? preview : null;
+  const checking = !answer && (pending || previewWanted);
+  const samples = !answer?.error ? (answer?.samples ?? []).slice(0, 5) : [];
+  const typedGroup = then === NEW_GROUP ? newGroup.trim() : '';
+  const existingGroup = typedGroup && !reservedTarget
+    ? targets.find((one) => one.value !== NEW_GROUP && one.value.toLowerCase() === typedGroup.toLowerCase())?.label
+    : undefined;
 
   const errorFor = (field: ConditionField | 'then' | 'note'): string | undefined =>
     props.serverErrors.find((one) => fieldOfError(one.field) === field)?.message;
   const otherErrors = props.serverErrors.filter((one) => fieldOfError(one.field) === null);
-  const setRow = (key: number, patch: Partial<ConditionRow>) => {
+  const setRow = (key: number, patch: Partial<ConditionRow>, typed = false) => {
     markDirty();
+    typedRef.current = typed;
     setRows((prev) => prev.map((one) => (one.key === key ? { ...one, ...patch } : one)));
   };
   const canSave = problems.size === 0 && !!target && !props.saving;
   const [attempted, setAttempted] = useState(false);
+  const shown = (row: ConditionRow): boolean => !pending && (attempted || row.value.trim() !== '');
   const rowProblem = (row: ConditionRow): string | undefined => {
     const local = problems.get(row.key);
-    if (local && (attempted || row.value.trim() !== '')) return local;
+    if (local) return shown(row) ? local : undefined;
     return errorFor(row.field);
   };
+  // Save is off while a typed condition waits to be judged and from the moment a problem shows.
+  const problemShown = rows.some((row) => problems.has(row.key) && shown(row)) || (attempted && problems.has(-1));
+  // A blank text condition holds Save too: there is nothing to save yet, and the placeholder shows what goes there.
+  const saveOff = props.saving || pending || problemShown || blank || (attempted && !canSave);
 
   const valueControl = (row: ConditionRow) => {
     const label = `${FIELD_LABELS[row.field]} value`;
@@ -244,8 +313,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
     if (row.field === 'cc') return <span className="mail-rules-help">Not available for Outlook accounts</span>;
     return (
       <input type="text" className="settings-input mail-rule-value-input" aria-label={label} data-testid="mail-rule-value" data-draft-key={form.key ?? undefined}
-        value={row.value} placeholder={row.field === 'from' ? 'issues@*, Survey Desk' : row.field === 'group' ? 'Ticket updates' : ''}
-        onChange={(event) => setRow(row.key, { value: event.target.value })} />
+        value={row.value} placeholder={PLACEHOLDERS[row.field] ?? ''} spellCheck={row.field === 'subjectRe' ? false : undefined}
+        onChange={(event) => setRow(row.key, { value: event.target.value }, true)} onBlur={settleNow} />
     );
   };
 
@@ -266,30 +335,66 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   };
   // Save while the note's mic records waits for the final words, then saves.
   const saveGate = useSendAfterDictation([noteMic], save);
+  // Enter in any text box of the editor saves, as the Save button would: what was typed is judged
+  // at once (no wait for the pause), and nothing is saved while it has a problem.
+  const onEditorKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    const box = event.target;
+    if (!(box instanceof HTMLInputElement) || box.type !== 'text') return;
+    event.preventDefault();
+    settleNow();
+    if (canSave) saveGate.send();
+  };
 
   return (
-    <div className="mail-rule-editor" data-testid="mail-rule-editor">
+    <div className="mail-rule-editor" data-testid="mail-rule-editor" onKeyDown={onEditorKey}>
       <div className="mail-rule-editor-head">When</div>
       <ul className="mail-rule-conditions">
         {rows.map((row) => {
           const problem = rowProblem(row);
+          // One line under a row at most: its problem, else why it stays off, else a hint, else that
+          // saving turns the rule on, else help. Spaces alone say so at once.
+          const offLine = problem ? undefined : off.get(row.key);
+          const hint = problem || offLine || pending ? undefined : hints.get(row.key);
+          const spacesOnly = !problem && TEXT_FIELDS.has(row.field) && row.value !== '' && !row.value.trim();
+          const turnOn = !problem && !offLine && !hint && !pending && !userOff && turnsOn.has(row.key);
+          const help = !problem && !offLine && !hint && !turnOn && row.field === 'subjectRe' ? PATTERN_HELP : undefined;
           return (
             <li key={row.key} className="mail-rule-condition" data-testid="mail-rule-condition" data-field={row.field}>
               <MailRulesPicker ariaLabel="Condition" value={row.field} options={fieldOptions} testId="mail-rule-field"
-                onChange={(field) => setRow(row.key, { field: field as ConditionField, value: defaultValueOf(field as ConditionField) })} />
+                onChange={(picked) => {
+                  const field = picked as ConditionField;
+                  // From one text box to another (Subject contains to Subject pattern, say), what was typed stays.
+                  const keep = TEXT_FIELDS.has(row.field) && TEXT_FIELDS.has(field);
+                  setRow(row.key, { field, value: keep ? row.value : defaultValueOf(field) });
+                }} />
               {valueControl(row)}
               <button type="button" className="mail-rules-icon-btn" aria-label={`Remove condition ${FIELD_LABELS[row.field]}`}
-                data-testid="mail-rule-remove-condition" onClick={() => { markDirty(); setRows((prev) => prev.filter((one) => one.key !== row.key)); }}>
+                data-testid="mail-rule-remove-condition" onClick={() => { markDirty(); typedRef.current = false; setRows((prev) => prev.filter((one) => one.key !== row.key)); }}>
                 <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" /></svg>
               </button>
               {problem && <p className="mail-rule-field-error" role="alert" data-testid="mail-rule-field-error">{problem}</p>}
+              {offLine && <p className="mail-rule-off" data-testid="mail-rule-field-off">{offLine}</p>}
+              {hint && (
+                <p className="mail-rule-hint" data-warn={hint.warn ? 'true' : undefined} data-testid="mail-rule-field-hint">
+                  {hint.text}
+                  {hint.fix && (
+                    <button type="button" className="mail-rule-hint-fix" data-testid="mail-rule-hint-fix"
+                      onClick={() => setRow(row.key, { value: hint.fix!.pattern })}>{hint.fix.label}</button>
+                  )}
+                </p>
+              )}
+              {spacesOnly && <p className="mail-rule-help" data-testid="mail-rule-field-spaces">{SPACES_ONLY}</p>}
+              {!spacesOnly && turnOn && <p className="mail-rule-help" data-testid="mail-rule-field-turns-on">{TURNS_ON}</p>}
+              {!spacesOnly && help && <p className="mail-rule-help" data-testid="mail-rule-field-help">{help}</p>}
             </li>
           );
         })}
       </ul>
       {attempted && problems.get(-1) && <p className="mail-rule-field-error" role="alert">{problems.get(-1)}</p>}
-      <SettingsButton variant="text" data-testid="mail-rule-add-condition"
-        onClick={() => { markDirty(); setRows((prev) => [...prev, { key: nextKeyOf(prev), field: 'subject', value: '' }]); }}>
+      <SettingsButton variant="text" className="mail-rule-add-condition" data-testid="mail-rule-add-condition"
+        onClick={() => { markDirty(); typedRef.current = false; setRows((prev) => [...prev, { key: nextKeyOf(prev), field: 'subject', value: '' }]); }}>
         + Add condition
       </SettingsButton>
       <div className="mail-rule-editor-head">Then</div>
@@ -302,6 +407,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         )}
       </div>
       {errorFor('then') && <p className="mail-rule-field-error" role="alert">{errorFor('then')}</p>}
+      {existingGroup && <p className="mail-rule-help" data-testid="mail-rule-group-exists">{existingGroupLine(existingGroup)}</p>}
       <label className="mail-rule-skip-inbox" data-testid="mail-rule-skip-inbox">
         <input type="checkbox" checked={skipInbox && !reservedTarget} disabled={reservedTarget}
           onChange={(event) => { markDirty(); setSkipInbox(event.target.checked); }} />
@@ -314,13 +420,32 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
           placeholder="Optional: why this rule exists" onChange={(event) => { markDirty(); setNote(event.target.value); }} />
       </MicField>
       {otherErrors.map((one, index) => <p key={index} className="mail-rule-field-error" role="alert">{one.message}</p>)}
-      <p className="mail-rule-preview" data-testid="mail-rule-preview" aria-live="polite">
-        {preview?.error ? <span className="mail-rule-field-error">{preview.error}</span> : preview?.text ?? ''}
+      <p className="mail-rule-preview" data-testid="mail-rule-preview" aria-live="polite" data-state={answer ? 'answer' : checking && !blank ? 'checking' : 'none'}>
+        {answer?.error ? <span className="mail-rule-field-error">{answer.error}</span> : answer ? answer.text : blank ? '' : pending ? 'Checking…' : checking ? 'Counting mails…' : ''}
+        {samples.length > 0 && (
+          <>
+            <span aria-hidden="true">{' \u00b7 '}</span>
+            <button type="button" className="mail-rule-hint-fix mail-rule-samples-toggle" aria-expanded={samplesOn} data-testid="mail-rule-samples"
+              onClick={() => setSamplesOn((on) => !on)}>
+              {samplesOn ? 'Hide them' : `Show ${samples.length === 1 ? 'it' : samples.length}`}
+            </button>
+          </>
+        )}
       </p>
+      {samplesOn && samples.length > 0 && (
+        <ul className="mail-rule-samples" data-testid="mail-rule-sample-list">
+          {samples.map((one) => (
+            <li key={`${one.accountId}/${one.messageId}`} className="mail-rule-sample" data-testid="mail-rule-sample">
+              <span className="mail-rule-sample-sender">{one.sender}</span>
+              <span className="mail-rule-sample-subject">{one.subject || '(no subject)'}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="mail-rule-editor-actions">
         <SettingsButton onClick={() => { form.clear(); props.onCancel(); }} data-testid="mail-rule-cancel" disabled={props.saving}>Cancel</SettingsButton>
         <SettingsButton variant="primary" onClick={saveGate.send} busy={props.saving} busyLabel="Saving…" data-testid="mail-rule-save"
-          disabled={props.saving || (attempted && !canSave)} {...dictationWaitProps(saveGate)}>
+          disabled={saveOff} {...dictationWaitProps(saveGate)}>
           Save
         </SettingsButton>
       </div>

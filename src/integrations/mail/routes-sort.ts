@@ -12,6 +12,7 @@ import { PRIMARY_ONLY, errorReply, firstQuery, readBody, segmentsAfter, withBudg
 import type { MailFilterMover } from './mail-filter-moves.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import { IMPORTANT } from './sort-classify.js'
+import { ruleOffReason } from './sort-regex-safety.js'
 import type { MailSortEngine } from './sort-engine.js'
 import { builtinSummaries } from './sort-rule-summary.js'
 import { disambiguateLabels, senderLabel } from './sort-sender.js'
@@ -186,11 +187,15 @@ export async function buildRules(sort: MailSortEngine): Promise<RulesResponse> {
     rulesRev: sort.rulesRev,
     fileRev: sort.fileRev,
     groups: doc.groups,
-    rules: doc.rules.map((rule, index) => ({
-      ...rule,
-      id: rule.id ?? compiled.get(index) ?? `rule-${index + 1}`,
-      summary: sort.summarize(rule),
-    })),
+    rules: doc.rules.map((rule, index) => {
+      const offReason = ruleOffReason(rule.when)
+      return {
+        ...rule,
+        id: rule.id ?? compiled.get(index) ?? `rule-${index + 1}`,
+        summary: sort.summarize(rule),
+        ...(offReason ? { offReason } : {}),
+      }
+    }),
     builtins: builtinSummaries(),
     catalog: await sort.catalog(),
     ...(error ? { error } : {}),

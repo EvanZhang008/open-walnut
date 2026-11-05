@@ -4,8 +4,10 @@
  * labels and disabled rules do not move it, so reordering or re-saving never triggers a re-sort and
  * never turns an already drawn `Mark N read` into a 409.
  */
+import crypto from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { groupIdForName } from '../../src/integrations/mail/sort-classify.js'
+import { BUILTIN_REV, groupIdForName } from '../../src/integrations/mail/sort-classify.js'
+import { SUBJECT_MATCHER_REV } from '../../src/integrations/mail/sort-regex-safety.js'
 import { computeRulesRev } from '../../src/integrations/mail/sort-engine.js'
 import { identityOf, type AccountIdentity } from '../../src/integrations/mail/sort-features.js'
 import type { Rule } from '../../src/integrations/mail/sort-types.js'
@@ -36,6 +38,20 @@ describe('rulesRev', () => {
   it('ignores disabled rules entirely', () => {
     const withDisabled: Rule[] = [...base, { when: { from: 'x@*' }, then: 'Important', source: 'user', enabled: false }]
     expect(rev(withDisabled)).toBe(rev(base))
+  })
+  it('ignores a rule loaded switched off because its pattern is too big for the matcher', () => {
+    const off: Rule[] = [...base, { when: { subject: { re: '(?:.{0,299}){20}' } }, then: 'Important', source: 'user' }]
+    expect(rev(off)).toBe(rev(base))
+  })
+  it('folds in the subject matcher version only when a rule that is on has a pattern', () => {
+    const hash = (parts: unknown[]): string => crypto.createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 12)
+    const ids = [...people.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, me]) => [id, me.address, me.displayName, me.separatesCc])
+    const pattern: Rule = { when: { subject: { re: 'invoice \\d+' } }, then: 'Notifications', source: 'user' }
+    const text: Rule = { when: { subject: 'invoice' }, then: 'Notifications', source: 'user' }
+    const target = groupIdForName('Notifications')
+    expect(rev([pattern])).toBe(hash([BUILTIN_REV, [[pattern.when, target]], ids, SUBJECT_MATCHER_REV]))
+    expect(rev([text])).toBe(hash([BUILTIN_REV, [[text.when, target]], ids]))
+    expect(rev([{ ...pattern, enabled: false }, text])).toBe(rev([text]))
   })
   it('treats two spellings of the same group as the same target', () => {
     const respelled = base.map((rule) => ({ ...rule, then: rule.then === 'Notifications' ? 'notifications' : rule.then }))

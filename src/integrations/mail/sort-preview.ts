@@ -11,13 +11,15 @@
  * - `recipientsKnown`: when the condition uses `addressedToMe`, how many of the mails matching the
  *   rest of it carry any recipients at all (Outlook rows mostly carry none).
  *
- * The scan runs in batches of 500 rows with the event loop released between batches, and stops at
- * two seconds with `partial: true` (the console then says "at least"). Settings calls this while the
- * person types, so it must never hold the loop.
+ * The scan runs in batches of 500 rows with the event loop released between batches and every
+ * `SLICE_MS` inside one (rules times rows can be seconds), and stops at two seconds with
+ * `partial: true` (the console then says "at least"). Settings calls this while the person types,
+ * so it must never hold the loop.
  */
 import { PRIMARY_ONLY, errorReply, readBody } from './contract.js'
 import { pairsOf, parseBodyScope } from './routes-sort.js'
 import { IMPORTANT, NOT_IMPORTANT, compileWhen, groupIdForName } from './sort-classify.js'
+import { SLICE_MS } from './sort-recompute.js'
 import type { MailSortEngine } from './sort-engine.js'
 import { whenProblems } from './sort-rules-schema.js'
 import { senderLabel } from './sort-sender.js'
@@ -134,9 +136,16 @@ export async function previewMany(
   })).map((plan) => ({ ...plan, senderMatch: plan.sender ? compileWhen(plan.sender) : undefined }))
   let partial = false
   let after = 0
-  for (;;) {
+  const yieldNow = (): Promise<unknown> => new Promise((resolve) => setImmediate(resolve))
+  scan: for (;;) {
     const rows = await store.sort.scanScope(pairs, after, batch)
+    let slice = performance.now()
     for (const row of rows) {
+      if (performance.now() - slice >= SLICE_MS) {
+        if (now() >= deadline) { partial = true; break scan }
+        await yieldNow()
+        slice = performance.now()
+      }
       const features = sort.features(row)
       const before = sort.classifyWith(features, current)
       for (const plan of plans) {
@@ -160,7 +169,7 @@ export async function previewMany(
     if (rows.length < batch) break
     after = rows[rows.length - 1]!.rowid
     if (now() >= deadline) { partial = true; break }
-    await new Promise((resolve) => setImmediate(resolve))
+    await yieldNow()
   }
   return plans.map(({ candidate, tally }) => {
     const shadows: Shadow[] = [...tally.shadows.entries()]

@@ -146,9 +146,9 @@ describe('step 2: drafts', () => {
 
   it('writes the matches line with scope, moves only when fewer than matches, bold over 50, at least when partial', () => {
     expect(matchesLine({ matches: 8, moves: 8 }, false)).toEqual({ head: 'Matches 8 mails in this inbox', moves: null, bold: false });
-    expect(matchesLine({ matches: 169, moves: 161 }, true)).toEqual({ head: 'Matches 169 mails in your inboxes', moves: 'moves 161', bold: true });
+    expect(matchesLine({ matches: 169, moves: 161 }, true)).toEqual({ head: 'Matches 169 mails in your inboxes', moves: '161 would move, 8 already there', bold: true });
     expect(matchesLine({ matches: 1, moves: 1 }, false).head).toBe('Matches 1 mail in this inbox');
-    expect(matchesLine({ matches: 1200, moves: 30, partial: true }, false)).toEqual({ head: 'Matches at least 1,200 mails in this inbox', moves: 'moves 30', bold: false });
+    expect(matchesLine({ matches: 1200, moves: 30, partial: true }, false)).toEqual({ head: 'Matches at least 1,200 mails in this inbox', moves: '30 would move, 1,170 already there', bold: false });
   });
 
   it('says the coverage and the shadow sentences verbatim', () => {

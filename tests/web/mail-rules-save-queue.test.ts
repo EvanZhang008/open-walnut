@@ -11,16 +11,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { COALESCE_MS, createRulesSaveQueue, RulesQueueCancelled, type RulesDoc } from '../../web/src/components/settings/sections/mail-rules-save-queue';
 import {
   COPY,
+  existingGroupLine,
   fieldOfError,
   fileErrorSentence,
   isMissingFileError,
   moveItem,
   provenanceLine,
-  riskyPattern,
-  RISKY_PATTERN,
   rowsOfWhen,
+  heldPatternOf,
+  PATTERN_SHOWN_CHARS,
+  previewSentence,
+  summaryParts,
+  TEXT_FIELDS,
   whenOfRows,
 } from '../../web/src/components/settings/sections/mail-rules-model';
+import { movesPhrase } from '../../web/src/utils/mail-preview-moves';
+import { HINT_NEEDS_MORE, HINT_SLASHES_FLAGS, PATTERN_BACKREFERENCE, PATTERN_TOO_BIG, heldPatternLine, patternTooLong } from '@open-walnut/mail-subject-pattern';
 
 const doc = (tag: string): RulesDoc => ({ groups: [tag], rules: [] });
 
@@ -142,11 +148,14 @@ describe('mail rules panel sentences', () => {
     expect(isMissingFileError({ line: 3, message: 'x', since })).toBe(false);
   });
 
-  it('says where a rule came from', () => {
-    expect(provenanceLine({ source: 'learned', created: '2026-09-28', note: 'Pages and tickets; I read them in the pager' }))
-      .toBe('Learned Sep 28 \u00b7 "Pages and tickets; I read them in the pager"');
+  it('says where a rule came from only when Walnut learned it, and its note whoever wrote it', () => {
+    expect(provenanceLine({ source: 'learned', created: '2026-09-28', note: 'Club newsletters; I read them on Sundays' }))
+      .toBe('Learned Sep 28 \u00b7 Club newsletters; I read them on Sundays');
     expect(provenanceLine({ source: 'learned', created: '2026-09-28' })).toBe('Learned Sep 28');
-    expect(provenanceLine({ source: 'user' })).toBe(COPY.addedByYou);
+    // Every rule there is the user's unless it says otherwise: no line for one without a note.
+    expect(provenanceLine({ source: 'user' })).toBe('');
+    expect(provenanceLine({ source: 'user', note: 'CI noise' })).toBe('CI noise');
+    expect(provenanceLine({ source: 'user', note: '  ' })).toBe('');
     expect(COPY.empty).toBe('No rules yet. Use "Important\u2026" or "Not important\u2026" on a mail in Mail to teach Walnut, or add one here.');
   });
 
@@ -163,20 +172,125 @@ describe('mail rule editor rows', () => {
     const when = { from: ['issues@*', 'Survey Desk'], subject: 'Action Required', addressedToMe: false, cc: true as const, sender: 'automated' as const, account: 'ferry' };
     const rows = rowsOfWhen(when, () => ++key);
     expect(rows.map((one) => one.field)).toEqual(['from', 'subject', 'addressedToMe', 'cc', 'sender', 'account']);
-    expect(whenOfRows(rows)).toEqual({ when, problems: new Map() });
+    expect(whenOfRows(rows)).toEqual({ when, problems: new Map(), off: new Map(), hints: new Map(), turnsOn: new Set() });
   });
 
-  it('refuses an empty rule, an empty value, a pattern that could hang, and one that does not compile', () => {
+  it('keeps text as typed where its spaces are part of what matches; trims only what the matcher ignores', () => {
+    let key = 0;
+    // As a hand-written file may hold them: every space where the matcher compares text as written.
+    const when = { subject: { re: '^re: ' }, listId: ' list.example.invalid', message: '<id@example.invalid> ' };
+    expect(whenOfRows(rowsOfWhen(when, () => ++key)).when).toEqual(when);
+    expect(whenOfRows([{ key: 1, field: 'subject', value: ' re: ' }]).when).toEqual({ subject: ' re: ' });
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: '^re: ' }]).when).toEqual({ subject: { re: '^re: ' } });
+    // A sender's entries and a group name: their matchers ignore edge spaces, so trimming changes nothing.
+    expect(whenOfRows([{ key: 1, field: 'from', value: ' issues@*, Survey Desk ' }]).when).toEqual({ from: ['issues@*', 'Survey Desk'] });
+    expect(whenOfRows([{ key: 1, field: 'group', value: ' Ticket updates ' }]).when).toEqual({ group: 'Ticket updates' });
+    // Only spaces is still empty.
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: '   ' }]).problems.get(1)).toBe('Type a value.');
+    // Switching between two text boxes keeps the text; a picker field starts from its own default.
+    expect(TEXT_FIELDS.has('subject') && TEXT_FIELDS.has('subjectRe')).toBe(true);
+    expect(TEXT_FIELDS.has('sender') || TEXT_FIELDS.has('account') || TEXT_FIELDS.has('addressedToMe')).toBe(false);
+  });
+
+  it('a pattern that runs but would not match as it seems meant to gets a warning hint, and stays savable', () => {
+    const slashes = whenOfRows([{ key: 1, field: 'subjectRe', value: '/invoice/i' }]);
+    expect(slashes.problems.size).toBe(0);
+    expect(slashes.hints.get(1)).toEqual({ text: HINT_SLASHES_FLAGS, warn: true, fix: { label: 'Remove them', pattern: 'invoice' } });
+    expect(whenOfRows([{ key: 2, field: 'subjectRe', value: 'a{1000}' }]).hints.get(2)).toEqual({ text: HINT_NEEDS_MORE, warn: true });
+    expect(whenOfRows([{ key: 3, field: 'subjectRe', value: 'invoice #\\d+' }]).hints.size).toBe(0);
+  });
+
+  it('the preview says what a rule the user switched off would match, and a new group with a taken name joins it', () => {
+    expect(previewSentence({ matches: 5, moves: 1 })).toBe('Matches 5 mails \u00b7 1 would move, 4 already there');
+    expect(previewSentence({ matches: 1, moves: 1, partial: true })).toBe('Matches at least 1 mail');
+    expect(previewSentence({ matches: 3, moves: 3 }, true)).toBe('This rule is switched off; saving keeps it off. Switched on, it would match 3 mails');
+    expect(existingGroupLine('Build results')).toBe('A group named Build results already exists; this rule sends mail to it.');
+  });
+
+  it('shows a summary\'s subject pattern as code without slashes, and its target on one line', () => {
+    const re = '(?=.{0,500}invoice)(?=.{0,500}paid)';
+    expect(summaryParts({ summary: `Mail with a subject matching /${re}/ \u2192 Not important`, when: { subject: { re } } })).toEqual([
+      { text: 'Mail with a subject matching ' }, { text: re, code: true }, { text: ' ' }, { text: '\u2192 Not important', nowrap: true },
+    ]);
+    expect(summaryParts({ summary: 'From issues@*', when: { from: 'issues@*' } })).toEqual([{ text: 'From issues@*' }]);
+    expect(summaryParts({ summary: 'From issues@* \u2192 Build results', when: { from: 'issues@*' } })).toEqual([
+      { text: 'From issues@*' }, { text: ' ' }, { text: '\u2192 Build results', nowrap: true },
+    ]);
+  });
+
+  it('shows the head of a pattern over 60 characters, the whole one in its tooltip', () => {
+    const at60 = 'a'.repeat(PATTERN_SHOWN_CHARS);
+    expect(summaryParts({ summary: `Mail with a subject matching /${at60}/ \u2192 Important`, when: { subject: { re: at60 } } })[1])
+      .toEqual({ text: at60, code: true });
+    const long = `(invoice|receipt|${'x'.repeat(80)})`;
+    const parts = summaryParts({ summary: `Mail with a subject matching /${long}/ \u2192 Important`, when: { subject: { re: long } } });
+    expect(parts).toEqual([
+      { text: 'Mail with a subject matching ' },
+      { text: `${long.slice(0, PATTERN_SHOWN_CHARS - 1)}\u2026`, code: true, full: long },
+      { text: ' ' }, { text: '\u2192 Important', nowrap: true },
+    ]);
+    // A cut never splits a surrogate pair (test data: U+1F600 straddling the cut).
+    const emoji = `${'a'.repeat(PATTERN_SHOWN_CHARS - 2)}\u{1F600}${'b'.repeat(10)}`;
+    const shown = summaryParts({ summary: `Mail with a subject matching /${emoji}/`, when: { subject: { re: emoji } } })[1]!.text;
+    expect(shown).toBe(`${'a'.repeat(PATTERN_SHOWN_CHARS - 2)}\u2026`);
+  });
+
+  it('says how many matched mails would move only when some are already there, the same in both previews', () => {
+    expect(movesPhrase(8, 8)).toBeNull();
+    expect(movesPhrase(20, 0)).toBe('all already there');
+    expect(movesPhrase(1, 0)).toBe('already there');
+    expect(movesPhrase(5, 1)).toBe('1 would move, 4 already there');
+    expect(movesPhrase(1200, 30)).toBe('30 would move, 1,170 already there');
+  });
+
+  it('refuses an empty rule, an empty value, and a subject pattern the server would refuse, in its words', () => {
     expect(whenOfRows([]).problems.get(-1)).toMatch(/match every mail/);
     expect(whenOfRows([{ key: 1, field: 'from', value: ' ' }]).problems.get(1)).toBe('Type a value.');
-    for (const risky of ['(a+)+$', '(a*)*', '(a|a)+', '(x+)\\1', '(?<n>a)\\k<n>', '(ab{2,})+']) {
-      expect(riskyPattern(risky), risky).toBe(true);
-      expect(whenOfRows([{ key: 2, field: 'subjectRe', value: risky }]).problems.get(2)).toBe(RISKY_PATTERN);
+    const refused: Array<[string, string]> = [
+      ['(x+)\\1', PATTERN_BACKREFERENCE], ['(?<n>a)\\k<n>', PATTERN_BACKREFERENCE], ['a'.repeat(201), patternTooLong(201)],
+      ['(?:a{0,100}){0,100}', PATTERN_TOO_BIG],
+    ];
+    for (const [value, sentence] of refused) {
+      expect(whenOfRows([{ key: 2, field: 'subjectRe', value }]).problems.get(2), value).toBe(sentence);
     }
-    expect(riskyPattern('^\\[Action Required\\]')).toBe(false);
-    expect(whenOfRows([{ key: 3, field: 'subjectRe', value: '(' }]).problems.get(3)).toMatch(/regular expression/);
-    expect(whenOfRows([{ key: 4, field: 'subjectRe', value: '^window \\d+' }]).when).toEqual({ subject: { re: '^window \\d+' } });
-    expect(RISKY_PATTERN).toBe('This pattern could take too long to run. Remove the repeated group.');
+    expect(whenOfRows([{ key: 3, field: 'subjectRe', value: '(' }]).problems.get(3))
+      .toBe('This pattern is not a valid regular expression: a ( has no matching ). Close it, or write \\( to match a bracket.');
+    expect(patternTooLong(201)).toBe('This pattern is 201 characters; the limit is 200. Shorten it, or split it into two rules.');
+    // Nested repeats run in the linear matcher: nothing to refuse.
+    for (const value of ['^window \\d+', '(a+)+$', '(a|a)+', '\\[[A-Z]+-\\d+\\] .*(resolved|closed)']) {
+      expect(whenOfRows([{ key: 4, field: 'subjectRe', value }])).toEqual({ when: { subject: { re: value } }, problems: new Map(), off: new Map(), hints: new Map(), turnsOn: new Set() });
+    }
+    expect(PATTERN_BACKREFERENCE).toBe('This pattern refers to a group by number or name (\\1, \\k<name>), which mail rules do not support. Write out the text it should match instead.');
+    expect(PATTERN_TOO_BIG).toBe('This pattern repeats too many times to check quickly. Use smaller numbers in {n,m}.');
+  });
+
+  it("keeps a rule's own refused pattern, unchanged, as written; a changed one is judged as new", () => {
+    const big = '(?:x{1,90}y{1,90}){40}';
+    const rule = { id: 'r-big', when: { subject: { re: big } }, then: 'Important', source: 'user' as const };
+    const held = heldPatternOf(rule);
+    expect(held).toBe(big);
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: big }], held)).toEqual({
+      when: { subject: { re: big } }, problems: new Map(), off: new Map([[1, heldPatternLine(big)]]), hints: new Map(), turnsOn: new Set(),
+    });
+    // Replaced by a pattern Walnut runs: saving turns the rule on.
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: 'x+y+ invoice' }], held).turnsOn).toEqual(new Set([1]));
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: 'x+y+ invoice' }]).turnsOn.size).toBe(0);
+    // Said calmly, not as the error a typed pattern gets.
+    expect(heldPatternLine(big)).toBe('This rule stays off until this pattern is made smaller. Use smaller numbers in {n,m}.');
+    // Any pattern Walnut will not run is held the same way: invalid, too long, a back-reference.
+    for (const re of ['(unclosed', 'a'.repeat(201), '(a)\\1']) {
+      const judged = whenOfRows([{ key: 1, field: 'subjectRe', value: re }], heldPatternOf({ ...rule, when: { subject: { re } } }));
+      expect(judged.problems.size, re).toBe(0);
+      expect(judged.off.get(1), re).toBe(heldPatternLine(re));
+      expect(judged.when, re).toEqual({ subject: { re } });
+    }
+    // Another pattern, too big too, typed in its place: refused like any new one.
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: '(?:x{1,90}y{1,90}){41}' }], held).problems.get(1)).toBe(PATTERN_TOO_BIG);
+    // Without the rule's own pattern to keep, the same text is refused.
+    expect(whenOfRows([{ key: 1, field: 'subjectRe', value: big }]).problems.get(1)).toBe(PATTERN_TOO_BIG);
+    // A rule that is on holds nothing to keep.
+    expect(heldPatternOf({ ...rule, when: { subject: { re: 'invoice \\d+' } } })).toBeUndefined();
+    expect(heldPatternOf(null)).toBeUndefined();
   });
 
   it('maps server error fields onto rows', () => {

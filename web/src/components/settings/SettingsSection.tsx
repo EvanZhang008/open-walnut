@@ -182,6 +182,8 @@ export interface SettingsGroupProps {
   heading?: ReactNode
   /** Right side of the heading line, e.g. `3 of 21 shown`. */
   headingTrailing?: ReactNode
+  /** One sentence UNDER the heading, above the box, about every row in it. */
+  description?: ReactNode
   /** One sentence BELOW the box about the whole group. */
   footer?: ReactNode
   disabled?: boolean
@@ -197,6 +199,7 @@ export interface SettingsGroupProps {
 export function SettingsGroup({
   heading,
   headingTrailing,
+  description,
   footer,
   disabled,
   children,
@@ -214,7 +217,7 @@ export function SettingsGroup({
       log.warn('settings', 'nested settings group', { sectionId: el.closest('.settings-section')?.id ?? null })
     }
   }, [])
-  const framed = hasContent(heading) || hasContent(headingTrailing) || hasContent(footer)
+  const framed = hasContent(heading) || hasContent(headingTrailing) || hasContent(description) || hasContent(footer)
   const dim = disabled ? { 'aria-disabled': true as const, inert: true } : {}
   const box = (
     <div
@@ -234,6 +237,7 @@ export function SettingsGroup({
           {hasContent(headingTrailing) && <span className="settings-group-heading-trailing">{headingTrailing}</span>}
         </div>
       )}
+      {hasContent(description) && <p className="settings-group-description settings-subcard-desc">{description}</p>}
       {box}
       {hasContent(footer) && <p className="settings-group-footer settings-subcard-desc">{footer}</p>}
     </div>

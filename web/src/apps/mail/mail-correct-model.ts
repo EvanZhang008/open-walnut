@@ -21,6 +21,7 @@ import type {
   MailSample,
   MailShadow,
 } from '@/api/mail-groups';
+import { movesPhrase } from '@/utils/mail-preview-moves';
 
 export const IMPORTANT_ID = 'important';
 export const IMPORTANT_LABEL = 'Important';
@@ -33,7 +34,7 @@ export const MAX_NOTE = 300;
 /** The counter under `Why?` appears only past this many characters. */
 export const NOTE_COUNTER_FROM = 250;
 export const MAX_GROUP_NAME = 40;
-/** A `moves` number above this is drawn bold: a correction about to move a lot of mail. */
+/** A `moves` number above this is drawn bold (with the rest of `movesPhrase`): a correction about to move a lot of mail. */
 export const BOLD_MOVES_OVER = 50;
 
 export const COPY = {
@@ -234,10 +235,9 @@ export function matchesLine(
   const n = option.matches;
   const where = allInboxes ? 'in your inboxes' : 'in this inbox';
   const head = `Matches ${option.partial ? 'at least ' : ''}${n.toLocaleString('en-US')} ${n === 1 ? 'mail' : 'mails'} ${where}`;
-  const showMoves = option.moves < option.matches;
   return {
     head,
-    moves: showMoves ? `moves ${option.moves.toLocaleString('en-US')}` : null,
+    moves: movesPhrase(option.matches, option.moves),
     bold: option.moves > BOLD_MOVES_OVER,
   };
 }

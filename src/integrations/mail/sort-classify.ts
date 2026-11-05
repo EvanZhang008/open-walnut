@@ -11,7 +11,8 @@
  * `unknown` recipients are never evidence: no rule treats a missing recipient list as "not addressed
  * to me".
  */
-import { compileSubjectPattern } from './sort-regex-safety.js'
+import { compileGlob } from '../../lib/linear-regex/index.js'
+import { compileSubjectPattern, ruleOffReason } from './sort-regex-safety.js'
 import type { ClassifyResult, CompiledRule, GroupId, SortFeatures } from './sort-types.js'
 
 /** Bump when the built-in table below changes: every cached verdict is then recomputed. */
@@ -124,11 +125,13 @@ export function classify(features: SortFeatures, rules: ReadonlyArray<CompiledRu
 
 // ── compiling a rule condition ──
 
-/** A glob (`*` = any run of characters) as an anchored, case-insensitive test. */
+/**
+ * A glob (`*` = any run of characters) as an anchored, case-insensitive test. Linear in the value
+ * (src/lib/linear-regex/glob.ts): the regex it used to compile to, `^a.*b.*c$`, backtracks
+ * polynomially in the number of stars on a long address.
+ */
 export function globTest(pattern: string): (value: string) => boolean {
-  const source = pattern.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')
-  const regex = new RegExp(`^${source}$`, 'is')
-  return (value) => regex.test(value)
+  return compileGlob(pattern)
 }
 
 /**
@@ -148,7 +151,7 @@ export function fromTest(pattern: string): (features: SortFeatures) => boolean {
 
 /**
  * The condition as one predicate. Assumes the rule already passed validation
- * (sort-rules-schema.ts): an unsafe pattern here throws rather than being run.
+ * (sort-rules-schema.ts): a refused pattern here throws rather than being run.
  */
 export function compileWhen(
   when: import('./sort-types.js').RuleWhen,
@@ -211,6 +214,11 @@ export function derivedRuleId(rule: import('./sort-types.js').Rule, index: numbe
   return `r-${hash.toString(16).padStart(8, '0').slice(0, 6)}`
 }
 
+/** A rule that sorts mail: not switched off, by the person or for a subject pattern Walnut will not run. */
+export function ruleIsOn(rule: Pick<import('./sort-types.js').Rule, 'enabled' | 'when'>): boolean {
+  return rule.enabled !== false && !ruleOffReason(rule.when)
+}
+
 /** Enabled rules, compiled, in file order. The doc must already be valid. */
 export function compileRules(
   rules: ReadonlyArray<import('./sort-types.js').Rule>,
@@ -219,7 +227,7 @@ export function compileRules(
 ): CompiledRule[] {
   const out: CompiledRule[] = []
   rules.forEach((rule, index) => {
-    if (rule.enabled === false) return
+    if (!ruleIsOn(rule)) return
     out.push({
       id: rule.id ?? derivedRuleId(rule, index),
       index,

@@ -17,7 +17,7 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { derivedRuleId } from './sort-classify.js'
 import { rulesErrorOf, syntaxErrorOf, withLines } from './sort-rules-lines.js'
-import { validateRulesDoc } from './sort-rules-schema.js'
+import { heldPatternsOf, validateRulesDoc, type ValidateOptions } from './sort-rules-schema.js'
 import type { Rule, RuleValidationError, RulesError, RulesFileDoc } from './sort-types.js'
 
 export const RULES_FILE_NAME = 'sort-rules.yaml'
@@ -34,6 +34,9 @@ export function fileRevOf(bytes: string | Buffer | null): string {
   if (bytes === null) return MISSING_FILE_REV
   return crypto.createHash('sha1').update(bytes).digest('hex').slice(0, 12)
 }
+
+/** Loading never fails a file for a subject pattern Walnut will not run: that rule loads switched off. */
+const ON_LOAD: ValidateOptions = { keepHeld: () => true }
 
 export function parseRulesYaml(text: string): unknown {
   return yaml.load(text, { schema: yaml.CORE_SCHEMA })
@@ -53,7 +56,7 @@ export function dumpRulesDoc(doc: RulesFileDoc): string {
     if (rule.skipInbox) out.skipInbox = true
     return out
   })
-  return HEADER + yaml.dump({ version: 1, groups: doc.groups, rules }, { lineWidth: 120, noRefs: true })
+  return HEADER + yaml.dump({ version: 1, groups: doc.groups, rules }, { lineWidth: -1, noRefs: true })
 }
 
 export const EXAMPLE_RULES_FILE = `# Walnut mail sorting rules.
@@ -156,7 +159,7 @@ export class MailRulesFile {
     if (raw) {
       try {
         const saved = JSON.parse(raw) as { doc?: unknown; at?: number }
-        const valid = validateRulesDoc(saved.doc)
+        const valid = validateRulesDoc(saved.doc, ON_LOAD)
         if (valid.ok) this.state = { ...this.state, doc: valid.doc, since: saved.at ?? this.now }
       } catch { /* a corrupt meta row reads as none */ }
     }
@@ -222,7 +225,7 @@ export class MailRulesFile {
       this.setError(syntaxErrorOf(error, this.state.since), { fileRev, exists: true })
       return
     }
-    const valid = validateRulesDoc(parsed)
+    const valid = validateRulesDoc(parsed, ON_LOAD)
     if (!valid.ok) {
       this.setError(rulesErrorOf(text, valid.errors, this.state.since), { fileRev, exists: true })
       return
@@ -290,7 +293,7 @@ export class MailRulesFile {
     if (fileRevOf(bytes) !== baseRev) {
       return { ok: false, status: 409, json: { error: 'changed', message: RULES_CHANGED_ON_DISK } }
     }
-    const valid = validateRulesDoc({ version: 1, groups: input.groups ?? [], rules: input.rules ?? [] })
+    const valid = validateRulesDoc({ version: 1, groups: input.groups ?? [], rules: input.rules ?? [] }, this.savingOptions())
     if (!valid.ok) return { ok: false, status: 400, json: { error: 'invalid', errors: valid.errors } }
     const doc: RulesFileDoc = { ...valid.doc, rules: fillRuleIds(valid.doc.rules) }
     const text = dumpRulesDoc(doc)
@@ -337,8 +340,14 @@ export class MailRulesFile {
       const syntax = syntaxErrorOf(error, this.now)
       return [{ index: -1, field: 'file', message: syntax.message, ...(syntax.line ? { line: syntax.line } : {}) }]
     }
-    const valid = validateRulesDoc(parsed)
+    const valid = validateRulesDoc(parsed, this.savingOptions())
     return valid.ok ? [] : withLines(text, valid.errors)
+  }
+
+  /** A save may keep a refused pattern the rules already hold (switched off), never add one. */
+  private savingOptions(): ValidateOptions {
+    const held = heldPatternsOf(this.state.doc)
+    return { keepHeld: (pattern) => held.has(pattern) }
   }
 
   dispose(): void {

@@ -4,6 +4,12 @@
  * every mail around the hole.
  *
  * Messages are sentences a person reads in Settings and in the grouped view, verbatim.
+ *
+ * One exception keeps one rule from failing a file: a subject pattern Walnut will not run (too big
+ * for the matcher, as an older Walnut accepted, or invalid, too long or with a back-reference, as a
+ * hand edit may write) is no error on LOAD (`keepHeld`): the rule loads switched off with its own
+ * line (`ruleOffReason`) and the rest of the file works. A save refuses a new or changed one, and
+ * keeps one the file already held as it was.
  */
 import { groupIdForName, reservedGroupId } from './sort-classify.js'
 import { compileSubjectPattern } from './sort-regex-safety.js'
@@ -11,7 +17,9 @@ import type { Rule, RuleSenderValue, RuleValidationError, RuleWhen, RulesFileDoc
 
 export const MAX_GROUP_NAME = 40
 export const MAX_RULES = 500
-const RULE_KEYS = new Set(['id', 'when', 'then', 'source', 'note', 'created', 'enabled', 'label', 'skipInbox'])
+// `offReason` is view-only (GET /rules puts it on a rule loaded switched off): a client that sends a
+// rule back as it read it must not be refused for it. It is never stored.
+const RULE_KEYS = new Set(['id', 'when', 'then', 'source', 'note', 'created', 'enabled', 'label', 'skipInbox', 'offReason'])
 const WHEN_KEYS = new Set(['from', 'subject', 'listId', 'addressedToMe', 'cc', 'sender', 'account', 'message', 'group'])
 const SENDERS = new Set<RuleSenderValue>(['person', 'bulk', 'transactional', 'automated', 'unknown'])
 /** The display names a `then` may use for the reserved destinations, for the "did you mean" suggestion. */
@@ -60,8 +68,24 @@ function stringList(value: unknown): string[] | null {
   return null
 }
 
+export interface ValidateOptions {
+  /** A refused subject pattern this answers true for is no problem (the rule loads switched off). */
+  keepHeld?: (pattern: string) => boolean
+}
+
+/** Every pattern a doc holds that Walnut will not run: what a save of it may keep. */
+export function heldPatternsOf(doc: RulesFileDoc): Set<string> {
+  const out = new Set<string>()
+  for (const rule of doc.rules) {
+    const subject = rule.when.subject
+    if (typeof subject !== 'object' || !subject) continue
+    if (!compileSubjectPattern(subject.re).ok) out.add(subject.re)
+  }
+  return out
+}
+
 /** Problems with one `when`, as [field, message] pairs. */
-export function whenProblems(when: unknown): Array<[string, string]> {
+export function whenProblems(when: unknown, options: ValidateOptions = {}): Array<[string, string]> {
   if (!isRecord(when) || Object.keys(when).length === 0) return [['when', WHEN_EMPTY]]
   const out: Array<[string, string]> = []
   for (const key of Object.keys(when)) {
@@ -75,7 +99,7 @@ export function whenProblems(when: unknown): Array<[string, string]> {
       if (!subject.trim()) out.push(['when.subject', 'subject cannot be empty.'])
     } else if (isRecord(subject) && typeof subject.re === 'string' && Object.keys(subject).length === 1) {
       const compiled = compileSubjectPattern(subject.re)
-      if (!compiled.ok) out.push(['when.subject', compiled.message])
+      if (!compiled.ok && !options.keepHeld?.(subject.re)) out.push(['when.subject', compiled.message])
     } else {
       out.push(['when.subject', 'subject must be a text or { re: "pattern" }.'])
     }
@@ -129,7 +153,7 @@ export type RulesValidation =
   | { ok: false; errors: RuleValidationError[] }
 
 /** Validate a parsed file (or a PUT body). Empty input is an empty, valid file. */
-export function validateRulesDoc(raw: unknown): RulesValidation {
+export function validateRulesDoc(raw: unknown, options: ValidateOptions = {}): RulesValidation {
   const errors: RuleValidationError[] = []
   if (raw === undefined || raw === null) return { ok: true, doc: { version: 1, groups: [], rules: [] } }
   if (!isRecord(raw)) {
@@ -174,7 +198,7 @@ export function validateRulesDoc(raw: unknown): RulesValidation {
       if (ids.has(id)) push('id', `Two rules use the id ${id}.`, id)
       else ids.set(id, index)
     }
-    for (const [field, message] of whenProblems(item.when)) push(field, message, id)
+    for (const [field, message] of whenProblems(item.when, options)) push(field, message, id)
     const then = thenProblem(item.then, known)
     const thenName = typeof item.then === 'string' ? item.then.trim() : ''
     if (then) push('then', then, id)

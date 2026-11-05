@@ -11,7 +11,7 @@ import type { MailRuleView } from '@/api/mail-groups';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
-import { COPY, provenanceLine } from './mail-rules-model';
+import { COPY, provenanceLine, summaryParts } from './mail-rules-model';
 
 export interface MoveFocus { list: 'rule'; key: string; dir: 'up' | 'down'; at: number }
 
@@ -84,23 +84,33 @@ export function MailRulesRulesList(props: RulesListProps) {
       {props.rules.map((rule, index) => {
         const editing = props.editingId === rule.id;
         const on = rule.enabled !== false;
+        const off = rule.offReason;
         return (
           <li key={rule.id} className="mail-rule-row" data-testid="mail-rule-row" data-rule-id={rule.id}
-            data-enabled={on ? 'true' : 'false'} data-flash={props.flashKey === rule.id ? 'true' : undefined}>
+            data-enabled={on && !off ? 'true' : 'false'} data-flash={props.flashKey === rule.id ? 'true' : undefined}>
             <div className="mail-rule-line">
               <MoveButtons name={rule.summary} index={index} count={props.rules.length} disabled={props.disabled || editing}
                 onMove={(delta) => props.onMove(index, delta)} />
               <div className="mail-rule-copy">
                 <span className="mail-rule-summary" data-testid="mail-rule-summary">
-                  {rule.summary}
+                  {summaryParts(rule).map((part, at) => part.code
+                    ? <code key={at} className="mail-rule-pattern" data-testid="mail-rule-pattern" title={part.full}>{part.text}</code>
+                    : <span key={at} className={part.nowrap ? 'mail-rule-target' : undefined}>{part.text}</span>)}
                   {rule.skipInbox && <span className="mail-rule-skip-badge" data-testid="mail-rule-skip-badge">· Skips the Inbox</span>}
                 </span>
-                <span className="mail-rule-provenance" data-testid="mail-rule-provenance">{provenanceLine(rule)}</span>
+                {provenanceLine(rule) && <span className="mail-rule-provenance" data-testid="mail-rule-provenance">{provenanceLine(rule)}</span>}
+                {/* Said once: while its editor is open, the editor says it under the pattern. */}
+                {off && !editing && <span className="mail-rule-off" data-testid="mail-rule-off">{off}</span>}
               </div>
               <MovedNote show={props.movedKey === rule.id} />
               <span className="mail-rule-actions" title={props.disabled ? props.disabledTitle : undefined}>
-                <ToggleSwitch checked={on} disabled={props.disabled || editing} aria-label={`Use rule ${rule.summary}`}
-                  data-testid="mail-rule-toggle" onChange={(value) => props.onToggle(index, value)} />
+                {/* A rule off for its pattern turns on only once the pattern is fixed (Edit), so its
+                    switch says the row's own reason; the title is on a wrapper because a disabled
+                    control shows no tooltip in every engine. */}
+                <span className="mail-rule-toggle-wrap" title={off || undefined} data-testid="mail-rule-toggle-wrap">
+                  <ToggleSwitch checked={on && !off} disabled={props.disabled || editing || Boolean(off)} aria-label={`Use rule ${rule.summary}`}
+                    data-testid="mail-rule-toggle" onChange={(value) => props.onToggle(index, value)} />
+                </span>
                 <SettingsButton variant="text" disabled={props.disabled || editing} data-testid="mail-rule-edit" onClick={() => props.onEdit(index)}>
                   Edit
                 </SettingsButton>
@@ -121,8 +131,9 @@ export function MailRulesBuiltinList({ builtins }: { builtins: Array<{ id: strin
     <ol className="mail-rules-builtins" data-testid="mail-rules-builtins">
       {builtins.map((one) => (
         <li key={one.id} className="mail-rules-builtin" data-testid="mail-rules-builtin" data-builtin-id={one.id}>
-          <span className="mail-rule-summary">{one.summary}</span>
-          <span className="mail-rule-provenance">{COPY.builtinNote}</span>
+          <span className="mail-rule-summary">
+            {one.summary}{' '}<span className="mail-rule-target" data-testid="mail-rules-builtin-target">{`\u2192 ${one.then}`}</span>
+          </span>
         </li>
       ))}
     </ol>
