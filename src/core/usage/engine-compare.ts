@@ -73,6 +73,8 @@ export interface EngineCompareTask {
   errored: boolean;
   /** The engine split chose its engine. */
   split: boolean;
+  /** Closed after a start that never ran a turn: neither finished nor open. */
+  notStarted?: boolean;
   /** The split assigned it one engine and most of its cost ran on another (an engine switch, a rescue). */
   switched: boolean;
 }
@@ -181,7 +183,8 @@ function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
 function sessionRanTurn(s: CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R | undefined : never): boolean {
   if (!s) return false;
   const r = s as { contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number };
-  return r.contextTokens != null || !!r.lastCompactUuid || !!r.summary || (r.messageCount ?? 0) > 1;
+  // Not messageCount: Claude Code counts a spawn that got its pid, before any turn ran.
+  return r.contextTokens != null || !!r.lastCompactUuid || !!r.summary;
 }
 
 function median(xs: number[]): number | null {
@@ -258,14 +261,20 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     // No session start known (an old task whose records are gone, a start that never ran): no time, rather than its age.
     const sessionStart = firstStart(t, input.sessions);
     const startedAt = sessionStart ?? t.engine_pick?.at ?? t.created_at;
-    const finishedAt = t.first_completed_at && t.completed_at && t.first_completed_at < t.completed_at ? t.first_completed_at : t.completed_at;
+    // A "first completion" before any session started is the close of a start that never ran (then
+    // reopened and worked on): not a finish, so neither its date, its time nor a reopen counts from it.
+    const closedUnrun = !!t.first_completed_at && !!sessionStart && t.first_completed_at < sessionStart;
+    const firstDone = closedUnrun ? undefined : t.first_completed_at;
+    const finishedAt = firstDone && t.completed_at && firstDone < t.completed_at ? firstDone : t.completed_at;
     // Finished: the day it finished. Reopened and open again: the day it first finished, so the
     // rework stays in the period of the work it reopened. Never finished: the day it started.
-    const day = input.dayOf(t.first_completed_at ?? (closed ? t.completed_at! : startedAt));
+    const day = input.dayOf(firstDone ?? (closed ? t.completed_at! : startedAt));
     if (!inRange(day, input.range)) continue;
     const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine ?? t.last_start?.engine);
-    const family = modelFamily(spend?.model) ?? modelFamily(session?.acpModel ?? session?.cliModel ?? session?.model)
-      ?? modelFamily(t.engine_pick?.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
+    // The first signal that names a known family; a model id of no known family (a proxy alias) falls
+    // through to the next, so one engine is not split into a known column and an "Other" one.
+    const signals = [spend?.model, session?.acpModel ?? session?.cliModel ?? session?.model, t.engine_pick?.model].map(modelFamily);
+    const family = signals.find((f): f is ModelFamily => !!f && f !== 'Other') ?? ENGINE_FAMILY[engine] ?? 'Other';
     const familyKey = `${engine}|${family}`;
     const byCost: Group = { key: familyKey, familyKey, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}` };
     // Where the split put it: the fair test keeps a task in that column even when it was rescued elsewhere.
@@ -292,9 +301,9 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // A task that never ran cost nothing: a known $0, not an unknown.
       costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
       partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
-      followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
+      followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - (closedUnrun ? 1 : 0)), errored, split: !!t.engine_pick,
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
-      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!t.first_completed_at), notStarted, finishedAt: done ? t.completed_at! : '',
+      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!firstDone), notStarted, finishedAt: done ? t.completed_at! : '',
     });
   }
   const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: entryLabelOf(b), weight: b.weight }));
@@ -345,9 +354,10 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   }
   rows.sort((a, b) => b.done - a.done || b.open - a.open || a.label.localeCompare(b.label));
   const tasks = [...picked]
-    .sort((a, b) => Number(b.done) - Number(a.done) || b.finishedAt.localeCompare(a.finishedAt))
+    // Finished first (newest first), then open, then the ones that never started.
+    .sort((a, b) => Number(b.done) - Number(a.done) || Number(a.notStarted) - Number(b.notStarted) || b.finishedAt.localeCompare(a.finishedAt))
     .slice(0, TASKS_MAX)
-    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, notStarted: _n, ...t }) => t);
+    .map(({ finishedAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, ...t }) => t);
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,
     projects: [...projects].sort((a, b) => b[1] - a[1]).map(([project, n]) => ({ project, tasks: n })),

@@ -261,6 +261,7 @@ export interface EngineCompareTask {
   split: boolean;
   noUsage?: boolean;
   switched?: boolean;
+  notStarted?: boolean;
 }
 
 export interface EngineCompare {

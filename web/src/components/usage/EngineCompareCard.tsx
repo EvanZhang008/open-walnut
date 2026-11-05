@@ -85,7 +85,7 @@ function taskCostNote(t: EngineCompareTask): string | undefined {
 const METRICS: Metric[] = [
   { id: 'done', label: 'Tasks finished', help: 'Completed in the period, counted under the engine and model that carried most of their cost (only the split\'s tasks: the engine it assigned).', value: (r) => r.done, show: (n) => String(n ?? 0) },
   { id: 'open', label: 'Still open', value: (r) => r.open, show: (n) => String(n ?? 0) },
-  { id: 'notstarted', label: 'Never started', help: 'Closed after a start that failed before any session ran: counted as an error, not as finished work.', value: (r) => r.notStarted ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
+  { id: 'notstarted', label: 'Never started', help: 'Closed after a start that failed before its first turn ran: counted as an error, not as finished work.', value: (r) => r.notStarted ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
   { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true, samples: timedDone },
   { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: medianCostPartial,
@@ -213,7 +213,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
               </table>
             </div>
             <p className="usage-bd-foot">
-              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} A task counts by the day it first finished (a reopened one too), or the day it started if it never finished. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
+              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} A task counts by the day it first finished (a reopened one too), or the day it started if it never finished. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more tasks behind that value (finished, and with a known cost or time where the row needs one); "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
             </p>
             {!data.splitOnly && split?.on && (
               <p className="usage-bd-foot" data-testid="usage-engines-bias">Counting every task: a lead may have picked an engine by hand for some of them, so this is not a fair test. "Assigned by the split" is.</p>
@@ -233,7 +233,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                   {data.tasks.map((t) => (
                     <tr key={t.taskId} className="usage-line" data-task={t.taskId}>
                       <td><button type="button" className="usage-ec-open" title={t.title} onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
-                        <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : 'open', t.split ? 'split' : '',
+                        <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>
                       <td className="num usage-line-cost" title={taskCostNote(t)}>

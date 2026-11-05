@@ -349,14 +349,50 @@ describe('round-8 counting', () => {
 
   it('a task finished, reopened and finished again stays in the period it first finished', () => {
     const t = done('twice', 1, { completed_at: '2026-11-10T00:00:00.000Z', first_completed_at: '2026-10-30T00:00:00.000Z', reopens: 1 });
-    const oct = aggregateEngineCompare(input([t], {}, { range: { start: '2026-10-01', end: '2026-10-31' } }));
-    const nov = aggregateEngineCompare(input([t], {}, { range: { start: '2026-11-01', end: '2026-11-30' } }));
+    const withStart = (range: { start: string; end: string }) => {
+      const inp = input([t], {}, { range });
+      (inp.sessions as Map<string, object>).set('s-twice', { startedAt: '2026-10-29T00:00:00.000Z' });
+      return aggregateEngineCompare(inp);
+    };
+    const oct = withStart({ start: '2026-10-01', end: '2026-10-31' });
+    const nov = withStart({ start: '2026-11-01', end: '2026-11-30' });
     expect([oct.taskCount, nov.taskCount]).toEqual([1, 0]);
   });
 
   it('a model with no known family (a proxy alias) is no move within one engine', () => {
     const inp = input([done('al', 1, { engine_pick: { key: 'claude', engine: 'claude', at } })], { al: { costUsd: 1, model: 'my-proxy-alias' } });
     expect(aggregateEngineCompare({ ...inp, splitOnly: true }).tasks[0].switched).toBe(false);
+  });
+});
+
+describe('round-9 counting', () => {
+  const at = '2026-11-02T00:00:00.000Z';
+  it('a never-started task says so in the task list, after the open ones', () => {
+    const ns = task({ id: 'ns', phase: 'COMPLETE', completed_at: '2026-11-02T00:01:00.000Z', start_failures: 1, last_start: { id: 'x', at, state: 'failed', engine: 'claude' } });
+    const out = aggregateEngineCompare(input([ns, done('d', 1), task({ id: 'o', session_id: 's-o' })], { d: { costUsd: 1 } }));
+    expect(out.tasks.map((t) => [t.taskId, !!t.notStarted])).toEqual([['d', false], ['o', false], ['ns', true]]);
+  });
+
+  it('a model of no known family does not split one engine into two columns in All', () => {
+    const tasks = [done('m1', 1, { engine_pick: { key: 'claude', engine: 'claude', at } }), done('m2', 1)];
+    const out = aggregateEngineCompare(input(tasks, { m1: { costUsd: 1, model: 'mock' }, m2: { costUsd: 1 } }));
+    expect(out.rows.map((r) => [r.key, r.done])).toEqual([['claude|Claude', 2]]);
+  });
+
+  it('a spawn that got its pid but ran no turn has not run (messageCount alone says nothing)', () => {
+    const t = done('pidonly', 0.01, { start_failures: 1 });
+    const inp = input([t], {});
+    (inp.sessions as Map<string, object>).set('s-pidonly', { startedAt: '2026-11-02T00:00:00.000Z', messageCount: 2 });
+    expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 0, notStarted: 1 });
+  });
+
+  it('a close of a start that never ran, then reopened and finished, dates and times from the real work', () => {
+    // Closed unrun on 10-20, reopened, worked from 11-02 and finished 11-02 01:00.
+    const t = done('late', 1, { first_completed_at: '2026-10-20T00:00:00.000Z', reopens: 1 });
+    const inp = input([t], { late: { costUsd: 1 } }, { range: { start: '2026-11-01', end: '2026-11-30' } });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks[0]).toMatchObject({ hours: 1, reopens: 0 });
+    expect(out.rows[0].reopenedShare).toBe(0);
   });
 });
 

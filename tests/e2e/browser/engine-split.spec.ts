@@ -42,7 +42,7 @@ function engines(project: string | null) {
   const tasks = Array.from({ length: 60 }, (_, i) => ({
     taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : i === 1 ? `A very long task title ${'that keeps going '.repeat(12)}` : `Task number ${i}`,
     project: i % 3 ? 'Walnut' : 'Walnut Idea', key: rows[i % 3].key, done: i % 7 !== 0, hours: i % 7 ? 1 + i / 4 : null,
-    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0,
+    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0, ...(i === 59 ? { done: false, hours: null, notStarted: true, errored: true } : {}),
   }))
   return { range: { start: null, end: null }, rows, tasks, taskCount: 75, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
     split: { on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 1 }] } }
@@ -158,6 +158,8 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   const costBox = (await tasks.locator('tr').nth(1).locator('td.num').boundingBox())!
   expect(costBox.x + costBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
   await expect(tasks.locator('tr').first()).toContainText('Claude Code · Claude')
+  // A task closed after a start that never ran says so, not "open".
+  await expect(tasks.locator('tr').nth(59)).toContainText('never started')
   // A task row opens its task from the keyboard too.
   await tasks.locator('tr').first().getByRole('button').focus()
   await expect(tasks.locator('tr').first().getByRole('button')).toBeFocused()
