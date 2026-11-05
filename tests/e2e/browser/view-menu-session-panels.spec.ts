@@ -3,7 +3,7 @@
  * and changes it.
  *
  * The count is ONE app-wide setting (`ui.session_panels`, also in Settings, General and
- * the session kebab's Panels row); the Display menu is a third surface for it because
+ * the session kebab's Columns row); the Display menu is a third surface for it because
  * the task panel is where the user is when the strip needs more or fewer panels
  * (2026-09-23: "this should show the number of session panels we can adjust"). So the
  * assertions are about the shared setting, not a local copy: the menu reads the current
@@ -52,7 +52,7 @@ const columns = (page: Page) => page.locator('.main-page-sessions-area > .main-p
 const panelsRow = (page: Page) => page.locator('.fb-menu [data-view-option="session-panels"]')
 const choice = (page: Page, key: string) => panelsRow(page).locator(`[data-choice="${key}"]`)
 const checked = (page: Page) => panelsRow(page).locator('button[aria-pressed="true"]')
-/** The session panel's own kebab and its Panels row (the other in-context surface of the setting). */
+/** The session panel's own kebab and its Columns row (the other in-context surface of the setting). */
 async function kebabPanels(page: Page) {
   const kebab = page.locator('.main-page-session-column .session-panel').first().getByRole('button', { name: 'More actions' })
   await expect(kebab).toBeVisible({ timeout: 20_000 })
@@ -143,6 +143,13 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   // 4 from the session kebab: the Display menu shows 4.
   await (await kebabPanels(page)).locator('.task-kebab-panels-opt[data-value="4"]').click()
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('4')
+  // With 4 chosen, the kebab's Auto still names what Auto would give at this width (never
+  // the chosen 4), so the user can see it before picking it.
+  const autoHere = await autoBudget(page)
+  const kebabAutoIdle = (await kebabPanels(page)).locator('.task-kebab-panels-opt[data-value="Auto"]')
+  await expect(kebabAutoIdle).toHaveAttribute('aria-pressed', 'false')
+  await expect(kebabAutoIdle).toHaveText(`Auto (${autoHere})`)
+  await page.keyboard.press('Escape')
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['4'])
   expect(await viewFits(page)).toBe(true)
@@ -170,8 +177,10 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await expect(checked(page)).toHaveText([`Auto (${wide})`])
   await closeViewMenu(page)
 
-  // The session kebab's Panels row holds the same state (its Auto carries no count).
-  await expect((await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-pressed="true"]')).toHaveAttribute('data-value', 'Auto')
+  // The session kebab's Columns row holds the same state, and its Auto names the same count.
+  const kebabAuto = (await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-pressed="true"]')
+  await expect(kebabAuto).toHaveAttribute('data-value', 'Auto')
+  await expect(kebabAuto).toHaveText(`Auto (${wide})`)
   await page.keyboard.press('Escape')
 
   // The choice survives a reload.

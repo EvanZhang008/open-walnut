@@ -184,14 +184,14 @@ export function GeneralSection({ config, onSave }: Props) {
           }
         />
         <SettingsRow
-          label="Session panels"
+          label="Session columns"
           help="How many sessions sit side by side; Auto fits the window width."
           error={panels.error}
           data-testid="settings-session-panels-row"
           control={
             <SegmentedControl
               id="settings-session-panels"
-              aria-label="Session panels"
+              aria-label="Session columns"
               value={panels.value}
               options={PANEL_OPTIONS.map((o) => ({ ...o, testId: `settings-panels-${o.value}` }))}
               onChange={panels.set}

@@ -181,7 +181,7 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   for (const id of ['locate', 'popout']) await expect(menu.getByTestId(`phone-row-${id}`)).toHaveCount(0)
   await expect(menu.getByText('Details', { exact: true })).toBeVisible()
   const menuText = await menu.innerText()
-  for (const desktopOnly of ['Open in new tab', 'Open in VS Code', 'Copy dir', 'Panels', 'Web preview', 'Fork']) {
+  for (const desktopOnly of ['Open in new tab', 'Open in VS Code', 'Copy dir', 'Columns', 'Web preview', 'Fork']) {
     expect(menuText, desktopOnly).not.toContain(desktopOnly)
   }
   await expect(menu.locator('select')).toHaveCount(0)

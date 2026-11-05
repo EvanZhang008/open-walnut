@@ -2,7 +2,7 @@
  * SessionKebabSection — the "Session" half of the session-panel kebab dropdown.
  *
  * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">, below a
- * divider, so a single dropdown holds the surface's rows (top: Open, Window, Panels),
+ * divider, so a single dropdown holds the surface's rows (top: Open, Window, Columns),
  * the task's rows, then this: ONE Session group (KebabGroup) holding Copy & open, Debug,
  * Restart / Terminate and Session info (the time it took, Created, Updated, Host).
  * `SessionViewItems` is the Open group's second half (Inbox, Code, Web, Notes, Msgs,
@@ -24,6 +24,7 @@ import { KebabGroup } from './KebabGroup';
 import { SessionMetaFacts } from './SessionMetaFacts';
 import {
   useSessionPanelMode,
+  useLiveAutoPanelCount,
   MIN_PANELS,
   MAX_PANELS,
   type SessionPanelMode,
@@ -66,25 +67,45 @@ const PANEL_CHOICES: SessionPanelMode[] = [
  * panel count is about the strip itself, and it is the control people could not
  * find when it sat between the view toggles (2026-10-01). Being first also keeps
  * it far from Restart / Terminate at the bottom.
+ *
+ * Labelled "Columns", as the Display menu's "Session columns" row names the same setting.
+ * Auto names what it gives in this window ("Auto (2)", the Display menu's words), pressed
+ * or not, from the count the home strip publishes (useLiveAutoPanelCount), so the
+ * breakpoints live in one place; with no strip measured yet it reads plain "Auto".
  */
 export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
   const { mode, setMode } = useSessionPanelMode();
+  const autoCount = useLiveAutoPanelCount();
   return (
     <div className="task-kebab-panels" data-testid="kebab-panels">
       <span className="task-kebab-icon">{VIEWS_ICON}</span>
-      <span className="task-kebab-panels-label" title="How many session panels sit side by side (applies to all sessions)">
-        Panels
+      <span className="task-kebab-panels-label" title="How many session columns sit side by side (applies to all sessions)">
+        Columns
       </span>
-      <div className="task-kebab-panels-track" role="group" aria-label="Session panels side by side">
+      <div
+        className="task-kebab-panels-track"
+        role="group"
+        aria-label="Session columns side by side"
+        // Left and Right move between the choices, as in any segmented control.
+        onKeyDown={(e) => {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+          const opts = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button'));
+          const at = opts.indexOf(document.activeElement as HTMLButtonElement);
+          if (at < 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          opts[Math.max(0, Math.min(opts.length - 1, at + (e.key === 'ArrowRight' ? 1 : -1)))]?.focus();
+        }}
+      >
         {PANEL_CHOICES.map((value) => (
           <button
             key={value}
             type="button"
             aria-pressed={mode === value}
             data-value={value === 'auto' ? 'Auto' : value}
-            aria-label={value === 'auto' ? 'Auto panels' : `${value} panel${value === '1' ? '' : 's'}`}
+            aria-label={value === 'auto' ? 'Auto columns' : `${value} column${value === '1' ? '' : 's'}`}
             className={`task-kebab-panels-opt${mode === value ? ' active' : ''}`}
-            title={value === 'auto' ? 'Adjust automatically to the window width' : `Show ${value} side by side`}
+            title={value === 'auto' ? 'As many as fit the window width' : `${value} session column${value === '1' ? '' : 's'} side by side`}
             onClick={(e) => {
               e.stopPropagation();
               // Re-picking the current value is a no-op beyond closing, so we don't
@@ -93,11 +114,14 @@ export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void })
               onAfterAction?.();
             }}
           >
-            {value === 'auto' ? 'Auto' : (
-              <span className="task-kebab-panels-bars" aria-hidden="true">
-                {Array.from({ length: Number(value) }, (_, i) => <i key={i} />)}
-              </span>
-            )}
+            {/* The number itself, never that many drawn bars to count (2026-11-04,
+                the user: "just show numbers, people having to count is not
+                reasonable"). tests/web/count-choice-guard.test.ts keeps it so. Auto always
+                names the count it gives in this window, muted until it is pressed, so the
+                track keeps one width whichever choice is pressed. */}
+            {value === 'auto' ? (
+              <>Auto{autoCount !== null && <span className="task-kebab-panels-auto-n">{` (${autoCount})`}</span>}</>
+            ) : value}
           </button>
         ))}
       </div>

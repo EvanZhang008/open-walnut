@@ -116,6 +116,22 @@ export function useLiveSessionPanelCount(): number | null {
 }
 
 /**
+ * How many panels Auto gives at the strip's measured width, whichever choice is set: a
+ * control can name Auto's count before Auto is picked (the session kebab's Columns row).
+ * Published with the live count by the instance that measures the strip.
+ */
+let liveAutoCount: number | null = null;
+function publishLiveAutoCount(n: number) {
+  if (liveAutoCount === n) return;
+  liveAutoCount = n;
+  for (const listener of liveCountListeners) listener();
+}
+/** Auto's panel count at the home strip's width; null until the home page has measured it. */
+export function useLiveAutoPanelCount(): number | null {
+  return useSyncExternalStore(subscribeLiveCount, () => liveAutoCount, () => null);
+}
+
+/**
  * @param containerWidth - actual pixel width of the session area container.
  *   Used by auto mode to decide the panel count from available space (not viewport).
  */
@@ -198,15 +214,18 @@ export function useSessionPanelMode(containerWidth = 0) {
   // An explicit count wins; 'auto' (and any value that failed validation on the
   // way in) falls back to the width breakpoints.
   const explicitCount = panelCountOf(mode);
-  const effectiveMaxPanels: number =
-    explicitCount ??
-    (containerWidth >= AUTO_MIN_WIDTH_FOR_THREE ? 3 :
-     containerWidth >= AUTO_MIN_WIDTH_FOR_TWO ? 2 : 1);
+  const autoCount =
+    containerWidth >= AUTO_MIN_WIDTH_FOR_THREE ? 3 :
+    containerWidth >= AUTO_MIN_WIDTH_FOR_TWO ? 2 : 1;
+  const effectiveMaxPanels: number = explicitCount ?? autoCount;
 
   // Only a caller that measured the strip knows the real count; the rest pass no width.
   useEffect(() => {
-    if (containerWidth > 0) publishLiveCount(effectiveMaxPanels);
-  }, [containerWidth, effectiveMaxPanels]);
+    if (containerWidth > 0) {
+      publishLiveCount(effectiveMaxPanels);
+      publishLiveAutoCount(autoCount);
+    }
+  }, [containerWidth, effectiveMaxPanels, autoCount]);
 
   return { mode, setMode, effectiveMaxPanels, loaded } as const;
 }
