@@ -310,8 +310,10 @@ test.describe('Question stack: asking and sending', () => {
     await expectDepth(panel, 0)
   })
 
-  test('every page keeps its own draft; an unsent page with text leaves a draft row that leads back', async ({ page }) => {
-    // Drafts never touch the server, so the dense fixture (with a real drawer) is safe here.
+  test('every page keeps its own draft; an unsent page with text leaves a draft row that leads back', async ({ page, request }) => {
+    // Drafts never touch the server, but other tests write the dense fixture: start from its seed
+    // (its real drawer), under its lease.
+    await resetThreadsFixture(request, DENSE_SESSION)
     await boot(page)
     let panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
     // One page at a time, with its back button (a split's halves have none).

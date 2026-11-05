@@ -1668,3 +1668,52 @@ describe('a test ends its fakes', () => {
     expect(offendersOf('test.afterEach(async ({ page }) => { await dropFakes(page) })')).toBe(0)
   })
 })
+
+describe('a test that opens a threads fixture session', () => {
+  // A test that only reads a fixture session is still using it, and the file-level rule above let
+  // one through: session-threads-send's draft test opened the dense session with no reset (its
+  // other tests reset their own session), so it held no lease while two tests on other workers
+  // asked and reset questions there, and the page it asked for never came (2026-11-04, CI, both
+  // tries). Every test that opens a session some spec resets resets it too: in its own body, in a
+  // beforeEach or beforeAll of its file, or through a helper of its file that does.
+  const RESET_OF = /resetThreadsFixture\([^,]+,\s*(\w+)/g
+  const OPEN_OF = /openThreadsSession\(\s*page\s*,\s*(\w+)/g
+  const namesOf = (re: RegExp, text: string) => new Set([...text.matchAll(re)].map((m) => m[1]!))
+  const offendersOf = (text: string, shared: Set<string>): string[] => {
+    const helpers = new Map<string, Set<string>>()
+    for (const m of text.matchAll(/async function (\w+)\([^)]*\)[^{]*\{([\s\S]*?)\n\}/g)) {
+      const names = namesOf(RESET_OF, m[2]!)
+      if (names.size) helpers.set(m[1]!, names)
+    }
+    const resets = (seg: string): Set<string> => {
+      const out = namesOf(RESET_OF, seg)
+      for (const [name, names] of helpers) if (new RegExp(`\\b${name}\\(`).test(seg)) names.forEach((n) => out.add(n))
+      return out
+    }
+    const hooks = new Set<string>()
+    for (const m of text.matchAll(/test\.before(?:Each|All)\(/g)) resets(text.slice(m.index!, m.index! + 400)).forEach((n) => hooks.add(n))
+    const out: string[] = []
+    for (const body of `\n${text}`.split(/\n\s*test\((?=['"`])/).slice(1)) {
+      const done = resets(body)
+      const missing = [...namesOf(OPEN_OF, body)].filter((n) => shared.has(n) && !done.has(n) && !hooks.has(n))
+      if (missing.length) out.push(`${body.split('\n')[0]!.slice(0, 70)}: ${missing.join(', ')}`)
+    }
+    return out
+  }
+  const specs = sources.filter(({ file }) => file.endsWith('.spec.ts'))
+  const shared = new Set(specs.flatMap(({ text }) => [...namesOf(RESET_OF, text)]))
+
+  it('every test that opens a session some spec resets resets it first', () => {
+    expect(shared).toContain('DENSE_SESSION')
+    expect(specs.flatMap(({ file, text }) => offendersOf(text, shared).map((o) => `${file}: ${o}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const one = new Set(['DENSE_SESSION'])
+    const reader = "test('reads', async ({ page }) => {\n  const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK)\n})"
+    expect(offendersOf(reader, one)).toHaveLength(1)
+    expect(offendersOf(reader.replace('{\n', '{\n  await resetThreadsFixture(request, DENSE_SESSION)\n'), one)).toEqual([])
+    const viaHelper = "async function resetDense(request) {\n  await resetThreadsFixture(request, DENSE_SESSION)\n}\ntest.beforeEach(async ({ request }) => { await resetDense(request) })\n" + reader
+    expect(offendersOf(viaHelper, one)).toEqual([])
+  })
+})
