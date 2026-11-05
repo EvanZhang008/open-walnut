@@ -13,8 +13,11 @@ import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { askView, openPanel, startPanelLab, tasksView, type PanelLab } from './extension-panel-harness'
+import { holdApprovalsLock } from './approvals-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It makes and answers an approval on the shared fixture server, where another file clears them.
+holdApprovalsLock('file')
 
 let lab: PanelLab
 let panel: Page
