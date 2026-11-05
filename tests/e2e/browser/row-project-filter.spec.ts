@@ -89,16 +89,25 @@ test('the project name on a row filters its own tab to that project, opens every
     await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'true')
     await expect(statusSectionToggle(panel, 'done')).toHaveAttribute('aria-expanded', 'false')
 
-    // Clearing the chip puts the view back: Pinned, Waiting and Completed folded again.
+    // Clearing the chip puts the folds back (Waiting and Completed folded again) and keeps All,
+    // the tab the user picked inside the jump: the panel never moves them back by itself.
     await removeFilterChip(page, 'project')
-    await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
+    await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
     await expect(statusSectionCard(panel, 'needs', kFocus)).toBeVisible()
-    await expect(panel.locator(`[data-task-id="${gNeeds}"]`)).toHaveCount(0)
     for (const key of ['waiting', 'done'] as const) {
       const toggle = statusSectionToggle(panel, key)
       if (await toggle.count()) await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     }
     expect(await page.evaluate((k) => localStorage.getItem(k), LS_STATUS_SECTIONS_KEY)).toBe(savedFolds)
+
+    // A jump with no tab picked inside it ends on the tab it came from.
+    await selectTab(page, 'Pinned')
+    await statusSectionCard(panel, 'needs', gFocus).getByTestId('row-project-link').click()
+    await expect(filterChip(page, 'project')).toContainText(garden)
+    await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
+    await removeFilterChip(page, 'project')
+    await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
+    await expect(panel.locator(`[data-task-id="${gNeeds}"]`)).toHaveCount(0)
 
     // The row itself still opens on a click away from the name.
     await statusSectionCard(panel, 'needs', gFocus).locator('.todo-pinned-title').click()

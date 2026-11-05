@@ -193,6 +193,16 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     c.clearAll();
     c.buttonRef.current?.focus({ preventScroll: true });
   };
+  // The held row stays while the pointer is anywhere on the panel: it goes once the pointer
+  // leaves the panel, so the list never slides up under a pointer resting on it.
+  const holdArea = () => c.rowRef.current?.closest('.todo-panel') ?? c.rowRef.current;
+  const outsideHoldArea = (x: number, y: number) => {
+    const r = holdArea()?.getBoundingClientRect();
+    return !!r && (x < r.left || x > r.right || y < r.top || y > r.bottom);
+  };
+  const onRowPointerLeave = (e: { clientX: number; clientY: number }) => {
+    if (outsideHoldArea(e.clientX, e.clientY)) onPointerLeave();
+  };
   const onPointerLeave = () => {
     if (holdHeight !== null && !linger) { setHoldHeight(null); return; }
     if (!linger || collapsing) return;
@@ -205,14 +215,15 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     }, ROW_COLLAPSE_MS);
   };
   // WebKit can drop the row's pointerleave when the hovered x is removed under
-  // the pointer, so a held row also watches where the pointer goes next.
+  // the pointer, so a held row also watches where the pointer goes next (out of the panel).
   const leaveRef = useRef(onPointerLeave);
   leaveRef.current = onPointerLeave;
+  const outsideRef = useRef(outsideHoldArea);
+  outsideRef.current = outsideHoldArea;
   useEffect(() => {
     if ((!linger && holdHeight === null) || collapsing) return;
     const onMove = (e: PointerEvent) => {
-      const r = c.rowRef.current?.getBoundingClientRect();
-      if (r && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) leaveRef.current();
+      if (outsideRef.current(e.clientX, e.clientY)) leaveRef.current();
     };
     window.addEventListener('pointermove', onMove, { passive: true });
     return () => window.removeEventListener('pointermove', onMove);
@@ -233,7 +244,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
       role="toolbar"
       aria-label="Active filters"
       style={rowStyle}
-      onPointerLeave={onPointerLeave}
+      onPointerLeave={onRowPointerLeave}
     >
       <div ref={chipsRef} className="fb-row-chips">
         {c.search.active && (

@@ -3,7 +3,8 @@
  * thik it shoud do a filter on the project show all in this project", then "and kind of expand
  * all secitino"). The panel's own Project filter takes that one project, the view shows every
  * task of it in the tab the user is on (every status section open), and clearing the Project chip
- * puts the view back as it was: the sections' open state, which the jump never writes.
+ * puts the sections' open state back, which the jump never writes. A tab the user picks inside the
+ * jump stays theirs when it ends; with none picked, the tab is the one the click came from.
  *
  * The tab stays (2026-11-04, the user: "if I click the project name in one pin group, should keep
  * in the same pin group, people can go to all if they need, we don't auto go to all"): the jump

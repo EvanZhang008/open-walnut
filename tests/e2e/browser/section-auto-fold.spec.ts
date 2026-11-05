@@ -291,13 +291,21 @@ test.describe('status folds: one rule', () => {
     const panel = page.locator('.todo-panel').first()
     await setStatusSectionOpen(panel, 'waiting', true)
     await page.clock.fastForward(14 * MIN)
-    // A move outside the panel, then nothing: at 15 minutes they may be reading it.
-    await pointerAway(page)
+    // A move on the panel (its toolbar, not the group), then nothing: at 15 minutes they may be
+    // reading it.
+    const toolbarBox = (await panel.locator('.todo-panel-toolbar').first().boundingBox())!
+    await page.mouse.move(Math.round(toolbarBox.x + 20), Math.round(toolbarBox.y + toolbarBox.height / 2))
     await page.clock.fastForward(MIN + 1_000)
     await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'true')
     await page.clock.fastForward(3 * MIN)
     await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'true')
     // Five minutes with no input anywhere: they are away, and it folds.
+    await page.clock.fastForward(MIN + 2_000)
+    await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'false')
+    // Still after an input outside the panel (working elsewhere), a due group folds on time.
+    await setStatusSectionOpen(panel, 'waiting', true)
+    await page.clock.fastForward(14 * MIN)
+    await pointerAway(page)
     await page.clock.fastForward(MIN + 2_000)
     await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'false')
   })

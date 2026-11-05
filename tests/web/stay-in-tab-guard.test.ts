@@ -30,12 +30,16 @@ describe('the task panel changes the tab only where the user picks one', () => {
   });
 
   it('no other path writes the tab state', () => {
-    // setActiveSection outside handleSectionChange is the stale custom tab's heal only.
+    // Besides handleSectionChange: a tab the user picked inside a project jump, kept when the
+    // jump ends, and the stale custom tab's heal.
     const writes = PANEL.split('\n').filter((line) => /setActiveSection\(/.test(line));
     expect(writes.map((l) => l.trim())).toEqual([
+      'const keepPickedTab = (section: TodoSection) => { startTransition(() => setActiveSection(section)); persistSection(section); };',
       'startTransition(() => setActiveSection(section));',
       "if (isDeleted(activeSection)) { setActiveSection('focus'); persistSection('focus'); }",
     ]);
+    const kept = PANEL.split('\n').filter((line) => /keepPickedTab\(/.test(line) && !/const keepPickedTab/.test(line));
+    expect(kept.map((l) => l.trim())).toEqual(['if (jumpPicked) keepPickedTab(jumpPicked as TodoSection);']);
   });
 
   it('a project jump shows the tab it came from', () => {

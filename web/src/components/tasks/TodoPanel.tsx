@@ -2511,12 +2511,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // the tab it came from shows all of it there, every status section open, without writing the
   // saved tab or folds, so clearing the Project chip puts the view back as it was. Kept like a view.
   const [projectJump, setProjectJump] = usePageView<ProjectJump | null>('home', 'projectJump', null, isProjectJump);
+  const keepPickedTab = (section: TodoSection) => { startTransition(() => setActiveSection(section)); persistSection(section); };
   const jumpLive = projectJumpHolds(projectJump, filterState.projects);
   const jumpLiveRef = useRef(jumpLive);
   jumpLiveRef.current = jumpLive;
+  const jumpPicked = projectJump?.section ?? null;
   useEffect(() => {
-    if (projectJump && !jumpLive) setProjectJump(null);
-  }, [projectJump, jumpLive, setProjectJump]);
+    if (!projectJump || jumpLive) return;
+    setProjectJump(null);
+    // A tab the user picked inside the jump is theirs: ending the jump keeps it (the panel never
+    // moves them back by itself); with none picked, the tab is the one the click came from.
+    if (jumpPicked) keepPickedTab(jumpPicked as TodoSection);
+  }, [projectJump, jumpLive, jumpPicked, setProjectJump]);
   const filterStateRef = useRef(filterState);
   filterStateRef.current = filterState;
   const applyFilters = homeFilters.apply;

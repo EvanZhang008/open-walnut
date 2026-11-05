@@ -90,8 +90,12 @@ let navFocus: Element | null = null;
 const navigatedTo = (focused: Element) => focused === navFocus;
 /** Was the user's last activity, within FOLD_READING_MS, in the panel this fold lives in? */
 function readingAround(el: Element): boolean {
+  return Date.now() - lastActivity.at < FOLD_READING_MS && lastInputIn(el);
+}
+/** Was the user's last input in the panel this fold lives in? */
+function lastInputIn(el: Element): boolean {
   const target = lastActivity.target;
-  if (!(target instanceof Node) || Date.now() - lastActivity.at >= FOLD_READING_MS) return false;
+  if (!(target instanceof Node)) return false;
   const panel = el.closest(`[${FOLD_PANEL_ATTR}]`) ?? scrollParentOf(el, false);
   return panel.contains(target) || target === el.ownerDocument;
 }
@@ -119,14 +123,14 @@ function beforeClockFold(key: string): 'visible' | 'plain' | null {
 }
 /** No input anywhere for this long: the user is away, and a due fold folds. */
 const AWAY_MS = 5 * 60_000;
-/** The window in front, the fold on screen and the user still for a while (past FOLD_READING_MS,
- *  short of AWAY_MS): they may be reading it, so it waits. Input elsewhere, the window going to the
- *  background or AWAY_MS of stillness lets it fold. */
+/** The window in front, the fold on screen and the user still for a while since their last input
+ *  in its panel (past FOLD_READING_MS, short of AWAY_MS): they may be reading it, so it waits.
+ *  Input elsewhere, the window going to the background or AWAY_MS of stillness lets it fold. */
 function maybeReading(key: string): boolean {
   if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
   const still = Date.now() - lastActivity.at;
   if (still < FOLD_READING_MS || still >= AWAY_MS) return false;
-  return foldElements(key).some(inPanelView);
+  return foldElements(key).some((f) => inPanelView(f) && lastInputIn(f));
 }
 /** The pointer rests on the list below a fold that is on screen: folding it would slide the rows
  *  under the pointer, so it waits for the pointer to go. One scrolled above the panel folds, and
