@@ -142,6 +142,9 @@ export class CostRollup {
   /** Whether a host's Claude Code sessions outside Walnut were ever read in full (an incremental pass only sees new ones). */
   claudeOutsideBuilt(host: string): boolean { return this.meta(`claude_outside_built:${host}`) === '1'; }
   markClaudeOutsideBuilt(host: string): void { this.setMeta(`claude_outside_built:${host}`, '1'); }
+  /** When a full read of this host's sessions outside Walnut last failed to finish (a link that dropped), so the next one waits a while. */
+  claudeOutsideFailedAt(host: string): number { return Number(this.meta(`claude_outside_failed:${host}`) ?? 0) || 0; }
+  setClaudeOutsideFailedAt(host: string, at: number): void { this.setMeta(`claude_outside_failed:${host}`, String(at)); }
   /** Full reads that left a file unreadable, in a row: a file that stays unreadable stops holding the full read back after a few. */
   claudeOutsideTries(host: string): number { return Number(this.meta(`claude_outside_tries:${host}`) ?? 0) || 0; }
   setClaudeOutsideTries(host: string, tries: number): void { this.setMeta(`claude_outside_tries:${host}`, String(tries)); }

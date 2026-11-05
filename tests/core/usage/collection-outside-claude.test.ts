@@ -25,7 +25,7 @@ function page(records: CanonicalUsageRecord[], outsideSessions: unknown[], until
 
 beforeEach(() => {
   mocks.send.mockReset(); mocks.connect.mockReset();
-  responseUsageStore().database.prepare("DELETE FROM usage_rollup_meta WHERE key LIKE 'claude_outside_built:%'").run();
+  responseUsageStore().database.prepare("DELETE FROM usage_rollup_meta WHERE key LIKE 'claude_outside_%'").run();
   mocks.sessions.mockResolvedValue([{ claudeSessionId: 'walnut-run', host: '__local__', engine: 'claude', taskId: 'example-task' }]);
   mocks.config.mockResolvedValue({ usage: {} });
 });
@@ -111,6 +111,20 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     const rollup = responseUsageStore().rollup;
     expect(rollup.claudeOutsideBuilt('studio')).toBe(true);
     expect(rollup.claudeOutsideBuilt('old')).toBe(false);
+  });
+
+  it('a full read the link cut off falls back to collecting the host without it, and waits before trying the full read again', async () => {
+    mocks.send.mockRejectedValueOnce(new Error('daemon command lost: usage.scan: connection closed'));
+    mocks.send.mockResolvedValueOnce(page([record('m9', 'walnut-run')], [], '2026-11-06T06:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T06:00:00.000Z');
+    expect(mocks.send.mock.calls[0][1]).toMatchObject({ outside: true });
+    expect(mocks.send.mock.calls[1][1].outside).toBeUndefined(); // the host's own sessions are still collected
+    const rollup = responseUsageStore().rollup;
+    expect(rollup.claudeOutsideBuilt('__local__')).toBe(false);
+    mocks.send.mockResolvedValueOnce(page([], [], '2026-11-06T07:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T07:00:00.000Z');
+    expect(mocks.send.mock.calls[2][1].since).toBeDefined(); // not a full read again within the wait
+    expect(mocks.send.mock.calls[2][1].outside).toBeUndefined();
   });
 
   it('a host that failed does not count as read in full', async () => {

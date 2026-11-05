@@ -37,6 +37,8 @@ export function collectionStale(now = Date.now()): boolean {
 
 /** Ask `collectUsage` to read each host from where its last finished pass ended. */
 export const INCREMENTAL = 'incremental';
+/** How long a host waits after a full read of its sessions outside Walnut failed. */
+const OUTSIDE_RETRY_MS = 3 * 60 * 60_000;
 
 /**
  * Where an incremental pass starts on one host: its last finished pass, less an
@@ -115,13 +117,26 @@ async function collect(since: string | undefined, until: string) {
       // Sessions Walnut did not start are read too (a daemon that can). Until they were read in full once, the whole history is.
       const machine = asJoined(host);
       const outsideScan = conn.hasCapability('claude-outside-v1') && host === machine;
-      const fullOutside = outsideScan && !rollup.claudeOutsideBuilt(host) && (since === undefined || since === INCREMENTAL);
-      const requestSince = fullOutside ? undefined : sinceFor(host);
+      // A full read that failed (a link that dropped before a long read ended) waits OUTSIDE_RETRY_MS before the next one.
+      const cooling = Date.now() - rollup.claudeOutsideFailedAt(host) < OUTSIDE_RETRY_MS;
+      let fullOutside = outsideScan && !rollup.claudeOutsideBuilt(host) && (since === undefined || since === INCREMENTAL) && !cooling;
       const known = ownerNames.get(machine) ?? new Map<string, string>();
       const foreign = new Set([...known].filter(([, name]) => name !== host).map(([id]) => id));
       let unreadable = 0;
-      let reply = await conn.send('usage.scan', { since: requestSince, until, sessionIds: owners.map(o => o.sessionId),
-        ...(outsideScan ? { outside: true } : {}), proxyLogDir: config.usage?.proxy_log_dirs?.[host] }, 30 * 60_000);
+      const scanArgs = (outside: boolean, from: string | undefined) => ({ since: from, until, sessionIds: owners.map(o => o.sessionId),
+        ...(outside ? { outside: true } : {}), proxyLogDir: config.usage?.proxy_log_dirs?.[host] });
+      let requestSince = fullOutside ? undefined : sinceFor(host);
+      let outsideNow = outsideScan && !(cooling && !rollup.claudeOutsideBuilt(host));
+      let reply: Awaited<ReturnType<typeof conn.send>>;
+      try { reply = await conn.send('usage.scan', scanArgs(outsideNow, requestSince), 30 * 60_000); }
+      catch (error) {
+        if (!fullOutside) throw error;
+        // The long read did not end: the host's own sessions are still collected, the full read of the rest is tried again later.
+        log.usage.warn('claude outside full read failed; collecting without it', { host, error: String(error) });
+        rollup.setClaudeOutsideFailedAt(host, Date.now());
+        fullOutside = false; outsideNow = false; requestSince = sinceFor(host);
+        reply = await conn.send('usage.scan', scanArgs(false, requestSince), 30 * 60_000);
+      }
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
       let logged = false;
@@ -132,7 +147,7 @@ async function collect(since: string | undefined, until: string) {
         const evidence = reply.result as UsageEvidence & { outsideSessions?: ClaudeSessionMeta[] };
         unreadable += (evidence.canonical?.diagnostics as { unreadable_files?: number } | undefined)?.unreadable_files ?? 0;
         // A session another name of this machine owns is stored by that name's own read.
-        if (outsideScan && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
+        if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
         // Who started each outside session is noted before its responses are stored.
         const extra = evidence.outsideSessions?.length
           ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];
@@ -145,10 +160,10 @@ async function collect(since: string | undefined, until: string) {
       responseUsageStore().finishHost(host, until, checks);
       // Only a read from the beginning counts as the full one; a pass with a start (a manual window) leaves it for the next.
       // A file that could not be read keeps the full read for the next pass, a few times at most.
-      if (outsideScan && requestSince === undefined) {
+      if (outsideNow && requestSince === undefined) {
         const tries = unreadable > 0 ? rollup.claudeOutsideTries(host) + 1 : 0;
         rollup.setClaudeOutsideTries(host, tries);
-        if (tries === 0 || tries >= 3) rollup.markClaudeOutsideBuilt(host);
+        if (tries === 0 || tries >= 3) { rollup.markClaudeOutsideBuilt(host); rollup.setClaudeOutsideFailedAt(host, 0); }
       }
       results.push({ host, responses, verified, unverified });
     } catch (error) {
