@@ -45,7 +45,7 @@ import { INPUT_PREFIX, refusalAdvice } from '../../providers/sound-rules.js'
 
 export { redact }
 import { GRANT_ID_RE, assertStillGranted, grantFor, isOwnHost, pinnedGrant } from './host-exec-grant.js'
-import { HostExecError, callerOf, hostName, targetHost, type Caller } from './host-exec-target.js'
+import { HostExecError, callerOf, hostName, normHost, targetHost, type Caller } from './host-exec-target.js'
 
 // Who asks and where it goes (host-exec-target.ts), for every host_exec-family call.
 export { HostExecError, callerOf, hostName, sameMachineAs, sameMachineNote, targetHost, type Caller } from './host-exec-target.js'
@@ -60,6 +60,9 @@ const SLOT_WAIT_MAX_MS = 20_000
 /** While it waits: a look at the count this often, and at the hosts' own lists this often. */
 const SLOT_POLL_MS = 1_000
 const SLOT_REFRESH_MS = 2_000
+/** A link quiet this long (the ping loop hears every 15 s) is asked whether it answers, QUIET_PROBE_MS or its round trip's need, before work goes on it. */
+const QUIET_LINK_MS = 20_000
+const QUIET_PROBE_MS = 3_000
 const DIAL_MS = 15_000
 export const REPLY_MARGIN_MS = 30_000
 export const LIST_MS = 5_000
@@ -154,6 +157,7 @@ function countRunning(pred: (r: { taskId: string; host: string }) => boolean): n
 /** The link to `host`, by `within` ms, with the daemon capability the call needs. */
 export async function dial(host: string, within = DIAL_MS, capability = 'host-exec-v1', what = 'run commands') {
   const { link } = await import('./link.js')
+  const t0 = Date.now()
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const conn = await Promise.race([
@@ -163,6 +167,20 @@ export async function dial(host: string, within = DIAL_MS, capability = 'host-ex
     if (!conn.hasCapability(capability)) {
       throw new HostExecError(`The Walnut daemon on ${await hostName(host)} needs an update before it can ${what} for other hosts (it updates on its next connect).`, 409, 'daemon_upgrade')
     }
+    // A link that has said nothing for a while is asked first: it may have died where this side
+    // cannot see it (this machine slept, its network changed), and work sent on it would be lost
+    // (2026-11-04: a pinned run sent 11 s after the Mac woke went into a link that never answered
+    // again). The check stays inside the dial's time: one that does not answer by then is silent.
+    // Never this machine's own daemon: a loopback socket survives a sleep, and a starved daemon's
+    // late pong is no dead link (work sent there waits in its socket, it is not lost).
+    if (normHost(host) !== LOCAL) {
+      const left = Math.max(250, Math.min(within, DIAL_MS) - (Date.now() - t0))
+      // As long as this link's round trip needs (review 4: a healthy link with a 3.4 s round trip
+      // was refused at 3 s, its pong 0.4 s later), within the dial's time.
+      const needs = Math.max(QUIET_PROBE_MS, conn.probeDeadlineMs?.(QUIET_PROBE_MS) ?? QUIET_PROBE_MS)
+      const quiet = await quietCheck(conn, Math.min(left, needs))
+      if (quiet !== null) throw new HostExecError(quietRefusal(await hostName(host), quiet), 503, 'host_offline', { quietLink: quiet })
+    }
     return conn
   } catch (err) {
     if (err instanceof HostExecError) throw err
@@ -170,6 +188,28 @@ export async function dial(host: string, within = DIAL_MS, capability = 'host-ex
   } finally {
     clearTimeout(timer)
   }
+}
+
+type QuietVerdict = 'heard' | 'alive' | 'dropped' | 'silent' | 'down'
+
+/**
+ * A quiet link's check, answered within `ms` on the probe's own clock (recheckQuiet `withinMs`: judged
+ * after this loop read what came in, one more round when its timer fired late). No second timer
+ * here: one fired after a held loop called a link silent while its pong was already in (review 3).
+ * Null when it may carry work.
+ */
+async function quietCheck(conn: { recheckQuiet?: (o: { quietMs: number; deadlineMs: number; withinMs?: number }) => Promise<QuietVerdict> }, ms: number): Promise<'dropped' | 'silent' | 'down' | null> {
+  if (!conn.recheckQuiet) return null
+  const v = await conn.recheckQuiet({ quietMs: QUIET_LINK_MS, deadlineMs: ms, withinMs: ms })
+  return v === 'heard' || v === 'alive' ? null : v
+}
+
+/** Said of this call only: what an earlier call started there runs on (a retry of a job is no new run). */
+function quietRefusal(name: string, v: 'dropped' | 'silent' | 'down'): string {
+  const kept = 'what an earlier call started there keeps running'
+  if (v === 'down') return `Walnut cannot reach ${name} right now: its link went down just now, so this call sent nothing there (${kept}). Walnut reconnects by itself: call again in a moment.`
+  if (v === 'dropped') return `Walnut cannot reach ${name} right now: its link had been quiet and did not answer a check, so Walnut closed it and this call sent nothing there (${kept}). Walnut is reconnecting to it: call again in a moment.`
+  return `Walnut cannot reach ${name} right now: its link had been quiet and did not answer a check just now, so this call sent nothing there (${kept}). Call again in a moment.`
 }
 
 /** What a failed step names that looks like a credential (its command, line, the `return` it ran), hidden like the output's lines. */

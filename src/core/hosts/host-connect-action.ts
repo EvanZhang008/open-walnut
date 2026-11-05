@@ -286,6 +286,16 @@ export async function startHostWakeRedial(hosts: () => Record<string, HostDef>):
       return [...reconnectingHosts().filter(enabled), ...failed]
     },
     redial: redialAfterWake,
+    // A link still up may have died out of sight while the machine slept or its network changed:
+    // asked now, so a command is not sent into it (2026-11-04: one sent 11 s after a wake was lost).
+    // Every link, however lately heard: bytes in flight at the sleep are read on waking (review 4).
+    // host-wake-signal.ts counted the signal (noteHostSignal) right before this call: counted once.
+    recheck: (signal) => {
+      void import('../../providers/daemon-connection.js')
+        .then((dc) => dc.recheckQuietLinks({ quietMs: 0, deadlineMs: 3_000, signalNoted: true }))
+        .then((seen) => { if (Object.keys(seen).length) log.session.info('host links rechecked after a signal', { signal, seen }) })
+        .catch(() => { /* a recheck never breaks the signal */ })
+    },
   })
   // A login done outside Walnut (a renewed certificate, a proxy's sign-in, a
   // reloaded agent) redials the hosts waiting on it.

@@ -101,16 +101,28 @@ export function clearReconnectCause(host?: string): void {
 // ── Wake / network-change signals (host-wake-signal.ts stamps these) ──
 
 let lastSignalAt = 0
+/**
+ * Every signal noted so far, counted the moment it is noted: daemon-connection.ts tells what a link
+ * said before a signal from what it said after by this count, never by the clock (review 6: a ping
+ * and a signal in the same millisecond can come in either order).
+ */
+let signalCount = 0
 
 export function noteHostSignal(at: number): void {
   lastSignalAt = Math.max(lastSignalAt, at)
+  signalCount += 1
 }
 
 export function lastHostSignalAt(): number {
   return lastSignalAt
 }
 
-/** Test seam. */
+/** How many wake or network signals were noted so far. */
+export function hostSignalCount(): number {
+  return signalCount
+}
+
+/** Test seam: forget the last signal's time. The count only grows: a link still open must never see it go back. */
 export function resetHostSignalForTest(): void {
   lastSignalAt = 0
 }

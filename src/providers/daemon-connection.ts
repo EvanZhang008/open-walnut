@@ -100,7 +100,7 @@ import { lastWordsExcerpt, UPLOAD_PARALLEL } from './ssh-last-words.js'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import {
-  clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause, WAKE_GRACE_MS,
+  clearReconnectCause, decideReconnectStep, getReconnectCause, hostSignalCount, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause, WAKE_GRACE_MS,
 } from './daemon-reconnect-cause.js'
 import { clearLinkDrops, noteLinkDrop, recentLinkDrops } from './daemon-link-drops.js'
 import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
@@ -337,6 +337,97 @@ export const SERVICE_PROBE_TIMEOUTS_MS = [10_000, 20_000]
  */
 export const UPGRADE_RECHECK_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000]
 
+/** A liveness probe whose timer fired late (this loop was held) watches the wire that much more, at most this. */
+const PROBE_EXTRA_MS = 1_000
+
+/** One liveness probe (DaemonConnection.probeLiveness, recheckQuiet): the socket it pinged and what came back. */
+interface LivenessProbe {
+  ws: WebSocket
+  /** Its answer to its callers, by its deadline. */
+  promise: Promise<boolean>
+  /** Its final word: as `promise`, or, when it watched one window more before closing (startProbe), by the end of that. */
+  settled: Promise<boolean>
+  /** The signal generation its ping was sent in (linkSignalGeneration). */
+  gen: number
+  /** When its own clock is due, before any late round. */
+  dueAt: number
+  /** What it takes as an answer so far (by its kind and the current generation: startProbe). */
+  answered: () => boolean
+  /** A check whose ping is of an older generation than the current one: what it hears proves nothing now. */
+  superseded: () => boolean
+  /** Past its deadline, watching one window more before it closes the link. */
+  confirming: () => boolean
+  /** The probe closed the link itself (no SSH, no answer). */
+  dropped: boolean
+}
+
+/** What watchedDeadline runs on (tests drive the loop's phases by hand). */
+export interface DeadlineClock {
+  now: () => number
+  setTimeout: (fn: () => void, ms: number) => unknown
+  clearTimeout: (t: unknown) => void
+  setImmediate: (fn: () => void) => void
+}
+
+const REAL_CLOCK: DeadlineClock = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  setImmediate: (fn) => { setImmediate(fn) },
+}
+
+/**
+ * The clock of a liveness check: `judge` runs once `ms` have passed AND this loop has read what
+ * already came in (setImmediate after the timer: on Node the timer runs before the poll phase, so an
+ * answer that arrived while the loop was busy would read as none; 2026-11-05 review, a 3.5 s stall
+ * dropped a link whose pong came back in 1 ms). A timer that fired late at all gives the wire that
+ * lateness again, up to PROBE_EXTRA_MS, once: it was never watched meanwhile, and a far side that
+ * shares this machine (a relay, an ssh client, a daemon in this process) was held with it (review 4:
+ * a hold ending 300 ms past the deadline closed a healthy link). `judge` answers a verdict or null
+ * (nothing yet); `done` gets the verdict, or null when the time ran out. Returns its cancel.
+ */
+export function watchedDeadline(
+  ms: number, judge: () => boolean | null, done: (verdict: boolean | null, extended: boolean) => void, clock: DeadlineClock = REAL_CLOCK,
+): () => void {
+  let dueAt = clock.now() + ms
+  let extended = false
+  let over = false
+  let timer: unknown
+  const look = (late: number) => {
+    if (over) return
+    const verdict = judge()
+    if (verdict === null && !extended && late > 0) {
+      extended = true
+      const more = Math.min(late, PROBE_EXTRA_MS)
+      dueAt = clock.now() + more
+      timer = clock.setTimeout(fire, more)
+      return
+    }
+    over = true
+    done(verdict, extended)
+  }
+  // How late the timer itself fired is read here, before the immediate adds its own turn.
+  const fire = () => { const late = clock.now() - dueAt; clock.setImmediate(() => look(late)) }
+  timer = clock.setTimeout(fire, ms)
+  return () => { over = true; clock.clearTimeout(timer) }
+}
+
+/** Signals a link recheck counted itself (recheckQuietLinks without `signalNoted`). */
+let linkSignalCount = 0
+
+/**
+ * The signal generation: one more for every wake or network signal, the moment it is noted
+ * (noteHostSignal, recheckQuietLinks). After a signal, what was heard says nothing of the path, as
+ * bytes that crossed before it are read after it (review 4: a reply that landed as the Mac slept read
+ * as heard on waking, and the work then went into the dead link). Every timed ping carries the
+ * generation it was sent in, and only a pong to a ping of the current generation proves the path. A
+ * count, not a clock: a ping and a signal in the same millisecond can come in either order (review 6:
+ * a ping sent just before a signal, in its millisecond, proved the path after it).
+ */
+export function linkSignalGeneration(): number {
+  return hostSignalCount() + linkSignalCount
+}
+
 /** WALNUT_DAEMON_BOOT_START=0: no boot start probe or setup at all (host autofix off still probes, to say why). */
 function bootStartOff(): boolean {
   return ['0', 'false', 'off', 'no'].includes((process.env.WALNUT_DAEMON_BOOT_START ?? '').trim().toLowerCase())
@@ -556,8 +647,16 @@ export class DaemonConnection {
   private _pongPending = false
   /** Consecutive awake ping ticks with the pong still outstanding. */
   private _missedPongs = 0
-  /** The liveness probe running now (probeLiveness), shared by concurrent callers. */
-  private _livenessProbe: Promise<boolean> | null = null
+  /** The liveness probe running now (probeLiveness), shared by concurrent callers of the socket it pinged. */
+  private _livenessProbe: LivenessProbe | null = null
+  /** The quiet check's probe running now (recheckQuiet): its own, as it takes only the main socket's answer. */
+  private _checkProbe: LivenessProbe | null = null
+  /**
+   * The signal generation of the newest ping the main socket answered (its pong echoes it), or the
+   * one that socket opened in: the link has proven its path since the newest signal while this is
+   * the current generation (linkSignalGeneration).
+   */
+  private _answeredGen = 0
   /** When the daemon last answered a command of ours (any socket): proof what this Mac sends gets there. */
   private _lastReplyAt = 0
   /** The check of a link whose answers stopped (checkUpstream), shared. */
@@ -598,8 +697,10 @@ export class DaemonConnection {
    * handshake seeds it). Kept across reconnects: the path stays the same.
    */
   private _rttSamples: number[] = []
-  /** Timed pings on the main socket not answered yet: send time, and the bytes heard by then. */
-  private _timedPings = new Map<number, number>()
+  /** Timed pings on the main socket not answered yet, by their id: send time, and the bytes heard by then. */
+  private _timedPings = new Map<number, { at: number; heard: number }>()
+  /** The last timed ping's id: each one has its own, so two in one millisecond are never confused (review 6). */
+  private _pingSeq = 0
   /** When a round trip was last recorded (0: never), and the quickest pong since that waited behind other bytes. */
   private _rttRecordedAt = 0
   private _queuedPongMinMs: number | null = null
@@ -1101,6 +1202,10 @@ export class DaemonConnection {
   /** When the daemon last sent a frame or a pong (ms epoch, 0 before any): core/link/daemon-connection-link.ts heard(). */
   lastHeardAt(): number { return Math.max(this._lastFrameAt, this.lastPongAt) }
   private _lastFrameAt = 0
+  /** When a byte last came on the main socket (a frame still arriving); the bulk socket's never count here. */
+  private _lastMainByteAt = 0
+  /** When a byte last came on any of this link's sockets (a check's progress after a signal: startProbe). */
+  private _lastByteAt = 0
   get disconnectedSince(): number | null { return this._disconnectedSince }
   /** How long the link has been down while this machine was awake (0 while up). A sleep
    *  with the link down counts one short step, never its length: give up on a session
@@ -6018,6 +6123,7 @@ export class DaemonConnection {
       ws.on('open', () => {
         this.ws = ws
         this.lastPongAt = Date.now()
+        this._answeredGen = linkSignalGeneration()
         this._pongPending = false
         this._missedPongs = 0
         this._silentVerdict = null
@@ -6084,6 +6190,8 @@ export class DaemonConnection {
         this.lastPongAt = Date.now()
         this._pongPending = false
         this._missedPongs = 0
+        const ping = pingPayloadId(data)
+        if (ping && this.ws === ws && ping.gen > this._answeredGen) this._answeredGen = ping.gen
         this.notePongPayload(data)
       })
 
@@ -7490,49 +7598,231 @@ export class DaemonConnection {
    * is not a dead one. Silent: nothing at all. The cloud box's link is then
    * closed at once (its re-dial is one WebSocket upgrade; the sessions live on
    * in its daemon) and every command waiting on it fails now instead of at its
-   * own timeout. Any other host only hears it as one missed pong (a busy daemon
+   * own timeout; so is a host network machine's, unless this machine's own
+   * daemon, which relays it, did not answer either (relayWatch). Any other
+   * host only hears it as one missed pong (a busy daemon
    * can hold a pong for seconds there too, and its re-dial is not cheap), and
    * the verdict stands for the next reads until a byte arrives
-   * (linkSilentRecently).
-   * One probe at a time; concurrent callers share it.
+   * (linkSilentRecently); `countMiss: false` (a recheck, recheckQuiet) leaves even that to the
+   * ping loop, so checks asked often never drop an SSH link sooner than the loop would.
+   * The verdict is judged after this loop has read what already came in: the timer runs before
+   * the poll phase, so a pong that arrived while the loop was busy would read as none (2026-11-05
+   * review: a 3.5 s stall here dropped a link whose pong came back in 1 ms); a timer that fired
+   * well past its time waits one short round more, as the wire was never watched meanwhile
+   * (watchedDeadline). One probe at a time; concurrent callers on the same socket share it.
    */
-  probeLiveness(requestedMs: number): Promise<boolean> {
+  probeLiveness(requestedMs: number, opts: { countMiss?: boolean } = {}): Promise<boolean> {
+    return this.startProbe(requestedMs, opts.countMiss !== false, 'read')?.promise ?? Promise.resolve(false)
+  }
+
+  /**
+   * Has this link answered a ping sent in the current signal generation (or come up in it)? Until it
+   * has, nothing heard proves the path: those bytes may have crossed before it died.
+   */
+  private provenSinceSignal(): boolean {
+    return this._answeredGen === linkSignalGeneration()
+  }
+
+  /**
+   * probeLiveness's probe ('read') or recheckQuiet's ('check'); null when nothing is connected to ping.
+   * A read's probe takes any byte on any socket as the answer (a pong can wait behind a reply).
+   * The check's takes only the main socket's, where the work will go (review 4: a bulk socket's
+   * bytes answered it while the main socket sat on a dead path), and, while the link has not
+   * answered in the current signal generation, only a pong to a ping of that generation. That is
+   * judged against the generation at each answer, not the one when the probe began (review 5: a
+   * signal that came while a dial awaited its probe left the pong to the older ping as the answer,
+   * and the work went into the dead path). A check whose own ping is of an older generation never
+   * closes the link: the check that signal started does (recheckQuietLinks).
+   * It still closes a link only when nothing at all came, as a read's does: a pong behind a bulk
+   * stream on one shared link is slow, not gone. After a signal, "something came" means bytes still
+   * arriving in the check's second half, on any socket: what sat in a buffer at the wake is read at
+   * once (review 4), a download that goes on is a live path (review 5: a healthy link carrying one
+   * was closed, and its read failed). Neither lets work onto the main socket.
+   * The probe answers its callers by its deadline (`promise`). A link it would close while it has not
+   * answered since a signal gets one more window, with one more ping, before the close (`settled`):
+   * the deadline scales with round trips measured before the signal, on what may have been another
+   * path (review 6: a network change to a healthy path with a 3.5 s round trip was closed at 3 s).
+   */
+  private startProbe(requestedMs: number, countMiss: boolean, kind: 'read' | 'check'): LivenessProbe | null {
     const ws = this.ws
-    if (!this._connected || !ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve(false)
-    if (this._livenessProbe) return this._livenessProbe
+    if (!this._connected || !ws || ws.readyState !== WebSocket.OPEN) return null
+    const running = kind === 'read' ? this._livenessProbe : this._checkProbe
+    // Shared only on the socket it pinged (a probe of a socket since replaced says nothing of this
+    // one), and for a check only when it pinged in the current signal generation.
+    if (running?.ws === ws && !running.superseded()) return running
     const deadlineMs = this.probeDeadlineMs(requestedMs)
-    const probe = new Promise<boolean>((resolve) => {
-      const heardAtStart = this._heardBytes
-      const mainAtStart = socketBytesRead(ws)
-      const bulkAtStart = socketBytesRead(this.sharedBulkWs)
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const finish = (alive: boolean) => {
-        clearTimeout(timer)
-        ws.off('pong', onPong)
-        if (alive) this._silentVerdict = null
-        resolve(alive)
-      }
-      const onPong = () => finish(true)
-      ws.on('pong', onPong)
-      timer = setTimeout(() => {
-        if (this.ws !== ws || !this._connected) { finish(false); return }
-        if (this._heardBytes > heardAtStart || socketBytesRead(ws) > mainAtStart || socketBytesRead(this.sharedBulkWs) > bulkAtStart) {
-          finish(true)
-          return
-        }
-        log.session.warn('DaemonConnection: no answer to a liveness probe', {
-          host: this.hostKey, deadlineMs, roundTripMs: this.roundTripMs, closing: this.noSsh,
+    const startedAt = Date.now()
+    // Bytes from here on are the far side still sending, not a buffer read on waking.
+    const settledAt = startedAt + Math.floor(deadlineMs / 2)
+    const heardAtStart = this._heardBytes
+    const mainAtStart = socketBytesRead(ws)
+    const bulkAtStart = socketBytesRead(this.sharedBulkWs)
+    const relay = this.isNetHost ? this.relayWatch(deadlineMs) : null
+    let alive: boolean | null = null
+    let ponged = false
+    let confirming = false
+    const anyByte = () => this._heardBytes > heardAtStart || socketBytesRead(ws) > mainAtStart || socketBytesRead(this.sharedBulkWs) > bulkAtStart
+    let tell: (v: boolean) => void = () => {}
+    let settle: (v: boolean) => void = () => {}
+    const probe: LivenessProbe = {
+      ws,
+      gen: linkSignalGeneration(),
+      dueAt: startedAt + deadlineMs,
+      dropped: false,
+      confirming: () => confirming,
+      superseded: () => kind === 'check' && probe.gen !== linkSignalGeneration(),
+      answered: () => kind === 'read'
+        ? alive === true || ponged || anyByte()
+        : this.provenSinceSignal() && (alive === true || ponged || socketBytesRead(ws) > mainAtStart),
+      promise: new Promise<boolean>((r) => { tell = r }),
+      settled: new Promise<boolean>((r) => { settle = r }),
+    }
+    let cancel = () => {}
+    const finish = (v: boolean) => {
+      if (alive !== null) return
+      alive = v
+      confirming = false
+      cancel()
+      ws.off('pong', onPong)
+      if (v) this._silentVerdict = null
+      tell(v) // no-op when the deadline already told the callers
+      settle(v)
+    }
+    // A check, while the link is unproven in the current generation, takes only a pong to a ping of
+    // that generation: the link's own pong listener ran first, so a pong like that has just proven it.
+    const onPong = () => {
+      if (kind === 'check' && !this.provenSinceSignal()) return
+      ponged = true
+      finish(true)
+    }
+    ws.on('pong', onPong)
+    const judge = () => {
+      if (this.ws !== ws || !this._connected) return false
+      return probe.answered() ? true : null
+    }
+    // No answer by the probe's time (`confirmed`: by the window after it).
+    const noAnswer = (extended: boolean, confirmed: boolean) => {
+      const superseded = probe.superseded()
+      const pongOnly = kind === 'check' && !this.provenSinceSignal()
+      const heardSome = kind === 'check' && (pongOnly ? this._lastByteAt >= settledAt : anyByte())
+      // The relay itself said nothing either: no proof the far side is gone (review 3).
+      const relayQuiet = relay !== null && !relay()
+      const closing = this.noSsh && !superseded && !relayQuiet && !heardSome
+      // Unproven since a signal, the deadline came from the old path's round trips: one more window.
+      const confirm = closing && !confirmed && !this.provenSinceSignal()
+      log.session.warn('DaemonConnection: no answer to a liveness probe', {
+        host: this.hostKey, kind, deadlineMs, roundTripMs: this.roundTripMs, closing: closing && !confirm, extended, pongOnly,
+        ...(confirm ? { confirming: true } : {}), ...(confirmed ? { confirmed: true } : {}), ...(superseded ? { superseded: true } : {}),
+        ...(relay ? { relayAnswered: !relayQuiet } : {}), ...(heardSome ? { otherSocketHeard: true } : {}),
+      })
+      if (!superseded) this._silentVerdict = { at: Date.now(), heard: this._heardBytes, mainBytes: socketBytesRead(ws) }
+      if (confirm) {
+        confirming = true
+        tell(false)
+        try { this.timedPing(ws) } catch { /* closing: the window's judge sees it */ }
+        cancel = watchedDeadline(Math.min(deadlineMs, DaemonConnection.PROBE_DEADLINE_MAX_MS), judge, (v, ext) => {
+          if (v !== null) finish(v)
+          else noAnswer(ext, true)
         })
-        this._silentVerdict = { at: Date.now(), heard: this._heardBytes, mainBytes: socketBytesRead(ws) }
-        if (this.noSsh) this.dropSilentLink(ws)
-        else this._missedPongs += 1
-        finish(false)
-      }, deadlineMs)
-      try { this.timedPing(ws) } catch { finish(false) }
+        return
+      }
+      if (closing) { probe.dropped = true; this.dropSilentLink(ws) }
+      else if (!this.noSsh && countMiss) this._missedPongs += 1
+      finish(false)
+    }
+    cancel = watchedDeadline(deadlineMs, judge, (verdict, extended) => {
+      if (verdict !== null) finish(verdict)
+      else noAnswer(extended, false)
     })
-    this._livenessProbe = probe
-    void probe.finally(() => { if (this._livenessProbe === probe) this._livenessProbe = null })
+    try { probe.gen = this.timedPing(ws).gen } catch { finish(false) }
+    if (kind === 'read') this._livenessProbe = probe
+    else this._checkProbe = probe
+    void probe.settled.finally(() => {
+      if (this._livenessProbe === probe) this._livenessProbe = null
+      if (this._checkProbe === probe) this._checkProbe = null
+    })
     return probe
+  }
+
+  /**
+   * A host network machine's link runs through this machine's own daemon (walnut-net's forward,
+   * core/hosts/net-link.ts), so its pong waits whenever that daemon is slow (load): checked beside
+   * the probe (its own pong, as the main socket's answer is asked of the far link), and asked at the
+   * verdict whether it answered. A probe whose relay did not answer either leaves the link up for its
+   * ping loop. Null when no local link is up to ask: the forward is gone with it, and the probe
+   * closes the link as before.
+   */
+  private relayWatch(deadlineMs: number): (() => boolean) | null {
+    const local = getConnectedDaemonConnection('__local__')
+    if (!local || local === this) return null
+    const check = local.startProbe(deadlineMs, false, 'check')
+    return () => check?.answered() === true
+  }
+
+  /**
+   * A link that has said nothing for `quietMs` (no frame, pong or byte on its main socket), asked
+   * now whether it still answers (one probe shared by every such caller). For a link that may have
+   * died where this side cannot see it: this machine slept, or its network changed, and its sockets
+   * stayed open on a path that is gone (2026-11-04: after a 6-minute sleep the Mac's link to a host
+   * network machine answered nothing for 30 s before the ping loop dropped it, and a command sent on
+   * it in that time was lost). Only the main socket speaks for it: work goes there, and a bulk socket
+   * dialled since may have come up on another path (review 3). After a wake or network signal,
+   * nothing heard counts until the link answers a ping sent after it (review 4).
+   * 'silent': no answer, and the link is left to its ping loop (an SSH host's or the local daemon's
+   * pong can wait behind a busy daemon, and so can a host network machine's when this machine's own
+   * daemon, its relay, is not answering either). A link with no SSH (the cloud box, a host network
+   * machine) the probe closes itself: 'dropped'. 'down': it closed by itself meanwhile. A socket
+   * that took the probed one's place is new and answered its handshake: 'alive', never closed.
+   * Whatever answered, 'alive' only while the link has answered a ping of the current signal
+   * generation: a signal during the check voids what the check heard before it, and the check that
+   * signal started is joined (or one started) for what is left of the caller's time (review 5).
+   * `withinMs`: the answer by then, judged on the probe's clock, while a probe stretched by a slow
+   * round trip (or one already running) goes on. Without it, the probe's final word: after a signal
+   * that may be one window past its deadline (startProbe), as for the signal's own recheck.
+   */
+  async recheckQuiet(o: { quietMs: number; deadlineMs: number; withinMs?: number }): Promise<'heard' | 'alive' | 'dropped' | 'silent' | 'down'> {
+    if (!this._connected || !this.ws) return 'down'
+    const heard = Math.max(this.lastHeardAt(), this._lastMainByteAt)
+    // Heard lately, unless a probe found it silent after that (2026-11-05 review: a link a probe had
+    // just judged silent still read 'heard' for 20 s from its last byte, and got the work).
+    const silentSince = (this._silentVerdict?.at ?? 0) >= heard
+    if (this.provenSinceSignal() && heard > 0 && Date.now() - heard < o.quietMs && !silentSince) return 'heard'
+    let probe = this.startProbe(o.deadlineMs, false, 'check')
+    if (!probe) return 'down'
+    // The caller's time: its own; a caller with none takes the probe's final word, and is not asked again.
+    const until = o.withinMs !== undefined ? Date.now() + o.withinMs : 0
+    for (;;) {
+      const alive = o.withinMs === undefined ? await probe.settled : await this.answerBy(probe, until)
+      if (alive && this.provenSinceSignal()) return 'alive'
+      if (!this._connected || !this.ws) return probe.dropped ? 'dropped' : 'down'
+      const replaced = this.ws !== probe.ws
+      if (replaced && this.provenSinceSignal()) return 'alive'
+      // Silent on the current generation's terms: the answer stands.
+      if (!replaced && !probe.superseded()) return 'silent'
+      if (until - Date.now() <= 0) return 'silent'
+      // A signal came after its ping (or a socket opened before it took the place): asked again.
+      probe = this.startProbe(o.deadlineMs, false, 'check')
+      if (!probe) return 'down'
+    }
+  }
+
+  /**
+   * A probe's answer for a caller whose time ends at `until`: the probe's own verdict when it comes
+   * first, else the caller's own clock (answerWithin). A verdict that came while the probe watches one
+   * window more (startProbe, after a signal) leaves the caller watching for the rest of its time.
+   */
+  private async answerBy(probe: LivenessProbe, until: number): Promise<boolean> {
+    if (until < probe.dueAt || probe.confirming()) return this.answerWithin(probe, Math.max(0, until - Date.now()))
+    if (await probe.promise) return true
+    return probe.confirming() && until > Date.now() ? this.answerWithin(probe, until - Date.now()) : false
+  }
+
+  /** A probe's answer by `withinMs` on its own clock, the probe's kind, or the probe's final word if sooner; it closes nothing. */
+  private answerWithin(probe: LivenessProbe, withinMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const cancel = watchedDeadline(withinMs, () => (probe.answered() ? true : null), (verdict) => resolve(verdict === true))
+      void probe.settled.then((alive) => { cancel(); resolve(alive) })
+    })
   }
 
   /**
@@ -7621,15 +7911,21 @@ export class DaemonConnection {
   /** Bytes a pong may find heard since its ping and still time the link: the pongs themselves. */
   private static readonly PONG_SLACK_BYTES = 64
 
-  /** A ping on the main socket that carries its send time, remembered with the bytes heard by then. */
-  private timedPing(ws: WebSocket): void {
+  /**
+   * A ping on the main socket that carries its send time, its own id and the signal generation it
+   * was sent in, remembered with the bytes heard by then; returns its time and generation.
+   */
+  private timedPing(ws: WebSocket): { at: number; gen: number } {
     const at = Date.now()
-    this._timedPings.set(at, this._heardBytes)
+    const id = ++this._pingSeq
+    const gen = linkSignalGeneration()
+    this._timedPings.set(id, { at, heard: this._heardBytes })
     if (this._timedPings.size > DaemonConnection.TIMED_PINGS_KEPT) {
       const oldest = this._timedPings.keys().next().value
       if (oldest !== undefined) this._timedPings.delete(oldest)
     }
-    ws.ping(timedPingPayload(at))
+    ws.ping(timedPingPayload(at, id, gen))
+    return { at, gen }
   }
 
   /**
@@ -7641,12 +7937,12 @@ export class DaemonConnection {
    * froze for 30s went unnoticed until it came back (gate review, 2026-10-03).
    */
   private notePongPayload(data: Buffer | undefined): void {
-    const sentAt = pingPayloadSentAt(data)
-    if (sentAt === null) return
-    const heardAtPing = this._timedPings.get(sentAt)
-    this._timedPings.delete(sentAt)
-    if (heardAtPing === undefined) return
-    this.noteRoundTrip(Date.now() - sentAt, this._heardBytes - heardAtPing > DaemonConnection.PONG_SLACK_BYTES)
+    const ping = pingPayloadId(data)
+    if (!ping) return
+    const sent = this._timedPings.get(ping.id)
+    this._timedPings.delete(ping.id)
+    if (!sent) return
+    this.noteRoundTrip(Date.now() - sent.at, this._heardBytes - sent.heard > DaemonConnection.PONG_SLACK_BYTES)
   }
 
   /**
@@ -7663,7 +7959,9 @@ export class DaemonConnection {
       // (the ping loop, probeLiveness) must not read its pongs as the session link's.
       if (own) { this._ownBulkHeardBytes += n; return }
       this._heardBytes += n
+      this._lastByteAt = Date.now()
       if (bulk) this._bulkHeardBytes += n
+      else this._lastMainByteAt = this._lastByteAt
     })
   }
 
@@ -7753,15 +8051,27 @@ function socketBytesWritten(ws: WebSocket | null | undefined): number {
   return typeof socket?.bytesWritten === 'number' ? socket.bytesWritten : 0
 }
 
-/** A ping carries its send time (`t<ms>`): the far end echoes it in the pong (RFC 6455). */
-function timedPingPayload(at: number): Buffer {
-  return Buffer.from(`t${at}`)
+/**
+ * A ping carries its send time, its id and its signal generation (`t<ms>.<id>.<gen>`): the far end
+ * echoes it in the pong (RFC 6455), whatever its version.
+ */
+function timedPingPayload(at: number, id: number, gen: number): Buffer {
+  return Buffer.from(`t${at}.${id}.${gen}`)
+}
+
+const PING_PAYLOAD = /^t(\d{10,16})(?:\.(\d{1,15})\.(\d{1,15}))?$/
+
+/** The ping a pong echoes (its time, id and generation), or null for a pong to someone else's ping (or none). */
+export function pingPayloadId(data: Buffer | undefined): { at: number; id: number; gen: number } | null {
+  const text = data && data.length > 1 && data.length < 64 ? data.toString('latin1') : ''
+  const m = PING_PAYLOAD.exec(text)
+  return m && m[2] !== undefined ? { at: Number(m[1]), id: Number(m[2]), gen: Number(m[3]) } : null
 }
 
 /** The send time a pong echoes, or null for a pong to someone else's ping (or none). */
 export function pingPayloadSentAt(data: Buffer | undefined): number | null {
-  const text = data && data.length > 1 && data.length < 32 ? data.toString('latin1') : ''
-  const m = /^t(\d{10,16})$/.exec(text)
+  const text = data && data.length > 1 && data.length < 64 ? data.toString('latin1') : ''
+  const m = PING_PAYLOAD.exec(text)
   return m ? Number(m[1]) : null
 }
 
@@ -8448,6 +8758,33 @@ export function probeDaemonLiveness(hostKey: string, deadlineMs: number): Promis
   const conn = connectionPool.get(hostKey)
   if (!conn?.connected) return Promise.resolve(false)
   return conn.probeLiveness(deadlineMs)
+}
+
+/**
+ * Right after this machine woke or its network changed (host-wake-signal.ts): every connected link
+ * to another machine is asked at once whether it still answers, however lately it was heard, so one
+ * that died out of sight is found in seconds, not after the ping loop's misses (DaemonConnection
+ * .recheckQuiet: a link with no SSH that does not answer is closed and reconnects; any other is left
+ * to its ping loop). From the signal on, until a link answers a ping sent after it, its quiet
+ * checks (this one and the dial's) take only that pong as an answer (review 4: bytes in flight at
+ * the sleep are read on waking), checks already running when it came included (review 5). A link
+ * still carrying a download then reads 'silent' and stays up: no work goes on it until it answers,
+ * and its download goes on. One that says nothing is closed one window after the deadline, not at
+ * it (review 6: the deadline came from the old path's round trips). The answer here is that final
+ * word. `signalNoted`: the signal was already counted (noteHostSignal, as host-wake-signal.ts does
+ * right before it asks for this); else this call counts one. The local daemon is not rechecked for itself (a loopback socket survives a
+ * sleep), but each host network machine's probe asks it too, as its relay: when it is not answering
+ * either (this loop or that daemon starved under load), that link reads 'silent' and stays up
+ * (relayWatch).
+ */
+export async function recheckQuietLinks(o: { quietMs: number; deadlineMs: number; signalNoted?: boolean }): Promise<Record<string, string>> {
+  if (!o.signalNoted) linkSignalCount += 1
+  const out: Record<string, string> = {}
+  await Promise.all([...connectionPool].map(async ([key, conn]) => {
+    if (!conn.connected || conn.host === '__local__') return
+    out[key] = await conn.recheckQuiet({ quietMs: o.quietMs, deadlineMs: o.deadlineMs }).catch(() => 'down')
+  }))
+  return out
 }
 
 /**

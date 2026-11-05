@@ -35,6 +35,22 @@ describe('host wake signal', () => {
     expect(h.redials).toHaveLength(2)
   })
 
+  it('every wake and network signal also asks the links still up to answer, before the redials, whatever host is down (2026-11-04)', () => {
+    const order: string[] = []
+    const sig = startHostWakeSignal({
+      now: (() => { let t = 1_000_000; return () => (t += WAKE_GAP_MS + 1) })(), addresses: (() => { let n = 0; return () => [`en0|IPv4|10.0.0.${n++}`] })(),
+      hostsToRedial: () => ['netbox'], redial: (h, k) => order.push(`redial ${h} ${k}`), recheck: (k) => order.push(`recheck ${k}`),
+      setInterval: () => ({ unref: () => {} }), clearInterval: () => {},
+    })
+    sig.tick()
+    sig.poll()
+    expect(order).toEqual(['recheck wake', 'redial netbox wake', 'recheck network'])
+    // A recheck that throws never keeps a host from its redial.
+    const redials: string[] = []
+    startHostWakeSignal({ hostsToRedial: () => ['keybox'], redial: (h) => redials.push(h), recheck: () => { throw new Error('boom') }, setInterval: () => ({ unref: () => {} }), clearInterval: () => {} }).fire('wake')
+    expect(redials).toEqual(['keybox'])
+  })
+
   it('a changed address set is a network signal; an unchanged one is not', () => {
     const h = harness(['netbox'])
     h.sig.poll()

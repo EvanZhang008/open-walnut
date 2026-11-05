@@ -30,6 +30,8 @@ export interface HostWakeSignalDeps {
   /** Hosts to redial right now (failed or reconnecting). */
   hostsToRedial: () => string[]
   redial: (host: string, signal: HostSignalKind) => void
+  /** Also on every signal, before the redials: the links still up are asked whether they answer. */
+  recheck?: (signal: HostSignalKind) => void
   setInterval?: (fn: () => void, ms: number) => { unref?: () => void }
   clearInterval?: (t: unknown) => void
 }
@@ -84,6 +86,9 @@ export function startHostWakeSignal(deps: HostWakeSignalDeps): HostWakeSignal {
   const fire = (kind: HostSignalKind): string[] => {
     const at = now()
     noteHostSignal(at)
+    try { deps.recheck?.(kind) } catch (err) {
+      log.session.warn('host link recheck after a signal failed to start', { signal: kind, error: err instanceof Error ? err.message : String(err) })
+    }
     // A Set: one signal never redials the same host twice, even if listed twice.
     const hosts = [...new Set(deps.hostsToRedial())].filter((h) => at - (lastRedialAt.get(h) ?? -Infinity) >= HOST_REDIAL_MIN_INTERVAL_MS)
     log.session.info('host wake signal', { signal: kind, hosts })
