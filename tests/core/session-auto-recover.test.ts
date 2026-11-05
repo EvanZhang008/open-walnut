@@ -51,6 +51,17 @@ class World {
   pending = new Map<string, number>()
   deliveryFailed = new Map<string, (error: string) => void>()
   dropped: Array<{ sid: string; messageId: string }> = []
+  /** Rows held for a start death, per session (session-queue-park.ts). */
+  held = new Map<string, string[]>()
+  released: Array<{ sid: string; ids: string[] }> = []
+  parkedHeld: Array<{ sid: string; ids: string[]; reason: string }> = []
+  /** Released rows still waiting in the queue (a test clears them when the CLI takes them). */
+  queuedIds = new Map<string, Set<string>>()
+  /** Rows being written to the CLI right now (status processing). */
+  processing = new Map<string, number>()
+  parkedQueued: Array<{ sid: string; ids: string[]; reason: string }> = []
+  /** The recovery the hand-back asks first, as phase.ts does (holdsHandBack). */
+  guard: SessionAutoRecover | null = null
   /** What a send does to the record: bring it back (default), fail the spawn, or nothing. */
   onSend: (sid: string) => void = (sid) => { this.patch(sid, { process_status: 'running' }) }
 
@@ -73,6 +84,7 @@ class World {
         this.onSend(sessionId)
       },
       getSession: async (sid) => this.records.get(sid) ?? null,
+      getSessionSync: (sid) => this.records.get(sid) ?? null,
       listSessions: async () => [...this.records.values()],
       getTask: async (id) => this.tasks.get(id) ?? null,
       recoveryOwner: async () => this.owner,
@@ -91,16 +103,44 @@ class World {
         this.records.set(sid, { ...r, restartLoss: next })
         return next ?? null
       },
-      handBack: async (taskId) => {
+      handBack: async (taskId, sessionId) => {
+        const rec = this.records.get(sessionId)
+        if (rec && this.guard?.holdsHandBack(rec)) return
         this.handBacks.push(taskId)
         const t = this.tasks.get(taskId)
         if (t && (t.phase === 'IN_PROGRESS' || t.phase === 'TODO')) t.phase = 'NEED_ACTION'
       },
       emitNote: (sessionId, _t, message) => { this.notes.push({ sessionId, message }) },
       pendingMessages: async (sid) => this.pending.get(sid) ?? 0,
+      unsettledMessages: async (sid) => (this.pending.get(sid) ?? 0) + (this.processing.get(sid) ?? 0),
       onDeliveryFailed: (sid, cb) => {
         this.deliveryFailed.set(sid, cb)
         return () => { this.deliveryFailed.delete(sid) }
+      },
+      releaseHeld: async (sid) => {
+        const ids = this.held.get(sid) ?? []
+        this.held.delete(sid)
+        if (ids.length) {
+          this.released.push({ sid, ids })
+          this.queuedIds.set(sid, new Set([...(this.queuedIds.get(sid) ?? []), ...ids]))
+        }
+        // The real kick only starts the session when the queue holds a row for it.
+        if (ids.length || (this.pending.get(sid) ?? 0) > 0) this.onSend(sid)
+        return ids
+      },
+      settleHeld: async (sid, how) => {
+        const ids = this.held.get(sid) ?? []
+        this.held.delete(sid)
+        if (ids.length && how === 'deliver') this.released.push({ sid, ids })
+        else if (ids.length) this.parkedHeld.push({ sid, ids, reason: how.park })
+        return ids
+      },
+      sessionsWithHeld: async () => [...this.held.keys()],
+      parkQueued: async (sid, ids, reason) => {
+        const queued = ids.filter((id) => this.queuedIds.get(sid)?.has(id))
+        for (const id of queued) this.queuedIds.get(sid)!.delete(id)
+        if (queued.length) this.parkedQueued.push({ sid, ids: queued, reason })
+        return queued
       },
       dropMessage: async (sid, messageId) => {
         this.dropped.push({ sid, messageId })
@@ -171,7 +211,9 @@ function dead(w: World, sid: string, phase: TaskPhase, opts: {
 }
 
 function make(w: World, cfg: Partial<AutoRecoverConfig> = {}): SessionAutoRecover {
-  return new SessionAutoRecover({ ...CFG, ...cfg }, w.deps())
+  const sar = new SessionAutoRecover({ ...CFG, ...cfg }, w.deps())
+  w.guard = sar
+  return sar
 }
 
 // ── Classification at boot ──
@@ -844,5 +886,307 @@ describe('shutdown check: a death while the computer shuts down', () => {
     w.t += 120_000
     expect(await next.resumeUnfinished()).toBe(1)
     expect(w.loss('q')).toMatchObject({ state: 'queued', cause: 'machine_reboot' })
+  })
+})
+
+// ── Start recovery: a process that ended before it read its first line ──
+
+describe('start recovery (2026-11-05: starts killed while booting, starts that never reached their host)', () => {
+  /** A session whose process the daemon reaped before its init, as the runner's exit path leaves it; its line held. */
+  function startDied(w: World, sid: string, phase: TaskPhase = 'IN_PROGRESS', over: Partial<SessionRecord> = {}): SessionRecord {
+    const taskId = `task-${sid}`
+    const rec = {
+      claudeSessionId: sid, taskId, type: 'interactive', archived: false, cwd: '/repo/marina', host: 'clouddev',
+      startedAt: new Date(w.t).toISOString(), lastActiveAt: new Date(w.t).toISOString(), messageCount: 0,
+      process_status: 'error', status_reason: 'daemon_reported_exit', errorMessage: 'Remote session exited with code -1', statusRevision: 3, ...over,
+    } as SessionRecord
+    w.records.set(sid, rec)
+    w.tasks.set(taskId, { phase, isMain: false })
+    w.held.set(sid, [`qm-first-${sid}`])
+    return rec
+  }
+
+  it('takes the death on, holds the task, and releases the held line itself (no copy, no resume prompt)', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's1')
+    expect(sar.takeStartDeath('s1')).toBe(true)
+    // Synchronous: the error edge that follows the offer already sees the hold.
+    expect(sar.holdsHandBack(w.records.get('s1')!)).toBe(true)
+    await w.advance(1_000)
+    expect(w.loss('s1')).toMatchObject({ cause: 'start_died', state: 'queued', told: true })
+    expect(w.notes.at(-1)?.message).toMatch(/^Start recovery: /)
+    await w.advance(CFG.delayMs + 2_000)
+    expect(w.sends).toEqual([])
+    expect(w.released).toEqual([{ sid: 's1', ids: ['qm-first-s1'] }])
+    await w.advance(10_000)
+    expect(w.loss('s1')?.state).toBe('resumed')
+    expect(w.handBacks).toEqual([])
+  })
+
+  it('a task the error edge already handed back still gets its line', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's2', 'NEED_ACTION')
+    expect(sar.takeStartDeath('s2')).toBe(true)
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.released.map((r) => r.ids)).toEqual([['qm-first-s2']])
+  })
+
+  it('a start that dies the same way again is that attempt\'s failure: retried within the budget, then parked and handed back', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's3')
+    // Every respawn is killed before it reads the line; the runner holds it again and offers the death.
+    w.onSend = (sid) => {
+      w.patch(sid, { process_status: 'error', status_reason: 'daemon_reported_exit' })
+      w.held.set(sid, [`qm-first-${sid}`])
+      expect(sar.takeStartDeath(sid)).toBe(true)
+    }
+    expect(sar.takeStartDeath('s3')).toBe(true)
+    await w.advance(CFG.delayMs + CFG.retryDelayMs * 4 + 60_000)
+    expect(w.released.length).toBe(CFG.maxAttempts)
+    expect(w.sends).toEqual([])
+    // Given up: the line waits for the user's Retry, and the task is theirs (the hold no longer stops it).
+    expect(w.parkedHeld).toEqual([{ sid: 's3', ids: ['qm-first-s3'], reason: expect.stringMatching(/^Not delivered: .*Retry it\.$/) }])
+    expect(w.handBacks).toEqual(['task-s3'])
+  })
+
+  it('a line the process read after all (its init came after its exit) is withdrawn: no start, its rows are the runner\'s, the task is handed back', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's4')
+    expect(sar.takeStartDeath('s4')).toBe(true)
+    sar.withdrawStartDied('s4')
+    await w.advance(CFG.delayMs + 10_000)
+    expect(w.sends).toEqual([])
+    expect(w.loss('s4')?.state).toBe('skipped')
+    expect(w.released).toEqual([])
+    expect(w.handBacks).toEqual(['task-s4'])
+  })
+
+  it('a withdraw after classification drops the queued start', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's5')
+    expect(sar.takeStartDeath('s5')).toBe(true)
+    await w.advance(2_000)
+    expect(w.loss('s5')?.state).toBe('queued')
+    sar.withdrawStartDied('s5')
+    await w.advance(CFG.delayMs + 10_000)
+    expect(w.loss('s5')?.state).toBe('skipped')
+    expect(w.released).toEqual([])
+    expect(w.handBacks).toEqual(['task-s5'])
+  })
+
+  it('a message that reached the session first takes the held line along (never lost)', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's7')
+    expect(sar.takeStartDeath('s7')).toBe(true)
+    await w.advance(2_000)
+    // The user typed "carry on" and the session runs again before recovery fired.
+    w.patch('s7', { process_status: 'running' })
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.loss('s7')?.state).toBe('resumed')
+    expect(w.released).toEqual([{ sid: 's7', ids: ['qm-first-s7'] }])
+  })
+
+  it('a task moved on meanwhile: the held line is parked for a Retry, never sent behind the user\'s back', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's8')
+    expect(sar.takeStartDeath('s8')).toBe(true)
+    await w.advance(2_000)
+    w.tasks.get('task-s8')!.phase = 'COMPLETE'
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.released).toEqual([])
+    expect(w.parkedHeld.map((p) => p.ids)).toEqual([['qm-first-s8']])
+  })
+
+  it('a death recovery already owns (a dead snapshot came first) is recovery\'s, and its held line goes out instead of the resume prompt', async () => {
+    const w = new World()
+    const sar = make(w)
+    const { rec, before } = dead(w, 's9', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    expect(sar.noteLoss(rec, 'server_restart', before, { requireInfra: false })).toBe(true)
+    w.held.set('s9', ['qm-first-s9'])
+    expect(sar.takeStartDeath('s9')).toBe(true)
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.sends).toEqual([])
+    expect(w.released).toEqual([{ sid: 's9', ids: ['qm-first-s9'] }])
+  })
+
+  it('a start death whose line is neither held nor queued is given up and handed back (never read as done)', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's11')
+    w.held.delete('s11')
+    expect(sar.takeStartDeath('s11')).toBe(true)
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.loss('s11')?.state).toBe('gave_up')
+    expect(w.handBacks).toEqual(['task-s11'])
+  })
+
+  it('a start death whose line is being written right now is not given up (the row is in flight, not gone)', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's17')
+    w.held.delete('s17')
+    w.processing.set('s17', 1)
+    w.onSend = (sid) => w.patch(sid, { process_status: 'running' })
+    expect(sar.takeStartDeath('s17')).toBe(true)
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.loss('s17')?.state).not.toBe('gave_up')
+    expect(w.handBacks).toEqual([])
+  })
+
+  it('a new start that ends before reading its line again is that attempt\'s failure even when its record reads stopped', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's12')
+    let tries = 0
+    w.onSend = (sid) => {
+      tries++
+      // The first respawn's process is stopped before it reads; the runner holds the line again.
+      if (tries === 1) { w.patch(sid, { process_status: 'stopped' }); w.held.set(sid, [`qm-first-${sid}`]) }
+      else w.patch(sid, { process_status: 'running' })
+    }
+    expect(sar.takeStartDeath('s12')).toBe(true)
+    await w.advance(CFG.delayMs + CFG.retryDelayMs + 60_000)
+    expect(tries).toBe(2)
+    expect(w.loss('s12')?.state).toBe('resumed')
+  })
+
+  it('a give-up parks the rows it released that still wait in the queue (a reconnect never runs them behind the user)', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's14')
+    // The host never takes the line: each kick leaves the row queued and the session dead.
+    w.onSend = (sid) => { w.patch(sid, { process_status: 'error', status_reason: 'daemon_reported_exit' }); w.pending.set(sid, 1) }
+    expect(sar.takeStartDeath('s14')).toBe(true)
+    await w.advance(CFG.delayMs + CFG.retryDelayMs * 4 + 60_000)
+    expect(w.loss('s14')).toMatchObject({ state: 'gave_up', releasedIds: ['qm-first-s14'] })
+    expect(w.parkedQueued).toEqual([{ sid: 's14', ids: ['qm-first-s14'], reason: expect.stringMatching(/^Not delivered: .*Retry it\.$/) }])
+    expect(w.handBacks).toEqual(['task-s14'])
+  })
+
+  it('a give-up leaves alone a released row the session already took', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's16')
+    w.onSend = (sid) => {
+      w.queuedIds.get(sid)?.clear()
+      w.patch(sid, { process_status: 'error', status_reason: 'daemon_reported_exit' })
+      w.pending.set(sid, 1)
+    }
+    expect(sar.takeStartDeath('s16')).toBe(true)
+    await w.advance(CFG.delayMs + CFG.retryDelayMs * 4 + 60_000)
+    expect(w.loss('s16')?.state).toBe('gave_up')
+    expect(w.parkedQueued).toEqual([])
+  })
+
+  it('a start death whose own start was out when the server stopped is taken on again at boot', async () => {
+    const w = new World()
+    startDied(w, 's15')
+    w.held.delete('s15')
+    w.pending.set('s15', 1)
+    w.records.set('s15', { ...w.records.get('s15')!, restartLoss: { at: new Date(w.t).toISOString(), cause: 'start_died', lost: [], state: 'sent', sentAt: new Date(w.t).toISOString(), releasedIds: ['qm-first-s15'], phaseAtLoss: 'IN_PROGRESS' } })
+    w.onSend = (sid) => w.patch(sid, { process_status: 'running' })
+    const next = make(w)
+    w.t += 30_000
+    expect(await next.resumeUnfinished()).toBe(1)
+    expect(w.loss('s15')?.state).toBe('queued')
+    await w.advance(CFG.delayMs + 10_000)
+    expect(w.loss('s15')?.state).toBe('resumed')
+    expect(w.sends).toEqual([])
+  })
+
+  it('a start death whose session runs again by the boot gets its held line delivered, not parked', async () => {
+    const w = new World()
+    startDied(w, 's18', 'IN_PROGRESS', { process_status: 'running' })
+    w.records.set('s18', { ...w.records.get('s18')!, restartLoss: { at: new Date(w.t).toISOString(), cause: 'start_died', lost: [], state: 'queued', phaseAtLoss: 'IN_PROGRESS' } })
+    const next = make(w)
+    await next.resumeUnfinished()
+    expect(w.loss('s18')?.state).toBe('resumed')
+    expect(w.released).toEqual([{ sid: 's18', ids: ['qm-first-s18'] }])
+    expect(w.parkedHeld).toEqual([])
+  })
+
+  it('a start death past its wait when the server comes back is given up: released rows still queued are parked, never run hours later', async () => {
+    const w = new World()
+    startDied(w, 's19')
+    w.held.delete('s19')
+    w.queuedIds.set('s19', new Set(['qm-first-s19']))
+    w.records.set('s19', { ...w.records.get('s19')!, restartLoss: { at: new Date(w.t).toISOString(), cause: 'start_died', lost: [], state: 'queued', waitingHost: { since: new Date(w.t).toISOString() }, releasedIds: ['qm-first-s19'], phaseAtLoss: 'IN_PROGRESS' } as never })
+    w.t += 3 * 3_600_000
+    const next = make(w)
+    await next.resumeUnfinished()
+    expect(w.loss('s19')?.state).toBe('gave_up')
+    expect(w.parkedQueued.map((p) => p.ids)).toEqual([['qm-first-s19']])
+    expect(w.handBacks).toEqual(['task-s19'])
+  })
+
+  it('with recovery off, rows a past recovery released that still wait are parked', async () => {
+    const w = new World()
+    startDied(w, 's21')
+    w.held.delete('s21')
+    w.queuedIds.set('s21', new Set(['qm-first-s21']))
+    w.records.set('s21', { ...w.records.get('s21')!, restartLoss: { at: new Date(w.t).toISOString(), cause: 'start_died', lost: [], state: 'sent', releasedIds: ['qm-first-s21'], phaseAtLoss: 'IN_PROGRESS' } })
+    await make(w, { enabled: false }).resumeUnfinished()
+    expect(w.parkedQueued.map((p) => p.ids)).toEqual([['qm-first-s21']])
+    expect(w.loss('s21')?.state).toBe('skipped')
+  })
+
+  it('a hold that lands after the settle window ended takes the start on again (never held with no owner)', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's20')
+    // The respawn neither comes back nor dies within the settle window.
+    let tries = 0
+    w.onSend = (sid) => { tries++; if (tries > 1) w.patch(sid, { process_status: 'running' }) }
+    expect(sar.takeStartDeath('s20')).toBe(true)
+    await w.advance(CFG.delayMs + CFG.settleTimeoutMs + 10_000)
+    expect(w.loss('s20')?.state).toBe('sent')
+    // Its process dies now, before reading; the runner holds the line again and asks who owns it.
+    w.held.set('s20', ['qm-first-s20'])
+    expect(sar.ownsStartDeath('s20')).toBe(true)
+    await w.advance(CFG.retryDelayMs + 10_000)
+    expect(tries).toBe(2)
+    expect(w.loss('s20')?.state).toBe('resumed')
+  })
+
+  it('held rows are parked at boot even while recovery is off', async () => {
+    const w = new World()
+    const sar = make(w, { enabled: false })
+    w.held.set('s13', ['qm-first-s13'])
+    await sar.resumeUnfinished()
+    expect(w.parkedHeld.map((p) => p.ids)).toEqual([['qm-first-s13']])
+  })
+
+  it('rows a start death held whose recovery is gone are parked for a Retry at boot', async () => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's10')
+    await sar.resumeUnfinished()
+    expect(w.parkedHeld.map((p) => p.ids)).toEqual([['qm-first-s10']])
+  })
+
+  it.each([
+    ['a spent attempt budget', { autoRecover: { attempts: 3, lastAt: '2026-10-26T02:00:00.000Z' } }],
+    ['a session with no task of its own', { taskId: undefined }],
+    ['an embedded session', { type: 'triage' }],
+    ['an archived session', { archived: true }],
+  ] as Array<[string, Partial<SessionRecord>]>)('is not taken on for %s (the old error path speaks)', async (_label, over) => {
+    const w = new World()
+    const sar = make(w)
+    startDied(w, 's6', 'IN_PROGRESS', over)
+    expect(sar.takeStartDeath('s6')).toBe(false)
+    await w.advance(CFG.delayMs + 5_000)
+    expect(w.released).toEqual([])
+  })
+
+  it('an unknown session is not taken on', () => {
+    const w = new World()
+    expect(make(w).takeStartDeath('nope')).toBe(false)
   })
 })

@@ -388,6 +388,23 @@ describe('upsertNotification', () => {
     expect(record.project).toBe('walnut');
   });
 
+  it('a feed full of letters keeps its live error cards (2026-11-05: 200 letters dropped every one)', async () => {
+    await upsertNotification({ kind: 'operation-error', severity: 'error', title: 'Session Error', dedupKey: 'error:live', recoveryKey: 'session:s1' });
+    await upsertNotification({ kind: 'operation-error', severity: 'error', title: 'Old', dedupKey: 'error:settled', recoveryKey: 'git' });
+    await recoverNotifications(['git']);
+    for (let i = 0; i < 205; i++) {
+      await addNotification({ kind: 'letter', severity: 'info', title: `l${i}`, dedupKey: `letter:lt-${i}`, letterId: `lt-${i}` });
+    }
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(200);
+    expect(feed.some(n => n.dedupKey === 'error:live')).toBe(true);
+    // A settled receipt is an ordinary record: it goes first.
+    expect(feed.some(n => n.dedupKey === 'error:settled')).toBe(false);
+    // The oldest letters give way, the newest stay.
+    expect(feed.some(n => n.dedupKey === 'letter:lt-204')).toBe(true);
+    expect(feed.some(n => n.dedupKey === 'letter:lt-0')).toBe(false);
+  });
+
   it('moves a refreshed record to the tail so the cap cannot evict a live error', async () => {
     await upsertNotification({
       kind: 'operation-error', severity: 'error', title: 'Recurring',

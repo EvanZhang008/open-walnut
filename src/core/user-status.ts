@@ -500,6 +500,7 @@ export function dueStatus(due: string | null | undefined, nowMs: number): UserSt
 /** What a restart that killed a session was, in words. */
 const RESTART_WORDS: Record<string, string> = {
   machine_reboot: 'this computer restarted', server_restart: 'Walnut restarted', host_restart: 'its host restarted',
+  start_died: 'its process stopped before it read its first message',
 };
 
 /**

@@ -237,7 +237,9 @@ describe('nothing refuses Main\'s or a VP\'s own command', () => {
       expect(command).not.toContain('permissionDecision')
       for (const [tool, input] of CALLS) for (let i = 0; i < 5; i++) call('/bin/sh', tool, input, `sid-class-${role}`, role, command)
     }
-  })
+  // Every call spawns the hook: 13 to 14s alone on clouddev, so the quick tier's 15s
+  // timed it out under a land's load (2026-11-06).
+  }, 60_000)
 
   it('no source file ties a deny to an org role', () => {
     const SRC = path.resolve(__dirname, '../../src')

@@ -291,7 +291,10 @@ describe('fold checkpoint', () => {
     // 2026-11-05, format 6: foldLine no longer starts a turn on the CLI's echo of a
     // local command (<local-command-stdout> and friends, bde530c6c). A checkpoint
     // folded before it may hold such a turn open, so it must not load.
-    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 6, logicHash: '349aafeaf29d1c34' })
+    // 2026-11-05, format 7: foldLine opens the turn at the walnut_process line of a
+    // start that carries its first line (walnutTurn), not at the CLI's init. A
+    // checkpoint folded before it read such a booting start as idle.
+    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 7, logicHash: 'd639954615f663b6' })
 
     // The factory's own FORMAT is the one written.
     fs.writeFileSync(jsonl, content(20))

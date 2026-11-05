@@ -11,7 +11,7 @@ import { link, linkTarget } from './hosts/link.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
 import { claudeProjectsSearchRoots } from './claude-config-dir.js'
-import type { SessionFileReader } from './session-file-reader.js'
+import { encodeProjectPath, isSafeForProjectEncoding, type SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
 
 /**
@@ -716,6 +716,41 @@ export class DaemonFileReader implements SessionFileReader {
       if (result.ok && (result.files as string[])?.length) return (result.files as string[])[0]
     }
     return null
+  }
+
+  /**
+   * Whether the CLI ever wrote this conversation on the host, for its `cwd`: its
+   * path, null only when it is proven absent, undefined when that cannot be told.
+   * Proven absent: every transcripts root exists, the transcript's own path (where
+   * the CLI writes it for this cwd, through any symlink) is ENOENT, and a find over
+   * the roots holds no copy. A root that is missing (a host reinstalled), a stat or
+   * a find that fails or times out, proves nothing: a find skips symlinked folders
+   * and unreadable ones and still answers ok (2026-11-05 review).
+   */
+  async probeSessionPath(sessionId: string, cwd: string, timeoutMs?: number): Promise<string | null | undefined> {
+    // A long cwd's folder carries a hash this side cannot compute: its own path is unknown.
+    if (!isSafeForProjectEncoding(cwd)) return undefined
+    try {
+      await this.resolve()
+      const conn = await link(this.host)
+      const roots = claudeProjectsSearchRoots(this.host)
+      for (const root of roots) {
+        const rootStat = await conn.send('fs.stat', { path: root }, timeoutMs)
+        if (!rootStat.ok || !rootStat.exists) return undefined
+        const own = path.posix.join(root, encodeProjectPath(cwd), `${sessionId}.jsonl`)
+        const ownStat = await conn.send('fs.stat', { path: own }, timeoutMs)
+        if (!ownStat.ok) return undefined
+        if (ownStat.exists) return own
+      }
+      for (const root of roots) {
+        const result = await conn.send('fs.find', { path: root, name: sessionId + '.jsonl', maxDepth: 3 }, timeoutMs)
+        if (!result.ok) return undefined
+        if ((result.files as string[] | undefined)?.length) return (result.files as string[])[0]
+      }
+      return null
+    } catch {
+      return undefined
+    }
   }
 
   /**

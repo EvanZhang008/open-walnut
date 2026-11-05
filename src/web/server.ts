@@ -501,11 +501,27 @@ function sessionRecoveryKey(sessionId: string): string {
  * 'transport start failed' knows only a taskId (the session it was starting never
  * existed), so its card is keyed `task:<id>` and would otherwise never retire.
  */
-function recoverSessionErrors(sessionId: string | undefined, taskId: string | undefined): void {
+function recoverSessionErrors(sessionId: string | undefined, taskId: string | undefined, opts: { taskMovedOn?: boolean } = {}): void {
   const keys: string[] = []
   if (sessionId && sessionErrorTracker.isFailing(sessionRecoveryKey(sessionId))) {
     sessionErrorTracker.forget(sessionRecoveryKey(sessionId))
     keys.push(sessionRecoveryKey(sessionId))
+  }
+  // The task's work went on without the session that failed (a clean turn in another
+  // of its sessions, or the task completed): that session's error is over too.
+  // 2026-11-05: cards of sessions killed while they booted stayed after their tasks
+  // ran again elsewhere, since only the dead session's own next result retired them.
+  if (taskId && opts.taskMovedOn) {
+    for (const sid of failingSessionsByTask.get(taskId) ?? []) {
+      if (sid === sessionId) continue
+      if (sessionErrorTracker.isFailing(sessionRecoveryKey(sid))) {
+        sessionErrorTracker.forget(sessionRecoveryKey(sid))
+        keys.push(sessionRecoveryKey(sid))
+      }
+    }
+    failingSessionsByTask.delete(taskId)
+  } else if (taskId && sessionId) {
+    failingSessionsByTask.get(taskId)?.delete(sessionId)
   }
   if (taskId && sessionErrorTracker.isFailing(`task:${taskId}`)) {
     sessionErrorTracker.forget(`task:${taskId}`)
@@ -520,6 +536,9 @@ function recoverSessionErrors(sessionId: string | undefined, taskId: string | un
  * sites, because forgetting the tracker half would leave a card that can never be
  * retired — exactly the class of bug this round is closing.
  */
+/** Sessions with a live error card, by their task: the task moving on retires them (recoverSessionErrors). */
+const failingSessionsByTask = new Map<string, Set<string>>()
+
 function publishSessionErrorNotification(input: {
   title: string
   body: string
@@ -531,6 +550,11 @@ function publishSessionErrorNotification(input: {
     ? sessionRecoveryKey(input.sessionId)
     : input.taskId ? `task:${input.taskId}` : undefined
   if (key) sessionErrorTracker.observe(key, true)
+  if (input.sessionId && input.taskId) {
+    const set = failingSessionsByTask.get(input.taskId) ?? new Set<string>()
+    set.add(input.sessionId)
+    failingSessionsByTask.set(input.taskId, set)
+  }
   return publishErrorNotification({ ...input, ...(key ? { recoveryKey: key } : {}) })
 }
 
@@ -4144,7 +4168,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         if (healed > 0) log.web.info('startup: healed stale pendingPermission rows', { healed })
       })
       .then(() => import('../core/notifications/permission-expiry.js'))
-      .then(async ({ expireOrphanedPermissionNotifications, expireStaleErrorNotifications, unresolvedErrorRecoveryKeys }) => {
+      .then(async ({ expireOrphanedPermissionNotifications, expireStaleErrorNotifications, unresolvedErrorRecoveryKeys, unresolvedSessionErrorsByTask }) => {
         // A task-sync card an older build logged without its plugin key gets it now,
         // so the sync loop's next good tick retires it like the rest. First in the
         // chain: the first tick is 60s out, and the per-card checks below can be slow.
@@ -4174,6 +4198,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // A card the user dismissed while it was failing waits on the same
         // recovery signal, so its keys are armed too (dismissed-conditions.ts).
         const seeded = [...new Set([...await unresolvedErrorRecoveryKeys(), ...await dismissedConditionKeys()])]
+        // And which task each session card belongs to, so its task moving on retires it.
+        for (const { taskId, sessionId } of await unresolvedSessionErrorsByTask()) {
+          const set = failingSessionsByTask.get(taskId) ?? new Set<string>()
+          set.add(sessionId)
+          failingSessionsByTask.set(taskId, set)
+        }
         if (seeded.length > 0) {
           seedFailingRoutes(seeded)
           for (const key of seeded) {
@@ -4524,6 +4554,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       unsubscribeHostPhase = () => { offHostWiring?.(); stopWake() }
     }
   }
+
+  // -- A completed task's session error cards: nothing of that task waits on them --
+  bus.subscribe('session-error-cards-on-complete', (event) => {
+    if (event.name !== EventNames.TASK_COMPLETED) return
+    const { task: completedTask } = eventData<'task:completed'>(event)
+    if (completedTask?.id) recoverSessionErrors(undefined, completedTask.id, { taskMovedOn: true })
+  }, { global: true, interest: ['task:completed'] })
 
   // -- Dependency unblock: emit task:unblocked when a completed task frees dependents --
   bus.subscribe('dependency-unblock', async (event) => {
@@ -5400,7 +5437,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // produce a clean result without its message having been delivered — so
         // the result already implies delivery recovery, one signal instead of two.
         // No-ops for a session that never failed (see recoverSessionErrors).
-        recoverSessionErrors(sessionId, taskId)
+        // A lane's turn (a side conversation on the task) says nothing of the task's own sessions.
+        recoverSessionErrors(sessionId, taskId, { taskMovedOn: !isLaneSession })
       }
       if (!isError && result && !willBeTriage && !isLaneSession) {
         const content = taskRef
@@ -5508,7 +5546,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Route session errors to Notifications. Session panels retain their own
     // contextual error/retry state; the general chat must remain conversational.
     if (event.name === 'session:error') {
-      const { error, taskId, sessionId, errorKind, parked, retryAt } = eventData<'session:error'>(event)
+      const { error, taskId, sessionId, errorKind, parked, retryAt, startRecovery } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
       const { inboxOwnsStartFailure } = await import('../core/human-inbox/item-start-notification.js')
       let shouldPublish = !(taskId && !isDeliveryFailure && await inboxOwnsStartFailure(taskId, sessionId).catch(() => false))
@@ -5522,6 +5560,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const { isLoginFailure } = await import('../core/hosts/host-auth-alert.js')
         if (isLoginFailure(error)) shouldPublish = false
       }
+      // A process that ended before it read its first line: restart recovery sends
+      // that line again (sessions/start-recovery.ts), and the task says it waits on the machine.
+      if (startRecovery) shouldPublish = false
 
       // delivery_failed = connectivity status, not a turn outcome. The session is
       // still valid and the message batch is safely back in 'pending'. Avoid
@@ -5589,14 +5630,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Delivery failure: session is intact (batch back in pending) — do NOT clear
       // the task slot, do NOT flip the phase, do NOT announce session:ended.
       if (isDeliveryFailure) return
-      // Clear active session from task on error
+      // Clear active session from task on error (not one recovery continues: the task keeps it)
       if (taskId && sessionId) {
-        try {
-          const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
-          await clearSessionSlot(taskId, sessionId)
-          // Also clear new single-slot field (parallel 1-slot transition)
-          await clearSession(taskId, sessionId).catch(() => {})
-        } catch (err) { log.web.warn('failed to clear session slot', { sessionId, taskId, error: String(err) }) }
+        if (!startRecovery) {
+          try {
+            const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
+            await clearSessionSlot(taskId, sessionId)
+            // Also clear new single-slot field (parallel 1-slot transition)
+            await clearSession(taskId, sessionId).catch(() => {})
+          } catch (err) { log.web.warn('failed to clear session slot', { sessionId, taskId, error: String(err) }) }
+        }
         // Phase sync: session error → WAIT
         try {
           const { applySessionPhase } = await import('../core/phase.js')

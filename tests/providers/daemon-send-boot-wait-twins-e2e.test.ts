@@ -9,11 +9,15 @@
  * reaped the healthy booting CLI ('send-partial-write'), twice in a row; the server
  * showed "Session started, but the queued message was not delivered".
  *
- * Pins, in one run per twin (the three sessions boot side by side):
+ * Pins, in one run per twin (the sessions boot side by side):
  *   - a boot-wait send waits for the booting CLI and the line arrives whole;
- *   - the same send without `bootWait` keeps the old contract (reaped at 20s), which
- *     is also the incident reproduced on the real twin;
- *   - a `start` whose own message carries `bootWait` waits the same way.
+ *   - write-boot-wait-v1: the same send without `bootWait` waits too, and so does a
+ *     raw line (2026-11-05: a 7KB status question written into a CLI still booting
+ *     under load was reaped at 20s as 'sendRaw-partial-write', exit -1);
+ *   - a `start` whose own message carries `bootWait` waits the same way;
+ *   - a start that carries its line marks its walnut_process line `walnutTurn`
+ *     (the fold reads the boot as a running turn); an idle start and a start that
+ *     defers its line to the next send do not.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, the
  * "CLI" is a node script that exits on its own within 60 s, every session's
@@ -68,6 +72,10 @@ setTimeout(() => process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue
     let msg; try { msg = JSON.parse(line) } catch {
       fs.appendFileSync(received, JSON.stringify({ pid: process.pid, parseError: line.slice(0, 200) }) + '\\n')
+      continue
+    }
+    if (msg.type === 'control_request') {
+      fs.appendFileSync(received, JSON.stringify({ pid: process.pid, length: msg.request.question.length, head: msg.request.question.slice(0, 16) }) + '\\n')
       continue
     }
     if (msg.type !== 'user') continue
@@ -177,14 +185,18 @@ afterEach(async () => {
 })
 
 describe.each(TWINS)('send-boot-wait-v1: $name', (twin) => {
-  it('a boot-wait line waits for a CLI booting past 20s; the plain line is reaped at 20s', async () => {
+  it('every write into a CLI booting past 20s waits for it, and the line arrives whole', async () => {
     const dirs = makeDirs()
     await boot(twin, dirs)
-    expect((await rpc({ cmd: 'hello' })).capabilities).toContain('send-boot-wait-v1')
+    const caps = (await rpc({ cmd: 'hello' })).capabilities
+    expect(caps).toContain('send-boot-wait-v1')
+    expect(caps).toContain('write-boot-wait-v1')
 
-    // Two idle spawns, then the first line of each, as the server's deferred start sends it.
-    const waitStart = await rpc({ cmd: 'start', sid: 'bw-wait', cwd: root, message: '', mode: 'default', args: cliArgs(dirs) })
+    // Spawns whose first line follows the start (deferred), one idle spawn, and one
+    // that carries a small line and then gets a big raw line (the status question).
+    const waitStart = await rpc({ cmd: 'start', sid: 'bw-wait', cwd: root, message: '', deferMessage: true, mode: 'default', args: cliArgs(dirs) })
     const plainStart = await rpc({ cmd: 'start', sid: 'bw-plain', cwd: root, message: '', mode: 'default', args: cliArgs(dirs) })
+    const rawStart = rpc({ cmd: 'start', sid: 'bw-raw', cwd: root, message: 'small first line', bootWait: true, mode: 'default', args: cliArgs(dirs) })
     for (const r of [waitStart, plainStart]) { expect(typeof r.pid).toBe('number'); cliPids.add(r.pid as number) }
     const t0 = Date.now()
     const markers = (id: string, message: string) => [{ message, messageId: id }]
@@ -192,27 +204,37 @@ describe.each(TWINS)('send-boot-wait-v1: $name', (twin) => {
     const plain = rpc({ cmd: 'send', sid: 'bw-plain', message: bigLine('plain'), uuid: 'aaaaaaaa-0000-4000-8000-0000000000b2', markers: markers('qm-bw-2', 'plain') })
     // The start's own message, with bootWait (the path a start without markers takes).
     const inStart = rpc({ cmd: 'start', sid: 'bw-start', cwd: root, message: bigLine('start'), bootWait: true, mode: 'default', args: cliArgs(dirs) })
+    const r = await rawStart
+    expect(typeof r.pid).toBe('number'); cliPids.add(r.pid as number)
+    const raw = rpc({ cmd: 'sendRaw', sid: 'bw-raw', raw: JSON.stringify({ type: 'control_request', request_id: 'sq-boot', request: { subtype: 'side_question', question: bigLine('raw') } }) })
 
-    const [w, p, s] = await Promise.all([waited, plain, inStart])
+    const [w, p, s, q] = await Promise.all([waited, plain, inStart, raw])
     expect(w).toMatchObject({ ok: true })
     expect(Date.now() - t0).toBeGreaterThanOrEqual(BOOT_MS - 1_000)
-    expect(p).toMatchObject({ ok: false, reason: 'session_dead' })
+    expect(p).toMatchObject({ ok: true })
+    expect(q).toMatchObject({ ok: true })
     expect(typeof s.pid).toBe('number')
     expect(s.error).toBeUndefined()
 
-    // Each waited line reached its CLI whole; the reaped one never ran.
+    // Each line reached its CLI whole.
     const got = await (async () => {
       const until = Date.now() + 10_000
-      while (Date.now() < until && received(dirs).length < 2) await new Promise((r) => setTimeout(r, 100))
+      while (Date.now() < until && received(dirs).length < 5) await new Promise((r) => setTimeout(r, 100))
       return received(dirs)
     })()
     expect(got.filter((r) => r.parseError)).toEqual([])
-    const heads = got.map((r) => r.head).sort()
-    expect(heads).toEqual(['start-----------', 'wait------------'])
-    for (const r of got) expect(r.length).toBe(bigLine('wait').length)
+    const big = got.filter((r) => r.head !== 'small first line')
+    expect(big.map((r) => r.head).sort()).toEqual(['plain-----------', 'raw-------------', 'start-----------', 'wait------------'])
+    for (const r of big) expect(r.length).toBe(bigLine('wait').length)
 
-    // The waited sessions are still running; the plain one was reaped mid-boot.
-    for (const sid of ['bw-wait', 'bw-start']) expect(await rpc({ cmd: 'status', sid })).toMatchObject({ exists: true, alive: true })
-    expect(await rpc({ cmd: 'status', sid: 'bw-plain' })).toMatchObject({ alive: false })
+    for (const sid of ['bw-wait', 'bw-plain', 'bw-start', 'bw-raw']) expect(await rpc({ cmd: 'status', sid })).toMatchObject({ exists: true, alive: true })
+
+    // The spawn line says which processes start on a line of the daemon's.
+    const spawnLine = (sid: string) => JSON.parse(fs.readFileSync(path.join(dirs.streams, `${sid}.jsonl`), 'utf8').split('\n')[0])
+    for (const sid of ['bw-start', 'bw-raw']) expect(spawnLine(sid)).toMatchObject({ subtype: 'walnut_process', walnutTurn: true })
+    // A deferMessage start's line may never be written: its send's marker anchors the turn.
+    expect(spawnLine('bw-wait').walnutTurn).toBeUndefined()
+    expect(spawnLine('bw-plain')).toMatchObject({ subtype: 'walnut_process' })
+    expect(spawnLine('bw-plain').walnutTurn).toBeUndefined()
   }, 120_000)
 })

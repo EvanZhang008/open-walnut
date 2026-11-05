@@ -702,6 +702,34 @@ describe('Notification feed API', () => {
     expect(rec.severity).toBe('info');
   });
 
+  it('SESSION: a card retires once its task goes on in another session, or completes (2026-11-05)', async () => {
+    // Sessions killed while they booted: their tasks ran again in new sessions,
+    // and the dead sessions' cards waited for a result that could never come.
+    const dead = 'sess-dead-boot-e2e'
+    const keep = 'sess-other-task-e2e'
+    bus.emit(EventNames.SESSION_ERROR, { sessionId: dead, taskId: 'task-moved-on', error: 'Session process exited with code -1' },
+      ['main-ai', 'session-runner'], { source: 'session-runner' })
+    bus.emit(EventNames.SESSION_ERROR, { sessionId: keep, taskId: 'task-still-broken', error: 'still broken' },
+      ['main-ai', 'session-runner'], { source: 'session-runner' })
+    await pollFeed((f) => [dead, keep].every((sid) => f.feed.some((n) => n.dedupKey === `error:session:${sid}:runtime`)))
+
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: 'sess-new-boot-e2e', taskId: 'task-moved-on', result: 'done', isError: false },
+      ['main-ai', 'session-runner'], { source: 'session-runner' })
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === `error:session:${dead}:runtime` && n.resolved === 'recovered'))
+    expect((await getFeed()).feed.find((n) => n.dedupKey === `error:session:${keep}:runtime`)?.resolved).toBeUndefined()
+
+    bus.emit(EventNames.TASK_COMPLETED, { task: { id: 'task-still-broken' } } as never, ['web-ui'], { source: 'test' })
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === `error:session:${keep}:runtime` && n.resolved === 'recovered'))
+  })
+
+  it('SESSION: a start death restart recovery sends again raises no card', async () => {
+    const sessionId = 'sess-start-recovery-e2e'
+    bus.emit(EventNames.SESSION_ERROR, { sessionId, error: 'Session process exited with code -1', startRecovery: true },
+      ['main-ai', 'session-runner'], { source: 'session-runner' })
+    await delay(300)
+    expect((await getFeed()).feed.some((n) => n.dedupKey === `error:session:${sessionId}:runtime`)).toBe(false)
+  })
+
   it('SESSION: a clean result for a session that never failed changes nothing', async () => {
     // The hot path — this fires on every turn of every session. It must not scan
     // the store, and above all must not retire ANOTHER session's card.

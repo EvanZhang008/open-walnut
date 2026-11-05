@@ -7,7 +7,12 @@
  * Part of the line went in, the 20s write deadline passed, and the daemon reaped
  * the healthy booting CLI ('send-partial-write') twice in a row. A `bootWait` send
  * into a CLI that has not shown its first init line since its spawn now waits until
- * the boot deadline after the spawn; every other send keeps the plain deadline.
+ * the boot deadline after the spawn.
+ *
+ * write-boot-wait-v1 (2026-11-05): so does EVERY other write into such a CLI, a
+ * plain send and a raw line alike. A 7KB status question (sendRaw) written 5s after
+ * a spawn under load 300 filled the pipe of a CLI still booting, and the 20s plain
+ * deadline reaped it ('sendRaw-partial-write', exit -1, no transcript).
  *
  * Deadlines are shortened here (plain 300ms, boot 2.5s); the FIFO and its reader
  * are real.
@@ -89,17 +94,36 @@ describe('send-boot-wait-v1: daemon-core', () => {
     expect(ctx.sessions.get('sid')!.fifoBootWaitUntil).toBeUndefined()
   }, 15_000)
 
-  it('the same line without bootWait keeps the plain deadline: reaped as send-partial-write (the incident)', async () => {
+  it.each([
+    ['a plain send', (core: ReturnType<typeof createDaemonCore>) => core.handleSendCommand('sid', BIG)],
+    ['a raw line (a status question, a control response)', (core: ReturnType<typeof createDaemonCore>) =>
+      core.handleSendRawCommand('sid', JSON.stringify({ type: 'control_request', request_id: 'sq-1', request: { subtype: 'side_question', question: BIG } }))],
+  ])('%s into a CLI still booting waits through the boot too (the 2026-11-05 incident)', async (_label, write) => {
     const core = createDaemonCore(ctx.deps)
     const { fifo, fd } = stalledFifo()
     ctx.sessions.set('sid', makeTestSession({ pid: 901, pipePath: fifo, spawnTs: Date.now(), sawInit: false }))
     const reader = drainAfter(fd, 1_200)
-    const res = await core.handleSendCommand('sid', BIG)
-    reader.stop()
+    const t0 = Date.now()
+    const res = await write(core)
+    const wire = reader.stop()
+    expect(res).toMatchObject({ ok: true })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
+    expect(ctx.sessions.get('sid')!.state).toBe('running')
+    expect(wire.trim().length).toBeGreaterThan(BIG.length)
+    expect(ctx.sessions.get('sid')!.fifoBootWaitUntil).toBeUndefined()
+  }, 15_000)
+
+  it('a raw line into a booted CLI that stops reading keeps the plain deadline', async () => {
+    const core = createDaemonCore(ctx.deps)
+    const { fifo } = stalledFifo()
+    ctx.sessions.set('sid', makeTestSession({ pid: 907, pipePath: fifo, spawnTs: Date.now(), sawInit: true }))
+    const t0 = Date.now()
+    const res = await core.handleSendRawCommand('sid', JSON.stringify({ type: 'control_request', request_id: 'sq-2', request: { subtype: 'side_question', question: BIG } }))
     expect(res).toMatchObject({ ok: false, reason: 'session_dead' })
-    expect(ctx.sessions.get('sid')!.exitReason).toBe('send-partial-write')
-    const warn = ctx.spies.logger.mock.calls.find(([, msg]) => msg === 'send: the CLI did not read the line in time')
-    expect(warn?.[2]).toMatchObject({ bootWait: false, sawInit: false })
+    expect(Date.now() - t0).toBeLessThan(1_000)
+    expect(ctx.sessions.get('sid')!.exitReason).toBe('sendRaw-partial-write')
+    const warn = ctx.spies.logger.mock.calls.find(([, msg]) => msg === 'sendRaw: the CLI did not read the line in time')
+    expect(warn?.[2]).toMatchObject({ sawInit: true })
   }, 15_000)
 
   it.each([

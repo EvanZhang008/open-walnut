@@ -7430,8 +7430,12 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // line-answer-v1: where this process's output begins, so a line an earlier process
   // took is never answered by this one's output (line-fate-core.ts lineFateScan). Silent
   // (no words, no uuid, no session_id). Written before the CLI boots. Keep in sync with
-  // daemon-standalone.ts.
-  try { fs.writeSync(outputFd, JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: proc.pid }) + '\\n'); } catch {}
+  // daemon-standalone.ts. walnutTurn: this process starts on the message below, so the
+  // fold counts the turn as open from here (daemon-fold.ts). Not for a deferMessage
+  // start (its line may never be written; its send's marker anchors), nor for a resume
+  // (the CLI may skip a line its transcript already has, by its uuid).
+  const turnOnSpawn = typeof message === 'string' && message.length > 0 && !resumesTranscript;
+  try { fs.writeSync(outputFd, JSON.stringify(Object.assign({ type: 'system', subtype: 'walnut_process', walnutPid: proc.pid }, turnOnSpawn ? { walnutTurn: true } : {})) + '\\n'); } catch {}
 
   // Write initial message to FIFO — only when one was provided. Empty message =
   // "spawn idle" (restart-to-reinitialize): CLI emits init but runs no turn.
@@ -7810,7 +7814,9 @@ function budgetControlExempt(raw) {
 }
 
 async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
-  const bootDeadline = line && typeof line.deadlineAt === 'number' ? line.deadlineAt : undefined;
+  // write-boot-wait-v1 (twin of daemon-core.ts): every write into a CLI this daemon
+  // spawned that has not shown its init waits through its boot, raw lines included.
+  const bootDeadline = line && typeof line.deadlineAt === 'number' ? line.deadlineAt : bootWriteDeadline(session);
   let deadline = bootDeadline !== undefined ? bootDeadline : Date.now() + FIFO_WRITE_DEADLINE_MS;
   // Behind a boot-wait write the chain wait can outlast this write's budget; past
   // it, one full pipe would reap the CLI that just booted (twin of daemon-core.ts).
@@ -10691,6 +10697,10 @@ async function cmdSendRaw(ws, id, cmd) {
     } else if (result === 'EAGAIN') {
       sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true });
     } else {
+      logMsg('warn', 'sendRaw: the CLI did not read the line in time', {
+        sid: sid, pid: session.pid, bytes: buf.length,
+        sinceSpawnMs: typeof session.spawnTs === 'number' ? Date.now() - session.spawnTs : null, sawInit: session.sawInit === undefined ? null : session.sawInit,
+      });
       reapSession(sid, -1, 'sendRaw-partial-write');
       sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: session.exitCode });
     }

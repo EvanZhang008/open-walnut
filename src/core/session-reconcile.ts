@@ -374,7 +374,9 @@ export function foldSessionTail(
       const differentInvocation = !!(taskId && toolUseId && fold.bgTasks[taskId]?.toolUseId
         && fold.bgTasks[taskId].toolUseId !== toolUseId)
       if (differentInvocation && (subtype === 'task_progress' || subtype === 'task_updated' || subtype === 'task_notification')) continue
-      if (subtype === 'init') {
+      // walnutTurn: the daemon spawned this process on a line it writes (daemon-fold.ts):
+      // the same new-turn edge as its init, which comes only once the CLI booted.
+      if (subtype === 'init' || (subtype === 'walnut_process' && parsed.walnutTurn === true)) {
         // A new init after a result means a NEW turn (or auto-continuation)
         // began after that result — the result cannot be the current turn's
         // verdict. Without this, a turn started by a plain-text FIFO send

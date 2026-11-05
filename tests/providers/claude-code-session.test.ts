@@ -33,9 +33,11 @@ import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult, st
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { resetContextWindowCaches, rememberModelWindow, recallModelWindow } from '../../src/providers/context-window.js';
 import { log } from '../../src/logging/index.js';
+import { setStartDeathHandler } from '../../src/core/sessions/start-recovery.js';
+import { SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js';
 import type { BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
-import { enqueueMessage, getQueue, markProcessing, resetCache as resetQueueCache } from '../../src/core/session-message-queue.js';
+import { enqueueMessage, getQueue, markProcessing, resetCache as resetQueueCache, START_RECOVERY_HELD_REASON } from '../../src/core/session-message-queue.js';
 import { turnUserUuid } from '../../src/providers/batch-uuid.js';
 import fs from 'node:fs';
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js';
@@ -1220,6 +1222,30 @@ describe('End-to-end session flow', () => {
     // "the task's session" (TASK_PHASE_CHANGED carries task.session_id), so a
     // session that died must stay named there. Force-delete clears it explicitly.
     expect(task.session_id).toBe(sessionId);
+  });
+
+  it('a death restart recovery takes on keeps the task\'s exec slot; a plain error releases it', async () => {
+    // 2026-11-05: a start killed while booting is started again by recovery
+    // (sessions/start-recovery.ts); clearing its slot made the task read as having
+    // no session while its line was about to run.
+    const collected = collectEvents('e2e-task-001');
+    bus.emit(EventNames.SESSION_START, { taskId: 'e2e-task-001', message: 'slot test', project: 'Walnut' }, ['session-runner'], { source: 'test' });
+    const result = await waitForResult(collected);
+    const sessionId = (result.data as { sessionId: string }).sessionId;
+    await new Promise((r) => setTimeout(r, 500));
+    const { getTask, linkSessionSlot } = await import('../../src/core/task-manager.js');
+    const slotAfter = async (data: Record<string, unknown>) => {
+      await linkSessionSlot('e2e-task-001', sessionId, 'exec');
+      bus.emit(EventNames.SESSION_ERROR, { sessionId, taskId: 'e2e-task-001', error: 'Remote session exited with code -1', ...data }, ['session-runner'], { source: 'test' });
+      await vi.waitFor(async () => {
+        const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+        expect((await getSessionByClaudeId(sessionId))?.process_status).toBe('error');
+      }, { timeout: 5_000, interval: 50 });
+      await new Promise((r) => setTimeout(r, 500));
+      return (await getTask('e2e-task-001')).exec_session_id;
+    };
+    expect(await slotAfter({ startRecovery: true })).toBe(sessionId);
+    expect(await slotAfter({})).toBeFalsy();
   });
 
   it('session:result carries all fields needed by frontend', async () => {
@@ -4382,6 +4408,212 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
+
+  describe('start recovery: a process that ended before it read its first line (2026-11-05)', () => {
+    let offers: string[];
+    let withdrawn: string[];
+    let take: boolean;
+    let owns: boolean;
+    beforeEach(() => {
+      offers = []; withdrawn = []; take = true;
+      owns = true;
+      setStartDeathHandler({
+        take: (sid) => { offers.push(sid); return take; },
+        withdraw: (sid) => { withdrawn.push(sid); },
+        owns: () => take && owns,
+      });
+    });
+    afterEach(() => { setStartDeathHandler(null); });
+
+    /** A fresh start whose `start` carried its first line, killed before its init. */
+    function booting(id: string, line = 'Fix the flaky test.', uuid?: string) {
+      const session = makeRemoteSession(id);
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      (session as any)._initSeenThisProcess = false;
+      (session as any)._spawnFirstLine = { text: line, ...(uuid ? { uuid } : {}) };
+      (session as any)._spawnedAtMs = Date.now();
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+      return session;
+    }
+    const heldRows = async (sid: string) => (await getQueue(sid)).filter((m) => m.status === 'parked' && m.parkedReason === START_RECOVERY_HELD_REASON);
+    const settle = () => new Promise((r) => setTimeout(r, 2_300));
+
+    it('hands the death to recovery: no error log, the session error says so, and the carried line is held in the queue as it was', async () => {
+      const uuid = '0b6f2f5e-8f3a-4d6e-9c1a-2b3c4d5e6f70';
+      const session = booting('start-killed', 'Fix the flaky test.', uuid);
+      expect(session.hasUnreadFirstLine()).toBe(true);
+      exit(session, -1);
+      expect(offers).toEqual(['start-killed']);
+      expect(session.hasUnreadFirstLine()).toBe(false);
+      expect(errors).toEqual([]);
+      expect(busErrors).toHaveLength(1);
+      expect(busErrors[0].data).toMatchObject({ sessionId: 'start-killed', startRecovery: true });
+      await settle();
+      const held = await heldRows('start-killed');
+      expect(held).toHaveLength(1);
+      expect(held[0]).toMatchObject({ message: 'Fix the flaky test.', userUuid: uuid, lineUuid: uuid });
+    }, 10_000);
+
+    it('a recovery that declines leaves the old error path, and is not asked again for that process', async () => {
+      take = false;
+      const session = booting('start-declined');
+      exit(session, -1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((session as any).offerUnreadFirstLine()).toBe(false);
+      expect(offers).toHaveLength(1);
+      expect(errors.map((e) => e.msg)).toContain('remote session process exited with error');
+      expect((busErrors[0].data as { startRecovery?: boolean }).startRecovery).toBeUndefined();
+      await settle();
+      expect(await heldRows('start-declined')).toEqual([]);
+    }, 10_000);
+
+    it.each([
+      ['a process that read its init', (s: ClaudeCodeSession) => { (s as any)._initSeenThisProcess = true; }],
+      ['a CLI that said why it could not start', () => {}, 1, 'Error: invalid --model'],
+      ['a conversation that was never written', () => {}, 1, 'No conversation found with session ID: x'],
+      ['a start with no line of its own', (s: ClaudeCodeSession) => { (s as any)._spawnFirstLine = null; }],
+    ] as Array<[string, (s: ClaudeCodeSession) => void, number?, string?]>)('is not offered for %s', (_label, prep, code = -1, stderr) => {
+      const session = booting('start-not-offered');
+      prep(session);
+      exit(session, code, stderr);
+      expect(offers).toEqual([]);
+      expect((busErrors[0]?.data as { startRecovery?: boolean } | undefined)?.startRecovery).toBeUndefined();
+    });
+
+    it('a death it does not offer is not waited for: a dead snapshot hands back as before', () => {
+      const session = booting('start-terminal');
+      exit(session, 1, 'Error: invalid --model');
+      expect(offers).toEqual([]);
+      expect(session.hasUnreadFirstLine()).toBe(false);
+    });
+
+    it('the carried line is on disk at once: a respawn right after the death cannot lose it', async () => {
+      const session = booting('start-respawn', 'first words');
+      exit(session, -1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (session as any)._spawnLineRow;
+      expect((await heldRows('start-respawn')).map((m) => m.message)).toEqual(['first words']);
+    });
+
+    it('a held resume line keeps its rows, unchanged, held for the new start', async () => {
+      const sid = 'resume-killed';
+      const first = await enqueueMessage(sid, 'first');
+      const second = await enqueueMessage(sid, 'second');
+      const rows = await markProcessing(sid);
+      const session = booting(sid);
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      (session as any)._spawnFirstLine = null;
+      (session as any)._resumeLineHold = rows;
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+      exit(session, -1);
+      expect(offers).toEqual([sid]);
+      await settle();
+      expect((await heldRows(sid)).map((m) => [m.id, m.message])).toEqual([[first.id, 'first'], [second.id, 'second']]);
+    }, 10_000);
+
+    it('an exit that comes before the spawn was confirmed still hands the rows over once the hold is set', async () => {
+      const sid = 'resume-early-exit';
+      const row = await enqueueMessage(sid, 'only');
+      const rows = await markProcessing(sid);
+      const session = booting(sid);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (session as any)._spawnFirstLine = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const endsBefore = (session as any)._processEnds;
+      exit(session, -1);
+      expect(offers).toEqual([]);
+      expect(session.holdResumeLineUntilRead(rows, endsBefore)).toBe(true);
+      await settle();
+      expect(offers).toEqual([sid]);
+      expect((await heldRows(sid)).map((m) => m.id)).toEqual([row.id]);
+    }, 10_000);
+
+    it('a start whose outcome is unknown keeps the offer open: its adopted process dying before it reads is offered', () => {
+      const session = booting('start-unknown');
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      expect((session as any).offerFailedStart(new SendOutcomeUnknownError('start: no answer from the daemon'), true)).toBe(false);
+      expect(offers).toEqual([]);
+      expect(session.hasUnreadFirstLine()).toBe(true);
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+      exit(session, -1);
+      expect(offers).toEqual(['start-unknown']);
+    });
+
+    it('a start that never reached its host is offered once; a refusal for another reason closes the offer', () => {
+      const unreachable = booting('start-unreachable');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((unreachable as any).offerFailedStart(new Error('Connection to clouddev failed: Permission denied (publickey)'), true)).toBe(true);
+      expect(offers).toEqual(['start-unreachable']);
+      const refused = booting('start-refused');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((refused as any).offerFailedStart(new Error('Error: invalid --model'), true)).toBe(false);
+      expect(refused.hasUnreadFirstLine()).toBe(false);
+    });
+
+    it('rows held for a recovery that no longer owns the death are parked for a Retry, never left held', async () => {
+      // Recovery took the death, then dropped it before the rows were held (a give-up, a withdraw).
+      owns = false;
+      const session = booting('start-dropped', 'never stranded');
+      exit(session, -1);
+      expect(offers).toEqual(['start-dropped']);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (session as any)._spawnLineRow;
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await heldRows('start-dropped')).toEqual([]);
+      const parked = (await getQueue('start-dropped')).filter((m) => m.status === 'parked');
+      expect(parked.map((m) => m.message)).toEqual(['never stranded']);
+      expect(parked[0].parkedReason).toMatch(/Retry it\.$/);
+    }, 10_000);
+
+    it('a start killed while booting with only the managed-settings advisory on stderr is still offered', () => {
+      const session = booting('start-advisory');
+      exit(session, -1, MANAGED_SETTINGS_NOISE);
+      expect(offers).toEqual(['start-advisory']);
+      expect(busErrors[0]?.data).toMatchObject({ sessionId: 'start-advisory', startRecovery: true });
+    });
+
+    it('a late init after a resume line was held puts its rows back and kicks the queue (never pending with nothing to drive them)', async () => {
+      const sid = 'resume-late-init';
+      const row = await enqueueMessage(sid, 'resume words');
+      const rows = await markProcessing(sid);
+      const session = booting(sid);
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      (session as any)._spawnFirstLine = null;
+      (session as any)._resumeLineHold = rows;
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+      const kicks: string[] = [];
+      bus.subscribe('test-start-recovery-kicks', (event: BusEvent) => {
+        if (event.name === EventNames.SESSION_SEND) kicks.push((event.data as { sessionId: string }).sessionId);
+      }, { global: true, interest: [EventNames.SESSION_SEND] });
+      try {
+        exit(session, -1);
+        await settle();
+        expect((await heldRows(sid)).map((m) => m.id)).toEqual([row.id]);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (session as any).noteInitCapabilities(['msg_lifecycle_v1'], false);
+        await vi.waitFor(async () => {
+          expect((await getQueue(sid)).map((m) => [m.id, m.status])).toEqual([[row.id, 'pending']]);
+          expect(kicks).toContain(sid);
+        }, { timeout: 3_000, interval: 50 });
+      } finally {
+        bus.unsubscribe('test-start-recovery-kicks');
+      }
+    }, 10_000);
+
+    it('an init that lands after the exit withdraws the offer, reports the death plainly, and holds nothing', async () => {
+      const session = booting('late-init');
+      exit(session, -1);
+      expect(offers).toHaveLength(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (session as any).noteInitCapabilities(['msg_lifecycle_v1'], false);
+      expect(withdrawn).toEqual(['late-init']);
+      expect(busErrors).toHaveLength(2);
+      expect((busErrors[1].data as { startRecovery?: boolean }).startRecovery).toBeUndefined();
+      await settle();
+      // The line ran: its row leaves the queue whatever its status (born held), never put back to run twice.
+      expect(await getQueue('late-init')).toEqual([]);
+    }, 10_000);
+  });
 
   it('an intentional teardown (task marked done) is not an error, despite exit -1', () => {
     const session = makeRemoteSession('remote-expected');

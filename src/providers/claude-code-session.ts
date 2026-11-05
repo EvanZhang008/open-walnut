@@ -58,6 +58,8 @@ import {
   unmarkUnwritten,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
+import { offerStartDeath, setUnreadFirstLineProbe, startRecoveryOwns, withdrawStartDeath } from '../core/sessions/start-recovery.js'
+import { classifySessionError } from '../core/session-error-kind.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, rowsCarriedBy, turnUserUuid } from './batch-uuid.js'
 import {
   announceReclaimed, answeredLines, awaitAnswer, awaitLine, orderAnswer, awaitedLines, dropLine, forgetLineState, hasAnsweringLines, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
@@ -685,6 +687,8 @@ function resumeProfileOpts(
 
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
 /** How long a resumed line whose process ended waits for that process's last stream lines. */
+/** How long after a spawn a dead snapshot may wait for the runner's start-death offer: the boot deadline and slack. */
+const UNREAD_FIRST_LINE_WINDOW_MS = 180_000
 const RESUME_LINE_SETTLE_MS = 2_000
 /**
  * A line Claude Code took twice and never answered (line-answer-v1): parked for
@@ -2947,6 +2951,16 @@ export class ClaudeCodeSession {
     this._startedMarks.clear()
     this._initSeenThisProcess = false
     this._initAnswerCount = null
+    this._startDeathOffered = false
+    this._startDeathAsked = false
+    this._quietDeathError = null
+    this._spawnLineRow = null
+    // A queue delivery's rows are its own record (_resumeLineHold); a fork or a spilled
+    // prompt is not a line a plain resend could repeat.
+    this._spawnFirstLine = message && !onSpawnSettled && !forkSession && !spillFile && !opts?.markers?.length
+      ? { text: message, ...(opts?.uuid ? { uuid: opts.uuid } : {}) }
+      : null
+    this._spawnedAtMs = Date.now()
 
     const isResume = !!resumeSessionId && !forkSession
     // Pre-assigned id (init-only spawn) names the stream/FIFO files directly —
@@ -2963,6 +2977,8 @@ export class ClaudeCodeSession {
     // `claude` into a nonexistent directory and report "session created and running"
     // when the spawn will definitely fail (ENOENT). Soft-fails on remote errors
     // to avoid blocking on flaky connectivity.
+    // False once the resume turned out to have no conversation to resume (below).
+    let resumeNow = true
     const startSpawn = async (): Promise<{ pid: number | null; outputFile: string; fileSize: number } & SpawnLineOutcome> => {
       const { sessionStops } = await import('../core/sessions/session-stop.js')
       const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
@@ -2980,7 +2996,29 @@ export class ClaudeCodeSession {
         // reverting it to pending and retrying forever (delivery-failure.ts).
         throw new CwdMissingError(errMsg)
       }
-      if (resumeSessionId) {
+      // A resume of a conversation the CLI never wrote (its first spawn died before
+      // it read its first line: killed while booting, or never started on a host that
+      // was unreachable) dies with "No conversation found" on every try. A resume that
+      // carries a message starts that conversation instead, under the same id, so the
+      // session, its task and the message stay where they are (2026-11-05: six tasks
+      // started while clouddev's certificate had expired, and four Mac sessions killed
+      // mid-boot, all failed this way). Only a proven absence switches: a host that
+      // cannot be asked keeps the resume, and a transcript a probe missed is refused by
+      // the CLI ("Session ID ... is already in use"), never overwritten.
+      if (isResume && message) {
+        const found = await new DaemonFileReader(host ?? '__local__').probeSessionPath(resumeSessionId!, resolvedCwd, 10_000)
+        if (found === null) {
+          const at = args.indexOf('--resume')
+          if (at !== -1) args.splice(at, 2, '--session-id', resumeSessionId!)
+          const cut = args.indexOf('--resume-session-at')
+          if (cut !== -1) args.splice(cut, 2)
+          resumeNow = false
+          log.session.warn('resume: the conversation was never written on its host; starting it under the same id', {
+            taskId: this.taskId, sessionId: resumeSessionId, host: host ?? '__local__', cwd: resolvedCwd,
+          })
+        }
+      }
+      if (resumeNow && resumeSessionId) {
         try {
           const reader = new DaemonFileReader(host ?? '__local__')
           const restored = await reader.readCostState(resumeSessionId, resolvedCwd)
@@ -3000,7 +3038,7 @@ export class ClaudeCodeSession {
       // Spread, so an absent uuid never reaches the daemon as an explicit key.
       ...(opts?.uuid ? { uuid: opts.uuid } : {}),
       ...(opts?.markers ? { markers: opts.markers } : {}),
-      resume: isResume,
+      resume: isResume && resumeNow,
       fork: forkSession,
       ...(this.taskId ? { taskId: this.taskId } : {}),
       spillFile,
@@ -3165,10 +3203,25 @@ export class ClaudeCodeSession {
       // The server's pre-flight throws CwdMissingError; a host's daemon says it in its own
       // words when the pre-flight could not ask it (folder-gone-words.ts).
       const folderGone = err instanceof CwdMissingError || isFolderGoneReason(err instanceof Error ? err.message : String(err))
-      const quiet = folderGone && !!onSpawnSettled
+      // A fresh start that never reached its host (unreachable, an expired login):
+      // restart recovery sends its line again once the host answers, so no error
+      // for the user. Taken on before the start is reported failed, so its caller
+      // and its asker already see the recovery. An unknown outcome is the daemon
+      // reconnect's to settle (the start may still run), a queue delivery's batch is
+      // its own (settleResumeFailure).
+      const startRecovering = this.offerFailedStart(err, !onSpawnSettled && !folderGone)
+      // Never written for a start that did not reach its host: the record needs what the
+      // next start of this session reads from it (model, prompt, profile).
+      if (startRecovering && this.claudeSessionId) {
+        void this.persistSessionRecord(this.claudeSessionId, resolvedCwd).catch((recErr) => log.session.warn('start recovery: persisting the launch settings failed', {
+          sessionId: this.claudeSessionId, error: recErr instanceof Error ? recErr.message : String(recErr),
+        }))
+      }
+      const quiet = (folderGone && !!onSpawnSettled) || startRecovering
       log.session[quiet ? 'warn' : 'error']('transport start failed', {
         taskId: this.taskId, host: host ?? 'local', cwd, isRemote: !!sshTarget,
         error: err instanceof Error ? err.message : String(err),
+        ...(startRecovering ? { startRecovery: true } : {}),
       })
       this._rejectSessionReady(err)
       // Tell the caller the spawn failed BEFORE the SESSION_ERROR emit, so it can
@@ -3226,6 +3279,7 @@ export class ClaudeCodeSession {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
             error: err instanceof Error ? err.message : String(err),
+            ...(startRecovering ? { startRecovery: true } : {}),
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
         } else if ((err instanceof SessionHeldElsewhereError || folderGone) && this._transport === transport) {
           // The host refused the spawn: another process runs this session there, or
@@ -4483,6 +4537,8 @@ export class ClaudeCodeSession {
       // The process's first init: its first line's answer is any answer read after it.
       if (!this._initSeenThisProcess) this._initAnswerCount = this._answerCount
       this._initSeenThisProcess = true
+      // Its exit overtook this init: it read its first line, which must not go out again.
+      this.withdrawStartDeathOffer()
       // Read, not answered: a CLI that names its lines is held to its answer (line-answer-v1).
       this.releaseResumeLine(reports || this._sawCommandLifecycle ? 'read' : 'answered')
     }
@@ -4858,6 +4914,138 @@ export class ClaudeCodeSession {
    */
   private _resumeLineHold: QueuedMessage[] | null = null
 
+  /** The first line a fresh start carried inside its `start` (no queue row holds it), and its uuid. */
+  private _spawnFirstLine: { text: string; uuid?: string } | null = null
+  /** When this process was spawned (ms): the window a dead snapshot may still wait for its offer. */
+  private _spawnedAtMs = 0
+  /** This process's death went to start recovery (core/sessions/start-recovery.ts). Cleared by every spawn. */
+  private _startDeathOffered = false
+  /** Start recovery was asked about this process's death (once per process, taken or not). */
+  private _startDeathAsked = false
+  /** Each offer's number, and the last one withdrawn (a late hold of a withdrawn offer settles nothing). */
+  private _offerSeq = 0
+  private _withdrawnOffer = 0
+  /** The queue row a start-carried first line was given when its death was offered (its id, once written). */
+  private _spawnLineRow: Promise<string | null> | null = null
+  /** The death error this process's offer kept quiet (startRecovery): reported plainly if the offer is withdrawn. */
+  private _quietDeathError: string | null = null
+
+  /**
+   * Does this process still hold a first line it never read, its death not yet
+   * offered? A dead snapshot can reach the server before the exit event: its
+   * hand-back waits for the offer (session-auto-recover.ts holdsHandBack), within
+   * the boot deadline after the spawn and a minute's slack.
+   */
+  hasUnreadFirstLine(): boolean {
+    // Its death already reported here, offered or not: nothing waits for an offer.
+    if (this._startDeathAsked || this._processEnded || this._initSeenThisProcess || this._expectedTeardown) return false
+    if (!this._resumeLineHold?.length && !this._spawnFirstLine) return false
+    return Date.now() - this._spawnedAtMs < UNREAD_FIRST_LINE_WINDOW_MS
+  }
+
+  /**
+   * Rows held after recovery already decided this death (it gave up, or the task
+   * moved on, before the hold landed): nobody would release them, so they are parked
+   * for a Retry now.
+   */
+  private async settleIfUnowned(sid: string, offer: number, heldAfterWithdraw = false): Promise<void> {
+    const { settleStartRecoveryHeld } = await import('../core/session-message-queue.js')
+    if (this._withdrawnOffer === offer) {
+      // A withdrawn offer settles its rows itself (withdrawStartDeathOffer), but a hold
+      // that landed after the withdraw read the queue is still to settle: the line was read.
+      if (heldAfterWithdraw && (await settleStartRecoveryHeld(sid, 'deliver')).length > 0) this.kickQueue(sid)
+      return
+    }
+    if (startRecoveryOwns(sid)) return
+    const parked = await settleStartRecoveryHeld(sid, { park: 'Not delivered: the session\'s process ended before it read this message, and Walnut did not start it again. Retry it.' })
+    if (parked.length > 0) log.session.warn('start recovery: rows held after its recovery ended, parked for a Retry', { sessionId: sid, messageIds: parked })
+  }
+
+  /**
+   * A fresh start whose `start` command failed: offered to restart recovery when the
+   * host was out of reach (an infra failure). An unknown outcome is not offered and
+   * keeps the offer open: the daemon reconnect may adopt the start, and a death of
+   * that process before it reads its line is offered then.
+   */
+  private offerFailedStart(err: unknown, eligible: boolean): boolean {
+    if (isDaemonCommandOutcomeUnknown(err)) return false
+    const recovering = eligible && !this.resultEmitted
+      && classifySessionError({ errorMessage: err instanceof Error ? err.message : String(err) }) === 'infra'
+      && this.offerUnreadFirstLine()
+    this._startDeathAsked = true
+    return recovering
+  }
+
+  /** Rows put back to pending after the queue last looked: a kick with no text drives them. */
+  private kickQueue(sid: string): void {
+    bus.emit(EventNames.SESSION_SEND, { sessionId: sid, message: '', ...(this.taskId ? { taskId: this.taskId } : {}) }, ['session-runner'], { source: 'session-runner' })
+  }
+
+  /** The process read its first line after all (its exit overtook the stream): no new start. */
+  private withdrawStartDeathOffer(): void {
+    if (!this._startDeathOffered || !this.claudeSessionId) return
+    this._startDeathOffered = false
+    this._withdrawnOffer = this._offerSeq
+    const sid = this.claudeSessionId
+    withdrawStartDeath(sid)
+    // The line was read: its row leaves the queue (a start-carried one), and rows
+    // already held go back as any crash's untaken lines do (pending, uuid kept).
+    const row = this._spawnLineRow
+    this._spawnLineRow = null
+    void (async () => {
+      const queue = await import('../core/session-message-queue.js')
+      const id = await row
+      // Whatever its status (it was born held): a line put back to pending would run twice.
+      if (id) await queue.removeStartRecoveryRows(sid, [id])
+      if ((await queue.settleStartRecoveryHeld(sid, 'deliver')).length > 0) this.kickQueue(sid)
+    })().catch((err) => log.session.warn('start recovery: settling a withdrawn line failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) }))
+    // The line ran and its process died anyway: the death is reported as any crash
+    // (its card, its slot, its hand-back), no longer as recovery's.
+    const error = this._quietDeathError
+    this._quietDeathError = null
+    if (error) bus.emit(EventNames.SESSION_ERROR, { sessionId: sid, taskId: this.taskId, error }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+  }
+
+  /**
+   * The process ended before it read its first line (no init, no `started`):
+   * killed while it booted, or its start never reached the host. Restart recovery
+   * takes the death on before it is reported, so the task waits on the machine and
+   * the session starts again by itself instead of an error asking for a Retry
+   * (2026-11-05). The line stays in the queue, held for that start (holdUnreadFirstLine).
+   * True when recovery took it on.
+   */
+  private offerUnreadFirstLine(): boolean {
+    const sid = this.claudeSessionId
+    if (!sid) return false
+    if (this._startDeathOffered) return true
+    if (this._startDeathAsked || this._initSeenThisProcess || this._expectedTeardown) return false
+    const rows = this._resumeLineHold
+    if (rows && this.resumeLineStarted(rows)) return false
+    if (!rows?.length && !this._spawnFirstLine) return false
+    this._startDeathAsked = true
+    if (!offerStartDeath(sid)) return false
+    this._startDeathOffered = true
+    const offer = ++this._offerSeq
+    log.session.info('start recovery took the death of a process that never read its first line', {
+      sessionId: sid, taskId: this.taskId, host: this._host, rows: rows?.length ?? 0, carried: !!this._spawnFirstLine,
+    })
+    // A line the start carried has no row yet: it gets one now, held (a respawn, a
+    // server restart must find it on disk). A late init removes it (withdraw).
+    const line = this._spawnFirstLine
+    if (line) {
+      this._spawnFirstLine = null
+      this._spawnLineRow = import('../core/session-message-queue.js').then(({ enqueueMessage, START_RECOVERY_HELD_REASON }) =>
+        enqueueMessage(sid, line.text, { heldReason: START_RECOVERY_HELD_REASON, ...(line.uuid ? { userUuid: line.uuid, lineUuid: line.uuid } : {}) }),
+      ).then(async (row) => { await this.settleIfUnowned(sid, offer); return row.id }, (err) => {
+        log.session.error('start recovery: holding the first line failed', {
+          sessionId: sid, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      })
+    }
+    return true
+  }
+
   /** Hold `rows` until this process reads them. False when it already did (remove them now). */
   holdResumeLineUntilRead(rows: QueuedMessage[], endsBefore: number): boolean {
     // Read already: its init came first, or it named the line started (line-answer-v1).
@@ -4917,14 +5105,31 @@ export class ClaudeCodeSession {
     if (!held) return
     if (this._initSeenThisProcess) { this.releaseResumeLine(this._sawCommandLifecycle ? 'read' : 'answered'); return }
     // The CLI named it started (before any init, as Claude Code does): it read it.
-    if (this.resumeLineStarted(held)) { this.releaseResumeLine('read'); return }
+    if (this.resumeLineStarted(held)) { this.withdrawStartDeathOffer(); this.releaseResumeLine('read'); return }
     if (settleMs > 0) {
       const timer = setTimeout(() => { if (this._resumeLineHold === held) this.parkUnreadResumeLine() }, settleMs)
       timer.unref?.()
       return
     }
     const rows = held
+    // Offered while the rows are still this process's hold (its exit can come before
+    // the spawn was confirmed and the hold set, and then found nothing to offer).
+    const recovering = this._startDeathOffered || this.offerUnreadFirstLine()
+    const offer = this._offerSeq
     this._resumeLineHold = null
+    // Start recovery starts the session again (offerUnreadFirstLine): the rows wait for it, unchanged.
+    if (recovering) {
+      const sid = this.claudeSessionId
+      void import('../core/session-message-queue.js').then(async ({ holdForStartRecovery }) => {
+        await holdForStartRecovery(rows)
+        if (sid) await this.settleIfUnowned(sid, offer, true)
+      })
+        .catch((err) => {
+          log.session.error('start recovery: holding the unread rows failed; parked for a Retry', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
+          this.parkLineRows(rows, 'Not delivered: Claude Code exited before it read this message. Retry it.')
+        })
+      return
+    }
     const stderr = this._exitStderr ? stripCliStartupNoise(this._exitStderr).trim().replace(/\s+/g, ' ').slice(0, 300) : ''
     const where = this._host ? ` on ${this._host}` : ''
     // A stop Walnut asked for: the user's choice, worded like every other stop's park,
@@ -5728,7 +5933,10 @@ export class ClaudeCodeSession {
     // signalled stop may be suppressed; a real failure code falls through to the
     // error path.
     const suppressibleExit = code === 0 || code === -1 || code === 143 || code === 130
-    if (!cleanStderr && stderr && suppressibleExit) {
+    // Not a process that ended before it read its first line: whatever its stderr,
+    // that is start recovery's death (below), or the line is lost.
+    const unreadFirstLine = !this._initSeenThisProcess && (!!this._resumeLineHold?.length || !!this._spawnFirstLine)
+    if (!cleanStderr && stderr && suppressibleExit && !unreadFirstLine) {
       this.reclaimUntakenLines('exit', true)
       this._active = false
       this._processStatus = 'stopped'
@@ -5771,17 +5979,26 @@ export class ClaudeCodeSession {
     if (this._host) parts.push(`[${this._host}]`)
     if (cleanStderr) parts.push(cleanStderr.slice(0, 500))
     const errMsg = parts.join(' — ')
+    const conversationLost = cleanStderr.includes('No conversation found')
+    // Killed before it read its first line (no init): restart recovery sends that
+    // line again, so this death is the machine's, not an error for the user. A CLI
+    // that said why it could not start fails the same way again: not this.
+    const startRecovering = !startupFailure && !conversationLost && this.offerUnreadFirstLine()
+    // A death that fails the same way again is reported here, never offered: no dead
+    // snapshot waits for an offer (hasUnreadFirstLine), and no later hold offers it.
+    if (startupFailure || conversationLost) this._startDeathAsked = true
 
     // skipNotify while the session:error below is still to come: the server cards
     // that one ("A session hit an error", same session recovery key), so the log
     // bridge carding this developer line too made two cards for one failure.
-    log.session.error('remote session process exited with error', {
+    log.session[startRecovering ? 'warn' : 'error']('remote session process exited with error', {
       taskId: this.taskId,
       sessionId: this.claudeSessionId,
       exitCode: code,
       host: this._host,
       stderr: cleanStderr.slice(0, 200) || undefined,
-      ...(!this.resultEmitted ? { skipNotify: true } : {}),
+      ...(!this.resultEmitted || startRecovering ? { skipNotify: true } : {}),
+      ...(startRecovering ? { startRecovery: true } : {}),
     })
 
     // Before the session:error below, so the runner's next delivery already sees them.
@@ -5803,7 +6020,6 @@ export class ClaudeCodeSession {
     // write below: that one carries the ('system','daemon_reported_exit')
     // category-① pair, which the C2 snapshot gate drops WHOLESALE in enforce
     // mode — an archive folded into it silently never lands.
-    const conversationLost = cleanStderr.includes('No conversation found')
     if (this.claudeSessionId) {
       const sid = this.claudeSessionId
       import('../core/session-tracker.js').then(async ({ updateSessionRecord }) => {
@@ -5841,7 +6057,9 @@ export class ClaudeCodeSession {
         sessionId: this.claudeSessionId ?? undefined,
         taskId: this.taskId,
         error: errMsg,
+        ...(startRecovering ? { startRecovery: true } : {}),
       }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+      if (startRecovering) this._quietDeathError = errMsg
     }
   }
 
@@ -8405,6 +8623,8 @@ export class ClaudeCodeSession {
           if (this._isReplayedByOffset() !== true) {
             this._startedMarks.delete(lc.command_uuid)
             this._startedMarks.set(lc.command_uuid, this._answerCount)
+            // A line started after its process's exit was reported: it was read.
+            if (this._processEnded) this.withdrawStartDeathOffer()
             if (this._startedMarks.size > 256) this._startedMarks.delete(this._startedMarks.keys().next().value!)
           }
           // A line held on the daemon's word, its start now read: later answers are its.
@@ -10402,6 +10622,9 @@ export class SessionRunner {
     this.stopReclaimListener?.()
     this.stopReclaimListener = onLinesReclaimed((sessionId, why) => this.onLinesReclaimedFor(sessionId, why))
 
+    // A dead snapshot that beats the exit event: its hand-back waits for the runner's start-death offer.
+    setUnreadFirstLineProbe((sid) => this.findSessionByClaudeId(sid)?.hasUnreadFirstLine() ?? false)
+
     bus.subscribe('session-runner', async (event) => {
       switch (event.name) {
         case EventNames.SESSION_START: {
@@ -10585,6 +10808,8 @@ export class SessionRunner {
                 // The snapshot may reject a stale status write, so clear the link based only on the status that was finally saved.
                 if ((rec.process_status === 'stopped' || rec.process_status === 'error') && rec.taskId) {
                   // A turn the endpoint wait continues keeps its task's session (sessions/endpoint-wait.ts).
+                  // Nor does a death restart recovery starts again (sessions/start-recovery.ts).
+                  if (event.name === EventNames.SESSION_ERROR && (event.data as { startRecovery?: boolean }).startRecovery) return
                   import('../core/sessions/endpoint-wait.js').then(({ endpointWaitTakes }) => {
                     if (rec.process_status === 'error' && result && endpointWaitTakes(result)) return
                     return import('../core/task-manager.js').then(({ clearSessionSlot }) => {

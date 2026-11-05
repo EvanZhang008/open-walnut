@@ -71,6 +71,7 @@ import {
   resumePriority,
 } from './sessions/restart-loss.js'
 import { log } from '../logging/index.js'
+import { hasUnreadFirstLine, setStartDeathHandler } from './sessions/start-recovery.js'
 
 export { AUTO_RECOVER_SOURCE, resolveAutoRecoverConfig }
 export type { AutoRecoverConfig, AutoRecoverDeps, AutoRecoverTask } from './sessions/auto-recover-env.js'
@@ -86,6 +87,16 @@ const RECHECK_MS = 15_000
 /** Poll interval while a resume waits for its session to come back. */
 const SETTLE_POLL_MS = 2_000
 /** How long a live-reading record with no fold from its host waits before it is resumed anyway. */
+/** The longest a start death waits for its host before the user is told (an expired login needs them). */
+/** A loss whose recovery has not ended (its rows may still be recovery's). */
+const UNSETTLED_LOSS: ReadonlySet<string> = new Set(['pending', 'queued', 'sent'])
+const START_DIED_WAIT_MS = 2 * 3_600_000
+
+/** A start death's held line, when Walnut does not start the session again: the user's Retry. */
+function notStartedReason(why: string): string {
+  return `Not delivered: the session's process ended before it read this message, and Walnut did not start it again (${why}). Retry it.`
+}
+
 const NO_FOLD_GRACE_MS = 5 * 60_000
 /** How often a resume parked on its host's daemon looks again. */
 const HOST_WAIT_RECHECK_MS = 60_000
@@ -115,6 +126,8 @@ export class SessionAutoRecover {
   private readonly queue = new Map<string, QueueItem>()
   private readonly inFlight = new Map<string, Set<string>>()
   private readonly hostNextStart = new Map<string, number>()
+  /** Start deaths whose process read its first line after all (withdrawStartDied). */
+  private readonly withdrawn = new Set<string>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private timerAt = 0
   private stopped = false
@@ -155,11 +168,13 @@ export class SessionAutoRecover {
   holdsHandBack(record: SessionRecord): boolean {
     if (!this.enabled || record.archived) return false
     if (this.tracked(record.claudeSessionId)) return true
+    // Its dead snapshot came before the runner's exit event, which offers the death (start_died).
+    if (!isLive(record) && hasUnreadFirstLine(record.claudeSessionId)) return true
     const loss = record.restartLoss
     const now = this.deps.now()
     // A loss nobody resolved within the host-wait window stops holding, so a
     // stuck record can never pin a task's phase forever.
-    if (loss && now - lossClock(loss) <= this.cfg.ownerWaitMs) {
+    if (loss && now - lossClock(loss) <= this.waitCap(loss)) {
       if (loss.state === 'pending' || loss.state === 'queued') return true
       if (loss.state === 'sent') {
         // On its way back; past the settle window the session's own state speaks.
@@ -216,6 +231,102 @@ export class SessionAutoRecover {
       status: b.process_status, lastActiveAt: b.lastActiveAt, permission: !!b.pendingPermission,
     }, !!opts.fallbackInFlight)
     return true
+  }
+
+  /**
+   * A session's process ended before it read its first line (start_died): killed
+   * while it booted, or its start never reached its host. That line never ran, and
+   * it waits in the session's queue, held (session-queue-park.ts
+   * START_RECOVERY_HELD_REASON); the session is started again through the same queue
+   * as a resume: held phase, Waiting on the machine, the load gate, the host wait and
+   * the attempt budget, and every end that does not start it releases or parks the
+   * held rows (settleHeld). 2026-11-05: four Mac sessions killed mid-boot under
+   * load 300 and six tasks started while clouddev's certificate had expired all
+   * read as errors asking for a Retry. Called before the death is reported, so no
+   * hand-back or asker notice beats it. A death of a start recovery itself made is
+   * that attempt's failure (settle requeues it): true, nothing new is taken on.
+   * Returns whether recovery owns it.
+   */
+  noteStartDied(record: SessionRecord): boolean {
+    const sid = record.claudeSessionId
+    // Recovery already owns this session's death (an earlier report, a start of its own that died): theirs.
+    if (this.tracked(sid)) return true
+    this.withdrawn.delete(sid)
+    const taken = this.noteLoss(record, 'start_died', { ...record, process_status: 'running' }, {
+      requireInfra: false, fallbackInFlight: true,
+    })
+    if (taken) log.session.info('start recovery: the process ended before it read its first line; Walnut starts it again', {
+      sessionId: sid, taskId: record.taskId ?? null, host: record.host ?? null,
+    })
+    return taken
+  }
+
+  /**
+   * The rows a start death holds (start_died), at an end of its recovery: `deliver`
+   * puts them back as they were and kicks the delivery (another message got there
+   * first, the line was read after all); a park reason leaves them for a Retry (it
+   * gave up, the task moved on). A no-op for a session that holds none.
+   */
+  private async settleHeld(sid: string, how: 'deliver' | { park: string }): Promise<void> {
+    const moved = await this.deps.settleHeld(sid, how).catch((err) => {
+      log.session.warn('start recovery: settling the held rows failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+      return [] as string[]
+    })
+    if (moved.length > 0) log.session.info('start recovery: held rows settled', { sessionId: sid, how: how === 'deliver' ? 'deliver' : 'park', messageIds: moved })
+  }
+
+  /** How long a start death may wait for its host: a host that needs the user (an expired login) must not hide for a day. */
+  private waitCap(loss: Pick<SessionRestartLoss, 'cause'> | undefined): number {
+    return loss?.cause === 'start_died' ? Math.min(this.cfg.ownerWaitMs, START_DIED_WAIT_MS) : this.cfg.ownerWaitMs
+  }
+
+  /** Does recovery still own this session's start death (it releases or parks the held rows itself)? */
+  ownsStartDeath(sid: string): boolean {
+    if (this.tracked(sid)) return true
+    const rec = this.deps.getSessionSync(sid)
+    const loss = rec?.restartLoss
+    if (!rec || loss?.cause !== 'start_died') return false
+    if (loss.state === 'pending' || loss.state === 'queued') return true
+    // 'sent' with nothing tracking it: the settle window ended before this start's
+    // rows were held (a death and its hold that came after the last poll). The late
+    // hold wakes the decision: another attempt within the budget and the wait, or
+    // no owner, and the runner parks the rows for a Retry.
+    if (loss.state !== 'sent' || !this.enabled || rec.archived) return false
+    if (this.attemptsSpent(rec) >= this.cfg.maxAttempts || this.deps.now() - lossClock(loss) > this.waitCap(loss)) return false
+    void this.deps.patchLoss(sid, (cur) => cur && cur.state === 'sent' ? { ...cur, state: 'queued' } : cur).catch(() => undefined)
+    this.enqueue(sid, rec.host, resumePriority(loss, Date.parse(loss.before?.lastActiveAt ?? '')), this.deps.now() + this.cfg.retryDelayMs)
+    log.session.info('start recovery: a hold after the settle window takes the start on again', { sessionId: sid })
+    return true
+  }
+
+  /** The runner's entry: reads the record without waiting (it reports from its exit path). */
+  takeStartDeath(sid: string): boolean {
+    const rec = this.deps.getSessionSync(sid)
+    return !!rec && this.noteStartDied(rec)
+  }
+
+  /**
+   * The process of a start death read its first line after all: its init landed
+   * after its exit (the daemon's exit event can overtake the stream's last lines).
+   * The line ran, so it must not go out again; the task gets the hand-back its
+   * death would have had.
+   */
+  withdrawStartDied(sid: string): void {
+    this.withdrawn.add(sid)
+    this.queue.delete(sid)
+    log.session.info('start recovery: withdrawn, the process read its first line after all', { sessionId: sid })
+    void this.deps.patchLoss(sid, (cur) => cur && cur.cause === 'start_died' && (cur.state === 'pending' || cur.state === 'queued')
+      ? { ...cur, state: 'skipped', reason: 'the process read its first line after all', told: true }
+      : cur)
+      .then(async () => {
+        // A classification still running sees the mark and settles itself.
+        if (this.classifying.has(sid)) return
+        this.withdrawn.delete(sid)
+        // Its rows are the runner's to settle: it read them (withdrawStartDeathOffer).
+        const rec = await this.deps.getSession(sid)
+        if (rec) await this.handBackIfOpen(rec)
+      })
+      .catch((err) => log.session.warn('start recovery: withdraw failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) }))
   }
 
   private startClassify(record: SessionRecord, cause: RestartLossCause, before: LossBefore, fallbackInFlight: boolean): void {
@@ -357,7 +468,8 @@ export class SessionAutoRecover {
     await this.deps.patchLoss(sid, () => ({ at: nowIso, cause, lost: [], state: 'pending', before }))
     const beforeActive = Date.parse(before.lastActiveAt ?? '')
 
-    const snap = await this.deps.fetchSnapshot(record)
+    // A process that never read its first line has nothing on its host to fold: the line is the work.
+    const snap = cause === 'start_died' ? null : await this.deps.fetchSnapshot(record)
     if (snap && snap.cliState !== 'dead') {
       // The host says the process lives: nothing was lost.
       await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: 'process is alive', told: true })
@@ -371,6 +483,9 @@ export class SessionAutoRecover {
         pendingPermission: before.permission ? { requestId: 'before-loss', receivedAt: '' } : undefined,
       })
     const task = await this.deps.getTask(taskId)
+    // A start whose hand-back the error edge wrote before this took it on (the edge
+    // and this run side by side): the line never ran, so the task still expects it.
+    const phase = cause === 'start_died' && task?.phase === 'NEED_ACTION' ? 'IN_PROGRESS' : task?.phase ?? null
     const cwdOk = await this.deps.cwdExists(record)
     const taskDir = await this.deps.taskDir(taskId, record.host)
     let finalCause = cause
@@ -384,7 +499,7 @@ export class SessionAutoRecover {
         bootAt = new Date(boot).toISOString()
       }
     }
-    const { verdict, reason } = classifyRestartLoss({ facts, phase: task?.phase ?? null, cwdMissing: cwdOk === false })
+    const { verdict, reason } = classifyRestartLoss({ facts, phase, cwdMissing: cwdOk === false })
     const lost = lostWork(facts)
     const loss: SessionRestartLoss = {
       at: nowIso,
@@ -402,28 +517,48 @@ export class SessionAutoRecover {
       ...(cwdOk === false ? { cwdMissing: true } : {}),
       ...(taskDir ? { taskDir } : {}),
       before,
+      // Its line never ran, so it carries no restart notice: the line itself goes out.
+      ...(cause === 'start_died' ? { told: true } : {}),
     }
     const latest = await this.deps.getSession(sid)
     if (latest?.statusRevision !== undefined) loss.revision = latest.statusRevision
+    if (cause === 'start_died' && this.withdrawn.delete(sid)) {
+      await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: 'the process read its first line after all', told: true })
+      this.classifying.delete(sid)
+      if (latest) await this.handBackIfOpen(latest)
+      return
+    }
     const stored = await this.deps.patchLoss(sid, (cur) => (cur && cur.state === 'pending' ? loss : cur))
     log.session.info('restart recovery: classified', {
       sessionId: sid, taskId, verdict, reason, cause: finalCause, facts: facts.source,
       phase: task?.phase ?? null, lost,
     })
-    if (!stored || stored.state !== loss.state || stored.at !== loss.at) return
+    if (!stored || stored.state !== loss.state || stored.at !== loss.at) {
+      // A withdraw landed while this classified (it left the settling to it).
+      if (cause === 'start_died' && this.withdrawn.delete(sid)) {
+        this.classifying.delete(sid)
+        const rec = await this.deps.getSession(sid)
+        if (rec) await this.handBackIfOpen(rec)
+      }
+      return
+    }
     // Decided: the stored verdict speaks for this session from here (the
     // hand-back below must not be held off by our own bookkeeping).
     this.classifying.delete(sid)
 
     if (verdict === 'resume') {
       this.enqueue(sid, record.host, resumePriority(loss, beforeActive), this.deps.now() + this.cfg.delayMs)
-      this.deps.emitNote(sid, taskId, `Restart recovery: ${finalCause === 'machine_reboot' ? 'the computer rebooted' : 'a restart'} killed this session while its work was in flight (${lost.join(', ')}). It will resume automatically.`)
+      this.deps.emitNote(sid, taskId, finalCause === 'start_died'
+        ? 'Start recovery: this session\'s process ended before it read its first message (a loaded machine, or a host that could not be reached). Walnut sends that message again by itself.'
+        : `Restart recovery: ${finalCause === 'machine_reboot' ? 'the computer rebooted' : 'a restart'} killed this session while its work was in flight (${lost.join(', ')}). It will resume automatically.`)
       return
     }
     if (verdict === 'cwd_missing') {
       void Promise.resolve(this.deps.noteFolderGone?.(sid)).catch(() => {})
       this.deps.emitNote(sid, taskId, `Restart recovery: not resumed, because the working directory ${record.cwd ?? ''} no longer exists (the reboot cleared it). The session can continue in a new folder from its panel.`)
     }
+    // Not started again: its held first line waits for the user's Retry.
+    await this.settleHeld(sid, { park: notStartedReason(reason) })
     // Not resumed: the task gets the hand-back the guard held off, unless it
     // sits where a hand-back does not apply (WAITING, Main between turns).
     if ((task?.phase === 'IN_PROGRESS' || task?.phase === 'TODO') && !(task.isMain && verdict === 'settled')) {
@@ -433,16 +568,37 @@ export class SessionAutoRecover {
 
   /** After boot: pick up losses a previous run left unresolved. */
   async resumeUnfinished(): Promise<number> {
-    if (!this.enabled) return 0
+    if (!this.enabled) {
+      await this.parkOrphanedHolds()
+      // Rows a recovery released that still wait (recovery is off now): a Retry is the user's.
+      for (const rec of await this.deps.listSessions().catch(() => [] as SessionRecord[])) {
+        const loss = rec.restartLoss
+        if (!loss?.releasedIds?.length || !UNSETTLED_LOSS.has(loss.state)) continue
+        await this.deps.patchLoss(rec.claudeSessionId, (cur) => cur && { ...cur, state: 'skipped', reason: 'restart recovery is off' })
+        await this.deps.parkQueued(rec.claudeSessionId, loss.releasedIds, notStartedReason('restart recovery is off')).catch(() => [])
+      }
+      return 0
+    }
     let picked = 0
     for (const rec of await this.deps.listSessions()) {
       const loss = rec.restartLoss
       const sid = rec.claudeSessionId
       if (!loss || this.tracked(sid) || rec.archived) continue
-      if (loss.state !== 'pending' && loss.state !== 'queued') continue
-      if (this.deps.now() - lossClock(loss) > this.cfg.ownerWaitMs) continue
+      // A start death's own start was out when the server stopped: its outcome is
+      // read afresh (live: back; held again or nothing: started again or given up).
+      const startOut = loss.cause === 'start_died' && loss.state === 'sent'
+      if (loss.state !== 'pending' && loss.state !== 'queued' && !startOut) continue
+      if (this.deps.now() - lossClock(loss) > this.waitCap(loss)) {
+        // Past its wait while the server was down: a start death, or rows it released,
+        // end here as at a give-up (held and still-queued rows parked for a Retry),
+        // never left for a reconnect to run hours later.
+        if (loss.cause === 'start_died' || loss.releasedIds?.length) await this.giveUp(rec, 'the session did not start again in time')
+        continue
+      }
       if (isLive(rec)) {
         await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'came back' })
+        // Its session runs again: a line still held for its start goes out to it, as fire would.
+        await this.settleHeld(sid, 'deliver')
         continue
       }
       picked++
@@ -451,6 +607,9 @@ export class SessionAutoRecover {
       const before = loss.before ?? { status: rec.process_status, lastActiveAt: rec.lastActiveAt, permission: !!rec.pendingPermission }
       if (loss.state === 'pending') {
         this.startClassify(rec, loss.cause, before, false)
+      } else if (startOut) {
+        await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'sent' ? { ...cur, state: 'queued' } : cur)
+        this.enqueue(sid, rec.host, resumePriority(loss, Date.parse(before.lastActiveAt ?? '')), this.deps.now() + this.cfg.delayMs)
       } else {
         // Queued on the way down (sessions/shutdown-death.ts): the machine then rebooted, which that server could not see.
         const boot = this.deps.bootTimeMs()
@@ -460,6 +619,7 @@ export class SessionAutoRecover {
         this.enqueue(sid, rec.host, resumePriority(loss, Date.parse(before.lastActiveAt ?? '')), this.deps.now() + this.cfg.delayMs)
       }
     }
+    await this.parkOrphanedHolds()
     if (picked) log.session.info('restart recovery: picked up unfinished recoveries', { count: picked })
     return picked
   }
@@ -521,13 +681,36 @@ export class SessionAutoRecover {
   }
 
   private async giveUp(rec: SessionRecord, reason: string): Promise<void> {
-    await this.deps.patchLoss(rec.claudeSessionId, (cur) => cur && { ...cur, state: 'gave_up', reason, revision: rec.statusRevision })
+    const loss = await this.deps.patchLoss(rec.claudeSessionId, (cur) => cur && { ...cur, state: 'gave_up', reason, revision: rec.statusRevision })
+    await this.settleHeld(rec.claudeSessionId, { park: notStartedReason(reason) })
+    // Rows it released that still wait (a host that never took them): the user's
+    // now, so a reconnect must not run them behind their back.
+    if (loss?.releasedIds?.length) {
+      const parked = await this.deps.parkQueued(rec.claudeSessionId, loss.releasedIds, notStartedReason(reason)).catch(() => [] as string[])
+      if (parked.length) log.session.info('start recovery: released rows still queued, parked at the give-up', { sessionId: rec.claudeSessionId, messageIds: parked })
+    }
     log.session.warn('restart recovery: gave up', { sessionId: rec.claudeSessionId, taskId: rec.taskId, reason })
     this.deps.emitNote(rec.claudeSessionId, rec.taskId, `Restart recovery gave up: ${reason}. The task needs you now.`)
+    // Decided: its own bookkeeping must not hold off the hand-back below (holdsHandBack).
+    this.untrack(rec.claudeSessionId)
     if (rec.taskId) {
       const task = await this.deps.getTask(rec.taskId)
       if (task?.phase === 'IN_PROGRESS') await this.deps.handBack(rec.taskId, rec.claudeSessionId)
     }
+  }
+
+  /** Rows a start death held that no recovery here owns (the server stopped mid-way, recovery is off): a Retry is the user's. */
+  private async parkOrphanedHolds(): Promise<void> {
+    for (const sid of await this.deps.sessionsWithHeld().catch(() => [] as string[])) {
+      if (this.tracked(sid)) continue
+      await this.settleHeld(sid, { park: notStartedReason('Walnut restarted before it could start the session again') })
+    }
+  }
+
+  private untrack(sid: string): void {
+    this.classifying.delete(sid)
+    this.queue.delete(sid)
+    for (const set of this.inFlight.values()) set.delete(sid)
   }
 
   private requeue(item: QueueItem, delayMs: number): void {
@@ -539,8 +722,9 @@ export class SessionAutoRecover {
     try {
       const rec = await this.deps.getSession(sid)
       const loss = rec?.restartLoss
-      if (!rec || rec.archived || !loss || loss.state !== 'queued' || !rec.taskId) {
+      if (this.withdrawn.delete(sid) || !rec || rec.archived || !loss || loss.state !== 'queued' || !rec.taskId) {
         log.session.info('restart recovery: dropped, record changed', { sessionId: sid, state: loss?.state ?? null })
+        await this.settleHeld(sid, rec && !rec.archived ? 'deliver' : { park: notStartedReason('the session was archived') })
         return
       }
       if (isLive(rec)) {
@@ -562,6 +746,8 @@ export class SessionAutoRecover {
         }
         if (!ask || (snap && snap.cliState !== 'dead')) {
           await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'resumed by another message', waitingHost: undefined })
+          // The session runs again: its held first line follows that message.
+          await this.settleHeld(sid, 'deliver')
           return
         }
         log.session.info('restart recovery: the record reads live but its host says the process is dead', { sessionId: sid, status: rec.process_status })
@@ -570,6 +756,8 @@ export class SessionAutoRecover {
       if (!task || task.phase !== loss.phaseAtLoss) {
         await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: `task moved to ${task?.phase ?? 'nothing'}`, revision: rec.statusRevision })
         log.session.info('restart recovery: skipped, task phase changed', { sessionId: sid, was: loss.phaseAtLoss, now: task?.phase ?? null })
+        await this.settleHeld(sid, { park: notStartedReason(`the task moved to ${task?.phase ?? 'nothing'}`) })
+        if (loss.releasedIds?.length) await this.deps.parkQueued(sid, loss.releasedIds, notStartedReason(`the task moved to ${task?.phase ?? 'nothing'}`)).catch(() => [])
         return
       }
       if (loss.waitingHost) {
@@ -577,10 +765,11 @@ export class SessionAutoRecover {
         // daemon could not take it; the daemon's reconnect delivers it. Nothing
         // is sent again and no attempt is spent while it waits.
         if (await this.deps.pendingMessages(sid) > 0) {
-          if (this.deps.now() - lossClock(loss) > this.cfg.ownerWaitMs) {
+          if (this.deps.now() - lossClock(loss) > this.waitCap(loss)) {
             // A resume that goes out after the hand-back would start work the user now owns.
-            if (loss.waitingHost.messageId) await this.deps.dropMessage(sid, loss.waitingHost.messageId)
-            await this.giveUp(rec, `${hostName(rec.host)} could not take the resume within ${Math.round(this.cfg.ownerWaitMs / 3_600_000)} h of the restart (last error: ${loss.waitingHost.error})`)
+            // (A start death's line is the user's own, never dropped: it stays queued for the host.)
+            if (loss.waitingHost.messageId && loss.cause !== 'start_died') await this.deps.dropMessage(sid, loss.waitingHost.messageId)
+            await this.giveUp(rec, `${hostName(rec.host)} could not take the resume within ${Math.round(this.waitCap(loss) / 3_600_000)} h of the restart (last error: ${loss.waitingHost.error})`)
             return
           }
           this.requeue(item, HOST_WAIT_RECHECK_MS)
@@ -592,10 +781,11 @@ export class SessionAutoRecover {
       const owner = await this.deps.recoveryOwner(rec)
       if (owner === 'daemon') {
         await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: 'the host daemon supervises it', revision: rec.statusRevision })
+        await this.settleHeld(sid, 'deliver')
         return
       }
       if (owner === 'unknown') {
-        if (this.deps.now() - Date.parse(loss.at) > this.cfg.ownerWaitMs) {
+        if (this.deps.now() - Date.parse(loss.at) > this.waitCap(loss)) {
           await this.giveUp(rec, `its host ${rec.host ?? ''} did not come back`.replace('  ', ' '))
           return
         }
@@ -623,7 +813,23 @@ export class SessionAutoRecover {
       const undelivered: { error?: string; messageId: string } = { messageId: `qm-recover-${randomUUID()}` }
       const stopListening = this.deps.onDeliveryFailed(sid, (error) => { undelivered.error = error })
       try {
-        await this.deps.send(sid, RESUME_MESSAGE, { source: AUTO_RECOVER_SOURCE, taskId: rec.taskId, messageId: undelivered.messageId })
+        // A first line its process never read is still queued, held (whatever death
+        // recovery took on first): that line is the work, and goes out as it was.
+        const released = await this.deps.releaseHeld(sid, rec.taskId)
+        if (released.length > 0) {
+          undelivered.messageId = released[0]
+          await this.deps.patchLoss(sid, (cur) => cur && { ...cur, releasedIds: [...new Set([...(cur.releasedIds ?? []), ...released])] })
+        } else if (loss.cause === 'start_died') {
+          // Its line is neither held nor queued: there is nothing to start it on, and
+          // nothing proves it ran. The task is the user's again, said so.
+          // A row being written right now (a reconnect's delivery) is in flight, not gone.
+          if (await this.deps.unsettledMessages(sid) === 0) {
+            await this.giveUp(rec, 'its first line is no longer in the session\'s queue')
+            return
+          }
+        } else {
+          await this.deps.send(sid, RESUME_MESSAGE, { source: AUTO_RECOVER_SOURCE, taskId: rec.taskId, messageId: undelivered.messageId })
+        }
         const sentAt = new Date(this.deps.now()).toISOString()
         await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'queued' ? { ...cur, state: 'sent', sentAt } : cur)
         await this.settle(item, attempts, revBefore, undelivered, liveBefore)
@@ -671,8 +877,12 @@ export class SessionAutoRecover {
         await this.waitForHost(item, rec, attempt, undelivered.error, undelivered.messageId)
         return
       }
-      // Only an error written after the send is this spawn's failure.
-      if (rec.process_status === 'error' && rec.statusRevision !== revBefore) {
+      // Only an error written after the send is this spawn's failure. So is a start
+      // whose process ended before it read its line again, whatever the record says:
+      // the runner held its rows once more (a stop written as 'stopped' would
+      // otherwise leave them held past the settle window).
+      if ((rec.process_status === 'error' && rec.statusRevision !== revBefore)
+        || (!isLive(rec) && (await this.deps.sessionsWithHeld().catch(() => [] as string[])).includes(item.sid))) {
         log.session.warn('restart recovery: resume spawn failed, will retry', { sessionId: item.sid, attempt, error: rec.errorMessage ?? null })
         await this.deps.patchLoss(item.sid, (cur) => cur && { ...cur, state: 'queued' })
         this.requeue(item, this.cfg.retryDelayMs)
@@ -730,6 +940,12 @@ export function startSessionAutoRecover(
 ): { stop: () => void; instance: SessionAutoRecover } {
   const sar = new SessionAutoRecover(cfg, deps)
   instance = sar
+  // The runner reports a process that ended before it read its first line (sessions/start-recovery.ts).
+  setStartDeathHandler({
+    take: (sid) => sar.takeStartDeath(sid),
+    withdraw: (sid) => sar.withdrawStartDied(sid),
+    owns: (sid) => sar.ownsStartDeath(sid),
+  })
   bus.subscribe('session-auto-recover', sar.handleEvent, {
     global: true,
     interest: ['session:deleted'],
@@ -741,6 +957,7 @@ export function startSessionAutoRecover(
   return {
     stop: () => {
       bus.unsubscribe('session-auto-recover')
+      setStartDeathHandler(null)
       sar.stop()
       if (instance === sar) instance = null
     },
@@ -767,7 +984,14 @@ export function scheduleSessionAutoRecover(record: SessionRecord, cause?: Status
  */
 export async function recoverAfterBoot(dead: SessionRecord[], before: Map<string, SessionRecord>): Promise<{ taken: number; picked: number }> {
   const sar = instance
-  if (!sar) return { taken: 0, picked: 0 }
+  // Turned off in config (no instance): rows a past recovery held or released still
+  // go to a Retry (resumeUnfinished's disabled path), never stay waiting on it.
+  if (!sar) {
+    await new SessionAutoRecover({ ...resolveAutoRecoverConfig(), enabled: false }).resumeUnfinished().catch((err) => {
+      log.session.warn('restart recovery (off): settling rows a past recovery held failed', { error: err instanceof Error ? err.message : String(err) })
+    })
+    return { taken: 0, picked: 0 }
+  }
   let taken = 0
   for (const rec of dead) {
     // The reconciler's own stamp ('server_restart') is the infra fact here. A

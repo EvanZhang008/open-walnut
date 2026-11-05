@@ -512,7 +512,9 @@ async function restartRecoveryHolds(sessionId: string, processDied: boolean): Pr
     if (!rec) return false
     const loss = rec.restartLoss
     // A resume already sent is the resumed session's own: its errors hand back as usual.
-    if (loss?.state === 'sent') return false
+    // Not a first line sent again (start_died): a process that dies before reading it
+    // is that attempt's failure, which recovery retries (session-auto-recover.ts).
+    if (loss?.state === 'sent' && loss.cause !== 'start_died') return false
     const dead = rec.process_status === 'stopped' || rec.process_status === 'error'
     if (!dead && !processDied) return false
     const { getSessionAutoRecover } = await import('./session-auto-recover.js')

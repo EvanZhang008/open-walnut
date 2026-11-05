@@ -147,6 +147,8 @@ export function initPushNotifications(): void {
           // would spam the user's devices during an SSH outage. The in-app chat
           // notification (deduped) covers it.
           if (data.errorKind === 'delivery_failed') break
+          // Walnut sends the line again by itself: nothing for the user to do.
+          if (data.startRecovery) break
           const error = data.error
           const lane = await laneIdsFor(data.sessionId)
           if (lane === 'silent') break

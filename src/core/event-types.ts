@@ -338,6 +338,13 @@ export interface SessionErrorEvent {
   parked?: boolean;
   /** delivery_failed only: the host did not answer in time and the batch is sent again then (ISO). */
   retryAt?: string;
+  /**
+   * The process ended before it read its first line (killed while it booted, or its
+   * start never reached its host), and restart recovery sends that line again by
+   * itself (sessions/start-recovery.ts). The machine's failure, not the user's:
+   * no card, no push, no error notice to an asker, and the task keeps its session.
+   */
+  startRecovery?: boolean;
 }
 
 // ── Session streaming events ──

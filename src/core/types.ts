@@ -2439,7 +2439,13 @@ export interface SessionAutoRecoverState {
 }
 
 /** What killed a session process that restart recovery is looking at. */
-export type RestartLossCause = 'machine_reboot' | 'server_restart' | 'host_restart';
+/**
+ * start_died: the session's process ended before it read its first line (killed while
+ * it booted on a loaded machine, or its start never reached a host that could not be
+ * reached), so the line it carried never ran. Restart recovery sends that line again
+ * (`resend`) instead of the resume note (2026-11-05).
+ */
+export type RestartLossCause = 'machine_reboot' | 'server_restart' | 'host_restart' | 'start_died';
 
 /** Work the dead process was carrying, read from the stream fold at its death. */
 export type RestartLostWork = 'turn' | 'background' | 'wakeup' | 'cron' | 'team';
@@ -2534,6 +2540,8 @@ export interface SessionRestartLoss {
   before?: { status?: string; lastActiveAt?: string; permission?: boolean };
   /** ISO time the resume message went out (state 'sent'). */
   sentAt?: string;
+  /** start_died: the held rows this recovery released (still its own until the session is back; a give-up parks those still queued). */
+  releasedIds?: string[];
   /**
    * The resume could not be delivered because the host's session daemon could
    * not take it (it could not start, or did not answer: on a Mac, the window

@@ -66,8 +66,23 @@ const SEND_LOST_LINE_CAPABILITY = 'send-lost-line-v1'
 const LINE_ANSWER_CAPABILITY = 'line-answer-v1'
 /** A `send` or `start` carrying `bootWait` waits through the boot of the CLI it starts. */
 const SEND_BOOT_WAIT_CAPABILITY = 'send-boot-wait-v1'
+/** Every write into a CLI still booting waits through its boot (daemon-capabilities.ts). */
+const WRITE_BOOT_WAIT_CAPABILITY = 'write-boot-wait-v1'
 
 export class RemoteSessionManager implements SessionManager {
+  /** When this manager's CLI was spawned (ms; 0 = attached, not spawned here). */
+  private _spawnedAtMs = 0
+
+  /**
+   * A write may wait for the CLI's boot (write-boot-wait-v1): only within the boot
+   * window after a spawn here. Past it the daemon answers within its plain write
+   * budget, and a daemon that does not answer must fail the send as fast as before.
+   */
+  private inBootWindow(conn: { hasCapability(name: string): boolean }): boolean {
+    return conn.hasCapability(WRITE_BOOT_WAIT_CAPABILITY)
+      && this._spawnedAtMs > 0 && Date.now() - this._spawnedAtMs < RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS
+  }
+
   /**
    * How long a send whose answer never came keeps asking the daemon (tests
    * shorten it). A reachable daemon answers the first ask within a second; this
@@ -424,6 +439,7 @@ export class RemoteSessionManager implements SessionManager {
     }
 
     this._pid = (result.pid as number) ?? null
+    this._spawnedAtMs = Date.now()
     this._remoteOutputFile = result.outputFile as string ?? null
     this._hasPipe = true
 
@@ -794,7 +810,11 @@ export class RemoteSessionManager implements SessionManager {
           const body = payload(conn!, confirmable && opts?.dedupe === true)
           return bootWait
             ? conn!.send('send', { ...body, bootWait: true }, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
-            : conn!.send('send', body)
+            // A daemon that waits through a boot for every write answers a send into
+            // a CLI still booting only once it read the line: wait as long.
+            : this.inBootWindow(conn!)
+              ? conn!.send('send', body, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
+              : conn!.send('send', body)
         })
         const reason = String(reply.reason || reply.error || '')
         if (reply.ok || (reason !== 'not_found' && reason !== 'not found')) return reply
@@ -1054,7 +1074,11 @@ export class RemoteSessionManager implements SessionManager {
     const conn = this.conn
     const sid = this._sid
     try {
-      const result = await conn.send('sendRaw', { sid, raw: json })
+      // write-boot-wait-v1: a raw line into a CLI still booting is answered once the
+      // CLI read it (a booted CLI answers within the plain 20s write budget).
+      const result = this.inBootWindow(conn)
+        ? await conn.send('sendRaw', { sid, raw: json }, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
+        : await conn.send('sendRaw', { sid, raw: json })
       if (result.ok) return true
       const reason = String(result.reason || result.error || '')
       // See note in send() for why partial_write must be treated as terminal.

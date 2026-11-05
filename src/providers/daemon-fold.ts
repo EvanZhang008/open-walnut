@@ -341,7 +341,13 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       if (typeof at === 'number' && at > next.wakeupAt) next.wakeupAt = at
       return next
     }
-    if (subtype === 'init') {
+    // walnutTurn: the daemon spawned this process to run a line it writes into its
+    // stdin (a start that carries its first message, or one that defers it to the
+    // send right after). The CLI shows nothing of that line until it has booted, and
+    // under load that took 25s (2026-11-05): read as idle, the boot window ended a
+    // turn that had not begun, a status question was written into the booting CLI,
+    // and the write that could not finish reaped it. Same anchor as the init.
+    if (subtype === 'init' || (subtype === 'walnut_process' && parsed.walnutTurn === true)) {
       // Anchor-equivalent: a new turn (or auto-continuation) began after that
       // result — it cannot be the current turn's verdict (inc-1783644415695).
       next.sawAnchor = true

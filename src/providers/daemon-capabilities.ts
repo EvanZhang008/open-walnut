@@ -629,6 +629,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // a 136MB transcript took 18 to 22s to read stdin and was killed twice). Optional:
   // without it the server sends neither the flag nor the longer wait.
   'send-boot-wait-v1',
+  // 'write-boot-wait-v1': EVERY write into a CLI this daemon spawned that has not
+  // shown its init waits through its boot the way a boot-wait send does: a raw line
+  // (`sendRaw`: a status question, a control response) and a later send too, so the
+  // client gives `sendRaw` the boot-wait answer time. And a start that carries its
+  // line (or defers it to the next send) marks its walnut_process line `walnutTurn`,
+  // so the fold reads the boot as the turn it is, not as an ended one (2026-11-05:
+  // a status question into a CLI still booting under load reaped it at 20s).
+  // Optional: without it the server keeps the plain 30s answer time.
+  'write-boot-wait-v1',
   // 'line-answer-v1': a dedupe send's fate tells a line the CLI took from one it
   // answered (line-fate-core.ts): ran/started carries answer 'yes' (the CLI
   // printed its answer) or 'pending' (the process running now took it and has not

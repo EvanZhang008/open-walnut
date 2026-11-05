@@ -1275,6 +1275,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         return { ok: false, reason: 'ENXIO', exitCode: session.exitCode }
       }
       if (result === 'EAGAIN') return { ok: false, reason: 'EAGAIN', retriable: true }
+      logger('warn', 'sendRaw: the CLI did not read the line in time', {
+        sid, pid: session.pid, bytes: buf.length,
+        sinceSpawnMs: typeof session.spawnTs === 'number' ? clock() - session.spawnTs : null, sawInit: session.sawInit ?? null,
+      })
       reapSession(sid, -1, 'sendRaw-partial-write')
       return { ok: false, reason: 'session_dead', exitCode: session.exitCode }
     } catch (err) {
@@ -1475,11 +1479,18 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
     // walnut client's 30s RPC timeout even when writes stack up.
-    let deadline = line?.deadlineAt ?? clock() + fifoWriteDeadlineMs
+    // write-boot-wait-v1: EVERY write into a CLI this daemon spawned that has not
+    // shown its init (a raw control line, a later send) waits through its boot, not
+    // only the boot-wait send. 2026-11-05: a 7KB status question written 5s after a
+    // spawn under load 300 filled the pipe of a CLI still booting, and 20s later the
+    // part-written line reaped it (exit -1, no transcript, every resume then "No
+    // conversation found"). Death still ends the wait at once (the abandon check).
+    const bootAt = line?.deadlineAt ?? bootWriteDeadline(session)
+    let deadline = bootAt ?? clock() + fifoWriteDeadlineMs
     // Behind a boot-wait write the chain wait can outlast this write's budget; past
     // it, one full pipe would reap the CLI that just booted (send-boot-wait-v1).
     const behindBoot = (session.fifoBootWaitUntil ?? 0) > clock()
-    if (line?.deadlineAt !== undefined) session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil ?? 0, line.deadlineAt)
+    if (bootAt !== undefined) session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil ?? 0, bootAt)
     const prev = session.fifoWriteChain ?? Promise.resolve()
     const run = prev.catch(() => {}).then(async () => {
       if (behindBoot) deadline = Math.max(deadline, clock() + fifoWriteDeadlineMs)
@@ -1520,7 +1531,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       result = await run
     } finally {
       // Settled: only writes queued while it waited count as behind it.
-      if (line?.deadlineAt !== undefined && session.fifoBootWaitUntil === line.deadlineAt) session.fifoBootWaitUntil = undefined
+      if (bootAt !== undefined && session.fifoBootWaitUntil === bootAt) session.fifoBootWaitUntil = undefined
     }
     // Drop the chain pointer once the tail settles so it doesn't grow unbounded.
     if (session.fifoWriteChain === run) session.fifoWriteChain = undefined

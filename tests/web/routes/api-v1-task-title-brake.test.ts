@@ -159,7 +159,8 @@ describe('POST /api/v1/tasks', () => {
     try {
       const { json } = await post({ title: LONG }, sid)
       expect(json.task.title).toBe(CUT)
-      await waitFor(async () => (await getTask(json.task.id)).title === 'Bakery site launch')
+      // The store write and its bus event land in either order under load: wait for both.
+      await waitFor(async () => (await getTask(json.task.id)).title === 'Bakery site launch' && renamed.includes('Bakery site launch'))
       expect(renamed).toContain('Bakery site launch')
       expect(backend.calls).toBe(1)
     } finally {

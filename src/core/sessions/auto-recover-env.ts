@@ -77,6 +77,8 @@ export interface AutoRecoverDeps {
   clearTimer: (handle: ReturnType<typeof setTimeout>) => void
   send: (sessionId: string, message: string, opts: { source: string; taskId?: string; messageId?: string }) => Promise<unknown>
   getSession: (sessionId: string) => Promise<SessionRecord | null>
+  /** The record without waiting; null when unknown or the store is not loaded yet. */
+  getSessionSync: (sessionId: string) => SessionRecord | null
   listSessions: () => Promise<SessionRecord[]>
   /** null = no such task (deleted). */
   getTask: (taskId: string) => Promise<AutoRecoverTask | null>
@@ -102,20 +104,65 @@ export interface AutoRecoverDeps {
   emitNote: (sessionId: string, taskId: string | undefined, message: string) => void
   /** Messages still waiting in the session's queue (a failed delivery puts its batch back). */
   pendingMessages: (sessionId: string) => Promise<number>
+  /** Rows still waiting or being written to the CLI (pending or processing). */
+  unsettledMessages: (sessionId: string) => Promise<number>
   /** Calls back with the error of each delivery to the session that failed and was put back; returns the unsubscribe. */
   onDeliveryFailed: (sessionId: string, cb: (error: string) => void) => () => void
   /** Remove one still-queued message (a resume that must not go out after the hand-back). */
   dropMessage: (sessionId: string, messageId: string) => Promise<void>
+  /** Release the rows a start death holds (session-queue-park.ts) and kick the delivery; returns their ids. */
+  releaseHeld: (sessionId: string, taskId: string | undefined) => Promise<string[]>
+  /** End a start death's hold without starting the session: put the rows back, or park them for a Retry. */
+  settleHeld: (sessionId: string, how: 'deliver' | { park: string }) => Promise<string[]>
+  /** Sessions that hold rows for a start death. */
+  sessionsWithHeld: () => Promise<string[]>
+  /** Park these rows for a Retry if they are still queued (never re-inserting one the CLI took). */
+  parkQueued: (sessionId: string, ids: string[], reason: string) => Promise<string[]>
 }
 
 export const LOCAL_HOST = '__local__'
 export const isLocalHost = (host: string | null | undefined): boolean => !host || host === LOCAL_HOST
+
+/** session-tracker, loaded once in the background (a static import would make a cycle). */
+function syncSessionGetter(): (sessionId: string) => SessionRecord | null {
+  let tracker: typeof import('../session-tracker.js') | null = null
+  void import('../session-tracker.js').then((m) => { tracker = m }).catch(() => {})
+  return (sessionId) => tracker?.getSessionByClaudeIdSync(sessionId) ?? null
+}
 
 export function defaultDeps(): AutoRecoverDeps {
   return {
     pendingMessages: async (sessionId) => {
       const { getQueue } = await import('../session-message-queue.js')
       return (await getQueue(sessionId).catch(() => [])).filter((m) => m.status === 'pending').length
+    },
+    unsettledMessages: async (sessionId) => {
+      const { getQueue } = await import('../session-message-queue.js')
+      return (await getQueue(sessionId).catch(() => [])).filter((m) => m.status === 'pending' || m.status === 'processing').length
+    },
+    releaseHeld: async (sessionId, taskId) => {
+      const { settleStartRecoveryHeld } = await import('../session-message-queue.js')
+      const ids = await settleStartRecoveryHeld(sessionId, 'deliver')
+      // A kick with no text: the queue holds the rows.
+      bus.emit(EventNames.SESSION_SEND, { sessionId, message: '', ...(taskId ? { taskId } : {}) }, ['session-runner'], { source: 'auto-recover' })
+      return ids
+    },
+    settleHeld: async (sessionId, how) => {
+      const { settleStartRecoveryHeld } = await import('../session-message-queue.js')
+      const ids = await settleStartRecoveryHeld(sessionId, how)
+      if (how === 'deliver' && ids.length > 0) bus.emit(EventNames.SESSION_SEND, { sessionId, message: '' }, ['session-runner'], { source: 'auto-recover' })
+      return ids
+    },
+    parkQueued: async (sessionId, ids, reason) => {
+      if (ids.length === 0) return []
+      const { getQueue, parkIfQueued } = await import('../session-message-queue.js')
+      // Only rows still waiting: one being written is the CLI's (a Retry would run it twice).
+      const rows = (await getQueue(sessionId)).filter((m) => ids.includes(m.id) && m.status === 'pending')
+      return (await parkIfQueued(rows, reason, { onlyPending: true })).map((m) => m.id)
+    },
+    sessionsWithHeld: async () => {
+      const { sessionsWithStartRecoveryHeld } = await import('../session-message-queue.js')
+      return sessionsWithStartRecoveryHeld()
     },
     dropMessage: async (sessionId, messageId) => {
       const { deleteMessage } = await import('../session-message-queue.js')
@@ -136,6 +183,7 @@ export function defaultDeps(): AutoRecoverDeps {
       const { sendMessageToSession } = await import('../session-message-queue.js')
       return sendMessageToSession(sessionId, message, opts)
     },
+    getSessionSync: syncSessionGetter(),
     getSession: async (sessionId) => {
       const { getSessionByClaudeId } = await import('../session-tracker.js')
       return getSessionByClaudeId(sessionId)

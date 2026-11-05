@@ -50,6 +50,12 @@ export interface SessionStartParams {
   queueWhenFull?: boolean;
 }
 
+/** Restart recovery holds this session's start: it sends its first line again by itself. */
+async function recoveryHolds(sessionId: string): Promise<boolean> {
+  const { getSessionAutoRecover } = await import('../session-auto-recover.js');
+  return !!getSessionAutoRecover()?.ownsStartDeath(sessionId);
+}
+
 export interface SessionStartResult {
   taskId: string;
   title: string;
@@ -449,6 +455,22 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         const message = err instanceof Error ? err.message : String(err);
         // A timeout does not prove the process never started; keep the start record and let the normal state reconciliation path confirm it.
         const uncertain = isDaemonCommandOutcomeUnknown(err);
+        // Its host could not be reached and restart recovery sends the first line again
+        // once it answers (sessions/start-recovery.ts): a start under way, not a failure
+        // for its caller or its asker. The runner took it on before it reported the failure.
+        const recovering = !uncertain && !!sid && await recoveryHolds(sid);
+        if (recovering) {
+          log.session.info('task start: its host could not be reached; restart recovery starts it again', { taskId: task.id, sessionId: sid, error: message.slice(0, 200) });
+          await settle({ state: 'unconfirmed', error: message });
+          // Not left at awaiting_spawn: the session did not start, and its host is the reason.
+          if (seeded) {
+            await updateSessionRecord(sid, {
+              process_status: 'error', errorMessage: message,
+              status_reason: 'remote_unreachable', status_changed_by: 'session-runner', errorKind: 'infra' as const,
+            }).catch(() => {});
+          }
+          return { ...result, sessionId: sid, started: false, starting: true };
+        }
         await settle({ state: uncertain ? 'unconfirmed' : 'failed', error: message });
         if (seeded && sid) {
           await updateSessionRecord(sid, {

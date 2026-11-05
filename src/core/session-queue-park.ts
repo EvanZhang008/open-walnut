@@ -90,7 +90,7 @@ export async function parkMessages(messages: QueuedMessage[], reason: string, st
 export async function parkIfQueued(
   messages: QueuedMessage[],
   reason: string,
-  opts?: { freshLine?: boolean; transcribed?: boolean },
+  opts?: { freshLine?: boolean; transcribed?: boolean; onlyPending?: boolean },
 ): Promise<QueuedMessage[]> {
   if (messages.length === 0) return [];
   const parkedAt = new Date().toISOString();
@@ -99,6 +99,8 @@ export async function parkIfQueued(
     for (const m of messages) {
       const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
       if (!row || row.status === 'parked') continue;
+      // Checked under the lock: a row a delivery took meanwhile is the CLI's now.
+      if (opts?.onlyPending && row.status !== 'pending') continue;
       row.status = 'parked';
       row.parkedAt = parkedAt;
       row.parkedReason = reason;
@@ -192,6 +194,117 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
   });
   if (ok) log.session.info('parked message un-parked by user action', { sessionId, messageId });
   return ok;
+}
+
+/**
+ * Start recovery (sessions/start-recovery.ts): a session's process ended before it
+ * read these rows (killed while it booted, or its start never reached its host).
+ * They wait here, unchanged (id, source, uuid, request), until restart recovery
+ * starts the session again and releases them, or gives up and parks them for a
+ * Retry. Not a delivery failure, so no asker is told. 2026-11-05: the first
+ * version sent a copy of the text instead, which lost it on every path that did
+ * not send and turned the user's own words into Walnut's.
+ */
+export const START_RECOVERY_HELD_REASON = 'Waiting for Walnut to start the session again: its process ended before it read this message';
+
+/** Hold `rows` for start recovery (re-inserting any a cleanup removed meanwhile). Returns the ids held. */
+export async function holdForStartRecovery(rows: QueuedMessage[]): Promise<string[]> {
+  if (rows.length === 0) return [];
+  const parkedAt = new Date().toISOString();
+  const held = await mutateStore((s) => {
+    const ids: string[] = [];
+    for (const m of rows) {
+      const queue = s.queues[m.sessionId] ?? (s.queues[m.sessionId] = []);
+      let row = queue.find((q) => q.id === m.id);
+      if (!row) {
+        row = { ...m };
+        queue.push(row);
+        queue.sort(compareEnqueueOrder);
+      }
+      if (row.status === 'parked' && row.parkedReason !== START_RECOVERY_HELD_REASON) continue;
+      row.status = 'parked';
+      row.parkedAt = parkedAt;
+      row.parkedReason = START_RECOVERY_HELD_REASON;
+      ids.push(row.id);
+    }
+    return ids;
+  });
+  if (held.length > 0) log.session.info('rows held for start recovery', { sessionId: rows[0].sessionId, messageIds: held });
+  return held;
+}
+
+/** The rows of a session held for start recovery. */
+export async function startRecoveryHeld(sessionId: string): Promise<QueuedMessage[]> {
+  const peek = await readQueueFileFresh();
+  return (peek.queues[sessionId] ?? []).filter((r) => r.status === 'parked' && r.parkedReason === START_RECOVERY_HELD_REASON);
+}
+
+/** Sessions that hold rows for start recovery (a restart's leftovers). */
+export async function sessionsWithStartRecoveryHeld(): Promise<string[]> {
+  const peek = await readQueueFileFresh();
+  return Object.entries(peek.queues)
+    .filter(([, rows]) => rows.some((r) => r.status === 'parked' && r.parkedReason === START_RECOVERY_HELD_REASON))
+    .map(([sid]) => sid);
+}
+
+/**
+ * End a start recovery hold: `deliver` puts the rows back to pending, as they were
+ * (the caller kicks the delivery); a `park` reason dead-letters them for a Retry and
+ * tells their askers. Returns the ids it moved.
+ */
+/**
+ * Rows a start death holds that its process read after all (its init came after its
+ * exit): they ran, so they leave the queue. A row already put back to pending by a
+ * racing settle goes too; one being written (processing) is the delivery's.
+ */
+export async function removeStartRecoveryRows(sessionId: string, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const removed = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return [] as string[];
+    const gone = (r: QueuedMessage) => ids.includes(r.id)
+      && (r.status === 'pending' || (r.status === 'parked' && r.parkedReason === START_RECOVERY_HELD_REASON));
+    const out = queue.filter(gone).map((r) => r.id);
+    s.queues[sessionId] = queue.filter((r) => !gone(r));
+    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
+    return out;
+  });
+  if (removed.length > 0) log.session.info('start recovery: rows its process read after all left the queue', { sessionId, messageIds: removed });
+  return removed;
+}
+
+export async function settleStartRecoveryHeld(sessionId: string, how: 'deliver' | { park: string }): Promise<string[]> {
+  const rows = await startRecoveryHeld(sessionId);
+  if (rows.length === 0) return [];
+  if (how !== 'deliver') {
+    const ids = rows.map((r) => r.id);
+    const parkedAt = new Date().toISOString();
+    const parked = await mutateStore((s) => {
+      const done: QueuedMessage[] = [];
+      for (const row of s.queues[sessionId] ?? []) {
+        if (!ids.includes(row.id) || row.status !== 'parked' || row.parkedReason !== START_RECOVERY_HELD_REASON) continue;
+        row.parkedAt = parkedAt;
+        row.parkedReason = how.park;
+        done.push(row);
+      }
+      return done;
+    });
+    logParked(parked, how.park);
+    return parked.map((r) => r.id);
+  }
+  const moved = await mutateStore((s) => {
+    const ids: string[] = [];
+    for (const row of s.queues[sessionId] ?? []) {
+      if (row.status !== 'parked' || row.parkedReason !== START_RECOVERY_HELD_REASON) continue;
+      row.status = 'pending';
+      delete row.parkedAt;
+      delete row.parkedReason;
+      ids.push(row.id);
+    }
+    return ids;
+  });
+  if (moved.length > 0) log.session.info('rows held for start recovery released', { sessionId, messageIds: moved });
+  return moved;
 }
 
 /**

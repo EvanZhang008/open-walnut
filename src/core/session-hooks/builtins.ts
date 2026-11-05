@@ -2400,6 +2400,13 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         log.session.info('turn-end notices held: the endpoint wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
         return;
       }
+      // Restart recovery continues this session (a restart killed it, or its process
+      // ended before it read its first line, sessions/start-recovery.ts): its askers
+      // hear of the turn that follows, never of a death Walnut is undoing.
+      if (outcome === 'error' && (await import('../session-auto-recover.js')).getSessionAutoRecover()?.holdsHandBack(record)) {
+        log.session.info('turn-end notices held: restart recovery continues this session', { sessionId: record.claudeSessionId, taskId: task?.id });
+        return;
+      }
     }
 
     // A turn that only made progress leaves the requests it owes open (sessions/request-progress.ts):

@@ -196,6 +196,36 @@ describe('foldLine — turn anchors', () => {
     expect(active.sawAnchor).toBe(true)
     expect(active.turnActive).toBe(true)
   })
+
+  // 2026-11-05: a start whose line the CLI had not read yet (25s boot under load)
+  // assembled idle from its spawn line alone; the server ended a turn that had not
+  // begun and wrote a status question into the booting CLI, which reaped it.
+  it('a spawn line marked walnutTurn opens the turn before the CLI shows anything', () => {
+    const spawn = JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: 42, walnutTurn: true })
+    const s = fold([spawn])
+    expect(s.turnActive).toBe(true)
+    expect(assembleSnapshot({ foldState: s, pendingCtrl: null, dead: false, pid: 42, exitCode: null }).cliState).toBe('running')
+    // The turn it opened settles on its own result, as any turn does.
+    const done = fold([spawn, initEvent(), resultEvent(), stateEvent('idle')])
+    expect(done.turnActive).toBe(false)
+    expect(done.lastResult).not.toBe(null)
+  })
+
+  it('a resume spawn marked walnutTurn is not judged by the previous process\'s result', () => {
+    const spawn = JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: 43, walnutTurn: true })
+    const s = fold([userEvent('earlier turn'), resultEvent(), spawn])
+    expect(s.lastResult).toBe(null)
+    expect(s.turnActive).toBe(true)
+  })
+
+  it('an idle spawn line (no walnutTurn: a restart that runs no turn) leaves the state as it was', () => {
+    const idle = fold([JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: 44 })])
+    expect(idle.sawAnchor).toBe(false)
+    expect(idle.turnActive).toBe(false)
+    const after = fold([userEvent('earlier turn'), resultEvent(), stateEvent('idle'), JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: 45 })])
+    expect(after.lastResult).not.toBe(null)
+    expect(after.turnActive).toBe(false)
+  })
 })
 
 // ── result / idle / running ──
@@ -1216,7 +1246,9 @@ describe('property — batch foldLines matches foldSessionTail verdict (3000 see
       else if (roll < 0.86) lines.push(notificationOriginResult())
       else if (roll < 0.92) lines.push(taskProgress(tid))
       else if (roll < 0.95) lines.push(wakeupResult(1_700_000_000_000 + Math.floor(rand() * 1e9)))
-      else lines.push(JSON.stringify({ type: 'stream_event', session_id: SID, event: { i } }))
+      else if (roll < 0.98) lines.push(JSON.stringify({ type: 'stream_event', session_id: SID, event: { i } }))
+      // A respawn on a line the daemon writes (walnutTurn, 2026-11-05): both folds read it as init.
+      else lines.push(JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: 4000 + i, walnutTurn: true }))
     }
     return { lines, anchorCount }
   }

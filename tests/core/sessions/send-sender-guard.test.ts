@@ -134,7 +134,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,
   'src/core/workspaces/manager.ts': 2,
-  'src/providers/claude-code-session.ts': 1,       // an ACP session's first line (framed by its start)
+  // an ACP session's first line (framed by its start); a textless kick for rows a late init put back
+  'src/providers/claude-code-session.ts': 2,
   'src/providers/subagent-runner.ts': 2,
   'src/web/routes/messages-v1.ts': 1,              // task_send: the caller session, or an automation, is the sender
   'src/web/routes/notifications.ts': 1,

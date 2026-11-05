@@ -163,6 +163,26 @@ function taskIdOfErrorKey(record: NotificationRecord): string | null {
  * settled is not re-armed. Only this Walnut's own cards: the trackers watch
  * this process, and a recovery it publishes never retires another instance's.
  */
+/**
+ * The sessions with an unresolved error card of this Walnut, by their task: the
+ * server's map that retires them when their task goes on in another session or
+ * completes (server.ts recoverSessionErrors) outlives a restart only through this.
+ */
+export async function unresolvedSessionErrorsByTask(): Promise<Array<{ taskId: string; sessionId: string }>> {
+  try {
+    const { feed } = await listNotifications();
+    const out: Array<{ taskId: string; sessionId: string }> = [];
+    for (const record of feed) {
+      if (record.kind !== 'operation-error' || record.resolved || !record.taskId || !writtenHere(record)) continue;
+      const sid = sessionIdOfErrorKey(record);
+      if (sid) out.push({ taskId: record.taskId, sessionId: sid });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export async function unresolvedErrorRecoveryKeys(): Promise<string[]> {
   try {
     const { feed } = await listNotifications();

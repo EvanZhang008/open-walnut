@@ -96,6 +96,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/org/org-store.ts': 1,
   'src/core/peers/envelope-kit.ts': 1,
   'src/core/phase.ts': 5,
+  // a picker: a start death the error edge already handed back is recovered as IN_PROGRESS
+  'src/core/session-auto-recover.ts': 1,
   // the mark a person's NEED_ACTION write leaves, which the derive reads as their ask
   'src/core/sessions/person-needs.ts': 3,
   // a precondition beside user_status (which decides): only a run its turn handed back is closed

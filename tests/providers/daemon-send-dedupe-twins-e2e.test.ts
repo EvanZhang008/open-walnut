@@ -204,6 +204,12 @@ async function start(dirs: Dirs, sid: string, lifecycle: boolean | string[], res
   expect(typeof pid).toBe('number')
   cliPids.add(pid)
   expect(await waitFor(() => fs.existsSync(r.outputFile as string) && fs.readFileSync(r.outputFile as string, 'utf8').includes('"init"'))).toBe(true)
+  // And the daemon has read it: until then a write into this CLI waits through its
+  // boot (write-boot-wait-v1), which a test of a booted CLI that stops reading is not about.
+  const sawInit = () => fs.readdirSync(dirs.daemon).filter((f) => f.endsWith('.log'))
+    .some((f) => fs.readFileSync(path.join(dirs.daemon, f), 'utf8').split('\n')
+      .some((l) => l.includes('"first init line from CLI"') && l.includes(`"sid":${JSON.stringify(sid)}`)))
+  expect(await waitFor(sawInit)).toBe(true)
   return { pid, outputFile: r.outputFile as string }
 }
 

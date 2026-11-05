@@ -6471,8 +6471,13 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // line-answer-v1: where this process's output begins, so a line an earlier process
   // took is never answered by this one's output (line-fate-core.ts lineFateScan). Silent
   // (no words, no uuid, no session_id). Written before the CLI boots. Keep in sync with
-  // daemon-source.ts.
-  try { fs.writeSync(outputFd, JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: proc.pid }) + '\n') } catch {}
+  // daemon-source.ts. walnutTurn: this process starts on the message below: the fold
+  // counts the turn as open from here, not from the init the CLI prints once it booted
+  // (daemon-fold.ts; 2026-11-05: a 25s boot read as an ended turn). Not for a
+  // deferMessage start (its line may never be written; its send's marker anchors),
+  // nor for a resume (the CLI may skip a line its transcript already has, by its uuid).
+  const turnOnSpawn = typeof message === 'string' && message.length > 0 && !resumesTranscript
+  try { fs.writeSync(outputFd, JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: proc.pid, ...(turnOnSpawn ? { walnutTurn: true } : {}) }) + '\n') } catch {}
 
   // Handle late spawn errors (shouldn't happen after pid is set, but defensive)
   proc.on('error', (err) => {
