@@ -51,6 +51,7 @@ import { randomUUID } from 'node:crypto'
 import { bus, EventNames } from './event-bus.js'
 import type { BusEvent } from './event-bus.js'
 import type { RestartLossCause, SessionRecord, SessionRestartLoss, StatusReason } from './types.js'
+import type { SessionSnapshot } from '../providers/daemon-fold.js'
 import { isInfraSessionError } from './session-error-kind.js'
 import {
   AUTO_RECOVER_SOURCE,
@@ -109,6 +110,8 @@ export class SessionAutoRecover {
   private readonly deps: AutoRecoverDeps
   /** Sessions being classified (stamp written, verdict not yet). */
   private readonly classifying = new Set<string>()
+  /** Deaths waiting to learn whether their host is shutting down (sessions/shutdown-death.ts). */
+  private readonly shutdownChecks = new Set<string>()
   private readonly queue = new Map<string, QueueItem>()
   private readonly inFlight = new Map<string, Set<string>>()
   private readonly hostNextStart = new Map<string, number>()
@@ -130,7 +133,7 @@ export class SessionAutoRecover {
   }
 
   private tracked(sid: string): boolean {
-    if (this.classifying.has(sid) || this.queue.has(sid)) return true
+    if (this.classifying.has(sid) || this.shutdownChecks.has(sid) || this.queue.has(sid)) return true
     for (const set of this.inFlight.values()) if (set.has(sid)) return true
     return false
   }
@@ -242,6 +245,106 @@ export class SessionAutoRecover {
     return this.noteLoss(record, lossCause, record, { fallbackInFlight: true })
   }
 
+  /**
+   * A death edge that may be its host's own shutdown (sessions/shutdown-death.ts):
+   * hold the hand-back while the shutdown shows itself. With a witness the death
+   * is a restart loss and is classified; with none after `checkMs` the process
+   * died on its own and the task is handed back. Returns true when held.
+   */
+  holdForShutdownCheck(
+    record: SessionRecord,
+    witness: (r: SessionRecord) => Promise<string | null>,
+    checkMs: number,
+  ): boolean {
+    const sid = record.claudeSessionId
+    if (this.shutdownChecks.has(sid)) return true
+    if (!this.wouldAttempt(record, { requireInfra: false }).ok) return false
+    this.shutdownChecks.add(sid)
+    void this.runShutdownCheck(record, witness, checkMs)
+      .catch(async (err) => {
+        log.session.warn('restart recovery: shutdown check failed', {
+          sessionId: sid, error: err instanceof Error ? err.message : String(err),
+        })
+        this.shutdownChecks.delete(sid)
+        await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'pending' ? { ...cur, state: 'skipped', reason: 'its death could not be checked' } : cur).catch(() => undefined)
+        await this.handBackIfOpen(record).catch(() => undefined)
+      })
+      .finally(() => this.shutdownChecks.delete(sid))
+    return true
+  }
+
+  private async runShutdownCheck(
+    record: SessionRecord,
+    witness: (r: SessionRecord) => Promise<string | null>,
+    checkMs: number,
+  ): Promise<void> {
+    const sid = record.claudeSessionId
+    const start = this.deps.now()
+    const cause: RestartLossCause = isLocalHost(record.host) ? 'server_restart' : 'host_restart'
+    // On disk before anything waits, the host's answer included (a daemon going
+    // down with the computer may never answer): a server that dies inside the
+    // check leaves the death to the next boot's resumeUnfinished. With no fold
+    // the death edge is all there is, taken to have cut work short.
+    const before: LossBefore = { status: 'running', lastActiveAt: record.lastActiveAt, permission: !!record.pendingPermission }
+    await this.deps.patchLoss(sid, () => ({ at: new Date(start).toISOString(), cause, lost: [], state: 'pending', before }))
+    // The host may still answer now and not in a moment: ask it while the check runs.
+    const answer: { snap?: SessionSnapshot | null } = {}
+    void this.deps.fetchSnapshot(record).then((v) => { answer.snap = v ?? null }, () => { answer.snap = null })
+    let seen: string | null = null
+    for (;;) {
+      const snap = answer.snap
+      if (snap && snap.cliState !== 'dead') {
+        // Not a death (an error its process lived through): the edge's own hand-back.
+        log.session.info('restart recovery: shutdown check found the process alive', { sessionId: sid })
+        await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'pending' ? { ...cur, state: 'skipped', reason: 'process is alive', told: true } : cur)
+        this.shutdownChecks.delete(sid)
+        await this.handBackIfOpen(record)
+        return
+      }
+      seen = seen ?? await witness(record)
+      // A witness waits for the host's answer only while the window runs.
+      if ((seen && 'snap' in answer) || this.stopped || this.deps.now() - start >= checkMs) break
+      await new Promise<void>((resolve) => { this.deps.setTimer(resolve, Math.min(seen ? 250 : 1_000, Math.max(0, checkMs - (this.deps.now() - start)))) })
+    }
+    if (seen === 'server_stopping' || this.stopped) {
+      // This server is going away with the computer: the next boot classifies
+      // the stamp, knowing the reboot it could not see yet.
+      log.session.info('restart recovery: death is the host\'s shutdown, left to the next boot', {
+        sessionId: sid, taskId: record.taskId ?? null, witness: seen,
+      })
+      return
+    }
+    const latest = (await this.deps.getSession(sid)) ?? record
+    if (seen) {
+      log.session.info('restart recovery: death is the host\'s shutdown', {
+        sessionId: sid, taskId: record.taskId ?? null, host: record.host ?? null, witness: seen,
+      })
+      if (answer.snap) {
+        const facts = factsFromSnapshot(answer.snap, Date.parse(record.lastActiveAt ?? ''))
+        before.status = lostWork(facts).length === 0 ? 'idle' : 'running'
+        before.permission = facts.pendingPermission
+      }
+      this.shutdownChecks.delete(sid)
+      this.startClassify(latest, cause, before, false)
+      return
+    }
+    log.session.info('restart recovery: no shutdown, the process died on its own', {
+      sessionId: sid, taskId: record.taskId ?? null, host: record.host ?? null,
+    })
+    await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'pending'
+      ? { ...cur, state: 'skipped', reason: 'no shutdown: the process died on its own', ...(latest.statusRevision !== undefined ? { revision: latest.statusRevision } : {}) }
+      : cur)
+    this.shutdownChecks.delete(sid)
+    await this.handBackIfOpen(record)
+  }
+
+  private async handBackIfOpen(record: SessionRecord): Promise<void> {
+    const task = record.taskId ? await this.deps.getTask(record.taskId) : null
+    if (record.taskId && (task?.phase === 'IN_PROGRESS' || task?.phase === 'TODO')) {
+      await this.deps.handBack(record.taskId, record.claudeSessionId)
+    }
+  }
+
   private async classify(record: SessionRecord, cause: RestartLossCause, before: LossBefore, fallbackInFlight: boolean): Promise<void> {
     const sid = record.claudeSessionId
     const taskId = record.taskId!
@@ -349,6 +452,11 @@ export class SessionAutoRecover {
       if (loss.state === 'pending') {
         this.startClassify(rec, loss.cause, before, false)
       } else {
+        // Queued on the way down (sessions/shutdown-death.ts): the machine then rebooted, which that server could not see.
+        const boot = this.deps.bootTimeMs()
+        if (isLocalHost(rec.host) && loss.cause === 'server_restart' && Number.isFinite(boot) && boot > lossClock(loss)) {
+          await this.deps.patchLoss(sid, (cur) => cur && { ...cur, cause: 'machine_reboot', bootAt: new Date(boot).toISOString() })
+        }
         this.enqueue(sid, rec.host, resumePriority(loss, Date.parse(before.lastActiveAt ?? '')), this.deps.now() + this.cfg.delayMs)
       }
     }

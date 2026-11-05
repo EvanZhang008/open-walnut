@@ -516,7 +516,14 @@ async function restartRecoveryHolds(sessionId: string, processDied: boolean): Pr
     const dead = rec.process_status === 'stopped' || rec.process_status === 'error'
     if (!dead && !processDied) return false
     const { getSessionAutoRecover } = await import('./session-auto-recover.js')
-    return getSessionAutoRecover()?.holdsHandBack(rec) === true
+    const recovery = getSessionAutoRecover()
+    if (!recovery) return false
+    if (recovery.holdsHandBack(rec)) return true
+    // A death no one asked for may be its host's own shutdown: held until that
+    // shows or the check says it died on its own (sessions/shutdown-death.ts).
+    const { shutdownCheckApplies, shutdownWitness, shutdownCheckMs } = await import('./sessions/shutdown-death.js')
+    if (!shutdownCheckApplies(rec, processDied) || await endedByIdleReap(sessionId)) return false
+    return recovery.holdForShutdownCheck(rec, shutdownWitness, shutdownCheckMs())
   } catch {
     return false
   }

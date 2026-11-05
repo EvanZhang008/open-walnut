@@ -5,6 +5,7 @@
  * and serves static files in production mode.
  */
 
+import { markServerStopping, resetServerStopping } from '../core/sessions/shutdown-death.js'
 import { serverBindAddress } from './bind-address.js'
 import { createServer, type Server as HttpServer } from 'node:http'
 import { attachClientErrorAnswer } from './client-error-answer.js'
@@ -1094,6 +1095,7 @@ let serverPortHold: import('./port-hold.js').PortHold | null = null
  * Returns the running HTTP server instance.
  */
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
+  resetServerStopping()
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
   // Bound before the first await: a stopServer or a newer boot from here on overtakes this
   // one's lane. An older boot's lane (its listener and timer) stops in this same tick.
@@ -6733,6 +6735,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   localDaemonLaneOwner++
   localDaemonLane?.stop()
   localDaemonLane = null
+  // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
+  markServerStopping()
   // A boot stopped before it listened leaves its port held.
   void serverPortHold?.release()
   serverPortHold = null

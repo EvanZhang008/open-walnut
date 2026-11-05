@@ -7916,6 +7916,21 @@ export function getDaemonDisconnectedSince(hostKey: string): number | null {
   return connectionPool.get(hostKey)?.disconnectedSince ?? null
 }
 
+/**
+ * When the host's daemon link that was up went down, or null: a link up now, or
+ * one never made. Looks through the direct pool too, where the local daemon's
+ * connection is keyed `direct:<wsUrl>` (sessions/shutdown-death.ts).
+ */
+export function daemonLinkLostSince(hostKey: string): number | null {
+  let lost: number | null = null
+  for (const [key, conn] of connectionPool) {
+    if (key !== hostKey && !(key.startsWith('direct:') && conn.host === hostKey)) continue
+    if (conn.connected) return null
+    if (conn.disconnectedSince != null) lost = lost == null ? conn.disconnectedSince : Math.min(lost, conn.disconnectedSince)
+  }
+  return lost
+}
+
 /** Awake time the host's link has been down (0 while up or unknown): DaemonConnection.disconnectedAwakeMs. */
 export function getDaemonDisconnectedAwakeMs(hostKey: string): number {
   return connectionPool.get(hostKey)?.disconnectedAwakeMs() ?? 0

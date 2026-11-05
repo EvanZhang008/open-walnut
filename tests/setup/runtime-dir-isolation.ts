@@ -147,6 +147,13 @@ if (process.env.WALNUT_ORG_AUTOSTART === undefined) {
   process.env.WALNUT_ORG_AUTOSTART = '0'
 }
 
+// A session death is held up to 15 s while restart recovery checks whether its host is
+// shutting down (src/core/sessions/shutdown-death.ts): every test that kills a session would
+// wait that long for its hand-back. The shutdown drills set this to '1' themselves.
+if (process.env.WALNUT_SHUTDOWN_CHECK === undefined) {
+  process.env.WALNUT_SHUTDOWN_CHECK = '0'
+}
+
 // A start the running-subtask cap queued begins by itself once a sibling stops running
 // (src/core/sessions/start-queue.ts): a test that fills the cap and then moves a sibling would
 // otherwise spawn a CLI it never asked for. The start-queue tests drive the drain directly, or
