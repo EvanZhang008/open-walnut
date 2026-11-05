@@ -1,5 +1,6 @@
 import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
 import type { TaskResultReport } from './peers/structured-reply.js';
+import type { AskAnswer } from './same-ask.js';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 /**
  * The one state field. WAITING (added 0.5.2) is a task set aside until something
@@ -1008,6 +1009,10 @@ export interface Task {
   /** The session's own plain-words report of its last turn for the user (the self-report's
    *  FOR_USER_* lines): state, ask, what it waits on, now, next, when. Local-only, payload blob. */
   status_report?: StatusReport;
+  /** Its question to the user that a lead, VP or Main answered in the user's place (task_send
+   *  answers_ask, sessions/ask-answer.ts): while it asks the same, it is not Needs you
+   *  (same-ask.ts answeredAbove). Local-only, payload blob. */
+  ask_answered?: AskAnswer;
   /** The ONE status the user sees (src/core/user-status.ts), derived on the server from the
    *  phase, the live session, open letters, Board choices, reply requests, triggers and
    *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task

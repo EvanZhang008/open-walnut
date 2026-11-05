@@ -128,8 +128,34 @@ export function needsRowLine(status: UserStatus): { category: NeedsCategory; lab
 export const needsLineText = (l: { label: string; text: string }): string => (l.text ? `${l.label}: ${l.text}` : l.label);
 
 /** A waiting row's one line: "Waiting on another task: …", "Nothing will wake it. …", "Not started yet". */
+/**
+ * A row that waits because its decision shows elsewhere (same-ask.ts): who or where first, in a few
+ * words, since a row shows one line (2026-11-05 UI review: "Waiting on the same decisio..." hid
+ * which task asks it and who answered). The full sentence is waitingSentence, the row's hover text.
+ */
+export function sameAskLine(status: UserStatus): string {
+  if (status.state !== 'waiting') return '';
+  const name = (t: string) => `"${t.replace(/\s+/g, ' ').slice(0, 80)}"`;
+  if (status.answeredFor) {
+    const answer = (status.waitingOn ?? '').split(' for you: ')[1]?.trim();
+    return `Answered by ${status.answeredFor.byTitle.replace(/\s+/g, ' ').slice(0, 80)}${answer ? `: ${answer}` : ''}`;
+  }
+  const fold = status.sameAsk;
+  if (!fold) return '';
+  if (fold.answered) return `Answered in ${name(fold.title)}`;
+  return `Same decision in ${fold.team ? '' : 'its subtask '}${name(fold.title)}`;
+}
+
+/** The whole sentence of what a waiting row waits on, for its hover text. */
+export function waitingSentence(status: UserStatus): string {
+  const on = (status.waitingOn ?? '').trim();
+  return on ? `Waiting on ${on.charAt(0).toLowerCase()}${on.slice(1)}` : '';
+}
+
 export function waitingLine(status: UserStatus, formatUntil: (iso: string) => string): string {
   const on = (status.waitingOn ?? '').trim();
+  const short = sameAskLine(status);
+  if (short) return short;
   if (status.kind === 'stuck') return on ? `Nothing will wake it. ${on}` : 'Nothing will wake it.';
   if (status.kind === 'not-started') return on || 'Not started yet';
   if (status.kind === 'time' && status.until) return `Waiting until ${formatUntil(status.until)}`;

@@ -82,12 +82,15 @@ describe('a re-check pass', () => {
 })
 
 describe('a trigger armed to watch the ask (trigger_create watches:"ask")', () => {
-  it('keeps the re-check quiet while it is armed; paused, stopped or gone, the re-check comes back', async () => {
-    tasks.set('old', { ...tasks.get('old')!, recheck_watch: [{ trigger: 'tr-1', watches: 'ask', at: ago(1000) }] })
+  it('keeps the re-check quiet by checking: each run is the ask\'s check; armed but not checking, the re-check comes', async () => {
+    const old = tasks.get('old')!
+    tasks.set('old', { ...old, recheck_watch: [{ trigger: 'tr-1', watches: 'ask', at: ago(1000) }] })
     routines = [{ id: 'tr-1', enabled: true }]
-    expect(await runNeedsRecheck(NOW)).toEqual([])
-    routines = [{ id: 'tr-1', enabled: false, state: { consecutiveErrors: 5 } }]
+    // Armed, but its runs never stamped the ask (2026-11-04: such asks read NOT VERIFIED for days): due.
     expect(await runNeedsRecheck(NOW)).toEqual(['old'])
+    // Its run 10 minutes ago is the ask's last check (the sync's stampChecked): quiet.
+    tasks.set('old', { ...old, needs_recheck: null, recheck_watch: [{ trigger: 'tr-1', watches: 'ask', at: ago(1000) }], user_status: { ...old.user_status!, checkedAt: ago(10 * 60_000), checkedBy: 'check' } })
+    expect(await runNeedsRecheck(NOW)).toEqual([])
   })
 
   it('a watch of a letter does not cover the ask, and the note offers agent-ack for no change', async () => {

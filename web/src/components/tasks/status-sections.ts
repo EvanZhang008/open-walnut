@@ -27,7 +27,7 @@
 import type { Task } from '@open-walnut/core';
 import { taskUserState } from '@/utils/session-status';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, needsLineOf, shownState, type NeedsCategory } from '@open-walnut/user-status';
-import { waitingLine } from '../board/board-status-model';
+import { sameAskLine, waitingLine, waitingSentence } from '../board/board-status-model';
 import { recentActivityTime } from './recent-activity-time';
 
 export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done';
@@ -93,6 +93,12 @@ export function waitingReason(task: Task, formatUntil: (iso: string) => string):
     return [on || 'A set time', when].filter(Boolean).join(', ');
   }
   return waitingLine(us, formatUntil);
+}
+
+/** A waiting row's hover text: the whole sentence when its line is the short form (sameAskLine). */
+export function waitingHover(task: Task, formatUntil: (iso: string) => string): string {
+  const us = task.user_status;
+  return us && !us.snoozed && sameAskLine(us) ? waitingSentence(us) : waitingReason(task, formatUntil);
 }
 
 /** Where a row goes in a design with no state sections for open work (By project, and the

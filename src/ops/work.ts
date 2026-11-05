@@ -49,6 +49,7 @@ defineOp({
     '(what is not done or not checked); a non-empty not_done shows the reply as Partial on the Board and in the Brief, ' +
     'so list there anything left over instead of burying it in the text. ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
+    'When you decide in the user\'s place a question a task below you is asking the user, pass answers_ask=true: the user sees that ask no more, and the task is told once. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
     'A COMPLETE task returns 409 target_complete: its work is done and a message would reopen it. ' +
     'Send to it only when it must act again, with force=true and a reason saying why; the reason leads the message. ' +
@@ -64,6 +65,12 @@ defineOp({
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
     hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it'),
+    answers_ask: z.boolean().optional().describe(
+      'This message decides the question the target task is asking the user, in the user\'s place (you are a task it is under, its lead or VP, or Main). '
+      + 'Walnut takes that ask off the user\'s Needs you and leads your message with one line telling the task so. 409 not_above when the task is not below you, '
+      + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves'),
+    user_words: z.string().min(10).max(2000).optional().describe(
+      'With answers_ask on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step): the user\'s own words you act on, quoted exactly'),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
@@ -96,6 +103,7 @@ defineOp({
         + (Array.isArray(b.answeredFor) && b.answeredFor.length
           ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
           : '')
+        + (args.answers_ask === true ? ' It answers that task\'s ask of the user: Walnut took it off the user\'s Needs you and told the task.' : '')
         + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
         + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
           ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`

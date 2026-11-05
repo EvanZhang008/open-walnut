@@ -38,7 +38,7 @@ describe('the shown status folds a same ask', () => {
     expect(callers, 'a new caller of deriveUserStatus must go through statusOf (user-status-sync.ts), which folds a same ask').toEqual(['src/core/user-status-sync.ts'])
     const sync = code('src/core/user-status-sync.ts')
     expect(sync.match(/deriveUserStatus\(/g)).toHaveLength(1)
-    expect(sync).toMatch(/export function statusOf[\s\S]*?deriveUserStatus\([\s\S]*?foldSameAsk\(/)
+    expect(sync).toMatch(/export function statusOf[\s\S]*?deriveUserStatus\([\s\S]*?foldSameAsk\([\s\S]*?relatives:[\s\S]*?answeredAbove\(/)
     expect(code('src/core/status-consistency.ts')).toContain('statusOf(')
   })
 
@@ -101,5 +101,21 @@ describe('every write that asks the user is checked', () => {
     const store = code('src/core/org/threads-store.ts')
     expect(store).toMatch(/export async function openNodeThread[\s\S]*?refuseSameAskThread\([\s\S]*?openThread\(/)
     expect(store).toMatch(/export async function patchThread[\s\S]*?refuseSameAskThread\([\s\S]*?updateThread\(/)
+  })
+})
+
+describe('an ask answered above it', () => {
+  it('only ask-answer.ts records an answer, and only through task_send answers_ask', () => {
+    expect(filesWith(/[{,]\s*ask_answered\s*:/), 'a new writer of Task.ask_answered: go through sessions/ask-answer.ts (it checks the sender stands above the task and tells it once)')
+      .toEqual(['src/core/sessions/ask-answer.ts'])
+    expect(code('src/core/sessions/session-send-core.ts')).toMatch(/export async function performSessionSend[\s\S]*?answersAsk[\s\S]*?prepareAskAnswer\([\s\S]*?performPlainSend\([\s\S]*?commit\(\)/)
+    expect(code('src/web/routes/messages-v1.ts')).toContain('answersAsk: b.answers_ask === true')
+    expect(code('src/ops/work.ts')).toContain('answers_ask:')
+  })
+
+  it('Main and every lead are told to answer that way, and every session not to ask what was decided', async () => {
+    const { DEFAULT_ORG_INSTRUCTIONS } = await import('../../src/core/org/core-instructions.js')
+    for (const [role, text] of Object.entries(DEFAULT_ORG_INSTRUCTIONS)) expect(text, role).toContain('answers_ask=true')
+    expect(code('src/core/session-hooks/builtins.ts')).toContain('Never a question your lead, a VP or Main already decided for the user')
   })
 })

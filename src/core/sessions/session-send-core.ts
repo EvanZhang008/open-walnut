@@ -59,7 +59,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -98,6 +98,11 @@ export interface SessionSendInput {
   /** A reply's structured fields (peers/structured-reply.ts): `inReplyTo` sends only. The asker
    *  reads them as sections of the text; a non-empty `not_done` marks the reply Partial. */
   reply?: { result?: unknown; evidence?: unknown; not_done?: unknown };
+  /** This message answers the target's open question to the user, in the user's place
+   *  (sessions/ask-answer.ts): only from a task above it, its lead or VP, Main, or the person. */
+  answersAsk?: boolean;
+  /** With answersAsk on an ask only the user approves: their own words it acts on. */
+  userWords?: string;
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
   callerSid?: string;
   /** Walnut itself sends this (a start that continues a task's conversation, on behalf of a routine, a
@@ -520,6 +525,40 @@ async function callerLeads(caller: CallerIdentity, taskId: string | undefined): 
 
 /** The one send entry point (route + gateway both land here). */
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
+  if (!input.answersAsk) return performPlainSend(input);
+  // An answer for the user (ask-answer.ts): checked and led by Walnut's line, then recorded.
+  const caller = await resolveCaller(input.callerSid);
+  if (caller.kind === 'external' || (caller.kind === 'session' && !caller.record.taskId)) {
+    throw new SendError('bad_request', 'answers_ask needs a task\'s session or the person as the sender');
+  }
+  let targetTaskId: string | undefined;
+  if (input.inReplyTo) {
+    const { getSessionRequest } = await import('../session-requests.js');
+    const asked = await getSessionRequest(input.inReplyTo);
+    if (asked) {
+      const { getSessionByClaudeId } = await import('../session-tracker.js');
+      targetTaskId = (await getSessionByClaudeId(asked.fromSessionId).catch(() => undefined))?.taskId;
+    }
+  } else if (input.to) {
+    // A target that cannot be reached fails here as the send would, never as a plain send.
+    const t = await resolveSendTarget(input.to);
+    targetTaskId = t.taskId ?? t.session.taskId;
+  }
+  const { prepareAskAnswer, AskAnswerError } = await import('./ask-answer.js');
+  const words = input.text?.trim() || (typeof input.reply?.result === 'string' ? input.reply.result : '');
+  let prepared: Awaited<ReturnType<typeof prepareAskAnswer>>;
+  try {
+    prepared = await prepareAskAnswer(caller.kind === 'session' ? caller.record.taskId! : null, targetTaskId, words, input.userWords);
+  } catch (err) {
+    if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
+    throw err;
+  }
+  const result = await performPlainSend({ ...input, answersAsk: false, text: input.text?.trim() ? `${prepared.line}\n\n${input.text}` : prepared.line });
+  await prepared.commit();
+  return result;
+}
+
+async function performPlainSend(input: SessionSendInput): Promise<SessionSendResult> {
   const { readStructuredReply, composeReplyText } = await import('../peers/structured-reply.js');
   const fields = input.reply ? readStructuredReply(input.reply) : null;
   if (fields && !input.inReplyTo) {

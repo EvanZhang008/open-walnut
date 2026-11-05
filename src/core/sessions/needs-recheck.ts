@@ -10,8 +10,11 @@
  * Walnut, carry on if so, and arm a check if one can be scripted. Its turn-end report then states
  * the ask again (checked now) or moves on. A trigger of the task does not exempt it: it watches
  * the task, maybe not this ask; one the session armed to watch it (trigger_create watches:"ask")
- * does, while it is armed (recheck-watch.ts). At most MAX_RECHECKS in a row while it keeps asking the user
- * (reworded or not); after that it shows as not verified until someone looks. Primary only; an
+ * checks it each time it runs, which counts as the last check (user-status.ts stampChecked), so a
+ * watch that keeps running keeps the re-check away and one that stopped running brings it back.
+ * MAX_RECHECKS in a row every NEEDS_RECHECK_MS while it keeps asking the user (reworded or not),
+ * then once a day (RECHECK_AFTER_CAP_MS), never stopping (2026-11-04, Main's reflection: asks sat
+ * NOT VERIFIED for 18 to 21 hours, one for five days, until Main chased each one). Primary only; an
  * ephemeral server never wakes a task for a status it copied from the real Walnut. The task's open
  * decision letters to the user ride the same clock (letter-recheck.ts), and so does a Board choice
  * that asks the user about it: its Board owner is asked to confirm or remove it (choiceRecheckBody).
@@ -25,6 +28,8 @@ import { snoozeEndedMs } from '../snooze.js';
  *  verified a little later, once the re-check had its turn). */
 export { NEEDS_RECHECK_MS };
 export const MAX_RECHECKS = 6;
+/** After MAX_RECHECKS in a row, the re-check comes once a day: no ask reads NOT VERIFIED longer. */
+export const RECHECK_AFTER_CAP_MS = 24 * 60 * 60_000;
 const SCAN_MS = Math.min(10 * 60_000, NEEDS_RECHECK_MS / 4);
 /** After boot, once the hosts had a moment to connect (the host checks read where tasks run). */
 const BOOT_SWEEP_DELAY_MS = 30_000;
@@ -47,7 +52,7 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
     'The user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone, a review), and nothing told you. Check it now yourself: run the command, look for the file, read the letter, the review or the state it needed.',
     'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why). '
       + 'Still needed and nothing changed: answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, so the user\'s chat does not repeat the same status; your report still counts as checked now. '
-      + 'If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false, watches:"ask") so you hear the moment it is, and this re-check stays quiet while it is armed.',
+      + 'If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false, watches:"ask") so you hear the moment it is: each run of its check counts as this ask\'s check, and this re-check stays quiet while it keeps running.',
   ].join('\n');
 }
 
@@ -100,8 +105,8 @@ export function recheckDue(task: Pick<Task, 'phase' | 'status' | 'user_status' |
   if (opts.notBefore !== undefined && checked < opts.notBefore) return false;
   const last = task.needs_recheck;
   if (last) {
-    if (last.count >= MAX_RECHECKS) return false;
-    if (opts.nowMs - Date.parse(last.at) < NEEDS_RECHECK_MS) return false;
+    const gap = last.count >= MAX_RECHECKS ? RECHECK_AFTER_CAP_MS : NEEDS_RECHECK_MS;
+    if (opts.nowMs - Date.parse(last.at) < gap) return false;
   }
   return true;
 }
@@ -113,8 +118,6 @@ let ephemeral = false;
 /** One pass: wake each task due a re-check. Exported for tests. */
 export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
   const woken: string[] = [];
-  // The triggers polling now, read once a pass and only when a task names one.
-  let live: Set<string> | undefined;
   try {
     const { listTasks, updateTaskRaw } = await import('../task-manager.js');
     const all = await listTasks();
@@ -134,19 +137,13 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
       }
       const source = task.user_status?.source;
       if (task.plugin_only || task.user_status?.state !== 'needs' || (source !== 'session' && source !== 'choice')) continue;
-      // A trigger of the task does not exempt it (it watches the task, maybe not this ask), unless
-      // the session armed it to watch this ask (trigger_create watches:"ask", recheck-watch.ts).
+      // A trigger of the task does not exempt it (it watches the task, maybe not this ask); one the
+      // session armed to watch this ask stamps its check (recheck-watch.ts, stampChecked).
       if (!recheckDue(task, { nowMs, snoozeEndedMs: snoozeEndedMs(task, byId, nowMs), unknownSince: startedAt || nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
       if (quieted.has(task.id)) continue;
-      if (task.recheck_watch?.length) {
-        const { liveTriggerIds, watchedBy } = await import('./recheck-watch.js');
-        live ??= await liveTriggerIds().catch(() => new Set<string>());
-        const watch = watchedBy(task, 'ask', live);
-        if (watch) {
-          log.task.debug('needs-you re-check skipped: a trigger watches the ask', { taskId: task.id, trigger: watch.trigger });
-          continue;
-        }
-      }
+      // A trigger watching the ask needs no skip here: each run it makes is the ask's last check
+      // (checkedAt), so it is due only once that trigger stopped checking (2026-11-04: a skip on
+      // any live watch kept asks NOT VERIFIED for days behind triggers that checked nothing new).
       const ask = task.user_status!.ask!;
       // A Board choice is its Board owner's to confirm or remove: that session gets the note.
       const choice = source === 'choice' ? task.user_status!.choice : undefined;

@@ -4,8 +4,9 @@
  * Pure. Non-ASCII strings below are test data (CJK asks), written as \u escapes.
  */
 import { describe, it, expect } from 'vitest'
-import { askKey, foldSameAsk, sameAskText, findSameAsk, sameAskMessage, sameAskReasonOf } from '../../src/core/same-ask.js'
-import { treeAround, treeAsksOf } from '../../src/core/same-ask-tree.js'
+import { answeredAbove, askKey, foldSameAsk, sameAskText, findSameAsk, sameAskMessage, sameAskReasonOf } from '../../src/core/same-ask.js'
+import { relativeAsksIndex, teamKeysOf, teammatesIndex, treeAround, treeAsksOf } from '../../src/core/same-ask-tree.js'
+import { standsAbove } from '../../src/core/sessions/ask-answer.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import type { RolledAsk, UserStatus } from '../../src/core/user-status.js'
 import type { Task } from '../../src/core/types.js'
@@ -99,7 +100,7 @@ describe('foldSameAsk', () => {
     // The user wrote to the subtask after the fold: the answer went there, until the lead reports anew.
     const after = foldSameAsk('lead', own, [], { report, prev: folded, personInputAt: () => '2026-11-04T10:06:00.000Z' })
     expect(after).toMatchObject({ state: 'waiting', kind: 'task', sameAsk: { id: 'child', answered: true } })
-    expect(after.waitingOn).toContain('you answered it there')
+    expect(after.waitingOn).toContain('the same decision, answered in')
     expect(foldSameAsk('lead', own, [], { report, prev: after })).toMatchObject({ sameAsk: { answered: true } })
     expect(foldSameAsk('lead', own, [], { report: { at: '2026-11-04T12:00:00.000Z' }, prev: after })).toBe(own)
     // No word from the user (the subtask was moved away, snoozed, or asks something else): its own ask is back.
@@ -168,5 +169,138 @@ describe('the turn-end report', () => {
 describe('askKey', () => {
   it('folds case, width and spacing', () => {
     expect(askKey('  Create   THE accounts? ')).toBe(askKey('create the accounts'))
+  })
+})
+
+// ── Teammates beside each other (2026-11-04, a VP's reflection: a lead and the review task beside
+// it asked the user the same design decision with opposite picks) ──
+
+describe('foldSameAsk beside it in its team', () => {
+  const report = { at: '2026-11-04T10:00:00.000Z' }
+  const NOW = '2026-11-04T10:05:00.000Z'
+  const ASK = 'Should the handler wait for the plugin rollout?'
+  const sib = { id: 'sib', title: 'CR reviews', ask: 'Should the handler wait for the plugin rollout', createdAt: '2026-11-01T00:00:00.000Z' }
+
+  it('a newcomer asking what a teammate already shows waits on it', () => {
+    const out = foldSameAsk('lead', needs(ASK), [], { report, nowIso: NOW, relatives: [sib], selfCreatedAt: '2026-11-03T00:00:00.000Z' })
+    expect(out).toMatchObject({ state: 'waiting', kind: 'task', sameAsk: { id: 'sib', team: true, at: NOW } })
+    expect(out.waitingOn).toMatch(/^the same decision in "CR reviews", beside it in its team/)
+  })
+
+  it('of two that both show it, the older keeps it and the newer waits, never both', () => {
+    const shown = (id: string) => ({ state: 'needs' as const, source: 'session' as const, ask: ASK })
+    const older = foldSameAsk('old', needs(ASK), [], { report, prev: shown('old'), relatives: [{ ...sib, id: 'new', createdAt: '2026-11-03T00:00:00.000Z' }], selfCreatedAt: '2026-11-01T00:00:00.000Z' })
+    expect(older.state).toBe('needs')
+    const newer = foldSameAsk('new', needs(ASK), [], { report, prev: shown('new'), relatives: [{ ...sib, id: 'old', createdAt: '2026-11-01T00:00:00.000Z' }], selfCreatedAt: '2026-11-03T00:00:00.000Z' })
+    expect(newer).toMatchObject({ state: 'waiting', sameAsk: { id: 'old', team: true } })
+  })
+
+  it('takes either side\'s word: a teammate naming it folds in other words, a "different" never', () => {
+    const other = needs('Do we block the deploy until the CRD is ready?')
+    expect(foldSameAsk('lead', other, [], { report: { ...report, same_as: 'sib' }, relatives: [sib] })).toMatchObject({ state: 'waiting', sameAsk: { id: 'sib' } })
+    expect(foldSameAsk('lead', other, [], { report, relatives: [sib], declared: (id) => (id === 'sib' ? { same_as: 'lead' } : null) })).toMatchObject({ sameAsk: { id: 'sib' } })
+    expect(foldSameAsk('lead', needs(ASK), [], { report: { ...report, ask_distinct: true }, relatives: [sib] }).state).toBe('needs')
+    expect(foldSameAsk('lead', needs(ASK), [], { report, relatives: [sib], declared: () => ({ ask_distinct: true }) }).state).toBe('needs')
+    expect(foldSameAsk('lead', needs('Rename the stage?'), [], { report, relatives: [sib] }).state).toBe('needs')
+  })
+
+  it('a subtask below it wins over a teammate beside it', () => {
+    const below: RolledAsk = { id: 'kid', title: 'Kid', ask: ASK }
+    expect(foldSameAsk('lead', needs(ASK), [below], { report, relatives: [sib] }).sameAsk).toMatchObject({ id: 'kid' })
+  })
+
+  it('a teammate asking what a lead, VP or Main already answered beside it reads it answered at once', () => {
+    const shown = { state: 'needs' as const, source: 'session' as const, ask: ASK }
+    const out = foldSameAsk('late', needs(ASK), [], { report, prev: shown, relatives: [{ ...sib, answered: true }], selfCreatedAt: '2026-10-01T00:00:00.000Z' })
+    expect(out).toMatchObject({ state: 'waiting', sameAsk: { id: 'sib', team: true, answered: true } })
+  })
+
+  it('stays answered once a lead, VP or Main answered the teammate\'s ask there', () => {
+    const folded = foldSameAsk('lead', needs(ASK), [], { report, nowIso: NOW, relatives: [sib] })
+    expect(foldSameAsk('lead', needs(ASK), [], { report, prev: folded, answeredAt: () => '2026-11-04T10:30:00.000Z' })).toMatchObject({ state: 'waiting', sameAsk: { id: 'sib', answered: true } })
+    expect(foldSameAsk('lead', needs(ASK), [], { report, prev: folded, answeredAt: () => '2026-11-04T09:00:00.000Z' }).state).toBe('needs')
+  })
+})
+
+describe('the teams a task is in', () => {
+  const at = (n: number) => `2026-11-0${n}T00:00:00.000Z`
+  const tasks = [
+    task('main', { org_role: 'main', project: '' }),
+    task('vp', { org_role: 'lead', project: 'Garden', org_leads: ['Orchard'], parent_task_id: 'main' }),
+    task('a', { project: 'Garden', created_at: at(1) }),
+    task('a1', { project: 'Garden', parent_task_id: 'a', created_at: at(2) }),
+    task('a2', { project: 'Garden', parent_task_id: 'a', created_at: at(3) }),
+    task('b', { project: 'Garden', created_at: at(4) }),
+    task('o', { project: 'Orchard', created_at: at(5) }),
+    task('w', { project: 'Garden', parent_task_id: 'vp', created_at: at(6) }),
+    task('x', { project: 'Meadow', created_at: at(7) }),
+    task('y', { project: 'Meadow', created_at: at(8) }),
+    task('i1', { project: '', created_at: at(1) }),
+    task('i2', { project: '', created_at: at(2) }),
+    task('done', { project: 'Garden', phase: 'COMPLETE' }),
+  ]
+  const of = teammatesIndex(tasks)
+  const ids = (id: string) => of(tasks.find((t) => t.id === id)!).map((t) => t.id)
+
+  it('siblings, cousins and a VP\'s other project are teammates; a leader and its subtasks are not', () => {
+    expect(ids('a1')).toEqual(['a2', 'b', 'o', 'w'])
+    expect(ids('a')).toEqual(['b', 'o', 'w'])
+    expect(ids('o')).toEqual(['a', 'a1', 'a2', 'b', 'w'])
+  })
+
+  it('a project with no lead teams only under one top-level task; the Inbox and Main are no team', () => {
+    expect(ids('x')).toEqual([])
+    expect(ids('i1')).toEqual([])
+    expect(of(tasks[0]!)).toEqual([])
+    expect(teamKeysOf(tasks.find((t) => t.id === 'w')!, new Map(tasks.map((t) => [t.id, t])), tasks.filter((t) => t.org_role === 'lead'))).toEqual(['lead:vp', 'root:w'])
+  })
+
+  it('the write check and the status question read the teammates too', () => {
+    const asking = tasks.map((t) => (t.id === 'b' ? { ...t, user_status: needs('Should the handler wait for the plugin rollout?') } : t))
+    expect(treeAround('a1', asking).find((r) => r.task.id === 'b')?.relation).toBe('team')
+    expect(findSameAsk('Should the handler wait for the plugin rollout?', treeAsksOf('a1', asking, [], true))).toMatchObject({ taskId: 'b', relation: 'team' })
+    expect(relativeAsksIndex(asking)(asking.find((t) => t.id === 'o')!)).toEqual([{ id: 'b', title: 'B', ask: 'Should the handler wait for the plugin rollout?', createdAt: at(4) }])
+  })
+})
+
+describe('an ask answered above it', () => {
+  const answer = { key: askKey('Wait for the rollout before the next stage?'), ask: 'Wait for the rollout before the next stage?', text: 'Yes, wait up to ten minutes.', by: 'main', byTitle: 'Main', at: '2026-11-04T10:00:00.000Z' }
+  const NOW = Date.parse('2026-11-04T11:00:00.000Z')
+
+  it('is no longer Needs you while the task asks the same, and says who answered', () => {
+    const out = answeredAbove(needs('Wait for the rollout before the next stage?'), answer, NOW)
+    expect(out).toMatchObject({ state: 'waiting', kind: 'task', answeredFor: { by: 'main', byTitle: 'Main' } })
+    expect(out.waitingOn).toContain('answered by Main for you')
+  })
+
+  it('leaves a different ask, a Board choice, a prompt, an old answer and no answer alone', () => {
+    const other = needs('Rename the stage?')
+    expect(answeredAbove(other, answer, NOW)).toBe(other)
+    for (const source of ['choice', 'prompt', 'error', 'letter'] as const) {
+      const s = needs('Wait for the rollout before the next stage?', { source })
+      expect(answeredAbove(s, answer, NOW), source).toBe(s)
+    }
+    const s = needs('Wait for the rollout before the next stage?')
+    expect(answeredAbove(s, answer, NOW + 8 * 24 * 3600_000)).toBe(s)
+    expect(answeredAbove(s, null, NOW)).toBe(s)
+  })
+
+  it('only a task it is under, its lead or VP, or Main may answer it', () => {
+    const org = [
+      task('main', { org_role: 'main' }),
+      task('vp', { org_role: 'lead', project: 'Garden' }),
+      task('top', { project: 'Garden' }),
+      task('kid', { project: 'Garden', parent_task_id: 'top' }),
+      task('peer', { project: 'Garden' }),
+      task('far', { project: 'Orchard' }),
+      task('vp2', { org_role: 'lead', project: 'Orchard' }),
+    ]
+    const t = (id: string) => org.find((x) => x.id === id)!
+    expect(standsAbove(t('top'), t('kid'), org)).toBe(true)
+    expect(standsAbove(t('vp'), t('kid'), org)).toBe(true)
+    expect(standsAbove(t('main'), t('far'), org)).toBe(true)
+    expect(standsAbove(t('peer'), t('kid'), org)).toBe(false)
+    expect(standsAbove(t('kid'), t('top'), org)).toBe(false)
+    expect(standsAbove(t('vp2'), t('kid'), org)).toBe(false)
   })
 })

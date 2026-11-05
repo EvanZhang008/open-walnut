@@ -97,12 +97,13 @@ describe('the re-check clock', () => {
     expect(recheckDue(needsTask(ago(NEEDS_RECHECK_MS + 60_000)), { nowMs: NOW })).toBe(true)
   })
 
-  it('asks at most MAX_RECHECKS times in a row, one per period, however the session rewords its ask', () => {
+  it('asks MAX_RECHECKS times in a row, one per period, then once a day, however the session rewords its ask', () => {
     const t = needsTask(ago(30 * H), { needs_recheck: { at: ago(NEEDS_RECHECK_MS + 60_000), count: 2, ask: 'Sign in on the Mac' } })
     expect(recheckDue(t, { nowMs: NOW })).toBe(true)
     expect(recheckDue({ ...t, needs_recheck: { at: ago(H), count: 2, ask: 'Sign in on the Mac' } }, { nowMs: NOW })).toBe(false)
-    expect(recheckDue({ ...t, needs_recheck: { at: ago(30 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac' } }, { nowMs: NOW })).toBe(false)
-    expect(recheckDue({ ...t, needs_recheck: { at: ago(30 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac, then tell me' } }, { nowMs: NOW })).toBe(false)
+    // Past the cap it never stops (2026-11-04: an ask sat NOT VERIFIED for days after six notes): daily.
+    expect(recheckDue({ ...t, needs_recheck: { at: ago(NEEDS_RECHECK_MS + 60_000), count: MAX_RECHECKS, ask: 'Sign in on the Mac' } }, { nowMs: NOW })).toBe(false)
+    expect(recheckDue({ ...t, needs_recheck: { at: ago(25 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac, then tell me' } }, { nowMs: NOW })).toBe(true)
   })
 
   it('an ephemeral server never asks about a status it copied (checked before it started)', () => {

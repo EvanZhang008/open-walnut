@@ -25,7 +25,8 @@ import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
-import { askKey, foldSameAsk } from './same-ask.js';
+import { answeredAbove, answerHolds, askKey, foldSameAsk, type RelativeAsk } from './same-ask.js';
+import { relativeAsksIndex } from './same-ask-tree.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
@@ -92,6 +93,8 @@ export interface StatusFacts {
   projectLeads?: Set<string>;
   /** Every task by id, for what a task takes from its ancestors (a snooze, snooze.ts). */
   tasksById?: ReadonlyMap<string, Task>;
+  /** A task's teammates' open asks beside it (same-ask-tree.ts relativeAsksIndex), for a same-ask fold. */
+  relativeAsks?: (task: Task) => RelativeAsk[];
   /** Task id -> when a person last wrote to its sessions (ISO), for the tasks a same-ask fold names (readFoldEvidence). */
   personInputAt?: Map<string, string>;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
@@ -250,6 +253,9 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
         if (!job.check || triggerRunState(job) !== 'armed' || typeof ran !== 'number') continue;
         const at = new Date(Math.floor(ran / CHECK_STAMP_MS) * CHECK_STAMP_MS).toISOString();
         if (!out.has(target) || out.get(target) < at) out.set(target, at);
+        // Per trigger too (`trigger:<id>`), a check that ran without an error: a trigger the session
+        // armed to watch its ask (Task.recheck_watch) checks that ask each time it runs.
+        if (job.id && job.state?.lastCheck?.outcome !== 'error') out.set(`trigger:${job.id}`, at);
         continue;
       }
       const list = out.get(target) ?? [];
@@ -469,6 +475,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     isLead: task.org_role === 'lead',
     dueDate: task.due_date ?? null,
     checkRanAt: facts.checks?.get(task.id) ?? null,
+    askCheckedAt: askCheckedAtOf(task, facts.checks, task.status_report?.state === 'needs' ? task.status_report.ask : null),
     teamStoppedAt: facts.teamStopped?.get(task.id) ?? null,
     snoozedUntil: snoozedUntil(task, facts.tasksById, nowMs),
   };
@@ -519,6 +526,7 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
   // Name the task a reply is awaited from even when it is not in this pass.
   for (const t of everything) if (!facts.titles.has(t.id)) facts.titles.set(t.id, t.title);
   facts.tasksById = new Map(everything.map((t) => [t.id, t] as const));
+  facts.relativeAsks = relativeAsksIndex(everything);
   facts.openWorkers = new Map();
   for (const t of everything) {
     if (!t.parent_task_id || t.phase === 'COMPLETE' || t.status === 'done') continue;
@@ -573,13 +581,45 @@ function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']
  * Whether a task still holds `ask` while it is not shown as Needs you: its current report still
  * asks it (a turn runs on it), its report is on the way, or it is snoozed with it (same-ask.ts).
  */
-function stillAsksOf(t: Task | undefined, ask: string): boolean {
+function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now()): boolean {
   if (!t || t.phase === 'COMPLETE' || t.status === 'done') return false;
   const key = askKey(ask);
+  // Answered there for the user (a lead, VP or Main, or the answer reached its own holder): it no
+  // longer holds it, and the fold reads answered.
+  if (answerHolds(t.ask_answered, ask, nowMs) || answeredThereOf(t)) return false;
   const r = t.status_report;
-  if (r?.state === 'needs' && askKey(r.ask) === key && reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
+  if (r?.state === 'needs' && askKey(r.ask) === key) {
+    if (reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
+    // A turn runs on it: its report is still the newest word, and the turn's end says the next.
+    if (t.user_status?.state === 'working') return true;
+  }
   const us = t.user_status;
   return !!us?.transient || (!!us?.snoozed?.ask && askKey(us.snoozed.ask) === key);
+}
+
+/** Its own status reads its ask answered: a fold of its own that was answered, or an answer above it. */
+function answeredThereOf(t: Task | undefined): boolean {
+  return !!t?.user_status?.sameAsk?.answered || !!t?.user_status?.answeredFor;
+}
+
+/** When a trigger the session armed to watch its ask (trigger_create watches:"ask") last checked it
+ *  without an error, while it is armed (needs-recheck.ts): a check of the ask, not only of the task. */
+export function askCheckedAtOf(task: Pick<Task, 'recheck_watch'>, checks: ReadonlyMap<string, string> | undefined, ask: string | null | undefined): string | null {
+  const key = askKey(ask);
+  if (!key) return null;
+  let best: string | null = null;
+  for (const w of task.recheck_watch ?? []) {
+    // Only a watch armed for this very ask (2026-11-04 review: one armed for an old ask stamped every later one).
+    if (w.watches !== 'ask' || w.key !== key) continue;
+    const at = checks?.get(`trigger:${w.trigger}`);
+    if (at && (!best || at > best)) best = at;
+  }
+  return best;
+}
+
+/** When a lead, VP or Main answered `ask` of that task for the user (Task.ask_answered), or null. */
+function answeredAtOf(t: Task | undefined, ask: string, nowMs = Date.now()): string | null {
+  return t && answerHolds(t.ask_answered, ask, nowMs) ? t.ask_answered!.at : null;
 }
 
 /** Its open subtasks by parent id, for statusOf. */
@@ -592,9 +632,10 @@ export function childrenByParent(everything: readonly Task[]): Map<string, Task[
 /**
  * The status one task shows: derived from its facts, with the questions its subtasks ask carried
  * up (rollUpAsks; Main and a VP show them on their top-level tasks, never as their own: Needs you is
- * only ever an individual task), and its own ask folded when a task below it already asks the same
- * (same-ask.ts: the user sees one decision once, from the deepest task). The one way a stored status
- * is made: the sync writes it, the consistency check compares against it.
+ * only ever an individual task), and its own ask folded when a task below it, or a teammate beside it
+ * that asked first, already asks the same (same-ask.ts: the user sees one decision once), or taken off
+ * Needs you when a lead, VP or Main answered it for the user (answeredAbove). The one way a stored
+ * status is made: the sync writes it, the consistency check compares against it.
  */
 export function statusOf(
   task: Task, facts: StatusFacts, childrenOf: ReadonlyMap<string, readonly Task[]>, nowMs = Date.now(),
@@ -603,15 +644,19 @@ export function statusOf(
   const derived = deriveUserStatus(input, nowMs);
   const asks = task.org_role ? [] : rollUpAsks(childrenOf.get(task.id) ?? [], task.id);
   const withAsks = asks.length ? { ...derived, asks } : derived;
-  const status = foldSameAsk(task.id, withAsks, asks, {
+  const folded = foldSameAsk(task.id, withAsks, asks, {
     report: reportIsCurrent(input) ? task.status_report ?? null : null,
     prev: task.user_status ?? null,
     declared: (id) => declaredOf(facts.tasksById?.get(id)),
     personInputAt: (id) => facts.personInputAt?.get(id),
-    stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask),
+    stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs),
     nowIso: new Date(nowMs).toISOString(),
+    relatives: facts.relativeAsks?.(task) ?? [],
+    selfCreatedAt: task.created_at,
+    answeredAt: (id, ask) => answeredAtOf(facts.tasksById?.get(id), ask, nowMs),
+    answeredThere: (id) => answeredThereOf(facts.tasksById?.get(id)),
   });
-  return { input, status };
+  return { input, status: answeredAbove(folded, task.ask_answered, nowMs) };
 }
 
 /**
@@ -655,6 +700,12 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
       changed += 1;
       // Its leader carries its questions (rollUpAsks): re-derived in the next pass, one level each.
       if (task.parent_task_id) mark(task.parent_task_id);
+      // The tasks whose same ask waits on it (same-ask.ts) read its new status in the next pass.
+      for (const t of everything) if (t.user_status?.sameAsk?.id === task.id) mark(t.id);
+      // A teammate folded under another whose ask was just answered there is told once.
+      if (next.sameAsk?.answered && next.sameAsk.team && !task.user_status?.sameAsk?.answered) {
+        void import('./sessions/ask-answer.js').then((m) => m.tellFoldAnswered(task, next.sameAsk!)).catch(() => {});
+      }
       // Into Needs you: the line `walnut-logs.sh flips` pairs with the phase moves.
       if (next.state === 'needs' && task.user_status?.state !== 'needs') {
         log.task.info('user-status: now needs you', { taskId: task.id, source: next.source });

@@ -1,7 +1,7 @@
 /**
  * /api/v1/messages + /api/v1/requests — the unified send surface.
  *
- *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, force?, reason?, messageId? }
+ *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, force?, reason?, messageId? }
  *                         → 202 SessionSendResult (session-send-core.ts)
  *   GET  /requests/:id    → { request, delivery? } — status read for `walnut wait rq-…`;
  *                         `delivery` while the asked message still waits to go in
@@ -53,6 +53,9 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         replyTimeoutSecs: num(b.reply_timeout),
         inReplyTo: str(b.in_reply_to),
         handsOn: str(b.hands_on),
+        // This answers the target's question to the user in his place (sessions/ask-answer.ts).
+        answersAsk: b.answers_ask === true,
+        userWords: str(b.user_words),
         title: str(b.title),
         force: b.force === true,
         reason: str(b.reason),

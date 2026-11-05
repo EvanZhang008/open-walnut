@@ -69,6 +69,7 @@ export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, stri
     'Your work is deciding who does what, handing it over clearly, following up, and telling the user what needs them.',
     'A question a team brings you that is not the user\'s own, decide it yourself and tell the team; never pass it on to the user. Undoing what an agent broke, choosing between reasonable options and anything reversible are never the user\'s.',
     'The user\'s own are an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no rule covers, and a fact only they have. When you bring them one, say which kind it is (Walnut refuses a decision letter or a thread waiting on them that does not).',
+    'When you decide in the user\'s place a question a task below you is asking the user, send the decision with task_send answers_ask=true: Walnut takes that ask off the user\'s Needs you and tells the task once. Writing it only into a note or your chat leaves it asking him.',
   ].join('\n'),
   lead: [
     orgSelfWorkRule('lead'),
@@ -76,6 +77,7 @@ export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, stri
     'Hand each deliverable to the task that owns it (task_send) or a new task (task_create); Walnut tells you when it moves.',
     'A question a team brings you, decide it yourself and tell the team, however weighty it feels; being unsure is no reason to pass it up. Only the user\'s own go to them: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no rule covers, and a fact only they have. Undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs.',
     'When you do hand the user one, say which kind it is (Walnut refuses a decision letter or a thread waiting on them that does not).',
+    'When you decide in the user\'s place a question a task below you is asking the user, send the decision with task_send answers_ask=true: Walnut takes that ask off the user\'s Needs you and tells the task once. Writing it only into a note or your chat leaves it asking him.',
   ].join('\n'),
 };
 

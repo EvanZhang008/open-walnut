@@ -19,6 +19,10 @@ export interface RecheckWatch {
   watches: string;
   /** When it was recorded (ISO). */
   at: string;
+  /** With "ask": the ask it was armed for (same-ask.ts askKey). Its runs count as that ask's check
+   *  only (user-status-sync.ts askCheckedAtOf); a watch with none (an older one, or one armed
+   *  before the session asked) checks nothing and the re-check keeps its clock. */
+  key?: string;
 }
 
 /** The ids of the triggers polling now ("armed": present and enabled; a stopped one is disabled). */

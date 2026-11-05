@@ -7,9 +7,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import type { UserStatus } from '@open-walnut/user-status';
+import fs from 'node:fs';
+import path from 'node:path';
+import { answeredAbove, askKey, foldWords, answeredWords } from '../../src/core/same-ask';
 import {
   briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, needsRowLine, statusBrief, statusFilterShown,
-  userStatusOf, waitingLine,
+  sameAskLine, userStatusOf, waitingLine, waitingSentence,
 } from '../../web/src/components/board/board-status-model';
 
 const NOW = Date.parse('2026-10-26T05:35:00.000Z');
@@ -137,5 +140,34 @@ describe('waitingLine', () => {
     expect(waitingLine({ state: 'waiting', kind: 'stuck', waitingOn: 'Nobody' }, fmt)).toBe('Nothing will wake it. Nobody');
     expect(waitingLine({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until: ago(-60) }, fmt)).toBe('Waiting until Mon 9:00');
     expect(waitingLine({ state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet' }, fmt)).toBe('Not started yet');
+  });
+});
+
+describe('a wait whose decision shows elsewhere names who or where first (sameAskLine)', () => {
+  // 2026-11-05 UI review: one line on the row cut "Waiting on the same decisio..." before the task
+  // that holds it and the lead that answered it.
+  const fmt = () => 'Mon 9:00';
+  const fold = { id: 'b', title: 'Plugin rollout', ask: 'Should the deploy handler wait for the plugin rollout?', key: 'k', stamp: 's', at: ago(5) };
+  const answer = { key: askKey('Should the deploy handler wait?'), ask: 'Should the deploy handler wait?', text: 'Wait up to ten minutes.', by: 'lead', byTitle: 'Orchard lead', at: ago(1) };
+  const cases: [string, UserStatus, string][] = [
+    ['subtask', { state: 'waiting', kind: 'task', waitingOn: foldWords(fold), sameAsk: fold }, 'Same decision in its subtask "Plugin rollout"'],
+    ['teammate', { state: 'waiting', kind: 'task', waitingOn: foldWords({ ...fold, team: true }), sameAsk: { ...fold, team: true } }, 'Same decision in "Plugin rollout"'],
+    ['answered there', { state: 'waiting', kind: 'task', waitingOn: foldWords({ ...fold, answered: true }), sameAsk: { ...fold, answered: true } }, 'Answered in "Plugin rollout"'],
+    ['answered above', { state: 'waiting', kind: 'task', waitingOn: answeredWords(answer), answeredFor: { by: 'lead', byTitle: 'Orchard lead', at: ago(1), ask: answer.ask } }, 'Answered by Orchard lead: Wait up to ten minutes.'],
+  ];
+  it.each(cases)('%s', (_name, status, line) => {
+    expect(waitingLine(status, fmt)).toBe(line);
+    // The whole sentence stays the hover text.
+    expect(waitingSentence(status)).toBe(`Waiting on ${status.waitingOn}`);
+  });
+
+  it('every waiting status same-ask.ts makes carries a field sameAskLine reads', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../src/core/same-ask.ts'), 'utf8');
+    const made = [...src.matchAll(/state: 'waiting'[^\n]*/g)].map((m) => m[0]);
+    expect(made.length).toBeGreaterThan(0);
+    for (const line of made) expect(line, `a new waiting status in same-ask.ts: give it sameAsk or answeredFor so its row names who or where: ${line}`).toMatch(/sameAsk:|answeredFor|answeredWords\(/);
+    // And the live builders produce exactly those shapes.
+    const asked: UserStatus = { state: 'needs', source: 'session', ask: answer.ask };
+    expect(sameAskLine(answeredAbove(asked, answer, NOW))).toMatch(/^Answered by Orchard lead/);
   });
 });

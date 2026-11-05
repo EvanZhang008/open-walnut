@@ -298,6 +298,9 @@ export interface UserStatusInput {
   teamStoppedAt?: string | null;
   /** When an armed trigger of the task last ran its check (ISO): shown, never counted as a check. */
   checkRanAt?: string | null;
+  /** When a trigger armed to watch this task's ask of the user (watches:"ask") last checked it
+   *  without an error (ISO, to 10 minutes): that run confirms the ask, so it counts as a check. */
+  askCheckedAt?: string | null;
   /** The start date it is snoozed until, while that is still to come (snooze.ts snoozedUntil). */
   snoozedUntil?: string | null;
 }
@@ -359,9 +362,10 @@ export interface UserStatus {
   /** Its due date has passed (`overdue`) or comes within a day (`soon`); absent otherwise
    *  (2026-10-28, the Grok Bot study: deadlines in the status). `at` is the due date as set. */
   due?: { at: string; state: 'overdue' | 'soon' };
-  /** needs from its own session: when the session last confirmed the ask (ISO), at a turn end.
+  /** needs from its own session: when the ask was last confirmed (ISO): by the session at a turn
+   *  end (`checkedBy` session), or by a trigger it armed to watch that ask (`check`, watches:"ask").
    *  Every other needs is Walnut's live record (a prompt, a letter, a choice, an error) and
-   *  carries none. `checkedBy` is always `session` (kept for a client that reads it). */
+   *  carries none. */
   checkedAt?: string;
   checkedBy?: 'session' | 'check';
   /** When an armed trigger of the task last ran (ISO, to 10 minutes): it watches the task, which
@@ -397,6 +401,9 @@ export interface UserStatus {
    *  on that task (kind task), so the user sees the decision once, from the deepest task. Kept while
    *  it holds the same report, so answering the deeper task settles both. */
   sameAsk?: SameAskFold;
+  /** A task whose own question a lead, VP or Main answered for the user (same-ask.ts answeredAbove):
+   *  it reads Waiting on itself to act on that answer, never Needs you, while it asks the same. */
+  answeredFor?: { by: string; byTitle: string; at: string; ask: string };
 }
 
 /** One question a subtask asks the user, as its leader carries it up (2026-10-31, the user: asks
@@ -839,13 +846,18 @@ function stampChecked(out: UserStatus, input: UserStatusInput, nowMs: number): v
   // Its last word on it: the newest of its report and its last phase move (a turn's end).
   const at = Math.max(...[input.report?.at, input.phaseChangedAt].map((v) => Date.parse(v ?? '')).filter(Number.isFinite));
   if (!Number.isFinite(at)) return;
-  out.checkedAt = new Date(at).toISOString();
-  out.checkedBy = 'session';
-  // A trigger of the task watches the task, not necessarily this ask (2026-10-28: a reminder to
-  // call someone carried a mail trigger): shown beside it, never a check of its own.
+  // A trigger the session armed to watch this very ask (watches:"ask") checks it each run
+  // (2026-11-04, Main's reflection: such asks read NOT VERIFIED for up to five days while their
+  // trigger kept checking them, because only the session's own word counted).
+  const watched = Date.parse(input.askCheckedAt ?? '');
+  const last = Number.isFinite(watched) && watched > at ? watched : at;
+  out.checkedAt = new Date(last).toISOString();
+  out.checkedBy = last === at ? 'session' : 'check';
+  // Any other trigger of the task watches the task, not necessarily this ask (2026-10-28: a
+  // reminder to call someone carried a mail trigger): shown beside it, never a check of its own.
   const ran = Date.parse(input.checkRanAt ?? '');
   if (Number.isFinite(ran)) out.watchedAt = new Date(ran).toISOString();
-  if (nowMs - at > UNVERIFIED_AFTER_MS) out.unverified = true;
+  if (nowMs - last > UNVERIFIED_AFTER_MS) out.unverified = true;
 }
 
 /**
@@ -1077,7 +1089,7 @@ export function fallbackUserState(phase: string | undefined, status?: string): U
 }
 
 /** The keys of the status every agent task read carries (agentStatusView). */
-export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'threads', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed', 'sameAsk'] as const;
+export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'threads', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed', 'sameAsk', 'answeredFor'] as const;
 
 /**
  * The live status an agent reads beside a task in every list, bulk and single read (2026-11-02,

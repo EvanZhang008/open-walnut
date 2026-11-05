@@ -107,6 +107,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/idle-compaction.ts': 1,
   'src/core/session-message-queue.ts': 1,          // the queue's own enqueue inside sendMessageToSession
   'src/core/sessions/adopt-notice.ts': 1,
+  // A teammate's folded ask answered elsewhere: one Walnut note, source wait-until like needs-recheck.
+  'src/core/sessions/ask-answer.ts': 1,
   'src/core/sessions/app-state.ts': 1,
   'src/core/sessions/auto-recover-env.ts': 1,
   'src/core/sessions/brief-refresh.ts': 1,

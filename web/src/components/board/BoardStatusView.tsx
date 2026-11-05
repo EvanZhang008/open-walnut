@@ -24,7 +24,7 @@ import { LiveActivityLine } from './LiveActivityLine';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
   SHOWN_STATES, briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, needsRowLine, rowTime, statusBrief,
-  statusFilterShown, waitingLine, type KeptStatusFilter, type ShownState, type StatusFilter, type StatusRow,
+  statusFilterShown, waitingLine, sameAskLine, waitingSentence, type KeptStatusFilter, type ShownState, type StatusFilter, type StatusRow,
 } from './board-status-model';
 import '@/styles/board-overview.css';
 import '@/styles/board-status.css';
@@ -71,7 +71,7 @@ function WhereCell({ row }: { row: StatusRow }) {
   const live = useLiveActivity(s.state === 'working' ? row.task.id : undefined);
   return (
     <>
-      {s.state === 'waiting' && <span className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`}>{waitingLine(s, formatWaitUntil)}</span>}
+      {s.state === 'waiting' && <span className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`} title={sameAskLine(s) ? waitingSentence(s) : undefined}>{waitingLine(s, formatWaitUntil)}</span>}
       {s.state === 'working' && <LiveActivityLine taskId={row.task.id} />}
       {s.now && <span className="bs-now">{s.now}</span>}
       {!s.now && !live && s.state === 'working' && <span className="bs-muted">{s.carriesOn ? 'Its own work goes on.' : 'Running a turn now.'}</span>}

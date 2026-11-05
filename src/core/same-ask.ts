@@ -3,8 +3,11 @@
  * sat in Needs you asking the user whether to create three alpha test accounts, and Main had the VP
  * merge them by hand; the user, 11-01: "why need me").
  *
- * When a task and a task above or below it ask the user the same thing, the user sees it once, from
- * the task closest to the work (the deepest). Two halves:
+ * When two tasks of one team ask the user the same thing, the user sees it once. A task and a task
+ * above or below it: from the task closest to the work (the deepest). Two tasks side by side under
+ * one lead or VP (siblings, cousins; 2026-11-04, a VP's reflection again: a lead and the review task
+ * beside it asked the same design decision with opposite picks): from the one that asked first. Two
+ * halves:
  *  - the shown status (user-status-sync.ts statusOf): an ancestor whose own ask is the same as one
  *    its subtree carries up (rollUpAsks) reads Waiting on that subtask (`sameAsk` on its status), so
  *    every surface reading `user_status` (Home's Needs you rows, the Org Task view, a VP's or Main's
@@ -100,8 +103,10 @@ export function sameAskText(a: string | undefined | null, b: string | undefined 
 
 /** The fold an ancestor's status carries: whose ask it is shown as, and what it remembers. */
 export interface SameAskFold {
-  /** The task that asks it (the deepest owner). */
+  /** The task that asks it (the deepest owner, or the teammate that asked first). */
   id: string;
+  /** That task is beside this one in its team (same-ask-tree.ts teamKeysOf), not below it. */
+  team?: true;
   title: string;
   /** Its ask, as the user reads it there. */
   ask: string;
@@ -130,6 +135,33 @@ export interface FoldContext {
   stillAsks?: (taskId: string, ask: string) => boolean;
   /** Now (ISO), for a new fold's `at`. */
   nowIso?: string;
+  /** The open asks of its teammates beside it (never above or below it), each shown as Needs you
+   *  now, the first asked first (same-ask-tree.ts relativesOf). */
+  relatives?: readonly RelativeAsk[];
+  /** When this task was made (ISO): two teammates that both show the ask keep the older one's. */
+  selfCreatedAt?: string;
+  /** When a lead, VP or Main answered that task's `ask` for the user (Task.ask_answered, ISO): like a
+   *  person's message, the evidence the answer reached it. */
+  answeredAt?: (taskId: string, ask: string) => string | null | undefined;
+  /** That task's own status reads the ask answered (a fold of its own that was answered, or an answer
+   *  above it): the answer travels along a chain of folds. */
+  answeredThere?: (taskId: string) => boolean;
+}
+
+/** A teammate's open ask, as a fold reads it. */
+export interface RelativeAsk extends RolledAsk {
+  createdAt?: string;
+  /** A lead, VP or Main already answered it there for the user (Task.ask_answered): a teammate
+   *  asking the same reads it answered at once, never as a new Needs you. */
+  answered?: true;
+}
+
+/** Of two teammates that both show the same ask, the one whose shows: the older task, then the lower id. */
+function ranksFirst(a: { id: string; createdAt?: string }, b: { id: string; createdAt?: string }): boolean {
+  // A task with no time recorded counts as the newest.
+  const ta = a.createdAt || '\uffff';
+  const tb = b.createdAt || '\uffff';
+  return ta !== tb ? ta < tb : a.id < b.id;
 }
 
 /** The report a fold is tied to: the ask's own report, else the source and the words. */
@@ -137,11 +169,14 @@ function stampOf(status: UserStatus, report: FoldContext['report']): string {
   return status.source === 'session' && report?.at ? `report:${report.at}` : `${status.source ?? 'none'}:${askKey(status.ask)}`;
 }
 
-export function foldWords(f: Pick<SameAskFold, 'title' | 'ask' | 'answered'>): string {
+/** Its wait in words, as every surface prints it after "Waiting on": what it is first, since a row
+ *  shows one line (2026-11-05 UI review: the title first left "same decision" cut off). */
+export function foldWords(f: Pick<SameAskFold, 'title' | 'ask' | 'answered' | 'team'>): string {
   const title = f.title.replace(/\s+/g, ' ').slice(0, 80);
+  const where = f.team ? `"${title}", beside it in its team` : `its subtask "${title}"`;
   return f.answered
-    ? `Its subtask "${title}" asked you the same, and you answered it there`
-    : `Its subtask "${title}" asks you the same: ${f.ask.replace(/\s+/g, ' ').slice(0, 160)}`;
+    ? `the same decision, answered in ${where}`
+    : `the same decision in ${where}: ${f.ask.replace(/\s+/g, ' ').slice(0, 160)}`;
 }
 
 /**
@@ -160,27 +195,39 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
   const key = askKey(derived.ask);
   const stamp = stampOf(derived, own);
   const prev = ctx.prev?.sameAsk;
-  const pick = (): RolledAsk | undefined => {
+  const same = (a: RolledAsk): boolean => {
+    const theirs = ctx.declared?.(a.id);
+    if (theirs?.ask_distinct) return false;
+    return own?.same_as === a.id || theirs?.same_as === selfId || sameAskText(derived.ask, a.ask);
+  };
+  const pick = (): { hit: RolledAsk; team?: true } | undefined => {
     // Its own word first; a "different" from either side is never folded.
     if (own?.ask_distinct) return undefined;
-    const named = own?.same_as ? asks.find((a) => a.id === own.same_as) : undefined;
-    if (named) return named;
-    return asks.find((a) => {
-      const theirs = ctx.declared?.(a.id);
-      if (theirs?.ask_distinct) return false;
-      return theirs?.same_as === selfId || sameAskText(derived.ask, a.ask);
-    });
+    // Below it first: the deepest task shows it.
+    const below = asks.find(same);
+    if (below) return { hit: below };
+    // Beside it: the older task keeps it (a fixed order, so two teammates never trade it as their
+    // turns come and go), one answered there already takes it, and a fold made before stays where it
+    // is (its holder still shows it: a teammate folded under another is never a holder).
+    const self = { id: selfId, createdAt: ctx.selfCreatedAt };
+    const beside = (ctx.relatives ?? []).find((r) => same(r) && (r.answered || prev?.id === r.id || ranksFirst(r, self)));
+    return beside ? { hit: beside, team: true } : undefined;
   };
-  const hit = pick();
+  const picked = pick();
   let fold: SameAskFold | null = null;
-  if (hit) {
+  if (picked) {
+    const { hit } = picked;
     const at = prev && prev.id === hit.id && prev.key === key && prev.at ? prev.at : (ctx.nowIso ?? new Date().toISOString());
-    fold = { id: hit.id, title: hit.title, ask: hit.ask, key, stamp, at };
+    fold = {
+      id: hit.id, title: hit.title, ask: hit.ask, key, stamp, at,
+      ...(picked.team ? { team: true as const } : {}), ...((hit as RelativeAsk).answered ? { answered: true as const } : {}),
+    };
   } else if (prev && prev.key === key && prev.stamp === stamp && prev.at && !prev.answered && ctx.stillAsks?.(prev.id, prev.ask)) {
     fold = prev;
   } else if (prev && prev.key === key && prev.stamp === stamp && prev.at) {
-    const wrote = Date.parse(ctx.personInputAt?.(prev.id) ?? '');
-    if (prev.answered || (Number.isFinite(wrote) && wrote >= Date.parse(prev.at))) fold = { ...prev, answered: true };
+    // The answer reached that task: a person wrote to it, or a lead, VP or Main answered it there.
+    const reached = [ctx.personInputAt?.(prev.id), ctx.answeredAt?.(prev.id, prev.ask)].map((v) => Date.parse(v ?? '')).filter(Number.isFinite);
+    if (prev.answered || ctx.answeredThere?.(prev.id) || reached.some((t) => t >= Date.parse(prev.at))) fold = { ...prev, answered: true };
   }
   if (!fold) return derived;
   const out: UserStatus = {
@@ -193,6 +240,71 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
     ...(derived.asks ? { asks: derived.asks } : {}),
   };
   return out;
+}
+
+/**
+ * A task's ask that a lead, a VP or Main answered for the user (2026-11-04, a VP's reflection: Main
+ * had decided six questions for the user and written them into the lead's record, and the lead
+ * still waited on him with them). Recorded on the asking task when one of them answers it with
+ * `task_send answers_ask` (sessions/ask-answer.ts), whose message tells the asker once.
+ */
+export interface AskAnswer {
+  /** The ask it answered (askKey) and its words. */
+  key: string;
+  ask: string;
+  /** Its answer, cut to a line or two. */
+  text: string;
+  /** Who answered: a task id, or `human`, and the name the user reads. */
+  by: string;
+  byTitle: string;
+  at: string;
+  /** The user's own words it acts on, for an ask of a kind only they approve (APPROVAL_KINDS). */
+  userWords?: string;
+}
+
+/** An answer above holds this long: a much later ask in the same words is a new decision. */
+export const ASK_ANSWER_HOLD_MS = 7 * 24 * 60 * 60_000;
+
+/** Whether `answer` still answers an ask in these words now (the same key, inside the hold). Pure. */
+export function answerHolds(answer: AskAnswer | null | undefined, ask: string | null | undefined, nowMs = Date.now()): boolean {
+  if (!answer || !ask) return false;
+  const at = Date.parse(answer.at);
+  return Number.isFinite(at) && nowMs - at <= ASK_ANSWER_HOLD_MS && askKey(ask) === answer.key;
+}
+
+/** Ask kinds only the user may approve: an answer in their place quotes their words (user_words). */
+export const APPROVAL_KINDS: ReadonlySet<string> = new Set(['outward', 'spending', 'credentials', 'permissions', 'cloud_delete', 'irreversible']);
+
+/** Walnut's line at the head of the answering message: the one time the asker is told. */
+export function askAnswerLine(ask: string, byTitle: string): string {
+  return `[Walnut: ${byTitle.replace(/\s+/g, ' ').slice(0, 80)} answers here, in the user's place, the ask you put to the user: "${ask.replace(/\s+/g, ' ').slice(0, 200)}". `
+    + 'Walnut took it off the user\'s Needs you. Act on this answer and do not ask the user it again; if it leaves a different decision open, ask that one in its own words.]';
+}
+
+/** Its wait in words, after "Waiting on": its own next step, and who answered in the user's place, first. */
+export function answeredWords(a: Pick<AskAnswer, 'byTitle' | 'text'>): string {
+  return `its next step, answered by ${a.byTitle.replace(/\s+/g, ' ').slice(0, 80)} for you: ${a.text.replace(/\s+/g, ' ').slice(0, 160)}`;
+}
+
+/**
+ * The status shown for a task whose own question a lead, VP or Main already answered for the user
+ * (`answer`, Task.ask_answered): Waiting on itself to act on the answer, never Needs you, while it
+ * asks the same in the same words. Any other status as derived. Only the session's own question: a
+ * Board choice is answered on the Board, a prompt or a failure in the session. Pure.
+ */
+export function answeredAbove(derived: UserStatus, answer: AskAnswer | null | undefined, nowMs = Date.now()): UserStatus {
+  if (!answer || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
+  if (!answerHolds(answer, derived.ask, nowMs)) return derived;
+  return {
+    state: 'waiting', kind: 'task', waitingOn: answeredWords(answer),
+    answeredFor: { by: answer.by, byTitle: answer.byTitle, at: answer.at, ask: answer.ask },
+    ...(derived.now ? { now: derived.now } : {}),
+    ...(derived.next ? { next: derived.next } : {}),
+    ...(derived.at ? { at: derived.at } : {}),
+    ...(derived.stale ? { stale: derived.stale } : {}),
+    ...(derived.due ? { due: derived.due } : {}),
+    ...(derived.asks ? { asks: derived.asks } : {}),
+  };
 }
 
 /** An open ask in a task's tree, as a write is checked against it (same-ask-tree.ts). */

@@ -128,8 +128,9 @@ defineOp({
     wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default false. Pass true only when '
       + 'the rest of the work waits on that outside thing and nothing of this turn is for the user to read (never in the turn that answers '
       + 'the user\'s message)'),
-    watches: z.string().optional().describe('What this trigger watches for you, so Walnut\'s 4-hour re-check of it stays quiet while '
-      + 'the trigger is armed: "ask" = your status\'s ask of the user, or a letter id (lt-...) you sent them. '
+    watches: z.string().optional().describe('What this trigger watches for you: "ask" = your status\'s ask of the user (each run of its check '
+      + 'counts as that ask\'s check, so Walnut\'s 4-hour re-check stays quiet while it keeps running), or a letter id (lt-...) you sent them '
+      + '(that letter\'s re-check stays quiet while the trigger is armed). '
       + 'Such a trigger never parks the task: it waits on the user, so it stays Needs you'),
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("2h", "1d"). Set it to when you expect the event, kept short: it is the check that the trigger works. '

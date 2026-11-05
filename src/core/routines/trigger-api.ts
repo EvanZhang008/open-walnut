@@ -282,7 +282,14 @@ async function recordWatch(taskId: string, jobId: string, watches: string): Prom
   const { updateTaskRaw } = await import('../task-manager.js');
   const { withWatch } = await import('../sessions/recheck-watch.js');
   const at = new Date().toISOString();
-  await updateTaskRaw(taskId, (cur) => ({ recheck_watch: withWatch(cur.recheck_watch, { trigger: jobId, watches, at }) }),
+  const { askKey } = await import('../same-ask.js');
+  // A watch of the ask remembers which ask (its words' key): its runs check that one, never a later ask.
+  const askOf = (cur: { status_report?: { state?: string; ask?: string }; user_status?: { state?: string; ask?: string } }) =>
+    (cur.status_report?.state === 'needs' ? cur.status_report.ask : undefined) ?? (cur.user_status?.state === 'needs' ? cur.user_status.ask : undefined);
+  await updateTaskRaw(taskId, (cur) => {
+    const key = watches === 'ask' ? askKey(askOf(cur)) : '';
+    return { recheck_watch: withWatch(cur.recheck_watch, { trigger: jobId, watches, at, ...(key ? { key } : {}) }) };
+  },
     { push: false, source: 'trigger-watch' }).catch((err) => log.web.warn('trigger watch not recorded', {
     target: taskId, jobId, error: err instanceof Error ? err.message : String(err),
   }));

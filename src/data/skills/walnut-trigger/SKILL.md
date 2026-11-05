@@ -216,8 +216,10 @@ or a file only that host has), and never paste one inline as `curl -H
    `"wait":true` only when the rest of the work truly waits on the watched thing
    and nothing of this turn is for the user to read.
    Watching something you asked the user (your status's ask, or a letter you
-   sent them)? Add `"watches":"ask"` or `"watches":"<letter id>"`: Walnut's
-   4-hour re-check of it then stays quiet while this trigger is armed.
+   sent them)? Add `"watches":"ask"` or `"watches":"<letter id>"`. With `ask`,
+   each run of the check counts as that ask's check, so Walnut's 4-hour re-check
+   stays quiet while the trigger keeps running; with a letter id, that letter's
+   re-check stays quiet while the trigger is armed.
 5. **Report the id and the cadence.** Then stop; do not poll the trigger yourself.
 
 Default cadence when the user gave none: **every 5 minutes**. Never poll faster

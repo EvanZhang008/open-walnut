@@ -38,6 +38,7 @@ import {
   type StatusSectionsModel,
   needsLine,
   waitingReason,
+  waitingHover,
 } from './status-sections';
 import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
 import { FOLD_KEY_ATTR } from './section-fold-rule';
@@ -161,7 +162,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       ) : null}
     </span>
   ) : reasonText ? (
-    <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
+    <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText}>{reasonText}</span>
   ) : null;
   // The same rename as every task row: double-click the title (useInlineTitleEdit).
   const title = (
