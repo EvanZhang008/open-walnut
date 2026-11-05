@@ -18,7 +18,7 @@ function input(tasks: Task[], spend: Record<string, Partial<TaskSpend>>, over: P
   const sessions = new Map(tasks.filter((t) => t.session_id).map((t) => [t.session_id!, { startedAt: '2026-11-02T00:00:00.000Z' }]));
   return {
     tasks, sessions,
-    spend: new Map(Object.entries(spend).map(([id, s]) => [id, { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, engine: 'claude', model: 'claude-opus-5-5', ...s }])),
+    spend: new Map(Object.entries(spend).map(([id, s]) => [id, { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, unknown: 0, engine: 'claude', model: 'claude-opus-5-5', ...s }])),
     followUps: () => 0, range: {}, dayOf: (iso) => iso.slice(0, 10), ...over,
   };
 }
@@ -236,9 +236,42 @@ describe('aggregateEngineCompare', () => {
     expect(on.split.entries.map((e) => e.label)).toEqual(['Claude Code · Claude', 'Claude Code · GPT (gpt-6.1-sol)']);
   });
 
+  it('requests with no token counts make cost and tokens unknown, never a zero that wins', () => {
+    const tasks = Array.from({ length: 5 }, (_, i) => done(`z${i}`, 1));
+    const out = aggregateEngineCompare(input(tasks, Object.fromEntries(tasks.map((t) => [t.id, { unknown: 12 }]))));
+    expect(out.rows[0]).toMatchObject({ noUsage: 5, partialCost: 5, partialTokens: 5, medianCostUsd: null, medianTokens: null });
+    const some = aggregateEngineCompare(input([done('k', 1)], { k: { costUsd: 3, tokens: 1000, unknown: 2 } }));
+    expect(some.rows[0]).toMatchObject({ noUsage: 0, partialCost: 1, partialTokens: 1, medianCostUsd: 3 });
+  });
+
+  it('a plain Claude Code pick is the Claude column even when a later model in it carried the cost', () => {
+    const pick = { key: 'claude', engine: 'claude' as const, at: '2026-11-02T00:00:00.000Z' };
+    const inp = input([done('later', 1, { engine_pick: pick })], { later: { costUsd: 8, engine: 'claude', model: 'gpt-6.1-sol' } });
+    const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
+    expect(fair.rows.map((r) => [r.key, r.switched])).toEqual([['claude|Claude', 1]]);
+    expect(fair.tasks[0]).toMatchObject({ key: 'claude|Claude', switched: true });
+  });
+
   it('reports the split as configured', () => {
     expect(aggregateEngineCompare(input([], {})).split).toEqual({ on: false, entries: [] });
     const on = aggregateEngineCompare(input([], {}, { config: { defaults: { engine_split: ['claude', { engine: 'codex', weight: 2 }] } } }));
     expect(on.split).toEqual({ on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 2 }] });
+  });
+});
+
+describe('taskSpend', () => {
+  it('gives a task to the engine and model family that carried most of it, models of one family summed', async () => {
+    const { taskSpend } = await import('../../../src/core/usage/engine-compare.js');
+    const row = (engine: string, model: string, input: number, unknown = 0) => ({
+      date: '2026-11-02', host: '', source: 'session', engine, sessionId: 's1', taskId: 't1', model, agent: '', band: '',
+      calls: 1, input, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, unknown,
+    });
+    // Models with no price, so the weights are the tokens: two Claude models of 300 each beat one GPT of 400.
+    const rows = [row('claude', 'claude-nopriced-a', 300), row('claude', 'claude-nopriced-b', 300), row('codex', 'gpt-nopriced', 400, 3)];
+    const rollup = { setThresholds: () => {}, query: () => rows } as unknown as Parameters<typeof taskSpend>[0];
+    const spend = (await taskSpend(rollup, undefined, () => undefined)).get('t1')!;
+    expect(spend.engine).toBe('claude');
+    expect(modelFamily(spend.model)).toBe('Claude');
+    expect(spend).toMatchObject({ tokens: 1000, unknown: 3 });
   });
 });

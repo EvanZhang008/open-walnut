@@ -38,6 +38,8 @@ export interface TaskSpend {
   outputTokens: number;
   /** Requests with no price: costUsd leaves them out. */
   unpriced: number;
+  /** Requests whose token counts were not recorded: cost and tokens both leave them out. */
+  unknown: number;
   /** The engine and model that carried most of the cost (or tokens, when nothing was priced). */
   engine: string;
   model: string;
@@ -53,8 +55,10 @@ export interface EngineCompareTask {
   costUsd: number;
   /** Some of its requests have no price, or none of its usage was recorded, so costUsd is a floor. */
   partialCost: boolean;
-  /** No usage of it was recorded (an engine Walnut does not read usage from): cost and tokens are unknown. */
+  /** No usage of it was recorded (an engine Walnut does not read usage from, or requests with no token counts): cost and tokens are unknown. */
   noUsage: boolean;
+  /** Some of its requests have no token counts (or none were recorded): tokens are a floor. */
+  partialTokens: boolean;
   tokens: number;
   reviews: number;
   /** What its reviewer subtasks cost. */
@@ -85,6 +89,8 @@ export interface EngineCompareRow {
   partialCost: number;
   /** Tasks with no usage recorded: their tokens are unknown too. */
   noUsage: number;
+  /** Tasks whose tokens leave out requests with no token counts (noUsage ones included). */
+  partialTokens: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched: number;
   medianCostUsd: number | null;
@@ -149,6 +155,11 @@ export interface CompareInput {
   dayOf: (iso: string) => string;
 }
 
+/** Nothing of it is known: no spend, or every request it made has no token counts. */
+function usageUnknown(spend: TaskSpend | undefined): boolean {
+  return !spend || (spend.unknown > 0 && spend.tokens === 0 && spend.costUsd === 0);
+}
+
 function median(xs: number[]): number | null {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -197,7 +208,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const spend = input.spend.get(t.id);
     reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
     reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
-    if (!spend || spend.unpriced > 0) reviewPartial.add(t.parent_task_id);
+    if (!spend || spend.unpriced > 0 || spend.unknown > 0) reviewPartial.add(t.parent_task_id);
   }
   type Group = { key: string; engine: string; family: ModelFamily };
   type Candidate = EngineCompareTask & { finishedAt: string; byCost: Group; byPick: Group | null };
@@ -225,7 +236,9 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     let byPick: Group | null = null;
     if (t.engine_pick) {
       const pe = resolveEngine(t.engine_pick.engine);
-      const pf = modelFamily(t.engine_pick.model) ?? (pe === engine ? family : ENGINE_FAMILY[pe] ?? 'Other');
+      // Fixed at assignment: the model the entry names, else the engine's own default family, never
+      // read back from where the cost went (a task moved to another model in the same engine is a move).
+      const pf = modelFamily(t.engine_pick.model) ?? ENGINE_FAMILY[pe] ?? (pe === engine ? family : 'Other');
       byPick = { key: `${pe}|${pf}`, engine: pe, family: pf };
     }
     const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
@@ -237,7 +250,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     candidates.push({
       byCost, byPick, taskId: t.id, title: t.title, project: t.project ?? '', key: byCost.key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
-      costUsd: spend?.costUsd ?? 0, partialCost: !spend || spend.unpriced > 0, noUsage: !spend, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
+      costUsd: spend?.costUsd ?? 0, partialCost: !spend || spend.unpriced > 0 || spend.unknown > 0, noUsage: usageUnknown(spend),
+      partialTokens: !spend || spend.unknown > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
       switched: !!byPick && byPick.key !== byCost.key, finishedAt: done ? t.completed_at! : '',
     });
@@ -274,7 +288,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       medianHours: median(done.map((p) => p.hours).filter((h): h is number => h !== null)),
       costUsd: all.reduce((a, p) => a + p.costUsd, 0), partialCost: all.filter((p) => p.partialCost).length,
       // Under the column the split assigned, in either view.
-      noUsage: all.filter((p) => p.noUsage).length, switched: picked.filter((p) => p.switched && p.byPick?.key === key).length,
+      noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && p.byPick?.key === key).length,
       // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
@@ -325,10 +339,12 @@ export async function taskSpend(rollup: CostRollup, overrides: Record<string, Us
     if (!taskId) continue;
     const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
     const tokens = p.input + p.output + p.cacheRead + p.cacheWrite5m + p.cacheWrite1h;
-    const acc = out.get(taskId) ?? { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, engine: r.engine, model: r.model, top: -1 };
+    const acc = out.get(taskId) ?? { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, unknown: 0, engine: r.engine, model: r.model, top: -1 };
     acc.costUsd += p.costUsd; acc.tokens += tokens; acc.outputTokens += p.output; acc.unpriced += p.unpriced;
-    // The engine and model that carried most of it: cost first, tokens break the tie for unpriced rows.
-    const wk = `${taskId}\u0000${r.engine}\u0000${r.model}`;
+    acc.unknown += Number(r.unknown) || 0;
+    // The engine and model family that carried most of it, summed the way the columns are (Opus and
+    // Sonnet are one Claude column): cost first, tokens break the tie for unpriced rows.
+    const wk = `${taskId}\u0000${r.engine}\u0000${modelFamily(r.model) ?? 'Other'}`;
     const w = (weightOf.get(wk) ?? 0) + p.costUsd * 1e9 + tokens;
     weightOf.set(wk, w);
     if (w > acc.top) { acc.top = w; acc.engine = r.engine; acc.model = r.model; }

@@ -52,6 +52,8 @@ interface Metric {
 const ownPartial = (r: EngineCompareRow) => r.partialCost;
 const reviewPartial = (r: EngineCompareRow) => r.reviewPartialCost ?? 0;
 const noUsage = (r: EngineCompareRow) => r.noUsage ?? 0;
+/** Tasks whose tokens leave something out (an older server sends only noUsage). */
+const tokensPartial = (r: EngineCompareRow) => r.partialTokens ?? noUsage(r);
 const tasksWord = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
 /** The tooltip of one task's cost: why it is unknown or a floor. */
 function taskCostNote(t: EngineCompareTask): string | undefined {
@@ -63,7 +65,7 @@ function taskCostNote(t: EngineCompareTask): string | undefined {
 /** The tooltip of a value that is a floor: which of its tasks it leaves out, and why. */
 function partialNote(m: Metric, r: EngineCompareRow): string {
   const none = noUsage(r);
-  if (m.partial === noUsage) return `${tasksWord(none)} had no usage recorded: their tokens are unknown`;
+  if (m.partial === tokensPartial) return `${tasksWord(tokensPartial(r))} had requests with no token counts recorded: the tokens leave those out`;
   const unpriced = m.partial!(r) - (m.partial === ownPartial ? none : 0);
   return [unpriced > 0 && `${tasksWord(unpriced)} used a model with no price`, m.partial === ownPartial && none > 0 && `${tasksWord(none)} had no usage recorded`]
     .filter(Boolean).join(', ') + ': the cost leaves those out';
@@ -76,7 +78,7 @@ const METRICS: Metric[] = [
   { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true },
   { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: ownPartial },
   { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => r.costUsd, show: (n) => money(n ?? 0), partial: ownPartial },
-  { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: noUsage },
+  { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: tokensPartial },
   { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a title starting with "Review" or naming a reviewer): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.', value: (r) => r.reviewCostPerTask, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },

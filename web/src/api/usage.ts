@@ -216,6 +216,8 @@ export interface EngineCompareRow {
   partialCost: number;
   /** Tasks with no usage recorded (an older server leaves it out). */
   noUsage?: number;
+  /** Tasks whose tokens leave out requests with no token counts. */
+  partialTokens?: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched?: number;
   medianCostUsd: number | null;
