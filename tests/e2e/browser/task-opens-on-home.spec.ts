@@ -13,6 +13,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { revealInTasksTable } from './tasks-table-helpers'
+import { selectSection } from './todo-panel-helpers'
 
 const TASK_ID = 'pw-task-store-sync'
 const TITLE = 'Store sync fixture task'
@@ -24,9 +25,23 @@ test.describe.configure({ timeout: 90_000 })
 const located = (page: Page, id: string) =>
   page.locator(`#home-task-navigation [data-task-id="${id}"]`).and(page.locator('.task-focused, .todo-pinned-card-active'))
 
+/**
+ * The task panel never changes its tab by itself (6b083a264, 2026-11-04): a task opened from
+ * outside that the tab does not draw leaves the user on their tab with a note saying where it is,
+ * and the note's "Show in …" goes there. Which tab a fresh browser opens on is the fixture's shared
+ * ui-prefs (ui-prefs-sync mirrors walnut-todo-active-section), so another spec's pick decides it
+ * (2026-11-05 CI shard 14: task-move-project.spec.ts had just picked Focus): either way is the rule.
+ */
 async function expectOnHome(page: Page, id: string): Promise<void> {
   await expect.poll(() => new URL(page.url()).pathname).toBe('/')
-  await expect(located(page, id)).toHaveCount(1, { timeout: 60_000 })
+  const note = page.locator('#home-task-navigation [data-testid="todo-offview-note"]')
+  await expect.poll(async () => (await located(page, id).count()) + (await note.count()), { timeout: 60_000 }).toBeGreaterThan(0)
+  if (await located(page, id).count() === 0) {
+    await expect(note).toContainText(`${TITLE} is not in `)
+    await note.getByTestId('todo-offview-show').click()
+    await expect(note).toHaveCount(0)
+  }
+  await expect(located(page, id)).toHaveCount(1, { timeout: 20_000 })
   await expect(located(page, id)).toBeInViewport()
 }
 
@@ -36,6 +51,25 @@ test('an old /tasks/<id> link and an old task pop-out link open the task on Home
 
   await page.goto(`/popout?view=task&id=${TASK_ID}`)
   await expectOnHome(page, TASK_ID)
+})
+
+test('an old link opened on a tab that does not draw the task: the note says so, and Show in brings the task into view', async ({ page }) => {
+  await page.goto('/')
+  await selectSection(page, 'Focus')
+  try {
+    await page.goto(`/tasks/${TASK_ID}`)
+    const note = page.locator('#home-task-navigation [data-testid="todo-offview-note"]')
+    await expect(note).toContainText(`${TITLE} is not in Focus.`, { timeout: 60_000 })
+    await expect(located(page, TASK_ID)).toHaveCount(0)
+    // The tab it opens renders in a transition: the scroll waits for it (TodoPanel showAfterSwitchRef).
+    await note.getByTestId('todo-offview-show').click()
+    await expect(note).toHaveCount(0)
+    await expect(located(page, TASK_ID)).toHaveCount(1, { timeout: 20_000 })
+    await expect(located(page, TASK_ID)).toBeInViewport()
+  } finally {
+    // The tab is shared through the fixture's ui-prefs: leave it on All, the default.
+    await selectSection(page, 'All')
+  }
 })
 
 test('a task clicked on the Tasks page opens on Home, and its menu\'s Details opens the popup there', async ({ page }) => {
