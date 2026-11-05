@@ -19,12 +19,27 @@ export function importSummaryLine(p: ClaudeCodeImportPreview, name: string): str
   const credentials = p.credentials.kind === 'bedrock' ? 'Amazon Bedrock credentials'
     : p.credentials.kind === 'anthropic-key' ? 'an Anthropic API key'
       : p.credentials.kind === 'sign-in' ? 'no API credentials (Claude Code signs in with an account, which pi cannot share)'
-        : 'no credentials';
+        : p.gateway ? 'Claude models' : 'no credentials';
   const parts = [
-    credentials,
+    p.gateway ? `${credentials} through your gateway at ${p.gateway.baseUrl}` : credentials,
     plural(p.mcpServers.length, 'MCP server'),
     plural(skillCount, 'skill or command', 'skills and commands'),
     plural(p.instructions.length, 'instruction source'),
   ];
   return `${name} gets ${parts.join(', ')}. ${plural(p.cannotCarry.length, 'thing')} cannot carry over.`;
+}
+
+/**
+ * The gateway change in plain words: which provider pi's models.json gets, where it sends
+ * requests, and which models it lists. Empty when Claude Code names no gateway.
+ */
+export function gatewayChangeLine(p: ClaudeCodeImportPreview, name: string): string {
+  const g = p.gateway;
+  if (!g) return '';
+  const speaks = g.api === 'bedrock-converse-stream' ? 'Amazon Bedrock requests' : 'Anthropic API requests';
+  const models = `${plural(g.modelIds.length, 'model')} (${g.modelIds.join(', ')})`;
+  const head = g.change === 'add' ? `Adds the provider ${g.provider} to ${g.path}`
+    : g.change === 'update' ? `Updates the provider ${g.provider} in ${g.path}`
+      : `${g.path} already has the provider ${g.provider}`;
+  return `${head}: it sends ${speaks} to your gateway at ${g.baseUrl}, as Claude Code does (${g.from}), with ${models}. ${name} starts on it, so no request goes to the cloud provider directly. Other providers in the file stay as they are.`;
 }

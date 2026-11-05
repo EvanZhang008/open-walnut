@@ -7,8 +7,9 @@
  * nothing in Claude Code's files. What it does:
  *
  *   - credentials: the provider variables in ~/.claude/settings.json `env` (AWS region,
- *     profile, keys, bearer token, the Bedrock endpoint), only where the process does not
- *     already set them;
+ *     profile, keys, bearer token, the Bedrock endpoint, an Anthropic key or auth token),
+ *     only where the process does not already set them (Walnut's gateway provider in pi's
+ *     models.json names its key as one of these variables);
  *   - MCP servers: the user's servers in ~/.claude.json, the project's own and approved
  *     .mcp.json servers, and the servers of every enabled Claude Code plugin;
  *   - skills and slash commands: ~/.claude/skills, ~/.claude/commands, the project's
@@ -26,7 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const WALNUT_CLAUDE_CODE_EXTENSION_VERSION = 1
+export const WALNUT_CLAUDE_CODE_EXTENSION_VERSION = 2
 
 // ── Reading files ────────────────────────────────────────────────────────────
 
@@ -123,12 +124,12 @@ function isWithin(child: string, parent: string): boolean {
 const COPIED_ENV_KEYS = [
   'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_PROFILE', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
   'AWS_SESSION_TOKEN', 'AWS_BEARER_TOKEN_BEDROCK', 'AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE',
-  'ANTHROPIC_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy',
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy',
   'NODE_EXTRA_CA_CERTS',
 ] as const
 
 /** Values that are secrets: shown by name only, never by value. */
-const SECRET_ENV_KEYS = new Set(['AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_BEARER_TOKEN_BEDROCK', 'ANTHROPIC_API_KEY', 'AWS_ACCESS_KEY_ID'])
+const SECRET_ENV_KEYS = new Set(['AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_BEARER_TOKEN_BEDROCK', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'AWS_ACCESS_KEY_ID'])
 
 export function isSecretEnvKey(key: string): boolean {
   return SECRET_ENV_KEYS.has(key)

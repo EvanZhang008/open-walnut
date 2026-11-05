@@ -4,14 +4,16 @@
  *
  * One click, per host: Walnut installs the walnut-claude-code pi extension
  * (src/data/pi/walnut-claude-code.ts) into that host's pi folder and points pi's own
- * settings at the model Claude Code uses. The extension then reads Claude Code's files
+ * settings at the model Claude Code uses (through Claude Code's own gateway when it names one:
+ * pi-gateway.ts). The extension then reads Claude Code's files
  * live every time pi starts (credentials, MCP servers, skills, commands, CLAUDE.md), so
  * nothing is copied that could go stale and no secret leaves Claude Code's own file.
  *
  * `previewClaudeCodeImport` says exactly what the import will bring and what cannot
  * carry over, by running the extension's own collectors over the host's files;
- * `applyClaudeCodeImport` writes the two files (pi's settings.json, by key, and the
- * extension) with the daemon's guarded atomic replace. Claude Code's files are only read.
+ * `applyClaudeCodeImport` writes the extension, Walnut's gateway entry in pi's models.json
+ * (when Claude Code names a gateway) and pi's settings.json (by key) with the daemon's guarded
+ * atomic replace. Claude Code's files are only read.
  */
 
 import { createHash } from 'node:crypto'
@@ -32,6 +34,7 @@ import {
   WALNUT_CLAUDE_CODE_EXTENSION_VERSION,
 } from '../../data/pi/walnut-claude-code.js'
 import { parseJsonObject, serializeJsonObject, type JsonObject } from './config-file-edit.js'
+import { gatewayChange, piGatewayFromClaudeCode, PI_GATEWAY_PROVIDER, withGatewayEntry, type PiGateway } from './pi-gateway.js'
 
 /** pi releases from this one carry MCP (pi.registerMcpServer); older ones still get the rest. */
 export const PI_MCP_MIN_VERSION = '0.99.0'
@@ -94,6 +97,20 @@ export interface ImportPreview {
   agentDir: string
   extension: { path: string; state: 'absent' | 'current' | 'outdated' | 'foreign'; version: number }
   settings: { path: string; changes: SettingChange[]; unreadable?: string }
+  /**
+   * Claude Code's gateway as a pi provider in models.json, or null when Claude Code names none.
+   * Only the entry named `provider` is Walnut's; the file's other providers are never touched.
+   */
+  gateway: null | {
+    path: string
+    provider: string
+    from: PiGateway['from']
+    api: PiGateway['api']
+    baseUrl: string
+    modelIds: string[]
+    change: 'add' | 'update' | 'none'
+    unreadable?: string
+  }
   credentials: { kind: 'bedrock' | 'anthropic-key' | 'sign-in' | 'none'; vars: Array<{ name: string; value?: string }>; note: string }
   mcpServers: ImportItem[]
   skippedMcpServers: ImportItem[]
@@ -219,6 +236,8 @@ export interface PiStartChoice {
   provider?: string
   model?: string
   thinking?: string
+  /** Claude Code's gateway, which `provider` then names (PI_GATEWAY_PROVIDER). */
+  gateway?: PiGateway
   notes: string[]
 }
 
@@ -229,20 +248,25 @@ export function piStartFromClaudeCode(files: ClaudeCodeFiles, processEnv: Record
   const env = (key: string): string | undefined => ccEnv[key] || processEnv[key] || undefined
   const notes: string[] = []
   const bedrock = claudeCodeEnv(files, {}).bedrock || /^(1|true)$/i.test(processEnv.CLAUDE_CODE_USE_BEDROCK ?? '')
-  const provider = bedrock ? 'amazon-bedrock' : 'anthropic'
   const rawModel = (typeof files.settings?.model === 'string' ? files.settings.model : undefined) || env('ANTHROPIC_MODEL')
-  let model: string | undefined
+  let resolved: string | undefined
   if (rawModel) {
     const alias = MODEL_ALIASES[piModelId(rawModel).toLowerCase()]
-    const resolved = alias ? env(alias) : rawModel
-    if (resolved) model = piModelId(resolved)
-    else notes.push(`Claude Code uses the "${rawModel}" alias with no model id behind it here, so pi keeps its own default model.`)
+    resolved = alias ? env(alias) : rawModel
   }
+  let model = resolved ? piModelId(resolved) : undefined
+  // A gateway Claude Code names is where pi goes too, never the cloud provider behind it.
+  const { gateway, note } = piGatewayFromClaudeCode(env, bedrock, resolved)
+  if (note) notes.push(note)
+  const gatewayUnusable = note !== undefined
+  const provider = gateway ? PI_GATEWAY_PROVIDER : gatewayUnusable ? undefined : bedrock ? 'amazon-bedrock' : 'anthropic'
+  if (gateway && !model) model = gateway.defaultModel
+  if (rawModel && !resolved && !model) notes.push(`Claude Code uses the "${rawModel}" alias with no model id behind it here, so pi keeps its own default model.`)
   let thinking: string | undefined
   const effort = typeof files.settings?.effortLevel === 'string' ? files.settings.effortLevel : undefined
   if (files.settings?.alwaysThinkingEnabled === false) thinking = 'off'
   else if (effort && EFFORTS.has(effort)) thinking = effort
-  return { provider, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}), notes }
+  return { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(thinking ? { thinking } : {}), ...(gateway ? { gateway } : {}), notes }
 }
 
 // ── Preview ──
@@ -296,10 +320,20 @@ export async function previewClaudeCodeImport(
   pi: PiInstall,
   home = '~',
 ): Promise<ImportPreview> {
+  return (await buildPreview(host, transport, pi, home)).preview
+}
+
+async function buildPreview(
+  host: string,
+  transport: ImportTransport,
+  pi: PiInstall,
+  home: string,
+): Promise<{ preview: ImportPreview; start: PiStartChoice }> {
   const env = transport.env ?? {}
   const agentDir = piAgentDir(transport.env)
   const extensionPath = path.posix.join(agentDir, 'extensions', EXTENSION_FILE_NAME)
   const settingsPath = path.posix.join(agentDir, 'settings.json')
+  const modelsPath = path.posix.join(agentDir, 'models.json')
   const ccPaths = claudePaths(home, env)
   const { value, entries, unreadable: unread } = await withHostReader(transport, (reader) => {
     const files = loadClaudeCodeFiles(reader, home, env)
@@ -321,6 +355,7 @@ export async function previewClaudeCodeImport(
       rules: { dir: rulesDir, files: ruleFiles(reader, rulesDir) },
       userAgents: reader.isDir(agentsDir) ? agentsDir : undefined,
       piSettings: reader.readText(settingsPath),
+      piModels: reader.readText(modelsPath),
       extension: reader.readText(extensionPath),
     }
   })
@@ -333,6 +368,19 @@ export async function previewClaudeCodeImport(
   }
   const start = piStartFromClaudeCode(files, env)
   const changes = unreadable ? [] : settingChanges(current, start)
+  let gateway: ImportPreview['gateway'] = null
+  if (start.gateway) {
+    let change: 'add' | 'update' | 'none' = 'none'
+    let modelsUnreadable: string | undefined
+    try { change = gatewayChange(value.piModels, start.gateway, modelsPath) } catch (err) {
+      modelsUnreadable = err instanceof Error ? err.message : String(err)
+    }
+    gateway = {
+      path: modelsPath, provider: PI_GATEWAY_PROVIDER, from: start.gateway.from, api: start.gateway.api,
+      baseUrl: start.gateway.baseUrl, modelIds: start.gateway.models.map((m) => m.id), change,
+      ...(modelsUnreadable ? { unreadable: modelsUnreadable } : {}),
+    }
+  }
 
   const shipped = readExtensionSource()
   const extensionState: ImportPreview['extension']['state'] = value.extension === undefined
@@ -340,18 +388,25 @@ export async function previewClaudeCodeImport(
     : value.extension === shipped ? 'current' : extensionVersionOf(value.extension) === null ? 'foreign' : 'outdated'
 
   const envPlan = claudeCodeEnv(files, {})
-  const ccEnv = (files.settings?.env as Record<string, unknown> | undefined) ?? {}
   const vars = Object.keys(envPlan.set).map((name) => (isSecretEnvKey(name) ? { name } : { name, value: envPlan.set[name] }))
+  const gw = start.gateway
+  const viaGateway = gw ? ` through your gateway at ${gw.baseUrl}, the address Claude Code uses (${gw.from})` : ''
+  const gatewayKey = !gw ? ''
+    : gw.keyFrom === 'variable' ? ` The gateway gets the ${gw.apiKey.slice(1)} that Claude Code sends it.`
+      : gw.keyFrom === 'skip-auth' ? ' Claude Code signs nothing for the gateway (CLAUDE_CODE_SKIP_BEDROCK_AUTH), and neither does pi.'
+        : ' Claude Code sends the gateway no key, so pi sends it a placeholder.'
   // The same answer the start choice gave (it also reads the host's own environment).
-  const credentials: ImportPreview['credentials'] = start.provider === 'amazon-bedrock'
-    ? { kind: 'bedrock', vars, note: vars.length > 0
-      ? 'pi reaches Amazon Bedrock with the region, endpoint and credentials in Claude Code\'s settings, read each time pi starts. Values marked secret are never copied or shown.'
-      : 'pi reaches Amazon Bedrock with the AWS credentials already in its environment on this host, as Claude Code does.' }
-    : vars.some((v) => v.name === 'ANTHROPIC_API_KEY')
-      ? { kind: 'anthropic-key', vars, note: 'pi uses the Anthropic API key in Claude Code\'s settings, read each time pi starts.' }
-      : files.settings
-        ? { kind: 'sign-in', vars, note: 'Claude Code signs in with your Claude account, which pi cannot borrow. Run pi once on this host and type /login, then pick Anthropic (Claude Pro/Max).' }
-        : { kind: 'none', vars, note: 'No Claude Code settings were found on this host.' }
+  const credentials: ImportPreview['credentials'] = envPlan.bedrock || start.provider === 'amazon-bedrock' || gw?.api === 'bedrock-converse-stream'
+    ? { kind: 'bedrock', vars, note: (vars.length > 0
+      ? `pi reaches Amazon Bedrock${viaGateway} with the region, endpoint and credentials in Claude Code's settings, read each time pi starts. Values marked secret are never copied or shown.`
+      : `pi reaches Amazon Bedrock${viaGateway} with the AWS credentials already in its environment on this host, as Claude Code does.`) + gatewayKey }
+    : vars.some((v) => v.name === 'ANTHROPIC_API_KEY' || v.name === 'ANTHROPIC_AUTH_TOKEN')
+      ? { kind: 'anthropic-key', vars, note: `pi uses the Anthropic key in Claude Code's settings${viaGateway}, read each time pi starts.${gatewayKey}` }
+      : gw
+        ? { kind: 'none', vars, note: `pi reaches Claude${viaGateway}.${gatewayKey}` }
+        : files.settings
+          ? { kind: 'sign-in', vars, note: 'Claude Code signs in with your Claude account, which pi cannot borrow. Run pi once on this host and type /login, then pick Anthropic (Claude Pro/Max).' }
+          : { kind: 'none', vars, note: 'No Claude Code settings were found on this host.' }
 
   const mcpServers = mcp.servers.map((s) => ({ name: s.name, detail: s.config.url ?? [s.config.command, ...(s.config.args ?? [])].join(' '), source: s.source }))
   const skippedMcpServers = mcp.skipped.map((s) => ({ name: s.name, detail: s.why, source: s.source }))
@@ -387,21 +442,22 @@ export async function previewClaudeCodeImport(
   if (files.settings?.statusLine || files.settings?.outputStyle) {
     cannotCarry.push({ what: 'Status line and output style', why: 'These shape Claude Code\'s own terminal screen.', nearest: 'pi has themes and its own footer.' })
   }
-  if (typeof ccEnv.ANTHROPIC_BASE_URL === 'string' && !envPlan.bedrock) {
-    cannotCarry.push({ what: 'ANTHROPIC_BASE_URL', why: 'pi takes a gateway address from its own models.json, not from this variable.', nearest: 'Set providers.anthropic.baseUrl in ~/.pi/agent/models.json.' })
+  if (gw?.api === 'bedrock-converse-stream' && gw.keyFrom === 'none') {
+    cannotCarry.push({ what: 'AWS request signing to the gateway', why: 'pi signs requests with AWS keys only for its built-in Amazon Bedrock provider, so it sends your gateway a placeholder bearer token instead.', nearest: 'Give Claude Code an AWS_BEARER_TOKEN_BEDROCK for the gateway, or CLAUDE_CODE_SKIP_BEDROCK_AUTH=1 when the gateway signs requests itself.' })
   }
   if (pi.needsUpdateForMcp) {
     cannotCarry.push({ what: 'MCP servers (this pi version)', why: `pi ${pi.version} is older than ${PI_MCP_MIN_VERSION}, the first release with MCP.`, nearest: `Update pi on this host: ${PI_UPDATE_COMMAND}` })
   }
   for (const note of start.notes) cannotCarry.push({ what: 'Model', why: note, nearest: 'Pick a model in a pi session or in pi\'s settings.' })
 
-  return {
+  const preview: ImportPreview = {
     host,
     pi,
     claudeCode: { found: files.settings !== undefined || files.globalConfig !== undefined, settingsPath: path.posix.join(ccPaths.dir, 'settings.json') },
     agentDir,
     extension: { path: extensionPath, state: extensionState, version: WALNUT_CLAUDE_CODE_EXTENSION_VERSION },
     settings: { path: settingsPath, changes, ...(unreadable ? { unreadable } : {}) },
+    gateway,
     credentials,
     mcpServers,
     skippedMcpServers,
@@ -410,8 +466,9 @@ export async function previewClaudeCodeImport(
     instructions,
     cannotCarry,
     warnings: unread,
-    upToDate: extensionState === 'current' && changes.length === 0 && !unreadable,
+    upToDate: extensionState === 'current' && changes.length === 0 && !unreadable && (gateway === null || (gateway.change === 'none' && !gateway.unreadable)),
   }
+  return { preview, start }
 }
 
 // ── Apply ──
@@ -448,12 +505,15 @@ export async function applyClaudeCodeImport(
   pi: PiInstall,
   home = '~',
 ): Promise<ImportResult> {
-  const before = await previewClaudeCodeImport(host, transport, pi, home)
+  const { preview: before, start } = await buildPreview(host, transport, pi, home)
   if (before.extension.state === 'foreign') {
     throw new ClaudeCodeImportError(`${before.extension.path} exists and was not written by Walnut; move it away and import again.`, 409)
   }
   if (before.settings.unreadable) {
     throw new ClaudeCodeImportError(`${before.settings.path} could not be read (${before.settings.unreadable}); fix it and import again.`, 409)
+  }
+  if (before.gateway?.unreadable) {
+    throw new ClaudeCodeImportError(`${before.gateway.path} could not be read (${before.gateway.unreadable}); fix it and import again.`, 409)
   }
   const written: string[] = []
   const source = readExtensionSource()
@@ -461,6 +521,12 @@ export async function applyClaudeCodeImport(
     if (current !== null && extensionVersionOf(current) === null) throw new ClaudeCodeImportError(`${before.extension.path} was replaced by another file meanwhile.`, 409)
     return source
   })) written.push(before.extension.path)
+  // The gateway entry goes in before settings.json names it as pi's default provider.
+  const planned = before.gateway
+  const gateway = start.gateway
+  if (planned && gateway && planned.change !== 'none' && await guardedWrite(transport, planned.path, (current) => withGatewayEntry(current, gateway, planned.path))) {
+    written.push(planned.path)
+  }
   const changes = before.settings.changes
   if (changes.length > 0 && await guardedWrite(transport, before.settings.path, (current) => {
     // Only the keys the preview named change; everything else in the file stays as it is.

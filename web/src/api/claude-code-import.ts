@@ -20,6 +20,20 @@ export interface ClaudeCodeImportPreview {
   agentDir: string;
   extension: { path: string; state: 'absent' | 'current' | 'outdated' | 'foreign'; version: number };
   settings: { path: string; changes: ClaudeCodeSettingChange[]; unreadable?: string };
+  /**
+   * Claude Code's gateway as a pi provider in models.json (null or absent: Claude Code names
+   * none, or an older server). Only the entry named `provider` is Walnut's.
+   */
+  gateway?: null | {
+    path: string;
+    provider: string;
+    from: 'ANTHROPIC_BEDROCK_BASE_URL' | 'ANTHROPIC_BASE_URL';
+    api: 'bedrock-converse-stream' | 'anthropic-messages';
+    baseUrl: string;
+    modelIds: string[];
+    change: 'add' | 'update' | 'none';
+    unreadable?: string;
+  };
   credentials: { kind: 'bedrock' | 'anthropic-key' | 'sign-in' | 'none'; vars: Array<{ name: string; value?: string }>; note: string };
   mcpServers: ClaudeCodeImportItem[];
   skippedMcpServers: ClaudeCodeImportItem[];

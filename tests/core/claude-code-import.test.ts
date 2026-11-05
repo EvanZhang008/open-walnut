@@ -313,7 +313,7 @@ describe('preview and apply', () => {
     const preview = await previewClaudeCodeImport('h', host(), pi)
     expect(preview.extension.state).toBe('absent')
     expect(preview.settings.changes).toEqual([
-      { key: 'defaultProvider', from: 'other', to: 'amazon-bedrock' },
+      { key: 'defaultProvider', from: 'other', to: 'claude-code-gateway' },
       { key: 'defaultModel', from: undefined, to: 'global.anthropic.claude-opus-5-5' },
       { key: 'defaultThinkingLevel', from: undefined, to: 'high' },
       { key: 'quietStartup', from: undefined, to: true },
@@ -326,17 +326,18 @@ describe('preview and apply', () => {
     expect(preview.skippedMcpServers.map((s) => s.name)).toEqual(['legacy'])
     expect(preview.skills).toEqual([{ name: '~/.claude/skills', detail: '1 skill', source: 'user' }])
     expect(preview.instructions[0].name).toBe('~/.claude/CLAUDE.md')
-    expect(preview.cannotCarry.map((c) => c.what)).toEqual(['Hooks', 'Permission mode and rules'])
+    expect(preview.cannotCarry.map((c) => c.what)).toEqual(['Hooks', 'Permission mode and rules', 'AWS request signing to the gateway'])
+    expect(preview.gateway).toMatchObject({ path: '~/.pi/agent/models.json', provider: 'claude-code-gateway', baseUrl: 'http://127.0.0.1:9000', change: 'add' })
     expect(preview.upToDate).toBe(false)
   })
 
   it('writes the extension and only the named settings keys, then reads as up to date', async () => {
     const t = host()
     const result = await applyClaudeCodeImport('h', t, pi)
-    expect(result.written).toEqual(['~/.pi/agent/extensions/walnut-claude-code.ts', '~/.pi/agent/settings.json'])
+    expect(result.written).toEqual(['~/.pi/agent/extensions/walnut-claude-code.ts', '~/.pi/agent/models.json', '~/.pi/agent/settings.json'])
     expect(t.tree['~/.pi/agent/extensions/walnut-claude-code.ts']).toBe(readExtensionSource())
     const settings = JSON.parse(t.tree['~/.pi/agent/settings.json'] as string)
-    expect(settings).toEqual({ theme: 'dark', defaultProvider: 'amazon-bedrock', defaultModel: 'global.anthropic.claude-opus-5-5', defaultThinkingLevel: 'high', quietStartup: true })
+    expect(settings).toEqual({ theme: 'dark', defaultProvider: 'claude-code-gateway', defaultModel: 'global.anthropic.claude-opus-5-5', defaultThinkingLevel: 'high', quietStartup: true })
     expect((t.tree['~/.pi/agent/settings.json'] as string).endsWith('\n')).toBe(true)
     expect(result.preview.upToDate).toBe(true)
     const again = await applyClaudeCodeImport('h', t, pi)

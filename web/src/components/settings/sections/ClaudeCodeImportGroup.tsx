@@ -18,7 +18,7 @@ import {
   type ClaudeCodeImportItem, type ClaudeCodeImportPreview,
 } from '@/api/claude-code-import';
 import { log } from '@/utils/log';
-import { importSummaryLine, settingValueText } from './claude-code-import-text';
+import { gatewayChangeLine, importSummaryLine, settingValueText } from './claude-code-import-text';
 import '@/styles/claude-code-import.css';
 
 type Phase =
@@ -153,7 +153,8 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
         help={`There is no ${preview.claudeCode.settingsPath} on this host, so there is nothing to import. Set ${name} up on its own, or install and sign in to Claude Code first.`} />
     );
   }
-  const blocked = preview.extension.state === 'foreign' || preview.settings.unreadable !== undefined;
+  const gatewayUnreadable = preview.gateway?.unreadable;
+  const blocked = preview.extension.state === 'foreign' || preview.settings.unreadable !== undefined || gatewayUnreadable !== undefined;
   return (
     <>
       <SettingsRow indent label="Summary" data-testid={`cc-import-summary-${engine}`} help={importSummaryLine(preview, name)} />
@@ -176,6 +177,9 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
               <li key={v.name}><span className="cc-import-name">{v.name}</span>{v.value !== undefined ? <span className="cc-import-detail"> = {v.value}</span> : <span className="cc-import-detail"> (secret, read in place)</span>}</li>
             ))}
           </ul>
+        )}
+        {preview.gateway && (
+          <p className="cc-import-gateway" data-testid={`cc-import-gateway-${engine}`}>{gatewayChangeLine(preview, name)}</p>
         )}
         {preview.settings.changes.length > 0 && (
           <ul className="cc-import-list" data-testid={`cc-import-changes-${engine}`}>
@@ -223,8 +227,10 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
           : preview.upToDate
             ? `${name} on this host already uses your Claude Code setup; it reads changes to Claude Code's files each time it starts.`
             : blocked
-              ? (preview.settings.unreadable ?? `${preview.extension.path} is not Walnut's file; move it away to import.`)
-              : `Writes ${preview.extension.path} and the changed keys of ${preview.settings.path}.`}
+              ? (preview.settings.unreadable ?? gatewayUnreadable ?? `${preview.extension.path} is not Walnut's file; move it away to import.`)
+              : preview.gateway && preview.gateway.change !== 'none'
+                ? `Writes ${preview.extension.path}, the ${preview.gateway.provider} provider in ${preview.gateway.path} and the changed keys of ${preview.settings.path}.`
+                : `Writes ${preview.extension.path} and the changed keys of ${preview.settings.path}.`}
         control={!written && !preview.upToDate ? (
           <button
             type="button"
