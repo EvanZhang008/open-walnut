@@ -178,7 +178,12 @@ describe('standalone mock daemon: the same order', () => {
     let refused: Record<string, unknown> | null = null
     for (let i = 0; i < 2000 && !refused; i++) {
       const reply = await ask({ cmd: 'sendRaw', sid, raw: '{"type":"control_request"}' })
-      if (reply.ok === false || (reply as { reason?: unknown }).reason) refused = reply
+      // Only a death refuses (session_dead, ENXIO). EAGAIN is a full FIFO of a CLI that is still
+      // alive (a loaded runner shrinks the pipe buffer to a page): wait and write again
+      // (2026-11-05, a push gate run counted it as the death, before the answer was read).
+      const reason = (reply as { reason?: unknown }).reason
+      if (reason === 'EAGAIN') { await new Promise((r) => setTimeout(r, 1)); continue }
+      if (reply.ok === false || reason) refused = reply
     }
     expect(refused, 'a write was refused once the CLI exited').not.toBeNull()
     const line = seen.findIndex((f) => f.ev === 'jsonl' && f.sid === sid && f.line === result)
