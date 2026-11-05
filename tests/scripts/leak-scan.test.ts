@@ -117,6 +117,18 @@ describe('leak-scan rules', () => {
     expect(labels('unzorblax zorblaxer')).toEqual([])
   })
 
+  it('never reads a term out of an opaque id: a lower-case word of three or more letter and digit parts', () => {
+    // 2026-11-05: a test letter id (a base-36 timestamp, then a random suffix) split into
+    // `mw`, `35` and a short term, in a public CI log. Ids like these fill every log.
+    expect(labels('{"letterId":"lt-mw35zorblax-fdfa03"}')).toEqual([])
+    expect(labels('task 1a2zorblax and 9zorblax7b')).toEqual([])
+    // Whole words, two parts and camelCase keep matching.
+    expect(labels('zorblax2 zorblax2026 2zorblax')).toEqual(['tool', 'tool', 'tool'])
+    expect(labels('lt-mw35-zorblax-fdfa03 mw35ZorblaxClient')).toEqual(['tool', 'tool'])
+    // An id in capitals is no base-36 id: its parts still count.
+    expect(labels('MW35ZORBLAX9')).toEqual(['tool'])
+  })
+
   it('keeps short C strings and UTF-8 runs of a binary, drops short noise', () => {
     // test data: two CJK characters (UTF-8, 6 bytes) then the term, so the run is 13 bytes
     const cjk = Buffer.from('\u4f60\u597dzorblax', 'utf8')

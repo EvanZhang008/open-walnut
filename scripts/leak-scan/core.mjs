@@ -155,6 +155,17 @@ export const RUN_BREAK = '\x1f'
 const PARTS = /[A-Z]{2,}(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g
 
 /**
+ * A lower-case word of three or more letter and digit parts (`mw35zqx1`, `a1b2c3`) is an
+ * opaque id (a base-36 timestamp, a random suffix), not words joined: its letter runs are
+ * chance, and a short term turns up among them (2026-11-05: a test letter id in a CI log
+ * read as a name). Such a word is matched whole, never by its parts. `foo2`, `foo2026`
+ * and camelCase still are.
+ */
+export function opaqueId(word, parts) {
+  return parts >= 3 && /^[a-z0-9]+$/.test(word)
+}
+
+/**
  * Finds every rule hit in a text. Returns [{ label, offset, length }], offsets into `text`.
  * `base` is added to every offset (for a text that is one chunk of a larger file).
  */
@@ -193,7 +204,7 @@ export function scanText(rules, text, base = 0) {
         const subs = []
         let p
         while ((p = PARTS.exec(raw)) !== null) subs.push([p[0], p.index])
-        if (subs.length > 1) {
+        if (subs.length > 1 && !opaqueId(raw, subs.length)) {
           for (const [w, at] of subs) {
             const label = ones.get(hashNum(norm(w), rules.seed))
             if (label) (parts ??= []).push([label, at, at + w.length])
