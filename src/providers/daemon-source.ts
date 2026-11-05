@@ -11051,6 +11051,29 @@ function recordMissingStartTime(sid, session) {
   return true;
 }
 
+/**
+ * True only when it is proven that the recorded process is not the one living under its pid:
+ * the daemon already saw it die, a start time was recorded, the pid now has another readable start
+ * time, and its command line (readable, not empty) names neither the session nor its argv files.
+ * Anything unread is not proof.
+ */
+function pidNowRunsAnotherProgram(sid, session, recordedStartTime) {
+  const pid = session.pid;
+  // Only a record whose death this daemon already saw: a live-looking record is never declared gone.
+  if (session.state !== 'dead') return false;
+  if (!recordedStartTime || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 1) return false;
+  if (sessions.get(sid) !== session || (SERVICE_MODE && session.bootId !== daemonBootId)) return false;
+  const now = readStartTime(pid);
+  if (!now || now === recordedStartTime) return false;
+  const argv = commandLineOf(pid);
+  if (argv === null || argv === '') return false;
+  // Loose on purpose: a live CLI runs its argv as files (cli-argv-files-core.ts), so any mention
+  // of the session or of one of its argv files means it may still be ours.
+  if (argv.includes(sid)) return false;
+  const files = Array.isArray(session.args) ? cliArgvFiles.namesIn(session.args.map(String)) : [];
+  return !files.some(function (name) { return argv.includes(name); });
+}
+
 function stopSessionProcess(ws, id, sid) {
   const session = sessions.get(sid);
   if (!session || !session.pid) {
@@ -11089,6 +11112,16 @@ function stopSessionProcess(ws, id, sid) {
       // A pid+startTime pair only identifies a process within one boot.
       && (!SERVICE_MODE || session.bootId === daemonBootId);
   };
+  if (!sameProcess() && pidNowRunsAnotherProgram(sid, session, originalStartTime)) {
+    // The recorded CLI is gone and its pid belongs to another program now (2026-11-05: a CLI
+    // stopped at 06:03 kept its record, the pid was reused, and a send to the session failed with
+    // "process identity is unknown" until the new program ended). Nothing is signalled.
+    logMsg('info', 'cmdStop: the recorded process is gone; its pid runs another program now (not signalled)', {
+      sid, pid, recordedStartTime: originalStartTime || null, state: session.state,
+    });
+    try { persistRegistry(); } catch (failure) { return sendError(ws, id, 'stop: registry persistence failed: ' + String(failure)); }
+    return sendOk(ws, id, { stopped: true, noop: true, reason: 'pid_reused' });
+  }
   if (!sameProcess()) {
     logMsg('warn', 'cmdStop: process identity is unknown; refusing to signal', {
       sid, pid, recordedStartTime: originalStartTime || null,

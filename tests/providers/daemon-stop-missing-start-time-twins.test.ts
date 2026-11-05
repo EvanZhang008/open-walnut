@@ -23,10 +23,12 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import nodeFs from 'node:fs'
+import nodeCrypto from 'node:crypto'
 import nodePath from 'node:path'
 import ts from 'typescript'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { argvNamesSession } from '../../src/providers/daemon-core.js'
+import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const SID = '43b00853-0000-4000-8000-00000000abcd'
@@ -36,6 +38,11 @@ const START = 'Tue Oct 27 20:50:35 2026'
 const SPAWN_ARGS = ['claude', '-p', '--output-format', 'stream-json', '--verbose', '--resume', SID, '--settings', '{"env":{"A":"1"}}']
 /** What ps prints for that spawn: the program resolved to a path, the rest as spawned. */
 const CLI_ARGV = ['/usr/local/bin/claude', ...SPAWN_ARGS.slice(1)].join(' ')
+/** The daemon's argv files (names only are read here; nothing is written). */
+const ARGV_FILES = createCliArgvFiles({ fs: nodeFs, path: nodePath, crypto: nodeCrypto, dir: '/nonexistent/walnut-argv' } as never)
+/** What ps prints for a CLI spawned since argv files: --settings is a file path. */
+const CLI_ARGV_FILES = ['/usr/local/bin/claude', ...SPAWN_ARGS.slice(1, -2), '--settings',
+  `/home/u/.cache/open-walnut/streams/argv/${ARGV_FILES.namesIn(SPAWN_ARGS)[0]}`].join(' ')
 
 type Twin = 'standalone' | 'template'
 interface Reply { id: number; ok: boolean; error?: string; data?: Record<string, unknown> }
@@ -62,6 +69,7 @@ function buildTwin(kind: Twin, world: World) {
   const logs: Array<{ level: string; msg: string; data?: Record<string, unknown> }> = []
   let persisted = 0
   let groupAlive = true
+  const reaped: string[] = []
   const sessions = new Map<string, Record<string, unknown>>([[SID, world.session]])
   const injected: Record<string, unknown> = {
     sessions,
@@ -74,17 +82,21 @@ function buildTwin(kind: Twin, world: World) {
     readStartTime: (pid: number) => (pid === PID ? world.liveStartTime : null),
     commandLineOf: (pid: number) => (pid === PID ? world.argv : ''),
     persistRegistry: () => { persisted++ },
-    reapSession: (sid: string) => { const s = sessions.get(sid); if (s) s.state = 'dead' },
+    reapSession: (sid: string) => { reaped.push(sid); const s = sessions.get(sid); if (s) s.state = 'dead' },
     isProcessGroupAlive: () => groupAlive,
     killProcessGroup: (_pid: number, sig: string) => { signals.push(sig); groupAlive = false },
     cancelTurnRetry: () => {},
     clearTurnRetryStreak: () => {},
     wsId: () => 7,
+    cliArgvFiles: ARGV_FILES,
   }
   const src = kind === 'standalone'
     ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
     : getDaemonSource()
   const parts = [sliceTopLevelFn(src, 'stopSessionProcess')!]
+  const reused = sliceTopLevelFn(src, 'pidNowRunsAnotherProgram')
+  expect(reused, 'both twins carry pidNowRunsAnotherProgram').toBeTruthy()
+  parts.push(reused!)
   const backfill = sliceTopLevelFn(src, 'recordMissingStartTime')
   if (backfill) parts.push(backfill)
   else parts.push('function recordMissingStartTime() { return false }')
@@ -102,7 +114,7 @@ function buildTwin(kind: Twin, world: World) {
   const names = Object.keys(injected)
   const built = new Function(...names, js)(...names.map((n) => injected[n]))
   const stop = () => Promise.resolve(built.stopSessionProcess({}, 1, SID))
-  return { stop, replies, signals, logs, persisted: () => persisted }
+  return { stop, replies, signals, logs, reaped, persisted: () => persisted }
 }
 
 describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a process with no recorded start time', (kind) => {
@@ -189,6 +201,60 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a proces
     expect(recycled.replies[0]!.error).toBe('stop: process identity is unknown; refusing to signal')
     expect(recycled.signals).toEqual([])
     expect(world.session.startTime, 'a recorded start time is never overwritten').toBe('Mon Oct 26 09:00:00 2026')
+  })
+})
+
+// 2026-11-05: a CLI stopped at 06:03 kept its record (state dead, pid 41900); the pid was then
+// reused by another program, and every send to the session failed with "process identity is
+// unknown; refusing to signal" (the server stops a dead record before it resumes) until that
+// program ended. A pid proven to run another program means the recorded process is gone.
+describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a record whose pid another program took', (kind) => {
+  let world: World
+  let killSpy: ReturnType<typeof vi.spyOn>
+  const OTHER = 'Wed Nov  4 22:10:00 2026'
+
+  beforeEach(() => {
+    world = {
+      session: { pid: PID, state: 'dead', exitCode: 0, startTime: START, args: SPAWN_ARGS },
+      liveStartTime: OTHER,
+      argv: '/Applications/Some.app/Contents/MacOS/helper --type=renderer',
+    }
+    killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, sig?: string | number) => {
+      if (sig === 0) return true
+      throw new Error(`the harness must never send a real signal (${String(sig)} to ${pid})`)
+    }) as typeof process.kill)
+  })
+
+  afterEach(() => {
+    for (const call of killSpy.mock.calls) expect(call[1]).toBe(0)
+    vi.restoreAllMocks()
+  })
+
+  it('answers already gone (pid_reused) and signals nothing: the send can resume the session', async () => {
+    const twin = buildTwin(kind, world)
+    await twin.stop()
+    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true, noop: true, reason: 'pid_reused' } }])
+    expect(twin.signals).toEqual([])
+    expect(twin.reaped, 'a dead record is not reaped twice').toEqual([])
+    expect(twin.persisted()).toBeGreaterThanOrEqual(1)
+  })
+
+
+  it.each([
+    ['its start time cannot be read', { liveStartTime: null }],
+    ['its command line cannot be read', { argv: null }],
+    ['its command line reads empty', { argv: '' }],
+    ['its command line still names this session (a CLI of it)', { argv: CLI_ARGV }],
+    ['its command line runs this session\'s argv files (a CLI spawned with argv files)', { argv: CLI_ARGV_FILES.replace(SID, 'x') }],
+    ['the record is not dead: the daemon never saw it die', { session: { pid: PID, state: 'running', startTime: START, args: SPAWN_ARGS } }],
+    ['the record is idle, not dead', { session: { pid: PID, state: 'idle', startTime: START, args: SPAWN_ARGS } }],
+  ])('still refuses when %s: no proof the recorded process is gone', async (_label, change) => {
+    Object.assign(world, change)
+    const twin = buildTwin(kind, world)
+    await twin.stop()
+    expect(twin.replies).toEqual([{ id: 1, ok: false, error: 'stop: process identity is unknown; refusing to signal' }])
+    expect(twin.signals).toEqual([])
+    expect(twin.reaped).toEqual([])
   })
 })
 
