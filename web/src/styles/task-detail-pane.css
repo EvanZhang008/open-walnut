@@ -322,6 +322,14 @@
   cursor: pointer;
 }
 .tdp-dep-result:hover { background: var(--bg-secondary); }
+/* The same small heading as the section's own, a little apart from the rows above it. */
+.tdp-dependents-label { margin: 10px 0 2px; }
+.tdp-dep-empty {
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
 .tdp-note-add {
   display: flex;
   align-items: center;

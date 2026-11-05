@@ -23,6 +23,7 @@ import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { mountBrowserView, _resetBrowserViewForTesting } from './browser-view-v1.js'
+import { missingIsNull } from '../../lib/id-ref.js'
 
 export const browserV1Router = Router()
 
@@ -271,7 +272,7 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
     const url = typeof b.url === 'string' ? b.url.slice(0, 4000) : ''
     if (tab === undefined || !taskId) throw new h.BrowserError('A tab and a task are needed.', 400, 'bad_request')
     const { getTask } = await import('../../core/task-manager.js')
-    if (!(await getTask(taskId).catch(() => null))) throw new h.BrowserError('No such task.', 404, 'task_not_found')
+    if (!(await getTask(taskId).catch(missingIsNull))) throw new h.BrowserError('No such task.', 404, 'task_not_found')
     const s = await sites()
     const site = s.siteOf(url)
     if (!site) throw new h.BrowserError('Agents use web pages only (http or https).', 400, 'not_a_web_page')

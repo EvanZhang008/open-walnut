@@ -17,6 +17,7 @@
  */
 
 import { log } from '../../logging/index.js'
+import { matchIdRef } from '../../lib/id-ref.js'
 import type { BackupLeader } from './backup-leader.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../../providers/daemon-frame-cap.js'
 
@@ -112,7 +113,7 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
       return { ok: false, code: 'bad_request', message: 'expect_reply needs a session caller — a reply can only be routed back to a tracked session' }
     }
     const all = await deps.sessions()
-    let candidates = all.filter((s) => s.id === to || (to.length >= 8 && s.id.startsWith(to)))
+    let candidates = matchIdRef(all, to).filter((s) => s.id === to || to.length >= 8)
     let targetTitle: string | undefined
     let current: string | undefined
     if (candidates.length !== 1) {

@@ -10,6 +10,7 @@
  * it, so a Board written while a lead still had open subtasks is known by the
  * time its last subtask finishes (review, 2026-10-26).
  */
+import { refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { wsClient } from '@/api/ws';
@@ -46,7 +47,7 @@ function subscribeOnce(): void {
   const onTask = (data: unknown) => {
     const parent = (data as { task?: { parent_task_id?: string | null } } | null)?.task?.parent_task_id;
     if (!parent) return;
-    for (const id of known.keys()) if (id === parent || id.startsWith(parent)) markStale(id);
+    for (const id of known.keys()) if (refNamesId(parent, id, known.has(parent))) markStale(id);
   };
   wsClient.onEvent('task:created', onTask);
   wsClient.onEvent('task:updated', onTask);

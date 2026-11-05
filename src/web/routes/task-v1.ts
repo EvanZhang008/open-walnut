@@ -39,6 +39,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
+import { matchParentRef, refNamesId } from '../../lib/id-ref.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { role } from '../../core/server-role.js'
@@ -72,6 +73,12 @@ function sendTaskManagerError(res: Response, err: unknown): boolean {
     return true
   }
   if (/Ambiguous ID prefix/i.test(msg)) {
+    sendError(res, 400, 'bad_request', msg)
+    return true
+  }
+  // An error that names the caller's own input (a depends_on id that is no task's, a task
+  // depending on itself: DependencyValidationError) is theirs to fix, never a 500.
+  if ((err as { status?: number } | null)?.status === 400) {
     sendError(res, 400, 'bad_request', msg)
     return true
   }
@@ -157,12 +164,13 @@ taskV1Router.get('/tasks/:id', async (req: Request, res: Response, next: NextFun
       detail.dependents = dependents.map((t) => ({ id: t.id, title: t.title, phase: t.phase }))
     }
     // Children — tolerate prefix parent_task_id (legacy data), like the web route.
-    const children = allTasks.filter((t) => t.parent_task_id && task.id.startsWith(t.parent_task_id))
+    const ids = new Set(allTasks.map((t) => t.id))
+    const children = allTasks.filter((t) => t.parent_task_id && refNamesId(t.parent_task_id, task.id, ids.has(t.parent_task_id), t.id))
     if (children.length > 0) {
       detail.children = children.map((t) => ({ id: t.id, title: t.title, phase: t.phase, status: t.status, priority: t.priority }))
     }
     if (task.parent_task_id) {
-      const parent = allTasks.find((t) => t.id.startsWith(task.parent_task_id!))
+      const parent = matchParentRef(allTasks, task)
       if (parent) detail.parent = { id: parent.id, title: parent.title, phase: parent.phase, status: parent.status }
     }
     // The link tags as the phone draws them: a name each, its kind, and whether the file is gone

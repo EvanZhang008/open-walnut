@@ -18,6 +18,7 @@ import type { HostKind } from '../../core/hosts/host-profile.js'
 import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types.js'
 import type { TransferJob } from '../../core/transfer/transfer-jobs.js'
 import { placement } from '../../core/server-role.js'
+import { missingIsNull } from '../../lib/id-ref.js'
 
 export const transferV1Router = Router()
 
@@ -48,7 +49,7 @@ async function enabledHosts(): Promise<string[]> {
 transferV1Router.get('/tasks/:id/transfer-options', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { getTask } = await import('../../core/task-manager.js')
-    const task = await getTask(String(req.params.id)).catch(() => null)
+    const task = await getTask(String(req.params.id)).catch(missingIsNull)
     if (!task) { res.status(404).json({ error: 'Task not found' }); return }
     const { taskConversation } = await import('../../core/sessions/task-session-claim.js')
     const session = await taskConversation(task.id)

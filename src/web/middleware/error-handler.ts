@@ -9,6 +9,7 @@ import { NEEDS_LEADER_HEADERS, isNeedsLeaderError, needsLeaderBody, shouldLogNee
 import { isTaskSyncError } from '../../core/task-sync-error.js'
 import { markHandledFailure } from './handled-failure.js'
 import { sendLinkFailure } from './link-failure-answer.js'
+import { idRefErrorStatus } from '../../lib/id-ref.js'
 
 /**
  * 404 handler for unknown API routes.
@@ -33,8 +34,9 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   // A host that did not answer, or whose link dropped mid-command: 503 or 504, a
   // warn line and no card, whichever route sent the command (link-failure-answer.ts).
   if (sendLinkFailure(req, res, err)) return
-  const status = (err as { status?: number }).status ?? 500
   const message = err.message || 'Internal server error'
+  // An id lookup that names several tasks, or none, is the caller's to fix (src/lib/id-ref.ts).
+  const status = (err as { status?: number }).status ?? idRefErrorStatus(message) ?? 500
 
   // Same normalization as the request logger, and for the same reason: this
   // log.error becomes a notification card, and the bridge fingerprints the
@@ -85,6 +87,7 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
 
   res.status(status).json({
     error: message,
-    ...(process.env.NODE_ENV !== 'production' && { details: err.stack }),
+    // A stack helps only for a server fault: a 4xx is the caller's to fix and says so in `error`.
+    ...(status >= 500 && process.env.NODE_ENV !== 'production' && { details: err.stack }),
   })
 }

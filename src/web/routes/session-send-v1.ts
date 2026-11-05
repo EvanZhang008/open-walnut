@@ -212,7 +212,7 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // (engine-switch.ts activeSessionFor), which a client shows instead.
     res.status(202).json({
       messageId: msg.id, ...(heldForTurn ? { afterTurn: true } : {}),
-      ...(msg.sessionId && !msg.sessionId.startsWith(sessionId) ? { deliveredTo: msg.sessionId } : {}),
+      ...(msg.sessionId && msg.sessionId !== sessionId ? { deliveredTo: msg.sessionId } : {}),
     })
   } catch (err) {
     next(err)

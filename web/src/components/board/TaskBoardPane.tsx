@@ -19,6 +19,7 @@
  * (`board_task_id`), and the owner, never the session's own task, is where every
  * write goes, whose events reload, and whose seen record and drafts are kept.
  */
+import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, apiDelete, apiPost, apiPut } from '@/api/client';
@@ -238,7 +239,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
 
   const openTask = useCallback((rawId: string) => {
     const ref = refs[rawId];
-    const full = ref?.id ?? store?.tasks.find((t) => t.id.startsWith(rawId))?.id ?? rawId;
+    const full = ref?.id ?? (store ? matchIdRef(store.tasks, rawId)[0]?.id : undefined) ?? rawId;
     log.info('board', 'task chip opened', { taskId, targetTaskId: full });
     if (onOpenTask) { onOpenTask(full); return; }
     if (onLocateTask) { onLocateTask(full); return; }

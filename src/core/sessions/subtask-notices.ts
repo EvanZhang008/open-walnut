@@ -46,6 +46,7 @@
 import { randomUUID } from 'node:crypto';
 import { isSupersededSession } from './engine-switch-marker.js';
 import { log } from '../../logging/index.js';
+import { refNamesId } from '../../lib/id-ref.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
 import type { SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
@@ -191,10 +192,12 @@ export async function parentCanHear(parentTaskId: string): Promise<boolean> {
   }
 }
 
-/** `task` names `parentId` as its parent; a stored parent id may be a legacy short prefix. */
-export function isSubtaskOf(task: Pick<Task, 'parent_task_id'> | null | undefined, parentId: string): boolean {
-  const p = task?.parent_task_id;
-  return !!p && parentId.startsWith(p);
+/**
+ * `task` names `parentId` as its parent; a stored parent id may be a legacy short prefix.
+ * `exactExists`: some task's id is the stored parent id itself, so it is no prefix (src/lib/id-ref.ts).
+ */
+export function isSubtaskOf(task: (Pick<Task, 'parent_task_id'> & { id?: string }) | null | undefined, parentId: string, exactExists = false): boolean {
+  return refNamesId(task?.parent_task_id, parentId, exactExists, task?.id);
 }
 
 /** Which of `ids` are tasks that are direct subtasks of `parentId`. */
@@ -203,7 +206,10 @@ async function subtasksAmong(parentId: string, ids: Iterable<string>): Promise<S
   const out = new Set<string>();
   for (const id of new Set(ids)) {
     const t = await getTask(id).catch(() => null);
-    if (t && isSubtaskOf(t, parentId)) out.add(id);
+    const p = t?.parent_task_id;
+    if (!p) continue;
+    const exact = p === parentId || (await getTask(p).catch(() => null))?.id === p;
+    if (isSubtaskOf(t, parentId, exact)) out.add(id);
   }
   return out;
 }

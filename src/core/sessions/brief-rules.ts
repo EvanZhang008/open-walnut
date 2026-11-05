@@ -16,6 +16,7 @@
  */
 import type { BriefTask, TaskBrief } from '../user-status.js';
 import { ADDED_MORE_RE, briefVpOf } from './brief-structure.js';
+import { matchIdRef } from '../../lib/id-ref.js';
 export { briefVpOf };
 
 /** One line that breaks a rule: no task, no VP (Main), several things. */
@@ -68,7 +69,7 @@ export function completeBriefRefs<T extends { text: string }>(brief: T, tasks: r
   let changed = false;
   const text = brief.text.replace(REF_RE, (whole, id: string) => {
     if (ids.has(id) || id.length < 6) return whole;
-    const hits = tasks.filter((t) => t.id.startsWith(id));
+    const hits = matchIdRef(tasks, id);
     if (hits.length !== 1) return whole;
     changed = true;
     return whole.replace(`id="${id}"`, `id="${hits[0]!.id}"`);

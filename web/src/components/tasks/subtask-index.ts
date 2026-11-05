@@ -6,7 +6,8 @@ import { ParentRefMatcher } from './task-tree-index';
  *
  * A subtask points at its parent with `parent_task_id`, which may be a short
  * prefix of the parent's id (legacy data): the store's rule everywhere is
- * `parent.id.startsWith(child.parent_task_id)`. Resolving that per row would be
+ * `refNamesId(child.parent_task_id, parent.id, ...)` (src/lib/id-ref.ts: the
+ * whole id wins, else a prefix). Resolving that per row would be
  * O(rows × tasks) on every render of the board, so the index is built once per
  * task ARRAY (the context hands out a new array on every change) and cached on
  * it. Subtasks in other projects count too: the board only nests inside one
@@ -27,7 +28,7 @@ function buildIndex(tasks: readonly Task[]): Map<string, Task[]> {
   }
   const index = new Map<string, Task[]>();
   if (byPrefix.size === 0) return index;
-  const matcher = new ParentRefMatcher(byPrefix.keys());
+  const matcher = new ParentRefMatcher(byPrefix.keys(), tasks.map((t) => t.id));
   for (const parent of tasks) {
     let children: Task[] | undefined;
     for (const prefix of matcher.refsOf(parent.id)) {

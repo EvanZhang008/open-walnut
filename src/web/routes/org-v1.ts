@@ -31,6 +31,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import type { Task } from '../../core/types.js'
+import { matchIdRef, missingIsNull } from '../../lib/id-ref.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { getOrgSettings, setOrgSettings } from '../../core/org/org-settings.js'
 import {
@@ -121,7 +122,7 @@ orgV1Router.get('/org/reports', async (req: Request, res: Response, next: NextFu
     const ofParam = typeof req.query.of === 'string' ? req.query.of.trim() : ''
     let of: Task | undefined
     if (ofParam) {
-      of = await getTask(ofParam).catch(() => undefined)
+      of = (await getTask(ofParam).catch(missingIsNull)) ?? undefined
       if (!of) throw new OrgError('unknown_task', 404, `No task "${ofParam}".`)
     } else {
       const sid = header(req, 'x-walnut-caller-sid')
@@ -189,8 +190,7 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
 async function teamTaskOf(contact: { task: Task; kind: string; project?: string }, id: string): Promise<Task> {
   const { listTasks } = await import('../../core/task-manager.js')
   const tasks = await listTasks()
-  const exact = tasks.find((t) => t.id === id)
-  const byPrefix = exact ? [exact] : tasks.filter((t) => t.id.startsWith(id))
+  const byPrefix = matchIdRef(tasks, id)
   if (byPrefix.length !== 1) throw new OrgError('task_not_found', 404, byPrefix.length ? `"${id}" names more than one task: give the whole id.` : `No task "${id}".`)
   const target = byPrefix[0]!
   if (target.id === contact.task.id) return target

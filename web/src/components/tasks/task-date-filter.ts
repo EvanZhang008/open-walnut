@@ -20,7 +20,7 @@ export function getEffectiveDateField(task: Task, allTasks: Task[], field: 'due_
   // Walk up parent chain (max 10 depth to avoid infinite loops)
   let current: Task | undefined = task;
   for (let i = 0; i < 10 && current?.parent_task_id; i++) {
-    const parent: Task | undefined = resolveParentRef(allTasks, current.parent_task_id);
+    const parent: Task | undefined = resolveParentRef(allTasks, current.parent_task_id, current);
     if (!parent) break;
     if (parent[field]) return parent[field];
     current = parent;

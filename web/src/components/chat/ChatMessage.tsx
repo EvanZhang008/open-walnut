@@ -1,3 +1,4 @@
+import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useMemo, useState, useCallback, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
@@ -376,10 +377,7 @@ function resolveTaskId(id: string, lookup: Map<string, Task>): Task | undefined 
   const exact = lookup.get(id);
   if (exact) return exact;
   // Prefix scan fallback (agent sometimes uses partial IDs)
-  for (const [key, task] of lookup) {
-    if (key.startsWith(id)) return task;
-  }
-  return undefined;
+  return matchIdRef(lookup, id, ([key]) => key)[0]?.[1];
 }
 
 /** Keys in tool call inputs that should be resolved as task IDs */

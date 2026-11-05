@@ -37,6 +37,7 @@ interface TaskLabelEntry {
   src: unknown;
 }
 
+import { matchIdRef } from '../../../src/lib/id-ref';
 import { isTaskLookupToken, isTaskPrefixToken } from '../utils/task-id-shape';
 
 type TaskLike = { id: string; title?: string; project?: string; org_role?: string; org_name?: string; session_id?: string; session_ids?: readonly string[] };
@@ -295,8 +296,7 @@ function indexSessions(task: TaskLike): boolean {
 /** The one task a prefix names among `keys` (mapped through `owner`), or null. */
 function uniqueByPrefix(ref: string, keys: Iterable<string>, owner: (k: string) => string | undefined): string | null {
   let id: string | null = null;
-  for (const key of keys) {
-    if (!key.startsWith(ref)) continue;
+  for (const key of matchIdRef(keys, ref, (k) => k)) {
     const t = owner(key);
     if (!t || !taskLabels.has(t)) continue;
     if (id && id !== t) return null;

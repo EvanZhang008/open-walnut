@@ -1,28 +1,25 @@
-/* One glass for everything that floats over the page: menus, popovers,
-   flyouts, context menus and the sidebar's slide-out panels. iOS material:
-   what lies behind turns into soft colour, never readable words, and the
-   overlay's own text stays crisp. The older recipe (72-80% tint, 16px blur, and
-   the voice panel's 72% tint with no blur at all) let task titles read straight
-   through and mix with the panel's own rows (2026-10-26, Mac app).
-
-   WebKit blurs only up to the nearest backdrop root (an ancestor with a filter,
-   backdrop-filter, opacity, mask or clip-path): a glass overlay inside one shows
-   the page behind it UNBLURRED. So the glass goes only on overlays portalled to
-   <body> or mounted where no ancestor is a backdrop root, and an overlay that
-   can open inside one stays opaque there (the second block). The folder picker,
-   the model picker, task settings flyouts and the board's card menu stay opaque, and so
-   do the Org page's own overlays (org-rail.css: a settings panel or a date picker
-   over the VP list is read word by word, and an engine without the blur showed that
-   list straight through it, 2026-11-04; tests/web/org-overlays-opaque.test.ts).
-   Phones keep their opaque menus and panels (phone-layout.css, phone-fixes-r2.css,
-   whose `html body` selectors outweigh these). */
+/* One surface for everything that floats over the page: menus, popovers,
+   flyouts, context menus and the sidebar's slide-out panels. It is SOLID
+   (2026-11-04). The glass it was (an 82% tint under a 50px backdrop blur, after
+   an older 72-80% recipe let task titles read straight through, 2026-10-26)
+   still read as see-through in WebKit, the Mac app's engine: WebKit blurs only
+   up to the nearest backdrop root (an ancestor with a filter, backdrop-filter,
+   opacity, mask or clip-path), so an overlay inside one showed the page behind
+   it UNBLURRED, and three independent reviews read the rows behind a menu
+   through its items (the Org page's settings panel, a task's kebab menu, a
+   session header's "..." menu). The rows of a menu are read word by word, so
+   every overlay paints the raised surface with no blur; the names below stay so
+   a later material can come back in one place. tests/web/overlays-opaque.test.ts
+   finds every overlay from the source and fails on a see-through one.
+   Phones keep their own opaque menus and panels (phone-layout.css,
+   phone-fixes-r2.css, whose `html body` selectors outweigh these). */
 
 html:root {
   /* The raised surface, not the card's: in the dark theme --bg-elevated is one
      step lighter than the page and its columns, so a menu reads as a layer over
      them (the same in light, where both are white). */
-  --overlay-glass-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 82%, transparent);
-  --overlay-glass-blur: blur(50px) saturate(1.8);
+  --overlay-glass-bg: var(--bg-elevated, var(--card-bg));
+  --overlay-glass-blur: none;
   /* The Materials Pass menus (globals.css) take the same glass. */
   --glass-bg-menu: var(--overlay-glass-bg);
   --glass-blur-menu: var(--overlay-glass-blur);

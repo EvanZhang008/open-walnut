@@ -8,6 +8,7 @@
  */
 import { choiceSpecs, type BoardChoiceOption } from './board-html.js';
 import { getBoard, listBoardTaskIds } from './board-store.js';
+import { matchIdRef } from '../../lib/id-ref.js';
 
 export interface OpenChoice {
   /** The Board's task: the answer is written there. */
@@ -22,7 +23,7 @@ export interface OpenChoice {
 export function resolveChoiceRef(ref: string, allIds: readonly string[]): string | undefined {
   if (allIds.includes(ref)) return ref;
   if (ref.length < 4) return undefined;
-  const hits = allIds.filter((t) => t.startsWith(ref));
+  const hits = matchIdRef(allIds, ref, (id) => id);
   return hits.length === 1 ? hits[0] : undefined;
 }
 

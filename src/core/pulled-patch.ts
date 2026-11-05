@@ -24,6 +24,7 @@
  * The remote keeps its prefixes, so an older Walnut reading it is unaffected.
  */
 import { log } from '../logging/index.js';
+import { matchIdRef } from '../lib/id-ref.js';
 import type { Task } from './types.js';
 
 type Ids = { has(id: string): boolean; ids: readonly string[] };
@@ -38,13 +39,8 @@ export function idIndex(tasks: readonly Pick<Task, 'id'>[]): Ids {
 export function resolveLink(value: string, held: string | undefined, index: Ids): string | undefined {
   if (!value || index.has(value)) return value;
   if (held && held.startsWith(value) && index.has(held)) return held;
-  let found: string | undefined;
-  for (const id of index.ids) {
-    if (!id.startsWith(value)) continue;
-    if (found) return undefined;
-    found = id;
-  }
-  return found;
+  const hits = matchIdRef(index.ids, value, (id) => id);
+  return hits.length === 1 ? hits[0] : undefined;
 }
 
 /**

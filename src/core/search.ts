@@ -11,6 +11,7 @@ import { isSearchArtifact } from './task-junk.js';
 import type { SessionRecord, Task } from './types.js';
 import type { QuerySegments } from '../lib/hybrid-search/index.js';
 import { foldWidth } from '../lib/hybrid-search/tokenizer.js';
+import { refNamesId } from '../lib/id-ref.js';
 
 export interface SearchResult {
   type: 'task' | 'memory' | 'session';
@@ -1377,10 +1378,12 @@ export function expandChildTasks(results: SearchResult[], allTasks: Task[]): Sea
 
   // parent_task_id may be a prefix — resolve to full parent ID via prefix match
   const childrenByParent = new Map<string, typeof allTasks>();
+  const allIds = new Set(allTasks.map((t) => t.id));
   for (const task of allTasks) {
     if (!task.parent_task_id || existingIds.has(task.id)) continue;
-    // Match: task.parent_task_id is a prefix of one of our parent full IDs
-    const matchedParent = parentFullIds.find((pid) => pid.startsWith(task.parent_task_id!));
+    // Match: task.parent_task_id names one of our parent full IDs (the whole id wins over a prefix)
+    const ref = task.parent_task_id;
+    const matchedParent = parentFullIds.find((pid) => refNamesId(ref, pid, allIds.has(ref)));
     if (matchedParent) {
       const children = childrenByParent.get(matchedParent) ?? [];
       children.push(task);

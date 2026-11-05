@@ -1,3 +1,4 @@
+import { matchIdRef } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
 import { subtasksOf } from './subtask-index';
 
@@ -17,7 +18,7 @@ export function isDoneTask(t: Pick<Task, 'phase' | 'status'>): boolean {
 /** The task a `parent_task_id` names (exact id first, then the prefix rule). */
 export function resolveParent(tasks: readonly Task[], byId: ReadonlyMap<string, Task>, ref: string | undefined): Task | null {
   if (!ref) return null;
-  return byId.get(ref) ?? tasks.find((t) => t.id.startsWith(ref)) ?? null;
+  return byId.get(ref) ?? matchIdRef(tasks, ref)[0] ?? null;
 }
 
 /** Ids a leader may not adopt: itself, its ancestors and its descendants. */

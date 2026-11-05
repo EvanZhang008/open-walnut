@@ -43,7 +43,7 @@ function childrenIndex(tasksById: TaskMap): Map<string, Task[]> {
   for (const t of list) {
     if (!t.parent_task_id) continue;
     // Parent refs may be id prefixes (task-tree-index's rule).
-    const parent = tasksById.get(t.parent_task_id) ?? resolveParentRef(list, t.parent_task_id);
+    const parent = tasksById.get(t.parent_task_id) ?? resolveParentRef(list, t.parent_task_id, t);
     if (!parent || parent.id === t.id) continue;
     const arr = index.get(parent.id);
     if (arr) arr.push(t); else index.set(parent.id, [t]);

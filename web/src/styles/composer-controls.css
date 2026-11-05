@@ -79,7 +79,8 @@
 }
 
 .session-panel-input .chat-plus-menu {
-  background: var(--bg);
+  /* The raised surface every menu paints; --bg is pure black in dark, the chat behind it. */
+  background: var(--bg-elevated, var(--card-bg));
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

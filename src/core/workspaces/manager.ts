@@ -24,6 +24,7 @@ import { findProvider, validateInputs, workspaceProviderCatalog, GIT_WORKTREE_ID
 import { cleanupDecision, isLaunchReady, keptReason, workspaceName, isBusy, type CleanupTrigger } from './decisions.js'
 import { log } from '../../logging/index.js'
 import { role } from '../server-role.js'
+import { missingIsNull } from '../../lib/id-ref.js'
 
 const POLL_MS = 1_500
 export const START_RPC_MS = 30_000
@@ -58,7 +59,8 @@ export interface WorkspaceManagerDeps {
 const realDeps: WorkspaceManagerDeps = {
   async getTask(id) {
     const { getTask } = await import('../task-manager.js')
-    try { return await getTask(id) } catch { return null }
+    // A prefix several tasks share is the caller's to lengthen (400), not a missing task.
+    return getTask(id).catch(missingIsNull)
   },
   async write(taskId, fn) {
     const { updateTaskRaw } = await import('../task-manager.js')

@@ -193,3 +193,21 @@ export function writeGitGlanceDemo(tmpBase: string, now: number): DemoSession[] 
     }
   })
 }
+
+/**
+ * Two plain tasks where one task's whole id is the start of the other's (PW_GIT_GLANCE_DEMO=1),
+ * so a person can open, edit and complete the shorter one by its full id (src/lib/id-ref.ts:
+ * the exact id wins; a plain prefix match had answered "Ambiguous ID prefix").
+ */
+export function gitGlanceDemoIdPair(nowIso: string): Record<string, unknown>[] {
+  if (process.env.PW_GIT_GLANCE_DEMO !== '1') return []
+  const plain = (id: string, title: string) => ({
+    id, title, status: 'todo', phase: 'TODO', priority: 'none', project: 'Walnut', source: 'local',
+    session_ids: [], active_session_ids: [], created_at: nowIso, updated_at: nowIso,
+    description: '', summary: '', note: '', subtasks: [],
+  })
+  return [
+    plain('pw-glance-demo-tour', 'Plan the onboarding tour'),
+    plain('pw-glance-demo-tour-phone', 'Plan the onboarding tour on the phone'),
+  ]
+}

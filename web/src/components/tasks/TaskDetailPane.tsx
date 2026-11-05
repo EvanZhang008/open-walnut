@@ -20,6 +20,7 @@
  * of its own (2026-10-06 redesign: the old pane stacked a box per part, repeated the
  * task's phase on every session and printed session ids).
  */
+import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
@@ -136,12 +137,16 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
   // parent_task_id may be an id prefix.
   const childTasks = useMemo(
-    () => (allTasks ?? []).filter((t) => t.parent_task_id && task.id.startsWith(t.parent_task_id)),
+    () => {
+      const list = allTasks ?? [];
+      const ids = new Set(list.map((t) => t.id));
+      return list.filter((t) => t.parent_task_id && refNamesId(t.parent_task_id, task.id, ids.has(t.parent_task_id), t.id));
+    },
     [allTasks, task.id],
   );
   const parentTask = useMemo(
-    () => (allTasks && task.parent_task_id ? allTasks.find((t) => t.id.startsWith(task.parent_task_id!)) ?? null : null),
-    [allTasks, task.parent_task_id],
+    () => (allTasks && task.parent_task_id ? matchParentRef(allTasks, task) ?? null : null),
+    [allTasks, task],
   );
   const openTask = (t: Task) => (onFocusChild ? onFocusChild(t) : openTaskOnHome(t.id, navigate));
   const openLinked = (id: string) => {

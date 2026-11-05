@@ -71,9 +71,10 @@
   /* iOS material helpers — translucent chrome recipe shared by all glass
      surfaces (sidebar, dock, popovers). Solid fallback via @supports below. */
   --glass-bg: color-mix(in srgb, var(--bg) 72%, transparent);
-  --glass-bg-menu: color-mix(in srgb, var(--card-bg) 80%, transparent);
+  /* Menus and popovers are solid: their rows are read word by word (overlay-glass.css). */
+  --glass-bg-menu: var(--bg-elevated, var(--card-bg));
   --glass-blur: blur(20px) saturate(1.8);
-  --glass-blur-menu: blur(16px) saturate(1.8);
+  --glass-blur-menu: none;
 
   /* G4 "milky glass" (readability-first) — the full liquid-glass recipe for
      surfaces that CONTENT SCROLLS UNDER (session header/composer, chat
@@ -7952,7 +7953,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   bottom: calc(100% + 6px);
   left: 0;
   min-width: 180px;
-  background: var(--bg);
+  /* The raised surface every overlay paints (overlay-glass.css); --bg is pure black in dark. */
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -8296,7 +8298,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   bottom: calc(100% + 6px);
   right: 0;
   min-width: 180px;
-  background: var(--bg);
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -13810,7 +13812,7 @@ body.walnut-dragging {
 }
 
 .notes-slash-panel {
-  background: var(--bg);
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
@@ -15535,7 +15537,7 @@ body.walnut-dragging {
 
 .task-kebab-menu {
   min-width: 180px;
-  background: var(--card-bg);
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
@@ -20781,7 +20783,7 @@ td.usage-share-col {
   right: 0;
   z-index: 50;
   margin-top: 2px;
-  background: var(--bg);
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 8px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
@@ -23917,7 +23919,7 @@ a.tag-chip:focus-visible,
   max-width: 300px;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
@@ -29502,9 +29504,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
     background: var(--bg);
   }
 
-  /* Voice panel matches the sidebar surface — keep that intent, translucent. */
+  /* Voice panel matches the sidebar surface, solid like every overlay (overlay-glass.css). */
   .notification-panel.voice-panel {
-    background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+    background: var(--bg-secondary);
   }
 
   /* Focus dock — iOS dock material. Guard: backdrop-filter turns the dock
@@ -31093,6 +31095,16 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-ctx-menu .cal-ctx-danger {
   color: var(--error);
+}
+
+/* A menu is as wide as its rows, not as its longest note: the note wraps under them
+   (a recurring event's warning had stretched the menu to 577px, off its click). */
+.cal-ctx-menu { max-width: 280px; }
+.cal-ctx-menu .cal-item-warning {
+  padding: 4px 10px 6px;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
 }
 
 /* Code context menu (Files viewer + Changed diff) — rides the cal-ctx base.

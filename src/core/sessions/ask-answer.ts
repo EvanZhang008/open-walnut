@@ -22,6 +22,7 @@
  * it passes them back in user_words (user-spoke.ts).
  */
 import { log } from '../../logging/index.js';
+import { ambiguousIdMessage, matchIdRef, missingIdMessage } from '../../lib/id-ref.js';
 import type { SessionRecord, Task } from '../types.js';
 import { isLiveSessionStatus } from '../routines/session-target.js';
 import { briefTeam } from '../user-status.js';
@@ -149,8 +150,11 @@ export async function prepareAskAnswer(
   if (!targetTaskId) throw new AskAnswerError('bad_request', 'answers_ask needs a task to answer: name it in `to` (or answer its request)', 400);
   const { listTasks, updateTaskRaw } = await import('../task-manager.js');
   const everything = await listTasks();
-  const target = everything.find((t) => t.id === targetTaskId || t.id.startsWith(targetTaskId));
-  if (!target) throw new AskAnswerError('bad_request', `No task ${targetTaskId}`, 404);
+  // The whole id wins over a prefix (src/lib/id-ref.ts); a prefix only when it names one task.
+  const matches = matchIdRef(everything, targetTaskId);
+  if (matches.length > 1) throw new AskAnswerError('bad_request', ambiguousIdMessage(targetTaskId, matches), 400);
+  const target = matches[0];
+  if (!target) throw new AskAnswerError('bad_request', missingIdMessage(targetTaskId), 404);
   const caller = callerTaskId ? everything.find((t) => t.id === callerTaskId) : undefined;
   if (callerTaskId && (!caller || !standsAbove(caller, target, everything))) {
     throw new AskAnswerError('not_above',

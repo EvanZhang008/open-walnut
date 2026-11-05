@@ -21,7 +21,7 @@ import {
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
 import { kanbanSeedTasks } from './board-kanban-seed'
 import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
-import { GIT_GLANCE_SESSION, gitGlanceJsonl, gitGlanceRecord, gitGlanceTask, writeGitGlanceDemo, writeGitGlanceRepo } from './git-glance-fixture'
+import { GIT_GLANCE_SESSION, gitGlanceDemoIdPair, gitGlanceJsonl, gitGlanceRecord, gitGlanceTask, writeGitGlanceDemo, writeGitGlanceRepo } from './git-glance-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
@@ -1201,6 +1201,7 @@ await fs.writeFile(
       },
       gitGlanceTask(new Date().toISOString()),
       ...gitGlanceDemo.map((d) => d.task),
+      ...gitGlanceDemoIdPair(new Date().toISOString()),
       {
         id: 'pw-task-codex-customer',
         title: 'Playwright Codex customer task',

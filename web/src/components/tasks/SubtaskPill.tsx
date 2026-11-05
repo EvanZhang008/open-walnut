@@ -1,3 +1,4 @@
+import { matchParentRef } from '../../../../src/lib/id-ref';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -83,7 +84,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
   const parentId = task.parent_task_id;
   if (!parentId) return null;
   // parent_task_id may be a short prefix (legacy data): the store's rule everywhere.
-  const parent = store?.tasks.find((t) => t.id.startsWith(parentId)) ?? null;
+  const parent = (store ? matchParentRef(store.tasks, { id: task.id ?? '', parent_task_id: parentId }) : undefined) ?? null;
   const leaderId = parent?.id ?? parentId;
   // The team is read only while the list is open: a board draws this pill on every worker row.
   const workers = open && store ? openSubtasksOf(store.tasks, leaderId) : [];

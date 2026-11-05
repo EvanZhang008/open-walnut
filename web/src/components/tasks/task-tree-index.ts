@@ -1,3 +1,4 @@
+import { matchIdRef, matchParentRef } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
 
 /**
@@ -5,8 +6,8 @@ import type { Task } from '@open-walnut/core';
  *
  * A subtask names its parent with `parent_task_id`, which may be a short
  * prefix of the parent's id (legacy data): the rule everywhere is
- * `parent.id.startsWith(child.parent_task_id)`. Resolving that with
- * `list.find(startsWith)` per subtask costs O(subtasks x tasks) on every task
+ * src/lib/id-ref.ts (the task whose id IS the reference wins, else a prefix).
+ * Resolving that with a scan per subtask costs O(subtasks x tasks) on every task
  * event. Here each id is instead cut at every distinct reference length and
  * looked up, so a whole list costs O(tasks x distinct lengths).
  */
@@ -20,12 +21,18 @@ function projectKey(p: string | undefined): string {
 
 const NO_REFS: readonly string[] = [];
 
-/** Answers "which of these references does this id start with". */
+/**
+ * Answers "which of these references names this id": the references it starts
+ * with, except one that is itself the whole id of another task in `ids` (the
+ * exact id wins over a prefix, src/lib/id-ref.ts).
+ */
 export class ParentRefMatcher {
   private readonly rank = new Map<string, number>();
   private readonly lengths: number[];
+  private readonly ids: ReadonlySet<string> | undefined;
 
-  constructor(refs: Iterable<string>) {
+  constructor(refs: Iterable<string>, ids?: Iterable<string>) {
+    this.ids = ids ? new Set(ids) : undefined;
     for (const ref of refs) if (!this.rank.has(ref)) this.rank.set(ref, this.rank.size);
     this.lengths = [...new Set([...this.rank.keys()].map((ref) => ref.length))].sort((a, b) => a - b);
   }
@@ -34,13 +41,14 @@ export class ParentRefMatcher {
     return this.rank.size;
   }
 
-  /** The references `id` starts with, in the order they were given. */
+  /** The references that name `id`, in the order they were given. */
   refsOf(id: string): readonly string[] {
     let out: string[] | undefined;
     for (const len of this.lengths) {
       if (len > id.length) break;
       const head = len === id.length ? id : id.slice(0, len);
       if (!this.rank.has(head)) continue;
+      if (head !== id && this.ids?.has(head)) continue;
       if (out) out.push(head); else out = [head];
     }
     if (!out) return NO_REFS;
@@ -62,7 +70,7 @@ const FIRST_MATCH = new WeakMap<readonly TaskRef[], Map<string, TaskRef | null>>
 
 function buildFirstMatch(list: readonly TaskRef[]): Map<string, TaskRef | null> {
   const refs = parentRefsOf(list);
-  const matcher = new ParentRefMatcher(refs);
+  const matcher = new ParentRefMatcher(refs, list.map((t) => t.id));
   const first = new Map<string, TaskRef | null>();
   if (matcher.size === 0) return first;
   for (const t of list) {
@@ -74,11 +82,20 @@ function buildFirstMatch(list: readonly TaskRef[]): Map<string, TaskRef | null> 
 }
 
 /**
- * Exactly `list.find((t) => t.id.startsWith(ref))`. The references the list's
+ * The parent `ref` names in `list`: the task whose id IS `ref`, else the first
+ * one whose id starts with it (src/lib/id-ref.ts). The references the list's
  * own members carry are resolved together on first use; any other reference
- * falls back to one scan, remembered for this list.
+ * falls back to one scan, remembered for this list. Given the `child` holding
+ * `ref`, the answer is never that child, and given `knownIds` (every task id,
+ * when `list` is filtered) a reference that is a known task's whole id names
+ * nothing when that task is not in `list` (matchParentRef).
  */
-export function resolveParentRef<T extends TaskRef>(list: readonly T[], ref: string): T | undefined {
+export function resolveParentRef<T extends TaskRef>(
+  list: readonly T[],
+  ref: string,
+  child?: { id: string },
+  knownIds?: { has(id: string): boolean },
+): T | undefined {
   let first = FIRST_MATCH.get(list);
   if (!first) {
     first = buildFirstMatch(list);
@@ -86,9 +103,11 @@ export function resolveParentRef<T extends TaskRef>(list: readonly T[], ref: str
   }
   let hit = first.get(ref);
   if (hit === undefined) {
-    hit = list.find((t) => t.id.startsWith(ref)) ?? null;
+    hit = matchIdRef(list, ref)[0] ?? null;
     first.set(ref, hit);
   }
+  if (hit && hit.id !== ref && knownIds?.has(ref)) return undefined;
+  if (hit && child && hit.id === child.id) return matchParentRef(list, { id: child.id, parent_task_id: ref }, { knownIds });
   return (hit ?? undefined) as T | undefined;
 }
 
@@ -97,7 +116,7 @@ export function countSubtasksByParent(tasks: readonly TaskRef[]): Map<string, nu
   const countMap = new Map<string, number>();
   for (const task of tasks) {
     if (!task.parent_task_id) continue;
-    const parent = resolveParentRef(tasks, task.parent_task_id);
+    const parent = resolveParentRef(tasks, task.parent_task_id, task);
     if (parent) countMap.set(parent.id, (countMap.get(parent.id) ?? 0) + 1);
   }
   return countMap;
@@ -118,7 +137,7 @@ export function withSubtaskContext<T extends TaskRef & Pick<Task, 'project'>>(
 ): T[] {
   const result = [...matched];
   const included = new Set<string>(matched.map((t) => t.id));
-  const matcher = new ParentRefMatcher(parentRefsOf(tasks));
+  const matcher = new ParentRefMatcher(parentRefsOf(tasks), tasks.map((t) => t.id));
   // ref -> project keys of listed rows whose id starts with it.
   const listed = new Map<string, Set<string>>();
   const list = (t: T): void => {

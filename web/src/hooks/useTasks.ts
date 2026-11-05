@@ -1,3 +1,4 @@
+import { matchParentRef } from '../../../src/lib/id-ref';
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import { useCommittedRef } from './useCommittedRef';
 import { READ_MARKER_KEYS, defaultWaitUntil } from '@open-walnut/core';
@@ -1178,7 +1179,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const current = snapshot.find((t) => t.id === taskId);
     const isUnparent = newParentId === null;
     const oldParentFullId = current?.parent_task_id
-      ? snapshot.find((t) => t.id.startsWith(current.parent_task_id!))?.id ?? null
+      ? matchParentRef(snapshot, current)?.id ?? null
       : null;
 
     // Position priority for optimistic reposition:

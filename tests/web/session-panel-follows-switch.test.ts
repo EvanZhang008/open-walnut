@@ -86,8 +86,10 @@ describe('a session panel follows the task to its new session in every host', ()
   });
 
   it('a send the server delivered elsewhere reports it, and every panel send path follows it', () => {
-    // Only a real redirect: a panel opened by an id prefix is the same session.
-    expect(read('src/web/routes/session-chat.ts')).toContain('...(msg.sessionId && !msg.sessionId.startsWith(data.sessionId) ? { deliveredTo: msg.sessionId } : {}),');
+    // Only a real redirect, by the whole id: sends never resolve a session by prefix, so an
+    // unmoved send answers the id it was given, and a new session whose id starts with the
+    // old one is still a redirect (src/lib/id-ref.ts: the whole id wins).
+    expect(read('src/web/routes/session-chat.ts')).toContain('...(msg.sessionId && msg.sessionId !== data.sessionId ? { deliveredTo: msg.sessionId } : {}),');
     const hook = read('web/src/hooks/useSessionSend.ts');
     const rpcs = hook.match(/sendRpc<[^>]*>\(\s*'session:send'/g) ?? [];
     expect(rpcs.length).toBeGreaterThanOrEqual(3);
@@ -95,7 +97,7 @@ describe('a session panel follows the task to its new session in every host', ()
     expect(hook.match(/followRedirect\(res, /g)?.length).toBe(rpcs.length);
     expect(panel).toContain('if (redirectedTo && redirectedTo !== sessionId) onSessionReplaced?.(sessionId, redirectedTo);');
     // The phone's send says the same (api-v1.md, deliveredTo).
-    expect(read('src/web/routes/session-send-v1.ts')).toContain('...(msg.sessionId && !msg.sessionId.startsWith(sessionId) ? { deliveredTo: msg.sessionId } : {}),');
+    expect(read('src/web/routes/session-send-v1.ts')).toContain('...(msg.sessionId && msg.sessionId !== sessionId ? { deliveredTo: msg.sessionId } : {}),');
   });
 });
 

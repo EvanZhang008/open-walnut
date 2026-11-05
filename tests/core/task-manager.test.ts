@@ -168,7 +168,7 @@ describe('completeTask', () => {
     await addTask({ title: 'Existing task' });
 
     await expect(completeTask('nonexistent')).rejects.toThrow(
-      /No task found matching ID prefix/,
+      /No task found matching ID "/,
     );
   });
 
@@ -446,16 +446,15 @@ describe('deleteTask', () => {
 
   it('throws for non-existent ID', async () => {
     await addTask({ title: 'Existing' });
-    await expect(deleteTask('nonexistent')).rejects.toThrow(/No task found matching ID prefix/);
+    await expect(deleteTask('nonexistent')).rejects.toThrow(/No task found matching ID "/);
   });
 
   it('throws for ambiguous ID prefix', async () => {
-    // Create two tasks with same prefix by manipulating the store
-    const { task: t1 } = await addTask({ title: 'Task A' });
-    const { task: t2 } = await addTask({ title: 'Task B' });
-    // Use a single character that both IDs start with (they both start with a letter)
-    // This is tricky because IDs are random. Instead, use an empty prefix which matches all.
-    await expect(deleteTask('')).rejects.toThrow(/Ambiguous ID prefix/);
+    await addTask({ title: 'Task A', explicitId: 'fixamb01-0001' });
+    await addTask({ title: 'Task B', explicitId: 'fixamb01-0002' });
+    await expect(deleteTask('fixamb01')).rejects.toThrow(/Ambiguous ID prefix/);
+    // An empty id names no task (src/lib/id-ref.ts), never every task.
+    await expect(deleteTask('')).rejects.toThrow(/No task found matching ID "/);
   });
 
   it('throws ActiveSessionError when task has an active session slot', async () => {

@@ -30,6 +30,7 @@
  * rather than relying on a delegating ancestor that is only sometimes there, and
  * stops propagation on a chip hit so the two paths can never both fire.
  */
+import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import {
@@ -159,7 +160,7 @@ function useResolvedTarget(send: OutboundSend): ResolvedTarget {
         ambiguous: false,
       };
     }
-    const matches = candidates.filter((c) => c.id.startsWith(ref)).length;
+    const matches = matchIdRef(candidates, ref).length;
     return {
       // Only a PRINTED short id is shown as a dim chip: `to` may be a title or a
       // task, and printing that as an id would be a lie about what it is.

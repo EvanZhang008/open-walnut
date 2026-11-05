@@ -414,6 +414,19 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return text.replace(/(<|&(?:amp;)*lt;)(\/?)(system-reminder)/gi, (_m, open: string, slash: string, name: string) =>
       `${open === '<' ? '&lt;' : `&amp;${open.slice(1)}`}${slash}${name}`)
   }
+  // matchIdRef / refNamesId of src/lib/id-ref.ts, inlined for the same reason: the
+  // item whose id IS the reference wins, and only when none does is it a prefix.
+  const matchIdRef = <T,>(items: readonly T[], ref: string, idOf: (item: T) => string): T[] => {
+    const byPrefix: T[] = []
+    for (const item of items) {
+      const id = idOf(item)
+      if (id === ref) return [item]
+      if (ref && id.startsWith(ref)) byPrefix.push(item)
+    }
+    return byPrefix
+  }
+  const refNamesId = (ref: string | null | undefined, id: string, exactExists: boolean): boolean =>
+    !!ref && (id === ref || (!exactExists && id.startsWith(ref)))
   const MAX_RECORDS = 1000
   const MAX_ARGS_BYTES = 256 * 1024
   const WRITE_BUDGET = 30
@@ -911,7 +924,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const tasks = tasksWithOverlay(home)
     const exact = tasks.find((t) => t.id === id)
     if (exact) return { task: exact }
-    const hits = id.length >= 4 ? tasks.filter((t) => t.id.startsWith(id)) : []
+    const hits = id.length >= 4 ? matchIdRef(tasks, id, (t) => t.id) : []
     if (hits.length === 1) return { task: hits[0] }
     if (hits.length > 1) {
       return { error: fail('ambiguous_peer', `"${id}" matches ${hits.length} tasks on this host`, { detail: { candidates: hits.map((t) => ({ id: t.id, shortId: t.id, title: t.title })) } }) }
@@ -1182,8 +1195,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (task) {
       items.task = { id: task.id, title: task.title }
       // A stored parent id may be a legacy short prefix of the parent's id.
+      const ids = new Set(tasks.map((t) => t.id))
       const children = tasks
-        .filter((t) => t.id !== task.id && !!t.parent_task_id && task.id.startsWith(t.parent_task_id) && t.phase !== 'COMPLETE')
+        .filter((t) => t.id !== task.id && refNamesId(t.parent_task_id, task.id, ids.has(t.parent_task_id ?? '')) && t.phase !== 'COMPLETE')
         .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
       items.subtasks = children.slice(0, MAX_SUBTASKS).map((t) => ({ id: t.id, title: t.title, phase: t.phase ?? 'TODO' }))
       items.moreSubtasks = children.length - items.subtasks.length
@@ -1239,7 +1253,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!ownId || !targetTaskId) return undefined
     const tasks = tasksWithOverlay(home)
     const parentRef = tasks.find((t) => t.id === ownId)?.parent_task_id
-    if (!parentRef || !targetTaskId.startsWith(parentRef)) return undefined
+    if (!refNamesId(parentRef, targetTaskId, tasks.some((t) => t.id === parentRef))) return undefined
     const parent = tasks.find((t) => t.id === targetTaskId)
     if (parent?.phase !== 'COMPLETE') return undefined
     return fail('parent_complete', `"${parent.title}" (${parent.id}) is your task's parent and it is complete: it no longer takes messages `
@@ -1367,7 +1381,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       return { sid: current.sid, taskId: task.id, title: current.title ?? task.title }
     }
     const ref = to.trim()
-    const byId = slice.sessions.filter((s) => s.sid === ref || (ref.length >= 8 && s.sid.startsWith(ref)))
+    const byId = matchIdRef(slice.sessions, ref, (s) => s.sid).filter((s) => s.sid === ref || ref.length >= 8)
     if (byId.length === 1) {
       if (!deps.isLive(byId[0].sid)) return { error: needsServer(`Session ${ref} is not running on this host; resuming it`) }
       return { sid: byId[0].sid, taskId: byId[0].taskId, title: byId[0].title }
@@ -1523,7 +1537,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const printed = /\[([0-9a-f][0-9a-f-]{7,})\]\s*$/i.exec(ref)?.[1]
     const key = (printed ?? ref).toLowerCase()
     if (key.length < 8 || !/^[0-9a-f-]+$/.test(key)) return null
-    const hits = slice.sessions.filter((s) => s.sid.toLowerCase() === key || s.sid.toLowerCase().startsWith(key))
+    const hits = matchIdRef(slice.sessions, key, (s) => s.sid.toLowerCase())
     if (hits.length !== 1 || hits[0].aside || !deps.isLive(hits[0].sid)) return null
     // An older session of a task that runs another one here too: the server
     // knows which one the task continues in.

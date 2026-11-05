@@ -1,3 +1,4 @@
+import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useDraft } from '@/hooks/useDraft';
@@ -2224,6 +2225,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Hide .metadata* tasks (legacy project-configuration sentinels, not user-visible) and the org's
   // own nodes (Main, project leads: the chat slot and the org chart show them; their work stays here).
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata') && !isHiddenFromTaskLists(t)), [rawTasks]);
+  // Every task id this panel holds: a parent reference that is one of them names that task alone,
+  // even where a filtered list left it out (src/lib/id-ref.ts matchParentRef).
+  const knownTaskIds = useMemo(() => new Set(rawTasks.map((t) => t.id)), [rawTasks]);
   // Always-current task list for drag closures (drag handlers freeze their deps).
   const tasksRef = useCommittedRef<Task[]>(tasks);
   const navigate = useNavigate();
@@ -2567,7 +2571,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const parentsToExpand: string[] = [];
     for (const t of tasks) {
       if (!t.parent_task_id || t.status === 'done') continue;
-      const parent = tasks.find((p) => p.id.startsWith(t.parent_task_id!));
+      const parent = matchParentRef(tasks, t);
       if (parent && !expandedParents.has(parent.id)) {
         parentsToExpand.push(parent.id);
       }
@@ -3032,10 +3036,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Auto-expand parent when a child task is created (via WS event)
   // Persist to localStorage so expansion survives page refresh (fork subtask bug fix)
   useEvent('task:created', (data) => {
-    const { task } = data as { task: { parent_task_id?: string } };
+    const { task } = data as { task: { id: string; parent_task_id?: string } };
     if (!task?.parent_task_id) return;
     // Resolve full parent ID (parent_task_id may be a prefix)
-    const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
+    const parentTask = matchParentRef(tasks, task);
     if (parentTask) {
       setExpandedParents((prev) => {
         if (prev.has(parentTask.id)) return prev;
@@ -5110,6 +5114,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!dedupePinned || displayedPinIds.size === 0) return list;
     const keep = new Set<string>();
     const dropped: Task[] = [];
+    const listIds = new Set(list.map((task) => task.id));
     for (const task of list) {
       if (displayedPinIds.has(task.id)) dropped.push(task);
       else keep.add(task.id);
@@ -5121,7 +5126,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       for (const task of list) {
         if (!keep.has(task.id) || !task.parent_task_id) continue;
         for (const parent of dropped) {
-          if (keep.has(parent.id) || !parent.id.startsWith(task.parent_task_id)) continue;
+          if (keep.has(parent.id) || !refNamesId(task.parent_task_id, parent.id, listIds.has(task.parent_task_id), task.id)) continue;
           keep.add(parent.id);
           added = true;
         }
@@ -5262,10 +5267,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const childrenOf = new Map<string, Task[]>();
 
     // Build a prefix→fullId lookup so parent_task_id (short prefix) resolves to the actual parent
-    const fullIds = items.map((t) => t.id);
     const byId = new Map(items.map((t) => [t.id, t]));
-    const resolveParent = (prefix: string): string | undefined =>
-      fullIds.find((id) => id.startsWith(prefix));
+    // Never the task itself, and never a stand-in for a known parent this list left out.
+    const resolveParent = (task: Task): string | undefined =>
+      matchParentRef(items, task, { knownIds: knownTaskIds })?.id;
 
     for (const task of items) {
       if (!task.parent_task_id) {
@@ -5276,7 +5281,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Nesting stays inside one project: a subtask filed into another project
       // is a top-level row there (the list buckets rows by project below, so
       // nesting it would move it under the parent's project header).
-      const parentFullId = resolveParent(task.parent_task_id);
+      const parentFullId = resolveParent(task);
       const parentTask = parentFullId ? byId.get(parentFullId) : undefined;
       if (parentFullId && parentTask && sameProjectKey(parentTask.project, task.project)) {
         let siblings = childrenOf.get(parentFullId);
@@ -5351,7 +5356,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // A subfolder's cluster goes inside its parent folder's (pre-order).
     for (const m of nestFolderUnits(clustered, (t) => t.group_id || undefined, folderParents)) emitWithChildren(m);
     return order;
-  }, [sortBy, groupBy, sortForProject, folderParents]);
+  }, [sortBy, groupBy, sortForProject, folderParents, knownTaskIds]);
 
   // --- Debounced sort order ---
   // Badge/data updates instantly (always use latest `filtered` task objects).
@@ -5534,7 +5539,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (task.parent_task_id) {
         // Find parent — match by prefix (parent_task_id may be a short prefix)
         const parentId = task.parent_task_id;
-        const parent = resolveParentRef(sorted, parentId);
+        const parent = resolveParentRef(sorted, parentId, task, knownTaskIds);
         // Same project only, as computeSortOrder nests: a cross-project subtask
         // is a top-level row in its own project, never indented or folded away.
         if (parent && sameProjectKey(parent.project, task.project)) {
@@ -5547,16 +5552,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Compute depth for each task by walking the parent chain (supports unlimited nesting)
     const depths = new Map<string, number>();
     const MAX_DEPTH = 10; // Safety cap against unexpected cycles
+    // A chain that loops (bad data) stops where it closes: the walk marks each id before it
+    // recurses, so it can never call itself without end (2026-11-04: a self-parent overflowed it).
+    const walking = new Set<string>();
     const getDepth = (id: string): number => {
       if (depths.has(id)) return depths.get(id)!;
+      if (walking.has(id)) return 0;
+      walking.add(id);
       const pid = parentMap.get(id);
       const d = pid ? Math.min(getDepth(pid) + 1, MAX_DEPTH) : 0;
+      walking.delete(id);
       depths.set(id, d);
       return d;
     };
     for (const task of sorted) getDepth(task.id);
     return { childTaskIds: childIds, childParentMap: parentMap, depthMap: depths };
-  }, [sorted]);
+  }, [sorted, knownTaskIds]);
 
   // Virtual-group render metadata: taskId → { groupId, label, isLead, isLast }.
   // computeSortOrder already clusters group members contiguously, so we just walk
@@ -5776,7 +5787,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const parentOf = (id: string) => {
       const t = byId(id);
       if (!t?.parent_task_id) return undefined;
-      const p = resolveParentRef(all, t.parent_task_id);
+      const p = resolveParentRef(all, t.parent_task_id, t);
       // The list nests a subtask only under a parent in its own project (computeSortOrder).
       return p && sameProjectKey(p.project, t.project) ? p.id : undefined;
     };
@@ -6267,7 +6278,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Resolve the dragged task's current parent (full id) up-front so we can
       // detect "drop on own parent/sibling" as an unparent gesture.
       const currentParentFullId = activeTask.parent_task_id
-        ? (sorted.find((t) => t.id.startsWith(activeTask.parent_task_id!))?.id ?? null)
+        ? (matchParentRef(sorted, activeTask, { knownIds: knownTaskIds })?.id ?? null)
         : null;
 
       let newParentId: string | null = null;
@@ -6377,7 +6388,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         onOperationError?.(err instanceof Error ? err.message : 'Move failed');
       });
     }
-  }, [onReorder, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, requestMoveTask, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks, onOperationError, requestFileIntoFolder, folderMeta]);
+  }, [onReorder, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, requestMoveTask, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks, onOperationError, requestFileIntoFolder, folderMeta, knownTaskIds]);
 
   // Kebab "Move left" — promote subtask to top-level via onReparentTask(id, null).
   // Also primes scroll restoration so the task stays visible after refetch.
@@ -6459,7 +6470,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const siblingGroups = new Map<string, Task[]>();
       for (const t of groupTasks) {
         const parentKey = t.parent_task_id
-          ? (groupTasks.find((p) => p.id.startsWith(t.parent_task_id!))?.id ?? `__orphan:${t.parent_task_id}`)
+          ? (matchParentRef(groupTasks, t, { knownIds: knownTaskIds })?.id ?? `__orphan:${t.parent_task_id}`)
           : '__root__';
         if (!siblingGroups.has(parentKey)) siblingGroups.set(parentKey, []);
         siblingGroups.get(parentKey)!.push(t);
@@ -6489,7 +6500,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (fullTasks) processGroup(projTasks, fullTasks, project);
     }
     return map;
-  }, [grouped, fullGrouped, onReorder, ensureManualSort]);
+  }, [grouped, fullGrouped, onReorder, ensureManualSort, knownTaskIds]);
 
   // Stable move-up dispatcher: the map above rebuilds (fresh closures) on every
   // tasks change, and passing those closures straight down gave every row a new

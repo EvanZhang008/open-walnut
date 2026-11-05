@@ -29,6 +29,7 @@
  * ones apart). A row's state group is still on it, so a blocked worker stays red
  * inside its section.
  */
+import { matchIdRef, refNamesId } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
 import type { BoardChoice, BoardMessage, BoardProject, BoardProjectStatus, BoardReminder, BoardSeen } from './board-model';
 import { reminderDue } from './board-items-model';
@@ -100,7 +101,8 @@ export function walkTeam(
  */
 export function teamChildren(tasks: readonly Task[], ownerId: string): (id: string) => readonly Task[] {
   if (tasks.some((t) => t.id === ownerId)) return (id) => subtasksOf(tasks, id);
-  const direct = tasks.filter((t) => !!t.parent_task_id && ownerId.startsWith(t.parent_task_id));
+  const ids = new Set(tasks.map((t) => t.id));
+  const direct = tasks.filter((t) => !!t.parent_task_id && refNamesId(t.parent_task_id, ownerId, ids.has(t.parent_task_id), t.id));
   return (id) => (id === ownerId ? direct : subtasksOf(tasks, id));
 }
 
@@ -160,14 +162,10 @@ function memberOf(ref: string, ownerId: string, teamIds: ReadonlySet<string>): s
   if (!ref) return '';
   if (ref === ownerId || teamIds.has(ref)) return ref;
   if (ref.length < 4) return '';
-  if (ownerId.startsWith(ref)) return ownerId;
-  let hit = '';
-  for (const id of teamIds) {
-    if (!id.startsWith(ref)) continue;
-    if (hit) return ''; // ambiguous: a guess, not a ref
-    hit = id;
-  }
-  return hit;
+  // No id this knows is `ref` itself (checked above), so it is read as a prefix.
+  if (refNamesId(ref, ownerId, false)) return ownerId;
+  const hits = matchIdRef(teamIds, ref, (id) => id);
+  return hits.length === 1 ? hits[0]! : ''; // several: ambiguous, a guess, not a ref
 }
 
 /**

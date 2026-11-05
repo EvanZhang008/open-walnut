@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
+import { dependsOnThrough } from '../../../../src/lib/dependency-loop';
 import { addDependency, addNote, deleteTask, fetchTasks, removeDependency, toggleCompleteTask, type TaskDetail } from '@/api/tasks';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -70,6 +71,8 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Task[]>([]);
+  /** What the last finished search left out because picking it would make a loop (null: none ran). */
+  const [loopHidden, setLoopHidden] = useState<number | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   const dependsOn = detail?.depends_on ?? task.depends_on ?? [];
@@ -79,20 +82,24 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
   const search = (q: string) => {
     setQuery(q);
     if (timer.current) clearTimeout(timer.current);
-    if (!q.trim()) { setResults([]); return; }
+    if (!q.trim()) { setResults([]); setLoopHidden(null); return; }
     timer.current = setTimeout(async () => {
       try {
         const all = await fetchTasks();
         const needle = q.toLowerCase();
-        setResults(all.filter((t) => t.id !== task.id && !dependsOn.includes(t.id)
-          && (t.title.toLowerCase().includes(needle) || t.id.startsWith(needle))).slice(0, 10));
+        const matching = all.filter((t) => t.id !== task.id && !dependsOn.includes(t.id)
+          && (t.title.toLowerCase().includes(needle) || t.id.startsWith(needle)));
+        // A task that already depends on this one, directly or through others, would make a loop.
+        const pickable = matching.filter((t) => !dependsOnThrough(all, t.id, task.id));
+        setResults(pickable.slice(0, 10));
+        setLoopHidden(matching.length - pickable.length);
       } catch { /* the picker stays as it was */ }
     }, 300);
   };
   const pickDependency = async (depId: string) => {
     try {
       await addDependency(task.id, depId);
-      setPicking(false); setQuery(''); setResults([]);
+      setPicking(false); setQuery(''); setResults([]); setLoopHidden(null);
       onChanged();
     } catch (e) { onError(errText(e)); }
   };
@@ -126,14 +133,21 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
           {results.map((t) => (
             <button type="button" key={t.id} className="tdp-dep-result" onClick={() => void pickDependency(t.id)}>{t.title}</button>
           ))}
-          <button type="button" className="tdp-link" onClick={() => { setPicking(false); setQuery(''); setResults([]); }}>Cancel</button>
+          {results.length === 0 && loopHidden !== null && query.trim() && (
+            <div className="tdp-dep-empty" data-testid="task-detail-dependency-empty">
+              {loopHidden > 0
+                ? `No task to add: ${loopHidden === 1 ? 'the one match already depends' : `the ${loopHidden} matches already depend`} on this task, so picking it would make a loop.`
+                : 'No matching task.'}
+            </div>
+          )}
+          <button type="button" className="tdp-link" onClick={() => { setPicking(false); setQuery(''); setResults([]); setLoopHidden(null); }}>Cancel</button>
         </div>
       ) : (
         <button type="button" className="tdp-link" data-testid="task-detail-add-dependency" onClick={() => setPicking(true)}>+ Dependency</button>
       )}
       {dependents.length > 0 && (
         <div className="tdp-dependents">
-          <div className="tdp-row-sub">Waiting on this task</div>
+          <div className="tdp-label tdp-dependents-label">Waiting on this task <span className="tdp-label-count">{dependents.length}</span></div>
           {dependents.map((dep) => (
             <button type="button" key={dep.id} className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{dep.title}</button>
           ))}

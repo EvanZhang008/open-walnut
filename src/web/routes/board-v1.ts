@@ -56,6 +56,7 @@
 import express, { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { refNamesId } from '../../lib/id-ref.js'
 import type { Task } from '../../core/types.js'
 import { storedUserState } from '../../core/user-status.js'
 import {
@@ -260,12 +261,14 @@ function boardRefIds(board: BoardFile): string[] {
 }
 
 /** Direct subtasks not done, by the board's rule (a parent ref may be a short prefix of the id). */
-async function openSubtaskCount(taskId: string): Promise<number> {
+export async function openSubtaskCount(taskId: string): Promise<number> {
   const { listTasks } = await import('../../core/task-manager.js')
+  const tasks = await listTasks()
+  const ids = new Set(tasks.map((t) => t.id))
   let n = 0
-  for (const t of await listTasks()) {
+  for (const t of tasks) {
     const parent = t.parent_task_id
-    if (!parent || t.id === taskId || !taskId.startsWith(parent)) continue
+    if (!parent || t.id === taskId || !refNamesId(parent, taskId, ids.has(parent))) continue
     if (t.phase !== 'COMPLETE' && t.status !== 'done') n++
   }
   return n

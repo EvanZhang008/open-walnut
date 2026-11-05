@@ -20,6 +20,7 @@
  */
 
 import { log } from '../../logging/index.js';
+import { matchIdRef, refNamesId } from '../../lib/id-ref.js';
 import type { SessionRecord } from '../types.js';
 import type { UserSaid } from './user-spoke.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
@@ -251,7 +252,7 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
     const byHandle = candidates.find((s) => s.claudeSessionId.toLowerCase() === printed)
       ?? null;
     if (byHandle) return { session: byHandle };
-    const hits = candidates.filter((s) => s.claudeSessionId.toLowerCase().startsWith(printed));
+    const hits = matchIdRef(candidates, printed, (s) => s.claudeSessionId.toLowerCase());
     if (hits.length === 1) return { session: hits[0] };
     if (hits.length > 1) {
       throw ambiguous(to, hits.map((s) => ({ id: s.claudeSessionId, title: s.title, host: s.host })));
@@ -277,7 +278,7 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
 
   const lower = to.toLowerCase();
   const byPrefix = to.length >= 4
-    ? candidates.filter((s) => s.claudeSessionId.toLowerCase().startsWith(lower))
+    ? matchIdRef(candidates, lower, (s) => s.claudeSessionId.toLowerCase())
     : [];
 
   if (taskHit && byPrefix.length > 0) {
@@ -489,9 +490,12 @@ async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: 
   const { getTask } = await import('../task-manager.js');
   const own = await getTask(caller.record.taskId).catch(() => undefined);
   // A stored parent id may be a legacy short prefix of the parent's id.
-  if (!own?.parent_task_id || !targetTaskId.startsWith(own.parent_task_id)) return;
+  const parentRef = own?.parent_task_id;
+  if (!parentRef) return;
+  const exact = await isTaskId(parentRef);
+  if (!refNamesId(parentRef, targetTaskId, exact, own?.id)) return;
   const target = await getTask(targetTaskId).catch(() => undefined);
-  if (!target || !target.id.startsWith(own.parent_task_id) || target.phase !== 'COMPLETE') return;
+  if (!target || !refNamesId(parentRef, target.id, exact, own?.id) || target.phase !== 'COMPLETE') return;
   throw new SendError('parent_complete',
     `"${target.title}" (${target.id}) is your task's parent and it is complete: it no longer takes messages `
     + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear '
@@ -576,7 +580,14 @@ async function callerLeads(caller: CallerIdentity, taskId: string | undefined): 
   if (caller.kind !== 'session' || !caller.record.taskId || !taskId) return false;
   const { getTask } = await import('../task-manager.js');
   const task = await getTask(taskId).catch(() => undefined);
-  return !!task?.parent_task_id && caller.record.taskId.startsWith(task.parent_task_id);
+  const parentRef = task?.parent_task_id;
+  return !!parentRef && refNamesId(parentRef, caller.record.taskId, await isTaskId(parentRef), task.id);
+}
+
+/** Some task's id is `ref` itself (so `ref` is no prefix of another id). */
+async function isTaskId(ref: string): Promise<boolean> {
+  const { getTask } = await import('../task-manager.js');
+  return (await getTask(ref).catch(() => undefined))?.id === ref;
 }
 
 /** Whether a task is an org node (a lead or Main). Unknown counts as not. */

@@ -16,6 +16,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { placement } from '../../core/server-role.js'
 import type { SessionEffort, SessionEngine, SessionMode, SessionRecord } from '../../core/types.js'
+import { missingIsNull } from '../../lib/id-ref.js'
 
 export const engineSwitchV1Router = Router()
 
@@ -68,7 +69,7 @@ export function sessionHistoryRow(r: SessionRecord, activeId: string | undefined
 engineSwitchV1Router.get('/tasks/:id/sessions', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { getTask } = await import('../../core/task-manager.js')
-    const task = await getTask(String(req.params.id)).catch(() => null)
+    const task = await getTask(String(req.params.id)).catch(missingIsNull)
     if (!task) { res.status(404).json({ error: 'Task not found', code: 'not_found' }); return }
     const { getSessionsForTask } = await import('../../core/session-tracker.js')
     const { taskConversation } = await import('../../core/sessions/task-session-claim.js')

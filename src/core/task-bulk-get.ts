@@ -15,6 +15,7 @@
 import type { Task } from './types.js';
 import { extractProgressLines, summarizeProgress } from './task-progress.js';
 import { agentStatusView, summaryAt } from './user-status.js';
+import { matchIdRef } from '../lib/id-ref.js';
 
 /** Max ids per call. Above this the reply stops being a triage payload. */
 export const MAX_BULK_GET_IDS = 50;
@@ -185,7 +186,7 @@ export function bulkGetFromTasks(
       items.push(projectTaskFields(exact, fields));
       continue;
     }
-    const matches = tasks.filter((t) => t.id.startsWith(id));
+    const matches = matchIdRef(tasks, id);
     if (matches.length === 1) {
       items.push(projectTaskFields(matches[0], fields));
       continue;

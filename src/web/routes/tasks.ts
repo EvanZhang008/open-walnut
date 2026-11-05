@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
+import { matchParentRef, refNamesId } from '../../lib/id-ref.js'
 import { VALID_PHASES } from '../../core/phase.js'
 import {
   addTask,
@@ -841,7 +842,8 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
       taskWithDeps.dependents = dependents.map((t) => ({ id: t.id, title: t.title, phase: t.phase }))
     }
     // Child tasks — handle both full-ID and prefix parent_task_id (legacy data)
-    const children = allTasks.filter((t) => t.parent_task_id && enriched.id.startsWith(t.parent_task_id))
+    const ids = new Set(allTasks.map((t) => t.id))
+    const children = allTasks.filter((t) => t.parent_task_id && refNamesId(t.parent_task_id, enriched.id, ids.has(t.parent_task_id), t.id))
     if (children.length > 0) {
       taskWithDeps.children = children.map((t) => ({
         id: t.id, title: t.title, phase: t.phase, status: t.status, priority: t.priority,
@@ -851,7 +853,7 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
     }
     // Parent task — resolve parent_task_id (may be prefix) to actual parent info
     if (enriched.parent_task_id) {
-      const parent = allTasks.find((t) => t.id.startsWith(enriched.parent_task_id!))
+      const parent = matchParentRef(allTasks, enriched)
       if (parent) {
         taskWithDeps.parent = { id: parent.id, title: parent.title, phase: parent.phase, status: parent.status, ...(parent.user_status ? { user_status: parent.user_status } : {}) }
       }

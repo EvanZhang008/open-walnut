@@ -12,6 +12,8 @@
  * provenance cards (a peer's short id → its session and task), not the palette.
  */
 
+import { matchIdRef } from '../../../../src/lib/id-ref';
+
 export interface SessionMentionCandidate {
   /** Full session id. */
   id: string;
@@ -40,7 +42,7 @@ export function resolveRefInIndex(
   ref: string,
   candidates: SessionMentionCandidate[],
 ): SessionMentionCandidate | null {
-  const matches = candidates.filter((c) => c.id.startsWith(ref));
+  const matches = matchIdRef(candidates, ref);
   return matches.length === 1 ? matches[0] : null;
 }
 

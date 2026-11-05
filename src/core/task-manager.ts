@@ -5,6 +5,8 @@ import { CLOUD_MODE, TASKS_FILE } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { log } from '../logging/index.js';
 import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
+import { ambiguousIdMessage, matchIdRef, missingIdMessage } from '../lib/id-ref.js';
+import { dependsOnThrough } from '../lib/dependency-loop.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
@@ -2874,12 +2876,12 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // If parent_task_id is set, inherit project/source from parent
     let parentTask: Task | undefined;
     if (input.parent_task_id) {
-      const matches = store.tasks.filter((t) => t.id.startsWith(input.parent_task_id!));
+      const matches = matchIdRef(store.tasks, input.parent_task_id!);
       if (matches.length === 0) {
-        throw new Error(`Parent task not found: ${input.parent_task_id}`);
+        throw new Error(`Parent task not found: "${input.parent_task_id}": no task has that id or an id starting with it.`);
       }
       if (matches.length > 1) {
-        throw new Error(`Ambiguous parent_task_id prefix: ${input.parent_task_id}`);
+        throw new Error(ambiguousIdMessage(input.parent_task_id!, matches, 'parent_task_id'));
       }
       parentTask = matches[0];
     }
@@ -3805,41 +3807,26 @@ function validateDependencyIds(store: TaskStore, taskId: string, depIds: string[
       throw new DependencyValidationError('A task cannot depend on itself.', taskId, depId);
     }
     if (!taskMap.has(depId)) {
+      // depends_on takes whole ids only; a prefix of several tasks is named as one, not as nothing.
+      const starts = matchIdRef(store.tasks, depId);
       throw new DependencyValidationError(
-        `Dependency target not found: "${depId}". Use full task IDs for depends_on.`, taskId, depId,
+        starts.length > 0
+          ? `Dependency "${depId}" is not a whole task id (${starts.length === 1 ? '1 task starts' : `${starts.length} tasks start`} with it: ${starts.slice(0, 3).map((t) => t.id).join(', ')}${starts.length > 3 ? ', ...' : ''}). Use full task IDs for depends_on.`
+          : `Dependency target not found: "${depId}". Use full task IDs for depends_on.`, taskId, depId,
       );
     }
   }
 }
 
 /**
- * BFS cycle detection: check if adding depIds to taskId would create a cycle.
- * Walks the transitive depends_on graph from each depId and checks if any path
- * leads back to taskId.
+ * Cycle detection: adding depIds to taskId is a loop when one of them already depends on
+ * taskId, directly or through other tasks. The error names that dependency, by title.
  */
 function checkCircularDependency(store: TaskStore, taskId: string, depIds: string[]): void {
-  const taskMap = new Map(store.tasks.map(t => [t.id, t]));
-  const visited = new Set<string>();
-  const queue = [...depIds];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    if (current === taskId) {
-      // depIds[0] is used as the "culprit" in the error message. The previous
-      // depIds.find(d => depIds.includes(d)) was a tautology — the predicate
-      // matches the first element, so it always returned depIds[0]. Tracking
-      // which specific dep triggered the cycle would require a different
-      // algorithm (per-dep traversal). For now, report the first one.
-      throw new CircularDependencyError(taskId, depIds[0]);
-    }
-    if (visited.has(current)) continue;
-    visited.add(current);
-    const depTask = taskMap.get(current);
-    if (depTask?.depends_on) {
-      for (const next of depTask.depends_on) {
-        if (!visited.has(next)) queue.push(next);
-      }
-    }
-  }
+  const culprit = depIds.find((depId) => dependsOnThrough(store.tasks, depId, taskId));
+  if (culprit === undefined) return;
+  const titleOf = (id: string) => store.tasks.find((t) => t.id === id)?.title;
+  throw new CircularDependencyError(taskId, culprit, titleOf(taskId), titleOf(culprit));
 }
 
 /**
@@ -3983,14 +3970,14 @@ export async function completeTask(
   // holding the lock during the await would self-deadlock the whole task system.
   const { task, oldPhase } = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -4027,14 +4014,14 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   // not loaded → set sync_error).
   const { task, oldPhase } = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -4121,13 +4108,13 @@ export async function setPhaseBulk(
     const now = new Date().toISOString();
 
     for (const prefix of [...new Set(idPrefixes)]) {
-      const matches = store.tasks.filter((t) => t.id.startsWith(prefix));
+      const matches = matchIdRef(store.tasks, prefix);
       if (matches.length === 0) {
-        skipped.push({ id: prefix, ok: false, error: `No task found matching ID prefix "${prefix}"` });
+        skipped.push({ id: prefix, ok: false, error: missingIdMessage(prefix) });
         continue;
       }
       if (matches.length > 1) {
-        skipped.push({ id: prefix, ok: false, error: `Ambiguous ID prefix "${prefix}" matches ${matches.length} tasks` });
+        skipped.push({ id: prefix, ok: false, error: ambiguousIdMessage(prefix, matches) });
         continue;
       }
       const t = matches[0];
@@ -4468,14 +4455,14 @@ export async function updateTask(
   // re-acquires the lock when stamping sync_error → self-deadlock if held.
   const { task, oldPhase, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject } = await withWriteLock(async () => {
   const store = await readStore();
-  const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+  const matches = matchIdRef(store.tasks, idPrefix);
 
   if (matches.length === 0) {
-    throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    throw new Error(missingIdMessage(idPrefix));
   }
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      ambiguousIdMessage(idPrefix, matches),
     );
   }
 
@@ -4687,12 +4674,12 @@ export async function updateTask(
       }
     } else {
       // Resolve parent by prefix
-      const parentMatches = store.tasks.filter((t) => t.id.startsWith(updates.parent_task_id!));
+      const parentMatches = matchIdRef(store.tasks, updates.parent_task_id!);
       if (parentMatches.length === 0) {
-        throw new Error(`Parent task not found: ${updates.parent_task_id}`);
+        throw new Error(`Parent task not found: "${updates.parent_task_id}": no task has that id or an id starting with it.`);
       }
       if (parentMatches.length > 1) {
-        throw new Error(`Ambiguous parent_task_id prefix: ${updates.parent_task_id}`);
+        throw new Error(ambiguousIdMessage(updates.parent_task_id!, parentMatches, 'parent_task_id'));
       }
       const parentTask = parentMatches[0];
       if (parentTask.id === task.id) {
@@ -4704,7 +4691,7 @@ export async function updateTask(
       const seen = new Set<string>([parentTask.id]);
       while (cursor && !seen.has(cursor)) {
         if (cursor === task.id) {
-          throw new Error('Circular reference: the target parent is a descendant of this task.');
+          throw new Error(`Circular reference: "${parentTask.title}" is a subtask of "${task.title}" (directly or further down), so it cannot be its parent. Move it out from under "${task.title}" first.`);
         }
         seen.add(cursor);
         const ancestor = store.tasks.find((t) => t.id === cursor);
@@ -4992,14 +4979,14 @@ export async function addNote(idPrefix: string, content: string): Promise<{ task
   // self-deadlock (autoPushIfConfigured re-acquires this same lock).
   const task = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -5048,14 +5035,14 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
   // Lock-internal: validate + persist. Push moved outside lock to avoid self-deadlock.
   const task = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -5095,7 +5082,7 @@ export async function updateNote(idPrefix: string, content: string): Promise<{ t
   const target = await getTask(idPrefix);
   runPluginContentValidation(target, 'note', content);
   const { task: written } = await updateTaskRaw(target.id, { note: content, updated_at: new Date().toISOString() });
-  if (!written) throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+  if (!written) throw new Error(missingIdMessage(idPrefix));
   const task = written;
 
   const syncResult = await autoPushIfConfigured(task);
@@ -5134,7 +5121,7 @@ export async function compareAndSetNote(
     return { note: content, updated_at: new Date().toISOString() };
   });
   if (stale) return { updated: false, task: stale };
-  if (!written) throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+  if (!written) throw new Error(missingIdMessage(idPrefix));
   const result: CompareAndSetNoteResult = { updated: true, task: written };
   const syncResult = await autoPushIfConfigured(result.task);
   if (!syncResult.success) {
@@ -5151,14 +5138,14 @@ export async function updateDescription(idPrefix: string, content: string): Prom
   // Lock-internal: validate + persist. Push moved outside lock to avoid self-deadlock.
   const task = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -5186,14 +5173,14 @@ export async function updateSummary(idPrefix: string, content: string): Promise<
   // Lock-internal: validate + persist. Push moved outside lock to avoid self-deadlock.
   const task = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -5243,14 +5230,14 @@ export async function getTask(idPrefix: string): Promise<Task> {
   const exact = (await taskIndex()).get(idPrefix);
   if (exact) return cloneTask(exact);
   const store = await readStoreView();
-  const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+  const matches = matchIdRef(store.tasks, idPrefix);
 
   if (matches.length === 0) {
-    throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    throw new Error(missingIdMessage(idPrefix));
   }
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      ambiguousIdMessage(idPrefix, matches),
     );
   }
 
@@ -5367,6 +5354,8 @@ export class ActiveSessionError extends Error {
  * swallowing lock timeouts and disk failures under the same catch.
  */
 export class DependencyValidationError extends Error {
+  /** The caller's input is wrong: the web error handler answers 400, never a 500 route card. */
+  public readonly status = 400;
   public readonly taskId: string;
   public readonly depId: string;
   constructor(message: string, taskId: string, depId: string) {
@@ -5383,8 +5372,11 @@ export class DependencyValidationError extends Error {
 export class CircularDependencyError extends Error {
   public readonly taskId: string;
   public readonly depId: string;
-  constructor(taskId: string, depId: string) {
-    super(`Circular dependency detected: adding dependency on "${depId}" from task "${taskId}" creates a cycle.`);
+  constructor(taskId: string, depId: string, taskTitle?: string, depTitle?: string) {
+    // Titles when the store has them: the person reads this in a toast (2026-11-04 review).
+    super(taskTitle && depTitle
+      ? `Circular dependency detected: "${depTitle}" already depends on "${taskTitle}", directly or through other tasks, so "${taskTitle}" cannot depend on it. Remove that dependency first.`
+      : `Circular dependency detected: adding dependency on "${depId}" from task "${taskId}" creates a cycle.`);
     this.name = 'CircularDependencyError';
     this.taskId = taskId;
     this.depId = depId;
@@ -5446,14 +5438,14 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   const stoppedIds = await sessionIdsProvenStopped(linkedIds);
   const result = await withWriteLock(async () => {
   const store = await readStore();
-  const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+  const matches = matchIdRef(store.tasks, idPrefix);
 
   if (matches.length === 0) {
-    throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    throw new Error(missingIdMessage(idPrefix));
   }
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      ambiguousIdMessage(idPrefix, matches),
     );
   }
 
@@ -5581,13 +5573,13 @@ export async function deleteTasksByIds(
     const found: Task[] = [];
     const skipped: BatchTaskOutcome[] = [];
     for (const prefix of [...new Set(idPrefixes)]) {
-      const matches = store.tasks.filter((t) => t.id.startsWith(prefix));
+      const matches = matchIdRef(store.tasks, prefix);
       if (matches.length === 0) {
-        skipped.push({ id: prefix, ok: false, error: `No task found matching ID prefix "${prefix}"` });
+        skipped.push({ id: prefix, ok: false, error: missingIdMessage(prefix) });
         continue;
       }
       if (matches.length > 1) {
-        skipped.push({ id: prefix, ok: false, error: `Ambiguous ID prefix "${prefix}" matches ${matches.length} tasks` });
+        skipped.push({ id: prefix, ok: false, error: ambiguousIdMessage(prefix, matches) });
         continue;
       }
       found.push(matches[0]);
@@ -6009,9 +6001,9 @@ function sameProject(a: string | undefined, b: string | undefined): boolean {
 function resolveTasksByPrefix(store: TaskStore, idPrefixes: string[]): Task[] {
   const resolved: Task[] = [];
   for (const prefix of idPrefixes) {
-    const matches = store.tasks.filter((t) => t.id.startsWith(prefix));
-    if (matches.length === 0) throw new Error(`No task found matching ID prefix "${prefix}"`);
-    if (matches.length > 1) throw new Error(`Ambiguous ID prefix "${prefix}" matches ${matches.length} tasks. Be more specific.`);
+    const matches = matchIdRef(store.tasks, prefix);
+    if (matches.length === 0) throw new Error(missingIdMessage(prefix));
+    if (matches.length > 1) throw new Error(ambiguousIdMessage(prefix, matches));
     resolved.push(matches[0]);
   }
   return resolved;
@@ -6183,7 +6175,7 @@ function lineOf(store: TaskStore, rootId: string): (task: Task) => boolean {
   const resolve = (ref: string): Task | undefined => {
     const exact = byId.get(ref);
     if (exact) return exact;
-    const hits = store.tasks.filter((t) => t.id.startsWith(ref));
+    const hits = matchIdRef(store.tasks, ref);
     return hits.length === 1 ? hits[0] : undefined;
   };
   return (task) => {
@@ -7025,14 +7017,14 @@ export async function linkSessionSlot(
 ): Promise<{ task: Task }> {
   return withWriteLock(async () => {
   const store = await readStore();
-  const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+  const matches = matchIdRef(store.tasks, idPrefix);
 
   if (matches.length === 0) {
-    throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    throw new Error(missingIdMessage(idPrefix));
   }
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      ambiguousIdMessage(idPrefix, matches),
     );
   }
 
@@ -7107,14 +7099,14 @@ export async function clearSessionSlot(
 ): Promise<{ task: Task }> {
   return withWriteLock(async () => {
   const store = await readStore();
-  const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+  const matches = matchIdRef(store.tasks, idPrefix);
 
   if (matches.length === 0) {
-    throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+    throw new Error(missingIdMessage(idPrefix));
   }
   if (matches.length > 1) {
     throw new Error(
-      `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+      ambiguousIdMessage(idPrefix, matches),
     );
   }
 
@@ -7162,14 +7154,14 @@ export async function addSessionToHistory(
 ): Promise<{ task: Task }> {
   return withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -7194,13 +7186,13 @@ export async function replaceSessionIdLinks(
 ): Promise<{ task: Task }> {
   return withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -7234,14 +7226,14 @@ export async function linkSession(
 ): Promise<{ task: Task }> {
   return withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -7271,7 +7263,7 @@ export async function linkSession(
 export async function touchLastSessionUpdate(taskIdPrefix: string): Promise<void> {
   // One row: this runs on every session activity, and the whole-store
   // read + write it used to take cost a fingerprint of every task each time.
-  const found = (await readStoreView()).tasks.find((t) => t.id.startsWith(taskIdPrefix));
+  const found = matchIdRef((await readStoreView()).tasks, taskIdPrefix)[0];
   if (!found) return;
   const { changed, task } = await updateTaskRaw(found.id, { last_session_update: new Date().toISOString() });
   if (changed && task) bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-touch' });
@@ -7287,14 +7279,14 @@ export async function clearSession(
 ): Promise<{ task: Task }> {
   return withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    const matches = matchIdRef(store.tasks, idPrefix);
 
     if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+      throw new Error(missingIdMessage(idPrefix));
     }
     if (matches.length > 1) {
       throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
+        ambiguousIdMessage(idPrefix, matches),
       );
     }
 
@@ -9279,8 +9271,8 @@ export async function makeTaskLocal(
 ): Promise<MadeLocal> {
   const locked = await withWriteLock(async () => {
     const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
-    if (matches.length !== 1) throw new Error(matches.length ? `Ambiguous task id "${idPrefix}"` : `No task found matching ID prefix "${idPrefix}"`);
+    const matches = matchIdRef(store.tasks, idPrefix);
+    if (matches.length !== 1) throw new Error(matches.length ? `Ambiguous task id "${idPrefix}"` : missingIdMessage(idPrefix));
     const task = matches[0];
     if (task.source === 'local') {
       const target = task.sync_hold?.target ?? projectSyncSource(store, task.project);

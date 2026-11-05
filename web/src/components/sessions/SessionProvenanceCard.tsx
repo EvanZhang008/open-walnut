@@ -32,6 +32,7 @@
  * words (message-fold.ts). A click opens the rest; a slim reply-request row has
  * nothing to fold.
  */
+import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import {
@@ -120,7 +121,7 @@ function useResolvedPeer(peer: SessionEnvelopePeer, source?: SessionEnvelopeSour
         ambiguous: false,
       };
     }
-    const matches = candidates.filter((c) => c.id.startsWith(peer.shortId!)).length;
+    const matches = matchIdRef(candidates, peer.shortId).length;
     return { title: peer.title, host: peer.host, ambiguous: matches > 1 };
   }, [candidates, peer, source]);
 

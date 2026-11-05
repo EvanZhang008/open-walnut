@@ -1,3 +1,4 @@
+import { matchParentRef } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
 import { TaskCard, type CardGroupInfo } from './TaskCard';
@@ -99,7 +100,7 @@ export function TaskList({
     for (const child of tasks) {
       if (!child.parent_task_id) continue;
       const parent = taskById.get(child.parent_task_id)
-        ?? tasks.find((candidate) => candidate.id.startsWith(child.parent_task_id!));
+        ?? matchParentRef(tasks, child);
       if (!parent) continue;
       const current = stats.get(parent.id) ?? { done: 0, total: 0 };
       current.total++;

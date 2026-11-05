@@ -70,10 +70,11 @@ describe('POST /api/tasks/:id/toggle-complete', () => {
     expect(res2.body.task.status).toBe('todo');
   });
 
-  it('returns 500 for non-existent task', async () => {
+  it('returns 404 for non-existent task', async () => {
     const app = createApp();
     const res = await request(app).post('/api/tasks/nonexistent/toggle-complete');
-    expect(res.status).toBe(500);
+    // An id that names no task is the caller's (src/lib/id-ref.ts idRefErrorStatus), never a 500.
+    expect(res.status).toBe(404);
   });
 
   it('state is persisted — refetch shows updated status', async () => {

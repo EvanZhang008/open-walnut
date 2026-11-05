@@ -25,7 +25,8 @@ import { subtasksOf } from '../../web/src/components/tasks/subtask-index';
 // --- The old code, verbatim -------------------------------------------------
 
 function refFind(list: readonly Task[], ref: string): Task | undefined {
-  return list.find((t) => t.id.startsWith(ref));
+  // Since src/lib/id-ref.ts: the whole id wins, and an empty reference names nothing.
+  return list.find((t) => t.id === ref) ?? (ref ? list.find((t) => t.id.startsWith(ref)) : undefined);
 }
 
 function refCount(tasks: readonly Task[]): Map<string, number> {
@@ -194,6 +195,52 @@ describe('ParentRefMatcher', () => {
     for (const t of BOARD) {
       expect(m.refsOf(t.id)).toEqual(refs.filter((r) => t.id.startsWith(r)));
     }
+  });
+});
+
+describe('a parent reference that is a whole id (src/lib/id-ref.ts)', () => {
+  const short = task({ id: 'fixa83e-d669' });
+  const long = task({ id: 'fixa83e-d6690' });
+  const child = task({ id: 'fixc001-0001', parent_task_id: 'fixa83e-d669' });
+  const legacy = task({ id: 'fixc002-0001', parent_task_id: 'fixa83e' });
+  const tasks = [long, short, child, legacy];
+
+  it('names that task, never a longer id that starts with it', () => {
+    expect(resolveParentRef(tasks, 'fixa83e-d669')).toBe(short);
+    expect(resolveParentRef([long, short], 'fixa83e-d669')).toBe(short);
+    expect(subtasksOf(tasks, short.id).map((t) => t.id)).toEqual(['fixc001-0001', 'fixc002-0001']);
+    expect(subtasksOf(tasks, long.id).map((t) => t.id)).toEqual(['fixc002-0001']);
+    expect([...countSubtasksByParent(tasks)]).toEqual([['fixa83e-d669', 1], ['fixa83e-d6690', 1]]);
+  });
+
+  it('ParentRefMatcher drops a reference that is another task\'s whole id', () => {
+    const m = new ParentRefMatcher(['fixa83e-d669', 'fixa83e'], tasks.map((t) => t.id));
+    expect(m.refsOf('fixa83e-d669')).toEqual(['fixa83e-d669', 'fixa83e']);
+    expect(m.refsOf('fixa83e-d6690')).toEqual(['fixa83e']);
+  });
+
+  it('pulls the subtask in under its own parent only', () => {
+    expect(withSubtaskContext(tasks, [long], () => true).map((t) => t.id)).toEqual(['fixa83e-d6690', 'fixc002-0001']);
+    expect(withSubtaskContext(tasks, [short], () => true).map((t) => t.id)).toEqual(['fixa83e-d669', 'fixc001-0001', 'fixc002-0001']);
+  });
+});
+
+describe('a subtask whose id starts with its parent\'s, the parent out of the list', () => {
+  // The search list after the parent completed: only the subtask is in it.
+  const parent = task({ id: 'fixtour' });
+  const child = task({ id: 'fixtour-phone', parent_task_id: 'fixtour' });
+  const grandchild = task({ id: 'fixtour-phone-2', parent_task_id: 'fixtour-phone' });
+  const known = new Set([parent.id, child.id, grandchild.id]);
+
+  it('is never its own parent', () => {
+    expect(resolveParentRef([child], child.parent_task_id!, child)).toBeUndefined();
+    expect(resolveParentRef([child, grandchild], child.parent_task_id!, child, known)).toBeUndefined();
+    expect(resolveParentRef([grandchild, child], grandchild.parent_task_id!, grandchild, known)).toBe(child);
+    expect([...countSubtasksByParent([child])]).toEqual([]);
+  });
+
+  it('still nests under its parent when the parent is in the list', () => {
+    expect(resolveParentRef([parent, child], child.parent_task_id!, child, known)).toBe(parent);
   });
 });
 
