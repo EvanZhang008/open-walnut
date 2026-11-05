@@ -27,6 +27,8 @@
  * `engines.codex` but `env`, the result is exactly that parsed CODEX_CONFIG.
  */
 
+import { withCodexRequestTag } from '../core/sessions/request-tag.js'
+
 /** A provider id codex reads as a table key; codex-acp's patch passes only these. */
 const PROVIDER_ID = /^[A-Za-z0-9_-]+$/
 /** Codex's built-in providers win over a user table of the same id, so naming one would route nowhere new. */
@@ -252,7 +254,17 @@ export interface CodexEngineResolution {
 export function resolveCodexEngine(
   config: unknown,
   rawCodexConfig: string | undefined,
-  options: { pick?: CodexSessionPick } = {},
+  options: { pick?: CodexSessionPick; tag?: string } = {},
+): CodexEngineResolution {
+  const resolved = resolveUntagged(config, rawCodexConfig, options)
+  // session.tag_requests: the provider the threads go to carries the session's tag header.
+  return options.tag ? { ...resolved, baseConfig: withCodexRequestTag(resolved.baseConfig, options.tag) } : resolved
+}
+
+function resolveUntagged(
+  config: unknown,
+  rawCodexConfig: string | undefined,
+  options: { pick?: CodexSessionPick },
 ): CodexEngineResolution {
   const explicit = parseCodexBaseConfig(rawCodexConfig)
   const configured = readCodexEngineSettings(config)

@@ -159,3 +159,25 @@ rather than letting Codex use the host's own provider:
 - this machine runs a Walnut older than copying engine settings;
 - the provider was not copied because it holds a credential (a password in `base_url`). Put the
   key under `env_key` instead, so the provider itself carries none.
+
+## Telling Walnut's requests apart (`session.tag_requests`)
+
+A proxy in front of your provider sees every request on the machine, from Walnut's sessions and
+from anything else you run. To let it tell them apart, turn on:
+
+```yaml
+session:
+  tag_requests: true
+```
+
+Every session Walnut starts then sends the header `x-walnut-session: <task id>` with each model
+request, wherever the session works:
+
+- Claude Code sessions send it through `ANTHROPIC_CUSTOM_HEADERS`. Header lines you set in this
+  Mac's `~/.claude/settings.json` are kept beside it. On another host, a value set there in that
+  host's own settings is not known to Walnut and is replaced for Walnut's sessions.
+- Codex sessions send it through the `http_headers` of the provider their threads use
+  (`engines.codex.provider`, or a provider your own `CODEX_CONFIG` defines). Codex's built-in
+  providers get no header.
+
+It is off by default, so nothing extra leaves the machine unless you ask for it.

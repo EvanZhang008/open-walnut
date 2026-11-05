@@ -32,6 +32,7 @@ import { registerSessionServerProbe } from '../core/sessions/session-server-stat
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
+import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-event-view.js'
@@ -2800,7 +2801,12 @@ export class ClaudeCodeSession {
     // local and remote alike.
     const sessionSettings: Record<string, unknown> = {}
     const slimEnv = slim ? readUserSettingsEnv() : {}
-    if (Object.keys(walnutEnv).length + Object.keys(slimEnv).length > 0) sessionSettings.env = { ...slimEnv, ...walnutEnv }
+    // session.tag_requests: the task's id rides every model request as a header, beside any
+    // the user set in this machine's settings (another host's own are not known here).
+    const tagEnv: Record<string, string> = requestTagOn()
+      ? { ANTHROPIC_CUSTOM_HEADERS: withRequestTagHeaders(host ? undefined : readUserSettingsEnv().ANTHROPIC_CUSTOM_HEADERS, requestTagValue(this.taskId)) }
+      : {}
+    if (Object.keys(walnutEnv).length + Object.keys(slimEnv).length + Object.keys(tagEnv).length > 0) sessionSettings.env = { ...slimEnv, ...walnutEnv, ...tagEnv }
     const slimOverrides = slim ? slimChildSettingsArg() : undefined
     if (slimOverrides) Object.assign(sessionSettings, JSON.parse(slimOverrides) as Record<string, unknown>)
     // Main's or a VP's session (read from its own prompt) is reminded of its first rule by hooks too.

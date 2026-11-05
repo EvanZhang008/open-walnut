@@ -56,6 +56,7 @@ import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
+import { requestTagOn, requestTagValue } from '../core/sessions/request-tag.js'
 import { singleFile, type SingleFile } from '../lib/single-file.js'
 import type {
   AcpCapabilitySnapshot,
@@ -1440,7 +1441,11 @@ export class AcpSession {
     const codex = resolveCodexEngine(
       walnutConfig,
       overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
-      { pick: pick ? { model: pick.model, reasoning_effort: pick.reasoning_effort } : undefined },
+      {
+        pick: pick ? { model: pick.model, reasoning_effort: pick.reasoning_effort } : undefined,
+        // session.tag_requests (sessions/request-tag.ts): this task's id on every request.
+        ...(requestTagOn(walnutConfig) ? { tag: requestTagValue(this.taskId) } : {}),
+      },
     )
     // Startup approval preset (acp-permission-posture.ts resolveCodexStartPreset): the
     // session's OWN persisted choice wins (it is replayed post-establish by

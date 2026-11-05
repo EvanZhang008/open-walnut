@@ -14,6 +14,7 @@ import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.
 import { isHostReplicaProgram } from './server-role.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
 import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
+import { noteRequestTagConfig } from './sessions/request-tag.js';
 import {
   dumpConfig,
   modifyConfigDoc,
@@ -253,6 +254,8 @@ export async function getConfig(): Promise<Config> {
     // last good settings, but says nothing about what the user's newest text
     // holds: a caller that acts on something being absent must not act on it.
     if (read.source === 'backup' && read.state !== 'missing' && read.state !== 'empty') fallbackConfigs.add(config);
+    // The Claude Code spawn path reads this switch synchronously (sessions/request-tag.ts).
+    noteRequestTagConfig(config);
     return config;
   } catch (err) {
     // Was log.debug — invisible in prod, which is precisely why a wiped

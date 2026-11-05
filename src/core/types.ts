@@ -1626,6 +1626,12 @@ export interface Config {
      *    run multiple sessions in shared project directories. */
     cron_policy?: 'unrestricted' | 'session-only';
 
+    /** Tag every model request of a session Walnut starts with `x-walnut-session: <task id>`
+     *  (Claude Code through ANTHROPIC_CUSTOM_HEADERS, Codex through its provider's
+     *  http_headers), so a proxy in front of the provider can tell Walnut's sessions from
+     *  the user's other ones. Default off (src/core/sessions/request-tag.ts). */
+    tag_requests?: boolean;
+
     /** Reply STYLE every session starts on: 'rich' lets the model answer in HTML
      *  the console renders natively, 'markdown' keeps replies plain. A session's
      *  own `output_mode` (the composer pill) overrides this; a session that never
