@@ -181,3 +181,14 @@ describe('foldStepsPhrase', () => {
   });
 });
 
+
+describe('foldStepsPhrase counts calls by outcome', () => {
+  const call = (id: string, extra: { result?: string; isError?: boolean } = {}): FoldStep => ({ kind: 'calls', tools: [{ name: 'Bash', input: { command: 'x' }, toolUseId: id, ...extra }] });
+  it('a call held by an open prompt has not run, and the line leads with it; a denied one did not run either', () => {
+    const waiting = new Set(['b'])
+    expect(foldStepsPhrase([call('a', { result: 'ok' }), call('b'), call('c')], waiting)).toBe('Waiting for approval · Ran 1 tool')
+    expect(foldStepsPhrase([call('a', { result: 'ok' }), call('b', { result: "The user doesn't want to proceed with this tool use.", isError: true })])).toBe('Ran 1 tool · Denied 1 tool')
+    // No prompt open: a call without a result is still running, and counts as one that runs.
+    expect(foldStepsPhrase([call('a'), call('b', { result: 'ok' })])).toBe('Ran 2 tools')
+  })
+})

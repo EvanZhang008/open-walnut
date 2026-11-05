@@ -33,9 +33,23 @@ export function isRoutedQuestion(name: string | undefined, result: unknown): boo
     && result.trimStart().startsWith('In this team your questions go to your leader');
 }
 
+/**
+ * A call the person said no to: the CLI records the deny's message as the tool's
+ * error result (Walnut's own words: a plain deny, a deny with a note, a prompt
+ * withdrawn by a new message). Nothing failed, so it is counted as denied, never
+ * as failed, and marks its row with its own sign rather than the red cross.
+ */
+export function isUserDenied(result: unknown): boolean {
+  return typeof result === 'string' && /^(User denied permission|The user denied this tool call|The user doesn't want to proceed with this tool use|User sent a new message \u2014 permission auto-denied|User dismissed the questions)/.test(result.trimStart());
+}
+
 export interface ToolRunMember {
   name: string;
   input?: Record<string, unknown>;
+  /** The call's id and outcome, when the line counts by outcome (foldStepsPhrase). */
+  toolUseId?: string;
+  result?: string;
+  isError?: boolean;
 }
 
 function filePathOf(input: Record<string, unknown> | undefined): string | undefined {
@@ -81,4 +95,52 @@ export function toolRunPhrase(tools: ToolRunMember[]): string {
   }
   const phrase = parts.join(', ');
   return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+}
+
+/** One call of a run, with what became of it (denied: isUserDenied on its result). */
+export interface RunCall extends ToolRunMember {
+  toolUseId?: string;
+  denied?: boolean;
+  /** It has its result (or settled): only a call still open can be waiting. */
+  done?: boolean;
+}
+
+export interface RunSegment {
+  kind: 'ran' | 'denied' | 'waiting' | 'queued';
+  text: string;
+}
+
+/**
+ * The collapsed line by outcome: what ran, then what was denied, then what still
+ * waits for an answer ("Ran a command, denied a command"). A denied or held call
+ * never counts as one that ran. `waiting` is the toolUseIds an open prompt holds;
+ * while one of them waits, the CLI runs nothing else, so a call queued beside it
+ * (the agent sent both at once) waits too.
+ */
+export function runSegments(calls: readonly RunCall[], waiting: ReadonlySet<string>): RunSegment[] {
+  const asked = (c: RunCall) => !c.denied && !!c.toolUseId && waiting.has(c.toolUseId);
+  const blocked = calls.some(asked);
+  const queued = (c: RunCall) => !asked(c) && blocked && !c.denied && c.done === false;
+  const held = (c: RunCall) => asked(c) || queued(c);
+  const ran = calls.filter((c) => !c.denied && !held(c));
+  const denied = calls.filter((c) => c.denied);
+  const waitingCount = calls.filter(asked).length;
+  const queuedCount = calls.filter(queued).length;
+  const segments: RunSegment[] = [];
+  if (ran.length) segments.push({ kind: 'ran', text: toolRunPhrase(ran) });
+  if (denied.length) {
+    const cats = new Set(denied.map((c) => toolPhraseCategory(c.name)));
+    const n = denied.length;
+    const what = cats.size === 1 && cats.has('command') ? (n === 1 ? 'a command' : `${n} commands`)
+      : cats.size === 1 && cats.has('ask') ? (n === 1 ? 'a question' : `${n} questions`)
+        : (n === 1 ? 'a tool call' : `${n} tool calls`);
+    segments.push({ kind: 'denied', text: `${cats.size === 1 && cats.has('ask') ? 'dismissed' : 'denied'} ${what}` });
+  }
+  // A question waits for an answer, not an approval.
+  const what = calls.filter(asked).every((c) => toolPhraseCategory(c.name) === 'ask') ? 'waiting for your answer' : 'waiting for approval';
+  if (waitingCount) segments.push({ kind: 'waiting', text: waitingCount === 1 ? what : `${waitingCount} ${what}` });
+  // Sent beside it: not asked yet, it runs (or asks) once the open prompt is answered.
+  if (queuedCount) segments.push({ kind: 'queued', text: `${queuedCount} queued` });
+  if (segments.length) segments[0] = { ...segments[0], text: segments[0].text.charAt(0).toUpperCase() + segments[0].text.slice(1) };
+  return segments;
 }

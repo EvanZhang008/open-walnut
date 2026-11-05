@@ -3,8 +3,8 @@
  * others in the same frame, without waiting for the server.
  *
  * Regression guarded: a pending permission / AskUserQuestion ask is shown by three
- * surfaces at once — the session timeline card, the notification rail card and the
- * toast — and each used to keep a private `useState` copy and POST
+ * surfaces — the session timeline card, the notification rail card and the
+ * toast (for a session whose card is not on screen) — and each used to keep a private `useState` copy and POST
  * `/api/sessions/:id/permission` itself. The timeline card seeded its status ONCE
  * and never re-read it (stream blocks render under index keys, so nothing
  * remounted it), so approving from the rail left Approve/Deny armed in the
@@ -71,6 +71,19 @@ function permissionRequest(requestId: string) {
 }
 
 /** The same ask, as the enriched feed record the notification lane delivers. */
+/** Asks other specs left on the shared server toast when a page opens; clear them off the
+ *  page's top corner before clicking under it. */
+async function dismissStrayToasts(page: Page, keep: string): Promise<void> {
+  // Other specs share this server, so a closed stray can make room for the next
+  // one: close until none is left, the "N asks wait" line included.
+  const strays = page.locator('.nfc-perm-toast').filter({ hasNotText: keep }).locator('.notification-toast-close')
+    .or(page.locator('.nfc-more-asks-close'))
+  for (let i = 0; i < 12 && await strays.count() > 0; i++) {
+    await strays.first().click({ timeout: 2_000 }).catch(() => {})
+    await page.waitForTimeout(150)
+  }
+}
+
 function permissionRecord(requestId: string) {
   return {
     id: `notif-${requestId}`,
@@ -126,7 +139,8 @@ const railCard = (panel: Locator, requestId: string): Locator =>
 
 /** The session timeline card for one request (same marker). */
 const timelineCardFor = (panel: Locator, requestId: string): Locator =>
-  panel.locator('.permission-request-card').filter({ hasText: MARKER(requestId) })
+  // By its request: an answered card no longer shows the ask's reason line.
+  panel.locator(`.permission-request-card[data-request-id="${requestId}"]`)
 
 test('a permission answered on one surface settles the others before the server answers', async ({ page, baseURL }) => {
   test.setTimeout(120_000)
@@ -204,18 +218,19 @@ test('a permission answered on one surface settles the others before the server 
   const timelineCard = panel.locator('.permission-request-card')
   await expect(timelineCard).toHaveCount(1, { timeout: 20_000 })
   await expect(timelineCard.getByRole('button', { name: 'Allow' })).toBeVisible()
-  // The toast is the third surface, and it is answerable too.
-  const toast = page.locator('.nfc-perm-toast')
-  await expect(toast).toBeVisible({ timeout: 20_000 })
+  // No toast while the session's own card is on screen: it would cover the card
+  // it repeats (the toast comes back below, once the session column closes).
+  await page.waitForTimeout(1000)
+  await expect(page.locator('.nfc-perm-toast').filter({ hasText: BASH_COMMAND })).toHaveCount(0)
 
   const center = await openNeedsAction(page)
   const card = railCard(center, APPROVE_REQUEST)
   await expect(card).toBeVisible({ timeout: 20_000 })
-  await expect(card.getByRole('button', { name: 'Approve' })).toBeVisible()
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/01-three-surfaces-pending.png` })
+  await expect(card.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/01-two-surfaces-pending.png` })
 
   // ── 1. Approve in the RAIL → the timeline card settles, same frame ──
-  await card.getByRole('button', { name: 'Approve' }).click()
+  await card.getByRole('button', { name: 'Allow', exact: true }).click()
 
   await expect(timelineCard).toContainText('Allowed', { timeout: INSTANT_MS })
   // The exact reported symptom: the timeline kept offering the buttons, and
@@ -224,7 +239,7 @@ test('a permission answered on one surface settles the others before the server 
   await expect(timelineCard.getByRole('button', { name: 'Deny' })).toHaveCount(0)
   await expect(timelineCard).not.toContainText('Denied')
   // …and the toast stops offering a decision it no longer owns.
-  await expect(page.locator('.nfc-perm-toast button', { hasText: 'Approve' })).toHaveCount(0)
+  await expect(page.locator('.nfc-perm-toast').filter({ hasText: BASH_COMMAND }).locator('button', { hasText: 'Allow' })).toHaveCount(0)
   expect(answered, 'the server has not even seen the POST yet').toHaveLength(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-rail-approve-settled-timeline.png` })
 
@@ -234,42 +249,41 @@ test('a permission answered on one surface settles the others before the server 
   await page.waitForTimeout(1000)
   await expect(timelineCard).toContainText('Allowed')
   await expect(timelineCard).not.toContainText('Denied')
-  await expect(card).toContainText('Approved')
-  await expect(card.getByRole('button', { name: 'Approve' })).toHaveCount(0)
+  await expect(card).toContainText('Allowed')
+  await expect(card.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
 
   // ── 3. The other direction, answered from the TOAST ──
-  // The toast is the surface on TOP (z-index 9999, above the center's backdrop),
-  // so it is the one that can be clicked while the rail card and the timeline card
-  // both stay mounted underneath it. Denying there has to settle both.
+  // The toast shows only for a session whose card is not on screen and while the
+  // panel (which lists the same ask) is closed, so both close first. Denying there
+  // has to settle the panel's card, which then reads Denied with no further answer.
+  await page.locator('.notification-panel .notification-panel-close').click()
+  await expect(center).toBeHidden()
+  await dismissStrayToasts(page, BASH_COMMAND)
+  await panel.getByRole('button', { name: 'Close session panel' }).click()
+  await expect(panel).toHaveCount(0)
   await injectEvent(page, 'session:permission-request', permissionRequest(DENY_REQUEST))
   await injectEvent(page, 'notification:new', permissionRecord(DENY_REQUEST))
 
-  const secondTimelineCard = timelineCardFor(panel, DENY_REQUEST)
-  await expect(secondTimelineCard.getByRole('button', { name: 'Deny' })).toBeVisible({ timeout: 20_000 })
+  // The first ask's toast settled and left, so this is the second ask's toast.
+  const secondToast = page.locator('.nfc-perm-toast').filter({ hasText: BASH_COMMAND })
+  await expect(secondToast).toHaveCount(1, { timeout: 20_000 })
+  await secondToast.getByRole('button', { name: 'Deny', exact: true }).click()
+  expect(answered, 'the second POST is still held').toHaveLength(1)
+
+  await openNeedsAction(page)
   // Two asks from ONE session collapse into a same-origin group in the rail, so
   // the second card is behind "Show 1 more" until the group is expanded.
   const expand = center.locator('.notification-group-toggle').first()
   if (await expand.count() > 0) await expand.click()
   const secondRailCard = railCard(center, DENY_REQUEST)
-  await expect(secondRailCard.getByRole('button', { name: 'Approve' })).toBeVisible({ timeout: 20_000 })
-
-  // The first ask's toast settled and left, so this is the second ask's toast.
-  const secondToast = page.locator('.nfc-perm-toast')
-  await expect(secondToast).toHaveCount(1, { timeout: 20_000 })
-  await secondToast.getByRole('button', { name: 'Deny' }).click()
-
-  await expect(secondRailCard).toContainText('Denied', { timeout: INSTANT_MS })
-  await expect(secondTimelineCard).toContainText('Denied', { timeout: INSTANT_MS })
-  await expect(secondRailCard.getByRole('button', { name: 'Approve' })).toHaveCount(0)
-  await expect(secondTimelineCard.getByRole('button', { name: 'Allow' })).toHaveCount(0)
-  expect(answered, 'the second POST is still held too').toHaveLength(1)
+  await expect(secondRailCard).toContainText('Denied', { timeout: INSTANT_MS * 4 })
+  await expect(secondRailCard.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-toast-deny-settled-rail-and-timeline.png` })
 
   await expect.poll(() => answered.length, { timeout: HOLD_MS * 3 }).toBe(2)
   expect(answered[1]).toMatchObject({ requestId: DENY_REQUEST, allow: false })
   await page.waitForTimeout(1000)
   await expect(secondRailCard).toContainText('Denied')
-  await expect(secondTimelineCard).toContainText('Denied')
 
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
 })

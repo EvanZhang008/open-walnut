@@ -304,6 +304,12 @@
     font-size: 12px;
   }
 
+  /* Deny with a note and a choice's rule: phone-size text. */
+  html body .notification-panel.nfc-panel-wide .perm-note-toggle { font-size: 13px; }
+  html body .notification-panel.nfc-panel-wide .perm-option-detail,
+  html body .notification-panel.nfc-panel-wide .perm-option-saved { font-size: 12px; }
+  html body .notification-panel.nfc-panel-wide .permission-note-input { font-size: 16px; }
+
   html body .notification-panel.nfc-panel-wide .nfc-rail-badge {
     min-width: 20px;
     height: 20px;

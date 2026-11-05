@@ -73,8 +73,23 @@ export function AnswerBox({
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, maxRows * LINE_PX + 8)}px`;
+    const fit = () => {
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, maxRows * LINE_PX + 8)}px`;
+    };
+    fit();
+    // Measured while its column was still sliding in (narrow, the placeholder wrapped):
+    // the height is read again once the width settles. Only a width change refits, so
+    // the box's own new height never loops back here.
+    if (typeof ResizeObserver !== 'function') return;
+    let width = el.clientWidth;
+    const watch = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fit();
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
   }, [value, maxRows, box]);
   const takesPictures = !!pictures && !readOnly && !disabled;
   const hasPictures = !!pictures && pictures.images.length > 0;

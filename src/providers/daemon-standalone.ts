@@ -4646,7 +4646,7 @@ async function cmdSessionPermission(ws: ServerWebSocket<WsData>, id: number, cmd
   if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' })
   const owner = sessionHomeOf(cmd.sid)
   if (owner && !bridgeSpeaksFor(ws, owner)) return sendError(ws, id, 'session.permission: not a session of this Walnut', { errorKind: 'refused' })
-  const r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission')
+  const r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers, optionId: cmd.optionId }, 'session.permission')
   if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind })
   return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId as string, allow: r.allow })
 }
@@ -4659,7 +4659,7 @@ async function cmdSessionPermission(ws: ServerWebSocket<WsData>, id: number, cmd
 async function answerPermission(sid: string, raw: Record<string, unknown>, label: string): Promise<{ ok: true; allow: boolean } | { ok: false; error: string; errorKind: string }> {
   const session = sessions.get(sid)
   const pending = session?.pendingCtrl ? { reqId: session.pendingCtrl.reqId, request: session.pendingCtrl.request } : null
-  const answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers }, sid)
+  const answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers, optionId: raw.optionId }, sid)
   if (!answer.ok) return { ok: false, error: answer.error, errorKind: answer.code }
   // Answered here already (a retry after its reply was lost): resolved, nothing written again.
   if (answer.duplicate) {

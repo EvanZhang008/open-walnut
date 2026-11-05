@@ -12,6 +12,8 @@
   font: inherit; font-size: 13px; line-height: 18px; resize: none; overflow-y: auto;
   field-sizing: content; box-sizing: border-box;
 }
+/* The box's own border shows focus; the global field ring on the textarea inside drew a second frame. */
+.answer-box-input:focus { border: none; box-shadow: none; }
 .answer-box-input::placeholder { color: var(--fg-muted); }
 .answer-box-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .answer-box-tools .mic-btn { min-width: 28px; height: 28px; }

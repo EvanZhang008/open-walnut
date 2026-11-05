@@ -97,7 +97,9 @@ export interface StreamingPermissionBlock {
   status?: 'pending' | 'allowed' | 'denied';
   /** ACP (codex) provider options — rendered as the real buttons
    * (Allow Once / Allow for Session / prefix amendment / Reject). */
-  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
+  /** The tool call this prompt gates, when the engine names it: its row reads as waiting. */
+  toolUseId?: string;
 }
 
 /** Model reasoning ("thinking" mode). Rendered gray/italic, collapsible. */
@@ -484,7 +486,8 @@ export interface PermissionRequestEvent {
   toolName: string;
   input?: Record<string, unknown>;
   reason?: string;
-  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
+  toolUseId?: string;
 }
 
 /** An unanswered permission / AskUserQuestion card. Absent status counts as
@@ -509,6 +512,7 @@ export function appendPermissionBlock(
     input: ev.input,
     reason: ev.reason,
     acpOptions: ev.acpOptions,
+    ...(ev.toolUseId ? { toolUseId: ev.toolUseId } : {}),
   }];
 }
 

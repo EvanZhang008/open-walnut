@@ -81,7 +81,9 @@ import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, r
 import { shapeTurns, type PagedTurnShape as TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundSend } from './session-outbound';
-import { isRoutedQuestion } from './tool-run-phrase';
+import { isRoutedQuestion, isUserDenied } from './tool-run-phrase';
+import { DeniedNowContext, ToolDecisionsContext, useSessionToolDecisions, WaitingToolsContext } from './waiting-tools';
+import { permissionRequestStore } from '@/stores/permission-request-store';
 import { isMergeableHistoryTool } from './SessionMessage';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
@@ -3590,10 +3592,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   /** A stream run's calls, read the way a history row's tools are. */
   const streamToolsOf = (members: readonly StreamRunMember[]): SessionHistoryTool[] => members.flatMap((b) => (
-    b.type === 'tool_call' ? [{ name: b.name ?? 'unknown', input: b.input, isError: b.status === 'error' } as SessionHistoryTool] : []
+    // A finished call counts as one with a result even when the block has none.
+    b.type === 'tool_call' ? [{
+      name: b.name ?? 'unknown', input: b.input, isError: b.status === 'error',
+      ...(b.toolUseId ? { toolUseId: b.toolUseId } : {}),
+      ...(b.result !== undefined || b.status === 'done' || b.status === 'error' ? { result: b.result ?? '' } : {}),
+    } as SessionHistoryTool] : []
   ));
   const streamFailedOf = (members: readonly StreamRunMember[]): number => members
-    .filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
+    .filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result) && !isUserDenied(b.result)).length;
 
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
@@ -4546,13 +4553,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   };
   /** The failures a stretch of rows holds, for its fold's red count: the runtime's
-   *  error lines and the failed calls (a routed question is an answer). */
+   *  error lines and the failed calls (a routed question is an answer; a call the
+   *  person denied did not fail, the line counts it as denied). */
   const failedOf = (parts: readonly HistoryPart[]): number => {
     let failed = 0;
     for (const part of parts) {
       for (const m of rowsOf(part)) {
         if (m.role === 'system' && m.systemVariant === 'error') failed++;
-        if (!(part.kind === 'msg' && part.suppressTools)) failed += (m.tools ?? []).filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
+        if (!(part.kind === 'msg' && part.suppressTools)) failed += (m.tools ?? []).filter((t) => t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result)).length;
       }
     }
     return failed;
@@ -4578,7 +4586,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return envelopeSteps(segs);
   };
   const toolSteps = (tools: readonly SessionHistoryTool[]): FoldStep[] => tools.flatMap((t): FoldStep[] => {
-    if (!isOutboundTool(t)) return [{ kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined }] }];
+    if (!isOutboundTool(t)) return [{ kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined, ...(t.toolUseId ? { toolUseId: t.toolUseId } : {}), ...(t.result !== undefined ? { result: t.result } : {}), ...(t.isError ? { isError: true } : {}) }] }];
     if (/__human_inbox_(?:send|reply)$/.test(t.name)) return [{ kind: 'inbox' }];
     // One step per target, named by its task (send-targets.ts): a loop over two
     // tasks is two sends, and the line says to whom.
@@ -4703,6 +4711,27 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const committedAbsorbed = useRef(0);
   // Folds opened for this panel's reader (TurnFolds ReaderOpenedFolds).
   const readerOpened = useMemo(() => new Set<string>(), [sessionId]);
+  // The calls an open prompt holds: their rows say they wait for approval.
+  // An answer given in this browser stops the wait at once (the card's own store),
+  // before the server's event turns the block settled.
+  const pendingBlocks = blocks.filter(isPendingPermissionBlock);
+  const waitingKey = useSyncExternalStore(permissionRequestStore.subscribe, () => pendingBlocks
+    .filter((b) => (permissionRequestStore.get(b.requestId)?.status ?? 'pending') === 'pending')
+    .map((b) => b.toolUseId ?? '').filter(Boolean).join(' '));
+  const waitingTools = useMemo(() => new Set(waitingKey ? waitingKey.split(' ') : []), [waitingKey]);
+  // Denied here a moment ago: the row says so before the call's own result arrives.
+  const permissionBlocks = blocks.filter((b): b is StreamingBlock & { type: 'permission' } => b.type === 'permission');
+  const deniedNowKey = useSyncExternalStore(permissionRequestStore.subscribe, () => permissionBlocks
+    .filter((b) => (permissionRequestStore.get(b.requestId)?.status ?? b.status) === 'denied')
+    .map((b) => b.toolUseId ?? '').filter(Boolean).join(' '));
+  // A deny is final: kept once seen, so a call reads denied after its card has gone
+  // and before the record or the CLI's result catches up.
+  const deniedSeen = useRef<{ sid: string; ids: Set<string> }>({ sid: sessionId, ids: new Set() });
+  if (deniedSeen.current.sid !== sessionId) deniedSeen.current = { sid: sessionId, ids: new Set() };
+  for (const id of deniedNowKey ? deniedNowKey.split(' ') : []) deniedSeen.current.ids.add(id);
+  const deniedSeenKey = [...deniedSeen.current.ids].join(' ');
+  const deniedNow = useMemo(() => new Set(deniedSeenKey ? deniedSeenKey.split(' ') : []), [deniedSeenKey]);
+  const toolDecisions = useSessionToolDecisions(sessionId);
   // The row to hold, from this render only: a render that never commits leaves none behind.
   const readerHold: { at: { key: string; top: number } | null } = { at: null };
   const foldRowsNow = new Map<string, Set<SessionHistoryMessage>>();
@@ -4832,7 +4861,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const running = isStreaming && items.some((x) => rowsOf(x.part).some((m) => (m.tools ?? []).some((t) => toolRole(t, isFoldableCall) === 'running')));
     pageRows.push(
       <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running} phrase={foldStepsPhrase(steps)}>
+        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running} phrase={foldStepsPhrase(steps, waitingTools)}>
           {body}
         </ProcessFoldRow>
       </div>,
@@ -4948,7 +4977,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
             <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
               running={live || (isStreaming && streamRunHasCallingTool(members))}
-              phrase={foldStepsPhrase([...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)])}>
+              phrase={foldStepsPhrase([...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools)}>
               {tail.map((part, k) => {
                 // The group's first steps continue history's last run: one run,
                 // as the saved turn will draw it.
@@ -5306,10 +5335,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         </div>
       );
     }
-    const { phrase, failCount } = streamRunSummary(members);
+    const { phrase, failCount, calls } = streamRunSummary(members);
     return (
       <div key={runRowKey(members, chunk.members[0])} className="session-msg-bare">
-        <ToolRunShell phrase={phrase} failCount={failCount} running={thinkingLive || (isStreaming && streamRunHasCallingTool(members))}
+        <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={thinkingLive || (isStreaming && streamRunHasCallingTool(members))}
           count={members.filter((m) => m.type === 'tool_call').length}
           disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
           <StreamRunMembers members={members} live={thinkingLive}
@@ -5343,7 +5372,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div key={`turn-${key}`} className="session-msg-bare" data-testid="session-step-group-row">
         <ProcessFoldRow foldId={key} foldKey={turnFoldKey(key)} testId="step-group-fold" failed={streamFailedOf(members)}
           running={live || (isStreaming && streamRunHasCallingTool(members))}
-          phrase={foldStepsPhrase(streamFoldStepsOf(group))}>
+          phrase={foldStepsPhrase(streamFoldStepsOf(group), waitingTools)}>
           {renderGroupBody(group)}
         </ProcessFoldRow>
       </div>
@@ -5473,14 +5502,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // Tools and the reasoning between them, in arrival order — the
       // body a persisted run shows, so absorption changes nothing.
       const members = runMembersOf(runIdx);
-      const { phrase, failCount } = streamRunSummary(members);
+      const { phrase, failCount, calls } = streamRunSummary(members);
       const thinkingLive = isThinkingTail(runIdx[runIdx.length - 1]);
       // A running call is inside the closed run, so the row breathes for it.
       const running = thinkingLive || (isStreaming && streamRunHasCallingTool(members));
       const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
-          <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
+          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
             <StreamRunMembers
               members={members}
               live={thinkingLive}
@@ -5516,6 +5545,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               : blocks.some((b) => b.type === 'system' && b.variant === 'compact' && b.progress === true)
                 ? { text: `${assistantLabel} is compacting the context\u2026` }
                 : {})}
+            waiting={blocks.some(isPendingPermissionBlock)}
           />
         </SessionWorkingIndicator>
       );
@@ -5670,6 +5700,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   return (
     <RowDisclosureScope.Provider value={sessionId}>
     <ReaderOpenedFolds.Provider value={readerOpened}>
+    <WaitingToolsContext.Provider value={waitingTools}>
+    <ToolDecisionsContext.Provider value={toolDecisions}>
+    <DeniedNowContext.Provider value={deniedNow}>
       {/* Team tab bar — shown when session has team(s) */}
       {teams.length > 0 && !leftHalf && (
         <div className="team-tab-bar">
@@ -6043,6 +6076,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       </div>
       </ThreadStackFrame>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
+    </DeniedNowContext.Provider>
+    </ToolDecisionsContext.Provider>
+    </WaitingToolsContext.Provider>
     </ReaderOpenedFolds.Provider>
     </RowDisclosureScope.Provider>
   );

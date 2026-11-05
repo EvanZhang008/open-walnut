@@ -80,6 +80,11 @@ struct PendingPermission: Codable, Identifiable, Equatable {
     let toolName: String?
     let input: [String: JSONValue]?
     let reason: String?
+    /// The answers the prompt offers beyond the plain Allow / Deny: an ACP
+    /// adapter's own options, or a Claude prompt's built by the server from the
+    /// CLI's suggested rules (src/providers/claude-permission-options.ts). Absent
+    /// on older servers and on a Claude prompt with nothing to remember.
+    var acpOptions: [PermissionOption]? = nil
 
     var id: String { requestId }
 
@@ -111,6 +116,151 @@ struct PendingPermission: Codable, Identifiable, Equatable {
             }
         }
         return nil
+    }
+
+    /// The answers the generic card offers, in order. The options when the
+    /// prompt lists any (plus a plain Deny when none of them refuses: a prompt
+    /// the phone cannot refuse is a trap), else the plain Allow / Deny pair. The
+    /// plain pair only appears on a Claude prompt (an ACP prompt always lists its
+    /// options), and its Deny carries a note, as the web card's does.
+    var choices: [PermissionChoice] {
+        let options = (acpOptions ?? []).filter { !$0.optionId.isEmpty }
+        guard !options.isEmpty else { return [.plainAllow, .plainDeny(takesNote: true)] }
+        var out = options.map(PermissionChoice.init(option:))
+        if !options.contains(where: \.isReject) { out.append(.plainDeny(takesNote: false)) }
+        return out
+    }
+}
+
+/// One option on a permission prompt, as the server lists it (`acpOptions`).
+/// Decoded leniently: an option with a field of the wrong type keeps the rest,
+/// and one without an id is dropped by `PendingPermission.choices`, so one bad
+/// entry never fails the whole session detail.
+struct PermissionOption: Codable, Equatable, Identifiable {
+    let optionId: String
+    /// ACP's kind: `allow_once`, `allow_always`, `reject_once`, `reject_always`, ...
+    let kind: String?
+    let name: String?
+    /// What a remembering option allows, in the CLI's rule words (`Bash(npm test:*)`).
+    let detail: String?
+    /// A deny that carries the person's note to the agent as the tool's result.
+    let takesNote: Bool?
+    /// The settings file a standing rule is written to (`.claude/settings.local.json`).
+    var savedTo: String? = nil
+
+    enum CodingKeys: String, CodingKey { case optionId, kind, name, detail, takesNote, savedTo }
+
+    var id: String { optionId }
+
+    /// Whether the option means "no". ACP names its refusals `reject_once` /
+    /// `reject_always`, so the prefix covers both (as the web client's check does).
+    var isReject: Bool { kind?.hasPrefix("reject") ?? false }
+}
+
+extension PermissionOption {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        optionId = (try? c.decodeIfPresent(String.self, forKey: .optionId)) ?? ""
+        kind = try? c.decodeIfPresent(String.self, forKey: .kind)
+        name = try? c.decodeIfPresent(String.self, forKey: .name)
+        detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+        takesNote = try? c.decodeIfPresent(Bool.self, forKey: .takesNote)
+        savedTo = try? c.decodeIfPresent(String.self, forKey: .savedTo)
+    }
+}
+
+/// One answer on the generic permission card: a listed option, or the plain
+/// Allow / Deny. Pure, so the card's labels and wire values are unit-tested.
+struct PermissionChoice: Equatable, Identifiable {
+    /// The option's id, or `allow` / `deny` for the plain pair.
+    let id: String
+    let label: String
+    let detail: String?
+    let allow: Bool
+    /// Sent as `optionId`; nil for the plain pair.
+    let optionId: String?
+    /// This deny carries the note field's words to the agent.
+    let takesNote: Bool
+    /// The settings file a lasting rule is written to: such a choice takes a second tap.
+    var savedTo: String? = nil
+
+    static let plainAllow = PermissionChoice(
+        id: "allow", label: "Allow", detail: nil, allow: true, optionId: nil, takesNote: false
+    )
+
+    static func plainDeny(takesNote: Bool) -> PermissionChoice {
+        PermissionChoice(id: "deny", label: "Deny", detail: nil, allow: false, optionId: nil, takesNote: takesNote)
+    }
+
+    init(id: String, label: String, detail: String?, allow: Bool, optionId: String?, takesNote: Bool, savedTo: String? = nil) {
+        self.id = id
+        self.label = label
+        self.detail = detail
+        self.allow = allow
+        self.optionId = optionId
+        self.takesNote = takesNote
+        self.savedTo = savedTo
+    }
+
+    init(option: PermissionOption) {
+        let name = option.name ?? ""
+        // Where a standing rule is kept reads under the rule itself.
+        let saved = (option.savedTo ?? "").isEmpty ? "" : "Saves to \(option.savedTo ?? "")"
+        let detail = [option.detail ?? "", saved].filter { !$0.isEmpty }.joined(separator: "\n")
+        self.init(
+            id: option.optionId,
+            label: name.isEmpty ? option.optionId : name,
+            detail: detail.isEmpty ? nil : detail,
+            allow: !option.isReject,
+            optionId: option.optionId,
+            // Only a deny carries a note: an allow with a message is not a thing.
+            takesNote: option.isReject && option.takesNote == true,
+            savedTo: (option.savedTo ?? "").isEmpty ? nil : option.savedTo
+        )
+    }
+
+    /// The UI test handle: the plain pair keeps the identifiers it always had.
+    var accessibilityID: String {
+        optionId.map { "session.permission.option.\($0)" } ?? "session.permission.\(id)"
+    }
+
+    /// The button's words: a deny that will carry the typed note says so.
+    func displayLabel(note: String) -> String {
+        takesNote && PermissionNote.message(note) != nil ? "\(label) with note" : label
+    }
+
+    /// What answering with this choice sends, the note included when it carries one.
+    func reply(note: String) -> PermissionReply {
+        PermissionReply(allow: allow, optionId: optionId, message: takesNote ? PermissionNote.message(note) : nil)
+    }
+}
+
+/// An answer to a permission prompt, as POST /v1/sessions/:id/permission takes it.
+struct PermissionReply: Equatable {
+    let allow: Bool
+    var optionId: String? = nil
+    /// A deny's reason: the agent reads it as the tool's result.
+    var message: String? = nil
+}
+
+/// The note a deny carries to the agent.
+enum PermissionNote {
+    /// The same words the web client sends (web/src/components/sessions/prompt-keys.ts),
+    /// so the agent reads one sentence whichever surface answered.
+    static let prefix = "The user denied this tool call and said: "
+
+    /// The deny message for a typed note, nil when nothing but space was typed.
+    static func message(_ note: String) -> String? {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : prefix + trimmed
+    }
+
+    /// Whether this edit was the return key: one newline added and nothing else.
+    /// A vertical-axis TextField inserts the newline instead of firing onSubmit,
+    /// and a pasted note with line breaks in it is not a send.
+    static func isReturnKey(old: String, new: String) -> Bool {
+        guard new.count == old.count + 1 else { return false }
+        return new.filter(\.isNewline).count == old.filter(\.isNewline).count + 1
     }
 }
 

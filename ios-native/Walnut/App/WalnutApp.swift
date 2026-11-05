@@ -126,6 +126,10 @@ struct RootView: View {
                 // real-shape payload so the question + every option can be seen
                 // without holding a live CLI blocked mid-turn.
                 NavigationStack { AskQuestionHarnessView() }
+            } else if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("perm-harness") }) {
+                // Permission card harness: a Claude prompt's remembering options,
+                // an ACP adapter's own options and the plain pair, side by side.
+                NavigationStack { PermissionOptionsHarnessView() }
             } else if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("calendar-harness") }) {
                 // Calendar E2E harness (Maestro): boots straight into the
                 // Tasks-tab calendar against the configured server — lets the

@@ -145,8 +145,12 @@ struct SessionConversationView: View {
                 requests: lifecycle.pendingPermissions,
                 pageHeight: pageHeight,
                 isAnswering: { lifecycle.answeringIds.contains($0.requestId) },
-                onRespond: { request, allow in
-                    Task { await lifecycle.respondPermission(request, allow: allow) }
+                onRespond: { request, reply in
+                    Task {
+                        await lifecycle.respondPermission(
+                            request, allow: reply.allow, optionId: reply.optionId, message: reply.message
+                        )
+                    }
                 },
                 // AskUserQuestion: the ALLOW response carries the answers and
                 // their pictures in one request; the server puts both in the one

@@ -387,6 +387,8 @@
   }
 
   .app-shell-navigation .ask-user-question-card .qp-input { font-size: 16px; }
+  /* The deny note: 16px so focusing it does not zoom the page. */
+  .app-shell-navigation .permission-note .answer-box-input { font-size: 16px; }
   .app-shell-navigation .ask-user-question-card .answer-box { min-height: 44px; }
 
   .app-shell-navigation .ask-user-submit-hint {

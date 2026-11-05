@@ -151,6 +151,7 @@ import { nextSessionControlValue, SessionControlPills } from './SessionControlPi
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
 import { setActiveSession } from '@/stores/active-session';
+import { markDeniedByMessage } from '@/stores/permission-request-store';
 import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
@@ -2054,14 +2055,24 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     }
     return sendAnchored(message, images, false, targetKey);
   }, [sendAnchored, send, sessionId, engineSwitch.sendOptions, engineSwitch.clear, engineSwitch.markSent]);
-  const handleSend = useCallback((message: string, images?: ImageAttachment[]) => sendFor(message, images), [sendFor]);
-
   // Main's quick actions ride its own composer's "+" (the user, 2026-10-26: not a bar of their own).
   // Waiting = deriveDisplayStatus's rule (a live process holds the prompt); a stopped
   // Main with a stale prompt on its record takes a typed message, so it takes these too.
+  const promptOpen = (session?.process_status === 'running' || session?.process_status === 'idle') && !!pendingPermission;
+  // A person's message answers a Claude prompt with Deny (the server's closesPrompt rule).
+  const promptWarning = promptOpen && (session?.engine ?? 'claude') === 'claude'
+    ? (pendingPermission?.toolName === 'AskUserQuestion' ? 'Sending a message dismisses the open question' : 'Sending a message denies the open prompt')
+    : null;
+  const deniedPromptId = promptWarning ? (pendingPermission && 'requestId' in pendingPermission ? pendingPermission.requestId : undefined) : undefined;
+  const handleSend = useCallback((message: string, images?: ImageAttachment[]) => {
+    // The message denies the open prompt: its card will say so, not "Denied".
+    if (deniedPromptId) markDeniedByMessage(deniedPromptId);
+    return sendFor(message, images);
+  }, [sendFor, deniedPromptId]);
+
   const mainQuickActions = useMainQuickPlusActions(
     onQuestionPage ? null : sessionTask,
-    (session?.process_status === 'running' || session?.process_status === 'idle') && !!pendingPermission,
+    promptOpen,
     handleSend,
     macSessionAway ? 'Your Mac is away: sending waits until it is back.' : undefined,
   );
@@ -3595,6 +3606,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           {/* A host replica's console with the Mac away: a session the Mac runs gets
               the line, and its composer stays mounted with the send controls hidden,
               so a presence flip never takes what is being typed. */}
+          {/* Said while typing too, not only in the empty box's placeholder: sending answers the open prompt. */}
+          {promptWarning && !(phoneLayer || phoneWidth) && (
+            <div className="composer-prompt-warning" data-testid="composer-prompt-warning">{promptWarning}</div>
+          )}
           {macSessionAway && <MacAwayComposer />}
           <PendingCommentsTray
             pending={ownPendingComments}
@@ -3624,6 +3639,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
               ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
+              // A desktop says it in the line above the box (composer-prompt-warning), once.
               : 'Send a message to this session... (/ for commands)')}
             onValueChange={handleComposerValue}
             showCommands={false}

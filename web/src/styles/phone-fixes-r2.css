@@ -109,6 +109,14 @@
     min-height: 44px;
     font-size: 15px;
   }
+  /* Deny with a note: a full-row finger target, and a box iOS does not zoom into. */
+  html body .nfc-perm-toast .perm-note-toggle {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  html body .nfc-perm-toast .permission-note-input { font-size: 16px; }
+  html body .nfc-perm-toast .perm-option-detail,
+  html body .nfc-perm-toast .perm-option-saved { font-size: 12px; }
   html body .nfc-perm-toast .nfc-open-session {
     display: inline-flex;
     align-items: center;

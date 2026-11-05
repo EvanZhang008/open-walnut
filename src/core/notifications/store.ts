@@ -155,7 +155,7 @@ export interface NotificationRecord {
   /** Permission: the provider's decision reason, when it supplied one. */
   reason?: string;
   /** Permission (ACP): the option list the adapter offered. */
-  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
 
   // ── Shared enrichment: enough context to act without opening the session ──
   /** Resolved hostname / host alias of the session this notification came from. */

@@ -121,7 +121,7 @@ describe('resolvedLabelOf', () => {
   });
 
   it('keeps the permission decisions as they were', () => {
-    expect(resolvedLabelOf(n({ kind: 'permission', resolved: 'allowed' }))).toBe('Approved');
+    expect(resolvedLabelOf(n({ kind: 'permission', resolved: 'allowed' }))).toBe('Allowed');
     expect(resolvedLabelOf(n({ kind: 'permission', resolved: 'denied' }))).toBe('Denied');
   });
 

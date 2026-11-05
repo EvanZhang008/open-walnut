@@ -1399,6 +1399,12 @@ export async function terminateSession(sessionId: string, opts?: { force?: boole
  *  `answers` is AskUserQuestion-only: question text → the chosen option label (or
  *  the user's free-text). The server merges it into the tool's `answers` input, so
  *  the model receives the real answers instead of an empty set. */
+/** The person's answers to this session's tool prompts, by the call each gated (SessionRecord.promptAnswerLines). */
+export async function fetchPermissionDecisions(sessionId: string): Promise<Array<{ toolUseId: string; line: string }>> {
+  const res = await apiGet<{ decisions?: Array<{ toolUseId: string; line: string }> }>(`/api/sessions/${sessionId}/permission-decisions`);
+  return Array.isArray(res.decisions) ? res.decisions : [];
+}
+
 export async function respondToPermission(
   sessionId: string,
   requestId: string,

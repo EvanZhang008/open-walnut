@@ -46,6 +46,11 @@ export function askAnswerDraftKey(questions: ReadonlyArray<{ question: string }>
   return draftKey('ask-answer', draftHash(questions.map((q) => q.question).join('\n')));
 }
 
+/** The note a deny carries on one permission prompt (PromptCards.tsx). */
+export function permissionNoteDraftKey(requestId: string): string {
+  return draftKey('permission-note', requestId);
+}
+
 /** The words kept under a key ('' when none). */
 export function readDraft(key: string | null | undefined): string {
   if (!key) return '';

@@ -1,4 +1,4 @@
-import { useState, useCallback, useContext, useLayoutEffect, useMemo, useRef, memo, type ReactNode } from 'react';
+import { Fragment, useState, useCallback, useContext, useLayoutEffect, useMemo, useRef, memo, type ReactNode } from 'react';
 import { holdImageBoxesIn } from '@/utils/image-size-hold';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import type { StreamingBlock } from '@/stream/stream-reducer';
@@ -49,7 +49,10 @@ import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
-import { isRoutedQuestion, toolRunPhrase } from './tool-run-phrase';
+import { isRoutedQuestion, isUserDenied, runSegments, toolRunPhrase, type RunCall } from './tool-run-phrase';
+import { parseAskUserQuestionInput } from './ask-user-question';
+import { AnswerText } from './RuleDetail';
+import { answeredCallState, callAnswerText, callDecisionLabel, runAnswerLines, SoleCallContext, useSoleCall, useDeniedNow, useToolDecisions, useWaitingTools } from './waiting-tools';
 import { toolCallsLabel } from './tool-call-grouping';
 import { splitSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
@@ -395,8 +398,12 @@ function InjectedContextRow({ text }: { text: string }) {
 export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
-export function ToolRunShell({ phrase, failCount, running, count, disclosureId, children }: {
+export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, children }: {
   phrase: string;
+  /** The run's tool calls: the line then counts them by outcome (ran, denied, waiting for
+   *  an open prompt) and names the person's answers to the prompts they passed through
+   *  (waiting-tools.ts). Without them the line is `phrase`. */
+  calls?: readonly RunCall[];
   /** What the run shows (disclosureIds.run), so a reader who opened it keeps
    *  it open when the row is drawn again (its saved twin, a rebuilt lane). */
   disclosureId?: string;
@@ -409,16 +416,51 @@ export function ToolRunShell({ phrase, failCount, running, count, disclosureId, 
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useRowDisclosure(disclosureId, false);
+  const waiting = useWaitingTools();
+  const decisions = useToolDecisions();
+  const deniedNow = useDeniedNow();
+  // A call answered "no" reads as denied before its result is in (answeredCallState).
+  const segments = calls ? runSegments(calls.map((c) => (!c.denied && answeredCallState(c.toolUseId, c.toolUseId ? decisions.get(c.toolUseId) : undefined, deniedNow) === 'denied' ? { ...c, denied: true } : c)), waiting) : [];
+  // Every answer, in the order the calls were made.
+  const answered = calls ? calls.flatMap((c) => {
+    const line = c.toolUseId ? decisions.get(c.toolUseId) : undefined;
+    const command = typeof c.input?.command === 'string' ? c.input.command : undefined;
+    return line ? [{ line, command }] : [];
+  }) : [];
+  const answers = runAnswerLines(answered.map((a) => a.line), answered.map((a) => a.command));
+  const line = (
+    <>
+      <span className="tool-run-label">
+        {segments.length === 0 ? phrase : segments.map((seg, i) => (
+          <Fragment key={seg.kind}>
+            {i > 0 && ', '}
+            {seg.kind === 'ran' ? seg.text : <span className={`tool-run-${seg.kind}`}>{seg.text}</span>}
+          </Fragment>
+        ))}
+      </span>
+      {count !== undefined && count > 0 && <span className="tool-run-count">{toolCallsLabel(count)}</span>}
+      {failCount > 0 && <span className="tool-run-fail">{failCount} failed</span>}
+      {running && <span className="tool-run-live-dot" />}
+      <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+    </>
+  );
+  // Opened, each call's own row says its answer.
+  const showAnswers = answers.length > 0 && !open;
   return (
     <div className="tool-run-row">
-      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
-        <span className="tool-run-label">{phrase}</span>
-        {count !== undefined && count > 0 && <span className="tool-run-count">{toolCallsLabel(count)}</span>}
-        {failCount > 0 && <span className="tool-run-fail">{failCount} failed</span>}
-        {running && <span className="tool-run-live-dot" />}
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+      <button className={`tool-run-toggle${showAnswers ? ' tool-run-toggle--answered' : ''}`} onClick={() => setOpen((p) => !p)}>
+        {/* The answers under the line, not squeezed beside its count. */}
+        {showAnswers ? (
+          <>
+            <span className="tool-run-line">{line}</span>
+            {/* One answer per line: a note's own words never run into the next call's answer. */}
+            <span className="tool-run-decisions" title={answers.join('\n')}>
+              {answers.map((a) => <span key={a} className="tool-run-decision"><AnswerText text={a} /></span>)}
+            </span>
+          </>
+        ) : line}
       </button>
-      {open && <div className="tool-run-body">{children}</div>}
+      {open && <div className="tool-run-body"><SoleCallContext.Provider value={calls?.length === 1}>{children}</SoleCallContext.Provider></div>}
     </div>
   );
 }
@@ -544,9 +586,9 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
   tools: SessionHistoryTool[];
 } & Omit<SessionToolCallProps, 'tool'>) {
   const phrase = toolRunPhrase(tools);
-  const failCount = tools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length;
+  const failCount = tools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result)).length;
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount} running={tools.some((t) => t.liveStatus === 'calling')} count={tools.length} disclosureId={disclosureIds.run({ toolUseId: tools[0]?.toolUseId })}>
+    <ToolRunShell phrase={phrase} calls={tools.map(historyRunCall)} failCount={failCount} running={tools.some((t) => t.liveStatus === 'calling')} count={tools.length} disclosureId={disclosureIds.run({ toolUseId: tools[0]?.toolUseId })}>
       {tools.map((t, i) => (
         <SessionToolCall key={t.toolUseId ?? i} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       ))}
@@ -623,12 +665,23 @@ export function streamRunHasCallingTool(members: readonly StreamRunMember[]): bo
  *  is deliberately not a verb in the phrase: the row says what the turn DID, and
  *  it must read exactly as the persisted run it turns into once history absorbs
  *  it, or the line changes wording under the reader at turn end. */
-export function streamRunSummary(members: readonly StreamRunMember[]): { phrase: string; failCount: number } {
+export function streamRunSummary(members: readonly StreamRunMember[]): { phrase: string; failCount: number; calls: RunCall[] } {
   const tools = members.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
   return {
     phrase: toolRunPhrase(tools.map(b => ({ name: b.name ?? 'unknown', input: b.input }))),
-    failCount: tools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length,
+    failCount: tools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result) && !isUserDenied(b.result)).length,
+    calls: tools.map(streamRunCall),
   };
+}
+
+/** A persisted call as its run's line counts it (ToolRunShell `calls`). */
+function historyRunCall(t: SessionHistoryTool): RunCall {
+  return { name: t.name, input: t.input, toolUseId: t.toolUseId, denied: !!t.isError && isUserDenied(t.result), done: t.result !== undefined };
+}
+
+/** A streaming call as its run's line counts it: the same reading as its persisted twin. */
+function streamRunCall(b: StreamingBlock & { type: 'tool_call' }): RunCall {
+  return { name: b.name ?? 'unknown', input: b.input, toolUseId: b.toolUseId, denied: b.status === 'error' && isUserDenied(b.result), done: b.status !== 'calling' };
 }
 
 /** A run row's React key: the identity of its first member (a tool's id, a
@@ -713,15 +766,15 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
     ...allTools,
     ...trailingTools.map(b => ({ name: b.name ?? 'unknown', input: b.input })),
   ]);
-  const failCount = allTools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length
-    + trailingTools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
+  const failCount = allTools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result)).length
+    + trailingTools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result) && !isUserDenied(b.result)).length;
   // The run's first member, as the live run names it (runRowKey): a message's
   // reasoning streams before its tools.
   const head = messages[0];
   const first = head ? (head.thinking ? { msgId: head.msgId } : { toolUseId: head.tools?.[0]?.toolUseId })
     : trailingBlocks[0]?.type === 'tool_call' ? { toolUseId: trailingBlocks[0].toolUseId } : { msgId: trailingBlocks[0]?.msgId };
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive || allTools.some((t) => t.liveStatus === 'calling')} count={allTools.length + trailingTools.length} disclosureId={disclosureIds.run(first)}>
+    <ToolRunShell phrase={phrase} calls={[...allTools.map(historyRunCall), ...trailingTools.map(streamRunCall)]} failCount={failCount} running={trailingLive || allTools.some((t) => t.liveStatus === 'calling')} count={allTools.length + trailingTools.length} disclosureId={disclosureIds.run(first)}>
       {messages.map((m, mi) => (
         <div key={m.msgId ?? mi}>
           {m.thinking && <SessionThinking text={m.thinking} disclosureId={disclosureIds.thinking(m.msgId)} />}
@@ -785,17 +838,28 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
 });
 
 function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
-  const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), false);
+  const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), useSoleCall());
   // Pill titles resolve from the entity-label store — memo boundary is at
   // GenericToolCall, so this leaf must subscribe itself to see title changes.
   const labelsVersion = useEntityLabelsVersion();
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;
+  const waitingTools = useWaitingTools();
+  const toolDecisions = useToolDecisions();
+  const decision = tool.toolUseId ? toolDecisions.get(tool.toolUseId) : undefined;
   // Persisted history carries isError (tool_result.is_error) — a failed tool must
   // render ✗ after reload, matching what the streaming view showed live. A
   // worker's question sent to its leader is denied by design, not failed.
   const routed = isRoutedQuestion(tool.name, result);
-  const status = (tool as { isError?: boolean }).isError && !routed ? 'error'
+  const answered = answeredCallState(tool.toolUseId, decision, useDeniedNow());
+  const denied = (isUserDenied(result) && ((tool as { isError?: boolean }).isError || statusProp === 'error'))
+    || (result === undefined && answered === 'denied');
+  // Held by a prompt still open: no result yet, so not done (waiting-tools.ts).
+  const waiting = !denied && result === undefined && !!tool.toolUseId && waitingTools.has(tool.toolUseId);
+  // Sent beside a call whose prompt is open: the CLI runs nothing until it is answered.
+  const queued = !waiting && !denied && !answered && result === undefined && waitingTools.size > 0 && !(tool as { isError?: boolean }).isError && statusProp !== 'error';
+  const status = waiting || queued ? 'waiting' : denied ? 'denied'
+    : (tool as { isError?: boolean }).isError && !routed ? 'error'
     : statusProp === 'error' && routed ? 'done' : statusProp;
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const rawDesc = typeof safeInput.description === 'string' ? safeInput.description.trim() : '';
@@ -804,7 +868,10 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   // the measured hot spot behind whale-session slow commits (5-32s).
   // slice-before-stringify keeps a multi-100KB string value from being
   // serialized wholesale just to keep 60 chars of it.
-  const inputSummary = useMemo(() => Object.entries(safeInput)
+  const inputSummary = useMemo(() => tool.name === 'AskUserQuestion'
+    // A question reads as its words, not its JSON.
+    ? (parseAskUserQuestionInput(safeInput) ?? []).map((q) => q.question).join(' \u00b7 ')
+    : Object.entries(safeInput)
     .filter(([k]) => k !== 'description')
     .map(([k, v]) => {
       const val = typeof v === 'string'
@@ -812,11 +879,12 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
         : JSON.stringify(v)?.slice(0, 200) ?? String(v);
       return `${k}: ${val.length > 60 ? val.slice(0, 60) + '...' : val}`;
     })
-    .join(', '), [safeInput]);
+    .join(', '), [safeInput, tool.name]);
 
   // Dynamic icon and class based on status
-  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6\uFE0E';
-  const statusClass = status === 'error' ? 'chat-tool-block-error'
+  // A denied call: the person's no, not a failure (isUserDenied).
+  const statusIcon = status === 'waiting' ? '\u23F8\uFE0E' : status === 'denied' ? '\u2298' : status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6\uFE0E';
+  const statusClass = status === 'waiting' ? 'chat-tool-block-waiting' : status === 'denied' ? 'chat-tool-block-denied' : status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
   // Detect long multiline string values in input and render as markdown.
@@ -895,6 +963,8 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
         {description && (
           <span className="chat-tool-block-desc">· {description}</span>
         )}
+        {status === 'waiting' && <span className="chat-tool-block-waiting-label">{queued ? 'Queued' : tool.name === 'AskUserQuestion' ? 'Waiting for your answer' : 'Waiting for approval'}</span>}
+        {status !== 'waiting' && decision && <span className="chat-tool-block-decision" title={decision}><AnswerText text={callDecisionLabel(decision)} /></span>}
         {!open && inputSummary && (
           <span className="chat-tool-block-summary">{inputSummary}</span>
         )}
@@ -931,6 +1001,13 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
               </div>
             )}
           </div>
+          {/* The whole answer, which the header line cuts to fit. */}
+          {status !== 'waiting' && decision && (
+            <div className="chat-tool-block-section">
+              <div className="chat-tool-block-section-label">Answer</div>
+              <div className="chat-tool-block-answer"><AnswerText text={callAnswerText(decision, typeof safeInput.command === 'string' ? safeInput.command : undefined)} /></div>
+            </div>
+          )}
           {status !== 'calling' && (resultImages || resultTextHtml) && (
             <div className="chat-tool-block-section">
               <div className="chat-tool-block-section-label">Result</div>

@@ -362,19 +362,20 @@ function registerGlobalListeners(): void {
 
   // ── permission request/resolved ──
   onSessionEvent('session:permission-request', (data: unknown) => {
-    const { sessionId: sid, requestId, toolName, input, reason, acpOptions } = data as {
+    const { sessionId: sid, requestId, toolName, input, reason, acpOptions, toolUseId } = data as {
       sessionId: string;
       requestId: string;
       toolName: string;
       input?: Record<string, unknown>;
       reason?: string;
-      acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+      acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
+      toolUseId?: string;
     };
     if (!sid || !requestId || !toolName || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
     interruptText(state);
     state.blocks = appendPermissionBlock(state.blocks, {
-      requestId, toolName, input, reason, acpOptions,
+      requestId, toolName, input, reason, acpOptions, toolUseId,
     });
   });
 

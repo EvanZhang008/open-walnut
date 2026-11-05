@@ -53,12 +53,18 @@ export interface PermissionRequestState {
   /** The last attempt failed transiently (network / 5xx) and `status` rolled back
    *  to `pending`, so the user can retry. Cleared by the next attempt. */
   failed: boolean;
+  /** Why the server held the last attempt, in its words (a rule's file it cannot write). */
+  failReason?: string;
   /** ACP option the user picked (Allow for Session, a prefix amendment, …). */
   optionId?: string;
   /** AskUserQuestion answers as submitted — a settled card shows what was said. */
   answers?: Record<string, string>;
   /** Message that rode along with a denial (the "dismissed the questions" note). */
   message?: string;
+  /** A message sent to its session while it waited denies it (the server's rule): its card says so. */
+  byMessage?: boolean;
+  /** Answered in this browser (respondToPermissionRequest), not settled by word from elsewhere. */
+  answeredHere?: boolean;
 }
 
 /** Everything except `pending` is a settled request: no more Approve/Deny. */
@@ -187,6 +193,7 @@ export async function respondToPermissionRequest(
     status: optimistic,
     inFlight: true,
     failed: false,
+    answeredHere: true,
     ...(opts.optionId ? { optionId: opts.optionId } : {}),
     ...(opts.answers ? { answers: opts.answers } : {}),
     ...(opts.message ? { message: opts.message } : {}),
@@ -205,11 +212,15 @@ export async function respondToPermissionRequest(
     const status = (err as { status?: number }).status;
     const stale = status === 404 || status === 409;
     const settled = entries.get(requestId);
+    // 422: the server held the answer on purpose and says why (the prompt is still open).
+    const reason = status === 422 && err instanceof Error && err.message ? err.message : undefined;
+    const { failReason: _was, ...rest } = settled ?? { status: 'pending' as const, inFlight: false, failed: false };
     write(requestId, {
-      ...settled,
+      ...rest,
       status: stale ? 'stale' : 'pending',
       inFlight: false,
       failed: !stale,
+      ...(reason ? { failReason: reason } : {}),
     });
     log.warn('notifications', 'permission respond failed', {
       sessionId, requestId, status: String(status ?? ''), error: String(err),
@@ -218,9 +229,32 @@ export async function respondToPermissionRequest(
   }
 }
 
+/**
+ * The person sent a message to the session while this prompt waited: the server
+ * denies it for them. Kept on the entry until an answer of theirs replaces it, so
+ * the settled card reads "Denied by your message", not a Deny they never gave.
+ */
+export function markDeniedByMessage(requestId: string): void {
+  const current = entries.get(requestId);
+  if (!requestId || current?.inFlight || (current && current.status !== 'pending')) return;
+  write(requestId, { ...(current ?? { status: 'pending', inFlight: false, failed: false }), byMessage: true });
+}
+
+// Requests answered from their toast: that toast says which choice went for a beat
+// before it leaves (NotificationToaster), instead of vanishing on the server's echo.
+const answeredFromToast = new Set<string>();
+export function markAnsweredFromToast(requestId: string): void {
+  answeredFromToast.add(requestId);
+  if (answeredFromToast.size > 200) answeredFromToast.delete(answeredFromToast.values().next().value as string);
+}
+export function wasAnsweredFromToast(requestId: string): boolean {
+  return answeredFromToast.has(requestId);
+}
+
 /** Tests only: forget every remembered request. */
 export function resetPermissionRequestStore(): void {
   entries.clear();
+  answeredFromToast.clear();
   emit();
 }
 

@@ -33,10 +33,12 @@ import {
   useNotifications, sectionOf, sectionCounts, effectiveTs,
   toolNameOf, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  partitionErrorsByCause, systemIssueCount, errorsBadgeCount, letterIdOf,
+  partitionErrorsByCause, systemIssueCount, errorsBadgeCount, letterIdOf, requestIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
-import { PermissionAnswerButtons, PermissionAskDetail, usePermissionAnswer } from './PermissionPromptControls';
+import { getPermissionRequest } from '@/stores/permission-request-store';
+import { AnswerText } from '@/components/sessions/RuleDetail';
+import { PermissionAnswerButtons, PermissionAskDetail, permissionOutcomeLabel, usePermissionAnswer } from './PermissionPromptControls';
 import { NotificationActionButtons } from './NotificationActionButtons';
 import { QuietToggle } from './QuietToggle';
 import { displayActionsOf } from '@/contexts/notifications/notification-actions';
@@ -57,6 +59,7 @@ import { log } from '@/utils/log';
 import { ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from './Icons';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { useShiftClickGuard } from './useShiftClickGuard';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
@@ -77,6 +80,38 @@ interface NotificationPanelProps {
 
 /** Rail tabs — the notification sections plus the ambient System zone. */
 type RailSection = NotificationSection | 'system';
+
+/** How long an ask answered in this browser stays in Needs you after it settles. */
+const ANSWERED_HOLD_MS = 3500;
+
+/**
+ * The feed's asks answered in this browser that just settled: Needs you keeps them
+ * ANSWERED_HOLD_MS with their outcome ("Denied with note “…”"), instead of the row
+ * vanishing the moment the server stamps it, which read as nothing having happened.
+ */
+function useAnsweredHereHold(feed: readonly Notification[]): ReadonlySet<string> {
+  const [held, setHeld] = useState<ReadonlySet<string>>(() => new Set());
+  const seen = useRef<Set<string> | null>(null);
+  const timers = useRef<number[]>([]);
+  useEffect(() => {
+    const first = seen.current === null;
+    if (first) seen.current = new Set();
+    for (const n of feed) {
+      if (n.kind !== 'permission' || !n.resolved || seen.current!.has(n.id)) continue;
+      seen.current!.add(n.id);
+      const rid = requestIdOf(n);
+      if (first || !rid || !getPermissionRequest(rid)?.answeredHere) continue;
+      setHeld((prev) => new Set(prev).add(n.id));
+      timers.current.push(window.setTimeout(() => setHeld((prev) => {
+        const next = new Set(prev);
+        next.delete(n.id);
+        return next;
+      }), ANSWERED_HOLD_MS));
+    }
+  }, [feed]);
+  useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
+  return held;
+}
 
 export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed }: NotificationPanelProps) {
   // Phone: the center is a full-screen layer (spec 4.7, C55). Back, Escape and
@@ -107,6 +142,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   const localDismissed = useLocalDismissed();
   const localClaude = localNoticeShows(health, localDismissed, healthLoading) !== null;
   const { feed, loaded, unreadCount, markAllRead, markLocalRead, dismissFeed } = useNotifications();
+  // A card that moved up under the pointer (the one above was answered) waits a beat before a click counts.
+  const shiftGuard = useShiftClickGuard('.notification-feed-item');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [section, setSection] = useState<RailSection>('all');
   // Did the user pick a rail section themselves since this open? Once they have,
@@ -292,13 +329,15 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // Items of the active section, newest first. Sorting on effectiveTs (not
   // timestamp) keeps a folded recurring error at the top of the list — its
   // `timestamp` is first-seen and can be hours old while it is still firing.
+  const answeredHeld = useAnsweredHereHold(feed);
   const items = useMemo(() => {
     // Inbox rows come from the letter store, not the feed (see `inbox` above).
     const pool = section === 'system' || section === 'inbox' ? []
       : section === 'all' ? feed.filter(n => !hostCardIds.has(n.id))
-      : feed.filter(n => sectionOf(n) === section);
+      // An ask answered here stays a beat in Needs you, saying which choice went.
+      : feed.filter(n => sectionOf(n) === section || (section === 'action' && answeredHeld.has(n.id)));
     return [...pool].sort((a, b) => effectiveTs(b) - effectiveTs(a));
-  }, [feed, section, hostCardIds]);
+  }, [feed, section, hostCardIds, answeredHeld]);
 
   const inboxRows = useMemo(
     () => filterInboxLetters(inbox.letters, unreadOnly, keptReadIds),
@@ -624,7 +663,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                  header is the whole point of the grouping — it names the cause or
                  the family and how many cards are in it, so a rail of twenty reds
                  becomes four readable problems. */
-              <div className="notification-feed">
+              <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-feed">
                 {problems}
                 {/* Root-cause blocks first: they name the ONE thing that broke
                     ("Can't reach devbox"), and the cards under them are the
@@ -696,7 +735,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 ))}
               </div>
             ) : (
-              <div className="notification-feed">
+              <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-feed">
                 {problems}
                 <FeedGroups
                   groups={groups}
@@ -978,7 +1017,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
            toast can't drift apart. Pass the LOCAL resolved, not `n`: right after
            an inline answer only `sent` knows the outcome (`n.resolved` waits for
            the server round-trip), and `n` alone rendered an empty label. */
-        <div className="notification-feed-item-resolved">{resolvedLabelOf({ kind: n.kind, resolved })}</div>
+        <div className={`notification-feed-item-resolved notification-feed-item-resolved--${resolved}`}><AnswerText text={permissionOutcomeLabel(resolved, answer.stored, answer.acpOptions, answer.detail.type === 'question', answer.detail.type === 'question' ? answer.detail.questions.length : 0) ?? resolvedLabelOf({ kind: n.kind, resolved })} /></div>
       )}
 
       <PermissionAnswerButtons
@@ -995,8 +1034,8 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
           the session view, and session:permission-resolved stamped this entry) must
           not keep advertising an earlier failed attempt from this card. An incoming
           resolution always wins the display — `resolved` reads n.resolved FIRST. */}
-      {!resolved && respondError && (
-        <span className="notification-perm-error">Failed — open the session to respond</span>
+      {!resolved && respondError && !answer.stored?.failReason && (
+        <span className="notification-perm-error" role="alert">{answer.stored?.failReason ?? 'Failed — open the session to respond'}</span>
       )}
     </div>
   );

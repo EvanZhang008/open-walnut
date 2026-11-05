@@ -74,7 +74,9 @@ export interface StreamingPermissionBlock {
   /** ACP provider options (codex: Allow Once / Allow for Session / prefix
    * amendment / Reject). Present only for engine='codex' sessions; the UI
    * renders these as the real buttons instead of the bare Allow/Deny pair. */
-  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>
+  /** The tool call this prompt gates (Claude's tool_use_id), when the engine names it. */
+  toolUseId?: string
 }
 
 export interface StreamingThinkingBlock {
@@ -347,7 +349,7 @@ class SessionStreamBuffer {
   }
 
   /** Append a permission request block (idempotent — skips if requestId already exists). */
-  appendPermission(sessionId: string, requestId: string, toolName: string, input?: Record<string, unknown>, reason?: string, acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>): void {
+  appendPermission(sessionId: string, requestId: string, toolName: string, input?: Record<string, unknown>, reason?: string, acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>, toolUseId?: string): void {
     const entry = this.getOrCreate(sessionId)
     // Idempotent: don't add duplicate permission blocks (re-emit timer may fire multiple times)
     const existing = entry.blocks.find(b => b.type === 'permission' && b.requestId === requestId) as StreamingPermissionBlock | undefined
@@ -355,7 +357,7 @@ class SessionStreamBuffer {
     this.resetIfTurnEnded(entry, sessionId)
     this.carryPendingMarkup(entry)  // card breaks text flow; an unfinished tag rides across
     this.touch(entry)
-    entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending', ...(acpOptions?.length ? { acpOptions } : {}) })
+    entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending', ...(acpOptions?.length ? { acpOptions } : {}), ...(toolUseId ? { toolUseId } : {}) })
   }
 
   /** Update a permission block status after resolution. */

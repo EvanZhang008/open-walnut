@@ -114,14 +114,15 @@ final class SessionLifecycleController {
     /// Answer one prompt. Optimistic removal + rollback: the card disappears
     /// instantly; a failure puts it back with the error line.
     ///
+    /// `optionId` is the prompt's chosen option (`acpOptions`), when it listed any.
     /// `answers` / `message` are the AskUserQuestion path: answering IS the
     /// allow response, so the map rides along with allow=true; "Dismiss" is a
-    /// deny carrying the reason the model sees. `images` are an answer's
+    /// deny carrying the reason the model sees, as a deny with a note does. `images` are an answer's
     /// pictures, sent in the same request so the model reads them with the words.
     /// True once the server has the answer (or the prompt was already gone).
     @discardableResult
     func respondPermission(
-        _ request: PendingPermission, allow: Bool,
+        _ request: PendingPermission, allow: Bool, optionId: String? = nil,
         answers: [String: String]? = nil, message: String? = nil, images: [ImagePayload] = []
     ) async -> Bool {
         guard !answeringIds.contains(request.requestId) else { return false }
@@ -132,7 +133,7 @@ final class SessionLifecycleController {
         do {
             let resolved = try await api.respondSessionPermission(
                 id: sessionId, requestId: request.requestId, allow: allow,
-                message: message, answers: answers, images: images
+                optionId: optionId, message: message, answers: answers, images: images
             )
             // Pictures sent and none counted back: the server dropped them. Said,
             // never a silent loss (an older Walnut on the Mac takes the words only).
@@ -141,6 +142,7 @@ final class SessionLifecycleController {
             }
             AppLog.info("session-lifecycle", "permission answered", [
                 "sessionId": sessionId, "requestId": request.requestId, "allow": String(allow),
+                "optionId": optionId ?? "", "hasMessage": String(message != nil),
                 "answerCount": String(answers?.count ?? 0), "pictureCount": String(images.count),
             ])
             await refreshDetail()

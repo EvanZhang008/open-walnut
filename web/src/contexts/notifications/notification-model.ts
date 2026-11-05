@@ -70,7 +70,7 @@ export function resolvedLabelOf(
   n: { kind: NotificationKind; resolved?: string | null },
 ): string | null {
   switch (n.resolved) {
-    case 'allowed': return 'Approved';
+    case 'allowed': return 'Allowed';
     case 'denied': return 'Denied';
     case 'recovered': return 'Recovered ✓';
     case 'expired': return n.kind === 'operation-error' ? 'Stale' : 'Session ended';
@@ -357,9 +357,9 @@ export function requestIdOf(n: Notification): string | null {
  */
 export function validAcpOptions(
   n: Notification,
-): Array<{ optionId: string; kind?: string; name?: string }> {
+): Array<{ optionId: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }> {
   return (n.acpOptions ?? []).filter(
-    (o): o is { optionId: string; kind?: string; name?: string } => !!o.optionId,
+    (o): o is { optionId: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string } => !!o.optionId,
   );
 }
 

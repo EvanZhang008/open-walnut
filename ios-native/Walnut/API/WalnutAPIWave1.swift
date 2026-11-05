@@ -61,6 +61,10 @@ extension WalnutAPI {
 
     /// Answer a live CLI tool-permission prompt. `message` = deny reason.
     ///
+    /// `optionId` is the prompt's option the person chose (`acpOptions`): the
+    /// server maps it back to what that option allows (a session or project rule
+    /// on a Claude prompt, the adapter's own option on an ACP one), so a client
+    /// never sends rules itself.
     /// `answers` is AskUserQuestion-only: question text → the chosen option
     /// label (multi-select joined with ", "), merged server-side into the allow
     /// response's `updatedInput`, which the tool echoes back to the model as
@@ -70,25 +74,14 @@ extension WalnutAPI {
     /// and the server puts them in the same tool result as the words
     /// (`core/answer-pictures.ts` withAnswerPictures), never as a message after it.
     func respondSessionPermission(
-        id: String, requestId: String, allow: Bool, message: String? = nil,
+        id: String, requestId: String, allow: Bool, optionId: String? = nil, message: String? = nil,
         answers: [String: String]? = nil, images: [ImagePayload] = []
     ) async throws -> PermissionResolved {
-        struct Body: Encodable {
-            let requestId: String
-            let allow: Bool
-            let message: String?
-            let answers: [String: String]?
-            let images: [ImagePayload]?
-        }
-        let hasAnswers = !(answers?.isEmpty ?? true)
-        return try await send(
+        try await send(
             "POST", "/sessions/\(escape(id))/permission",
-            body: Body(
-                requestId: requestId, allow: allow, message: message,
-                // Omit an empty map: the server treats {} as "no answers" anyway,
-                // and sending it would just be a confusing wire artifact.
-                answers: hasAnswers ? answers : nil,
-                images: allow && hasAnswers && !images.isEmpty ? images : nil
+            body: SessionPermissionBody(
+                requestId: requestId, allow: allow, optionId: optionId, message: message,
+                answers: answers, images: images
             ),
             timeout: images.isEmpty ? nil : 60
         )
@@ -243,3 +236,30 @@ extension WalnutAPI {
 
 /// Placeholder for the error path of no-content calls (never decoded on 2xx).
 private struct EmptyDecodable: Decodable {}
+
+/// The body of POST /v1/sessions/:id/permission. Every optional field is left
+/// out when unset (a nil optional is not encoded), so an older server reads the
+/// same bytes it always did.
+struct SessionPermissionBody: Encodable, Equatable {
+    let requestId: String
+    let allow: Bool
+    let optionId: String?
+    let message: String?
+    let answers: [String: String]?
+    let images: [ImagePayload]?
+
+    init(
+        requestId: String, allow: Bool, optionId: String? = nil, message: String? = nil,
+        answers: [String: String]? = nil, images: [ImagePayload] = []
+    ) {
+        let hasAnswers = !(answers?.isEmpty ?? true)
+        self.requestId = requestId
+        self.allow = allow
+        self.optionId = (optionId?.isEmpty ?? true) ? nil : optionId
+        self.message = message
+        // Omit an empty map: the server treats {} as "no answers" anyway,
+        // and sending it would just be a confusing wire artifact.
+        self.answers = hasAnswers ? answers : nil
+        self.images = allow && hasAnswers && !images.isEmpty ? images : nil
+    }
+}

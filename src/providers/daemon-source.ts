@@ -5826,7 +5826,7 @@ async function cmdSessionPermission(ws, id, cmd) {
   if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' });
   var owner = sessionHomeOf(cmd.sid);
   if (owner && !bridgeSpeaksFor(ws, owner)) return sendError(ws, id, 'session.permission: not a session of this Walnut', { errorKind: 'refused' });
-  var r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission');
+  var r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers, optionId: cmd.optionId }, 'session.permission');
   if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind });
   return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: r.allow });
 }
@@ -5835,7 +5835,7 @@ async function cmdSessionPermission(ws, id, cmd) {
 async function answerPermission(sid, raw, label) {
   var session = sessions.get(sid);
   var pending = session && session.pendingCtrl ? { reqId: session.pendingCtrl.reqId, request: session.pendingCtrl.request } : null;
-  var answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers }, sid);
+  var answer = liveSettings.permissionAnswer(pending, { requestId: raw.requestId, allow: raw.allow, message: raw.message, answers: raw.answers, optionId: raw.optionId }, sid);
   if (!answer.ok) return { ok: false, error: answer.error, errorKind: answer.code };
   // Answered here already (a retry after its reply was lost): resolved, nothing written again.
   if (answer.duplicate) {

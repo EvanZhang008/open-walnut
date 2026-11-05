@@ -28,6 +28,7 @@ const ROOTS = [
 /** `file:state` → why it is not a row's disclosure. */
 const NOT_ROW_STATE: Record<string, string> = {
   'components/sessions/BashToolCall.tsx:popupOpen': 'a modal over the page, closed on any rebuild by design',
+  'components/sessions/PermissionNoteBox.tsx:open': "a toast's or the panel's note box (DenyWithNote), never a chat row; once words are typed the draft keeps it open",
   'components/common/MicButton.tsx:showChevron': 'the composer mic, not a chat row',
   'components/common/MicButton.tsx:dropdownOpen': 'the composer mic menu',
   'components/common/MicButton.tsx:expandedId': 'the composer mic menu',

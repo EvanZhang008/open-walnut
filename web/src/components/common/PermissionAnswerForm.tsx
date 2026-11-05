@@ -111,17 +111,19 @@ export function PermissionAnswerForm({
         const picked = selections[q.question] ?? [];
         return (
           <div key={q.question} className="nfc-answer-q">
-            {q.header && <div className="nfc-chip">{q.header}</div>}
+            {q.header && <div className="nfc-chip nfc-answer-chip">{q.header}</div>}
             <div className="nfc-answer-text">{q.question}</div>
             {q.options.length > 0 && (
               /* Every option, no cap: a truncated option list is a wrong answer
                  waiting to happen — the pills wrap instead. */
-              <div className="nfc-answer-opts">
+              <div className={`nfc-answer-opts${q.options.some((o) => o.description) ? ' nfc-answer-opts--rows' : ''}`}>
                 {q.options.map((opt) => (
                   <button
                     key={opt.label}
                     className={`nfc-answer-opt${picked.includes(opt.label) ? ' nfc-picked' : ''}`}
-                    title={opt.description}
+                    // Named by its label alone: the words under it describe it.
+                    aria-label={opt.label}
+                    aria-description={opt.description}
                     disabled={disabled}
                     onClick={() => setSelections(prev => ({
                       ...prev,
@@ -131,6 +133,7 @@ export function PermissionAnswerForm({
                     }))}
                   >
                     {opt.label}
+                    {opt.description && <span className="nfc-answer-opt-desc">{opt.description}</span>}
                   </button>
                 ))}
               </div>

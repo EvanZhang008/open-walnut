@@ -57,11 +57,12 @@ async function send(req: Request, res: Response): Promise<void> {
 
 async function permission(req: Request, res: Response): Promise<void> {
   const deadline = Date.now() + 22_000
-  const { host, sessionId, requestId, allow, message, answers } = req.body ?? {}
+  const { host, sessionId, requestId, allow, message, answers, optionId } = req.body ?? {}
   if (typeof host !== 'string' || !HOST.test(host) || host === '__local__' || host === '__cloudbox__'
     || typeof sessionId !== 'string' || !ID.test(sessionId)
     || typeof requestId !== 'string' || !requestId || requestId.length > 256
     || typeof allow !== 'boolean' || (message !== undefined && typeof message !== 'string')
+    || (optionId !== undefined && (typeof optionId !== 'string' || !optionId || optionId.length > 64))
     || (answers !== undefined && (typeof answers !== 'object' || answers === null || Array.isArray(answers)
       || Object.values(answers).some((value) => typeof value !== 'string')))) {
     res.status(400).json({ error: 'invalid_payload', sent: false })
@@ -86,7 +87,7 @@ async function permission(req: Request, res: Response): Promise<void> {
   try {
     const reply = await bridgeRequest(host, 'session.permission', {
       sid: sessionId, requestId, allow, ...(message !== undefined ? { message } : {}),
-      ...(answers !== undefined ? { answers } : {}),
+      ...(answers !== undefined ? { answers } : {}), ...(optionId !== undefined ? { optionId } : {}),
     }, remainingMs)
     res.json(reply)
   } catch (err) {

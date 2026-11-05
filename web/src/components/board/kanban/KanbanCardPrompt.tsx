@@ -26,7 +26,7 @@ interface PendingFromSession {
   toolName?: string;
   input?: Record<string, unknown>;
   reason?: string;
-  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
 }
 
 /** The open permission record of this request's session (the one with its request id when known, else the newest). */

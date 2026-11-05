@@ -364,15 +364,15 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   await expect(bashCard).toHaveCount(1)
   await expect(bashCard.locator('.notification-feed-item-title')).toHaveText('Bash')
   await expect(bashCard.locator('.nfc-card-cmd')).toHaveText(BASH_COMMAND)
-  await expect(bashCard.locator('.nfc-card-sub').first()).toContainText('Clean the demo directory')
+  await expect(bashCard.locator('.nfc-card-sub', { hasText: 'Clean the demo directory' })).toBeVisible()
   const chips = bashCard.locator('.nfc-card-chips .nfc-chip')
   await expect(chips).toHaveCount(3)
   await expect(chips.nth(0)).toHaveText('PW NFC fixture session')
   await expect(chips.nth(1)).toHaveText('nfc-host')
   await expect(chips.nth(2)).toHaveText('Walnut')
   // …and the buttons that answer it, without opening the session.
-  await expect(bashCard.getByRole('button', { name: 'Approve' })).toBeVisible()
-  await expect(bashCard.getByRole('button', { name: 'Deny' })).toBeVisible()
+  await expect(bashCard.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+  await expect(bashCard.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/needs-action-bash-card.png`, fullPage: true })
 
   // Errors: the two seeded operation-errors, and the folded one wears its ×N badge.
@@ -435,7 +435,7 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
     .filter({ hasText: '/tmp/nfc/read-me.txt' })
   await expect(resolvedCard).toHaveCount(1)
   await expect(resolvedCard.locator('.notification-feed-item-title')).toHaveText('Read')
-  await expect(resolvedCard.locator('.notification-feed-item-resolved')).toHaveText('Approved')
+  await expect(resolvedCard.locator('.notification-feed-item-resolved')).toHaveText('Allowed')
   // Settled = no answer buttons to click a second time.
   await expect(resolvedCard.locator('.notification-perm-btn')).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/all-section-expanded-group.png`, fullPage: true })
@@ -635,7 +635,7 @@ test('AskUserQuestion card submits the real answers map to the permission route'
   await page.screenshot({ path: `${SCREENSHOT_DIR}/ask-user-question-card.png`, fullPage: true })
 
   await submit.click()
-  await expect(card.locator('.notification-feed-item-resolved')).toHaveText('Approved')
+  await expect(card.locator('.notification-feed-item-resolved')).toHaveText('Answered: Staging')
   await expect(card.locator('.nfc-answer')).toHaveCount(0)
   expect(submitted).toMatchObject({
     requestId: 'pw-nfc-question',
@@ -698,7 +698,7 @@ test('permissions and hard errors toast; cron, skills and warnings go to the fee
   await expect(permToast.locator('.nfc-perm-context')).toContainText('PW NFC fixture session')
   await expect(permToast.locator('.nfc-perm-context')).toContainText('nfc-host')
   await expect(permToast.locator('.nfc-perm-cmd')).toHaveText(BASH_COMMAND)
-  await expect(permToast.getByRole('button', { name: 'Approve' })).toBeVisible()
+  await expect(permToast.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
   await expect(toast('PW NFC hard error')).toHaveCount(1)
   await expect(toast('PW NFC warning only')).toHaveCount(0)
   await expect(toast('PW NFC cron toastless')).toHaveCount(0)
@@ -706,7 +706,7 @@ test('permissions and hard errors toast; cron, skills and warnings go to the fee
   await page.screenshot({ path: `${SCREENSHOT_DIR}/toast-policy.png`, fullPage: true })
 
   // Deny from the toast rides the same permission route as the panel card.
-  await permToast.getByRole('button', { name: 'Deny' }).click()
+  await permToast.getByRole('button', { name: 'Deny', exact: true }).click()
   await expect(permToast.locator('.nfc-perm-settled')).toHaveText('Denied')
   expect(denied).toMatchObject({ requestId: 'pw-nfc-toast', allow: false })
 
@@ -790,7 +790,7 @@ test('a multi-question, multi-select, free-text ask is answered entirely in the 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/toast-full-answer-form.png`, fullPage: true })
 
   await submit.click()
-  await expect(toast.locator('.nfc-perm-settled')).toHaveText('Approved')
+  await expect(toast.locator('.nfc-perm-settled')).toHaveText(/^Answered: .+/)
   // The exact wire payload: multi-select joins with ', ', single-select is the one
   // label, and the free-text question carries the typed string.
   expect(submitted).toMatchObject({
@@ -827,7 +827,7 @@ test('a free-text answer overrides the picked pill on the same question', async 
   await toast.locator('.nfc-answer-opt', { hasText: 'Staging' }).click()
   await toast.locator('.nfc-answer-input').fill('neither — hold the deploy')
   await toast.getByRole('button', { name: 'Submit' }).click()
-  await expect(toast.locator('.nfc-perm-settled')).toHaveText('Approved')
+  await expect(toast.locator('.nfc-perm-settled')).toHaveText('Answered: neither — hold the deploy')
   expect(submitted).toMatchObject({
     answers: { 'Which deployment?': 'neither — hold the deploy' },
   })
@@ -849,7 +849,7 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
   const badgeBefore = await actionBadge(panel)
   expect(badgeBefore).toBeGreaterThanOrEqual(1)
-  await expect(seededPermCards(panel).getByRole('button', { name: 'Approve' })).toBeVisible()
+  await expect(seededPermCards(panel).getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
 
   // Watch the card from ALL, where a settled permission still lives — Needs Action
   // holds only PENDING asks by design (sectionOf), so a card observed from there
@@ -858,10 +858,10 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   await showSection(panel, 'All')
   const card = seededPermCards(panel).filter({ hasText: 'Bash' })
   await expect(card).toHaveCount(1)
-  await expect(card.getByRole('button', { name: 'Approve' })).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
 
   // Also raise a LIVE toast for the same dedupKey, so the toast half of the
-  // convergence is observable (the seeded feed alone never toasts).
+  // convergence is observable (the seeded ask toasted on load too; the open panel holds both back).
   await injectEvent(page, 'notification:new', {
     id: 'nfc-perm-bash', kind: 'permission', severity: 'warning',
     title: 'Bash', body: BASH_COMMAND, timestamp: Date.now(), read: false,
@@ -870,7 +870,9 @@ test('a session-view approval settles the panel card, the badge and the toast', 
     host: 'nfc-host', sessionTitle: 'PW NFC fixture session',
   })
   const toast = page.locator('.nfc-perm-toast').filter({ hasText: SEED_TAG })
-  await expect(toast).toHaveCount(1)
+  // The panel is open and shows this ask: no toast repeats it (NotificationToaster).
+  await page.waitForTimeout(500)
+  await expect(toast).toHaveCount(0)
 
   // The EXACT frame a session-view approval produces: claude-code-session.ts's
   // resolvePermissionRequest emits session:permission-resolved with the outcome,
@@ -884,8 +886,8 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   })
 
   // 1. The panel card settles, and its answer buttons are gone.
-  await expect(card.locator('.notification-feed-item-resolved')).toHaveText('Approved')
-  await expect(card.getByRole('button', { name: 'Approve' })).toHaveCount(0)
+  await expect(card.locator('.notification-feed-item-resolved')).toHaveText('Allowed')
+  await expect(card.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
   await expect(card.getByRole('button', { name: 'Deny' })).toHaveCount(0)
   // …while the click-through survives resolution: reading the transcript afterwards
   // is exactly as useful as answering was.
@@ -898,6 +900,10 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   await showSection(panel, 'Needs you')
   await expect(seededPermCards(panel).filter({ hasText: 'Bash' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/resolved-elsewhere-converged.png`, fullPage: true })
+  // Closing the panel does not bring the held toast back: the ask is settled.
+  await panel.locator('.notification-panel-close').click()
+  await page.waitForTimeout(600)
+  await expect(toast).toHaveCount(0)
 })
 
 // ── 8. Open session ↗ navigates WITHOUT settling the notification ──
@@ -938,6 +944,13 @@ test('Open session from the panel card navigates and leaves the ask pending', as
   await page.screenshot({ path: `${SCREENSHOT_DIR}/ask-still-pending-after-navigate.png`, fullPage: true })
 })
 
+/** Asks other specs left on the shared server toast when a page opens; clear them off the
+ *  page's top corner before clicking under it. */
+async function dismissStrayToasts(page: Page, keep: string): Promise<void> {
+  const strays = page.locator('.nfc-perm-toast').filter({ hasNotText: keep }).locator('.notification-toast-close')
+  for (let i = await strays.count(); i > 0; i--) await strays.first().click().catch(() => {})
+}
+
 // ── 9. Real permission: live Codex session → enriched record → toast → approve ──
 
 test('a real permission ask arrives enriched and is approved from the toast', async ({ page }) => {
@@ -967,6 +980,13 @@ test('a real permission ask arrives enriched and is approved from the toast', as
   // the seeded specs above use `PW NFC`, so neither can match the other.
   const permToast = page.locator('.nfc-perm-toast')
     .filter({ hasText: 'Write file /tmp/mock.txt' })
+  // While the session's own card is on screen there is no toast to cover it; it
+  // comes once the session column closes.
+  const panel = page.locator(REAL_PANEL)
+  await expect(panel.locator('.permission-request-card[data-prompt-pending="true"]')).toBeVisible({ timeout: 40_000 })
+  await expect(permToast).toHaveCount(0)
+  await dismissStrayToasts(page, 'Write file /tmp/mock.txt')
+  await panel.getByRole('button', { name: 'Close session panel' }).first().click()
   await expect(permToast).toBeVisible({ timeout: 40_000 })
   await expect(permToast.locator('.notification-toast-title'))
     .toHaveText('Write file /tmp/mock.txt')
@@ -999,8 +1019,10 @@ test('a real permission ask arrives enriched and is approved from the toast', as
   // Asserted as CONTAINMENT, not an exact-text element: the agent's pre- and
   // post-permission chunks belong to one message, so they render in a single
   // merged text block ("about to ask permissionpermission granted: allow-once").
-  const panel = page.locator(REAL_PANEL)
-  await expect(panel).toContainText('permission granted: allow-once', { timeout: 30_000 })
+  // The session column was closed to bring the toast: reopen the session to read it.
+  await page.goto(`/sessions?id=${pending?.sessionId}`)
+  await expect(page.locator('.session-panel').first()).toContainText('permission granted: allow-once', { timeout: 30_000 })
+  await loadHome(page)
 
   // …and the feed entry is stamped settled (server-side + in the panel).
   await expect.poll(async () => (await feedRecord())?.resolved, { timeout: 20_000 })
@@ -1008,6 +1030,6 @@ test('a real permission ask arrives enriched and is approved from the toast', as
   const center = await openCenter(page)
   await showSection(center, 'All')
   const settled = center.locator('.nfc-perm-card', { hasText: 'Write file /tmp/mock.txt' })
-  await expect(settled.locator('.notification-feed-item-resolved').first()).toHaveText('Approved')
+  await expect(settled.locator('.notification-feed-item-resolved').first()).toHaveText('Allowed')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/real-permission-approved.png`, fullPage: true })
 })

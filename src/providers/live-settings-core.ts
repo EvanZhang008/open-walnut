@@ -158,11 +158,71 @@ export function createLiveSettings(deps: LiveSettingsDeps) {
     while (answered.size > ANSWERED_CAP) answered.delete(answered.keys().next().value as string)
   }
 
-  function permissionAnswer(pending: PendingPrompt | null, raw: { requestId?: unknown; allow?: unknown; message?: unknown; answers?: unknown }, sid?: string): PermissionAnswer {
+  /**
+   * A Claude prompt's choice as the server maps it (src/providers/claude-permission-options.ts
+   * claudeChoiceResponse; tests/providers/live-settings-permission-choices.test.ts keeps the two
+   * equal): Allow and Deny, or the CLI's own suggested rules sent back for the session or where it
+   * suggested keeping them. Null: the request never offered that option.
+   */
+  function claudeChoice(request: Record<string, unknown>, optionId: string): { allow: boolean; updates: Array<Record<string, unknown>> | null } | null {
+    if (optionId === 'allow_once') return { allow: true, updates: null }
+    if (optionId === 'reject_once') return { allow: false, updates: null }
+    const tool = request.tool_name
+    if (typeof tool !== 'string' || !tool || tool === 'AskUserQuestion' || tool === 'ExitPlanMode' || request.suppress_always_allow_rule === true) return null
+    const updates: Array<Record<string, unknown>> = []
+    for (const s of Array.isArray(request.permission_suggestions) ? request.permission_suggestions : []) {
+      if (!s || typeof s !== 'object') continue
+      const u = s as Record<string, unknown>
+      const destination = typeof u.destination === 'string' ? u.destination : 'session'
+      if (u.type === 'addRules') {
+        if (u.behavior !== 'allow' || !Array.isArray(u.rules)) continue
+        const rules = (u.rules as unknown[]).filter((r): r is { toolName: string; ruleContent?: string } => !!r && typeof r === 'object'
+          && typeof (r as { toolName?: unknown }).toolName === 'string' && (r as { toolName: string }).toolName.length > 0
+          && ((r as { ruleContent?: unknown }).ruleContent === undefined || typeof (r as { ruleContent?: unknown }).ruleContent === 'string')
+          // A "*" in a Bash rule is the CLI's wildcard (only a trailing ":*" is meant as one): drop it.
+          && !((r as { toolName: string }).toolName === 'Bash' && typeof (r as { ruleContent?: unknown }).ruleContent === 'string'
+            && ((r as { ruleContent: string }).ruleContent).replace(/(?: |:)\*$/, '').includes('*')))
+          .map((r) => (r.ruleContent !== undefined ? { toolName: r.toolName, ruleContent: r.ruleContent } : { toolName: r.toolName }))
+        if (rules.length) updates.push({ type: 'addRules', rules, behavior: 'allow', destination })
+      } else if (u.type === 'addDirectories') {
+        const directories = Array.isArray(u.directories) ? (u.directories as unknown[]).filter((d): d is string => typeof d === 'string' && d.length > 0) : []
+        if (directories.length) updates.push({ type: 'addDirectories', directories, destination })
+      } else if (u.type === 'setMode' && u.mode === 'acceptEdits') {
+        // A command's yes never switches the session's edit mode (claude-permission-options.ts requestSuggestions).
+        if (tool !== 'Bash') updates.push({ type: 'setMode', mode: 'acceptEdits', destination })
+      }
+    }
+    // A command with a "*" of its own offers no Bash rule at all: the CLI reads every "*" as its wildcard.
+    const command = typeof (request.input as { command?: unknown } | undefined)?.command === 'string' ? (request.input as { command: string }).command : undefined
+    if (command !== undefined && command.includes('*')) {
+      for (let i = updates.length - 1; i >= 0; i--) {
+        const u = updates[i]
+        if (u.type !== 'addRules') continue
+        const rules = (u.rules as Array<{ toolName: string }>).filter((r) => r.toolName !== 'Bash')
+        if (rules.length) updates[i] = { ...u, rules }
+        else updates.splice(i, 1)
+      }
+    }
+    if (!updates.length) return null
+    if (optionId === 'allow_session') return { allow: true, updates: updates.map((u) => ({ ...u, destination: 'session' })) }
+    if (optionId === 'allow_always') {
+      // Offered only when a rule is kept in a file; it sends every rule its label names, each
+      // where the CLI suggested keeping it (a folder kept to this session stays so).
+      const kept = updates.filter((u) => u.type !== 'setMode' && ['localSettings', 'projectSettings', 'userSettings'].includes(u.destination as string))
+      // A saved exact command over 200 characters is a one-off: not offered (claude-permission-options.ts LONG_EXACT_RULE).
+      const oneOff = command !== undefined && command.length > 200 && kept.every((u) => u.type === 'addRules'
+        && (u.rules as Array<{ toolName: string; ruleContent?: string }>).every((r) => r.toolName === 'Bash' && r.ruleContent === command))
+      return kept.length && !oneOff ? { allow: true, updates: updates.filter((u) => u.type !== 'setMode') } : null
+    }
+    return null
+  }
+
+  function permissionAnswer(pending: PendingPrompt | null, raw: { requestId?: unknown; allow?: unknown; message?: unknown; answers?: unknown; optionId?: unknown }, sid?: string): PermissionAnswer {
     if (typeof raw.requestId !== 'string' || !raw.requestId || typeof raw.allow !== 'boolean') {
       return { ok: false, error: 'requestId (string) and allow (boolean) are required', code: 'bad_request' }
     }
     if (raw.message !== undefined && typeof raw.message !== 'string') return { ok: false, error: 'message must be a string', code: 'bad_request' }
+    if (raw.optionId !== undefined && typeof raw.optionId !== 'string') return { ok: false, error: 'optionId must be a string', code: 'bad_request' }
     let answers: Record<string, string> | null = null
     if (raw.answers !== undefined) {
       if (typeof raw.answers !== 'object' || raw.answers === null || Array.isArray(raw.answers)) {
@@ -179,9 +239,15 @@ export function createLiveSettings(deps: LiveSettingsDeps) {
       if (before !== undefined) return { ok: true, duplicate: true, allow: before }
       return { ok: false, error: 'Permission request not found or already resolved', code: 'not_found' }
     }
+    const choice = typeof raw.optionId === 'string' ? claudeChoice(pending.request, raw.optionId) : null
+    if (typeof raw.optionId === 'string' && !choice) return { ok: false, error: `This request does not offer option ${raw.optionId}`, code: 'bad_request' }
+    if (choice && choice.allow !== raw.allow) return { ok: false, error: `allow must be ${choice.allow} for option ${raw.optionId}`, code: 'bad_request' }
     const input = (pending.request.input && typeof pending.request.input === 'object' ? pending.request.input : {}) as Record<string, unknown>
     const result = raw.allow
-      ? { behavior: 'allow', updatedInput: answers ? { ...input, answers } : input }
+      ? {
+        behavior: 'allow', updatedInput: answers ? { ...input, answers } : input,
+        ...(choice?.updates ? { updatedPermissions: choice.updates, decisionClassification: 'user_permanent' } : {}),
+      }
       : { behavior: 'deny', message: typeof raw.message === 'string' ? raw.message : 'User denied permission' }
     const line = JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: pending.reqId, response: result } })
     return { ok: true, line, allow: raw.allow }

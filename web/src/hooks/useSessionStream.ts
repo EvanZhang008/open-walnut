@@ -179,7 +179,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           toolName?: string;
           input?: Record<string, unknown>;
           reason?: string;
-          acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+          acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
+          toolUseId?: string;
         }>;
       } | null) => {
         if (activeSessionId.current !== sessionId) return;
@@ -206,7 +207,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             : prev;
           const newBlocks = perms
             .filter(p => !existingIds.has(p.requestId))
-            .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason, acpOptions: p.acpOptions }));
+            .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason, acpOptions: p.acpOptions, ...(p.toolUseId ? { toolUseId: p.toolUseId } : {}) }));
           if (newBlocks.length === 0) return hasZombie ? next : prev;
           return [...next, ...newBlocks];
         });
@@ -740,10 +741,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle permission request events (control_request from Claude Code)
   useEvent('session:permission-request', (data) => {
-    const { sessionId: sid, requestId, toolName, input, reason, acpOptions } = data as {
+    const { sessionId: sid, requestId, toolName, input, reason, acpOptions, toolUseId } = data as {
       sessionId: string; requestId: string; toolName: string;
-      input?: Record<string, unknown>; reason?: string;
-      acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+      input?: Record<string, unknown>; reason?: string; toolUseId?: string;
+      acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
     };
     if (!sessionId || sid !== sessionId) return;
 
@@ -760,7 +761,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     interruptPendingText();
     flushPendingThinking();
     setBlocks(prev => appendPermissionBlock(prev, {
-      requestId, toolName, input, reason, acpOptions,
+      requestId, toolName, input, reason, acpOptions, toolUseId,
     }));
   });
 

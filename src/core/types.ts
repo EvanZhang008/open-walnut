@@ -3551,9 +3551,20 @@ export interface SessionRecord {
     toolName?: string;
     input?: Record<string, unknown>;
     reason?: string;
-    acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+    /** The prompt's choices: an ACP adapter's own, or a Claude prompt's remembering ones (claude-permission-options.ts). */
+    acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
+    /** Claude: the CLI's suggested rules and its no-standing-rule flag, so a restart offers the same choices. */
+    permissionSuggestions?: unknown[];
+    suppressAlwaysAllowRule?: boolean;
+    /** The call it gates (Claude's tool_use_id): after a restart its row still reads as waiting. */
+    toolUseId?: string;
     receivedAt: string;  // ISO timestamp — for stale detection
   };
+  /** The person's answers to this session's tool prompts, by the call they gated
+   *  (Claude's tool_use_id): the transcript records only the call, so the
+   *  timeline reads which choice let it run (or stopped it) from here. Newest
+   *  last, at most PERMISSION_DECISIONS_KEPT. */
+  promptAnswerLines?: Array<{ toolUseId: string; line: string }>;
   /** Consumed-offset watermark: byte position (the daemon's `v`) of the last
    *  turn-lifecycle event this server PROCESSED (result handled / turn completed).
    *  Survives restarts so replay-vs-new is decided by position, not by a boolean:

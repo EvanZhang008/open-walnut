@@ -1319,6 +1319,18 @@ function initialUserTextOf(messages: Array<{ role?: string; text?: string }>): s
   return first.text.length > 10_000 ? `${first.text.slice(0, 10_000)}…` : first.text
 }
 
+// GET /api/sessions/:sessionId/permission-decisions
+// The person's answers to this session's tool prompts, by the call they gated
+// (SessionRecord.promptAnswerLines): the timeline labels those rows with them.
+sessionsRouter.get('/:sessionId/permission-decisions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const record = await getSessionByClaudeId(req.params.sessionId as string)
+    res.json({ decisions: record?.promptAnswerLines ?? [] })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/history
 // ?source=streams — fast path: local-only reads (skip SSH).
 // Local sessions: reads canonical JSONL (~1ms, same result as full path).

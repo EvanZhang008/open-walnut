@@ -145,6 +145,8 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
   if (block.type === 'permission') {
     return (
       <PermissionRequestCard
+        // One card per request: a pick (or a typed note's state) never carries over to the next ask.
+        key={block.requestId}
         sessionId={sessionId}
         requestId={block.requestId}
         toolName={block.toolName}
@@ -152,6 +154,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
         reason={block.reason}
         initialStatus={block.status}
         acpOptions={block.acpOptions}
+        toolUseId={block.toolUseId}
       />
     );
   }
@@ -256,11 +259,13 @@ function formatTokenCount(tokens: number): string {
  * it stably), so elapsed time is simply time-since-mount — no cross-component
  * turn clock to maintain.
  */
-export function WorkingIndicator({ label, tokens, startedAt, text }: {
+export function WorkingIndicator({ label, tokens, startedAt, text, waiting }: {
   label: string;
   tokens: number;
   /** The whole line instead of "<label> is working…" (Walnut's idle compaction says what it does). */
   text?: string;
+  /** A prompt card is open: the agent is stopped on the person, not working. */
+  waiting?: boolean;
   /** Epoch ms the work began, when the caller knows it (a subagent's ledger
    *  start): elapsed counts from there instead of from mount, so a reader opened
    *  mid-run shows the run's age, not the reader's. */
@@ -277,10 +282,13 @@ export function WorkingIndicator({ label, tokens, startedAt, text }: {
   }, []);
   return (
     <div className="session-working-indicator">
-      <span className="session-working-label">{text ?? `${label} is working…`}</span>
-      <span className="session-working-meta">
-        {elapsed}s{tokens > 0 ? ` · ${formatTokenCount(tokens)} tokens` : ''}
-      </span>
+      <span className="session-working-label">{text ?? (waiting ? `${label} is waiting for your answer` : `${label} is working…`)}</span>
+      {/* No clock while it waits: this one counts from when the page drew it, not from the ask. */}
+      {!waiting && (
+        <span className="session-working-meta">
+          {elapsed}s{tokens > 0 ? ` · ${formatTokenCount(tokens)} tokens` : ''}
+        </span>
+      )}
     </div>
   );
 }

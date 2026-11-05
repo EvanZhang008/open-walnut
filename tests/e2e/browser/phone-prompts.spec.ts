@@ -28,6 +28,8 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
 const overlay = (page: Page) => page.locator(`.main-page-session-column.is-mobile-active .session-panel[data-session-id="${SID}"]`)
 const timeline = (page: Page) => overlay(page).locator('.session-history')
 const cards = (page: Page) => overlay(page).locator('.permission-request-card')
+// A card by its request: an answered card no longer shows the ask's reason line.
+const cardOf = (page: Page, requestId: string) => overlay(page).locator(`.permission-request-card[data-request-id="${requestId}"]`)
 const pill = (page: Page) => overlay(page).getByTestId('phone-prompt-pill')
 
 function historyOf(turns: number, longLast = false) {
@@ -166,7 +168,7 @@ test('Allow / Deny: side by side, armed after 500 ms, busy in the same frame, he
   const answers = await setup(page)
   await watchArming(page, 'ask req-phone-1')
   await inject(page, 'session:permission-request', ask('req-phone-1', 'Bash', { command: 'ls -la ./garden', description: 'List the garden folder' }))
-  const card = cards(page).filter({ hasText: 'ask req-phone-1' })
+  const card = cardOf(page, 'req-phone-1')
   await expect(card).toBeVisible({ timeout: 15_000 })
   const allow = card.getByRole('button', { name: 'Allow' })
   const deny = card.getByRole('button', { name: 'Deny' })
@@ -208,7 +210,7 @@ test('Allow / Deny: side by side, armed after 500 ms, busy in the same frame, he
   const t0 = await page.evaluate(() => performance.now())
   await allow.click()
   const held = await page.evaluate(async ({ start }) => {
-    const el = [...document.querySelectorAll<HTMLElement>('.permission-request-card')].find((c) => c.textContent?.includes('ask req-phone-1'))!
+    const el = document.querySelector<HTMLElement>('.permission-request-card[data-request-id="req-phone-1"]')!
     const h = el.getBoundingClientRect().height
     let changedAt = -1
     while (performance.now() - start < 1200) {
@@ -227,8 +229,8 @@ test('two queued prompts: a double tap answers only the first; the second ignore
   const answers = await setup(page)
   await inject(page, 'session:permission-request', ask('req-q-1', 'Bash', { command: 'du -sh ./seeds' }))
   await inject(page, 'session:permission-request', ask('req-q-2', 'Bash', { command: 'rm -rf ./seeds-old' }))
-  const first = cards(page).filter({ hasText: 'ask req-q-1' })
-  const second = cards(page).filter({ hasText: 'ask req-q-2' })
+  const first = cardOf(page, 'req-q-1')
+  const second = cardOf(page, 'req-q-2')
   await expect(second).toBeVisible({ timeout: 15_000 })
   const allow1 = first.getByRole('button', { name: 'Allow' })
   await expect(allow1).toBeEnabled({ timeout: 2000 })
@@ -238,7 +240,7 @@ test('two queued prompts: a double tap answers only the first; the second ignore
   const x = a.x + a.width / 2
   const y = a.y + a.height / 2
   // The finger lands on the first card's Allow, then again 120 ms later.
-  expect(await page.evaluate(({ px, py }) => document.elementFromPoint(px, py)?.closest('.permission-request-card')?.textContent?.includes('ask req-q-1') ?? false, { px: x, py: y })).toBe(true)
+  expect(await page.evaluate(({ px, py }) => document.elementFromPoint(px, py)?.closest('.permission-request-card')?.getAttribute('data-request-id') === 'req-q-1', { px: x, py: y })).toBe(true)
   await page.touchscreen.tap(x, y)
   await page.waitForTimeout(120)
   await page.touchscreen.tap(x, y)
@@ -247,7 +249,7 @@ test('two queued prompts: a double tap answers only the first; the second ignore
   // The second card moved up when the first collapsed: re-armed.
   await expect(first).toContainText('Allowed')
   await inject(page, 'session:permission-request', ask('req-q-3', 'Bash', { command: 'touch ./seeds/marker' }))
-  const third = cards(page).filter({ hasText: 'ask req-q-3' })
+  const third = cardOf(page, 'req-q-3')
   await expect(third).toBeVisible({ timeout: 10_000 })
   const allow3 = third.getByRole('button', { name: 'Allow' })
   const b3 = await box(allow3)
@@ -263,7 +265,7 @@ test('a 20-line command shows its first and last lines, end included, without ov
   await setup(page)
   const command = Array.from({ length: 19 }, (_, i) => `echo step-${i + 1}`).concat('echo end-marker').join('\n')
   await inject(page, 'session:permission-request', ask('req-long', 'Bash', { command }))
-  const card = cards(page).filter({ hasText: 'ask req-long' })
+  const card = cardOf(page, 'req-long')
   await expect(card).toBeVisible({ timeout: 15_000 })
   const preview = card.getByTestId('permission-command-preview')
   await expect(preview).toContainText('end-marker')
@@ -336,7 +338,7 @@ test('plan approval: 12 lines and Show all, Approve / Keep planning side by side
   const plan = Array.from({ length: 30 }, (_, i) => `${i + 1}. Plant row ${i + 1}`).join('\n')
   await watchArming(page, 'ask req-plan')
   await inject(page, 'session:permission-request', ask('req-plan', 'ExitPlanMode', { plan }))
-  const card = cards(page).filter({ hasText: 'ask req-plan' })
+  const card = cardOf(page, 'req-plan')
   await expect(card).toBeVisible({ timeout: 15_000 })
   const preview = card.getByTestId('phone-plan-preview')
   await expect(preview).toContainText('12. Plant row 12')
@@ -366,7 +368,7 @@ test('plan approval: 12 lines and Show all, Approve / Keep planning side by side
 test('a prompt out of view is a pill above the composer; two read 2 prompts waiting (C31 pill, C65, C70)', async ({ page }) => {
   await setup(page, 8)
   await inject(page, 'session:permission-request', ask('req-p-1', 'Bash', { command: 'ls ./tools' }))
-  const first = cards(page).filter({ hasText: 'ask req-p-1' })
+  const first = cardOf(page, 'req-p-1')
   await expect(first).toBeVisible({ timeout: 15_000 })
   // R3-01: the timeline lands on the whole card, its buttons above the composer.
   await expect.poll(async () => {
@@ -409,7 +411,7 @@ test('a prompt out of view is a pill above the composer; two read 2 prompts wait
 
 test('R3-01: opening a session that waits on a prompt lands on the whole card, not the long turn above it', async ({ page }) => {
   await setup(page, 8, { longLast: true, pending: [ask('req-open', 'Bash', { command: 'ls ./tools' })] })
-  const card = cards(page).filter({ hasText: 'ask req-open' })
+  const card = cardOf(page, 'req-open')
   await expect(card).toBeVisible({ timeout: 15_000 })
   // Past the open's settle window (the turn-start landing runs for 2 s).
   await page.waitForTimeout(2500)
@@ -425,7 +427,7 @@ test('R3-01: opening a session that waits on a prompt lands on the whole card, n
 test('N30: the Latest pill never sits on a prompt card a finger needs', async ({ page }) => {
   await setup(page, 8)
   await inject(page, 'session:permission-request', ask('req-n30', 'Bash', { command: 'ls ./tools' }))
-  const card = cards(page).filter({ hasText: 'ask req-n30' })
+  const card = cardOf(page, 'req-n30')
   await expect(card).toBeVisible({ timeout: 15_000 })
   let steppedAside = 0
   // A little above the bottom: the card is still on screen and the jump pill shows.

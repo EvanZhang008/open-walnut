@@ -4868,15 +4868,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:permission-request') {
-      const { sessionId, taskId, requestId, toolName, input, reason, acpOptions } = event.data as {
+      const { sessionId, taskId, requestId, toolName, input, reason, acpOptions, toolUseId } = event.data as {
         sessionId?: string; taskId?: string; requestId?: string; toolName?: string;
-        input?: Record<string, unknown>; reason?: string;
-        acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+        input?: Record<string, unknown>; reason?: string; toolUseId?: string;
+        acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
       }
       if (sessionId) {
         // Buffer the permission block so stream-subscribe snapshots include it
         if (requestId && toolName) {
-          sessionStreamBuffer.appendPermission(sessionId, requestId, toolName, input, reason, acpOptions)
+          sessionStreamBuffer.appendPermission(sessionId, requestId, toolName, input, reason, acpOptions, toolUseId)
         }
         sendStreamEvent(sessionId, event.name, event.data)
         // Agent blocked on a human decision → the task goes red NOW

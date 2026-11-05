@@ -1060,10 +1060,15 @@ export class RemoteSessionManager implements SessionManager {
         await this.ensureCloudLink(sid)
         const generation = this.cloudGeneration
         const { postToCloudSessionPermission } = await import('../core/cloud-ingest.js')
+        // A remembering choice rides as its option id: the host's daemon rebuilds the same rules
+        // from the request it holds (live-settings-core.ts claudeChoice), never from this line.
+        const kept = Array.isArray(answer.updatedPermissions) ? answer.updatedPermissions as Array<{ destination?: unknown }> : []
+        const optionId = kept.length === 0 ? undefined : kept.every((u) => u.destination === 'session') ? 'allow_session' : 'allow_always'
         const result = await postToCloudSessionPermission({
           host: this.hostKey, sessionId: sid, requestId, allow: answer.behavior === 'allow',
           ...(typeof answer.message === 'string' ? { message: answer.message } : {}),
           ...(answers !== undefined ? { answers: answers as Record<string, string> } : {}),
+          ...(optionId ? { optionId } : {}),
         })
         if (generation !== this.cloudGeneration || sid !== this._sid || !result?.ok) return false
         if (this.cloudPendingRequest?.id === requestId) this.cloudPendingRequest = null

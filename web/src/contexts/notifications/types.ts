@@ -145,7 +145,9 @@ export type NotificationInput = Omit<Notification, 'id' | 'timestamp' | 'read'> 
 
 /** Per-kind toast auto-dismiss duration (ms). Mirrors the legacy per-toast values. */
 export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
-  permission: 15000,
+  // An ask holds an agent until it is answered: its toast stays until then (or its ×).
+  // The toaster shows two and folds the rest, so they never pile up.
+  permission: Number.POSITIVE_INFINITY,
   cron: 8000,
   'operation-error': 6000,
   sort: 3000,

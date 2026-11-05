@@ -420,6 +420,8 @@ export interface CloudSessionPermission {
   allow: boolean
   message?: string
   answers?: Record<string, string>
+  /** A Claude prompt's remembering choice (claude-permission-options.ts); the host's daemon maps it to the rules. */
+  optionId?: string
 }
 
 export function postToCloudSessionPermission(payload: CloudSessionPermission): Promise<Record<string, unknown> | null> {

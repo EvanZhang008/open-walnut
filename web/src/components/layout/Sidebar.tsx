@@ -1,4 +1,5 @@
 import { Fragment, useState, useEffect, type RefObject } from 'react';
+import { setNotificationCenterOpen } from '@/stores/notification-center-open';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { linkTargetFor } from '@/utils/last-location';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -94,6 +95,8 @@ export function Sidebar({
   const quietNow = attentionHeld(quiet);
   const railAttention = railCount(attentionCount, quietNow);
   const [notifOpen, setNotifOpen] = useState(false);
+  // The toaster leaves out a permission toast the open panel already shows.
+  useEffect(() => { setNotificationCenterOpen(notifOpen); return () => setNotificationCenterOpen(false); }, [notifOpen]);
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
   const [statusOpen, setStatusOpen] = useState(false);
   // Collapsed, the icon under the pointer (or keyboard focus) grows out over the page with

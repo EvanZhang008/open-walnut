@@ -36,9 +36,13 @@ import {
   type Notification, type NotificationSeverity,
 } from '@/contexts/notifications';
 import {
-  isSettledPermission, respondToPermissionRequest, usePermissionRequest,
+  isSettledPermission, markAnsweredFromToast, respondToPermissionRequest, usePermissionRequest, wasAnsweredFromToast,
 } from '@/stores/permission-request-store';
 import { PermissionAnswerForm } from './PermissionAnswerForm';
+import { DenyWithNote, denyMessageOf, usePermissionNote } from '@/components/sessions/PermissionNoteBox';
+import { splitPromptHint, useSecondClick } from '@/components/sessions/prompt-keys';
+import { AnswerText, RuleDetail, SavedFileMark } from '@/components/sessions/RuleDetail';
+import { isLongRule, permissionOutcomeLabel, releaseAnswerFocus } from './PermissionPromptControls';
 import { NotificationActionButtons } from './NotificationActionButtons';
 import { navigateToTarget } from '@/utils/open-session';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -47,6 +51,9 @@ import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
 import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
+import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sessions/prompt-keys';
+import { useNotificationCenterOpen } from '@/stores/notification-center-open';
+import { useShiftClickGuard } from './useShiftClickGuard';
 
 /** Downward travel that dismisses a toast on the phone (it sits at the bottom of the screen). */
 const SWIPE_DISMISS_PX = 40;
@@ -109,10 +116,46 @@ const WITH_APPROVAL_SHOWN = 1;
 const PHONE_TITLE_ONLY_PX = 640;
 
 /** How long an answered permission toast stays up before self-dismissing. */
-const RESOLVED_DISMISS_MS = 1500;
+const RESOLVED_DISMISS_MS = 3000;
+/** Answerable permission toasts shown at once on a desktop; the rest fold into one line. */
+const MAX_ASK_TOASTS = 2;
+/** An ask toast left alone this long folds into that line: it stays reachable, not over the page. */
+const ASK_TOAST_UP_MS = 30_000;
+const PHONE_ASK_TOAST_MS = 15_000;
+
+/**
+ * When this browser first showed each ask toast, and a clock that moves while any is up,
+ * so one left alone folds on time. `age(id)` is 0 for an ask not seen before.
+ */
+function useAskToastClock(ids: string[], seenInPanel: string[]): { age: (id: string) => number; touch: (id: string) => void; leave: (id: string) => void } {
+  const seenAt = useRef(new Map<string, number>());
+  // Toasts the pointer has moved onto and not left: someone reading stays up however long.
+  const hovered = useRef(new Set<string>());
+  const [now, setNow] = useState(() => Date.now());
+  const at = Date.now();
+  // Read in the open panel: once it closes, the ask does not pop up again as if new.
+  for (const id of seenInPanel) seenAt.current.set(id, Number.NEGATIVE_INFINITY);
+  for (const id of ids) if (!seenAt.current.has(id)) seenAt.current.set(id, at);
+  const keep = new Set([...ids, ...seenInPanel]);
+  for (const id of [...seenAt.current.keys()]) if (!keep.has(id)) seenAt.current.delete(id);
+  for (const id of [...hovered.current]) if (!keep.has(id)) hovered.current.delete(id);
+  const key = ids.join(' ');
+  useEffect(() => {
+    if (!key) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 2000);
+    return () => window.clearInterval(timer);
+  }, [key]);
+  return {
+    age: (id) => (hovered.current.has(id) ? 0 : Math.max(0, now - (seenAt.current.get(id) ?? now))),
+    // A pointer moving on a toast is someone reading it: it waits until the pointer leaves.
+    touch: (id) => { if (seenAt.current.has(id)) { seenAt.current.set(id, Date.now()); hovered.current.add(id); } },
+    // Left, its time starts again from now.
+    leave: (id) => { hovered.current.delete(id); if (seenAt.current.has(id)) seenAt.current.set(id, Date.now()); },
+  };
+}
 
 export function NotificationToaster() {
-  const { toasts: allToasts, dismissToast, pinToast, markReadByKey } = useNotifications();
+  const { toasts: allToasts, feed, dismissToast, pinToast, markReadByKey } = useNotifications();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   usePhoneOverlayDepth(); // re-render when a session overlay opens or closes
@@ -124,21 +167,69 @@ export function NotificationToaster() {
   const shownCount = approvalInCorner ? WITH_APPROVAL_SHOWN : window.innerHeight < SHORT_WINDOW_PX ? 1 : DESKTOP_TOASTS_SHOWN;
   // A permission a session waits on stays in sight whatever the count; the rest fill what is left.
   const asking = (t: (typeof allToasts)[number]) => t.kind === 'permission' && !t.resolved;
-  const kept = new Set(allToasts.filter((t) => !asking(t)).slice(-Math.max(0, shownCount - allToasts.filter(asking).length)));
+  // Asks take at most MAX_ASK_TOASTS places (the rest fold into one line).
+  const kept = new Set(allToasts.filter((t) => !asking(t)).slice(-Math.max(0, shownCount - Math.min(MAX_ASK_TOASTS, allToasts.filter(asking).length))));
   // "N more ›" opens the notification center, which lists only what it keeps. A toast it does not
   // keep (an Undo after a column closed) is shown in place instead: the count unfolds the stack.
   const [unfolded, setUnfolded] = useState(false);
   const folded = phone ? [] : allToasts.filter((t) => !asking(t) && !kept.has(t));
   const foldsEphemeral = folded.some((t) => !t.persistent);
   useEffect(() => { if (!foldsEphemeral && unfolded) setUnfolded(false); }, [foldsEphemeral, unfolded]);
-  const toasts = phone
-    ? phoneVisibleToasts(allToasts, (sid) => isPhoneOverlayOpen(`session:${sid}`))
-    : unfolded && foldsEphemeral ? allToasts : allToasts.filter((t) => asking(t) || kept.has(t));
+  usePromptCardsChanged(); // re-render when a session's prompt card comes on screen or goes
+  // The desktop twin of the phone rule: a session whose pending card is on screen gets no
+  // permission toast, which would cover the card it repeats.
+  const withCard = phone ? null : sessionsWithPromptCard();
+  const [engaged, setEngaged] = useState<ReadonlySet<string>>(() => new Set());
+  const engage = useCallback((id: string) => setEngaged((prev) => (prev.has(id) ? prev : new Set(prev).add(id))), []);
+  // The open notification panel shows every pending ask already: no toast repeats one there.
+  const centerOpen = useNotificationCenterOpen();
+  const shown = phone
+  ? phoneVisibleToasts(allToasts, (sid) => isPhoneOverlayOpen(`session:${sid}`))
+  : unfolded && foldsEphemeral ? allToasts : allToasts.filter((t) => (asking(t)
+    // An ask whose card is on screen, or with the panel open, is in view already: no toast repeats it.
+    ? !(centerOpen || (t.sessionId && withCard?.has(t.sessionId)))
+    : kept.has(t)));
   // The older ones stay in the notification center (on the phone they also wait their turn); one
-  // line says how many and opens it.
-  const older = allToasts.length - toasts.length;
+  // line says how many and opens it. Asks are not among them: they have their own fold line.
+  const older = phone ? allToasts.length - shown.length : allToasts.filter((t) => !asking(t) && !kept.has(t)).length;
+  // Many sessions asking at once: two answerable asks stay up, the rest fold into one
+  // line that opens the panel, so the stack never runs off the screen. One the person is
+  // using (pointer on it, a note typed) stays; the other places go to the newest asks.
+  // An ask nobody touched for ASK_TOAST_UP_MS folds too, so two old asks never sit over
+  // the page's top corner for good.
+  const pendingAsks = shown.filter((t) => t.kind === 'permission' && !t.resolved);
+  const allAsks = allToasts.filter((t) => t.kind === 'permission' && !t.resolved);
+  const now = useAskToastClock(pendingAsks.map((t) => t.id), centerOpen ? allAsks.map((t) => t.id) : []);
+  const inUse = pendingAsks.filter((t) => engaged.has(t.id)).slice(-MAX_ASK_TOASTS);
+  const free = MAX_ASK_TOASTS - inUse.length;
+  const fresh = pendingAsks.filter((t) => !engaged.has(t.id) && now.age(t.id) < ASK_TOAST_UP_MS);
+  const up = new Set([...inUse, ...(free > 0 ? fresh.slice(-free) : [])]);
+  const foldedAsks = phone ? [] : pendingAsks.filter((t) => !up.has(t));
+  // A phone has no fold line: an ask left alone goes after PHONE_ASK_TOAST_MS, as it always
+  // did (its session's card and Needs you still hold it).
+  const phoneGone = phone ? pendingAsks.filter((t) => !engaged.has(t.id) && now.age(t.id) >= PHONE_ASK_TOAST_MS) : [];
+  const toasts = foldedAsks.length || phoneGone.length ? shown.filter((t) => !foldedAsks.includes(t) && !phoneGone.includes(t)) : shown;
 
-  if (toasts.length === 0) return null;
+  // Every ask waiting, as the badge and the panel count them (some came before this page did).
+  // An ask whose card is on screen is in view already: the line does not count it.
+  const waitingTotal = Math.max(foldedAsks.length + up.size, feed.filter((n) => n.kind === 'permission' && !n.resolved && !(n.sessionId && withCard?.has(n.sessionId))).length);
+  const moreCount = Math.max(foldedAsks.length, waitingTotal - up.size);
+  // The fold line's ×: hidden until a new ask comes, not back when a toast up now folds later.
+  const [lineHiddenFor, setLineHiddenFor] = useState<ReadonlySet<string> | null>(null);
+  const askIds = pendingAsks.map((t) => t.id).join('\n');
+  useEffect(() => {
+    if (lineHiddenFor && pendingAsks.some((t) => !lineHiddenFor.has(t.id))) setLineHiddenFor(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askIds, lineHiddenFor]);
+  const hideLine = () => {
+    setLineHiddenFor(new Set(pendingAsks.map((t) => t.id)));
+    foldedAsks.forEach((t) => dismissToast(t.id));
+  };
+
+  // A toast that slid up under the pointer (the one above was answered) waits a beat before a click counts.
+  const shiftGuard = useShiftClickGuard('.notification-toast');
+
+  if (toasts.length === 0 && (foldedAsks.length === 0 || lineHiddenFor)) return null;
   // The count rides the top toast's title row (a link, not a card of its own); only a stack of
   // permission prompts, which have their own head, keeps it as a line above them.
   const moreHost = toasts.find((t) => !(t.kind === 'permission' && !t.resolved))?.id;
@@ -149,7 +240,7 @@ export function NotificationToaster() {
 
   return (
     <CornerSlot order={CORNER_ORDER.toasts} className="corner-slot-toasts">
-    <div className="notification-toaster" aria-live="polite">
+    <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-toaster" aria-live="polite">
       {older > 0 && !moreHost && (
         <button
           type="button"
@@ -161,8 +252,10 @@ export function NotificationToaster() {
         </button>
       )}
       {toasts.map((toast) => {
-        // A pending permission is answerable in place — its own card.
-        if (toast.kind === 'permission' && !toast.resolved) {
+        // A pending permission is answerable in place — its own card. One answered in
+        // this browser stays that card a moment, saying which choice went (permissionOutcomeLabel).
+        const answeredHere = toast.kind === 'permission' && !!toast.resolved && wasAnsweredFromToast(requestIdOf(toast) ?? '');
+        if (toast.kind === 'permission' && (!toast.resolved || answeredHere)) {
           return (
             <PermissionToast
               key={toast.id}
@@ -171,7 +264,9 @@ export function NotificationToaster() {
               // The toast is now a form; the 15s auto-dismiss must not pull it out
               // from under someone mid-typing. It asks the OWNER of the timer to
               // cancel it (see NotificationProvider.pinToast) rather than racing it.
-              onPin={() => pinToast(toast.id)}
+              onPin={() => { pinToast(toast.id); engage(toast.id); }}
+              onRead={() => now.touch(toast.id)}
+              onLeave={() => now.leave(toast.id)}
               navigate={navigate}
               phone={phone}
             />
@@ -191,6 +286,23 @@ export function NotificationToaster() {
           </SwipeToast>
         );
       })}
+      {foldedAsks.length > 0 && !lineHiddenFor && (
+        <div className="nfc-more-asks-row">
+          <button
+            type="button"
+            className="notification-toast nfc-more-asks"
+            data-testid="toast-more-asks"
+            onClick={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
+          >
+            {up.size > 0
+              ? `+${moreCount} more ${moreCount === 1 ? 'ask waits' : 'asks wait'} for an answer \u00b7 Open the panel`
+              // Nothing above it: the count is every ask waiting, as the badge and the panel have it.
+              : `${waitingTotal} ${waitingTotal === 1 ? 'ask waits' : 'asks wait'} for an answer \u00b7 Open the panel`}
+          </button>
+          {/* Off the page's corner; the asks stay in the panel and on their session cards. */}
+          <button type="button" className="nfc-more-asks-close" aria-label="Hide the waiting asks line" title="Hide (the asks stay in the panel)" onClick={hideLine}>&times;</button>
+        </div>
+      )}
     </div>
     </CornerSlot>
   );
@@ -341,10 +453,13 @@ function SwipeToast({ phone, onDismiss, children }: { phone: boolean; onDismiss:
   return <div className="notification-toast-swipe" {...swipe}>{children}</div>;
 }
 
-function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
+function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone = false }: {
   n: Notification;
   onDismiss: () => void;
   onPin: () => void;
+  /** The pointer moves on it: it is being read (its fold waits). */
+  onRead?: () => void;
+  onLeave?: () => void;
   navigate: (to: string) => void;
   phone?: boolean;
 }) {
@@ -365,7 +480,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
   // instead of offering Approve/Deny for a dead request.
   const settled = n.resolved
     ?? (stored && isSettledPermission(stored.status) ? stored.status : null);
-  const acpOptions = validAcpOptions(n);
+  const { hint: promptHint, options: acpOptions } = splitPromptHint(validAcpOptions(n));
 
   // An answered toast leaves on its own after a beat. Armed from the settle, not
   // from the click, so a transient failure keeps the toast (and its form) up.
@@ -379,11 +494,21 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
     return () => clearTimeout(timer);
   }, [settled]);
 
+  // The prompt's one note draft: the Deny below sends it once words are typed.
+  const note = usePermissionNote(requestId);
+  const second = useSecondClick();
+  // A note typed turns the Allow choices off: nothing stays armed under it.
+  const kept = { armed: note.text ? null : second.armed, confirm: second.confirm };
+  const noteReject = acpOptions.find((o) => isRejectOption(o) && o.takesNote);
+  // The server held this choice (its rule's file cannot be written): why, under it.
+  const held = stored?.failed && stored.failReason ? stored.optionId : undefined;
   const respond = (
     allow: boolean,
     opts?: { optionId?: string; answers?: Record<string, string>; message?: string; images?: ImageAttachment[] },
   ) => {
     if (!n.sessionId || !requestId) return;
+    markAnsweredFromToast(requestId);
+    releaseAnswerFocus();
     void respondToPermissionRequest(n.sessionId, requestId, allow, {
       ...(opts?.optionId ? { optionId: opts.optionId } : {}),
       ...(opts?.answers ? { answers: opts.answers } : {}),
@@ -431,12 +556,17 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
 
   return (
     <div
-      className="notification-toast notification-toast--warning nfc-perm-toast"
+      // Answered: the warning stripe gives way to the outcome's tone while it says which choice went.
+      className={`notification-toast nfc-perm-toast ${settled ? `nfc-perm-toast--settled nfc-perm-toast--${settled}` : 'notification-toast--warning'}`}
       role="alert"
       // Capture-phase listeners on the wrapper: one place to notice interaction
       // anywhere inside (pills, the free-text input, the option list), instead of
       // wiring a handler onto every control the form owns.
       onPointerDown={pinOnce}
+      // A pointer moved onto the ask is someone reading it: it stays up until the pointer
+      // leaves. One resting there unmoved (a toast that slid under it) keeps nothing up.
+      onPointerMove={onRead}
+      onPointerLeave={onLeave}
       onFocusCapture={pinOnce}
       onKeyDownCapture={pinOnce}
       {...swipe}
@@ -448,8 +578,9 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
       } : undefined}
     >
       <div className="notification-toast-header">
-        <span className="notification-toast-icon">{SEVERITY_ICON.warning}</span>
-        <span className="notification-toast-title">{toolNameOf(n) ?? n.title}</span>
+        <span className="notification-toast-icon">{settled === 'allowed' ? '\u2713' : settled === 'denied' ? '\u2298' : SEVERITY_ICON.warning}</span>
+        {/* A question reads as the session card titles it, not by its tool's name. */}
+        <span className="notification-toast-title">{toolNameOf(n) === 'AskUserQuestion' ? 'Agent has a question' : toolNameOf(n) ?? n.title}</span>
         {/* Click-through to the session, on every permission toast with one. */}
         {target && (
           <button
@@ -472,7 +603,13 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
       {context && <div className="nfc-perm-context">{context}</div>}
 
       {/* What is actually being asked. */}
-      {detail.type === 'bash' && <PermCommand command={detail.command} onOpen={pinOnce} />}
+      {detail.type === 'bash' && (
+        <>
+          {/* The agent's own words for the call, as the card and the panel show them. */}
+          {detail.description && <div className="nfc-perm-desc">{detail.description}</div>}
+          <PermCommand command={detail.command} onOpen={pinOnce} />
+        </>
+      )}
       {/* Only when the form ISN'T rendering the questions itself — the form prints
           every question text, so a preview line above it would say it twice. */}
       {detail.type === 'question' && !questionForm && (
@@ -494,7 +631,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
            ('expired' is kind-aware: "Session ended" on a permission, "Stale" on
            an error). The toaster's local 'stale' outcome falls through to its
            neutral "Already answered". */
-        <div className="nfc-perm-settled">{resolvedLabelOf({ kind: n.kind, resolved: settled })}</div>
+        <div className="nfc-perm-settled"><AnswerText text={permissionOutcomeLabel(settled, stored, acpOptions, detail.type === 'question', detail.type === 'question' ? detail.questions.length : 0) ?? resolvedLabelOf({ kind: n.kind, resolved: settled })} /></div>
       ) : questionForm ? (
         /* The whole ask, answerable in the popup: every question, every option,
            multi-select, per-question free text. Height-capped + internally
@@ -507,9 +644,13 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
           scrollable
           onSubmit={(answers, images) => respond(true, { answers, ...(images?.length ? { images } : {}) })}
           onDismissQuestions={() => respond(false, { message: 'User dismissed the questions' })}
+          // Beside the toast's own close (×), which only hides it: this one answers the agent.
+          dismissLabel={questionForm.length === 1 ? 'Dismiss question' : 'Dismiss questions'}
         />
       ) : (
-        <div className="nfc-perm-actions">
+        <>
+        {promptHint && answerable && <div className="perm-prompt-hint">{promptHint}</div>}
+        <div className={`nfc-perm-actions${acpOptions.some((o) => o.detail || o.takesNote) ? ' perm-options-stack' : ''}`}>
           {!answerable ? (
             /* Nothing to answer WITH (no session/requestId), or an AskUserQuestion
                whose questions never survived the wire — a blanket Approve there
@@ -524,11 +665,31 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
                 return (
                   <button
                     key={o.optionId}
-                    className={`nfc-perm-btn${isReject ? '' : ' nfc-perm-primary'}`}
-                    disabled={busy}
-                    onClick={() => respond(!isReject, { optionId: o.optionId })}
+                    // A list that names rules stays neutral: no choice looks picked or recommended
+                    // before the person picks (a Claude prompt's list, whose Deny takes a note). A plain list keeps its strong yes.
+                    className={`nfc-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${isReject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' nfc-perm-primary'}${o === noteReject && note.text ? ' perm-deny-with-note' : ''}${held === o.optionId ? ' is-failed' : ''}`}
+                    data-choice={o.optionId}
+                    // A toast reads each choice in one line: the whole rule and its file are here.
+                    title={!isReject && note.text ? 'Clear the note to allow; a note goes with Deny' : [o.detail, o.savedTo && `Saves to ${o.savedTo}`].filter(Boolean).join('\n') || undefined}
+                    disabled={busy || (!isReject && !!note.text)}
+                    onClick={() => (o.savedTo && !kept.confirm(o.optionId)) || respond(!isReject, { optionId: o.optionId, ...(o === noteReject && note.text ? { message: denyMessageOf(note) } : {}) })}
                   >
-                    {o.name ?? o.optionId}
+                    {kept.armed === o.optionId && o.savedTo ? (
+                      /* Armed: what the second click does takes the choice's own line, so the toast keeps its height. */
+                      <>
+                        <span className="perm-option-name perm-option-confirm-name"><SavedFileMark />Click again to save</span>
+                        <span className="perm-option-sub perm-option-confirm-sub">to <span className="perm-saved-file">{o.savedTo}</span></span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="perm-option-name">{o.savedTo && <SavedFileMark />}{o === noteReject && note.text ? `${o.name ?? o.optionId} with note` : (o.name ?? o.optionId)}</span>
+                        {/* What a remembering choice allows, read before it is chosen. */}
+                        {o.detail && <span className="perm-option-sub"><span className="perm-option-detail"><RuleDetail text={o.detail} /></span></span>}
+                        {/* The server held this choice: why, under it. Otherwise where the rule is kept. */}
+                        {held === o.optionId ? <span className="perm-option-failed" role="alert">{stored?.failReason}</span>
+                          : o.savedTo && <span className="perm-option-saved" title={`Saves to ${o.savedTo}`}>Saves to <span className="perm-saved-file">{o.savedTo}</span></span>}
+                      </>
+                    )}
                   </button>
                 );
               })}
@@ -538,27 +699,37 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
                   Deny
                 </button>
               )}
+              {/* A Claude prompt's Deny takes a note, as on the session card. */}
+              {requestId && noteReject && (
+                <DenyWithNote note={note} disabled={busy} onDeny={(message) => respond(false, { optionId: noteReject.optionId, message })} />
+              )}
             </>
           ) : (
             <>
               <button
                 className="nfc-perm-btn nfc-perm-primary"
-                disabled={busy}
+                disabled={busy || !!note.text}
+                title={note.text ? 'Clear the note to allow; a note goes with Deny' : undefined}
                 onClick={() => respond(true)}
               >
-                Approve
+                Allow
               </button>
-              <button className="nfc-perm-btn" disabled={busy} onClick={() => respond(false)}>
-                Deny
+              <button className={`nfc-perm-btn${note.text ? ' perm-deny-with-note' : ''}`} disabled={busy} onClick={() => respond(false, note.text ? { message: denyMessageOf(note) } : undefined)}>
+                {note.text ? 'Deny with note' : 'Deny'}
               </button>
+              {requestId && <DenyWithNote note={note} disabled={busy} onDeny={(message) => respond(false, { message })} />}
             </>
           )}
         </div>
+        {/* Said, not only greyed: why the Allow choices went off. Under the note, as on the
+            session card, so no choice moves under the pointer while the note is typed. */}
+        {answerable && note.text && <div className="perm-prompt-hint perm-note-off">Allow is off while a note is typed. Clear it to allow.</div>}
+        </>
       )}
       {/* Hoisted out of the actions row: a failed SUBMIT from the answer form
           above needs the same message, and the form has no actions row of its own. */}
-      {!settled && failed && (
-        <div className="nfc-perm-error nfc-perm-error--block">Failed. Open the session to respond.</div>
+      {!settled && failed && !held && (
+        <div className="nfc-perm-error nfc-perm-error--block" role="alert">{stored?.failReason ?? 'Failed. Open the session to respond.'}</div>
       )}
     </div>
   );

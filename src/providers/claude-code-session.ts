@@ -28,6 +28,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
+import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
+import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
@@ -791,6 +793,12 @@ export class ClaudeCodeSession {
   private _warnedUnknownTypes = new Set<string>()
   private claudeSessionId: string | null = null
   private _cwd: string | null = null
+  /** Bash rules the person granted from a prompt in this process: a later call they cover runs without asking, and its row says why. */
+  private _grantedBashRules: Array<{ rule: string; scope: BashRuleScope }> = []
+  /** The project's own Bash rules (its settings files), read again after a few seconds. */
+  private _projectBashRules: { at: number; rules: string[] } | null = null
+  /** Bash calls seen and not yet returned: one sent beside a prompt runs on the rule its answer grants. */
+  private _openBashCalls = new Map<string, string>()
   private _active = false
   private _exitCode: number | null = null
   /** Stderr from the remote daemon (populated on exit for remote sessions) */
@@ -2195,7 +2203,7 @@ export class ClaudeCodeSession {
   /** Pending permission requests awaiting user decision (non-bypass modes). */
   private _pendingPermissionRequests = new Map<string, {
     request_id: string
-    request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string }
+    request: ClaudeCanUseToolRequest
   }>()
   /** Periodic re-emit timers for pending permission requests (no auto-resolve). */
   private _permissionReEmitTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -3781,12 +3789,7 @@ export class ClaudeCodeSession {
       const pp = record.pendingPermission
       session._pendingPermissionRequests.set(pp.requestId, {
         request_id: pp.requestId,
-        request: {
-          subtype: pp.subtype ?? 'can_use_tool',
-          tool_name: pp.toolName,
-          input: pp.input,
-          decision_reason: pp.reason,
-        },
+        request: requestFromPendingRecord(pp),
       })
       log.session.info('recovered orphaned control_request from session record (Layer 2)', {
         sessionId: record.claudeSessionId,
@@ -3926,12 +3929,12 @@ export class ClaudeCodeSession {
         }
         if (attachResult?.pendingCtrl && session._pendingPermissionRequests.size === 0) {
           const pc = attachResult.pendingCtrl
-          const pcReq = pc.request as { subtype?: string; tool_name?: string; input?: Record<string, unknown>; decision_reason?: string }
+          const pcReq = pc.request as Omit<ClaudeCanUseToolRequest, 'subtype'> & { subtype?: string }
           session._pendingPermissionRequests.set(pc.reqId, {
             request_id: pc.reqId,
-            request: pcReq as { subtype: string; tool_name?: string; input?: Record<string, unknown>; decision_reason?: string },
+            request: pcReq as ClaudeCanUseToolRequest,
           })
-          session._startPermissionReEmitTimer(pc.reqId, pcReq as { subtype: string; tool_name?: string; input?: Record<string, unknown> })
+          session._startPermissionReEmitTimer(pc.reqId, pcReq as ClaudeCanUseToolRequest)
           // Persist to the record too (incident fd089463, 2026-08-15): the
           // arrival-time persist lives in the control_request stream handler,
           // which never ran if the request landed while walnut was down or
@@ -3944,11 +3947,8 @@ export class ClaudeCodeSession {
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
               updateSessionRecord(record.claudeSessionId, {
                 pendingPermission: {
-                  requestId: pc.reqId,
+                  ...pendingPermissionRecordFields(pc.reqId, { ...pcReq, subtype: pcReq.subtype ?? 'can_use_tool' }),
                   toolName: pc.toolName ?? pcReq.tool_name,
-                  input: pcReq.input,
-                  reason: pcReq.decision_reason,
-                  subtype: pcReq.subtype ?? 'can_use_tool',
                   receivedAt: Number.isFinite(pc.receivedAt)
                     ? new Date(pc.receivedAt).toISOString()
                     : new Date().toISOString(),
@@ -4011,10 +4011,7 @@ export class ClaudeCodeSession {
           bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
             sessionId: record.claudeSessionId,
             taskId: record.taskId,
-            requestId: pending.request_id,
-            toolName: pending.request.tool_name,
-            input: pending.request.input,
-            reason: pending.request.decision_reason,
+            ...permissionEventFields(pending.request_id, pending.request),
           }, ['*'], { source: 'session-runner', urgency: 'urgent' })
         }
       }
@@ -7420,6 +7417,14 @@ export class ClaudeCodeSession {
             }
             this._activity = `Using ${block.name}`
             if (this._live.toolUse(block.id, block.name ?? '', block.input, Date.now(), !!parentToolUseId)) this._publishLive()
+            // A Bash call a remembered rule covers runs without a prompt: its row says which rule.
+            if (block.name === 'Bash' && block.id && typeof (block.input as { command?: unknown } | undefined)?.command === 'string'
+              && this._isReplayedByOffset() !== true) {
+              const command = (block.input as { command: string }).command
+              this._openBashCalls.set(block.id, command)
+              if (this._openBashCalls.size > 50) this._openBashCalls.delete(this._openBashCalls.keys().next().value!)
+              void this.noteAllowedByRule(block.id, command).catch(() => {})
+            }
 
             // Cache image file paths from tool inputs (e.g. Read tool's file_path).
             // When the tool_result comes back with base64 image content blocks,
@@ -7699,6 +7704,7 @@ export class ClaudeCodeSession {
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
             if (!userParentToolUseId && this._live.toolResult(block.tool_use_id, Date.now())) this._publishLive()
+            if (block.tool_use_id) this._openBashCalls.delete(block.tool_use_id)
             // Resolve a pending CronCreate: adopt the CLI's job id (what
             // CronDelete takes) on success; on an error result drop the
             // optimistic arm so a rejected create doesn't extend thresholds.
@@ -8437,6 +8443,7 @@ export class ClaudeCodeSession {
             tool_use_id?: string
             decision_reason?: string
             permission_suggestions?: unknown[]
+            suppress_always_allow_rule?: boolean
           }
         }
         const { request_id, request } = ctrl
@@ -8508,16 +8515,13 @@ export class ClaudeCodeSession {
                 if (this.claudeSessionId) {
                   import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
                     updateSessionRecord(this.claudeSessionId!, {
-                      pendingPermission: { requestId: request_id, toolName: request.tool_name, input: request.input, reason: request.decision_reason, subtype: request.subtype, receivedAt: new Date().toISOString() },
+                      pendingPermission: { ...pendingPermissionRecordFields(request_id, request), receivedAt: new Date().toISOString() },
                     }),
                   ).catch(() => {})
                   bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
                     sessionId: this.claudeSessionId,
                     taskId: this.taskId,
-                    requestId: request_id,
-                    toolName: request.tool_name,
-                    input: request.input,
-                    reason: request.decision_reason,
+                    ...permissionEventFields(request_id, request),
                   }, ['*'], { source: 'session-runner', urgency: 'urgent' })
                 }
               }
@@ -8963,6 +8967,56 @@ export class ClaudeCodeSession {
 
   // ── Permission prompt tool helpers ──
 
+  /** Keep one answer on the session record (promptAnswerLines), compare-and-set so two
+   *  answers landing together both stay. Best effort: a failed write loses only the label. */
+  /**
+   * A Bash call a rule already allows (one granted in this session, or the project's
+   * own settings) gets "Allowed by session rule: ..." on its row. Never over a decision
+   * already there (a replayed call that was asked); a prompt the CLI still raises for it
+   * replaces this line with the person's answer.
+   */
+  private async noteAllowedByRule(toolUseId: string, command: string): Promise<void> {
+    const sid = this.claudeSessionId
+    if (!sid || this._mode === 'bypass') return
+    // A compound command runs on rules for its parts (the CLI checks part by part, and
+    // passes read-only parts like `echo` on its own). A part it would still ask about is
+    // asked: that answer then replaces this line.
+    const parts = bashCommandParts(command)
+    const covers = (rule: string) => bashRuleCovers(rule, command) || (parts.length > 1 && parts.some((p) => bashRuleCovers(rule, p)))
+    let hit = [...this._grantedBashRules].reverse().find((g) => covers(g.rule))
+    if (!hit && !this._host && this._cwd) {
+      const cached = this._projectBashRules
+      let rules = cached && Date.now() - cached.at < 5000 ? cached.rules : null
+      if (!rules) {
+        const { readFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const texts = await Promise.all(['settings.local.json', 'settings.json'].map((f) => readFile(join(this._cwd!, '.claude', f), 'utf8').catch(() => '')))
+        rules = texts.flatMap(settingsBashRules)
+        this._projectBashRules = { at: Date.now(), rules }
+      }
+      const rule = rules.find((r) => covers(r))
+      if (rule) hit = { rule, scope: 'project' }
+    }
+    if (!hit) return
+    // Asked after all (the CLI judged it part by part): the answer will say what happened.
+    if ([...this._pendingPermissionRequests.values()].some((p) => p.request.tool_use_id === toolUseId)) return
+    await this.recordPermissionDecision(sid, toolUseId, ruleAllowedLine(hit.scope, hit.rule, command), true)
+  }
+
+  private async recordPermissionDecision(sid: string, toolUseId: string, line: string, onlyIfAbsent = false): Promise<void> {
+    const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../core/session-tracker.js')
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = (await getSessionByClaudeId(sid).catch(() => null))?.promptAnswerLines
+      // A line that only explains (noteAllowedByRule) never replaces the person's answer.
+      if (onlyIfAbsent && before?.some((d) => d.toolUseId === toolUseId)) return
+      const next = withPermissionDecision(before, toolUseId, line)
+      const written = await updateSessionRecordConditionally(sid, { promptAnswerLines: next },
+        (current) => JSON.stringify(current.promptAnswerLines ?? []) === JSON.stringify(before ?? []),
+        { preserveLastActiveAt: true }).catch(() => null)
+      if (written) return
+    }
+  }
+
   /**
    * Send a control_response to Claude Code via the FIFO.
    * @param allow — true to allow, false to deny
@@ -8996,21 +9050,24 @@ export class ClaudeCodeSession {
 
   private respondToControlRequest(
     requestId: string,
-    request: { tool_name?: string; input?: Record<string, unknown> },
+    request: { tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string },
     allow: boolean,
     denyMessage?: string,
     updatedInputPatch?: Record<string, unknown>,
-    restorePending?: { request_id: string; request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string } },
+    restorePending?: { request_id: string; request: ClaudeCanUseToolRequest },
     /** How the write ended: false when the CLI may not have it (this session is still the
      *  live owner of the request, but the write failed or its transport was replaced). */
     onSettled?: (delivered: boolean) => void,
+    updatedPermissions?: ClaudePermissionUpdate[],
   ): boolean {
     const result = allow
       ? {
         behavior: 'allow' as const,
         updatedInput: updatedInputPatch ? { ...(request.input ?? {}), ...updatedInputPatch } : request.input,
+        // A remembering choice: the CLI keeps these rules and does not ask again (claude-permission-options.ts).
+        ...(updatedPermissions?.length ? { updatedPermissions, decisionClassification: 'user_permanent' as const } : {}),
       }
-      : { behavior: 'deny' as const, message: denyMessage ?? 'User denied permission' }
+      : { behavior: 'deny' as const, message: cliDenyMessage(denyMessage) }
     // SDKControlResponseSchema wraps ControlResponseSchema: outer `response` is transport,
     // inner `response` is the permission result. Format mismatch = Claude Code hangs silently.
     const response = JSON.stringify({
@@ -9027,6 +9084,8 @@ export class ClaudeCodeSession {
       requestId,
       toolName: request.tool_name,
       mode: this._mode,
+      ...(updatedPermissions?.length ? { updatedPermissions: updatedPermissions.map((u) => `${u.type}@${u.destination}`) } : {}),
+      ...(!allow && denyMessage ? { denyMessageLen: denyMessage.length } : {}),
     })
     if (!this._transport) {
       // Transport gone: the response was NOT delivered. resolvePermissionRequest()
@@ -9080,10 +9139,24 @@ export class ClaudeCodeSession {
             && record.pendingPermission?.requestId === requestId).catch(() => undefined)
         }
       }
+      if (allow && ok) {
+        for (const u of updatedPermissions ?? []) {
+          if (u.type !== 'addRules') continue
+          for (const r of u.rules) if (r.toolName === 'Bash' && r.ruleContent) this._grantedBashRules.push({ rule: r.ruleContent, scope: scopeOfDestination(u.destination) })
+        }
+        if (this._grantedBashRules.length > 200) this._grantedBashRules = this._grantedBashRules.slice(-200)
+        // A call sent in the same message as this one waited behind the prompt and now runs on its rule.
+        for (const [id, command] of this._openBashCalls) {
+          if (id !== request.tool_use_id) void this.noteAllowedByRule(id, command).catch(() => {})
+        }
+      }
       if (sid && sameOwner()) bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
         sessionId: sid, taskId: this.taskId, variant: 'info' as const,
         message: `Permission ${allow ? 'granted' : 'denied'}: ${request.tool_name}`,
       }, ['main-ai'], { source: 'session-runner' })
+      // The person reads the answer on the settled card and on the call's row (session record, by tool_use_id).
+      const decisionLine = permissionDecisionLine(request.tool_name ?? 'tool', allow, updatedPermissions, denyMessage, updatedInputPatch?.answers, request.input)
+      if (sid && request.tool_use_id) void this.recordPermissionDecision(sid, request.tool_use_id, decisionLine)
       finish(ok && sameOwner())
       onSettled?.(true)
     }
@@ -10139,22 +10212,46 @@ export class ClaudeCodeSession {
     allow: boolean,
     denyMessage?: string,
     updatedInputPatch?: Record<string, unknown>,
+    optionId?: string,
   ): Promise<boolean> {
     const inFlight = this.permissionWriteAttempts.get(requestId)
     if (inFlight) return inFlight.promise
     const pending = this._pendingPermissionRequests.get(requestId)
     if (!pending) return Promise.resolve(false)
+    // A choice from the prompt's list decides allow and the rules; the server maps
+    // the id to the request's own suggestions, so a client cannot name other rules.
+    let updatedPermissions: ClaudePermissionUpdate[] | undefined
+    if (optionId !== undefined) {
+      const choice = claudeChoiceResponse(pending.request, optionId)
+      if (!choice) return Promise.reject(new UnknownPermissionOptionError(optionId))
+      allow = choice.allow
+      updatedPermissions = choice.updatedPermissions
+    }
     // The API and duplicate clicks await the one actual transport result.
     let resolve!: (ok: boolean) => void
     const promise = new Promise<boolean>((done) => { resolve = done })
     const attempt = { promise, resolve }
     this.permissionWriteAttempts.set(requestId, attempt)
-    const written = this.respondToControlRequest(requestId, pending.request, allow, denyMessage, updatedInputPatch, pending)
-    if (!written) {
+    const write = (): Promise<boolean> => {
+      const written = this.respondToControlRequest(requestId, pending.request, allow, denyMessage, updatedInputPatch, pending, undefined, updatedPermissions)
+      if (!written) {
+        if (this.permissionWriteAttempts.get(requestId) === attempt) this.permissionWriteAttempts.delete(requestId)
+        resolve(false)
+      }
+      return promise
+    }
+    // A rule kept in a file the CLI could not write would be lost after the card said
+    // "Saved": on this host, a file that cannot be written holds the answer instead.
+    const files = allow && updatedPermissions && !this._host && this._cwd
+      ? settingsFilesOf(updatedPermissions, this._cwd, process.env.CLAUDE_CONFIG_DIR || `${process.env.HOME ?? ''}/.claude`)
+      : []
+    if (!files.length) return write()
+    return unwritableSettingsFile(files).then((bad) => {
+      if (!bad) return write()
       if (this.permissionWriteAttempts.get(requestId) === attempt) this.permissionWriteAttempts.delete(requestId)
       resolve(false)
-    }
-    return promise
+      throw new PermissionSaveError(bad.shown, bad.why)
+    })
   }
 
   /**
@@ -10206,18 +10303,8 @@ export class ClaudeCodeSession {
   }
 
   /** Get all pending permission requests (for API/UI). */
-  getPendingPermissionRequests(): Array<{
-    requestId: string
-    toolName?: string
-    input?: Record<string, unknown>
-    reason?: string
-  }> {
-    return [...this._pendingPermissionRequests.values()].map(p => ({
-      requestId: p.request_id,
-      toolName: p.request.tool_name,
-      input: p.request.input,
-      reason: p.request.decision_reason,
-    }))
+  getPendingPermissionRequests(): Array<ReturnType<typeof permissionEventFields>> {
+    return [...this._pendingPermissionRequests.values()].map(p => permissionEventFields(p.request_id, p.request))
   }
 
   /**
@@ -10228,7 +10315,7 @@ export class ClaudeCodeSession {
    */
   private _routeQuestionOrAskUser(
     request_id: string,
-    request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string },
+    request: ClaudeCanUseToolRequest,
   ): void {
     this._pendingPermissionRequests.set(request_id, { request_id, request })
     const sessionId = this.claudeSessionId!
@@ -10255,7 +10342,7 @@ export class ClaudeCodeSession {
   /** Show a permission request to the user and wait for their decision. */
   private _awaitUserDecision(
     request_id: string,
-    request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string },
+    request: ClaudeCanUseToolRequest,
   ): void {
     // Store the pending request so the API route can resolve it later.
     this._pendingPermissionRequests.set(request_id, { request_id, request })
@@ -10272,14 +10359,7 @@ export class ClaudeCodeSession {
     if (this.claudeSessionId) {
       import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
         updateSessionRecord(this.claudeSessionId!, {
-          pendingPermission: {
-            requestId: request_id,
-            toolName: request.tool_name,
-            input: request.input,
-            reason: request.decision_reason,
-            subtype: request.subtype,
-            receivedAt: new Date().toISOString(),
-          },
+          pendingPermission: { ...pendingPermissionRecordFields(request_id, request), receivedAt: new Date().toISOString() },
         }),
       ).catch(err => log.session.warn('failed to persist pendingPermission', {
         sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err),
@@ -10293,10 +10373,7 @@ export class ClaudeCodeSession {
       bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
         sessionId: this.claudeSessionId,
         taskId: this.taskId,
-        requestId: request_id,
-        toolName: request.tool_name,
-        input: request.input,
-        reason: request.decision_reason,
+        ...permissionEventFields(request_id, request),
       }, ['*'], { source: 'session-runner', urgency: 'urgent' })
     }
   }
@@ -10307,7 +10384,7 @@ export class ClaudeCodeSession {
    * keep re-emitting every 60s so the user eventually sees it.
    * No auto-approve or auto-deny — human decision is required.
    */
-  private _startPermissionReEmitTimer(requestId: string, request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; decision_reason?: string }): void {
+  private _startPermissionReEmitTimer(requestId: string, request: ClaudeCanUseToolRequest): void {
     this._clearPermissionReEmitTimer(requestId)
     const REEMIT_INTERVAL_MS = 60_000 // re-emit every 60s
     const timer = setInterval(() => {
@@ -10341,10 +10418,7 @@ export class ClaudeCodeSession {
         bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
           sessionId: this.claudeSessionId,
           taskId: this.taskId,
-          requestId,
-          toolName: request.tool_name,
-          input: request.input,
-          reason: request.decision_reason,
+          ...permissionEventFields(requestId, request),
         }, ['*'], { source: 'session-runner', urgency: 'urgent' })
       }
     }, REEMIT_INTERVAL_MS)
@@ -13408,7 +13482,7 @@ export class SessionRunner {
       this.autoDenying.add(sessionId)
       try {
         for (const p of pendingPerms) {
-          await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
+          await targetSession.resolvePermissionRequest(p.requestId, false, MESSAGE_DENIES_PROMPT).catch(() => false)
         }
       } finally { this.autoDenying.delete(sessionId) }
       await new Promise(r => setTimeout(r, 200))
@@ -14714,7 +14788,7 @@ export class SessionRunner {
           this.autoDenying.add(sessionId)
           try {
             for (const p of pendingPerms) {
-              await targetSession.resolvePermissionRequest(p.requestId, false, 'User sent a new message — permission auto-denied').catch(() => false)
+              await targetSession.resolvePermissionRequest(p.requestId, false, MESSAGE_DENIES_PROMPT).catch(() => false)
             }
           } finally { this.autoDenying.delete(sessionId) }
           // Small delay for Claude Code to process the denial before we write the new message

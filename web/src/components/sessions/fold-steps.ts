@@ -17,7 +17,7 @@ import { noticeTitle } from './message-fold';
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_MESSAGE } from '@open-walnut/compaction-notice';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { walnutNoticeKind } from '../../../../src/core/sessions/walnut-commands';
-import type { ToolRunMember } from './tool-run-phrase';
+import { isUserDenied, type ToolRunMember } from './tool-run-phrase';
 
 /** The variant a row of Claude Code's own error reply ("Prompt is too long") draws with: an error line in the notice grey. */
 export const CLI_ERROR_VARIANT = 'cli-error';
@@ -95,10 +95,16 @@ function compactedName(lines: ReadonlySet<CompactLine>): string {
  *  What each step was is inside the fold, one row per step, when it is opened.
  *  A stretch with none of the three reads by what it was: an update, a
  *  runtime notice, an acknowledgement, or "Thinking", the old empty-fold line. */
-export function foldStepsPhrase(steps: readonly FoldStep[]): string {
+const NONE: ReadonlySet<string> = new Set();
+
+export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet<string> = NONE): string {
   let received = 0;
   let sent = 0;
   let tools = 0;
+  // A call the person denied did not run; one held by an open prompt (or queued beside
+  // it: the CLI runs nothing while a prompt waits) has not run yet (waiting-tools.ts).
+  let denied = 0;
+  let held = 0;
   let updates = 0;
   let acks = 0;
   let notices = 0;
@@ -108,7 +114,13 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   for (const s of steps) {
     if (s.kind === 'received') received++;
     else if (s.kind === 'sent' || s.kind === 'inbox') sent++;
-    else if (s.kind === 'calls') tools += s.tools.length;
+    else if (s.kind === 'calls') {
+      for (const t of s.tools) {
+        if (t.isError && isUserDenied(t.result)) denied++;
+        else if (t.result === undefined && t.toolUseId !== undefined && waiting.size > 0) held++;
+        else tools++;
+      }
+    }
     else if (s.kind === 'update') updates++;
     else if (s.kind === 'ack') acks++;
     else if (s.kind === 'notice') {
@@ -122,11 +134,14 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   // compaction stopped halfway made none).
   if (compacted) notices -= steps.filter((s) => s.kind === 'notice' && s.compact && s.compact !== 'cli').length;
   const pieces: string[] = [];
+  // What still needs the person leads the line.
+  if (held > 0) pieces.push('Waiting for approval');
   // A compaction is said by name, never counted as a notice (2026-11-04 review: "2 notices" hid it).
   if (compacted) pieces.push(compactedName(walnutLines));
   if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}`);
   if (sent > 0) pieces.push(`Sent ${sent}`);
   if (tools > 0) pieces.push(`Ran ${count(tools, 'tool', 'tools')}`);
+  if (denied > 0) pieces.push(`Denied ${count(denied, 'tool', 'tools')}`);
   if (notices > 0) pieces.push(count(notices, 'notice', 'notices'));
   if (pieces.length > 0) return pieces.join(' \u00b7 ');
   if (updates > 0) return updates === 1 ? 'An update' : `${updates} updates`;

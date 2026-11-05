@@ -314,7 +314,7 @@ describe('bridge permission literal parity', () => {
       expect(functionText(src, 'cmdSessionPermission')).toContain("'session.permission: the cloud bridge only'")
       expect(functionText(src, 'cmdSessionPermission')).toContain('if (!isJournalSid(cmd.sid))')
       expect(functionText(src, 'cmdSessionPermission')).toContain(
-        "answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission')",
+        "answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers, optionId: cmd.optionId }, 'session.permission')",
       )
       expect(functionText(src, 'cmdSessionPermission')).not.toMatch(/cmd\.(line|raw|updatedInput|control_request)/)
       expect(functionText(src, 'dispatchCommand')).toMatch(/case 'session\.permission': return daemonCommands\.run\(/)

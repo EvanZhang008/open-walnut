@@ -1399,9 +1399,10 @@ export interface PermissionResult {
 /**
  * Resolve a pending permission request (approve/deny a CLI tool prompt).
  * ACP sessions answer via the daemon acpRespond RPC; Claude sessions resolve
- * on the live session object. `optionId` (ACP only) selects a specific
- * provider option (e.g. codex "Allow for Session") instead of the allow
- * heuristic.
+ * on the live session object. `optionId` selects a specific option instead
+ * of the allow heuristic: an ACP provider's own (e.g. codex "Allow for
+ * Session"), or a Claude prompt's (`allow_session` / `allow_always` send the
+ * CLI's suggested rules back as `updatedPermissions`).
  *
  * `answers` (Claude CLI AskUserQuestion only) maps question text → the chosen
  * option label. It is merged into the allow response's `updatedInput`, which the
@@ -1468,6 +1469,16 @@ export async function respondSessionPermission(
   if (!session) throw new SessionControlError('Live session not found', 404);
   const pendingRequest = session.getPendingPermissionRequests().find((request) => request.requestId === requestId);
   if (!pendingRequest) throw new SessionControlError('Permission request not found or already resolved', 404);
+  // A Claude prompt's choice (claude-permission-options.ts): Allow and Deny always,
+  // a remembering one only when this request offered it.
+  if (optionId !== undefined) {
+    const { CLAUDE_OPTION_ALLOW, CLAUDE_OPTION_DENY } = await import('../../providers/claude-permission-options.js');
+    const offered = optionId === CLAUDE_OPTION_ALLOW || optionId === CLAUDE_OPTION_DENY
+      || (pendingRequest.acpOptions ?? []).some((o) => o.optionId === optionId);
+    if (!offered) throw new SessionControlError(`This request does not offer option ${optionId}`, 400);
+    // The option decides; an `allow` that says the opposite is a confused client, not an answer.
+    if ((optionId !== CLAUDE_OPTION_DENY) !== allow) throw new SessionControlError(`allow must be ${!allow} for option ${optionId}`, 400);
+  }
   let pictureCount = 0;
   if (allow && answerPatch && pictures) {
     const { withAnswerPictures } = await import('../answer-pictures.js');
@@ -1476,7 +1487,12 @@ export async function respondSessionPermission(
     answerPatch = { answers: withPictures.answers };
     pictureCount = withPictures.pictures;
   }
-  const resolved = await session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined, answerPatch).catch(() => false);
+  const { PermissionSaveError } = await import('../../providers/claude-permission-options.js');
+  const resolved = await session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined, answerPatch, optionId as string | undefined).catch((err: unknown) => {
+    // The rule's file cannot be written: the prompt stays open and the person is told why.
+    if (err instanceof PermissionSaveError) throw new SessionControlError(err.message, 422);
+    return false;
+  });
   if (!resolved) throw new SessionControlError('Permission answer was not confirmed by the session host; retry the same request', 503);
   return { status: 'resolved', requestId, allow, ...(pictureCount > 0 ? { pictures: pictureCount } : {}) };
 }
@@ -1521,7 +1537,7 @@ export interface SessionPendingPermission {
   toolName?: string;
   input?: Record<string, unknown>;
   reason?: string;
-  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string; detail?: string; takesNote?: boolean; savedTo?: string }>;
 }
 
 /**

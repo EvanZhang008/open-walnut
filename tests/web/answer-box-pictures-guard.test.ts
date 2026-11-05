@@ -28,6 +28,7 @@ const TEXT_ONLY_ANSWERS: Record<string, string> = {
   'components/inbox/ItemConfirmation.tsx': "a mail item's one-line work goal, kept on the item before any session exists",
   'apps/mail/MailGroupCard.tsx': 'why a mail belongs in a group: a sorting rule, never delivered to a session',
   'apps/mail/MailCorrectStepWhere.tsx': 'why a mail was sorted wrong: a sorting rule, never delivered to a session',
+  'components/sessions/PermissionNoteBox.tsx': "a prompt's deny note: the agent CLI takes a deny as one text message, so no picture can go with it",
 }
 
 /** Files drawing a ChatInput that refuse a picture on purpose, and why. */

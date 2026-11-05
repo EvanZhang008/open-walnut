@@ -121,6 +121,12 @@ function currentTarget(): { el: HTMLElement; reg: Registration } | null {
     at && document.contains(at) ? at : null);
 }
 
+/** The panel element keys would go to right now (null when none is registered or picked).
+ *  The prompt cards' number keys (prompt-keys.ts) answer the card in this panel. */
+export function keyTargetPanel(): HTMLElement | null {
+  return currentTarget()?.el ?? null;
+}
+
 /** Stack depth of the panel keys would go to (0 when none or at the root).
  *  useFullscreen reads it so one Esc never pops a page AND exits fullscreen. */
 export function keyTargetThreadDepth(): number {
@@ -144,11 +150,27 @@ export function keyTargetClaimsEscape(): boolean {
   return currentTarget()?.reg.handlers.current.hasEscapeLayer?.() === true;
 }
 
+/** Layers floating over the panels: a press there points at no panel, even once the layer is gone. */
+const OVER_PANELS = '.notification-toaster, .notification-panel';
+
+/** A pointer resting on a floating layer points at no panel (onPointerDown says why). */
+function overPanels(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest(OVER_PANELS);
+}
+
 function onPointerMove(e: PointerEvent) {
-  pointer = { x: e.clientX, y: e.clientY };
+  pointer = overPanels(e.target) ? null : { x: e.clientX, y: e.clientY };
 }
 
 function onPointerDown(e: PointerEvent) {
+  // A click on a toast over a pane is not a pick of that pane: when the toast leaves,
+  // the pane under the still pointer must not take the keys (a digit would answer it).
+  if (overPanels(e.target)) {
+    pointer = null;
+    pressed = null;
+    return;
+  }
   pointer = { x: e.clientX, y: e.clientY };
   pressed = e.target instanceof Node && typeof WeakRef !== 'undefined' ? new WeakRef(e.target) : null;
 }

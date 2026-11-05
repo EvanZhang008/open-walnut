@@ -4,6 +4,9 @@ import { ChevronRightIcon, PlayGlyphIcon } from '@/components/common/PhoneIcons'
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
+import { isUserDenied } from './tool-run-phrase';
+import { AnswerText } from './RuleDetail';
+import { answeredCallState, callAnswerText, callDecisionLabel, useDeniedNow, useSoleCall, useToolDecisions, useWaitingTools } from './waiting-tools';
 
 // ── Bash tool call — terminal-style rendering ──
 // Bash commands/output are shell text, not JSON: the command renders with real
@@ -58,11 +61,20 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
 };
 
 export function BashToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd }: BashToolCallProps) {
-  const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), false);
+  const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), useSoleCall());
   const [popupOpen, setPopupOpen] = useState(false);
 
   const result = resultProp ?? (tool as { result?: string }).result;
-  const status = (tool as { isError?: boolean }).isError ? 'error' : statusProp;
+  const failed = (tool as { isError?: boolean }).isError || statusProp === 'error';
+  // The person said no: not a failure. Held by an open prompt: not running yet (waiting-tools.ts).
+  const waitingTools = useWaitingTools();
+  const decision = useToolDecisions().get(tool.toolUseId ?? '');
+  const answered = answeredCallState(tool.toolUseId, decision, useDeniedNow());
+  const denied = (failed && isUserDenied(result)) || (result === undefined && answered === 'denied');
+  const waiting = !denied && result === undefined && !!tool.toolUseId && waitingTools.has(tool.toolUseId);
+  // Sent beside a call whose prompt is open: the CLI runs nothing until it is answered.
+  const queued = !waiting && !denied && !failed && !answered && result === undefined && waitingTools.size > 0;
+  const status = waiting || queued ? 'waiting' : denied ? 'denied' : failed ? 'error' : statusProp;
   const input = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const command = typeof input.command === 'string' ? input.command : '';
   const rawDesc = typeof input.description === 'string' ? input.description.trim() : '';
@@ -90,8 +102,9 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
     ? result.slice(0, INLINE_RESULT_LIMIT) + `\n… (${result.length - INLINE_RESULT_LIMIT} more chars — expand ⤢ for full output)`
     : result;
 
-  const statusIcon = status === 'error' ? '✗' : status === 'done' ? '✓' : <PlayGlyphIcon size={10} />;
-  const statusClass = status === 'error' ? 'chat-tool-block-error'
+  const statusIcon = status === 'waiting' ? '\u23F8\uFE0E' : status === 'denied' ? '\u2298' : status === 'error' ? '✗' : status === 'done' ? '✓' : <PlayGlyphIcon size={10} />;
+  const statusClass = status === 'waiting' ? 'chat-tool-block-waiting' : status === 'denied' ? 'chat-tool-block-denied'
+    : status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
   return (
@@ -104,6 +117,8 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
           <span className="chat-tool-block-summary">{commandSummary}</span>
         )}
         {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
+        {status === 'waiting' && <span className="chat-tool-block-waiting-label">{queued ? 'Queued' : 'Waiting for approval'}</span>}
+        {status !== 'waiting' && decision && <span className="chat-tool-block-decision" title={decision}><AnswerText text={callDecisionLabel(decision)} /></span>}
         <span className="chat-tool-block-arrow">{open ? '▼' : <ChevronRightIcon size={10} />}</span>
         <span
           className="bash-tool-expand-btn"
@@ -128,6 +143,13 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
             <div className="chat-tool-block-section-label">Command</div>
             <pre className="bash-tool-pre"><span className="bash-tool-prompt">$ </span>{command}</pre>
           </div>
+          {/* The whole answer, which the header line cuts to fit. */}
+          {status !== 'waiting' && decision && (
+            <div className="chat-tool-block-section">
+              <div className="chat-tool-block-section-label">Answer</div>
+              <div className="chat-tool-block-answer"><AnswerText text={callAnswerText(decision, command)} /></div>
+            </div>
+          )}
           {status !== 'calling' && result !== undefined && (
             <div className="chat-tool-block-section">
               <div className="chat-tool-block-section-label">Output</div>

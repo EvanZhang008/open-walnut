@@ -3508,7 +3508,8 @@ select {
   gap: 4px 8px;
   font-weight: 500;
 }
-.permission-request-icon { font-size: 14px; line-height: 1; }
+.permission-request-icon { font-size: 14px; line-height: 1; display: inline-flex; align-items: center; }
+.permission-request-card.is-pending .permission-request-icon { color: var(--warning); }
 .permission-request-tool {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -3574,6 +3575,14 @@ select {
 .permission-request-btn--deny:hover {
   background: var(--bg-tertiary);
 }
+/* A note is typed: the deny that carries it is the one that sends, so it leads and the yes steps back. */
+.permission-request-btn--allow.is-muted:not(.permission-request-choice) {
+  background: var(--bg);
+  color: var(--fg-secondary);
+  border-color: var(--border-strong);
+}
+.permission-request-btn--deny.is-noted { border-color: var(--error); color: var(--error); }
+.permission-request-choice.is-noted .permission-choice-label { color: var(--error); }
 .permission-request-resolved {
   margin-top: 6px;
   font-size: 12px;
@@ -3582,6 +3591,14 @@ select {
 }
 .permission-request-resolved--allowed { color: var(--success); }
 .permission-request-resolved--denied { color: var(--error); }
+/* The send failed and the choices are armed again: said where the eye is, in the error colour. */
+.permission-request-resolved--failed {
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  font-size: 12.5px;
+}
 
 /* AskUserQuestion card — permission-card frame, QuestionPopover (qp-*) pills inside. */
 .ask-user-question-card { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary)); }
@@ -3589,6 +3606,328 @@ select {
 .ask-user-question .qp-question { font-size: 13px; margin-bottom: 8px; }
 .ask-user-answer-line { font-weight: 400; line-height: 1.5; }
 .permission-request-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Prompt choices: number keys (prompt-keys.ts), remembering options as a list, the deny note. */
+.prompt-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  margin-right: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  opacity: 0.85;
+  box-sizing: border-box;
+}
+.permission-request-btn { display: inline-flex; align-items: center; justify-content: center; }
+.permission-request-btn.permission-request-choice { justify-content: flex-start; }
+.permission-request-btn.is-picked {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.permission-request-actions--rows {
+  flex-direction: column;
+  gap: 4px;
+}
+.permission-request-btn.permission-request-choice {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  gap: 10px;
+  /* Lifted off the card's tint, not a solid block of the page colour (heavy in dark). */
+  background: color-mix(in srgb, var(--bg) 65%, transparent);
+  color: var(--fg);
+  border-color: var(--border-strong);
+  text-align: left;
+}
+.permission-request-btn.permission-request-choice:hover { background: var(--bg-tertiary); }
+/* A pick by key shows and goes at once: a fading ring read as still picked after Esc. */
+.permission-request-btn.permission-request-choice { transition: none; }
+.permission-request-btn.permission-request-choice .prompt-key { margin-right: 0; }
+/* A list that names rules stays neutral, as in the toast: no choice looks picked before the person picks. */
+.permission-request-choice .permission-choice-label { color: var(--fg); }
+.permission-request-btn.permission-request-choice { align-items: flex-start; }
+.permission-request-choice .prompt-key { margin-top: 1px; }
+.permission-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+/* The file a rule goes in is read whole, wrapping in a narrow pane. */
+.permission-choice-saved { font-size: 11.5px; font-weight: 400; color: color-mix(in srgb, var(--fg-muted) 70%, var(--fg)); min-width: 0; overflow-wrap: break-word; }
+/* The file's name never breaks: in a narrow column it moves whole under "Saves to". */
+.perm-saved-file { white-space: nowrap; }
+.permission-request-btn.permission-request-choice.is-picked {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+/* Deny picked reads as the refusal it is. */
+.permission-request-btn.permission-request-choice.permission-request-btn--deny.is-picked {
+  border-color: var(--error);
+  box-shadow: 0 0 0 1px var(--error) inset;
+  background: color-mix(in srgb, var(--error) 8%, var(--bg));
+}
+.permission-choice-label { flex: 0 0 auto; font-weight: 500; }
+.permission-choice-detail {
+  min-width: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  /* A sentence ("Bash commands starting with npm test"), not code: the app's own font.
+     Read on every ask: a step stronger than the muted hints around it. */
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg-secondary, var(--fg-muted));
+}
+.permission-note { margin-top: 8px; }
+/* A prompt with remembering choices (each with its rule) stacks them, one per line. */
+.perm-options-stack { flex-direction: column; align-items: stretch; }
+.perm-option-saved { display: block; margin-top: 2px; padding-right: 2px; font-size: 10.5px; font-weight: 400; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-options-stack > button { text-align: left; min-width: 0; max-width: 100%; box-sizing: border-box; flex: 0 0 auto; }
+/* A toast and the panel hold many asks: a choice reads in two lines, its name, then
+   its rule with the file it is kept in after it. */
+.perm-option-sub { display: block; margin-top: 2px; }
+.perm-option-sub > .perm-option-detail { display: inline; margin: 0; }
+/* The file on its own line, as on the session card: a path wraps whole before it breaks mid-name. */
+.perm-options-stack > button > .perm-option-saved { display: block; margin: 1px 0 0; white-space: normal; overflow-wrap: break-word; }
+/* A toast holds two asks beside the page: a choice's rule takes one line under its name,
+   cut to fit (the button's title has the whole rule and the file it is kept in).
+   Only with a pointer, which reads the title; a phone keeps every line. */
+@media (hover: hover) and (pointer: fine) {
+  /* A rule is what the person allows: read whole, wrapping beside its name, never cut. */
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-sub { display: block; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-option-sub > .perm-option-detail { white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; color: var(--fg-secondary, var(--fg-muted)); }
+  /* Where a kept rule goes, on its own line under its rule, before the first click. */
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-saved { flex: 1 0 100%; display: block; margin-top: 1px; font-size: 11.5px; opacity: 1; color: color-mix(in srgb, var(--fg-muted) 70%, var(--fg)); white-space: normal; overflow-wrap: break-word; }
+  /* One line per choice: its name, then its rule cut to fit; what a second click does below. */
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-name { flex: 0 0 auto; }
+  /* A rule reads on the line under its name, the same in every choice (as on the session card). */
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-sub { flex: 1 0 100%; min-width: 0; margin-top: 1px; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-confirm { flex: 1 0 100%; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button.perm-option--long-rule > .perm-option-sub { flex: 1 0 100%; margin-top: 2px; }
+  /* Many asks at once (two toasts beside the page, a panel of them): a choice is one line
+     when its rule fits beside its name, and the file a rule is kept in shows when the
+     first click arms it (its title has it before). */
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button { padding: 3px 10px; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-sub { flex: 1 1 auto; margin-top: 0; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-saved { display: none; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack { gap: 4px; }
+  /* Many asks in the panel: each choice row as tight as the toast's. */
+  .nfc-perm-card .perm-options-stack { gap: 4px; }
+  /* The note box reads at the size of the words around it. */
+  :is(.nfc-perm-toast, .nfc-perm-card) .permission-note-input { font-size: 13px; }
+  /* The two ways to say no share a row; every other choice keeps its own. */
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack { display: grid; grid-template-columns: 1fr 1fr; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > * { grid-column: 1 / -1; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button:has(+ .perm-note-toggle),
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button + .perm-note-toggle { grid-column: auto; }
+}
+/* A rule kept in a file, picked once: what the second click does, in the accent. */
+.perm-option-confirm { display: block; margin: 1px 0 0; font-size: 11px; font-weight: 500; color: var(--accent); }
+.permission-choice-saved.perm-option-confirm { color: var(--accent); font-weight: 500; }
+/* Armed in a toast or the panel: a bar runs out over the 5 s it stays armed. */
+.nfc-perm-btn.is-armed, .notification-perm-btn.is-armed { position: relative; overflow: hidden; }
+.nfc-perm-btn.is-armed::after, .notification-perm-btn.is-armed::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  animation: perm-armed-run 5s linear forwards;
+}
+@keyframes perm-armed-run { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .nfc-perm-btn.is-armed::after, .notification-perm-btn.is-armed::after { animation: none; }
+}
+/* The command inside a rule ("Bash commands starting with `npm test`"): where it ends shows. */
+.perm-rule-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.95em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  overflow-wrap: anywhere;
+}
+.permission-request-keyhint.is-blocked { color: var(--warning); }
+/* A note draft left from earlier, above its box. */
+.permission-note-draft {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  font-size: 11.5px;
+  color: var(--warning);
+}
+.permission-note-draft-clear {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.permission-note-draft-clear:hover:not(:disabled) { text-decoration: underline; }
+/* A word about the whole prompt, above its choices (splitPromptHint). */
+.perm-prompt-hint {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+/* The agent's description of the call, under the card's header. */
+.permission-request-description {
+  margin: 2px 0 6px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+/* Deny with a note, in a toast or the panel: a choice row like the others (a quiet
+   link was missed among them), then the box in its place. */
+.perm-note-toggle {
+  flex: 1 0 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.perm-note-toggle:hover:not(:disabled) { border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
+.perm-note-toggle:disabled { opacity: 0.5; cursor: default; }
+/* Deny once a note is typed: red, as the session card shows it. */
+.nfc-perm-btn.perm-deny-with-note,
+.notification-perm-btn.perm-deny-with-note {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 55%, var(--border));
+  background: color-mix(in srgb, var(--error) 7%, var(--card-bg));
+}
+/* A choice that is off (Allow while a note is typed) reads as off, not as a lighter button. */
+.nfc-perm-btn:disabled,
+.notification-perm-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* A rule kept in a file, clicked once: the second click saves it. */
+.nfc-perm-btn.is-armed,
+.notification-perm-btn.is-armed {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+  color: var(--accent);
+}
+/* An answered ask in the panel reads in the card's tones (allowed is green below). */
+.notification-feed-item-resolved--denied { color: var(--error); }
+/* An answered toast: its outcome's tone, not the warning that asked. */
+.notification-toast.nfc-perm-toast--settled { border-left-color: var(--fg-muted); }
+.notification-toast.nfc-perm-toast--allowed { border-left-color: var(--success); }
+.nfc-perm-toast--settled .notification-toast-title { color: var(--fg); }
+.nfc-perm-toast--allowed .notification-toast-icon,
+.nfc-perm-toast--allowed .nfc-perm-settled,
+.notification-feed-item-resolved--allowed { color: var(--success); }
+.nfc-perm-toast--denied .notification-toast-icon,
+.nfc-perm-toast--denied .nfc-perm-settled { color: var(--error); }
+.notification-toast.nfc-perm-toast--denied { border-left-color: var(--error); }
+.nfc-perm-actions > .permission-note,
+.notification-feed-item-actions > .permission-note { flex: 1 0 100%; margin-top: 2px; }
+
+.perm-option-detail {
+  display: block;
+  max-width: 100%;
+  margin-top: 2px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0.75;
+}
+.permission-request-card[tabindex]:focus { outline: none; }
+/* Several cards take keys: the one they answer now is marked (prompt-keys.ts usePromptKeyTarget). */
+.permission-request-card.is-key-target { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+.permission-request-resolved-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.permission-request-title { font-weight: 500; }
+.permission-request-keyhint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* A typed note goes only with Deny: the card says so in words, as the toast and the panel do. */
+.permission-request-note-off { margin-top: 6px; font-size: 12px; color: var(--fg-secondary, var(--fg-muted)); }
+.permission-request-note-off.is-blocked { color: var(--warning); }
+/* A choice the server held (its rule's file cannot be written): marked, with why under its name. */
+.permission-request-btn.permission-request-choice.is-failed { border-color: var(--error); }
+.perm-options-stack > button.is-failed { border-color: var(--error); }
+/* Armed in a toast or the panel: the second click's words in the accent, on the choice's own line. */
+.perm-option-confirm-name { color: var(--accent); }
+.perm-options-stack > button > .perm-option-sub.perm-option-confirm-sub { color: var(--accent); font-size: 12px; }
+.perm-option-confirm-name > /* A toast or panel item that just moved or appeared under the pointer ignores clicks for a
+   moment (useShiftClickGuard): its choices dim for that moment, so the click reads as held. */
+:is(.notification-toast, .notification-feed-item)[data-settling] :is(button, [role="button"]) { opacity: 0.55; transition: opacity 0.15s ease-out; }
+.perm-saved-mark { color: var(--accent); }
+.perm-saved-mark { display: inline-block; margin-right: 4px; vertical-align: -1px; color: var(--fg-muted); }
+.perm-options-stack > button > .perm-option-failed { flex: 1 0 100%; display: block; margin-top: 1px; font-size: 11.5px; font-weight: 500; color: var(--error); white-space: normal; overflow-wrap: anywhere; }
+.permission-choice-failed { display: block; margin-top: 2px; font-size: 11.5px; font-weight: 500; color: var(--error); white-space: normal; overflow-wrap: anywhere; }
+/* The file a file tool's ask would touch, read before the choices (as the toast shows it). */
+.permission-request-file { display: flex; align-items: baseline; gap: 8px; margin: 8px 0 0; min-width: 0; }
+.permission-request-file-path { min-width: 0; padding: 3px 6px; border-radius: 4px; background: var(--bg-tertiary); font-size: 12px; overflow-wrap: anywhere; }
+.permission-request-file-meta { flex: 0 0 auto; font-size: 11.5px; color: var(--fg-muted); }
+.permission-request-command {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  max-height: 120px;
+  overflow: auto;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+}
+.permission-request-command.is-settled {
+  max-height: none;
+  overflow: hidden;
+  color: var(--fg-muted);
+}
+.permission-request-command-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.permission-request-input-chevron { display: inline-flex; transition: transform 0.15s; }
+.permission-request-input-chevron.is-open { transform: rotate(90deg); }
+/* A question's options read as the permission rows beside them: one full-width row each. */
+.ask-user-question-card .qp-options:not(.qp-options--rows) { flex-direction: column; align-items: stretch; }
+.ask-user-question-card .qp-options:not(.qp-options--rows) > .qp-option { width: 100%; text-align: left; box-sizing: border-box; }
+.qp-option.qp-option--keyed { position: relative; padding-left: 32px; }
+/* Only colours ease on a question's choices: a choice's box never animates its size or place. */
+.ask-user-question-card .qp-option { transition: background-color 0.12s, border-color 0.12s, color 0.12s; }
+/* Picked reads at once and as strongly as a picked permission row: the ring, no easing in. */
+.ask-user-question-card .qp-option.qp-option-selected { transition: none; box-shadow: 0 0 0 1px var(--accent) inset; }
+.qp-option.qp-option--keyed > .prompt-key { position: absolute; left: 9px; top: 9px; margin: 0; }
 
 /* ── Session Error Banner (persistent, shown at top of session chat) ──
    Words across the whole box, the actions under them, never a column beside the
@@ -6226,6 +6565,13 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   overflow: hidden;
+  /* A query container: in a narrow column a call's answer takes its own line (below). */
+  container-type: inline-size;
+}
+/* A narrow column: the answer drops under what the call does, whole, instead of both cut short. */
+@container (max-width: 480px) {
+  .chat-tool-block-header { flex-wrap: wrap; row-gap: 1px; }
+  .chat-tool-block-header > .chat-tool-block-decision { order: 10; flex: 1 0 100%; max-width: none; min-width: 0; padding-left: 20px; white-space: normal; overflow-wrap: anywhere; }
 }
 
 .chat-tool-block-calling {
@@ -6243,6 +6589,20 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 
 .chat-tool-block-error .chat-tool-block-icon {
   color: var(--error);
+}
+
+.chat-tool-block-denied .chat-tool-block-icon {
+  color: var(--fg-muted);
+}
+
+.chat-tool-block-waiting .chat-tool-block-icon,
+.chat-tool-block-waiting-label {
+  color: var(--warning);
+}
+
+.chat-tool-block-waiting-label {
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
 .chat-tool-block-header {
@@ -6289,7 +6649,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  min-width: 0;
+  /* What the call does keeps a readable share beside its answer. */
+  min-width: min(10em, 30%);
   flex-shrink: 1;
 }
 
@@ -6488,6 +6849,93 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   font-size: 11px;
   color: var(--error);
   flex-shrink: 0;
+}
+
+/* Parts of the run's line (runSegments): what was denied, what still waits. */
+.tool-run-denied { color: inherit; }
+
+/* A run with answers reads in two lines: the line and its chevron, then the answers
+   (beside the count they wrapped unevenly in a narrow column). */
+.tool-run-toggle--answered { flex-direction: column; align-items: flex-start; gap: 1px; max-width: 100%; min-width: 0; }
+.tool-run-line { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
+/* An answered run's line leads its answers: a step stronger than them, in light and dark alike. */
+.tool-run-toggle--answered .tool-run-line { color: var(--fg-secondary); }
+/* The answers, one per line, whole in their title. */
+.tool-run-decisions { display: flex; flex-direction: column; gap: 1px; max-width: 100%; min-width: 0; }
+.tool-run-decision {
+  max-width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* The person's own answer: read at a glance, a step stronger than the muted row line. */
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg-muted) 55%, var(--fg));
+}
+/* The person's note inside an answer: set apart by italics, not by quote marks. */
+.answer-note { font-style: italic; }
+/* The whole answer in an opened call: the person's words, wrapped, not code. */
+.chat-tool-block-answer { font-size: 12px; line-height: 1.45; color: var(--fg-secondary, var(--fg)); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* One call's answer is short ("Allowed once", "Denied with note ..."): it keeps its room before the description does. */
+.chat-tool-block-decision {
+  flex: 0 1 auto;
+  min-width: min(8em, 40%);
+  max-width: 50%;
+  /* Read whole: a long answer takes a second line (two at most) instead of ending in "...". */
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  font-size: 12px;
+  color: var(--fg-secondary, var(--fg-muted));
+}
+
+.tool-run-waiting { color: var(--warning); }
+.tool-run-queued { color: var(--fg-muted); }
+/* The fold line and its hide, side by side; the row itself lets clicks through. */
+.nfc-more-asks-row { position: relative; display: block; animation: notification-toast-in 0.25s ease-out; }
+/* The row and its hide come in together: the line's own entrance left the x showing first. */
+.nfc-more-asks-row > .notification-toast.nfc-more-asks { animation: none; }
+.nfc-more-asks-row > .notification-toast.nfc-more-asks { padding-right: 38px; }
+.nfc-more-asks-close {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-secondary, var(--fg-muted));
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.nfc-more-asks-close:hover { background: var(--bg-tertiary); color: var(--fg); }
+.notification-toast.nfc-more-asks {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.composer-prompt-warning {
+  padding: 2px 14px 4px;
+  font-size: 11.5px;
+  color: var(--warning);
 }
 
 .tool-run-live {
@@ -31409,12 +31857,40 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   line-height: 1.45;
   color: var(--fg);
   cursor: pointer;
-  word-break: break-all;
-  /* Two lines by default — a long heredoc must not push the buttons off-screen. */
+  display: block;
+  /* Breaks at spaces where it can, inside a long word only when it must. */
+  overflow-wrap: anywhere;
+}
+/* Two lines by default (a long heredoc must not push the buttons off-screen), clamped
+   on the text inside the padding so no third line peeks out under them. */
+.nfc-card-cmd > .nfc-cmd-text {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  white-space: pre-wrap;
+}
+.nfc-card-cmd.nfc-expanded > .nfc-cmd-text { display: block; -webkit-line-clamp: unset; }
+@media (min-width: 769px) {
+  /* A toast keeps to half the window and scrolls inside past that; the choices and the
+     note box stay whole. */
+  .notification-toaster .nfc-perm-toast { max-height: calc(50vh - 40px); overflow-y: auto; display: flex; flex-direction: column; }
+  .notification-toaster .nfc-perm-toast > * { flex-shrink: 0; }
+  /* Details shows all: the opened toast takes the window's height, not half of it. */
+  .notification-toaster .nfc-perm-toast:has(.nfc-perm-cmd.is-open) { max-height: calc(100vh - 32px); }
+  /* So does a note being typed: the box and its header stay in view, never scrolled under. */
+  .notification-toaster .nfc-perm-toast:has(.permission-note-input) { max-height: calc(100vh - 32px); }
+}
+.nfc-cmd-more {
+  align-self: flex-start;
+  margin: 0 0 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
 }
 
 .nfc-card-cmd.nfc-expanded {
@@ -31554,6 +32030,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
+/* Right under the task's name (a toast's question, with no preview above it): no rule to divide. */
+.nfc-perm-context + .nfc-answer { margin-top: 2px; padding-top: 0; border-top: none; }
 
 /* Toast placement. The toaster column is 380px and top-anchored, so a six-question
    ask would otherwise run past the bottom of the viewport with Submit below the
@@ -31605,6 +32083,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .nfc-answer-opt:disabled { opacity: 0.5; cursor: default; }
+/* Options that say what they mean (as on the session card): one per line, the label then its words. */
+.nfc-answer-opts--rows { flex-direction: column; align-items: stretch; }
+.nfc-answer-opts--rows > .nfc-answer-opt { text-align: left; }
+.nfc-answer-opt-desc { display: block; margin-top: 1px; font-size: 11.5px; font-weight: 400; color: var(--fg-muted); }
+.nfc-answer-opt.nfc-picked > .nfc-answer-opt-desc { color: var(--fg-secondary, var(--fg-muted)); }
 
 /* A question's "Other" box is the shared AnswerBox (styles/answer-box.css). */
 .answer-box .nfc-answer-input { font-size: 12px; }
@@ -31612,6 +32095,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* ── Answerable permission toast (top-right) ── */
 
 .nfc-perm-toast { max-width: 380px; }
+/* An ask toast is one width whatever it holds, so the stack stays one column and opening
+   the note box never widens it. */
+@media (min-width: 769px) {
+  .notification-toaster .nfc-perm-toast { width: 380px; box-sizing: border-box; }
+}
 
 .nfc-perm-context {
   font-size: 11px;
@@ -31619,6 +32107,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   margin-bottom: 5px;
   overflow-wrap: anywhere;
 }
+
+.nfc-perm-desc { font-size: 12px; color: var(--fg); line-height: 1.4; margin: 0 0 5px; overflow-wrap: anywhere; }
 
 .nfc-perm-cmd {
   display: block;
@@ -31685,6 +32175,17 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .nfc-perm-btn:disabled { opacity: 0.5; cursor: default; }
 .nfc-perm-btn:not(:disabled):hover { opacity: 0.9; }
+
+/* A question's header reads as the session card's chip (.qp-chip), not as a grey field. */
+.nfc-answer-q > .nfc-answer-chip {
+  display: inline-block;
+  align-self: flex-start;
+  width: auto;
+  border: none;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
 
 .nfc-perm-settled {
   font-size: 11.5px;

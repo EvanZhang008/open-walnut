@@ -26,7 +26,7 @@ import {
 } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
 import {
-  resolvedStatusOf, seedPermissionRequest, settlePermissionRequest,
+  resolvedStatusOf, seedPermissionRequest, settlePermissionRequest, wasAnsweredFromToast,
 } from '@/stores/permission-request-store';
 import { log } from '@/utils/log';
 import { stripEntityRefsToText, extractFirstRefIds } from '@/utils/markdown';
@@ -309,7 +309,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     // Auto-dismiss the toast after the per-kind lifetime. dismissToast drops the
     // dedupKey too, so the same key (e.g. a new sort change) can toast again later.
-    if (shouldToast) {
+    if (shouldToast && Number.isFinite(TOAST_DURATION_MS[input.kind])) {
       const duration = TOAST_DURATION_MS[input.kind];
       const timer = setTimeout(() => dismissToast(id), duration);
       timers.current.set(id, timer);
@@ -606,7 +606,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (!requestId) return;
     const storeStatus = resolvedStatusOf({ allowed, cancelled, expired });
     if (storeStatus) settlePermissionRequest(requestId, storeStatus);
-    dismissToastByDedup(`perm:${requestId}`);
+    // Answered from its own toast: the toast says which choice went for a beat and
+    // leaves by itself (PermissionToast). Answered anywhere else, it goes now.
+    if (!wasAnsweredFromToast(requestId)) dismissToastByDedup(`perm:${requestId}`);
     // Outcome mapping mirrors resolvePermissionNotification in
     // src/core/notifications/store.ts (allowed→success, denied/expired→info),
     // AND the same precedence as the server's stamp: a WITHDRAWN request

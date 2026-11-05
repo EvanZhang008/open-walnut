@@ -14,7 +14,7 @@ struct PendingPermissionStack: View {
     let requests: [PendingPermission]
     let pageHeight: CGFloat
     var isAnswering: (PendingPermission) -> Bool
-    var onRespond: (PendingPermission, Bool) -> Void
+    var onRespond: (PendingPermission, PermissionReply) -> Void
     /// The answers, and the pictures the person put with the last answer.
     var onAnswer: (PendingPermission, [String: String], [SelectedImage]) -> Void
     var onDismissQuestions: (PendingPermission) -> Void
@@ -280,7 +280,9 @@ struct CardScrollGeometry: Equatable {
 /// Permission-request banner shown at the top of a session conversation page
 /// when the CLI is blocked on a tool-permission prompt. One card per pending
 /// request (usually a single one — prompts serialize the turn), with the tool
-/// name, an input summary, and Allow / Deny.
+/// name, an input summary, and its answers: the prompt's options when it lists
+/// them (Allow for this session, Always allow in this project, an ACP adapter's
+/// own), else Allow / Deny, and a note the deny can carry to the agent.
 ///
 /// AskUserQuestion is NOT an Allow/Deny prompt (see AskUserQuestion in
 /// ModelsWave1): it carries the agent's actual questions, and the allow
@@ -292,7 +294,7 @@ struct CardScrollGeometry: Equatable {
 struct PermissionRequestCard: View {
     let request: PendingPermission
     let answering: Bool
-    var onRespond: (Bool) -> Void
+    var onRespond: (PermissionReply) -> Void
     /// AskUserQuestion answer submit (answers map) / dismiss (deny + reason).
     /// Optional so existing call sites and previews stay valid.
     var onAnswer: (([String: String], [SelectedImage]) -> Void)?
@@ -310,6 +312,13 @@ struct PermissionRequestCard: View {
     /// A picture was put with the answers.
     var onPicturesAdded: (() -> Void)?
 
+    /// The note the deny carries to the agent (generic card).
+    @State private var note = ""
+    @FocusState private var noteFocused: Bool
+    /// A choice that writes a lasting rule, tapped once: the next tap within 5 s sends it.
+    @State private var armed: String?
+    @State private var armedAt = Date.distantPast
+
     var body: some View {
         if let questions = request.askQuestions {
             AskUserQuestionCard(
@@ -322,15 +331,43 @@ struct PermissionRequestCard: View {
                 onTailFrame: onTailFrame,
                 onPicturesAdded: onPicturesAdded,
                 onSubmit: { answers, pictures in
-                    if let onAnswer { onAnswer(answers, pictures) } else { onRespond(true) }
+                    if let onAnswer { onAnswer(answers, pictures) } else { onRespond(PermissionReply(allow: true)) }
                 },
                 onDismiss: {
-                    if let onDismissQuestions { onDismissQuestions() } else { onRespond(false) }
+                    if let onDismissQuestions { onDismissQuestions() } else { onRespond(PermissionReply(allow: false)) }
                 }
             )
         } else {
             genericCard
         }
+    }
+
+    /// The answers this card offers (see `PendingPermission.choices`).
+    private var choices: [PermissionChoice] { request.choices }
+    /// The deny that carries the note field's words, when the prompt has one.
+    private var noteChoice: PermissionChoice? { choices.first(where: \.takesNote) }
+    /// The note field's scroll id, unique across cards.
+    private var noteFieldID: String { "\(request.requestId)|note" }
+
+    private func send(_ choice: PermissionChoice) {
+        guard !answering else { return }
+        // A typed note goes only with the deny: an allow would drop it unsaid.
+        if choice.allow && PermissionNote.message(note) != nil { return }
+        // A rule kept in a file outlives the session: a stray tap never writes it.
+        if choice.savedTo != nil && !(armed == choice.id && Date().timeIntervalSince(armedAt) < 5) {
+            armed = choice.id
+            armedAt = Date()
+            let id = choice.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { if armed == id { armed = nil } }
+            return
+        }
+        armed = nil
+        onRespond(choice.reply(note: note))
+    }
+
+    /// The choice is off while a note is typed (the note goes with the deny).
+    private func isOff(_ choice: PermissionChoice) -> Bool {
+        choice.allow && PermissionNote.message(note) != nil
     }
 
     private var genericCard: some View {
@@ -361,33 +398,9 @@ struct PermissionRequestCard: View {
                         .lineLimit(2)
                 }
             }
-            HStack(spacing: 10) {
-                Button {
-                    onRespond(true)
-                } label: {
-                    Text("Allow")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Theme.tint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("session.permission.allow")
-                Button {
-                    onRespond(false)
-                } label: {
-                    Text("Deny")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .foregroundStyle(Theme.danger)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("session.permission.deny")
-            }
-            .disabled(answering)
+            choiceButtons
+                .disabled(answering)
+            if noteChoice != nil { noteField }
         }
         .padding(12)
         .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -400,6 +413,133 @@ struct PermissionRequestCard: View {
         // `.contain` keeps Allow/Deny addressable (see AskUserQuestionCard).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session.permissionCard")
+    }
+
+    /// The choices: a list of full-width rows when any carries a rule to show
+    /// (the remembering options of a Claude prompt), else buttons side by side,
+    /// stacked when there are more than two (an ACP prompt's own options).
+    @ViewBuilder
+    private var choiceButtons: some View {
+        let list = choices
+        if list.contains(where: { $0.detail != nil }) {
+            VStack(spacing: 6) {
+                ForEach(list) { choice in
+                    choiceRow(choice)
+                }
+            }
+        } else if list.count > 2 {
+            VStack(spacing: 6) {
+                ForEach(list) { choice in
+                    choiceButton(choice)
+                }
+            }
+        } else {
+            HStack(spacing: 10) {
+                ForEach(list) { choice in
+                    choiceButton(choice)
+                }
+            }
+        }
+    }
+
+    /// A button like the plain pair's: Allow filled with the tint, Deny in the
+    /// danger color on a quiet fill.
+    private func choiceButton(_ choice: PermissionChoice) -> some View {
+        Button {
+            send(choice)
+        } label: {
+            Text(choice.displayLabel(note: note))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(
+                    choice.allow ? Theme.tint : Color(.tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .foregroundStyle(choice.allow ? Color.white : Theme.danger)
+        }
+        .buttonStyle(.plain)
+        .disabled(isOff(choice))
+        .opacity(isOff(choice) ? 0.45 : 1)
+        .accessibilityIdentifier(choice.accessibilityID)
+    }
+
+    /// A row of the option list: the label, and under it the rule the option
+    /// allows in a small monospaced line (one line, cut in the middle, so the
+    /// command's head and its wildcard both stay in view).
+    private func choiceRow(_ choice: PermissionChoice) -> some View {
+        Button {
+            send(choice)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(choice.displayLabel(note: note))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(choice.allow ? Theme.tint : Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                if armed == choice.id, let savedTo = choice.savedTo {
+                    // Tapped once: what the second tap does, where the file line was.
+                    Text("Tap again within 5 s to save to \(savedTo)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let detail = choice.detail {
+                    // A sentence ("Bash commands starting with npm test"), not code: the system font.
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        // One rule per line; a long rule wraps rather than hides its middle.
+                        .lineLimit(6)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                choice.allow ? Theme.tint.opacity(0.14) : Color(.tertiarySystemFill),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Theme.tint, lineWidth: armed == choice.id ? 1.5 : 0)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isOff(choice))
+        .opacity(isOff(choice) ? 0.45 : 1)
+        .accessibilityIdentifier(choice.accessibilityID)
+    }
+
+    /// The person's words for the agent, sent with the deny that carries them.
+    /// Return sends that deny with the note; an empty Return does nothing.
+    private var noteField: some View {
+        TextField("Or tell the agent what to do instead", text: $note, axis: .vertical)
+            .lineLimit(1...3)
+            .font(.callout)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .submitLabel(.send)
+            .disabled(answering)
+            .focused($noteFocused)
+            // A vertical-axis field inserts the return key's newline instead of
+            // firing onSubmit: that newline is the send.
+            .onChange(of: note) { old, new in
+                onTypeInField?()
+                guard PermissionNote.isReturnKey(old: old, new: new) else { return }
+                note = old
+                if let noteChoice, PermissionNote.message(old) != nil { send(noteChoice) }
+            }
+            .onChange(of: noteFocused) { _, focused in onFocusField?(focused ? noteFieldID : nil) }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PendingPermissionStack.contentSpace)) } action: { frame in
+                onFieldFrame?(noteFieldID, frame)
+            }
+            .accessibilityIdentifier("session.permission.note")
     }
 }
 

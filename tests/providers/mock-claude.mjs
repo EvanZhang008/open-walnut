@@ -930,7 +930,11 @@ if (outputFormat === 'stream-json') {
   // Emit remaining events (optionally delayed for "slow:N" messages)
   function emitRemainingEvents() {
     if (effectiveMessage.startsWith('status-permission-test:')) {
-      const toolName = effectiveMessage.match(/^status-permission-test:(\w+)/)?.[1];
+      // `BashRule`: a Bash ask that carries the CLI's suggested rule (permission_suggestions),
+      // answered with the rules and the deny message it got back.
+      const variant = effectiveMessage.match(/^status-permission-test:(\w+)/)?.[1];
+      const withRule = variant === 'BashRule';
+      const toolName = withRule ? 'Bash' : variant;
       const requestId = `req-status-${outputSessionId}-${++snapshotTurnSeq}`;
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       const input = toolName === 'AskUserQuestion'
@@ -945,7 +949,11 @@ if (outputFormat === 'stream-json') {
         onControlResponse = null;
         const decision = response.response;
         const answer = decision?.updatedInput?.answers?.['Which validation target?'];
-        const text = `${toolName} decision received: ${answer || decision?.behavior || 'missing'}`;
+        const rules = (decision?.updatedPermissions ?? []).map((u) => `${u.destination}:${(u.rules ?? []).map((r) => `${r.toolName}(${r.ruleContent ?? ''})`).join(',')}`);
+        const extra = withRule
+          ? `${rules.length ? ` rules=${rules.join(';')}` : ''}${decision?.behavior === 'deny' ? ` message=${decision.message}` : ''}`
+          : '';
+        const text = `${toolName} decision received: ${answer || decision?.behavior || 'missing'}${extra}`;
         emit({ type: 'system', subtype: 'session_state_changed', session_id: outputSessionId, state: 'running' });
         emit({ type: 'assistant', session_id: outputSessionId, message: {
           id: `msg_${requestId}`, type: 'message', role: 'assistant', model: 'mock-model',
@@ -961,7 +969,12 @@ if (outputFormat === 'stream-json') {
       };
       emit({ type: 'system', subtype: 'session_state_changed', session_id: outputSessionId, state: 'requires_action' });
       emit({ type: 'control_request', request_id: requestId,
-        request: { subtype: 'can_use_tool', tool_name: toolName, input },
+        request: { subtype: 'can_use_tool', tool_name: toolName, input,
+          ...(withRule ? {
+            tool_use_id: `toolu_${requestId}`,
+            decision_reason: 'This command requires approval',
+            permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'pwd' }], behavior: 'allow', destination: 'localSettings' }],
+          } : {}) },
       });
       return;
     }
