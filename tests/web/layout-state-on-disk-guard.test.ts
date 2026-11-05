@@ -43,6 +43,7 @@ const SESSION_FILES: Record<string, string> = {
   'components/chat/island-runtime.ts': 'blocks storage inside a sandboxed island, touches no key',
   'hooks/usePhoneRestore.ts': 'the scroll anchor of one reload; the strip itself is phoneColumns',
   'pages/MainPage.tsx': 'the todo list scroll offset, and the legacy single-session key it migrates',
+  'utils/code-block-actions.ts': "a code block's Wrap and Show all choices in this tab; a new tab starts from the defaults",
   'utils/browser-logger.ts': 'a per-tab id for log lines',
   'utils/crash-recovery.ts': 'the crash log must reset with the tab; it clears the layout record too',
   'utils/crash-report.ts': 'reads storage to report a crash',

@@ -88,6 +88,25 @@ export async function copyTextRobust(text: string): Promise<CopyResult> {
     }
   } catch { /* permission denied / insecure context — try legacy path */ }
 
+  // The legacy copy counts only when the browser really ran it: `execCommand`
+  // can answer true without copying anything (no user activation left after an
+  // awaited writeText refusal), but a copy that happens fires `copy`, and the
+  // handler writes the text itself rather than trusting the selection.
+  let fired = false;
+  const onCopy = (e: ClipboardEvent) => {
+    fired = true;
+    if (e.clipboardData) {
+      e.clipboardData.setData('text/plain', text);
+      e.preventDefault();
+    }
+  };
+  document.addEventListener('copy', onCopy, true);
+  // The textarea takes focus to be selected; whatever had it (the Copy button
+  // a keyboard pressed) gets it back, or Tab would start over from the page.
+  const hadFocus = document.activeElement as HTMLElement | null;
+  // Only a keyboard's focus: put back after a click, it would draw a ring.
+  let keyboardFocus = true;
+  try { keyboardFocus = hadFocus?.matches(':focus-visible') ?? false; } catch { /* old engine: put it back */ }
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -97,12 +116,19 @@ export async function copyTextRobust(text: string): Promise<CopyResult> {
     ta.style.top = '0';
     ta.setAttribute('readonly', '');
     document.body.appendChild(ta);
+    // Focused without scrolling to it (an engine may scroll for a selection).
+    if (typeof ta.focus === 'function') ta.focus({ preventScroll: true });
     ta.select();
     ta.setSelectionRange(0, text.length);
     const ok = document.execCommand('copy');
     document.body.removeChild(ta);
-    if (ok) return 'execCommand';
-  } catch { /* fall through */ }
+    if (ok && fired) return 'execCommand';
+  } catch { /* fall through */ } finally {
+    document.removeEventListener('copy', onCopy, true);
+    if (keyboardFocus && hadFocus && hadFocus !== document.body && hadFocus.isConnected !== false && typeof hadFocus.focus === 'function') {
+      hadFocus.focus({ preventScroll: true });
+    }
+  }
 
   return 'failed';
 }

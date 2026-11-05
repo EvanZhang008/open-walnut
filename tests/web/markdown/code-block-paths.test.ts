@@ -39,7 +39,10 @@ const P = '/workplace/dev/remotessh/acme/src/marina/pkg/remote/object.go';
 const CWD = '/repo';
 
 const anchors = (html: string) => (html.match(/<a[\s>]/gi) ?? []).length;
-const fileAnchors = (html: string) => html.match(/<a class="file-link"[^>]*>[^<]*<\/a>/g) ?? [];
+/** A wrapped code line keeps each hyphen with the next character in a span, and may break after a slash (a <wbr>, the link then named by its plain text)
+ *  (utils/code-block.ts keepHyphens); the link is the same link. */
+const unpairHyphens = (html: string) => html.replace(/<span class="md-code-nb">(-[^<]+)<\/span>/g, '$1').replace(/<wbr>/g, '').replace(/ aria-label="[^"]*"/g, '');
+const fileAnchors = (html: string) => unpairHyphens(html).match(/<a class="file-link"[^>]*>[^<]*<\/a>/g) ?? [];
 
 describe('a path in a fenced code block', () => {
   it('a comment line `// /abs:31-34` links the whole reference with its range', () => {
@@ -49,7 +52,9 @@ describe('a path in a fenced code block', () => {
     ]);
     // The block is still a code block with its language class, and its text is
     // byte-for-byte the code (what a select-and-copy yields).
-    expect(html).toContain('<pre><code class="language-go">// <a ');
+    // (Each line is a span, and syntax colors wrap the comment's own text in a
+    // token span: utils/code-block.ts.)
+    expect(html).toMatch(/<pre[^>]*><code class="language-go"[^>]*>(?:<span class="md-code-ln"[^>]*>)?(?:<span class="token comment">)?\/\/ (?:<\/span>)?<a /);
     expect(html.replace(/<[^>]+>/g, '')).toContain(`// ${P}:31-34\nfunc x() {}`);
   });
 
@@ -93,7 +98,7 @@ describe('a path in a fenced code block', () => {
   it('a reversed or half-written range keeps its first line only', () => {
     expect(renderMarkdownWithRefs(`see ${P}:34-31 x`, CWD)).toContain(`data-file-line="34" href="#">${P}:34-31</a>`);
     // Mid-stream `:31-`: the link covers `:31`, and grows to the range on the next frame.
-    expect(renderMarkdownWithRefs(['```', `// ${P}:31-`].join('\n'), CWD)).toContain(`data-file-line="31" href="#">${P}:31</a>-`);
+    expect(unpairHyphens(renderMarkdownWithRefs(['```', `// ${P}:31-`].join('\n'), CWD))).toContain(`data-file-line="31" href="#">${P}:31</a>-`);
   });
 
   it('code that only looks like a path stays text', () => {
@@ -113,7 +118,7 @@ describe('a path in a fenced code block', () => {
     const html = renderMarkdownWithRefs(block, CWD);
     expect(fileAnchors(html)).toEqual([]);
     // The URL is still an external link, whole.
-    expect(html).toContain('<a href="https://example.com/a/b/c.go" target="_blank" rel="noopener noreferrer">https://example.com/a/b/c.go</a>');
+    expect(unpairHyphens(html)).toContain('<a href="https://example.com/a/b/c.go" target="_blank" rel="noopener noreferrer">https://example.com/a/b/c.go</a>');
     expect(anchors(html)).toBe(1);
   });
 

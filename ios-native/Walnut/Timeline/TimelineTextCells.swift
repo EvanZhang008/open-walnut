@@ -234,37 +234,151 @@ extension TimelineUserBubbleCell: UIContextMenuInteractionDelegate {
     }
 }
 
-/// Code block: monospace text inside a horizontal UIScrollView, rounded
-/// secondary background. Content size is pre-measured (no wrapping).
+/// Code block: a header strip (language label, Wrap, Copy) over colored
+/// monospace text. Unwrapped, the text sits in a horizontal UIScrollView at its
+/// pre-measured widest line; wrapped (its own Wrap, per block), it is laid out at
+/// the card's width. The builder measures both (the cell never sizes itself).
+/// The text is a `TimelineTextView`, the stack the measurer matches, so part of
+/// a block can be selected and copied as well.
 final class TimelineCodeCell: UICollectionViewCell {
     static let reuseID = "code"
     private let scroll = UIScrollView()
     private let card = UIView()
-    private let label = UILabel()
-    private var contentSize: CGSize = .zero
+    private let header = UIView()
+    private let rule = UIView()
+    private let languageLabel = UILabel()
+    private let wrapButton = UIButton(type: .system)
+    private let copyButton = UIButton(type: .system)
+    private let textView = TimelineTextView()
+    private var block: TimelineCodeBlock?
+    private weak var delegate: TimelineCellActionDelegate?
+    private var copiedReset: DispatchWorkItem?
+    /// The top of the timeline's visible area in this cell's coordinates, last
+    /// told by `pinHeader`: the header moves down the card to stay under it
+    /// while the block's middle is read, as the web header sticks.
+    private var visibleTop: CGFloat = -.greatestFiniteMagnitude
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         card.backgroundColor = .secondarySystemBackground
+        // Opaque: pinned, it covers the code scrolling under it.
+        header.backgroundColor = .secondarySystemBackground
         card.layer.cornerRadius = 10
         card.layer.cornerCurve = .continuous
         card.clipsToBounds = true
-        scroll.showsHorizontalScrollIndicator = false
-        label.font = TimelineTextStyler.codeFont
-        label.numberOfLines = 0
-        label.textColor = .label
+        scroll.showsHorizontalScrollIndicator = true
+        scroll.alwaysBounceHorizontal = false
+        textView.isSelectable = true
+        rule.backgroundColor = .separator
+        languageLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        languageLabel.textColor = .secondaryLabel
+        languageLabel.lineBreakMode = .byTruncatingMiddle
+        configureButton(wrapButton, title: "Wrap", symbol: "arrow.turn.down.left", label: "Wrap long lines")
+        configureButton(copyButton, title: "Copy", symbol: "doc.on.doc", label: "Copy code")
+        wrapButton.addAction(UIAction { [weak self] _ in
+            guard let self, let key = self.block?.key else { return }
+            self.delegate?.timelineCell(didRequest: .toggleCodeWrap(key: key))
+        }, for: .touchUpInside)
+        copyButton.addAction(UIAction { [weak self] _ in self?.copyCode() }, for: .touchUpInside)
+        wrapButton.accessibilityIdentifier = "timeline.code.wrap"
+        copyButton.accessibilityIdentifier = "timeline.code.copy"
         contentView.addSubview(card)
         card.addSubview(scroll)
-        scroll.addSubview(label)
+        card.addSubview(header)
+        header.addSubview(languageLabel)
+        header.addSubview(wrapButton)
+        header.addSubview(copyButton)
+        header.addSubview(rule)
+        scroll.addSubview(textView)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(text: String, contentSize: CGSize) {
-        label.text = text
-        self.contentSize = contentSize
+    private func configureButton(_ button: UIButton, title: String?, symbol: String, label: String) {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .medium))
+        config.imagePadding = 4
+        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)
+        config.baseForegroundColor = .secondaryLabel
+        if let title {
+            var attrs = AttributeContainer()
+            attrs.font = UIFont.systemFont(ofSize: 13, weight: .medium)
+            config.attributedTitle = AttributedString(title, attributes: attrs)
+        }
+        config.background.cornerRadius = 7
+        button.configuration = config
+        button.accessibilityLabel = label
+    }
+
+    func configure(_ block: TimelineCodeBlock, delegate: TimelineCellActionDelegate?) {
+        self.block = block
+        self.delegate = delegate
+        textView.attributedText = block.attributed
+        languageLabel.text = block.label
+        languageLabel.isHidden = block.label.isEmpty
+        var wrapConfig = wrapButton.configuration
+        wrapConfig?.baseForegroundColor = block.wrapped ? .label : .secondaryLabel
+        wrapConfig?.background.backgroundColor = block.wrapped ? UIColor.label.withAlphaComponent(0.1) : .clear
+        wrapButton.configuration = wrapConfig
+        wrapButton.isSelected = false
+        wrapButton.accessibilityLabel = block.wrapped ? "Stop wrapping long lines" : "Wrap long lines"
+        wrapButton.accessibilityTraits = block.wrapped ? [.button, .selected] : .button
+        // Nothing to wrap: no Wrap (a wrapped block keeps it, to undo).
+        wrapButton.isHidden = block.fits && !block.wrapped
+        scroll.isScrollEnabled = !block.wrapped
+        if block.wrapped { scroll.contentOffset = .zero }
+        showCopied(false)
         setNeedsLayout()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        copiedReset?.cancel()
+        copiedReset = nil
+        scroll.contentOffset = .zero
+        visibleTop = -.greatestFiniteMagnitude
+    }
+
+    /// Keep the header (Copy, Wrap) in view: `visibleTop` is the top of the
+    /// timeline's visible area in this cell's coordinates. The header rides
+    /// down the card no further than its last line, so it leaves with the block.
+    func pinHeader(visibleTop: CGFloat) {
+        self.visibleTop = visibleTop
+        let pin = headerPin
+        if abs(pin - header.frame.minY) > 0.25 { header.frame.origin.y = pin }
+    }
+
+    /// Where the header sits in the card now (tests).
+    var headerOffset: CGFloat { header.frame.minY }
+
+    private var headerPin: CGFloat {
+        let maxPin = max(0, card.bounds.height - TimelineMetrics.codeHeaderHeight)
+        return min(max(0, visibleTop - card.frame.minY), maxPin)
+    }
+
+    private func copyCode() {
+        guard let block else { return }
+        UIPasteboard.general.string = block.text
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        showCopied(true)
+        copiedReset?.cancel()
+        let reset = DispatchWorkItem { [weak self] in self?.showCopied(false) }
+        copiedReset = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: reset)
+    }
+
+    private func showCopied(_ copied: Bool) {
+        var config = copyButton.configuration
+        var attrs = AttributeContainer()
+        attrs.font = UIFont.systemFont(ofSize: 13, weight: .medium)
+        config?.attributedTitle = AttributedString(copied ? "Copied" : "Copy", attributes: attrs)
+        config?.image = UIImage(systemName: copied ? "checkmark" : "doc.on.doc",
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
+        config?.baseForegroundColor = copied ? .systemGreen : .secondaryLabel
+        copyButton.configuration = config
+        copyButton.accessibilityLabel = copied ? "Copied" : "Copy code"
+        if copied { UIAccessibility.post(notification: .announcement, argument: "Copied") }
     }
 
     override func layoutSubviews() {
@@ -273,12 +387,31 @@ final class TimelineCodeCell: UICollectionViewCell {
             top: TimelineMetrics.codeVMargin, left: TimelineMetrics.hMargin,
             bottom: TimelineMetrics.codeVMargin, right: TimelineMetrics.hMargin
         ))
-        scroll.frame = card.bounds
-        label.frame = CGRect(x: TimelineMetrics.codePadding, y: TimelineMetrics.codePadding,
-                             width: contentSize.width, height: contentSize.height)
+        let headerH = TimelineMetrics.codeHeaderHeight
+        header.frame = CGRect(x: 0, y: headerPin, width: card.bounds.width, height: headerH)
+        rule.frame = CGRect(x: 0, y: headerH - 1 / max(1, traitCollection.displayScale),
+                            width: card.bounds.width, height: 1 / max(1, traitCollection.displayScale))
+        let copySize = copyButton.sizeThatFits(CGSize(width: 200, height: headerH))
+        let wrapSize = wrapButton.sizeThatFits(CGSize(width: 200, height: headerH))
+        // At least 36pt wide, the header's full height: a fingertip's target.
+        let copyW = max(copySize.width, 36), wrapW = max(wrapSize.width, 40)
+        copyButton.frame = CGRect(x: card.bounds.width - 4 - copyW, y: 0, width: copyW, height: headerH)
+        wrapButton.frame = CGRect(x: copyButton.frame.minX - wrapW, y: 0, width: wrapW, height: headerH)
+        languageLabel.frame = CGRect(x: TimelineMetrics.codePadding, y: 0,
+                                     width: max(0, wrapButton.frame.minX - TimelineMetrics.codePadding - 4),
+                                     height: headerH)
+        scroll.frame = CGRect(x: 0, y: headerH, width: card.bounds.width,
+                              height: max(0, card.bounds.height - headerH))
+        let size = block?.contentSize ?? .zero
+        // Wrapped, the text breaks at exactly the width it was measured at;
+        // unwrapped, a little slack past the widest line keeps TextKit from
+        // wrapping a line the builder measured as fitting.
+        let textWidth = (block?.wrapped ?? false) ? size.width : size.width + TimelineMetrics.codeUnwrappedSlack
+        textView.frame = CGRect(x: TimelineMetrics.codePadding, y: TimelineMetrics.codePadding,
+                                width: textWidth, height: size.height)
         scroll.contentSize = CGSize(
-            width: contentSize.width + TimelineMetrics.codePadding * 2,
-            height: contentSize.height + TimelineMetrics.codePadding * 2
+            width: (block?.wrapped ?? false) ? scroll.bounds.width : textWidth + TimelineMetrics.codePadding * 2,
+            height: size.height + TimelineMetrics.codePadding * 2
         )
     }
 }

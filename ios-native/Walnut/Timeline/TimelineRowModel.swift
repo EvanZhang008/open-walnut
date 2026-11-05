@@ -161,8 +161,9 @@ enum TimelineRowContent {
     /// left that could take it back, and a control that silently does nothing is
     /// worse than no control.
     case queuedNotice(delivering: Bool, stacked: Bool)
-    /// Code fence: monospace, horizontal scroll, no wrapping.
-    case code(text: String, contentSize: CGSize)
+    /// Code fence: header (language, Wrap, Copy), colored monospace text that
+    /// scrolls sideways, or wraps when its Wrap is on (per block).
+    case code(TimelineCodeBlock)
     /// Inline image (assistant output or historical user image send).
     /// Fixed-height slot; the cell aspect-fits the loaded image. `spoken`: what
     /// VoiceOver says for it, set for the user's own photo (nil: as before).
@@ -362,8 +363,11 @@ extension TimelineRowContent {
             // Drawn AND measured: a text-size change that only flips this must still
             // reload the cell.
             hasher.combine(stacked)
-        case .code(let text, _):
-            hasher.combine(text)
+        case .code(let block):
+            hasher.combine(block.text)
+            hasher.combine(block.label)
+            // Drawn AND measured: flipping wrap must reload the cell.
+            hasher.combine(block.wrapped)
         case .image(let raw, let alt, let spoken, let mine):
             hasher.combine(raw)
             hasher.combine(alt)
@@ -561,6 +565,29 @@ struct TimelineInput {
     /// The chat of Main or a lead: every reply shows the tasks it is about under it
     /// (`MessageAboutTag`, the web's MessageAboutContext). Off everywhere else.
     var showMessageAbout: Bool = false
+    /// Keys of the code blocks wrapped in this timeline (`TimelineCodeBlock.key`).
+    /// A changed key moves its block's height, so the memo drops the messages
+    /// that hold one.
+    var wrappedCodeKeys: Set<String> = []
+}
+
+/// A code fence as one timeline row: everything the cell draws, measured by
+/// the builder (the cell never sizes itself).
+struct TimelineCodeBlock {
+    /// The code as written: what Copy puts on the pasteboard.
+    let text: String
+    /// Colored text the cell draws (`CodeHighlighter`).
+    let attributed: NSAttributedString
+    /// Header label: the language or the file the fence named ("" = none).
+    let label: String
+    /// Size of the text: its widest line unwrapped, or wrapped at the card's width.
+    let contentSize: CGSize
+    let wrapped: Bool
+    /// What its Wrap state hangs on (`CodeHighlighter.blockKey`).
+    var key: String = ""
+    /// Unwrapped, every line fits the card: Wrap would do nothing, so the cell
+    /// does not show it.
+    var fits: Bool = false
 }
 
 /// The actor's output: a complete row array (never a delta — latest wins).
@@ -766,6 +793,9 @@ enum TimelineChipLayout {
 
 /// User actions raised by cells, routed controller → host → store.
 enum TimelineRowAction {
+    /// A code block's Wrap button: flip that block's wrap (by its key,
+    /// `TimelineCodeBlock.key`) and rebuild, since its height moves.
+    case toggleCodeWrap(key: String)
     case retry(messageID: String)
     case discard(messageID: String)
     /// Take a banked message back before it is posted. Nothing goes on the wire.

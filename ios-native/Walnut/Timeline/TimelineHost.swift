@@ -133,6 +133,9 @@ struct TimelineHost: UIViewControllerRepresentable {
         private let actor = TimelineLayoutActor()
         private var islandObserver: NSObjectProtocol?
         private var mentionsObserver: NSObjectProtocol?
+        /// Code blocks wrapped in this timeline (`TimelineCodeBlock.key`): each
+        /// block's own Wrap, for as long as the timeline is open.
+        var wrappedCodeKeys: Set<String> = []
 
         init() {
             // An island's result strip is part of its row's height, and it comes and
@@ -174,6 +177,7 @@ struct TimelineHost: UIViewControllerRepresentable {
                 expandedRowIDs, liveTools: input.liveTools, scope: input.scope)
             input.expandedRowIDs = expandedRowIDs
             input.sizeCategory = controller.traitCollection.preferredContentSizeCategory
+            input.wrappedCodeKeys = wrappedCodeKeys
             Task { [actor] in
                 await actor.submit(input) { snapshot in
                     Task { @MainActor [weak self] in
@@ -192,6 +196,13 @@ struct TimelineHost: UIViewControllerRepresentable {
                     expandedRowIDs.insert(rowID)
                 }
                 resubmit() // heights change; rebuild off-main
+            case .toggleCodeWrap(let key):
+                if wrappedCodeKeys.contains(key) {
+                    wrappedCodeKeys.remove(key)
+                } else {
+                    wrappedCodeKeys.insert(key)
+                }
+                resubmit() // its height changes; rebuild off-main
             case .richHeight(let rowID, let key, let width, let height):
                 // A rich cell measured its web document. Bank it and rebuild so
                 // the row carries the real height instead of the first guess —

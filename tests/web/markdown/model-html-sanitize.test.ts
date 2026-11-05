@@ -138,9 +138,11 @@ describe('an animated widget the way a model writes it', () => {
     // A doc TEACHING this CSS keeps its blank lines and renders as code, not style.
     const doc = ['Like this:', '', '```html', ...ANIM_DEMO.split('\n'), '```'].join('\n');
     const html = renderMarkdownWithRefs(collapseRawtextBlankLines(doc), undefined, undefined, { allowStyle: true });
-    expect(html).toContain('<pre>');
-    expect(html).toContain('&lt;style&gt;');
-    expect(html).toMatch(/display: flex \}\n\n/); // the sample's blank line survives
+    expect(html).toMatch(/<pre[\s>]/);
+    // Read as text: the block's syntax colors put token spans between the characters.
+    const text = html.replace(/<[^>]+>/g, '');
+    expect(text).toContain('&lt;style&gt;');
+    expect(text).toMatch(/display: flex \}\n\n/); // the sample's blank line survives
   });
 });
 
@@ -216,14 +218,14 @@ describe('a blank line inside an open element', () => {
     const html = renderChunk(text);
     expect(html).toContain('<div class="second">');
     expect(html).not.toContain('&lt;div');
-    expect(html).not.toContain('<pre>');
+    expect(html).not.toMatch(/<pre[\s>]/);
   });
 
   it('renders semantic layout tags after a paragraph break', () => {
     const html = renderChunk('<section class="card">\nIntro\n\n    <header>Title</header>\n    <main>Body</main>\n    <footer>Footer</footer>\n</section>');
     expect(html).toContain('<header>Title</header>');
     expect(html).toContain('<footer>Footer</footer>');
-    expect(html).not.toContain('<pre>');
+    expect(html).not.toMatch(/<pre[\s>]/);
   });
 
   it('normalizes a layout tag while its attributes are still arriving', () => {
@@ -236,14 +238,14 @@ describe('a blank line inside an open element', () => {
     const html = renderChunk(text);
     expect(html).toContain('.widget b { color:blue }');
     expect(html).not.toContain('&lt;/style');
-    expect(html).not.toContain('<pre>');
+    expect(html).not.toMatch(/<pre[\s>]/);
   });
 
   it('keeps an isolated indented inline-control sample as code', () => {
     const text = '<div class="explanation">\nExample:\n\n    <input type="checkbox" checked>\n</div>';
     const html = renderChunk(text);
     expect(html).toContain('&lt;input');
-    expect(html).toContain('<pre>');
+    expect(html).toMatch(/<pre[\s>]/);
   });
 
   it('preserves paragraphs and code samples next to a rich layout', () => {
@@ -258,7 +260,7 @@ describe('a blank line inside an open element', () => {
     for (const sample of samples) expect(collapseHtmlBlankLines(sample)).toBe(sample);
     expect(renderChunk(samples[0])).toContain('<p>First paragraph.</p>');
     expect(renderChunk(samples[0])).toContain('<p>Second paragraph.</p>');
-    expect(renderChunk(samples[3])).toContain('&lt;div');
+    expect(renderChunk(samples[3]).replace(/<[^>]+>/g, '')).toContain('&lt;div');
     expect(renderChunk(samples[4])).toContain('&lt;div');
   });
 

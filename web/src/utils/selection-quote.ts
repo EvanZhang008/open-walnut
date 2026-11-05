@@ -85,6 +85,10 @@ export function selectionBody(container: HTMLElement, selection: Selection): Ele
     : focusNode.parentElement;
   if (!anchorEl || !focusEl) return null;
   if (anchorEl.closest(EDITABLE) || focusEl.closest(EDITABLE)) return null;
+  // A code block's Copy fell back to selecting the code for the system copy
+  // gesture (code-block-actions.ts COPY_FALLBACK_ATTR): not a passage to quote,
+  // and a bar over it would hide the "press to copy" hint.
+  if (anchorEl.closest('[data-md-code-select-to-copy]')) return null;
   const body = anchorEl.closest('.session-msg-content');
   if (!body || body !== focusEl.closest('.session-msg-content')) return null;
   if (!container.contains(body)) return null;

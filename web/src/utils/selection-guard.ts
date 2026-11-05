@@ -154,6 +154,8 @@ export function useSelectionAnchoredScroll(ref: RefObject<HTMLElement | null>): 
     let raf = 0;
     /** Viewport y the selection is being held at, or null when there is none. */
     let anchoredTop: number | null = null;
+    /** Which passage `anchoredTop` is for (its boundary points). */
+    let anchoredEnds: [Node, number, Node, number] | null = null;
 
     /** The live selection's range inside `el`, else the pill's held passage there. */
     const passageRange = (): Range | null => {
@@ -171,15 +173,26 @@ export function useSelectionAnchoredScroll(ref: RefObject<HTMLElement | null>): 
       if (!r.width && !r.height) return null;
       return r.top;
     };
+    const endsOf = (range: Range | null): [Node, number, Node, number] | null =>
+      range ? [range.startContainer, range.startOffset, range.endContainer, range.endOffset] : null;
     // Any selection change, and any scroll the USER made, redefine where the
     // passage is meant to sit. Our own scrollTop write lands here too, which is
     // harmless: it re-reads the position we just restored.
-    const remember = () => { anchoredTop = topOfSelection(); };
+    const remember = () => {
+      anchoredTop = topOfSelection();
+      anchoredEnds = endsOf(passageRange());
+    };
 
     const compensate = () => {
       raf = 0;
       if (pointerSelectingWithin(el)) return;
       if (anchoredTop === null) { remember(); return; }
+      // A different passage than the one remembered: script selected
+      // something else (a code block's Copy with no clipboard selects its code)
+      // and `selectionchange`, which is dispatched later, has not told us yet.
+      // The distance between two passages is not a move of the content.
+      const ends = endsOf(passageRange());
+      if (!ends || !anchoredEnds || ends.some((v, i) => v !== anchoredEnds![i])) { remember(); return; }
       const now = topOfSelection();
       if (now === null) { anchoredTop = null; return; }
       const delta = Math.round(now - anchoredTop);

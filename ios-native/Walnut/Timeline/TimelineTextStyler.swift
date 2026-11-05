@@ -15,7 +15,8 @@ enum TimelineTextStyler {
     /// purpose-built cells and exact heights.
     enum Piece {
         case text(NSAttributedString)
-        case code(String)
+        /// A fenced block and its fence's info string (the language).
+        case code(String, language: String?)
         case image(raw: String, alt: String)
         case table(header: [AttributedString], rows: [[AttributedString]])
     }
@@ -214,9 +215,9 @@ enum TimelineTextStyler {
                     .font: subheadlineFont, .foregroundColor: UIColor.secondaryLabel,
                     .paragraphStyle: paragraphStyle(spacing: 4),
                 ]))
-            case .code(_, let text):
+            case .code(let language, let text):
                 flushProse()
-                pieces.append(.code(text))
+                pieces.append(.code(text, language: language))
             case .image(let raw, let alt):
                 flushProse()
                 pieces.append(.image(raw: raw, alt: alt))

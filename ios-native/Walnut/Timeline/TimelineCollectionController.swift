@@ -132,6 +132,7 @@ final class TimelineCollectionController: UIViewController {
             onWidthChange(width)
         }
         repinAfterGeometryChange()
+        pinCodeHeaders()
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -463,8 +464,8 @@ final class TimelineCollectionController: UIViewController {
                 text: text, textSize: size, failed: failed, pending: pending,
                 messageID: messageID(fromRowID: row.id), added: added, delegate: self
             )
-        case .code(let text, let contentSize):
-            (cell as? TimelineCodeCell)?.configure(text: text, contentSize: contentSize)
+        case .code(let block):
+            (cell as? TimelineCodeCell)?.configure(block, delegate: self)
         case .richHTML(let html, let key, let streaming):
             // The cell is told the width the ROW was measured at, not left to
             // read its own bounds: the builder's height lookup keys on this
@@ -536,6 +537,24 @@ extension TimelineCollectionController: UICollectionViewDataSource, UICollection
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         updateIntent()
+        pinCodeHeaders()
+    }
+
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        if let code = cell as? TimelineCodeCell { pinHeader(of: code) }
+    }
+
+    /// A long code block keeps its header (Copy, Wrap) on screen while the
+    /// reader is in its middle, as the web header sticks.
+    func pinCodeHeaders() {
+        guard let collectionView else { return }
+        for case let code as TimelineCodeCell in collectionView.visibleCells { pinHeader(of: code) }
+    }
+
+    private func pinHeader(of cell: TimelineCodeCell) {
+        let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        cell.pinHeader(visibleTop: top - cell.frame.minY)
     }
 }
 

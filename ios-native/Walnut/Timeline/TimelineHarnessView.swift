@@ -227,6 +227,29 @@ final class TimelineHarnessStore {
             }
         } else if arguments.contains(where: { $0.contains("timeline-harness-turns") }) {
             messages = TimelineTurnFixtures.messages()
+        } else if arguments.contains(where: { $0.contains("timeline-harness-code") }) {
+            // `--timeline-harness-code`: code blocks of several languages (label,
+            // colors, Copy, Wrap); `--timeline-harness-code-stream` also streams a
+            // long one in, a line every 80 ms.
+            messages = TimelineCodeFixtures.messages()
+            if arguments.contains(where: { $0.contains("timeline-harness-code-stream") }) {
+                streaming = true
+                activity = "Writing"
+                streamTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    for chunk in TimelineCodeFixtures.streamingChunks() {
+                        try? await Task.sleep(for: .milliseconds(80))
+                        guard let self else { return }
+                        self.liveText += chunk
+                    }
+                    guard let self else { return }
+                    self.activity = nil
+                    self.streaming = false
+                    self.messages.append(ChatMessage(id: "h-code-live", role: "assistant", text: self.liveText,
+                                                     createdAt: "2026-08-08T10:05:00Z", kind: nil))
+                    self.liveText = ""
+                }
+            }
         } else {
             appendMessages(120)
         }
@@ -532,6 +555,65 @@ final class TimelineHarnessStore {
         streaming = false
         liveText = ""
         activity = nil
+    }
+}
+/// Code block fixtures for `--timeline-harness-code`.
+enum TimelineCodeFixtures {
+    static func messages() -> [ChatMessage] {
+        let texts = [
+            "Where is the object key built?",
+            """
+            Found it. The key is built in `Object.Key()`:
+
+            ```go
+            // pkg/remote/object.go:31-34
+            func (o *Object) Key() string {
+            \t// Namespace first, so keys of one namespace sort together.
+            \treturn o.Namespace + "/" + o.Name
+            }
+            ```
+
+            Reproduce the slow path with a long timeout:
+
+            ```bash
+            cd ~/src/marina && GOFLAGS=-count=1 go test ./pkg/remote/... -run TestObjectKey -bench BenchmarkKey -timeout 600s -v | tee /tmp/bench.log
+            ```
+
+            ```swift
+            import Foundation
+
+            /// Healthy workers per region.
+            func summarize(_ workers: [Worker]) -> [String: Int] {
+                var counts: [String: Int] = [:]
+                for w in workers where w.healthy { counts[w.region, default: 0] += 1 }
+                return counts // e.g. ["us-west-2": 112]
+            }
+            ```
+
+            ```json
+            { "region": "us-west-2", "healthy": 112, "drained": 3, "ok": true }
+            ```
+
+            ```
+            BenchmarkKey-8   52341172   22.9 ns/op
+            PASS
+            ```
+            """,
+        ]
+        return texts.enumerated().map { i, text in
+            ChatMessage(id: "h-code-\(i)", role: i == 0 ? "user" : "assistant", text: text,
+                        createdAt: "2026-08-08T10:00:0\(i)Z", kind: nil)
+        }
+    }
+
+    /// A long TypeScript block arriving a line at a time.
+    static func streamingChunks() -> [String] {
+        var chunks = ["Generating the worker table:\n\n```ts\nexport const WORKERS = [\n"]
+        for i in 0..<120 {
+            chunks.append("  { id: \(i), name: \"worker-\(i)\", region: \"\(["us-west-2", "eu-central-1"][i % 2])\", healthy: \(i % 7 != 0) },\n")
+        }
+        chunks.append("];\n```\n\nAll 120 workers written.")
+        return chunks
     }
 }
 #endif

@@ -80,15 +80,9 @@ struct MarkdownView: View {
             }
             .animation(.snappy(duration: 0.15), value: checked)
 
-        case .code(_, let text):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(text)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(12)
-            }
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .padding(.vertical, 4)
+        case .code(let language, let text):
+            MarkdownCodeBlockView(language: language, text: text)
+                .padding(.vertical, 4)
 
         case .quote(let lines):
             HStack(spacing: 0) {
@@ -178,4 +172,80 @@ extension EnvironmentValues {
 extension View {
     /// The body text style of every `MarkdownView` inside.
     func markdownBodyFont(_ font: Font) -> some View { environment(\.markdownBodyFont, font) }
+}
+
+/// A fenced block in a letter, note or sheet: the same header (language, Wrap,
+/// Copy) and colors as a chat code block (`TimelineCodeCell`). Wrap is the
+/// block's own, as there.
+struct MarkdownCodeBlockView: View {
+    let language: String?
+    let text: String
+    @State private var wrap = false
+    @State private var copied = false
+
+    private var fence: CodeHighlighter.Fence { CodeHighlighter.fence(language) }
+
+    private var colored: AttributedString {
+        let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+        let ns = CodeHighlighter.attributed(text, grammar: fence.grammar, font: font)
+        return (try? AttributedString(ns, including: \.uiKit)) ?? AttributedString(text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 2) {
+                Text(fence.label)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Button {
+                    wrap.toggle()
+                } label: {
+                    Label("Wrap", systemImage: "arrow.turn.down.left")
+                        .font(.system(size: 13, weight: .medium))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 8)
+                        .frame(height: 32)
+                        .background(wrap ? Color.primary.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                        .foregroundStyle(wrap ? Color.primary : Color.secondary)
+                }
+                .accessibilityLabel(wrap ? "Stop wrapping long lines" : "Wrap long lines")
+                .accessibilityAddTraits(wrap ? .isSelected : [])
+                Button {
+                    UIPasteboard.general.string = text
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+                } label: {
+                    Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .medium))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 8)
+                        .frame(height: 32)
+                        .foregroundStyle(copied ? Color.green : Color.secondary)
+                }
+                .accessibilityLabel(copied ? "Copied" : "Copy code")
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
+            .frame(height: 36)
+            Divider()
+            if wrap {
+                Text(colored)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(colored)
+                        .textSelection(.enabled)
+                        .padding(12)
+                }
+            }
+        }
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
 }

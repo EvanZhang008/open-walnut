@@ -23,7 +23,9 @@ import { linkBareTaskIds, type BareTaskIdMode, type BareTaskIdRenderer } from '.
 import { linkLetterIds } from './letter-links';
 import { ensureReadableText, withReadableInk } from './html-contrast';
 import { taskPath } from './task-path';
+import { beginCodeBlockRender, highlightCodeBlocks, renderCodeBlockFrame } from './code-block';
 import '@/styles/rich-ink.css';
+import '@/styles/code-block.css';
 
 /**
  * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
@@ -358,6 +360,14 @@ const LETTER_HREF_RE = /^letter:(lt-[0-9a-z]{1,12}-[0-9a-z]{4,12})$/;
 
 marked.use({
   renderer: {
+    // Fenced code in the in-app render gets the header (language, Wrap, Copy)
+    // and syntax colors (utils/code-block.ts). Every other path through the
+    // shared singleton (copy as rich text, tool results) keeps marked's bare
+    // <pre><code>: buttons mean nothing outside the app.
+    code({ text, lang, escaped, raw }) {
+      if (!fileLinkRenderCtx) return false as unknown as string;
+      return renderCodeBlockFrame(text, lang, escaped, raw);
+    },
     // Override codespan renderer: detect image paths inside backtick code spans.
     // Only matches when the entire code span is an image path (avoids false positives
     // on code like `convert /tmp/foo.png to jpg`).
@@ -1711,6 +1721,7 @@ export function renderMarkdownWithRefs(
     // In-app render: the `link` renderer may turn a local-path destination into
     // a file-link (see fileLinkRenderCtx). parse() is synchronous.
     fileLinkRenderCtx = { cwd: sessionCwd };
+    beginCodeBlockRender();
     let raw: string | Promise<string>;
     try {
       raw = marked.parse(preprocessed);
@@ -1746,6 +1757,14 @@ export function renderMarkdownWithRefs(
       FORBID_TAGS: allowStyle ? ['form'] : ['form', 'style'],
       FORBID_ATTR: ['action', 'formaction'],
     }));
+    // Syntax colors go on AFTER the sanitizer, which then only ever reads the
+    // plain code: colored markup is ~5x the bytes, and sanitizing it again on
+    // every delta of a streaming reply was most of that reply's render time.
+    // Safe by construction: the colored markup is the sanitized text escaped
+    // again, the sanitized tags put back as they were, and spans whose class
+    // comes from a fixed list (utils/code-block.ts). Last of the string passes,
+    // so it keeps the links the passes above put in code.
+    html = highlightCodeBlocks(html);
   } catch {
     html = DOMPurify.sanitize(text);
   }

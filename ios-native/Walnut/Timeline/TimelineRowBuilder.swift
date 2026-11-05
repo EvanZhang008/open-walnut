@@ -18,6 +18,15 @@ enum TimelineMetrics {
     static let bubbleVPad: CGFloat = 10
     static let bubbleCorner: CGFloat = 20
     static let codePadding: CGFloat = 12
+    /// Width added past an unwrapped block's widest line, so TextKit never wraps
+    /// a line `codeSize` measured as fitting (cell and builder both use it).
+    static let codeUnwrappedSlack: CGFloat = 2
+    /// A code block's header strip (language label, Wrap, Copy) above its text.
+    static let codeHeaderHeight: CGFloat = 36
+    /// Width a WRAPPED code block's text is laid out at, for row width `width`.
+    static func codeTextWidth(_ width: CGFloat) -> CGFloat {
+        max(40, width - hMargin * 2 - codePadding * 2)
+    }
     static let codeVMargin: CGFloat = 4
     static let chipVPad: CGFloat = 4
     static let chipHPad: CGFloat = 10
@@ -165,6 +174,10 @@ enum TimelineMetrics {
 /// TextKit measurer.
 final class TimelineRowBuilder {
     private let measurer = TimelineTextMeasurer()
+    /// `TimelineInput.wrappedCodeKeys` of the build in progress, set by the
+    /// layout actor before each build (which also drops the memo of the
+    /// messages a changed key is in).
+    var wrappedCodeKeys: Set<String> = []
 
     // MARK: - Message rows
 
@@ -517,14 +530,9 @@ final class TimelineRowBuilder {
             case .text(let attributed):
                 rows.append(textRow(id: nextID(), revision: revision,
                                     attributed: attributed, width: width))
-            case .code(let code):
-                let size = measurer.codeSize(code, font: TimelineTextStyler.codeFont)
-                rows.append(TimelineRow(
-                    id: nextID(), revision: revision,
-                    content: .code(text: code, contentSize: size),
-                    height: size.height + TimelineMetrics.codePadding * 2
-                        + TimelineMetrics.codeVMargin * 2
-                ))
+            case .code(let code, let language):
+                rows.append(codeRow(id: nextID(), revision: revision, code: code,
+                                    language: language, width: width))
             case .image(let raw, let alt):
                 rows.append(TimelineRow(
                     id: nextID(), revision: revision,
@@ -536,6 +544,49 @@ final class TimelineRowBuilder {
                                      header: header, rows: tableRows, width: width))
             }
         }
+    }
+
+    /// One fenced block: header + colored text, unwrapped (its widest line, the
+    /// cell scrolls sideways) or wrapped at the card's width.
+    func codeRow(id: String, revision: Int, code rawCode: String, language: String?,
+                 width: CGFloat) -> TimelineRow {
+        // A fence still streaming ends in the newline of the line just written:
+        // not a line to draw, and not something Copy should hand a terminal.
+        var trimmed = Substring(rawCode)
+        while trimmed.last == "\n" { trimmed = trimmed.dropLast() }
+        let code = String(trimmed)
+        let key = CodeHighlighter.blockKey(code: code, language: language)
+        let codeWrap = wrappedCodeKeys.contains(key)
+        let font = TimelineTextStyler.codeFont
+        let fence = CodeHighlighter.fence(language)
+        let colored = CodeHighlighter.attributed(code, grammar: fence.grammar, font: font)
+        let attributed = codeWrap ? CodeHighlighter.hangingIndents(colored, font: font) : colored
+        // The cell draws through a TextKit text view, so both shapes are measured
+        // by the same TextKit stack (a line is lineHeight plus leading there,
+        // not the bare lineHeight, which would clip the last line).
+        let size: CGSize
+        var fits = false
+        if code.isEmpty {
+            fits = !codeWrap
+            size = CGSize(width: codeWrap ? TimelineMetrics.codeTextWidth(width) : 0, height: ceil(font.lineHeight))
+        } else if codeWrap {
+            let textWidth = TimelineMetrics.codeTextWidth(width)
+            size = CGSize(width: textWidth, height: measurer.height(attributed, width: textWidth))
+        } else {
+            // Widest line, plus the cell's 2pt of slack so no line wraps.
+            let widest = measurer.codeSize(code, font: font).width
+            fits = widest <= TimelineMetrics.codeTextWidth(width)
+            size = CGSize(width: widest, height: measurer.height(attributed, width: widest + TimelineMetrics.codeUnwrappedSlack))
+        }
+        return TimelineRow(
+            // A flip reloads the cell even when no line was long enough to
+            // change the height: its Wrap button shows the state.
+            id: id, revision: codeWrap ? ~revision : revision,
+            content: .code(TimelineCodeBlock(text: code, attributed: attributed, label: fence.label,
+                                             contentSize: size, wrapped: codeWrap, key: key, fits: fits)),
+            height: TimelineMetrics.codeHeaderHeight + size.height + TimelineMetrics.codePadding * 2
+                + TimelineMetrics.codeVMargin * 2
+        )
     }
 
     private func textRow(id: String, revision: Int, attributed: NSAttributedString,

@@ -20,6 +20,10 @@ export default defineConfig({
       '@': path.resolve(import.meta.dirname, 'web/src'),
       marked: web('marked/lib/marked.esm.js'),
       dompurify: web('dompurify/dist/purify.es.mjs'),
+      // Code-block syntax colors (web/src/utils/code-block.ts): the grammars
+      // first, so `refractor/lang/x.js` does not resolve as `refractor` + path.
+      'refractor/lang': web('refractor/lang'),
+      refractor: web('refractor/index.js'),
     },
   },
   test: {
@@ -35,7 +39,7 @@ export default defineConfig({
     poolOptions: { forks: { execArgv: workerExecArgv() } },
     server: {
       // Inline so vitest transforms (not externalizes) the aliased ESM bundles.
-      deps: { inline: ['marked', 'dompurify'] },
+      deps: { inline: ['marked', 'dompurify', 'refractor'] },
     },
   },
 });

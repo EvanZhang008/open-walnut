@@ -93,3 +93,57 @@ describe('copyTextDeferred', () => {
     expect(nav.clipboard.writeText).not.toHaveBeenCalled();
   });
 });
+
+describe('copyTextRobust legacy path', () => {
+  let stubs: Stub[] = [];
+  beforeEach(() => { stubs = []; });
+  afterEach(() => { for (const s of stubs.reverse()) s.restore(); });
+
+  /** A DOM just big enough for the textarea + execCommand path. `fires` says
+   *  whether the browser really runs the copy (dispatches `copy`). */
+  const installDom = (opts: { ok: boolean; fires: boolean }) => {
+    const listeners: ((e: unknown) => void)[] = [];
+    // The Copy button a keyboard pressed.
+    const button = { isConnected: true, focus: vi.fn() };
+    const written: Record<string, string> = {};
+    const ta = { value: '', style: {}, setAttribute() {}, select() {}, setSelectionRange() {} };
+    stubs.push(stubGlobal('window', {}));
+    stubs.push(stubGlobal('navigator', {
+      clipboard: { writeText: vi.fn(() => Promise.reject(new Error('NotAllowedError'))) },
+    }));
+    stubs.push(stubGlobal('document', {
+      activeElement: button,
+      createElement: () => ta,
+      body: { appendChild() {}, removeChild() {} },
+      addEventListener: (type: string, fn: (e: unknown) => void) => { if (type === 'copy') listeners.push(fn); },
+      removeEventListener: (type: string, fn: (e: unknown) => void) => {
+        const i = listeners.indexOf(fn);
+        if (type === 'copy' && i >= 0) listeners.splice(i, 1);
+      },
+      execCommand: (cmd: string) => {
+        if (cmd === 'copy' && opts.fires) {
+          const e = { clipboardData: { setData: (t: string, v: string) => { written[t] = v; } }, preventDefault() {} };
+          for (const fn of [...listeners]) fn(e);
+        }
+        return opts.ok;
+      },
+    }));
+    return { written, listeners, button };
+  };
+
+  it('a copy the browser really ran counts, with the text written by the handler', async () => {
+    const dom = installDom({ ok: true, fires: true });
+    expect(await copyTextRobust('npm test')).toBe('execCommand');
+    expect(dom.written['text/plain']).toBe('npm test');
+    expect(dom.listeners).toHaveLength(0);
+    // Focus is back where it was, not on the page.
+    expect(dom.button.focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('execCommand answering true without a copy event is a failure, not a false "Copied"', async () => {
+    const dom = installDom({ ok: true, fires: false });
+    expect(await copyTextRobust('npm test')).toBe('failed');
+    expect(dom.listeners).toHaveLength(0);
+    expect(dom.button.focus).toHaveBeenCalled();
+  });
+});

@@ -39,6 +39,9 @@ actor TimelineLayoutActor {
     private var cacheMentionsVersion = -1
     /// Rows of a reply carry its task pills only in an Org node's chat.
     private var cacheShowAbout = false
+    /// The wrapped code blocks the memo was built for: a flip drops only the
+    /// entries that drew that block.
+    private var cacheWrappedCodeKeys: Set<String> = []
     /// The pills' status dots (`TaskMentionResolver.statesVersion`): a move drops only
     /// the memo entries that drew a pill (`aboutKeys`), never the whole cache.
     private var cacheStatesVersion = -1
@@ -118,6 +121,16 @@ actor TimelineLayoutActor {
             cacheShowAbout = input.showMessageAbout
             aboutKeys = []
         }
+        if input.wrappedCodeKeys != cacheWrappedCodeKeys {
+            let flipped = input.wrappedCodeKeys.symmetricDifference(cacheWrappedCodeKeys)
+            for (key, entry) in rowCache where Self.drawsCode(entry.rows, keyedIn: flipped) {
+                rowCache[key] = nil
+                richEntryIdentities[key] = nil
+            }
+            if let head = headCache, Self.drawsCode(head.rows, keyedIn: flipped) { headCache = nil }
+            cacheWrappedCodeKeys = input.wrappedCodeKeys
+        }
+        builder.wrappedCodeKeys = input.wrappedCodeKeys
         let statesVersion = TaskMentionResolver.shared.statesVersion
         if statesVersion != cacheStatesVersion {
             for key in aboutKeys { rowCache[key] = nil }
@@ -464,6 +477,13 @@ actor TimelineLayoutActor {
     /// this memo answer conversation Q's "m0" with conversation P's rows — which
     /// is why the stale transcript survived even a full reload: the snapshot
     /// itself carried the previous conversation's content.
+    private static func drawsCode(_ rows: [TimelineRow], keyedIn keys: Set<String>) -> Bool {
+        rows.contains { row in
+            if case .code(let block) = row.content { return keys.contains(block.key) }
+            return false
+        }
+    }
+
     private func cacheKey(_ m: ChatMessage, expandedRowIDs: Set<String>,
                           scope: String, queued: QueuedSend.Status? = nil) -> String {
         let namespace = TimelineScope.namespace(scope, m.id)

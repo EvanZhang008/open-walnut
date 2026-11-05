@@ -22,6 +22,7 @@ const ALLOWED: Record<string, string> = {
   'core/health/perf.test.ts': 'judges every gap on the loop thread CPU too (maxGapCpuMs)',
   'core/project-summary.test.ts': 'measures gaps between bus events to decide which checks apply, not a loop hold',
   'integrations/git-compaction-recovery-async.test.ts': 'its bound is a whole synchronous git call (3 s), with a tick count no load can fake',
+  'e2e/browser/code-block-actions-helpers.ts': "a browser page's frame gap while a reply streams (no lag in the page), not a Node loop hold; its bound (400 ms, WebKit 1.5 s) is several busy frames",
   'lib/sqlite.test.ts': 'its bound is half the same backup run inline on the same thread under the same load',
 }
 

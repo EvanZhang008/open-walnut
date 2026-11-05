@@ -1,0 +1,611 @@
+/* Fenced code blocks in rendered markdown: header (language, Wrap, Copy) and
+   syntax colors. Markup from web/src/utils/code-block.ts, buttons wired by
+   web/src/utils/code-block-actions.ts.
+
+   The header lies OVER the top of the <pre> (a negative bottom margin takes it
+   out of the flow) instead of pushing it down, so every surface rule for the
+   <pre> keeps working: geometry (the reserved scrollbar track, see the base rule
+   in globals.css), border, radius. The <pre> only grows a top padding the
+   header fits in. The header is sticky: scrolling through a long block keeps
+   Copy in reach, so it paints the block's own background (--md-code-bg, one per
+   surface, the same colors globals.css gives that surface's <pre>). */
+
+.md-code {
+  position: relative;
+  /* The sticky header's z-index stays inside the block: an app bar that sticks
+     in the same scroller still paints over it. */
+  isolation: isolate;
+  margin: 8px 0;
+  --md-code-bg: var(--bg-tertiary);
+  --md-code-head-h: 30px;
+  --md-code-ink: var(--fg-muted);
+  --md-code-ink-strong: var(--fg);
+  --md-code-rule: var(--border);
+  --md-code-hover: rgba(0, 0, 0, 0.06);
+  --md-code-link: var(--accent);
+  /* The sideways scrollbar's thumb: 3:1 or more on the block (a control). */
+  --md-code-thumb: rgba(0, 0, 0, 0.45);
+  --md-code-thumb-hover: rgba(0, 0, 0, 0.6);
+  /* GitHub Light, the palette of the diff and file views. */
+  --tk-comment: #6e7781;
+  --tk-keyword: #cf222e;
+  --tk-string: #0a3069;
+  --tk-number: #0550ae;
+  --tk-function: #8250df;
+  --tk-variable: #953800;
+  --tk-tag: #116329;
+}
+
+/* A sticky offset counts from inside the scroller's padding, and the session
+   timeline pads 8px more than its header glass is tall (globals.css
+   `.session-panel-body .session-history`, phone-session.css): stick that much
+   higher, flush under the glass, or code shows in the strip between. */
+.session-panel-body .session-history { --md-code-stick-gap: 8px; }
+
+/* The session header is see-through glass over the timeline. Stuck under it,
+   the header hides the code lines that already scrolled past it: a cover of
+   the block's own color reaches up from the header behind the glass, and the
+   block clips it, so it only ever paints inside the block (never over the
+   paragraph above it while the header sits at the block's top). */
+.session-panel-body .session-history { --md-code-stick-cover: var(--sp-header-h, 76px); }
+@supports (overflow: clip) {
+  /* The block's own corners round whatever reaches them (the header at the
+     block's top, the fold's fade at its foot). A header stuck mid-block is
+     square: the block reads as cut at the glass, and no code shows through
+     a rounded corner. */
+  .md-code { overflow: clip; border-radius: var(--radius-sm, 8px); }
+  .md-code-head { border-radius: 0; }
+  .md-code-head::before {
+    content: '';
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    bottom: 100%;
+    height: var(--md-code-stick-cover, 0px);
+    /* What the glass shows where nothing is under it: the timeline's own
+       background, so the block reads as cut at the glass's edge. */
+    background: var(--md-code-cover-bg, var(--bg));
+    pointer-events: none;
+  }
+}
+
+/* What each surface paints its <pre> with (globals.css), for the sticky header. */
+.session-msg-assistant .md-code { --md-code-bg: #1e1e2e; }
+[data-theme="dark"] .session-msg-assistant .md-code { --md-code-bg: #0d1117; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .session-msg-assistant .md-code { --md-code-bg: #0d1117; }
+}
+/* The person's bubble: a shade darker than globals.css's rgba(0, 0, 0, 0.25),
+   so its code colors keep 4.5:1 on the dark theme's lighter accent too. The
+   header paints it opaque. */
+.session-msg-user .markdown-body .md-code.md-code > pre {
+  background: rgba(0, 0, 0, 0.32);
+  --wn-scrollbar-thumb: var(--md-code-thumb);
+  --wn-scrollbar-thumb-hover: var(--md-code-thumb-hover);
+}
+.markdown-body .md-code.md-code > pre,
+.md-code > .md-code-rail {
+  --wn-scrollbar-thumb: var(--md-code-thumb);
+  --wn-scrollbar-thumb-hover: var(--md-code-thumb-hover);
+}
+.session-msg-user .md-code { --md-code-bg: color-mix(in srgb, var(--accent) 68%, #000); }
+
+/* Surfaces whose code is dark in both themes (globals.css: assistant replies and
+   the person's own bubble), and the dark theme itself. */
+.session-msg-assistant .md-code,
+.session-msg-user .md-code,
+[data-theme="dark"] .md-code {
+  --md-code-ink: rgba(230, 237, 243, 0.6);
+  --md-code-ink-strong: #e6edf3;
+  --md-code-rule: rgba(255, 255, 255, 0.09);
+  --md-code-hover: rgba(255, 255, 255, 0.1);
+  --md-code-thumb: rgba(255, 255, 255, 0.4);
+  --md-code-thumb-hover: rgba(255, 255, 255, 0.58);
+  /* Links (file paths, URLs) in code: the accent blue is 4.1:1 on these. */
+  --md-code-link: #79b8ff;
+  /* GitHub Dark. */
+  --tk-comment: #8b949e;
+  --tk-keyword: #ff7b72;
+  --tk-string: #a5d6ff;
+  --tk-number: #79c0ff;
+  --tk-function: #d2a8ff;
+  --tk-variable: #ffa657;
+  --tk-tag: #7ee787;
+}
+/* The light theme's assistant block is #1e1e2e with #cdd6f4 text
+   (globals.css): its colors are that palette's (Catppuccin Mocha), so code
+   and block read as one set. Each is at least 5:1 on the block. */
+.session-msg-assistant .md-code {
+  --md-code-ink: rgba(205, 214, 244, 0.62);
+  --md-code-ink-strong: #cdd6f4;
+  --tk-comment: #9399b2;
+  --tk-keyword: #cba6f7;
+  /* A removed diff line reads red, as in the other palettes (keyword is
+     purple here). */
+  --tk-deleted: #f38ba8;
+  --tk-string: #a6e3a1;
+  --tk-number: #fab387;
+  --tk-function: #89b4fa;
+  --tk-variable: #f5c2e7;
+  --tk-tag: #94e2d5;
+}
+[data-theme="dark"] .session-msg-assistant .md-code {
+  --md-code-ink: rgba(230, 237, 243, 0.6);
+  --md-code-ink-strong: #e6edf3;
+  --tk-comment: #8b949e;
+  --tk-keyword: #ff7b72;
+  --tk-deleted: #ff7b72;
+  --tk-string: #a5d6ff;
+  --tk-number: #79c0ff;
+  --tk-function: #d2a8ff;
+  --tk-variable: #ffa657;
+  --tk-tag: #7ee787;
+}
+/* The person's own bubble is blue, not near-black: GitHub Dark's reds and
+   blues fall under 3:1 on it. Pale tints of the same hues, each at least
+   4.5:1 on the bubble's code background. (Tripled class: above the
+   prefers-color-scheme rule below, whatever the theme.) */
+.session-msg-user .md-code.md-code.md-code {
+  --md-code-ink: rgba(255, 255, 255, 0.8);
+  --md-code-ink-strong: #fff;
+  --md-code-rule: rgba(255, 255, 255, 0.18);
+  --md-code-hover: rgba(255, 255, 255, 0.16);
+  --md-code-link: #fff;
+  --md-code-ok: #fff;
+  --md-code-warn: #ffe08a;
+  --md-code-focus: #fff;
+  --md-code-thumb: rgba(255, 255, 255, 0.45);
+  --md-code-thumb-hover: rgba(255, 255, 255, 0.62);
+  --tk-comment: rgba(255, 255, 255, 0.8);
+  --tk-keyword: #ffd5d0;
+  --tk-string: #fff1b8;
+  --tk-number: #d8f1ff;
+  --tk-function: #f0deff;
+  --tk-variable: #ffe0c2;
+  --tk-tag: #d5ffd9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .session-msg-assistant .md-code {
+    --md-code-ink: rgba(230, 237, 243, 0.6);
+    --md-code-ink-strong: #e6edf3;
+    --tk-comment: #8b949e;
+    --tk-keyword: #ff7b72;
+    --tk-deleted: #ff7b72;
+    --tk-string: #a5d6ff;
+    --tk-number: #79c0ff;
+    --tk-function: #d2a8ff;
+    --tk-variable: #ffa657;
+    --tk-tag: #7ee787;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .md-code {
+    --md-code-ink: rgba(230, 237, 243, 0.6);
+    --md-code-ink-strong: #e6edf3;
+    --md-code-rule: rgba(255, 255, 255, 0.09);
+    --md-code-hover: rgba(255, 255, 255, 0.1);
+    --md-code-thumb: rgba(255, 255, 255, 0.4);
+    --md-code-thumb-hover: rgba(255, 255, 255, 0.58);
+    --md-code-link: #79b8ff;
+      --tk-comment: #8b949e;
+    --tk-keyword: #ff7b72;
+    --tk-string: #a5d6ff;
+    --tk-number: #79c0ff;
+    --tk-function: #d2a8ff;
+    --tk-variable: #ffa657;
+    --tk-tag: #7ee787;
+  }
+}
+
+/* The doubled class outranks every surface's `… .markdown-body pre { margin;
+   padding }` whatever order the stylesheets load in. */
+/* A sticky box travels as far as its margin box stays inside the block's
+   content box, and the header's negative bottom margin would let it slide
+   (head height) past the block's end, over the next paragraph. The <pre> pulls
+   the content box's end up by as much as the block's own padding gives back,
+   so the block keeps its height and the header stops at the code's last line. */
+.md-code { padding-bottom: calc(var(--md-code-head-h) + 2px); }
+.markdown-body .md-code.md-code > pre {
+  margin: 0 0 calc(-2px - var(--md-code-head-h));
+  padding-top: calc(var(--md-code-head-h) + 10px);
+  /* A tab-indented block (Go, Makefiles, diffs of them) reads at 4, not 8. */
+  -moz-tab-size: 4;
+  tab-size: 4;
+}
+
+.md-code-head {
+  position: -webkit-sticky;
+  position: sticky;
+  top: calc(-1 * var(--md-code-stick-gap, 0px));
+  /* 1px in from the <pre>'s border on three sides; out of the flow below. */
+  margin: 1px 1px calc(-1px - var(--md-code-head-h));
+  height: var(--md-code-head-h);
+  box-sizing: border-box;
+  z-index: 2;
+  background: var(--md-code-bg);
+  border-radius: 7px 7px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--md-code-rule);
+  color: var(--md-code-ink);
+  font: 500 12px/1 var(--font-mono);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* A block that fits in half the visible timeline is seen whole, header and
+   all: its header scrolls with it instead of riding over its few lines
+   (data-short, code-block-actions.ts). */
+.md-code[data-short] > .md-code-head { position: relative; top: auto; }
+
+.md-code-lang {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+/* A file name gives up its folders first; the file itself goes last. */
+.md-code-lang-file { display: flex; }
+.md-code-lang-dir,
+.md-code-lang-base {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The folders shrink (down to a letter and its ellipsis); the file keeps its
+   width unless it alone is too long for the label. */
+.md-code-lang-dir { flex: 0 1 auto; min-width: 1.6em; }
+.md-code-lang-base { flex: 0 0 auto; max-width: calc(100% - 1.6em); }
+
+/* A failed copy's why: on screen where the header has room (below, a phone's
+   header gives it to screen readers alone). */
+.md-code-why { color: inherit; }
+.md-code-step { white-space: nowrap; }
+
+
+/* Copy's outcome for screen readers; on screen only when a copy failed. */
+.md-code-status {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--md-code-warn, var(--warning, #ff9500));
+  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+}
+.md-code-status:not([data-visible]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.md-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.md-code-status[data-visible] + .md-code-actions { margin-left: 0; }
+/* "Copied" takes no more room than "Copy" was given: Wrap never shifts. */
+.md-code-copy-label {
+  display: inline-block;
+  min-width: 3.8em;
+  /* Centered in its room, so the header's two ends keep even margins. */
+  text-align: center;
+}
+/* A failed copy says so beside the buttons, in the room the language
+   leaves; its words never widen the block (a block in a bubble is only as
+   wide as its code). Where they do not fit they hang under the header
+   (data-why-below, code-block-actions.ts). */
+.md-code-status[data-visible] { flex: 1 1 0; width: 0; text-align: right; }
+.md-code[data-why-below] .md-code-status[data-visible] {
+  position: absolute;
+  top: 100%;
+  left: -1px;
+  right: -1px;
+  width: auto;
+  padding: 7px 12px;
+  background: var(--md-code-bg);
+  border-bottom: 1px solid var(--md-code-rule);
+  white-space: normal;
+  text-align: left;
+  line-height: 1.35;
+}
+/* The buttons keep their place at the header's end. */
+.md-code[data-why-below] .md-code-status[data-visible] + .md-code-actions { margin-left: auto; }
+.markdown-body .md-code.md-code[data-why-below] > pre {
+  padding-top: calc(var(--md-code-head-h) + 10px + var(--md-code-why-h, 30px));
+}
+
+/* On the person's blue bubble, a selection the default tint barely shows. */
+.session-msg-user .md-code pre ::selection { background: rgba(255, 255, 255, 0.38); color: #fff; }
+
+/* Paths and URLs in code stay links, in a blue that reads on the block. */
+.markdown-body .md-code pre a {
+  color: var(--md-code-link);
+  border-bottom-color: color-mix(in srgb, var(--md-code-link) 40%, transparent);
+}
+
+/* The focusable <pre> (keyboard sideways scroll) shows where focus is: around
+   the whole block, header included (a ring on the <pre> runs under it). */
+.markdown-body .md-code.md-code > pre:focus { outline: none; }
+.md-code:has(> pre:focus-visible),
+.md-code[data-kbd-focus]:has(> pre:focus) {
+  outline: 2px solid var(--md-code-focus, var(--accent));
+  outline-offset: 1px;
+  border-radius: 8px;
+}
+
+.md-code-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--md-code-ink);
+  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s;
+}
+/* Only a pointer that hovers: after a tap, a touch screen keeps :hover on the
+   button, which read as stuck. */
+@media (hover: hover) {
+  .md-code-btn:hover {
+    background: var(--md-code-hover);
+    color: var(--md-code-ink-strong);
+  }
+}
+.md-code-btn:active { background: var(--md-code-hover); }
+.md-code-btn:focus-visible {
+  outline: 2px solid var(--md-code-focus, var(--accent));
+  outline-offset: 1px;
+}
+.md-code-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+/* Copy: the check stands in for the copy glyph for a moment after a copy. */
+.md-code-icon-done { display: none; }
+.md-code-copy[data-state="copied"] .md-code-icon-copy { display: none; }
+.md-code-copy[data-state="copied"] .md-code-icon-done { display: block; }
+.md-code-copy[data-state="copied"] { color: var(--md-code-ok, var(--success, #34c759)); }
+.md-code-copy[data-state="failed"] { color: var(--md-code-warn, var(--warning, #ff9500)); }
+
+/* Wrap: per block, `data-wrap` on the frame (code-block-actions.ts). A block
+   with no line too long for it has nothing to wrap: no Wrap button.
+   On reads as on even under the pointer: the link blue, not hover's grey. */
+.md-code[data-fits]:not([data-wrap]) .md-code-wrap { display: none; }
+/* A long finished block opens folded to its first ~30 lines, fading out
+   over a "Show all N lines" button (code-block-actions.ts). Copy still takes
+   all of it. */
+.md-code-more { display: none; }
+/* Fold: in the header of a long block while it is unfolded. */
+.md-code-fold { display: none; }
+.md-code[data-long]:not([data-collapsed]) .md-code-fold { display: inline-flex; }
+.markdown-body .md-code.md-code[data-collapsed] > pre {
+  max-height: 560px;
+  overflow-y: hidden;
+}
+.md-code[data-collapsed]::after {
+  content: '';
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 88px;
+  background: linear-gradient(to bottom, transparent, var(--md-code-bg) 70%);
+  pointer-events: none;
+  z-index: 1;
+}
+/* Above the sideways scrollbar, which stays in sight under the fade; a
+   block that fits or wraps has none. */
+.md-code[data-collapsed]:not([data-wrap]):not([data-fits])::after {
+  bottom: calc(1px + var(--wn-scrollbar-h, 0px));
+}
+.md-code[data-collapsed] .md-code-more {
+  display: block;
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 2;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--md-code-rule);
+  border-radius: 15px;
+  background: var(--md-code-bg);
+  color: var(--md-code-ink-strong);
+  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .md-code[data-collapsed] .md-code-more:hover { background: color-mix(in srgb, var(--md-code-bg) 85%, #fff); }
+}
+.md-code-more:focus-visible { outline: 2px solid var(--md-code-focus, var(--accent)); outline-offset: 2px; }
+
+/* One selection color in code, on text and on the room a wrapped line leaves. */
+.md-code pre::selection,
+.md-code pre ::selection { background: rgba(56, 139, 253, 0.45); }
+
+/* A block with no code has nothing to copy or wrap. */
+.md-code[data-empty] .md-code-actions { display: none; }
+
+/* A block too long to color whole says so (desktop: a phone header has no room). */
+.md-code-note {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--md-code-hover);
+  color: var(--md-code-ink);
+  font: 500 11px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+}
+@media (max-width: 640px) {
+  .md-code-note { display: none; }
+}
+
+/* The code is its own box, as wide as its widest line (or the block): its
+   rows are spaced by the code's own font, never the surrounding text's, so a
+   wrapped block keeps the spacing of an unwrapped one; and a row that fills
+   the code's width fills the block, however far it scrolls. */
+.markdown-body .md-code.md-code > pre > code {
+  display: inline-block;
+  min-width: 100%;
+  box-sizing: border-box;
+  vertical-align: top;
+}
+
+/* A diff's added and removed lines, tinted across the block's width. */
+.markdown-body .md-code [data-hl="diff"] .md-code-ln-add,
+.markdown-body .md-code [data-hl="diff"] .md-code-ln-del {
+  display: inline-block;
+  min-width: 100%;
+  box-sizing: border-box;
+}
+.md-code [data-hl="diff"] .md-code-ln-add { background: rgba(46, 160, 67, 0.16); --md-code-tint: rgba(46, 160, 67, 0.16); }
+.md-code [data-hl="diff"] .md-code-ln-del { background: rgba(248, 81, 73, 0.16); --md-code-tint: rgba(248, 81, 73, 0.16); }
+/* Across the block's side padding too (an outer shadow paints only outside
+   the line, so the two never add up). */
+.md-code [data-hl="diff"] .md-code-ln-add,
+.md-code [data-hl="diff"] .md-code-ln-del { box-shadow: -12px 0 0 var(--md-code-tint), 12px 0 0 var(--md-code-tint); }
+
+/* Each line knows its indent (markLines): wrapped, a line's continuation
+   starts two columns deeper than the line, never left of it. */
+.markdown-body .md-code.md-code[data-wrap] > pre .md-code-ln {
+  display: inline-block;
+  vertical-align: top;
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: calc((var(--in, 0) + 2) * 1ch);
+  text-indent: calc((var(--in, 0) + 2) * -1ch);
+}
+/* The sideways scrollbar: clear of the rounded corners, with a little air
+   under it. Its track keeps the 6px the bottom padding is measured against
+   (globals.css); the thumb draws 4px of it. */
+.md-code > pre::-webkit-scrollbar-track,
+.md-code > .md-code-rail::-webkit-scrollbar-track { margin: 0 8px; }
+.md-code > pre::-webkit-scrollbar-thumb,
+.md-code > .md-code-rail::-webkit-scrollbar-thumb {
+  border-bottom: 2px solid transparent;
+  background-clip: padding-box;
+}
+/* A long block, open, that scrolls sideways: its scrollbar stays in sight at
+   the foot of the timeline while the block is on screen, so the reader can
+   drag it from anywhere in the block (code-block-actions.ts keeps it and the
+   code scrolled together). At the block's end it lies exactly over the
+   code's own scrollbar; it adds nothing to the block's height. */
+.md-code-rail { display: none; }
+.md-code[data-long]:not([data-collapsed]):not([data-wrap]):not([data-fits]) > .md-code-rail {
+  display: block;
+  position: -webkit-sticky;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  height: var(--wn-scrollbar-h, 0px);
+  margin: calc(1px + var(--md-code-head-h) - var(--wn-scrollbar-h, 0px)) 1px calc(-1px - var(--md-code-head-h));
+  overflow-x: scroll;
+  overflow-y: hidden;
+  background: var(--md-code-bg);
+}
+.md-code-rail > div { height: 1px; }
+/* A hyphen stays with what follows it on a wrapped line (keepHyphens). */
+.md-code-nb { white-space: nowrap; }
+/* A path's break points after its slashes count only on a wrapped block:
+   Chromium breaks at a <wbr> even in `white-space: pre`. */
+.md-code:not([data-wrap]) wbr { display: none; }
+.md-code[data-wrap] .md-code-wrap,
+.md-code[data-wrap] .md-code-wrap:hover {
+  background: color-mix(in srgb, var(--md-code-link) 18%, transparent);
+  color: var(--md-code-link);
+}
+.markdown-body .md-code.md-code[data-wrap] > pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Nothing overflows any more: no track to reserve, so the bottom edge is the
+     plain 12px of the other sides. */
+  overflow-x: hidden;
+  padding-bottom: 12px;
+}
+
+/* Touch, or a phone-sized window: room for a fingertip (the button shows 34px
+   with air around it, and takes taps across the header's full 44px). */
+@media (pointer: coarse), (max-width: 640px) {
+  .md-code { --md-code-head-h: 44px; }
+  .md-code-btn { position: relative; height: 34px; min-width: 44px; padding: 0 10px; }
+  .md-code-btn::after { content: ''; position: absolute; inset: -5px 0; }
+  .md-code[data-collapsed] .md-code-more { height: 36px; border-radius: 18px; }
+  .md-code[data-collapsed] .md-code-more::after { content: ''; position: absolute; inset: -4px 0; }
+  /* A phone's header buttons are their words alone, on every block: room for
+     a long block's three (Fold, Wrap, Copy) beside the whole language, and
+     every block looks the same, folded or open. */
+  .md-code-btn > svg { display: none; }
+  .md-code-btn { padding: 0 8px; }
+}
+
+/* A block that opens or closes a message adds no gap of its own to the
+   bubble's padding. */
+/* Two blocks in a row read as two. */
+.markdown-body > .md-code + .md-code { margin-top: 16px; }
+.markdown-body > .md-code:first-child { margin-top: 0; }
+.markdown-body > .md-code:last-child { margin-bottom: 0; }
+
+/* Syntax colors (refractor / Prism token classes). Only the types listed here
+   become spans: STYLED_TOKENS in code-block.ts, keep the two in step. */
+.md-code .token.comment,
+.md-code .token.prolog,
+.md-code .token.doctype,
+.md-code .token.cdata { color: var(--tk-comment); font-style: italic; }
+.md-code .token.keyword,
+.md-code .token.atrule,
+.md-code .token.important,
+.md-code .token.rule { color: var(--tk-keyword); }
+.md-code .token.string,
+.md-code .token.char,
+.md-code .token.attr-value,
+.md-code .token.template-string,
+.md-code .token.regex,
+.md-code .token.inserted { color: var(--tk-string); }
+.md-code .token.number,
+.md-code .token.boolean,
+.md-code .token.constant,
+.md-code .token.symbol,
+.md-code .token.property,
+.md-code .token.entity,
+.md-code .token.url,
+.md-code .token.selector,
+.md-code .token.attr-name,
+.md-code .token.deleted { color: var(--tk-number); }
+.md-code .token.function,
+.md-code .token.class-name,
+.md-code .token.builtin { color: var(--tk-function); }
+.md-code .token.variable,
+.md-code .token.parameter { color: var(--tk-variable); }
+.md-code .token.tag { color: var(--tk-tag); }
+.md-code .token.bold { font-weight: 600; }
+.md-code .token.italic { font-style: italic; }
+/* A diff reads by its rows: color the whole added/removed line, and the hunk
+   and file headers (`@@`, `---`, `+++`) as a diff view does. */
+.md-code [data-hl="diff"] .token.coord { color: var(--tk-function); }
+/* YAML's keys are its `atrule` tokens: a key, not a keyword. */
+.md-code [data-hl="yaml"] .token.atrule { color: var(--tk-tag); }
+/* A shell builtin is a word like any other command: `go test` reads as one
+   command, not `test` picked out of it. */
+.md-code [data-hl="bash"] .token.builtin { color: inherit; }
+.md-code .language-diff .token.inserted,
+.md-code [data-hl="diff"] .token.inserted { color: var(--tk-tag); }
+.md-code [data-hl="diff"] .token.deleted { color: var(--tk-deleted, var(--tk-keyword)); }
