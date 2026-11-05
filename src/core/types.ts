@@ -3398,6 +3398,9 @@ export interface SessionRecord {
   /** Walnut moved this session out of a folder that was gone (sessions/folder-gone.ts). `told`
    *  once a message into the session has carried the notice saying so. */
   folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
+  /** An engine switch started (or resumed) this session with no message: the context it carried,
+   *  a hint block, rides the session's next message (sessions/engine-switch-io.ts). */
+  switchContext?: { text: string; switchId: string; at: string };
   stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed' | 'failed'; error?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;

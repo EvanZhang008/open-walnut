@@ -42,7 +42,7 @@ import { engineCaps, resolveEngine } from '../agents/engine-registry.js';
 import { engineHostBlocker, LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
 import { engineSwitchedReason, isSupersededSession } from './engine-switch-marker.js';
 import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-resume.js';
-import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
+import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, readActiveContext, renderCarriedContext, targetWindowTokens,
 } from './engine-switch-context.js';
@@ -112,16 +112,9 @@ export const BACKGROUND_CUT_NOTE = 'The previous session still had background wo
 const SWITCH_WAIT_MS = 120_000;
 /** A switch that stops a running turn waits this long for the turn to end cleanly; then its process is stopped. */
 export const SWITCH_TURN_STOP_MS = 10_000;
-/**
- * The first line of a session a switch starts with no message of the user's (the picker closed
- * on another engine), as Walnut's note: the chat shows it as Walnut's, and the carried context
- * stays a hint block beside it (a line of hints alone would show as typed text, hint-format.ts).
- */
-export function switchReadyNote(engine: SessionEngine): string {
-  return `The user switched this task to ${engineCaps(engine).displayName} and has not written anything yet. `
-    + 'Reply with one short line, in the language the user writes in, saying you have the conversation and are ready to continue. '
-    + 'Do not start or resume any work until the user writes.';
-}
+/** Read by the new session when the switch stopped the old one's running turn. */
+export const TURN_CUT_NOTE = 'The previous session was in the middle of a turn when the user switched engines; that turn was stopped, '
+  + 'so its last step may not have finished. Check before relying on it.';
 
 function by(callerSid: string | undefined, callerTaskId: string | undefined): string {
   return callerSid ? `task:${callerTaskId ?? 'unknown'}` : 'human';
@@ -171,14 +164,42 @@ export async function switchHostBlocker(host: string, engine: SessionEngine): Pr
  * A task with no conversation yet just starts on the engine.
  */
 export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<EngineSwitchResult> {
-  const engine = resolveEngine(req.engine);
   const tm = await import('../task-manager.js');
-  const task = await tm.getTask(req.taskId).catch((err: unknown) => {
+  const readTask = () => tm.getTask(req.taskId).catch((err: unknown) => {
     throw new EngineSwitchError(err instanceof Error ? err.message : String(err), 404, 'task_not_found');
   });
+  const task = await readTask();
+  // A person picking again while the last pick still starts: the newest pick follows it, from the
+  // session that one made. Its answer may come after the caller stopped waiting (the web posts with
+  // `detach`), so a refusal is put on the task, where the panel on that session reads it.
+  if (isSwitching(task.id) && !req.callerSid) {
+    await awaitSwitch(task.id);
+    return switchFrom(req, await readTask()).catch(async (err: unknown) => {
+      await noteRefusedAfterWait(req, err);
+      throw err;
+    });
+  }
+  return switchFrom(req, task);
+}
+
+/** A refusal of a pick that waited for another switch, as a failed switch from the task's current session. */
+async function noteRefusedAfterWait(req: EngineSwitchRequest, err: unknown): Promise<void> {
+  try {
+    const { taskConversation } = await import('./task-session-claim.js');
+    const current = await taskConversation(req.taskId);
+    if (!current) return;
+    const state: EngineSwitchState = {
+      id: `es-${randomUUID()}`, state: 'failed', at: new Date().toISOString(), from_session_id: current.claudeSessionId,
+      ...(current.engine ? { from_engine: current.engine } : {}), to: { engine: resolveEngine(req.engine), host: normalizeHost(current.host) }, by: 'human',
+    };
+    await fail(req.taskId, state, err);
+  } catch { /* the refusal still reaches the caller */ }
+}
+
+async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineSwitchResult> {
+  const engine = resolveEngine(req.engine);
+  const tm = await import('../task-manager.js');
   const message = req.message ?? '';
-  // A person picking again while the last pick still starts: the newest pick follows it.
-  if (isSwitching(task.id) && !req.callerSid) await awaitSwitch(task.id);
   if (isSwitching(task.id)) {
     throw new EngineSwitchError('This task is switching engines right now; send your message once the new session is up', 409, 'switch_in_progress');
   }
@@ -404,15 +425,22 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   if (Date.now() - settleAt > 500) log.session.info('engine switch: waited for the status question in flight', { taskId, sessionId: old.claudeSessionId, ms: Date.now() - settleAt });
   // A turn running now (its own message still reads `processing` in the queue, so the hold may say `queue`).
   let retiredEarly = false;
-  if (opts.now && hold !== 'free' && (await turnHold(old, { queue: false })) === 'turn') {
-    retiredEarly = true;
-    // Retired before its turn is stopped, so the stop is history, not the task's (no hand-back,
-    // no notice to its leader); a failed start below un-retires it (restore).
-    await tracker.updateSessionRecord(old.claudeSessionId, { archived: true, archive_reason: engineSwitchedReason(engine) }).catch(() => {});
-    await stopTurnForSwitch(old.claudeSessionId);
+  let rows: SessionRecord[];
+  try {
+    if (opts.now && hold !== 'free' && (await turnHold(old, { queue: false })) === 'turn') {
+      retiredEarly = true;
+      // Retired before its turn is stopped, so the stop is history, not the task's (no hand-back,
+      // no notice to its leader); a failure from here un-retires it (restore).
+      await tracker.updateSessionRecord(old.claudeSessionId, { archived: true, archive_reason: engineSwitchedReason(engine) }).catch(() => {});
+      await stopTurnForSwitch(old.claudeSessionId);
+    }
+    rows = await tracker.getSessionsForTask(taskId);
+  } catch (err) {
+    if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), []);
+    await fail(taskId, state, err);
+    throw err;
   }
 
-  const rows = await tracker.getSessionsForTask(taskId);
   // Retire the old session: from here its stop is history, not the task's.
   const retire = async (left?: { fingerprint: string; messages: number }): Promise<HeldRow[]> => {
     const oldWasLive = LIVE.has(old.process_status);
@@ -440,7 +468,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   if (!state.move) {
     // Read and render before anything changes: a failure here leaves the task as it was.
     try {
-      prepared = await prepare(task, old, rows, state, engine, host);
+      prepared = await prepare(task, old, rows, state, engine, host, retiredEarly);
     } catch (err) {
       // Retired early to stop its turn: it is the task's session again, unlocked and asked as before.
       if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), []);
@@ -470,7 +498,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
       });
       await tracker.updateSessionRecord(prepared.resume!.prev.claudeSessionId, {
         archived: true, archive_reason: prepared.resume!.prev.archive_reason, supersededBy: prepared.resume!.prev.supersededBy,
-        resumedBySwitch: prepared.resume!.prev.resumedBySwitch,
+        resumedBySwitch: prepared.resume!.prev.resumedBySwitch, switchContext: undefined,
       }).catch(() => {});
       return null;
     });
@@ -485,6 +513,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
       taskIdPrefix: taskId, message: prepared.message, cwd: prepared.cwd, host: host === LOCAL_HOST ? '__local__' : host,
       engine, ...(state.to.model ? { model: state.to.model } : {}), ...(state.to.effort ? { effort: state.to.effort } : {}),
       ...(prepared.mode ? { mode: prepared.mode } : {}), expectReply: false, source: 'engine-switch', awaitStart: true,
+      ...(prepared.message ? {} : { idle: true }),
     });
     sessionId = started.sessionId;
     if (!sessionId || started.started === false) throw new Error('the new session did not confirm its start');
@@ -527,6 +556,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   // Messages that came during a move (or before a restart cut an earlier try of it) were held
   // on the old session: they go too, deliverable again.
   if (state.move) held = [...held, ...(await takeQueuedRows(old.claudeSessionId))].map(releaseMoveHeld);
+  if (prepared.context) held = await stashSwitchContext(sessionId, prepared.context, state.id, held);
   await putQueuedRows(sessionId, held);
   await tm.updateTaskRaw(taskId, {
     engine_switch: {
@@ -550,7 +580,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
 }
 
 /** Everything the new session needs, computed while nothing has changed yet. */
-async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string) {
+async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string, turnCut = false) {
   const oldHost = normalizeHost(old.host);
   // A session that kept no folder: the task's recorded one, only when it lives on the session's host (launch-place.ts).
   let cwd = old.cwd ?? undefined;
@@ -607,7 +637,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
     ...(moveMeta ? { move: moveMeta } : {}),
   }, Math.floor(window * CARRY_WINDOW_SHARE));
   const { composeHinted, renderHintBlock } = await import('../hints/hint-format.js');
-  const cut = state.background_cut ? `\n\n${BACKGROUND_CUT_NOTE}` : '';
+  const cut = (state.background_cut ? `\n\n${BACKGROUND_CUT_NOTE}` : '') + (turnCut ? `\n\n${TURN_CUT_NOTE}` : '');
   const blocks = [renderHintBlock(ENGINE_SWITCH_HINT, carried.text + cut)];
   if (carried.trimmedTurns > 0) {
     // The user is told in the session (a system row) as well as the model in its context.
@@ -615,23 +645,25 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
       taskId: task.id, trimmedTurns: carried.trimmedTurns, budgetTokens: carried.budgetTokens,
     });
   }
-  const words = await switchWords(state, engine);
-  const message = composeHinted(words, { before: blocks, after: [] });
+  // No message: no turn now. The context waits for the session's next message (stashSwitchContext).
+  const words = await switchWords(state);
+  const resumeBlock = resume ? renderHintBlock(ENGINE_SWITCH_HINT, resume.text + cut) : undefined;
+  const message = words ? composeHinted(words, { before: blocks, after: [] }) : '';
   const mode = state.to.permission_mode ?? old.mode;
   return {
-    message, cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable,
-    ...(resume ? { resume: { ...resume, message: composeHinted(words, { before: [renderHintBlock(ENGINE_SWITCH_HINT, resume.text + cut)], after: [] }) } } : {}),
+    message, context: words ? undefined : blocks.join('\n'), cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable,
+    ...(resume && resumeBlock ? { resume: { ...resume, message: words ? composeHinted(words, { before: [resumeBlock], after: [] }) : '', context: words ? undefined : resumeBlock } } : {}),
   };
 }
 
 /**
  * The words the new session starts with (the start takes this line as it is, task-start.ts, so the
  * carried context stays a hint block outside): the person's as they typed them, an agent's in that
- * agent's peer note, and with no message Walnut's ready note.
+ * agent's peer note, and none without a message.
  */
-async function switchWords(state: EngineSwitchState, engine: SessionEngine): Promise<string> {
+async function switchWords(state: EngineSwitchState): Promise<string> {
   const { frameAsWalnut, frameStartText, framingCallerOf } = await import('./send-frame.js');
-  if (!state.message?.trim()) return frameAsWalnut(switchReadyNote(engine), 'engine-switch');
+  if (!state.message?.trim()) return '';
   if (state.by === 'human') return state.message;
   const callerTaskId = state.by?.startsWith('task:') ? state.by.slice('task:'.length) : undefined;
   try {

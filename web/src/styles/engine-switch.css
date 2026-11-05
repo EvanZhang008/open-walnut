@@ -64,3 +64,14 @@
 }
 .task-earlier-toggle:hover { color: var(--fg); }
 .task-earlier-body { border-left: 2px solid var(--border); padding-left: 8px; }
+
+/* The model picker says what closing it does while another engine is picked. */
+.model-picker-switch-note {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+}

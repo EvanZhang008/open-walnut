@@ -23,7 +23,7 @@ import type { SessionHistoryMessage } from '../session-history.js';
 import type { EngineSwitchState, SessionEngine, SessionRecord } from '../types.js';
 import { log } from '../../logging/index.js';
 import type { EngineSwitchResult } from './engine-switch.js';
-import { putQueuedRows, type HeldRow } from './engine-switch-io.js';
+import { putQueuedRows, stashSwitchContext, type HeldRow } from './engine-switch-io.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { normalizeHost } from '../transfer/planner.js';
 import { isSupersededSession } from './engine-switch-marker.js';
@@ -112,6 +112,10 @@ export async function planResume(args: {
   if (args.model && args.model !== 'default' && prevModel && args.model !== prevModel) return { reason: 'another model was picked' };
   if (!prev.leftContext) return { reason: 'no record of the context it was left with' };
   if (isAcpEngine(prev.engine) && prev.acpCapabilities?.loadSession !== true) return { reason: 'its engine cannot load an earlier session' };
+  // A thread whose last turn failed may fail every turn (2026-11-05: a Pi thread held a GPT model's
+  // encrypted reasoning the provider no longer took, "invalid encrypted view", so each switch back
+  // to Pi failed its first message): a new session carries the context instead.
+  if (prev.process_status === 'error') return { reason: 'its earlier session ended in an error' };
 
   // The sessions after it, each taking over from the one before, up to the active one.
   const links: Array<{ rec: SessionRecord; resumed: boolean }> = [];
@@ -164,7 +168,7 @@ export async function planResume(args: {
  * message is queued to let the caller start a new session instead.
  */
 export async function resumeEarlier(
-  taskId: string, state: EngineSwitchState, old: SessionRecord, plan: ResumePlan & { message: string },
+  taskId: string, state: EngineSwitchState, old: SessionRecord, plan: ResumePlan & { message: string; context?: string },
   transcriptPath: string | undefined, held: HeldRow[],
 ): Promise<EngineSwitchResult> {
   const tracker = await import('../session-tracker.js');
@@ -180,8 +184,10 @@ export async function resumeEarlier(
     resumedBySwitch: { fromSessionId: old.claudeSessionId, ...(old.engine ? { fromEngine: old.engine } : {}), at, carriedTurns: plan.missedTurns },
     ...(state.to.effort ? { effort: state.to.effort } : {}),
   });
+  // No message: nothing runs now; the missed turns wait for the session's next message.
+  if (plan.context) held = await stashSwitchContext(prev.claudeSessionId, plan.context, state.id, held);
   await tm.linkSession(taskId, prev.claudeSessionId);
-  await sendResumeMessage(taskId, state, prev.claudeSessionId, plan.message, mode);
+  if (plan.message) await sendResumeMessage(taskId, state, prev.claudeSessionId, plan.message, mode);
   // From here the switch is done: the earlier session holds the task's conversation again.
   // Nothing below may throw (the caller would start a second session for the same message).
   const engine = resolveEngine(state.to.engine);

@@ -208,7 +208,12 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     const { isAfterTurnHold } = await import('../../core/sessions/queue-after-turn.js')
     const heldForTurn = afterTurn && isAfterTurnHold(msg)
     log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice, interrupt, afterTurn: heldForTurn })
-    res.status(202).json({ messageId: msg.id, ...(heldForTurn ? { afterTurn: true } : {}) })
+    // Sent to a session an engine switch replaced: it went to the task's current session
+    // (engine-switch.ts activeSessionFor), which a client shows instead.
+    res.status(202).json({
+      messageId: msg.id, ...(heldForTurn ? { afterTurn: true } : {}),
+      ...(msg.sessionId && !msg.sessionId.startsWith(sessionId) ? { deliveredTo: msg.sessionId } : {}),
+    })
   } catch (err) {
     next(err)
   }

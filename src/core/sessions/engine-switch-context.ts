@@ -83,14 +83,37 @@ function lastCompactionIndex(messages: readonly SessionHistoryMessage[]): number
   return -1;
 }
 
-async function readClaudeChain(record: SessionRecord): Promise<ActiveContext | null> {
-  const host = record.host || '__local__';
+/**
+ * The transcript where Claude Code keeps it for the session's folder, read directly; a search of
+ * every project folder (fs.find) only when it is not there. The search took 49 s on a Mac with a
+ * full ~/.claude/projects at load 136 (2026-11-05), and the user waits on a switch.
+ */
+async function readTranscriptBytes(record: SessionRecord, host: string): Promise<{ path: string; bytes: Buffer } | null> {
+  const { DaemonFileReader } = await import('../daemon-file-reader.js');
+  const reader = new DaemonFileReader(host);
+  const max = await maxTranscriptBytes();
+  const cwd = record.cwd ?? '';
+  const { isSafeForProjectEncoding, remoteJsonlPath } = await import('../session-file-reader.js');
+  // macOS keeps /tmp and /var under /private, and Claude Code names the folder by its real path.
+  const cwds = cwd && isSafeForProjectEncoding(cwd) ? [cwd, ...(/^\/(tmp|var)(\/|$)/.test(cwd) ? [`/private${cwd}`] : [])] : [];
+  for (const c of cwds) {
+    const path = remoteJsonlPath(record.claudeSessionId, c, host);
+    const bytes = await reader.readFileBytes(path, max).catch(() => null);
+    if (bytes) return { path, bytes };
+  }
   const { findTranscript } = await import('../transfer/daemon-transfer-client.js');
   const found = await findTranscript(host, record.claudeSessionId);
   if (found.kind !== 'one') return null;
-  const { DaemonFileReader } = await import('../daemon-file-reader.js');
-  const bytes = await new DaemonFileReader(host).readFileBytes(found.path, await maxTranscriptBytes());
-  if (!bytes) return null;
+  const bytes = await reader.readFileBytes(found.path, max);
+  return bytes ? { path: found.path, bytes } : null;
+}
+
+async function readClaudeChain(record: SessionRecord): Promise<ActiveContext | null> {
+  const host = record.host || '__local__';
+  const read = await readTranscriptBytes(record, host);
+  if (!read) return null;
+  const { bytes } = read;
+  const found = { path: read.path };
   const rawLines = bytes.toString('utf8').split('\n');
   const parsed: Array<{ uuid?: string } & Record<string, unknown>> = [];
   const raws: string[] = [];

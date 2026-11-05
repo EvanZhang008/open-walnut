@@ -84,5 +84,5 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   }
   return { taskId: task.id, project: task.project, cwd, host, model, createTaskDir,
     mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine),
-    message: params.message?.trim() || task.description || `Working on task: ${task.title}` };
+    message: params.idle ? '' : params.message?.trim() || task.description || `Working on task: ${task.title}` };
 }

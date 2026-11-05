@@ -17,6 +17,9 @@ import { isLaunchReady } from '../workspaces/decisions.js';
 export interface SessionStartParams {
   taskIdPrefix: string;
   message?: string;
+  /** Start with no first message and run no turn (an engine switch with nothing to say): never the
+   *  task's description or a "Working on task" line, which would start its work again. */
+  idle?: boolean;
   cwd?: string;
   host?: string;
   model?: string;

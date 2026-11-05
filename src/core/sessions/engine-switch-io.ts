@@ -19,9 +19,11 @@ export async function writeTaskTranscript(task: Task, rows: SessionRecord[], hos
   const transfer = await import('../transfer/transfer.js');
   const { transfersDir } = await import('../transfer/workspace.js');
   const ordered = [...rows].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''));
+  // Read side by side: the user waits on the switch, and each read is its own host round trip.
+  const histories = await Promise.all(ordered.map((r) => readProviderSessionHistory(r.claudeSessionId, r, r.host, true).catch(() => ({ messages: [] }))));
   const parts: string[] = [];
   for (const [i, r] of ordered.entries()) {
-    const { messages } = await readProviderSessionHistory(r.claudeSessionId, r, r.host, true).catch(() => ({ messages: [] }));
+    const { messages } = histories[i];
     if (messages.length === 0) continue;
     parts.push(await renderTranscriptMarkdownChunked(messages, {
       title: `${task.title} (session ${i + 1} of ${ordered.length})`, engine: engineCaps(r.engine).displayName,
@@ -87,4 +89,36 @@ export async function putQueuedRows(sessionId: string, rows: HeldRow[]): Promise
     });
     s.queues[sessionId] = [...(s.queues[sessionId] ?? []), ...moved];
   }, false, true);
+}
+
+/**
+ * A switch with no message runs no turn (2026-11-05 review: a "ready" turn cost a model call,
+ * left a line in the chat and put the task on the user's list): the context it carried waits for
+ * the session's next message. With rows moved from the old session, the first of them carries it
+ * (they reach the queue without a send); otherwise the session record holds it for the next send.
+ */
+export async function stashSwitchContext(sessionId: string, text: string, switchId: string, rows: HeldRow[]): Promise<HeldRow[]> {
+  const first = rows.findIndex((r) => r.status !== 'parked');
+  if (first >= 0) return rows.map((r, i) => (i === first ? { ...r, message: `${text}\n\n${r.message}` } : r));
+  const { updateSessionRecord } = await import('../session-tracker.js');
+  await updateSessionRecord(sessionId, { switchContext: { text, switchId, at: new Date().toISOString() } });
+  return rows;
+}
+
+/** The carried context the session's next message takes along (session-message-queue.ts), once. */
+export async function pendingSwitchContext(sessionId: string): Promise<{ text: string; markTold: () => Promise<void> } | null> {
+  try {
+    const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js');
+    const ctx = (await getSessionByClaudeId(sessionId))?.switchContext;
+    if (!ctx?.text) return null;
+    return {
+      text: ctx.text,
+      markTold: async () => {
+        await updateSessionRecordConditionally(sessionId, { switchContext: undefined } as Partial<SessionRecord>,
+          (current) => current.switchContext?.switchId === ctx.switchId, { preserveLastActiveAt: true }).catch(() => {});
+      },
+    };
+  } catch {
+    return null;
+  }
 }

@@ -283,6 +283,8 @@ interface ModelPickerProps {
   onClose: () => void;
   /** The anchor pill left the page (a re-layout): defaults to onClose. */
   onAnchorLost?: () => void;
+  /** What closing the picker does now (another engine picked): shown above the models. */
+  switchNote?: string;
   /** Which provider's pane is showing. Default 'claude'. */
   engine?: ProviderId;
   /** Provider switch (rail click). Passed by DRAFT surfaces only — a live
@@ -332,7 +334,7 @@ interface ModelPickerProps {
 const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, speedReadout,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, switchNote, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
@@ -991,6 +993,7 @@ export function ModelPicker({
     >
       <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} />
       <div className="model-picker-pane">
+      {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
       {isAcpPane ? acpPane : (<>
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>

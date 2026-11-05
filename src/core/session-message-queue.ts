@@ -258,6 +258,9 @@ export async function sendMessageToSession(
   // A session Walnut moved out of a folder that was gone hears so the same way (sessions/folder-gone.ts).
   const { pendingFolderMovedNotice } = await import('./sessions/folder-gone.js');
   const folderMoved = await pendingFolderMovedNotice(sessionId);
+  // An engine switch with no message ran no turn: the context it carried leads this message (sessions/engine-switch-io.ts).
+  const { pendingSwitchContext } = await import('./sessions/engine-switch-io.js');
+  const switchContext = await pendingSwitchContext(sessionId);
   // One task's message to another is stamped first, so a lead's team note never repeats what this
   // message tells it (org/lead-traffic.ts).
   const { noteQueuedMessage } = await import('./org/lead-traffic.js');
@@ -293,7 +296,8 @@ export async function sendMessageToSession(
   // for the next message (each is told only when the row holds it, below).
   const slashCommand = body.trimStart().startsWith('/');
   const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
-  const enqueueText = notes && !slashCommand ? `${notes}\n\n${body}` : body;
+  const lead = [notes, switchContext?.text].filter(Boolean).join('\n\n');
+  const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
@@ -321,6 +325,7 @@ export async function sendMessageToSession(
   if (digest && msg.message.includes(digest.text)) await digest.markTold();
   if (restart && msg.message.includes(restart.text)) await restart.markTold();
   if (folderMoved && msg.message.includes(folderMoved.text)) await folderMoved.markTold();
+  if (switchContext && msg.message.includes(switchContext.text)) await switchContext.markTold();
   if (statusNote && msg.message.includes(statusNote.text)) statusNote.markTold();
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
   if (appState) {

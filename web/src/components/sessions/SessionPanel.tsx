@@ -2242,6 +2242,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             providerLockReason={engineSwitch.enabled ? engineSwitch.providerLockReason : undefined}
             onPickerClose={engineSwitch.enabled ? engineSwitch.commit : undefined}
             onPickerCancel={engineSwitch.enabled ? engineSwitch.clear : undefined}
+            pickerNote={switchPick ? `Closing the picker switches this task to ${engineCaps(switchPick.engine, engineCatalog).displayName} with this conversation${session?.process_status === 'running' ? ', and stops the running turn' : ''}.` : undefined}
           />
         ),
       },

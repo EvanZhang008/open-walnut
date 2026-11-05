@@ -2570,6 +2570,10 @@ primary box the same endpoints serve directly — no bridge involved.
 - `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"?, "threadId"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
+  - `deliveredTo` (additive, 2026-11): the session the message went to, when it is not
+    the one in the path. A session an engine switch replaced takes no message: it goes to
+    the task's current session, and a client shows that session (its chat holds the
+    message and its reply), never a bubble left waiting on the old one.
   - `threadId` (additive, 2026-11) — a thread's `th-…` id when the person sent
     this from that thread's Follow up (an Org node's Threads, `GET
     /tasks/:id/threads`): the message is filed under that thread instead of the

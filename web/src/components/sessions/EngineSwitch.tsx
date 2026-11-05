@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { SessionRecord } from '@/types/session';
 import { cancelEngineSwitch, switchTaskEngine } from '@/api/engine-switch';
+import { browserGaveUp } from '@/utils/request-failure';
 import { engineEntry, hostEngineLockReason, resolveEngine } from '@/utils/engines';
 import type { EngineCatalogEntry } from '@/utils/engines';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
@@ -42,6 +43,10 @@ export function markOpenedOnPurpose(sessionId: string): void { openedOnPurpose.a
 function errorText(err: unknown): string {
   const body = (err as { body?: { error?: unknown } } | null)?.body;
   if (body && typeof body.error === 'string') return body.error;
+  // A fetch that never got an answer ("Load failed", "Failed to fetch"), after every retry.
+  if (err instanceof TypeError || browserGaveUp(err)) {
+    return 'Walnut did not answer for 90 seconds (it may be restarting); the task stays on this session. Pick the engine again once it is back';
+  }
   return err instanceof Error ? err.message : String(err);
 }
 

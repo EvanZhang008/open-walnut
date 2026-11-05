@@ -93,7 +93,8 @@ import {
   resumeEngineSwitches, watchPendingSwitch, pendingVerdict,
   SWITCH_BACKGROUND_GRACE_MS, SWITCH_PENDING_MAX_MS,
 } from '../../../src/core/sessions/engine-switch-watch.js';
-import { BACKGROUND_CUT_NOTE, switchReadyNote } from '../../../src/core/sessions/engine-switch.js';
+import { BACKGROUND_CUT_NOTE, TURN_CUT_NOTE } from '../../../src/core/sessions/engine-switch.js';
+import { sendMessageToSession } from '../../../src/core/session-message-queue.js';
 import { parseHinted } from '../../../src/core/hints/hint-format.js';
 import { linkSession, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { taskConversation } from '../../../src/core/sessions/task-session-claim.js';
@@ -235,6 +236,18 @@ describe('engine switch inside a task', () => {
     const again = await requestEngineSwitch({ taskId, engine: 'gemini', message: 'Gemini again.', source: 'test' });
     expect(again.resumed).toBeUndefined();
     expect(again.sessionId).not.toBe(gem);
+  });
+
+  it('a session left in an error is not resumed on the way back: a new one carries the context', async () => {
+    // 2026-11-05: a Pi thread failed every first message ("invalid encrypted view"), and each switch back resumed it.
+    const { taskId } = await taskOn('claude');
+    const pi = (await requestEngineSwitch({ taskId, engine: 'pi', message: 'On Pi.', source: 'test' })).sessionId!;
+    edges.history[pi] = [{ role: 'user', text: 'On Pi.', timestamp: '2026-10-20T11:00:00Z' }];
+    await updateSessionRecord(pi, { process_status: 'error', errorMessage: 'protocol: ACP provider protocol operation failed' } as never);
+    await requestEngineSwitch({ taskId, engine: 'claude', message: 'Back.', source: 'test' });
+    const again = await requestEngineSwitch({ taskId, engine: 'pi', message: 'Pi again.', source: 'test' });
+    expect(again.resumed).toBeUndefined();
+    expect(again.sessionId).not.toBe(pi);
   });
 
   it('a session whose message is still queued counts as in a turn: the switch waits', async () => {
@@ -412,18 +425,72 @@ describe('engine switch inside a task', () => {
       expect(res.state).toBe('done');
       expect(interrupts).toEqual([{ sid, archived: true }]);
       expect(edges.stops).toContain(sid);
-      // No words of the user's: the new session starts on the carried context and a Walnut note asking
-      // for a ready line. The note is the line's words (a line of hints alone shows as typed text), framed
-      // as Walnut's, and the carried context comes off it as a hint.
-      const first = parseHinted(String(edges.starts[0].message));
-      expect(first.hints.map((h) => h.kind)).toEqual(['engine-switch']);
-      expect(first.text).toContain(switchReadyNote('codex'));
-      expect(first.text).toMatch(/^<walnut-message kind="peer-note" from="Walnut \(engine switch\)"/);
+      // No words of the user's: the new session starts with no turn, and the carried context (saying
+      // the turn was cut) waits on its record for the next message.
+      expect(edges.starts[0].message).toBe('');
+      const ctx = (await getSessionByClaudeId(res.sessionId!))?.switchContext;
+      expect(ctx?.switchId).toBe(res.switchId);
+      expect(parseHinted(`${ctx!.text}\n\nx`).hints.map((h) => h.kind)).toEqual(['engine-switch']);
+      expect(ctx!.text).toContain(TURN_CUT_NOTE);
       expect((await taskConversation(taskId))?.claudeSessionId).toBe(res.sessionId);
     } finally {
       bus.unsubscribe('test-interrupt');
     }
   }, 20_000);
+
+  it('a switch with no message runs no turn: the next message carries the context, once', async () => {
+    // 2026-11-05 review: a "ready" turn per switch cost a model call, a line in the chat and the task's place on the user's list.
+    const { taskId, sid } = await taskOn('claude');
+    const res = await requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    expect(res.state).toBe('done');
+    expect(edges.starts[0].message).toBe('');
+    // Never the task's description or a "Working on task" line, which would start its work again.
+    expect(edges.starts[0].idle).toBe(true);
+    const ctx = (await getSessionByClaudeId(res.sessionId!))?.switchContext;
+    expect(ctx?.text).toContain('PELICAN');
+    expect(ctx!.text).not.toContain(TURN_CUT_NOTE);
+    // A message to the old session's id lands on the new one, behind the context; the display reads the words alone.
+    await sendMessageToSession(sid, 'What was the magic word?', { source: 'ui', taskId });
+    const row = (await getStore()).queues[res.sessionId!]?.[0];
+    expect(row?.message).toContain(ctx!.text);
+    const shown = parseHinted(row!.message);
+    expect(shown.text).toBe('What was the magic word?');
+    expect(shown.hints.map((h) => h.kind)).toContain('engine-switch');
+    expect((await getSessionByClaudeId(res.sessionId!))?.switchContext).toBeUndefined();
+    await sendMessageToSession(res.sessionId!, 'And again?', { source: 'ui', taskId });
+    expect((await getStore()).queues[res.sessionId!]?.[1]?.message).not.toContain('PELICAN');
+  });
+
+  it('a round trip with no message resumes the first session without a turn; its next message carries the missed turns', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    const first = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    edges.history[first.sessionId!] = [
+      { role: 'user', text: 'Run the suite.', timestamp: '2026-10-20T11:00:00Z' },
+      { role: 'assistant', text: 'Codex ran the suite: green.', timestamp: '2026-10-20T11:05:00Z' },
+    ];
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', source: 'test' });
+    expect(back).toMatchObject({ state: 'done', sessionId: sid, resumed: true });
+    expect((await getStore()).queues[sid] ?? []).toHaveLength(0);
+    expect((await getSessionByClaudeId(sid))?.switchContext?.text).toContain('Codex ran the suite: green.');
+    await sendMessageToSession(first.sessionId!, 'Did it pass?', { source: 'ui', taskId });
+    const row = (await getStore()).queues[sid]?.[0];
+    expect(parseHinted(row!.message).text).toBe('Did it pass?');
+    expect(row!.message).toContain('Codex ran the suite: green.');
+  });
+
+  it('a switch with no message and a queued row: the row carries the context', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    await mutateStore((st) => {
+      st.queues[sid] = [{ id: 'qm-w', sessionId: sid, message: 'waiting words', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    expect(res.state).toBe('done');
+    const rows = (await getStore()).queues[res.sessionId!] ?? [];
+    expect(rows).toHaveLength(1);
+    expect(parseHinted(rows[0].message).text).toBe('waiting words');
+    expect(rows[0].message).toContain('PELICAN');
+    expect((await getSessionByClaudeId(res.sessionId!))?.switchContext).toBeUndefined();
+  });
 
   /** The CLI ends its turn on the Stop a switch sends. */
   const endTurnOnInterrupt = (name: string) => bus.subscribe(name, async (e) => {

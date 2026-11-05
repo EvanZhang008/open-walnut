@@ -84,12 +84,62 @@ describe('a session panel follows the task to its new session in every host', ()
   });
 
   it('a send the server delivered elsewhere reports it, and every panel send path follows it', () => {
-    expect(read('src/web/routes/session-chat.ts')).toContain('...(msg.sessionId && msg.sessionId !== data.sessionId ? { deliveredTo: msg.sessionId } : {}),');
+    // Only a real redirect: a panel opened by an id prefix is the same session.
+    expect(read('src/web/routes/session-chat.ts')).toContain('...(msg.sessionId && !msg.sessionId.startsWith(data.sessionId) ? { deliveredTo: msg.sessionId } : {}),');
     const hook = read('web/src/hooks/useSessionSend.ts');
     const rpcs = hook.match(/sendRpc<[^>]*>\(\s*'session:send'/g) ?? [];
     expect(rpcs.length).toBeGreaterThanOrEqual(3);
     for (const r of rpcs) expect(r, 'every session:send answer reads deliveredTo').toContain('deliveredTo');
     expect(hook.match(/followRedirect\(res, /g)?.length).toBe(rpcs.length);
     expect(panel).toContain('if (redirectedTo && redirectedTo !== sessionId) onSessionReplaced?.(sessionId, redirectedTo);');
+    // The phone's send says the same (api-v1.md, deliveredTo).
+    expect(read('src/web/routes/session-send-v1.ts')).toContain('...(msg.sessionId && !msg.sessionId.startsWith(sessionId) ? { deliveredTo: msg.sessionId } : {}),');
+  });
+});
+
+/**
+ * The class (2026-11-05, the user: "each engine can freely change back and forth, no problem at
+ * all"): a surface that holds a session id goes stale when a switch replaces the session. Every
+ * file that draws a session's chat or sends into one by id is listed here with how it stays on
+ * the task's current conversation; a new one fails until it is placed.
+ */
+describe('every surface that holds a session id stays on the task\'s current conversation', () => {
+  const files = walk(path.join(root, 'web/src')).filter((f) => !/\.test\./.test(f));
+  const rel = (f: string) => path.relative(root, f);
+
+  // Draws a session's chat outside SessionPanel.
+  const CHAT_HOSTS: Record<string, string | null> = {
+    // Resolves the task's session each render (the task's own session_id moves with a switch).
+    'web/src/components/dock/FocusDock.tsx': 'resolveTaskSessionId(task)',
+    'web/src/components/notes/NotesSessionChat.tsx': 'd.task.exec_session_id ?? d.task.plan_session_id',
+    // Not a task's engine-switchable conversation: a search ask, a fork tree, a side question.
+    'web/src/components/tasks/AgentSearchFollowUp.tsx': null,
+    'web/src/components/sessions/TreeSplitLeft.tsx': null,
+    'web/src/components/sessions/SideQuestionDrawer.tsx': null,
+  };
+  // Sends into a session by id outside useSessionSend: each sends once and closes (no bubble
+  // waits on that session), and the server hands a replaced session's message to the current one.
+  const ONE_SHOT_SENDERS = [
+    'web/src/components/chat/AskObjectDrawer.tsx',
+    'web/src/components/board/kanban/KanbanCardComposer.tsx',
+    'web/src/components/org/ask-main.ts',
+    'web/src/popout/PopoutExtTasks.tsx',
+  ];
+
+  it('every chat drawn outside SessionPanel is placed', () => {
+    const found = files.filter((f) => /<SessionChatHistory\b/.test(fs.readFileSync(f, 'utf8')))
+      .map(rel).filter((f) => f !== 'web/src/components/sessions/SessionPanel.tsx').sort();
+    expect(found).toEqual(Object.keys(CHAT_HOSTS).sort());
+    for (const [f, resolver] of Object.entries(CHAT_HOSTS)) if (resolver) expect(read(f), f).toContain(resolver);
+  });
+
+  it('every send by session id is the composer hook (which follows) or a one-shot sender', () => {
+    const found = files.filter((f) => /['"]session:send['"]/.test(fs.readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(found).toEqual([...ONE_SHOT_SENDERS, 'web/src/hooks/useSessionSend.ts'].sort());
+  });
+
+  it('the server never lets a replaced session take a message', () => {
+    const queue = read('src/core/session-message-queue.ts');
+    expect(queue).toContain('sessionId = await activeSessionFor(sessionId);');
   });
 });
