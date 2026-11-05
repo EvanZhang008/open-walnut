@@ -92,7 +92,8 @@ describe('the ratchet: every config key is allowlisted or dropped', () => {
 
   it('a key in neither list is not copied (it defaults to dropped) and is named as unknown', () => {
     const r = configCopyRows({ version: 1, brand_new_section: { mode: 'fast' }, ui: { theme: 'dark' } })
-    expect(r.rows.map((x) => x.key)).toEqual(['ui', 'version'])
+    // `engines` is always a row (`{}` for none): a reader then knows the Mac set no provider.
+    expect(r.rows.map((x) => x.key)).toEqual(['engines', 'ui', 'version'])
     expect(r.unknown).toEqual(['brand_new_section'])
   })
 
@@ -106,7 +107,7 @@ describe('the ratchet: every config key is allowlisted or dropped', () => {
       version: 1, heartbeat: { enabled: true, every: '30m' }, developer: { show_ui_only_triage: true },
       git_versioning: { auto_commit: true, remote: 'https://marina:planted@git.example.com/data.git' },
     })
-    expect(r.rows.map((x) => x.key)).toEqual(['version'])
+    expect(r.rows.map((x) => x.key)).toEqual(['engines', 'version'])
     expect(r.unknown).toEqual([])
     for (const k of RETIRED_CONFIG_KEYS) expect([k, own(CONFIG_COPY_ALLOWLIST, k) || own(CONFIG_COPY_DROPPED, k)]).toEqual([k, false])
   })
@@ -202,7 +203,7 @@ describe('a secret-shaped value in an allowlisted key refuses the row', () => {
   for (const [key, value, reason] of planted) {
     it(`${key}: ${reason}`, () => {
       const r = configCopyRows({ version: 1, [key]: value })
-      expect(r.rows.map((x) => x.key)).toEqual(['version'])
+      expect(r.rows.map((x) => x.key)).toEqual(['engines', 'version'])
       expect(r.refused.map((x) => x.key)).toEqual([key])
       expect(r.refused[0]!.findings.map((f) => f.reason)).toContain(reason)
       // The refusal names paths, never a value.

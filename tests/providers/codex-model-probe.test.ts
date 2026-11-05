@@ -265,7 +265,7 @@ describe('probeCodexModels', () => {
     expect(result.currentModelId).toBe('m[low]')
   })
 
-  it('applies the CODEX_CONFIG model and effort over config/read, keeping argv and catalog native', async () => {
+  it('applies the CODEX_CONFIG model and effort over config/read, keeping the catalog native and secrets off argv', async () => {
     writePlan({
       config: { model: 'a', model_reasoning_effort: 'low' },
       pages: { '': { data: [row({ id: 'a', isDefault: true }), row({ id: 'b' })], nextCursor: null } },
@@ -283,7 +283,8 @@ describe('probeCodexModels', () => {
     expect(result.currentModelId).toBe('b[high]')
     expect(result.models.map((m) => m.modelId)).toEqual(['a[low]', 'a[high]', 'b[low]', 'b[high]'])
     const start = startOf(await waitForLog(exited))
-    expect(start.argv).toEqual(['app-server', '-c', trustArg(workDir)])
+    // The provider table goes on argv as codex-acp's sessions get it, its secret left out.
+    expect(start.argv).toEqual(['app-server', '-c', trustArg(workDir), '-c', 'model_providers.p={}'])
     expect(JSON.stringify(start.argv)).not.toContain(SECRET)
   })
 
@@ -440,5 +441,29 @@ describe('codex-acp mapping parity', () => {
     expect(normalizeCodexModelDisplayName('gpt-5.1-codex-MINI')).toBe('GPT-5.1-Codex-Mini')
     expect(normalizeCodexModelDisplayName('GPT-6.1 Sol')).toBe('GPT-6.1 Sol')
     expect(normalizeCodexModelDisplayName('constructor-x')).toBe('constructor-x')
+  })
+})
+
+describe('the probe lists models through the provider CODEX_CONFIG names', () => {
+  it('passes model_provider and model_providers.<id> as -c overrides, never the provider secrets', async () => {
+    writePlan({ config: {}, pages: { '': { data: [row({ id: 'gpt-example', isDefault: true })], nextCursor: null } } })
+    const codexConfig = {
+      model_provider: 'my-proxy',
+      model_providers: { 'my-proxy': { name: 'my-proxy', base_url: 'http://127.0.0.1:9000/v1', wire_api: 'responses', requires_openai_auth: false, experimental_bearer_token: SECRET } },
+    }
+    await probeCodexModels(binary, { cwd: workDir, env: { ...baseEnv, CODEX_CONFIG: JSON.stringify(codexConfig) } })
+    const start = startOf(await waitForLog(exited))
+    expect(start.argv).toEqual([
+      'app-server', '-c', trustArg(workDir),
+      '-c', 'model_providers.my-proxy={name = "my-proxy", base_url = "http://127.0.0.1:9000/v1", wire_api = "responses", requires_openai_auth = false}',
+      '-c', 'model_provider="my-proxy"',
+    ])
+    expect(JSON.stringify(start.argv)).not.toContain(SECRET)
+  })
+
+  it('no provider in CODEX_CONFIG: no extra arguments', async () => {
+    writePlan({ config: {}, pages: { '': { data: [row({ id: 'gpt-example', isDefault: true })], nextCursor: null } } })
+    await probeCodexModels(binary, { cwd: workDir, env: { ...baseEnv, CODEX_CONFIG: JSON.stringify({ model: 'gpt-example' }) } })
+    expect(startOf(await waitForLog(exited)).argv).toEqual(['app-server', '-c', trustArg(workDir)])
   })
 })

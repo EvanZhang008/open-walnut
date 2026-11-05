@@ -129,6 +129,11 @@ async function applySessionModeControl(
       return undefined;
     });
     if (!session) return;
+    // The permission posture follows the Walnut mode on every ACP engine
+    // (acp-permission-posture.ts), the adapter's own preset with it.
+    await session.applyWalnutMode(mode);
+    // Plan vs exec is Codex's collaboration_mode; an engine without it has no such switch.
+    if (!session.sessionControls.some((control) => control.id === 'collaboration_mode')) return;
     const collaborationMode = mode === 'plan' ? 'plan' : 'default';
     if (!await session.setConfigOption('collaboration_mode', collaborationMode)) {
       throw new Error('Codex collaboration mode change was rejected');
@@ -155,7 +160,8 @@ export async function persistSessionModeChange(
   updates: Partial<SessionRecord> = {},
 ): Promise<SessionRecord> {
   const { updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js');
-  const updated = await updateSessionRecord(sessionId, { ...updates, mode });
+  // A mode change is a choice the next ACP start honours (acp-recorded-mode.ts).
+  const updated = await updateSessionRecord(sessionId, { modeChosen: true, ...updates, mode });
   emitSessionStatusChanged(updated, {}, ['*']);
 
   if (updated.taskId && existingRecord.mode !== mode) {
@@ -219,6 +225,11 @@ export async function changeSessionMode(
 ): Promise<SessionRecord> {
   const updated = await persistSessionModeChange(existingRecord, sessionId, mode, updates);
 
+  if (engineCaps(existingRecord.engine).modeControl === 'config-options') {
+    await applyAcpModeLive(existingRecord, sessionId, mode);
+    return updated;
+  }
+
   void applySessionModeControl(existingRecord, sessionId, mode).catch((err: unknown) => {
     log.session.warn('live permission mode apply failed after persist; mode takes effect next turn', {
       sessionId, mode, error: err instanceof Error ? err.message : String(err),
@@ -226,6 +237,41 @@ export async function changeSessionMode(
   });
 
   return updated;
+}
+
+/** How long a mode change waits on a live ACP adapter before it goes on in the background. */
+const ACP_MODE_APPLY_BOUND_MS = 5_000;
+
+/**
+ * The live half of an ACP session's mode change. A live adapter answers a preset
+ * change at once (no turn to wait on, unlike the Claude CLI's control queue), so
+ * the change waits on it, bounded: an adapter that refuses to leave full access
+ * for a restrictive mode is a failed change the caller must hear
+ * (acp-permission-posture.ts AcpModeRefusedError; Walnut answers nothing for the
+ * session meanwhile). A session that is not live, or an answer later than the
+ * bound, goes on in the background; its next start enforces the mode.
+ */
+async function applyAcpModeLive(record: SessionRecord, sessionId: string, mode: SessionMode): Promise<void> {
+  const logFailure = (err: unknown) => log.session.warn('live permission mode apply failed after persist; mode takes effect next turn', {
+    sessionId, mode, error: err instanceof Error ? err.message : String(err),
+  });
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  if (!sessionRunner.findAcpSession(sessionId)) {
+    void applySessionModeControl(record, sessionId, mode).catch(logFailure);
+    return;
+  }
+  const { AcpModeRefusedError } = await import('../../providers/acp-permission-posture.js');
+  const applying = applySessionModeControl(record, sessionId, mode).then(() => undefined, (err: unknown) => err ?? new Error('mode apply failed'));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), ACP_MODE_APPLY_BOUND_MS); });
+  const outcome = await Promise.race([applying, late]);
+  clearTimeout(timer);
+  if (outcome === 'late') {
+    void applying.then((err) => { if (err) logFailure(err); });
+    return;
+  }
+  if (outcome instanceof AcpModeRefusedError) throw outcome;
+  if (outcome) logFailure(outcome);
 }
 
 // ── PATCH (rename / archive / human note / mode) ────────────────────────────

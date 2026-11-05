@@ -102,7 +102,8 @@ export async function applySessionControl(
       const mirroredMode: SessionMode = value === 'plan'
         ? 'plan'
         : record.mode === 'plan' ? 'default' : record.mode;
-      await persistSessionModeChange(record, sessionId, mirroredMode);
+      // Leaving plan writes 'default' as a mirror, not a permission choice.
+      await persistSessionModeChange(record, sessionId, mirroredMode, { modeChosen: record.modeChosen === true || mirroredMode !== 'default' });
     }
     return {
       engine: caps.id,
@@ -507,7 +508,7 @@ export async function executeCompactSession(
   }
 
   // Update session mode and send the execute message.
-  await updateSessionRecord(actualPlanSessionId, { mode: execMode });
+  await updateSessionRecord(actualPlanSessionId, { mode: execMode, ...(input.mode ? { modeChosen: true } : {}) });
   const planMessage = buildPlanExecutionMessage(planResult.planFile, planResult.content, input.instructions);
   const { sendMessageToSession } = await import('../session-message-queue.js');
   await sendMessageToSession(actualPlanSessionId, planMessage, {

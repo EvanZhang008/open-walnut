@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..42bb008c24729bbebfa74c84ca12fac2bf112804 100755
+index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..7b232fe72dc1a1b653db048eae0ce02133a754a0 100755
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -22065,14 +22065,53 @@ var Logger = class {
+@@ -22065,14 +22065,133 @@ var Logger = class {
  var logger = new Logger();
  
  // src/CodexJsonRpcConnection.ts
@@ -46,6 +46,86 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..42bb008c24729bbebfa74c84ca12fac2
 +  }
 +  return args;
 +}
++// Walnut: an endpoint whose model ids carry a prefix (env WALNUT_CODEX_MODEL_PREFIX)
++// gets a model catalog for those ids, read from this Codex itself (`codex debug
++// models`), so Codex knows each model's metadata (reasoning levels, context window,
++// instructions) instead of its fallback metadata, which warns in every reply. Tools are
++// sent as tools (no tool_mode, no responses-lite), which such endpoints take. Codex reads
++// model_catalog_json only from its own command line, never from a thread's config,
++// so a catalog CODEX_CONFIG names goes there too.
++function walnutModelCatalogArgs(codexPath, startupArgs, config) {
++  const named = config && typeof config === "object" ? config["model_catalog_json"] : void 0;
++  if (typeof named === "string" && named) return ["-c", `model_catalog_json=${walnutTomlInline(named)}`];
++  const prefix = process.env["WALNUT_CODEX_MODEL_PREFIX"];
++  if (!prefix) return [];
++  try {
++    const { execFileSync } = require("node:child_process");
++    const { createHash } = require("node:crypto");
++    const os2 = require("node:os");
++    const [cmd, args] = codexPath ? [codexPath, [...startupArgs, "debug", "models"]] : [process.execPath, [createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js"), ...startupArgs, "debug", "models"]];
++    const listed = JSON.parse(execFileSync(cmd, args, { encoding: "utf8", timeout: 15e3, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }));
++    const models = (Array.isArray(listed?.models) ? listed.models : []).filter((m) => m && typeof m.slug === "string").map((m) => {
++      const entry = { ...m, slug: m.slug.startsWith(prefix) ? m.slug : prefix + m.slug, use_responses_lite: false };
++      delete entry.tool_mode;
++      return entry;
++    });
++    if (models.length === 0) return [];
++    const body = JSON.stringify({ ...listed, models });
++    const file = path.join(os2.tmpdir(), `walnut-codex-models-${createHash("sha256").update(body).digest("hex").slice(0, 16)}.json`);
++    if (!fs.existsSync(file)) {
++      // A catalog this Codex cannot read ends its app-server, so it is tried first and kept only when it loads.
++      const tmp = `${file}.${process.pid}.tmp`;
++      fs.writeFileSync(tmp, body, { mode: 384 });
++      try {
++        execFileSync(cmd, [...args.slice(0, -2), "-c", `model_catalog_json=${walnutTomlInline(tmp)}`, "debug", "models"], { timeout: 15e3, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "ignore", "ignore"] });
++      } catch (error51) {
++        fs.rmSync(tmp, { force: true });
++        throw error51;
++      }
++      fs.renameSync(tmp, file);
++    }
++    return ["-c", `model_catalog_json=${walnutTomlInline(file)}`];
++  } catch (error51) {
++    logger.log("Walnut model catalog not built", { error: error51 instanceof Error ? error51.message : String(error51) });
++    return [];
++  }
++}
++// Walnut: with a model prefix the thread must start on a prefixed id, or a host whose
++// config.toml names a plain id (one this endpoint gives no tools) would keep it. When
++// CODEX_CONFIG names no model, the host's own default is taken and prefixed: its
++// config.toml's top-level model, else the first model of the catalog. With neither,
++// the adapter stops with the reason rather than start a session with no tools.
++function walnutPrefixedModel(config, catalogArgs) {
++  const prefix = process.env["WALNUT_CODEX_MODEL_PREFIX"];
++  if (!prefix || !config || typeof config !== "object" || typeof config["model"] === "string") return;
++  let model;
++  try {
++    const home = process.env["CODEX_HOME"] || path.join(process.env["HOME"] || "", ".codex");
++    for (const line of fs.readFileSync(path.join(home, "config.toml"), "utf8").split(/\r?\n/)) {
++      const trimmed = line.trim();
++      if (trimmed.startsWith("[")) break;
++      const m = /^model\s*=\s*"([^"]+)"/.exec(trimmed);
++      if (m) model = m[1];
++    }
++  } catch {
++  }
++  if (!model) {
++    const at = catalogArgs.findIndex((a) => a.startsWith("model_catalog_json="));
++    try {
++      const listed = at >= 0 ? JSON.parse(fs.readFileSync(JSON.parse(catalogArgs[at].slice("model_catalog_json=".length)), "utf8")).models : [];
++      const shown = listed.filter((m) => m && typeof m.slug === "string" && (m.visibility === void 0 || m.visibility === "list"));
++      shown.sort((a, b) => (typeof a.priority === "number" ? a.priority : 1e9) - (typeof b.priority === "number" ? b.priority : 1e9));
++      model = shown[0]?.slug;
++    } catch {
++    }
++  }
++  if (!model) {
++    process.stderr.write("Walnut: engines.codex.provider.model_prefix is set, but no model is named (engines.codex.model, the session's pick, or this host's ~/.codex/config.toml) and Codex's model list could not be read, so this session would start on a model id the endpoint gives no tools. Set engines.codex.model in Walnut's config.\n");
++    process.exit(1);
++  }
++  config["model"] = model.startsWith(prefix) ? model : prefix + model;
++  logger.log("Walnut model for the prefixed provider", { model: config["model"] });
++}
 +function startCodexConnection(codexPath, env, startupArgs = []) {
    const spawnEnv = env ?? process.env;
    let codex;
@@ -59,12 +139,15 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..42bb008c24729bbebfa74c84ca12fac2
    }
    attachLogs(codex);
    const reader = createJSONRPCReader(codex.stdout);
-@@ -32728,7 +32767,7 @@ function startAcpServer() {
+@@ -32728,7 +32847,10 @@ function startAcpServer() {
      authRequest: authRequestString ?? null,
      defaultAuthRequest: defaultAuthRequest ?? null
    });
 -  const codexConnection = startCodexConnection(codexPath);
-+  const codexConnection = startCodexConnection(codexPath, void 0, walnutProviderStartupArgs(config2));
++  const walnutStartupArgs = walnutProviderStartupArgs(config2);
++  const walnutCatalogArgs = walnutModelCatalogArgs(codexPath, walnutStartupArgs, config2);
++  walnutPrefixedModel(config2, walnutCatalogArgs);
++  const codexConnection = startCodexConnection(codexPath, void 0, [...walnutStartupArgs, ...walnutCatalogArgs]);
    const maxStderrTailChars = 2 * 1024;
    let stderr = "";
    codexConnection.process.stderr.addListener("data", (data) => {

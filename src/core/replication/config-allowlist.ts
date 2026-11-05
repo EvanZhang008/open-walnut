@@ -38,6 +38,10 @@ const ALLOW: Record<string, AllowSpec> = {
   org: { name: true, founder_title: true },
   defaults: { priority: true, platform: true, project: true, engine: true },
   provider: { type: true, model: true, bedrock_region: true },
+  // Where each engine sends its requests, and its default model: a Codex session the
+  // companion starts must use the Mac's provider (providers/codex-engine-source.ts).
+  // `withheld` is the copy's own mark for a provider that held a credential (engineRows).
+  engines: { '*': { provider: { base_url: true, name: true, wire_api: true, env_key: true, model_prefix: true, withheld: true }, model: true, effort: true } },
   agent: {
     // region, maxTokens and available_models are retired (CONFIG_COPY_RETIRED_FIELDS), but an
     // older leader still sends them in this row, and a row with a field outside the spec is
@@ -82,7 +86,6 @@ export const CONFIG_COPY_ALLOWLIST: Readonly<Record<string, AllowSpec>> = Object
 
 export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.freeze({
   providers: 'provider credentials and request headers',
-  engines: 'engine environments hold API keys',
   usage: 'proxy log paths on the Mac',
   plugins: 'plugin settings and credentials never leave the Mac',
   plugin_sources: 'plugin install sources',
@@ -123,6 +126,10 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
  */
 export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   provider: { bedrock_bearer_token: 'a credential' },
+  'engines.*': {
+    env: 'engine environments hold API keys',
+    adapter_cmd: 'an argv of the Mac (the custom engine runs on the Mac only)',
+  },
   // The org runs on the primary only. Named in the copy, an older replica would refuse the whole org row.
   org: { enabled: 'the org switch, read where the org runs, on the Mac (org/org-enabled.ts)' },
   agent: {
@@ -291,10 +298,32 @@ export function configCopyRows(config: Readonly<Record<string, unknown>>): Confi
     const value = allowThrough(config[key], spec)
     if (value === undefined) continue
     const findings = findSecrets(value, key)
-    if (findings.length > 0) { refused.push({ key, findings }); continue }
+    if (findings.length > 0) {
+      refused.push({ key, findings })
+      if (key === 'engines') rows.push({ key, value: withheldEngines(value, findings) })
+      continue
+    }
     rows.push({ key, value })
   }
-  return { rows, refused, unknown }
+  // Always an engines row, `{}` for none: a server reading the copy then knows the Mac
+  // set no provider, rather than guessing from a missing row (codex-engine-source.ts).
+  if (!rows.some((r) => r.key === 'engines')) rows.push({ key: 'engines', value: {} })
+  return { rows: rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)), refused, unknown }
+}
+
+/**
+ * The engines row when something in it is secret-shaped (a password in a provider's
+ * base_url): each engine with a finding keeps only `provider: { withheld: true }`, so
+ * a server reading the copy refuses that engine's start instead of using the host's
+ * provider; the other engines are copied as they are.
+ */
+function withheldEngines(value: unknown, findings: SecretFinding[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  const flagged = new Set(findings.map((f) => f.path.split('.')[1]))
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    out[id] = flagged.has(id) ? { provider: { withheld: true } } : entry
+  }
+  return out
 }
 
 /** A row the host may write: an allowlisted key, its value already through the spec, nothing secret in it. */

@@ -91,6 +91,17 @@ import {
 } from '../core/session-message-queue.js'
 import { BudgetCheckingError, BudgetPausedError } from './delivery-failure.js'
 import { piNodeFor } from './pi-adapter-node.js'
+import {
+  ACP_ASKING_MODE_VALUES,
+  ACP_FULL_ACCESS_MODE_VALUES,
+  AcpModeRefusedError,
+  acpAutoAnswer,
+  acpPostureAllowsAll,
+  acpSupposedFullAccess,
+  resolveCodexStartPreset,
+  type AcpAutoAnswer,
+} from './acp-permission-posture.js'
+import { CODEX_MODEL_PREFIX_ENV, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -430,19 +441,7 @@ export function sessionMcpServerToAcp(
   }
 }
 
-export function parseCodexBaseConfig(raw: string | undefined): Record<string, unknown> | undefined {
-  if (!raw) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch (error) {
-    throw new Error(`CODEX_CONFIG must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('CODEX_CONFIG must be a JSON object')
-  }
-  return parsed as Record<string, unknown>
-}
+export { parseCodexBaseConfig }
 
 /**
  * Environment for the ACP worker + adapter (and therefore for every shell the
@@ -526,6 +525,8 @@ export function buildAcpAdapterEnv(
     initialAgentMode?: string
     /** Env pointing in-session Walnut clients at the launching server (self-api-root.ts). */
     walnutApiEnv?: Record<string, string>
+    /** engines.codex.provider.model_prefix: the patched adapter builds Codex a model catalog for those ids. */
+    codexModelPrefix?: string
   } = {},
 ): Record<string, string> | undefined {
   const existingInstructions = typeof options.baseConfig?.developer_instructions === 'string'
@@ -543,6 +544,7 @@ export function buildAcpAdapterEnv(
     ...(Object.keys(config).length > 0 ? { CODEX_CONFIG: JSON.stringify(config) } : {}),
     ...(options.sessionId ? { WALNUT_SESSION_ID: options.sessionId } : {}),
     ...(options.initialAgentMode ? { INITIAL_AGENT_MODE: options.initialAgentMode } : {}),
+    ...(options.codexModelPrefix ? { [CODEX_MODEL_PREFIX_ENV]: options.codexModelPrefix } : {}),
     ...(options.walnutApiEnv ?? {}),
   }
   return Object.keys(env).length > 0 ? env : undefined
@@ -587,7 +589,11 @@ export interface AcpSessionConfig {
   taskId: string
   project: string
   cwd: string
+  /** The Walnut permission mode (a start that names none passes DEFAULT_SESSION_MODE). */
   mode: SessionMode
+  /** The start named `mode` itself: it then wins over the engine's own config file
+   *  (acp-permission-posture.ts resolveCodexStartPreset). */
+  modeNamed?: boolean
   /** Which ACP engine backs this session. Defaults to codex (back-compat). */
   engine?: SessionEngine
   /** Lane binding (Personal AI chat conversation) — persisted on the record at
@@ -692,6 +698,11 @@ interface PendingPermission {
   input?: Record<string, unknown>
   options: Array<{ optionId?: string; kind?: string; name?: string }>
   receivedAt: number
+  /** The provider's own tool kind (`execute`, `edit`, `switch_mode`…), for acpAutoAnswer. */
+  kind?: string
+  title?: string
+  /** The request's own `_meta` (acp-permission-posture.ts reads Codex's command there). */
+  meta?: Record<string, unknown>
 }
 
 export class AcpSession {
@@ -754,6 +765,17 @@ export class AcpSession {
   private _speedEmitAt = 0
   /** Latest usage_update, written to the record at turn end (one write per turn). */
   private _lastContext: { used: number; size: number } | null = null
+  /** The adapter `mode` preset this session chose (its record's acpConfig.mode, or a
+   *  pick through the control): an asking one stands over the Walnut mode. */
+  private _chosenMode: string | undefined
+  /** The preset Walnut started the adapter in, persisted by the start (startAgentMode). */
+  private _startAgentMode: string | undefined
+  /** config `session.auto_approve_bypass` (default on), read at establish. */
+  private _autoApproveBypass = true
+  /** Requests Walnut is answering now: one answer each, whichever path saw it first. */
+  private readonly _autoAnswering = new Set<string>()
+  /** Requests Walnut could not answer: they are a person's now (autoAllow). */
+  private readonly _autoFailed = new Set<string>()
 
   constructor(cfg: AcpSessionConfig) {
     this.cfg = cfg
@@ -764,6 +786,7 @@ export class AcpSession {
     this.runtimeId = cfg.runtimeId ?? `acp-${crypto.randomBytes(8).toString('hex')}`
     this._providerSessionId = cfg.providerSessionId ?? null
     this._mode = cfg.mode
+    this._chosenMode = cfg.acpConfig?.mode
     const initialOffset = validOffset(cfg.consumedOffset) ? cfg.consumedOffset : 0
     this._seenV = initialOffset
     this._committedV = initialOffset
@@ -834,8 +857,8 @@ export class AcpSession {
     reason?: string
     acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>
   }> {
-    if (this.isFullAccessMode()) return []
-    return [...this._pendingPermissions.values()].map(({ requestId, toolName, input, options }) => ({
+    // What Walnut answers itself is never shown (acp-permission-posture.ts).
+    return [...this._pendingPermissions.values()].filter((p) => !this.autoAnswerOf(p)).map(({ requestId, toolName, input, options }) => ({
       requestId, toolName, input, acpOptions: options,
     }))
   }
@@ -966,24 +989,31 @@ export class AcpSession {
       if (name === 'session:permission-request') {
         const requestId = full.requestId as string
         const options = (full.acpOptions as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []
-        this._pendingPermissions.set(requestId, {
+        const rawParams = record.kind === 'acp'
+          ? (record.frame as { params?: { toolCall?: { kind?: unknown; title?: unknown }; _meta?: unknown } } | undefined)?.params
+          : undefined
+        const rawCall = rawParams?.toolCall
+        const rawMeta = rawParams?._meta && typeof rawParams._meta === 'object' ? rawParams._meta as Record<string, unknown> : undefined
+        const pending: PendingPermission = {
           requestId,
           toolName: full.toolName as string,
           input: full.input as Record<string, unknown> | undefined,
           options,
           receivedAt: record.ts,
-        })
+          ...(typeof rawCall?.kind === 'string' ? { kind: rawCall.kind } : {}),
+          ...(typeof rawCall?.title === 'string' ? { title: rawCall.title } : {}),
+          ...this.permissionMeta(rawMeta),
+        }
+        this._pendingPermissions.set(requestId, pending)
         this._emittedPermissionRequestIds.add(requestId)
-        // Codex snapshots approvalPolicy per turn: a mid-turn switch to full
-        // access leaves the CURRENT turn still asking (2026-08-11 incident:
-        // 6 more asks after the switch; 2 unanswered ones wedged the turn for
-        // ~3min). Full access means "stop asking" — auto-allow EVERY incoming
-        // request while the mode is active, and don't render a card at all.
-        if (this.isFullAccessMode()) {
-          log.session.info('acp: full access active — auto-allowing incoming permission', {
-            sessionId: this.trackingId(), requestId,
-          })
-          void this.resolvePermissionRequest(requestId, true).catch(() => false)
+        // Walnut answers what it owns (its own CLI and tools) and everything in a
+        // bypass posture, and draws no card for it. Codex snapshots approvalPolicy
+        // per turn: a mid-turn switch to full access leaves the CURRENT turn still
+        // asking (2026-08-11 incident: 6 more asks after the switch; 2 unanswered
+        // ones wedged the turn for ~3min), so "stop asking" is answered here too.
+        const auto = this.autoAnswerOf(pending)
+        if (auto) {
+          void this.autoAllow(requestId, auto, 'incoming')
           continue
         }
         this.persistPendingPermission()
@@ -1086,16 +1116,157 @@ export class AcpSession {
   /** Records/API key: providerSessionId once known, else runtimeId (pending phase). */
   private trackingId(): string { return this._providerSessionId ?? this.runtimeId }
 
-  /** True while the session's approval preset is Agent (full access). */
-  private isFullAccessMode(): boolean {
-    return this._configOptions.find((c) => c.id === 'mode')?.currentValue === 'agent-full-access'
+  /** True while the session answers every permission request itself (acp-permission-posture.ts). */
+  private postureAllowsAll(): boolean {
+    return acpPostureAllowsAll({
+      walnutMode: this._mode,
+      chosenMode: this._chosenMode,
+      autoApproveBypass: this._autoApproveBypass,
+    })
   }
+
+  /**
+   * A request's `_meta` as acpAutoAnswer reads it. codex-acp reports the command
+   * it runs only there; its `rawInput.command` has the shell wrapper and outer
+   * quotes stripped, which inverts the quoting. A Codex request without it (an
+   * older worker's snapshot) gets an empty codex block, so its command is never
+   * read from rawInput and such a request goes to a person outside bypass.
+   */
+  private permissionMeta(meta: Record<string, unknown> | undefined): { meta?: Record<string, unknown> } {
+    if (meta) return { meta }
+    return this.engineId === 'codex' ? { meta: { codex: {} } } : {}
+  }
+
+  /** Why Walnut answers this pending request itself, or undefined when a person does. */
+  private autoAnswerOf(p: PendingPermission): AcpAutoAnswer | undefined {
+    if (this._autoFailed.has(p.requestId)) return undefined
+    return acpAutoAnswer({ kind: p.kind, title: p.title, input: p.input, meta: p.meta }, this.postureAllowsAll())
+  }
+
+  /**
+   * Answer a request Walnut owns. The answer is checked: a failed or refused one
+   * is tried again (AUTO_ANSWER_ATTEMPTS in all, a short wait between), and a
+   * request still unanswered after that becomes an ordinary pending permission,
+   * with its card, so it never blocks the turn out of sight.
+   */
+  private async autoAllow(requestId: string, reason: AcpAutoAnswer, origin: 'incoming' | 'adopted' | 'pending'): Promise<void> {
+    if (this._autoAnswering.has(requestId) || this._autoFailed.has(requestId)) return
+    this._autoAnswering.add(requestId)
+    log.session.info('acp: permission answered by Walnut', {
+      sessionId: this.trackingId(), requestId, reason, origin, engine: this.engineId, mode: this._mode,
+    })
+    let lastError: string | undefined
+    try {
+      for (let attempt = 1; attempt <= AcpSession.AUTO_ANSWER_ATTEMPTS; attempt++) {
+        try {
+          if (await this.resolvePermissionRequest(requestId, true)) return
+          lastError = 'not answered'
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error)
+        }
+        // The worker no longer holds it (answered elsewhere, cancelled): nothing waits on it.
+        if (!this._pendingPermissions.has(requestId)) return
+        if (attempt < AcpSession.AUTO_ANSWER_ATTEMPTS) await new Promise((r) => setTimeout(r, AcpSession.AUTO_ANSWER_RETRY_MS * attempt))
+      }
+    } finally {
+      this._autoAnswering.delete(requestId)
+    }
+    const pending = this._pendingPermissions.get(requestId)
+    if (!pending) return
+    this._autoFailed.add(requestId)
+    log.session.warn('acp: Walnut could not answer a permission; it goes to a person', {
+      sessionId: this.trackingId(), requestId, reason, error: lastError,
+    })
+    this.persistPendingPermission()
+    bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
+      sessionId: this.trackingId(),
+      taskId: this.taskId,
+      requestId,
+      toolName: pending.toolName,
+      input: pending.input,
+      acpOptions: pending.options,
+    }, acpEventDestinations('session:permission-request'), { urgency: 'urgent' })
+  }
+
+  static AUTO_ANSWER_ATTEMPTS = 3
+  static AUTO_ANSWER_RETRY_MS = 250
+
+  /** Answer every pending request Walnut now owns (after a mode change). */
+  private async autoAllowPending(): Promise<void> {
+    for (const pending of [...this._pendingPermissions.values()]) {
+      const auto = this.autoAnswerOf(pending)
+      if (auto) await this.autoAllow(pending.requestId, auto, 'pending')
+    }
+  }
+
+  /**
+   * Read what the permission rules need before any request can arrive: config
+   * `session.auto_approve_bypass`, and Walnut's op registry (the ops load
+   * lazily, and walnutOpAnswered reads their read-only tags).
+   */
+  private async readPermissionPolicy(): Promise<void> {
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      this._autoApproveBypass = (await getConfig()).session?.auto_approve_bypass !== false
+    } catch { /* unreadable config keeps the default (on) */ }
+    await import('../ops/index.js').catch(() => { /* no registry: only the fixed write list is answered */ })
+  }
+
+  /** The Walnut mode moved (session-lifecycle.ts): the posture follows, and the
+   *  adapter's own preset with it when it advertises one for that posture. */
+  /**
+   * The Walnut mode moved (session-lifecycle.ts): the posture follows, and the
+   * adapter's own preset with it. A restrictive mode must take the adapter off
+   * any full-access preset: when the adapter refuses, the change fails with
+   * AcpModeRefusedError, and Walnut answers nothing for the session meanwhile
+   * (its preset choice is cleared, so the restrictive Walnut mode rules).
+   */
+  async applyWalnutMode(mode: SessionMode): Promise<void> {
+    this._mode = mode
+    const control = this._configOptions.find((c) => c.id === 'mode')
+    const values = control?.options.map((o) => o.value) ?? []
+    if (mode === 'bypass') {
+      // The newest choice rules: a bypass mode set now outranks an asking preset picked before.
+      this._chosenMode = undefined
+      const target = values.find((v) => ACP_FULL_ACCESS_MODE_VALUES.has(v))
+      if (control && target && target !== control.currentValue && !await this.setConfigOption('mode', target).catch(() => false)) {
+        log.session.warn('acp: adapter kept its preset under a bypass mode; Walnut answers its requests', { sessionId: this.trackingId(), target })
+      }
+    } else {
+      const live = control?.currentValue
+      const wasFull = (live !== undefined && ACP_FULL_ACCESS_MODE_VALUES.has(live))
+        || (this._chosenMode !== undefined && ACP_FULL_ACCESS_MODE_VALUES.has(this._chosenMode))
+      if (wasFull) {
+        const target = ACP_ASKING_MODE_VALUES.find((v) => values.includes(v))
+        const moved = target ? await this.setConfigOption('mode', target).catch(() => false) : false
+        if (!moved) {
+          await this.forgetChosenMode()
+          await this.autoAllowPending()
+          throw new AcpModeRefusedError(engineCaps(this.engineId).displayName, mode, live ?? this._chosenMode ?? 'full access')
+        }
+      }
+    }
+    await this.autoAllowPending()
+  }
+
+  /** Drop the session's adapter preset choice (in memory and on its record): its Walnut mode rules. */
+  private async forgetChosenMode(): Promise<void> {
+    this._chosenMode = undefined
+    const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
+    if (record?.acpConfig?.mode === undefined) return
+    const { mode: _dropped, ...rest } = record.acpConfig
+    await updateSessionRecord(this.trackingId(), { acpConfig: rest }).catch(() => {})
+  }
+
+  /** The preset Walnut started the adapter in: the start persists it as acpConfig.mode,
+   *  so a respawn runs on it instead of re-reading the engine's config file. */
+  get startAgentMode(): string | undefined { return this._startAgentMode }
 
   private persistPendingPermission(forceClear = false): void {
     const sessionId = this.trackingId()
-    const pending = forceClear || this.isFullAccessMode()
+    const pending = forceClear
       ? undefined
-      : [...this._pendingPermissions.values()]
+      : [...this._pendingPermissions.values()].filter((p) => !this.autoAnswerOf(p))
           .sort((left, right) => left.receivedAt - right.receivedAt)[0]
     const durable = pending
       ? {
@@ -1259,29 +1430,35 @@ export class AcpSession {
         : undefined
       return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) }
     }
-    const parsedBaseConfig = parseCodexBaseConfig(
-      overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
-    )
-    // Startup approval preset: the session's OWN persisted choice wins (it is
-    // replayed post-establish by replayPersistedConfig); only a session with
-    // no saved mode inherits the default from ~/.codex/config.toml (respect
-    // what the user configured in codex itself) or walnut config.yaml
-    // session.codex_default_mode.
-    let initialAgentMode: string | undefined
     const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
+    // engines.codex (provider, default model and effort) merged under the user's own
+    // CODEX_CONFIG, the same for a start here and on another host (codex-engine-config.ts).
+    // Off the Mac the Mac's copy says what was set, and a server that cannot tell refuses
+    // (codex-engine-source.ts): never the host's own provider by default.
+    const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig()
+    const pick = record?.acpConfig ?? this.cfg.acpConfig
+    const codex = resolveCodexEngine(
+      walnutConfig,
+      overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
+      { pick: pick ? { model: pick.model, reasoning_effort: pick.reasoning_effort } : undefined },
+    )
+    // Startup approval preset (acp-permission-posture.ts resolveCodexStartPreset): the
+    // session's OWN persisted choice wins (it is replayed post-establish by
+    // replayPersistedConfig), then the mode the start named, then the user's own
+    // ~/.codex/config.toml or walnut config.yaml session.codex_default_mode, which
+    // apply only to a start that named no mode, then Walnut's mode (bypass for a
+    // start with none, as a Claude Code session of the task runs).
     const persistedMode = record?.acpConfig?.mode ?? this.cfg.acpConfig?.mode
-    if (persistedMode) {
-      initialAgentMode = persistedMode
-    } else {
-      let walnutDefault: string | undefined
-      try {
-        const { getConfig } = await import('../core/config-manager.js')
-        const config = await getConfig()
-        walnutDefault = (config.session as { codex_default_mode?: string } | undefined)?.codex_default_mode
-      } catch { /* config unreadable — codex config.toml still applies */ }
+    if (persistedMode) this._chosenMode = persistedMode
+    const configured = persistedMode || this.cfg.modeNamed ? undefined : resolveCodexInitialMode({
+      walnutDefault: (walnutConfig as { session?: { codex_default_mode?: string } } | undefined)?.session?.codex_default_mode,
       // ~/.codex/config.toml of THIS machine says nothing about another host's codex.
-      initialAgentMode = resolveCodexInitialMode({ walnutDefault, ...(this.remote ? { env: {} } : {}) })
-    }
+      ...(this.remote ? { env: {} } : {}),
+    })
+    const start = resolveCodexStartPreset({ persisted: persistedMode, modeNamed: this.cfg.modeNamed === true, walnutMode: this._mode, configured })
+    this._mode = start.walnutMode
+    const initialAgentMode = start.preset
+    this._startAgentMode = persistedMode ? undefined : start.preset
     // Non-lane codex sessions get the same walnut context every native claude
     // session gets (walnut gateway + skill pointer); lanes get the self-knowledge
     // contract instead (they ARE the personal AI — the hint would be circular).
@@ -1297,10 +1474,11 @@ export class AcpSession {
     const managed = buildAcpAdapterEnv(providerExecutable, {
       disableProjectInstructions: this.cfg.disableProjectInstructions,
       developerInstructions: this.cfg.developerInstructions ?? defaultInstructions,
-      baseConfig: parsedBaseConfig,
+      baseConfig: codex.baseConfig,
       sessionId: this.runtimeId,
       initialAgentMode,
       walnutApiEnv: walnutApiEnvForSession(this.host),
+      codexModelPrefix: codex.prefix,
     })
     if (!overlay) return managed
     return { ...overlay, ...(managed ?? {}) }
@@ -1421,6 +1599,7 @@ export class AcpSession {
     if (this.remote && conn.readOnlyRemote) {
       throw new Error(`${engineCaps(this.engineId).displayName} on ${this.host} is not started from a test server: that host's daemon is shared with the real Walnut`)
     }
+    await this.readPermissionPolicy()
     const adapterEnv = await this.buildAdapterEnv(providerExecutable, { overlay })
     stage('adapterEnvMs')
     // Adapters that answer `loadSession: false` (gemini) can NEVER resume a
@@ -1502,11 +1681,13 @@ export class AcpSession {
       throw new Error('ACP session established without a provider session ID')
     }
     await this.replayPersistedConfig(conn)
+    await this.applyStartPosture(conn)
     if (this._coldLoaded) {
       this._coldLoaded = false
       await this.followEngineDefaultModel(conn)
     }
     this.persistPendingPermission()
+    await this.autoAllowPending()
     stage('afterMs')
     log.session.info('acp: session established', {
       sessionId: this._providerSessionId, runtimeId: this.runtimeId, engine: this.engineId, host: this.host,
@@ -1586,10 +1767,113 @@ export class AcpSession {
    * deadlock on _establishing). Only differing keys are sent; normal warm
    * attaches send nothing.
    */
+  /**
+   * A Codex session's stored pick, as its thread was started on it: with
+   * `engines.codex.provider` the pick rode the thread config with the provider's
+   * model prefix (codex-engine-config.ts), so replaying the bare id would switch
+   * the session onto the id the endpoint gives no tools.
+   */
+  private async codexPickAsStarted(stored: Record<string, string>): Promise<Record<string, string>> {
+    if (this.engineId !== 'codex' || !stored.model) return stored
+    try {
+      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig()
+      const { settings } = resolveCodexEngine(walnutConfig, codexRawConfig(walnutConfig, this.remote))
+      const pick = codexPickForProvider({ model: stored.model, reasoning_effort: stored.reasoning_effort }, settings)
+      if (!pick?.model) return stored
+      return { ...stored, model: pick.model, ...(pick.reasoning_effort ? { reasoning_effort: pick.reasoning_effort } : {}) }
+    } catch {
+      return stored
+    }
+  }
+
+  /**
+   * Put the adapter in the posture of the session's Walnut mode when nothing chose
+   * its preset yet (acp-permission-posture.ts): a bypass session whose adapter
+   * advertises a full-access preset (gemini's yolo, codex-acp's agent-full-access
+   * when it did not take INITIAL_AGENT_MODE) is switched to it, so the provider
+   * itself stops asking. Raw RPC, as replayPersistedConfig (setConfigOption here
+   * would wait on _establishing).
+   */
+  private async applyStartPosture(conn: DaemonConnection): Promise<void> {
+    const control = this._configOptions.find((c) => c.id === 'mode')
+    if (!control) return
+    if (!acpSupposedFullAccess({ walnutMode: this._mode, chosenMode: this._chosenMode })) {
+      // Only a mode someone chose (named at the start, kept on the record, or the
+      // adapter's preset picked) may fail a start; any other restrictive mode is
+      // tried and, refused, left as the adapter runs.
+      await this.leaveFullAccess(conn, control, this.cfg.modeNamed === true || this._chosenMode !== undefined)
+      return
+    }
+    if (this._chosenMode) return
+    if (ACP_FULL_ACCESS_MODE_VALUES.has(control.currentValue)) {
+      this._startAgentMode ??= control.currentValue
+      return
+    }
+    const target = control.options.find((o) => ACP_FULL_ACCESS_MODE_VALUES.has(o.value))?.value
+    if (!target) return
+    const resp = await conn.send('acpSetConfigOption', {
+      sid: this.runtimeId,
+      commandId: `acp-config-posture-${crypto.randomBytes(8).toString('hex')}`,
+      configId: 'mode',
+      value: target,
+    }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+    if (!resp.ok) {
+      log.session.warn('acp: adapter preset for the bypass posture refused; Walnut answers its requests', {
+        runtimeId: this.runtimeId, engine: this.engineId, target, error: (resp as { error?: string }).error,
+      })
+      return
+    }
+    const result = (resp as { result?: { configOptions?: AcpConfigOption[] } }).result
+    this._configOptions = result?.configOptions ?? this._configOptions.map((c) =>
+      c.id === 'mode' ? { ...c, currentValue: target } : c)
+    this._startAgentMode = target
+    log.session.info('acp: adapter preset set for the bypass posture', { runtimeId: this.runtimeId, engine: this.engineId, value: target })
+  }
+
+  /**
+   * A session whose mode is restrictive never runs on a full-access preset (an
+   * adapter that took one from its own config, a replay that did not land): it
+   * is moved to the adapter's asking preset, or, when someone chose that mode
+   * (`chosen`), the worker is stopped and the start fails with AcpModeRefusedError.
+   */
+  private async leaveFullAccess(conn: DaemonConnection, control: AcpConfigOption, chosen: boolean): Promise<void> {
+    if (!ACP_FULL_ACCESS_MODE_VALUES.has(control.currentValue)) return
+    const live = control.currentValue
+    const target = ACP_ASKING_MODE_VALUES.find((v) => control.options.some((o) => o.value === v))
+    const resp = target
+      ? await conn.send('acpSetConfigOption', {
+        sid: this.runtimeId,
+        commandId: `acp-config-posture-${crypto.randomBytes(8).toString('hex')}`,
+        configId: 'mode',
+        value: target,
+      }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+      : { ok: false, error: 'no asking preset advertised' }
+    if ((!resp.ok || !target) && !chosen) {
+      log.session.warn('acp: adapter kept full access under a mode nobody chose; it runs as it is', {
+        runtimeId: this.runtimeId, engine: this.engineId, mode: this._mode, live, error: (resp as { error?: string }).error,
+      })
+      return
+    }
+    if (!resp.ok || !target) {
+      log.session.error('acp: adapter refused to leave full access under a restrictive mode; stopping it', {
+        runtimeId: this.runtimeId, engine: this.engineId, mode: this._mode, live, error: (resp as { error?: string }).error,
+      })
+      await this.discardUnpublishedWorker()
+      throw new AcpModeRefusedError(engineCaps(this.engineId).displayName, this._mode, live)
+    }
+    const result = (resp as { result?: { configOptions?: AcpConfigOption[] } }).result
+    this._configOptions = result?.configOptions ?? this._configOptions.map((c) =>
+      c.id === 'mode' ? { ...c, currentValue: target } : c)
+    if (!this._chosenMode) this._startAgentMode = target
+    log.session.info('acp: adapter moved off full access for a restrictive mode', { runtimeId: this.runtimeId, engine: this.engineId, from: live, to: target })
+  }
+
   private async replayPersistedConfig(conn: DaemonConnection): Promise<void> {
     const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
-    const wanted = record?.acpConfig ?? this.cfg.acpConfig
-    if (!wanted || this._configOptions.length === 0) return
+    const stored = record?.acpConfig ?? this.cfg.acpConfig
+    if (stored?.mode) this._chosenMode = stored.mode
+    if (!stored || this._configOptions.length === 0) return
+    const wanted = await this.codexPickAsStarted(stored)
     let modelReplayed = false
     for (const [configId, value] of Object.entries(wanted)) {
       const control = this._configOptions.find((c) => c.id === configId)
@@ -1614,11 +1898,7 @@ export class AcpSession {
         })
         // Pending permissions adopted from the worker snapshot predate this
         // replay — under restored full access they must not wait for a click.
-        if (configId === 'mode' && value === 'agent-full-access') {
-          for (const requestId of [...this._pendingPermissions.keys()]) {
-            await this.resolvePermissionRequest(requestId, true).catch(() => false)
-          }
-        }
+        if (configId === 'mode') await this.autoAllowPending()
       } else {
         log.session.warn('acp: config replay failed', {
           runtimeId: this.runtimeId, configId, value,
@@ -1934,20 +2214,22 @@ export class AcpSession {
         ? toolCall.rawInput as Record<string, unknown>
         : undefined
       const options = (p.options as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []
-      this._pendingPermissions.set(p.providerRequestId, {
+      const pending: PendingPermission = {
         requestId: p.providerRequestId,
         toolName,
         input,
         options,
         receivedAt: p.receivedAt,
-      })
-      // Under full access an adopted pending request is answered, not shown.
-      if (this.isFullAccessMode()) {
+        ...(typeof toolCall?.kind === 'string' ? { kind: toolCall.kind } : {}),
+        ...(typeof toolCall?.title === 'string' ? { title: toolCall.title } : {}),
+        ...this.permissionMeta(p.meta && typeof p.meta === 'object' ? p.meta as Record<string, unknown> : undefined),
+      }
+      this._pendingPermissions.set(p.providerRequestId, pending)
+      // What Walnut answers itself is answered, not shown (acp-permission-posture.ts).
+      const auto = this.autoAnswerOf(pending)
+      if (auto) {
         this._emittedPermissionRequestIds.add(p.providerRequestId)
-        log.session.info('acp: full access active — auto-allowing adopted permission', {
-          sessionId: this.trackingId(), requestId: p.providerRequestId,
-        })
-        void this.resolvePermissionRequest(p.providerRequestId, true).catch(() => false)
+        void this.autoAllow(p.providerRequestId, auto, 'adopted')
         continue
       }
       if (!this._emittedPermissionRequestIds.has(p.providerRequestId)) {
@@ -2003,14 +2285,9 @@ export class AcpSession {
     // switching to full access mid-turn cannot unblock approvals codex already
     // asked for — they'd dangle until the turn dies. Match the user's intent:
     // "full access" means stop asking, so answer anything pending with allow.
-    if (configId === 'mode' && value === 'agent-full-access' && this._pendingPermissions.size > 0) {
-      const pending = [...this._pendingPermissions.keys()]
-      log.session.info('acp: full access selected — auto-allowing pending permissions', {
-        sessionId: this.trackingId(), requestIds: pending,
-      })
-      for (const requestId of pending) {
-        await this.resolvePermissionRequest(requestId, true).catch(() => false)
-      }
+    if (configId === 'mode') {
+      this._chosenMode = value
+      await this.autoAllowPending()
     }
     return true
   }
@@ -2021,7 +2298,20 @@ export class AcpSession {
    *  availableModels by base id and throws invalidParams otherwise) — split
    *  and apply model + reasoning_effort as two config ops. */
   async setModel(modelId: string): Promise<boolean> {
-    const { base, effort } = splitAcpModelId(modelId)
+    const { base: asked, effort } = splitAcpModelId(modelId)
+    let base = asked
+    // engines.codex.provider.model_prefix: the endpoint's id is not in codex's own list,
+    // and the bare one it lists starts turns with no tools there, so neither is switched to.
+    if (this.engineId === 'codex' && base) {
+      const asStarted = splitAcpModelId((await this.codexPickAsStarted({ model: base })).model ?? base).base
+      if (asStarted !== base && !this._configOptions.find((c) => c.id === 'model')?.options.some((o) => o.value === asStarted)) {
+        log.session.warn('acp: model not switched: this endpoint needs an id codex does not list; a new session starts on it', {
+          sessionId: this.trackingId(), modelId, endpointId: asStarted,
+        })
+        return false
+      }
+      base = asStarted
+    }
     if (!await this.setConfigOption('model', base)) return false
     if (effort && !await this.setConfigOption('reasoning_effort', effort)) {
       log.session.warn('acp: model applied but reasoning_effort rejected', {

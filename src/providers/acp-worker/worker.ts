@@ -760,6 +760,7 @@ export class AcpWorker {
               toolCall: { ...this.toolCalls.get(params.toolCall.toolCallId), ...params.toolCall },
               options: params.options,
               receivedAt: Date.now(),
+              ...(params._meta ? { meta: params._meta } : {}),
             },
             resolve,
           })

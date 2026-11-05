@@ -2336,6 +2336,29 @@ export interface EngineConfigEntry {
   adapter_cmd?: string[];
   /** Variables set for the engine's process; `null` removes an inherited one. */
   env?: Record<string, string | null>;
+  /** Codex only: route every Codex spawn through this OpenAI-compatible endpoint
+   *  (src/providers/codex-engine-config.ts, docs/reference/codex-engine.md). */
+  provider?: EngineProviderEntry;
+  /** Codex only: default model for a session that names none (a pick still wins). */
+  model?: string;
+  /** Codex only: default reasoning effort for a session that names none. */
+  effort?: string;
+}
+
+/** `engines.codex.provider`: an OpenAI-compatible endpoint Codex sends its requests to. */
+export interface EngineProviderEntry {
+  base_url: string;
+  /** The provider id Codex knows it by (letters, digits, `-`, `_`); default `walnut-provider`. */
+  name?: string;
+  /** `responses` (default) or `chat`. */
+  wire_api?: string;
+  /** The NAME of the environment variable that holds the endpoint's API key; none = no sign-in. */
+  env_key?: string;
+  /** Prefix the endpoint's model ids carry that Codex's own model list does not (`vendor.`). */
+  model_prefix?: string;
+  /** Never written by a person: a replica's config copy marks a provider the Mac could not copy
+   *  (it held a credential) this way, and a Codex start there refuses (codex-engine-source.ts). */
+  withheld?: boolean;
 }
 
 /**
@@ -3104,6 +3127,11 @@ export interface SessionRecord {
   project: string;
   process_status: ProcessStatus;
   mode: SessionMode;
+  /** A person or an agent named `mode` (a start that named one, a mode change).
+   *  ACP sessions read it: before 2026-11-05 an ACP start that named no mode
+   *  recorded 'default', so an unmarked 'default' there is no choice
+   *  (src/core/sessions/acp-recorded-mode.ts). */
+  modeChosen?: boolean;
   provider?: SessionProvider;
   /** Which coding-agent CLI backs this session. Only set when provider='cli'. Undefined = 'claude' (default). */
   engine?: SessionEngine;

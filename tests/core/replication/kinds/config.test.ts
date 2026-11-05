@@ -233,9 +233,10 @@ describe('the half rule (floor 0) and the confirm', () => {
     expect(Object.keys((await readConfigCopy())!).length).toBe(all)
     const st = peekKindState(h.target.id, 'config')!
     expect(st.refusals).toBe(3)
-    expect(confirmKindRemoval(h.target, 'config', { entries: 2 })).toBe(true)
-    expect(await round()).toMatchObject({ action: 'synced', removed: all - 2 })
-    expect(Object.keys((await readConfigCopy())!).sort()).toEqual(['ui', 'version'])
+    // Three rows left: ui, version and the engines row every copy carries.
+    expect(confirmKindRemoval(h.target, 'config', { entries: 3 })).toBe(true)
+    expect(await round()).toMatchObject({ action: 'synced', removed: all - 3 })
+    expect(Object.keys((await readConfigCopy())!).sort()).toEqual(['engines', 'ui', 'version'])
   })
 })
 

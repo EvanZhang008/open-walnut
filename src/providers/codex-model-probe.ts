@@ -52,6 +52,52 @@ export function codexConfigModelOverlay(env: NodeJS.ProcessEnv): { model?: strin
   return { model: pick('model'), effort: pick('model_reasoning_effort') }
 }
 
+/** A TOML inline value for a `-c` override (JSON string escapes are TOML basic-string escapes, except DEL). */
+function tomlInline(value: unknown): string {
+  if (typeof value === 'string') return JSON.stringify(value).replace(/\u007f/g, '\\u007F')
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return `[${value.filter((v) => v !== null && v !== undefined).map(tomlInline).join(', ')}]`
+  if (isRecord(value)) {
+    const parts = Object.entries(value).filter(([, v]) => v !== null && v !== undefined)
+      .map(([k, v]) => `${/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k)} = ${tomlInline(v)}`)
+    return `{${parts.join(', ')}}`
+  }
+  return '""'
+}
+
+/** Provider fields that stay off a command line, which every user of the host can read (ps). */
+const PROVIDER_SECRET_KEYS = new Set(['experimental_bearer_token', 'http_headers', 'query_params'])
+
+/**
+ * The provider CODEX_CONFIG names, as `-c` overrides for a codex app-server: the
+ * same arguments codex-acp's patch puts on the session's app-server, so the probe
+ * lists models through the provider a session uses, never the one
+ * ~/.codex/config.toml names. Errors never echo the value.
+ */
+export function codexProviderStartupArgs(env: NodeJS.ProcessEnv): string[] {
+  if (!env.CODEX_CONFIG) return []
+  let parsed: unknown
+  try { parsed = JSON.parse(env.CODEX_CONFIG) } catch { throw new Error('CODEX_CONFIG is not valid JSON') }
+  if (!isRecord(parsed)) throw new Error('CODEX_CONFIG must be a JSON object')
+  const args: string[] = []
+  const named = new Set<string>()
+  const providers = parsed.model_providers
+  if (isRecord(providers)) {
+    for (const [name, def] of Object.entries(providers)) {
+      if (!/^[A-Za-z0-9_-]+$/.test(name) || !isRecord(def)) continue
+      const startup = Object.fromEntries(Object.entries(def).filter(([key]) => !PROVIDER_SECRET_KEYS.has(key)))
+      args.push('-c', `model_providers.${name}=${tomlInline(startup)}`)
+      named.add(name)
+    }
+  }
+  const provider = parsed.model_provider
+  const definedHere = isRecord(providers) && typeof provider === 'string' && Object.hasOwn(providers, provider)
+  if (typeof provider === 'string' && provider && (!definedHere || named.has(provider))) {
+    args.push('-c', `model_provider=${JSON.stringify(provider)}`)
+  }
+  return args
+}
+
 /** codex-acp trusts the session cwd in thread/start; the same project layers apply here. */
 export function codexProjectTrustArg(cwd: string): string {
   let key = '"'
@@ -166,9 +212,11 @@ export function probeCodexModels(binary: string, options: CodexModelProbeOptions
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS
   let overlay: { model?: string; effort?: string }
   let trustArg: string
+  let providerArgs: string[]
   try {
     overlay = codexConfigModelOverlay(env)
     trustArg = codexProjectTrustArg(cwd)
+    providerArgs = codexProviderStartupArgs(env)
   } catch (err) {
     return Promise.reject(err)
   }
@@ -177,7 +225,7 @@ export function probeCodexModels(binary: string, options: CodexModelProbeOptions
     let child: ChildProcessWithoutNullStreams
     try {
       // Its own process group on Unix, so a descendant holding the pipes can be ended too.
-      child = spawn(binary, ['app-server', '-c', trustArg], {
+      child = spawn(binary, ['app-server', '-c', trustArg, ...providerArgs], {
         cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: !IS_WINDOWS,
       })
     } catch (err) {

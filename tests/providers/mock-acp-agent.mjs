@@ -358,6 +358,28 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  // "exec-permission-test <json>": ask permission for the tool call the test
+  // describes (an engine's own shape of a shell command or an MCP tool). The json
+  // is the toolCall, or { toolCall, _meta } for a request that carries _meta.
+  if (text.includes('exec-permission-test ')) {
+    const spec = JSON.parse(text.slice(text.indexOf('exec-permission-test ') + 'exec-permission-test '.length));
+    const toolCall = spec.toolCall ?? spec;
+    const resp = await request('session/request_permission', {
+      sessionId,
+      ...(spec._meta ? { _meta: spec._meta } : {}),
+      toolCall: { toolCallId: `tc-${Date.now()}`, status: 'pending', ...toolCall },
+      options: [
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'allow-always', name: 'Allow for session', kind: 'allow_always' },
+        { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+      ],
+    });
+    const outcome = resp?.outcome ?? {};
+    chunk(sessionId, outcome.outcome === 'selected' ? `exec permission: ${outcome.optionId}` : 'exec permission cancelled');
+    reply(id, { stopReason: outcome.outcome === 'selected' ? 'end_turn' : 'cancelled' });
+    return;
+  }
+
   if (text.includes('permission-test')) {
     chunk(sessionId, 'about to ask permission');
     const minimal = text.includes('minimal-permission-test');

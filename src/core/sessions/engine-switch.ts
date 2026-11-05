@@ -42,6 +42,7 @@ import { engineCaps, resolveEngine } from '../agents/engine-registry.js';
 import { engineHostBlocker, LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
 import { engineSwitchedReason, isSupersededSession } from './engine-switch-marker.js';
 import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-resume.js';
+import { recordedSessionMode } from './acp-recorded-mode.js';
 import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, renderCarriedContext, targetWindowTokens,
@@ -705,7 +706,8 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   const targetUnread = resume ? (await tracker.getSessionByClaudeId(resume.prev.claudeSessionId).catch(() => undefined))?.switchContext?.text : undefined;
   const resumeBlock = resume ? fit([...(targetUnread ? [targetUnread] : []), renderHintBlock(ENGINE_SWITCH_HINT, resume.text + cut)]).join('\n') : undefined;
   const message = words ? composeHinted(words, { before: blocks, after: [] }) : '';
-  const mode = state.to.permission_mode ?? old.mode;
+  // An old ACP record's unchosen 'default' is no mode to carry (acp-recorded-mode.ts).
+  const mode = state.to.permission_mode ?? (recordedSessionMode(old).chosen ? old.mode : undefined);
   return {
     message, context: words ? undefined : blocks.join('\n'), cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable,
     ...(resume && resumeBlock ? { resume: { ...resume, message: words ? composeHinted(words, { before: [resumeBlock], after: [] }) : '', context: words ? undefined : resumeBlock } } : {}),

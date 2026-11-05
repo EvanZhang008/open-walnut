@@ -24,7 +24,6 @@ import type { SessionEngine } from '../core/types.js'
 import {
   resolveAcpArtifacts,
   resolveSystemCodexPath,
-  parseCodexBaseConfig,
   resolveEngineExecutable,
   buildAcpAdapterEnv,
   engineEnvOverlayFromConfig,
@@ -37,6 +36,7 @@ import {
 import { log } from '../logging/index.js'
 import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection } from './daemon-connection.js'
+import { mapCodexCatalog, resolveCodexEngine } from './codex-engine-config.js'
 
 export interface EngineModelCatalog {
   engine: SessionEngine
@@ -246,15 +246,25 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
   // is a bundled package that would silently fall back to its own vendored
   // codex without it.
   let overlay: Record<string, string> | undefined
+  let walnutConfig: unknown
   try {
     const { getConfig } = await import('../core/config-manager.js')
-    overlay = engineEnvOverlayFromConfig(await getConfig(), engine)
+    walnutConfig = await getConfig()
+    overlay = engineEnvOverlayFromConfig(walnutConfig, engine)
   } catch { /* unreadable config = no overlay, same as the launch path */ }
   const configuredEnv = mergeAcpSpawnEnv(process.env, overlay)
   const codexPath = engine === 'codex' ? resolveSystemCodexPath({ env: configuredEnv, cwd: probeCwd }) : undefined
+  // The probe lists through the provider the merged config names, with its prefix (codex-engine-config.ts).
+  // Off the Mac its engine settings come from the Mac's copy (codex-engine-source.ts).
+  const codex = engine === 'codex'
+    ? resolveCodexEngine(await (await import('./codex-engine-source.js')).codexWalnutConfig(), configuredEnv.CODEX_CONFIG)
+    : undefined
   const managed = engine === 'codex'
-    ? buildAcpAdapterEnv(codexPath, { sessionId: `model-probe-${engine}`, baseConfig: parseCodexBaseConfig(configuredEnv.CODEX_CONFIG) })
+    ? buildAcpAdapterEnv(codexPath, { sessionId: `model-probe-${engine}`, baseConfig: codex!.baseConfig, codexModelPrefix: codex!.prefix })
     : buildAcpAdapterEnv(undefined, { sessionId: `model-probe-${engine}` })
+  // With a provider model_prefix, the menu offers the ids that endpoint answers to.
+  const shown = <T extends { models: AcpModelInfo[]; currentModelId?: string }>(catalog: T): T =>
+    codex ? mapCodexCatalog(catalog, codex.settings) : catalog
   const provider = engine === 'pi'
     ? { PI_ACP_PI_COMMAND: resolveEngineExecutable({ engine: 'pi', cwd: probeCwd, env: configuredEnv }) }
     : undefined
@@ -266,11 +276,11 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
     if (conn.hasCapability('acp-model-catalog-v1')) {
       const response = await conn.send('acpModelCatalog', { binary: codexPath, cwd: probeCwd, env: { ...(overlay ?? {}), ...(managed ?? {}) } })
       if (!response.ok) throw new Error(response.error || 'Codex model catalog failed')
-      const result = response as unknown as { models: AcpModelInfo[]; currentModelId?: string }
+      const result = shown(response as unknown as { models: AcpModelInfo[]; currentModelId?: string })
       return { engine, models: result.models, currentModelId: result.currentModelId, fetchedAt: Date.now(), source: 'probe' }
     }
   }
-  const { models, currentModelId } = await probeAdapterModels(adapterCmd, { env, cwd: probeCwd })
+  const { models, currentModelId } = shown(await probeAdapterModels(adapterCmd, { env, cwd: probeCwd }))
   return { engine, models, currentModelId, fetchedAt: Date.now(), source: 'probe' }
 }
 

@@ -228,6 +228,8 @@ export interface PendingPermissionSnapshot {
   toolCall: unknown          // raw ACP ToolCallUpdate — normalized server-side
   options: unknown[]         // raw ACP PermissionOption[]
   receivedAt: number
+  /** The request's raw `_meta` (codex-acp puts the unstripped command there); older workers omit it. */
+  meta?: unknown
 }
 
 export interface AcpModelInfo {

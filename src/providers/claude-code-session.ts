@@ -75,6 +75,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
+import { recordedSessionMode } from '../core/sessions/acp-recorded-mode.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
@@ -11229,12 +11230,17 @@ export class SessionRunner {
       record = replacement
     }
     let session: AcpSession | undefined
+    // An old record's 'default' may be the fallback an unnamed start wrote, never a
+    // choice: it re-attaches as Walnut's default, never moved off full access
+    // (core/sessions/acp-recorded-mode.ts).
+    const recorded = recordedSessionMode(record)
     try {
       session = new AcpSession({
         taskId: record.taskId ?? '',
         project: record.project ?? '',
         cwd: record.cwd || process.env.HOME || process.cwd(),
-        mode: (record.mode as SessionMode | undefined) ?? 'default',
+        mode: recorded.mode,
+        modeNamed: recorded.chosen,
         engine: recordEngine,
         ...(record.host && record.host !== '__local__' ? { host: record.host } : {}),
         providerSessionId: record.claudeSessionId,
@@ -11267,6 +11273,11 @@ export class SessionRunner {
       this.acpSessions.set(record.claudeSessionId, session)
       this.acpSessions.set(establishedId, session)
       if (migratedFrom) this.acpSessions.set(migratedFrom, session)
+      if (!recorded.chosen && currentRecord.mode !== session.mode) {
+        // The record says what the session runs in now, so its pill stops reading Ask.
+        const { updateSessionRecord } = await import('../core/session-tracker.js')
+        await updateSessionRecord(establishedId, { mode: session.mode }).catch(() => undefined)
+      }
       await this.linkAcpSessionToTask(
         currentRecord.taskId,
         establishedId,
@@ -11573,7 +11584,16 @@ export class SessionRunner {
     // ("base[effort]") while its `model` option takes the BASE id, so split;
     // engines whose option values ARE the full id (opencode's provider/model/
     // effort) pass through splitAcpModelId unchanged.
-    const draftModel = data.model?.trim() || undefined
+    let draftModel = data.model?.trim() || undefined
+    // With engines.codex.provider, the pick is the endpoint's id (its model prefix
+    // applied) and rides the new thread's config (codex-engine-config.ts).
+    if (engine === 'codex' && draftModel) {
+      const { codexPickForProvider, codexRawConfig, resolveCodexEngine } = await import('./codex-engine-config.js')
+      const walnutConfig = await (await import('./codex-engine-source.js')).codexWalnutConfig()
+      const { settings } = resolveCodexEngine(walnutConfig, codexRawConfig(walnutConfig, !!remoteHost))
+      const mapped = codexPickForProvider({ model: draftModel }, settings)
+      if (mapped?.model) draftModel = mapped.reasoning_effort ? `${mapped.model}[${mapped.reasoning_effort}]` : mapped.model
+    }
     const { base: draftModelBase, effort: draftModelEffort } = draftModel
       ? splitAcpModelId(draftModel)
       : { base: undefined, effort: undefined }
@@ -11583,12 +11603,17 @@ export class SessionRunner {
     const startAt = Date.now()
     const extras = await buildAcpStartExtras(data)
     const extrasMs = Date.now() - startAt
+    const modeNamed = !!data.mode && VALID_SESSION_MODE_IDS.has(data.mode)
     const session = new AcpSession({
       runtimeId: data.runtimeId,
       taskId: data.taskId,
       project: data.project ?? '',
       cwd,
-      mode: (data.mode as SessionMode | undefined) ?? 'default',
+      // A start that names no mode runs as a Claude Code start of the task does
+      // (DEFAULT_SESSION_MODE); only then may the engine's own config file pick its
+      // preset (acp-permission-posture.ts). Same mode, same posture, on every engine.
+      mode: modeNamed ? data.mode as SessionMode : DEFAULT_SESSION_MODE,
+      modeNamed,
       engine,
       ...(remoteHost ? { host: remoteHost } : {}),
       ...(draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
@@ -11626,10 +11651,13 @@ export class SessionRunner {
     // replayPersistedConfig applied a moment ago, so persisting past it would
     // pin a model on the record (pill + respawn replay) that never took
     // effect. Stale-catalog picks degrade to the provider default, honestly.
-    const modelAdvertised = !!draftModelBase && session.sessionControls.some(
+    // A Codex pick that rode the thread config (engines.codex.provider) is not in
+    // codex's own list, so the session's current model is the proof it took.
+    const liveModel = draftModelBase ? session.modelCatalog?.currentModelId : undefined
+    const modelAdvertised = !!draftModelBase && (session.sessionControls.some(
       (control) => control.id === 'model'
         && control.options.some((option) => option.value === draftModelBase),
-    )
+    ) || (!!liveModel && splitAcpModelId(liveModel).base === draftModelBase))
     if (draftModelBase && !modelAdvertised) {
       log.session.warn('acp: draft-picked model is not advertised by the adapter — launching on its default', {
         sessionId: sid, engine, model: draftModel,
@@ -11642,8 +11670,17 @@ export class SessionRunner {
         description: naming.slice(0, 500),
         // The record is the durable copy: acpConfig so a worker respawn
         // replays the choice, acpModel so the pill shows it immediately.
-        ...(modelAdvertised && draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
+        // The preset the adapter started in rides it too, so a respawn keeps the
+        // start's posture instead of re-reading the engine's config file.
+        ...((modelAdvertised && draftAcpConfig) || session.startAgentMode
+          ? { acpConfig: {
+            ...(modelAdvertised && draftAcpConfig ? draftAcpConfig : {}),
+            ...(session.startAgentMode ? { mode: session.startAgentMode } : {}),
+          } }
+          : {}),
         ...(modelAdvertised && draftModel ? { acpModel: draftModel } : {}),
+        // A named mode is a choice the next start honours (core/sessions/acp-recorded-mode.ts).
+        ...(modeNamed ? { modeChosen: true } : {}),
       })
     } catch (err) {
       log.session.warn('acp: failed to persist session title', {
@@ -11656,7 +11693,7 @@ export class SessionRunner {
       await this.linkAcpSessionToTask(
         data.taskId,
         sid,
-        (data.mode as SessionMode | undefined) ?? 'default',
+        session.mode,
       )
     } catch (err) {
       log.session.warn('acp: failed to link session to task', {

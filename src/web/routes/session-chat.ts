@@ -216,7 +216,7 @@ export function registerSessionChatRpc(): void {
     if (typeof data.mode === 'string') {
       const nextMode = data.mode as SessionMode
       const application = await sessionRunner.changePermissionMode(data.sessionId, nextMode)
-      await updateSessionRecord(data.sessionId, { mode: nextMode })
+      await updateSessionRecord(data.sessionId, { mode: nextMode, modeChosen: true })
       log.web.info('session:send RPC mode switch confirmed', {
         sessionId: data.sessionId, mode: nextMode, application,
       })
