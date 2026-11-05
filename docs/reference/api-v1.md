@@ -1925,15 +1925,18 @@ session instead.
   session_id, engine, model, at, carried_turns, trimmed_turns, compacted,
   transcript_path }, resumed?: { session_id, engine, at, carried_turns } }],
   legacySessionIds, engineSwitch? }`, oldest first.
-- `POST /api/v1/tasks/:id/switch-engine { engine, text, model?, effort?,
-  permission_mode?, wait_ms? }`: `text` is the message the new session starts
-  with, on the same host as the old one (a switch never moves the work). While the task's session is in a turn the switch waits
-  for that turn to end: `202 { state: "pending", switchId, fromSessionId,
-  engine, host }`, and it then runs by itself. Otherwise it waits up to
+- `POST /api/v1/tasks/:id/switch-engine { engine, text?, model?, effort?,
+  permission_mode?, when?, detach?, wait_ms? }`: `text` is the message the new session starts
+  with, on the same host as the old one (a switch never moves the work); without it the new
+  session starts with the carried context and answers one ready line. `when: "now"` (a person's
+  default) stops a running turn and switches at once; `when: "turn_end"` (an agent's default)
+  waits for that turn to end: `202 { state: "pending", switchId, fromSessionId,
+  engine, host }`, and it then runs by itself. `detach: true` answers `202 { state: "switching" }`
+  once the switch is checked. Otherwise it waits up to
   `wait_ms` (default 25000): `200 { state: "done", taskId, switchId,
   fromSessionId, sessionId, engine, host, carriedTurns, trimmedTurns,
   transcriptPath?, resumed? }` or `202 { state: "switching" }`. Refusals: `400 bad_engine`,
-  `400 message_required`, `400 same_engine` (change the model instead), `409
+  `400 bad_when`, `400 same_engine` (change the model instead), `409
   engine_not_on_host` (the task's host cannot run that engine: its CLI is not
   installed there, or it is the custom engine, which runs on the Mac only; move
   the work with `/tasks/:id/move`), `502 start_failed` (the old session is

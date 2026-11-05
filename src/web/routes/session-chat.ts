@@ -406,6 +406,9 @@ export function registerSessionChatRpc(): void {
       messageId: msg.id,
       enqueuedAt: msg.enqueuedAt,
       ...(displayedByHistory !== data.message ? { dedupText: displayedByHistory } : {}),
+      // Sent from a panel on a session an engine switch replaced: the message went to the task's
+      // current session (engine-switch.ts activeSessionFor), and the panel follows it there.
+      ...(msg.sessionId && msg.sessionId !== data.sessionId ? { deliveredTo: msg.sessionId } : {}),
     }
   })
 

@@ -384,7 +384,26 @@ interface SessionPanelProps {
   composerPill?: ReactNode;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill }: SessionPanelProps) {
+/**
+ * The panel, following its session when another replaces it (an engine switch, a rewind, a
+ * plan run, a prefix id): a host that follows passes `onSessionReplaced` and shows the new id
+ * itself; for every other host (a plugin page, a drawer, the Org page) the panel shows the new
+ * session by itself (2026-11-05: a plugin page kept drawing the replaced Claude Code session,
+ * so the switch read as "it go back automactily to claude code", its engines locked).
+ */
+export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps) {
+  const { sessionId, onSessionReplaced } = props;
+  const [followed, setFollowed] = useState<{ from: string; to: string } | null>(null);
+  const shown = followed?.from === sessionId ? followed.to : sessionId;
+  const replaced = useCallback((oldId: string, newId: string) => {
+    if (onSessionReplaced) { onSessionReplaced(oldId, newId); return; }
+    log.info('session-panel', 'following the replacing session (the host does not)', { sessionId: oldId, newSessionId: newId, hostSessionId: sessionId });
+    setFollowed({ from: sessionId, to: newId });
+  }, [onSessionReplaced, sessionId]);
+  return <SessionPanelBody {...props} sessionId={shown} onSessionReplaced={replaced} />;
+});
+
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -435,7 +454,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   useEffect(() => { if (sessionRecord) keepSessionRecord(sessionId, sessionRecord); }, [sessionId, sessionRecord]);
   // Set once the ~15s retry window closes on a 404 — the id resolves to nothing.
   const [missing, setMissing] = useState(false);
-  const { optimisticMsgs, sendError, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
+  const { optimisticMsgs, sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
+  // A message sent here went to the session an engine switch put in this one's place: show that one.
+  useEffect(() => {
+    if (redirectedTo && redirectedTo !== sessionId) onSessionReplaced?.(sessionId, redirectedTo);
+  }, [redirectedTo, sessionId, onSessionReplaced]);
   // isStreaming is bubbled up from the single useSessionStream instance that lives
   // inside SessionChatHistory (via onStreamingChange). We used to mount a second
   // hook instance here, which doubled stream-subscribe RPCs and produced two
@@ -2214,9 +2237,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             controls={!switchPick && engineUi.isAcp ? sessionControls : undefined}
             onControl={!switchPick && engineUi.isAcp ? setSessionControl : undefined}
             pending={switchPending}
-            title={switchPick ? 'Applies to the new session your next message starts.' : undefined}
+            title={switchPick ? 'Switches this task when you close the picker.' : undefined}
             onProviderSwitch={engineSwitch.enabled ? engineSwitch.onProviderSwitch : undefined}
             providerLockReason={engineSwitch.enabled ? engineSwitch.providerLockReason : undefined}
+            onPickerClose={engineSwitch.enabled ? engineSwitch.commit : undefined}
+            onPickerCancel={engineSwitch.enabled ? engineSwitch.clear : undefined}
           />
         ),
       },
@@ -3266,6 +3291,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
           <EngineSwitchLine
             pick={engineSwitch.pick}
             server={engineSwitch.server}
+            refused={engineSwitch.refused}
+            sending={engineSwitch.sending}
             catalog={engineCatalog}
             taskId={session?.taskId}
             onUndo={engineSwitch.clear}

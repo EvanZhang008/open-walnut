@@ -417,7 +417,9 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         // The first line says who started the task: a session's peer note, or Walnut's, never a person's typing.
         const { frameStartText } = await import('./send-frame.js');
         const { frameAsWalnut, readsAsPerson, framingCallerOf } = await import('./send-frame.js');
-        let firstMessage = frameStartText(startBody, {
+        // An engine switch attributes its own first line (engine-switch.ts prepare): the person's words as
+        // theirs, an agent's framed, and Walnut's carried context as a hint block a display takes off.
+        let firstMessage = params.source === 'engine-switch' ? startBody : frameStartText(startBody, {
           source: params.source, ...(params.callerSid ? { callerSid: params.callerSid } : {}),
           ...(caller?.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}), ...(requestId ? { requestId } : {}),
         }) + (replyTrailer ? `\n${replyTrailer}` : '');

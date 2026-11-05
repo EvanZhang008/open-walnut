@@ -15,6 +15,8 @@ const edges = vi.hoisted(() => ({
   stops: [] as string[],
   writes: [] as Array<{ host: string; path: string; content: string }>,
   failStart: false,
+  /** The old session's history cannot be read (a remote host dropped). */
+  failHistory: false,
   nextSid: 0,
   history: {} as Record<string, Array<Record<string, unknown>>>,
   gate: undefined as Promise<void> | undefined,
@@ -51,7 +53,10 @@ vi.mock('../../../src/core/transfer/daemon-transfer-client.js', () => ({
   findTranscript: async () => ({ kind: 'none' }),
 }));
 vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
-  readProviderSessionHistory: async (sid: string) => ({ messages: edges.history[sid] ?? [] }),
+  readProviderSessionHistory: async (sid: string) => {
+    if (edges.failHistory) throw new Error('the host dropped the connection');
+    return { messages: edges.history[sid] ?? [] };
+  },
   terminateSession: async (sid: string) => {
     edges.stops.push(sid);
     const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
@@ -88,7 +93,8 @@ import {
   resumeEngineSwitches, watchPendingSwitch, pendingVerdict,
   SWITCH_BACKGROUND_GRACE_MS, SWITCH_PENDING_MAX_MS,
 } from '../../../src/core/sessions/engine-switch-watch.js';
-import { BACKGROUND_CUT_NOTE } from '../../../src/core/sessions/engine-switch.js';
+import { BACKGROUND_CUT_NOTE, switchReadyNote } from '../../../src/core/sessions/engine-switch.js';
+import { parseHinted } from '../../../src/core/hints/hint-format.js';
 import { linkSession, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { taskConversation } from '../../../src/core/sessions/task-session-claim.js';
 import { createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
@@ -100,7 +106,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.failStart = false; edges.history = {}; edges.outlives.clear();
+  edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
 });
@@ -236,9 +242,19 @@ describe('engine switch inside a task', () => {
     await mutateStore((s) => {
       s.queues[sid] = [{ id: 'qm-w', sessionId: sid, message: 'not delivered yet', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
     }, false, true);
-    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'After it.', source: 'test' });
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'After it.', source: 'test', when: 'turn_end' });
     expect(res.state).toBe('pending');
     expect(edges.starts).toHaveLength(0);
+  });
+
+  it('a person\'s pick runs at once over a queued message, which moves to the new session', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    await mutateStore((s) => {
+      s.queues[sid] = [{ id: 'qm-n', sessionId: sid, message: 'not delivered yet', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Now.', source: 'test' });
+    expect(res.state).toBe('done');
+    expect((await getStore()).queues[res.sessionId!]?.map((r) => r.message)).toEqual(['not delivered yet']);
   });
 
   it('a restart in the middle of a resume still sends its message, once', async () => {
@@ -300,12 +316,29 @@ describe('engine switch inside a task', () => {
     const run = requestEngineSwitch({ taskId, engine: 'codex', message: 'Go on.', source: 'test' });
     await vi.waitFor(() => expect(edges.starts).toHaveLength(1));
     const addressed = activeSessionFor(sid);
-    // A second pick while it runs is refused, never dropped silently.
-    await expect(requestEngineSwitch({ taskId, engine: 'gemini', message: 'x', source: 'test' })).rejects.toMatchObject({ code: 'switch_in_progress' });
+    // An agent's second pick while it runs is refused, never dropped silently.
+    await expect(requestEngineSwitch({ taskId, engine: 'gemini', message: 'x', source: 'test', callerSid: 'agent-sid' })).rejects.toMatchObject({ code: 'switch_in_progress' });
     release();
     const res = await run;
     expect(await addressed).toBe(res.sessionId);
     edges.gate = undefined;
+  });
+
+  it('a person\'s second pick while a switch runs follows it: claude, then codex, then pi', async () => {
+    const { taskId, sid } = await taskOn('claude');
+    let release!: () => void;
+    edges.gate = new Promise<void>((r) => { release = r; });
+    const first = requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+    await vi.waitFor(() => expect(edges.starts).toHaveLength(1));
+    const second = requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    edges.gate = undefined;
+    release();
+    const a = await first;
+    const b = await second;
+    expect(a).toMatchObject({ state: 'done', engine: 'codex', fromSessionId: sid });
+    expect(b).toMatchObject({ state: 'done', engine: 'pi', fromSessionId: a.sessionId });
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(b.sessionId);
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done', session_id: b.sessionId });
   });
 
   it('queued rows and open requests move to the new session', async () => {
@@ -345,7 +378,7 @@ describe('engine switch inside a task', () => {
 
   it('a pick made mid-turn waits for the turn to end, then runs by itself', async () => {
     const { taskId, sid } = await taskOn('claude', { status: 'running' });
-    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'After this turn.', displayText: 'After this turn.', source: 'test' });
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'After this turn.', displayText: 'After this turn.', source: 'test', when: 'turn_end' });
     expect(res.state).toBe('pending');
     expect(edges.starts).toHaveLength(0);
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'pending', from_session_id: sid, message: 'After this turn.' });
@@ -357,6 +390,123 @@ describe('engine switch inside a task', () => {
     expect(String(edges.starts[0].message).trimEnd().endsWith('After this turn.')).toBe(true);
     expect((await getTask(taskId)).engine_switch?.message).toBeUndefined();
   }, 20_000);
+
+  it('a person\'s pick mid-turn stops the turn and switches at once, the old session retired before the stop', async () => {
+    // 2026-11-05, the user: "it shoud directly go, after user choose model and then exist the model selection".
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    // The turn's own message still reads `processing` (the real queue shape of a running turn).
+    await mutateStore((st) => {
+      st.queues[sid] = [{ id: 'qm-p', sessionId: sid, message: 'the running turn', status: 'processing', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    const interrupts: Array<{ sid: string; archived: boolean }> = [];
+    bus.subscribe('test-interrupt', async (e) => {
+      if (e.name !== EventNames.SESSION_INTERRUPT) return;
+      const id = (e.data as { sessionId: string }).sessionId;
+      interrupts.push({ sid: id, archived: !!(await getSessionByClaudeId(id))?.archived });
+      // The CLI ends its turn on the interrupt.
+      await updateSessionRecord(id, { process_status: 'idle' } as never);
+      await mutateStore((st) => { delete st.queues[id]; }, false, true);
+    }, { global: true });
+    try {
+      const res = await requestEngineSwitch({ taskId, engine: 'codex', source: 'test' });
+      expect(res.state).toBe('done');
+      expect(interrupts).toEqual([{ sid, archived: true }]);
+      expect(edges.stops).toContain(sid);
+      // No words of the user's: the new session starts on the carried context and a Walnut note asking
+      // for a ready line. The note is the line's words (a line of hints alone shows as typed text), framed
+      // as Walnut's, and the carried context comes off it as a hint.
+      const first = parseHinted(String(edges.starts[0].message));
+      expect(first.hints.map((h) => h.kind)).toEqual(['engine-switch']);
+      expect(first.text).toContain(switchReadyNote('codex'));
+      expect(first.text).toMatch(/^<walnut-message kind="peer-note" from="Walnut \(engine switch\)"/);
+      expect((await taskConversation(taskId))?.claudeSessionId).toBe(res.sessionId);
+    } finally {
+      bus.unsubscribe('test-interrupt');
+    }
+  }, 20_000);
+
+  /** The CLI ends its turn on the Stop a switch sends. */
+  const endTurnOnInterrupt = (name: string) => bus.subscribe(name, async (e) => {
+    if (e.name !== EventNames.SESSION_INTERRUPT) return;
+    const id = (e.data as { sessionId: string }).sessionId;
+    await updateSessionRecord(id, { process_status: 'idle' } as never);
+    await mutateStore((st) => { delete st.queues[id]; }, false, true);
+  }, { global: true });
+
+  it('a mid-turn switch whose context read fails puts the old session back as the task\'s, unlocked', async () => {
+    // Review 2026-11-05: the old session is retired before its turn is stopped; a read failing after
+    // that left the task on a session that read as replaced (rail locked, sends held, never asked).
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    endTurnOnInterrupt('test-interrupt-fail');
+    edges.failHistory = true;
+    try {
+      await expect(requestEngineSwitch({ taskId, engine: 'codex', source: 'test' })).rejects.toBeTruthy();
+      const old = await getSessionByClaudeId(sid);
+      expect(old?.archived).toBeFalsy();
+      expect(old?.archive_reason).toBeUndefined();
+      expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+      expect(await activeSessionFor(sid)).toBe(sid);
+      expect((await getTask(taskId)).engine_switch?.state).toBe('failed');
+      expect(edges.starts).toHaveLength(0);
+    } finally {
+      bus.unsubscribe('test-interrupt-fail');
+    }
+  }, 20_000);
+
+  it('a person\'s pick over a switch waiting for the turn takes that switch\'s message along', async () => {
+    const { taskId } = await taskOn('claude', { status: 'running' });
+    const waiting = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Run the parser tests next.', source: 'test', when: 'turn_end' });
+    expect(waiting.state).toBe('pending');
+    endTurnOnInterrupt('test-interrupt-carry');
+    try {
+      const res = await requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+      expect(res).toMatchObject({ state: 'done', engine: 'pi' });
+      expect(edges.starts).toHaveLength(1);
+      expect(parseHinted(String(edges.starts[0].message)).text).toContain('Run the parser tests next.');
+    } finally {
+      bus.unsubscribe('test-interrupt-carry');
+    }
+  }, 20_000);
+
+  it('an agent\'s switch message reaches the new session in that agent\'s peer note', async () => {
+    const { task: lead } = await addTask({ title: 'Parser lead', project: 'Marina', cwd: '/work/repo' } as never);
+    await createSessionRecord('lead-sid-1', lead.id, 'Marina', '/work/repo');
+    await updateSessionRecord('lead-sid-1', { process_status: 'idle' } as never);
+    await linkSession(lead.id, 'lead-sid-1');
+    const { taskId } = await taskOn('claude');
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on with the trailing commas.', source: 'test', callerSid: 'lead-sid-1' });
+    expect(res.state).toBe('done');
+    const first = parseHinted(String(edges.starts[0].message));
+    expect(first.hints.map((h) => h.kind)).toEqual(['engine-switch']);
+    expect(first.text).toContain('Carry on with the trailing commas.');
+    expect(first.text).toMatch(/^<walnut-message kind="peer-note"/);
+    expect(first.text).toContain('lead-sid');
+    expect(first.text).not.toContain('Walnut (engine switch)');
+  });
+
+  it('the user\'s sequence: send, Stop, model change, switch to Codex, then Pi, then messages reach Pi', async () => {
+    // 2026-11-05 in the Mac app: the model change's echo line read as a turn (fold-local-command-echo.test.ts),
+    // so the Codex switch went pending and the old Claude Code session looked like it carried on.
+    const { taskId, sid } = await taskOn('claude');
+    await updateSessionRecord(sid, { model: 'sonnet', cliModel: 'sonnet' } as never);
+    const codex = await requestEngineSwitch({ taskId, engine: 'codex', model: 'gpt-5.5', source: 'test' });
+    expect(codex).toMatchObject({ state: 'done', engine: 'codex' });
+    const pi = await requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    expect(pi).toMatchObject({ state: 'done', engine: 'pi', fromSessionId: codex.sessionId });
+    // A message addressed to any earlier session of the task goes to Pi's.
+    expect(await activeSessionFor(sid)).toBe(pi.sessionId);
+    expect(await activeSessionFor(codex.sessionId!)).toBe(pi.sessionId);
+    expect(edges.stops).toEqual(expect.arrayContaining([sid, codex.sessionId]));
+    // Nothing restarted the old ones.
+    expect(edges.starts.map((p) => p.engine)).toEqual(['codex', 'pi']);
+  });
+
+  it('the replaced session asking for its own switch waits for its turn (it cannot cut its own turn)', async () => {
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Mine.', source: 'test', callerSid: sid, when: 'now' });
+    expect(res.state).toBe('pending');
+    expect(edges.starts).toHaveLength(0);
+  });
 
   it('a pending switch always ends: free runs, background runs after its grace, a turn past the limit fails', () => {
     const at = 1_000_000;
@@ -376,7 +526,7 @@ describe('engine switch inside a task', () => {
     // 2026-11-03: the turn that asked for the move had started a test run; the session read running for 1 h 50 min.
     const { taskId, sid } = await taskOn('claude', { status: 'running' });
     edges.outlives.add(sid);
-    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on.', source: 'test' });
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on.', source: 'test', when: 'turn_end' });
     expect(res.state).toBe('pending');
     await new Promise((r) => setTimeout(r, 300));
     expect(edges.starts).toHaveLength(0);
@@ -391,7 +541,7 @@ describe('engine switch inside a task', () => {
 
   it('a switch whose turn never ends fails at the limit with its reason; the message stays and the session is told', async () => {
     const { taskId, sid } = await taskOn('claude', { status: 'running' });
-    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Keep me.', source: 'test' });
+    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Keep me.', source: 'test', when: 'turn_end' });
     await updateTaskRaw(taskId, (cur) => ({ engine_switch: { ...cur.engine_switch!, at: new Date(Date.now() - SWITCH_PENDING_MAX_MS - 1).toISOString() } }), { source: 'test' });
     watchPendingSwitch(taskId, sid);
     await vi.waitFor(async () => expect((await getTask(taskId)).engine_switch?.state).toBe('failed'), { timeout: 10_000, interval: 100 });
@@ -408,8 +558,8 @@ describe('engine switch inside a task', () => {
 
   it('a pending switch can be cancelled, and a cancelled one never runs when the turn ends', async () => {
     const { taskId, sid } = await taskOn('claude', { status: 'running' });
-    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Later.', source: 'test' });
-    await expect(requestEngineSwitch({ taskId, engine: 'codex', message: 'Again.', source: 'test' })).rejects.toMatchObject({ code: 'switch_pending' });
+    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Later.', source: 'test', when: 'turn_end' });
+    await expect(requestEngineSwitch({ taskId, engine: 'codex', message: 'Again.', source: 'test', when: 'turn_end' })).rejects.toMatchObject({ code: 'switch_pending' });
     expect(await cancelPendingSwitch(taskId)).toEqual({ cancelled: true });
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed', error: 'cancelled' });
     expect(await cancelPendingSwitch(taskId)).toEqual({ cancelled: false });
@@ -432,8 +582,6 @@ describe('engine switch inside a task', () => {
     const local = await taskOn('claude');
     await expect(requestEngineSwitch({ taskId: local.taskId, engine: 'claude', message: 'x', source: 'test' }))
       .rejects.toMatchObject({ code: 'same_engine', status: 400 });
-    await expect(requestEngineSwitch({ taskId: local.taskId, engine: 'codex', message: '  ', source: 'test' }))
-      .rejects.toMatchObject({ code: 'message_required' });
 
     const { task } = await addTask({ title: 'Remote work', project: 'Marina', cwd: '/home/me/repo' } as never);
     await createSessionRecord('remote-sid', task.id, 'Marina', '/home/me/repo');

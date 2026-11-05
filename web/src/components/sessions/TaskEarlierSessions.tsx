@@ -14,6 +14,7 @@ import { formatModelName } from '@/hooks/useSessionUsage';
 import { log } from '@/utils/log';
 import { StableMarkdownBody } from './SessionMessage';
 import { earlierParts, type ChatEarlierMessage } from './chat-earlier-parts';
+import { markOpenedOnPurpose } from './EngineSwitch';
 import '@/styles/chat-earlier.css';
 import '@/styles/engine-switch.css';
 
@@ -67,7 +68,7 @@ function EarlierSessionBlock({ row, sessionCwd, onOpen }: { row: TaskSessionRow;
           {row.started_at ? ` · ${when(row.started_at)}` : ''}
         </button>
         {onOpen && (
-          <button type="button" className="engine-switch-btn" onClick={() => onOpen(row.session_id)}>Open</button>
+          <button type="button" className="engine-switch-btn" onClick={() => { markOpenedOnPurpose(row.session_id); onOpen(row.session_id); }}>Open</button>
         )}
       </div>
       {open && (

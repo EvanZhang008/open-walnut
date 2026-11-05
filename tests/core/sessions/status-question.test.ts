@@ -18,7 +18,8 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { FOR_USER_PROMPT, buildSelfReportPrompt, runTriage, __resetTriageRateLimiter } from '../../../src/core/session-hooks/builtins.js'
-import { armStatusQuestion, askStatus, buildStatusPrompt, cancelStatusQuestion, statusQuestionOwns, STATUS_SETTLE_MS, __resetStatusQuestion } from '../../../src/core/sessions/status-question.js'
+import { armStatusQuestion, askStatus, buildStatusPrompt, cancelStatusQuestion, settleStatusQuestion, statusQuestionOwns, STATUS_SETTLE_MS, __resetStatusQuestion } from '../../../src/core/sessions/status-question.js'
+import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { isReportPending } from '../../../src/core/sessions/report-pending.js'
 import { STATUS_RULE_VERSION } from '../../../src/core/user-status.js'
 import type { OnTurnCompletePayload } from '../../../src/core/session-hooks/types.js'
@@ -110,6 +111,41 @@ describe('the status question', () => {
     await new Promise((r) => setTimeout(r, 300))
     expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
     expect(isReportPending(SID)).toBe(false)
+  })
+
+  it('an engine switch stopping the session waits for a question in flight and asks no new one', async () => {
+    // 2026-11-05: a switch stopped Pi mid-question; its provider thread kept the question, and the
+    // session resumed on a switch back answered it into the chat as FOR_USER lines.
+    const fake = fakeSession(ANSWER)
+    let release!: () => void
+    fake.askSideQuestion.mockImplementationOnce(() => new Promise<string>((r) => { release = () => r(ANSWER) }))
+    const first = askStatus(task.id, SID, Date.now() - 60_000, 'reconcile')
+    await new Promise((r) => setTimeout(r, 50))
+    let settled = false
+    const settling = settleStatusQuestion(SID, 5_000).then(() => { settled = true })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(settled).toBe(false)
+    release()
+    await first
+    await settling
+    expect(settled).toBe(true)
+    // An armed question does not fire after the settle.
+    expect(await armStatusQuestion(task.id, SID)).toBe(true)
+    await settleStatusQuestion(SID, 100)
+    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 300))
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+  }, 15_000)
+
+  it('a session an engine switch replaced is never asked', async () => {
+    const fake = fakeSession(ANSWER)
+    await createSessionRecord(SID, task.id, 'Garden', '/tmp')
+    await updateSessionRecord(SID, { archived: true, archive_reason: 'engine_switched:pi' } as never)
+    try {
+      expect(await askStatus(task.id, SID, Date.now())).toBe(false)
+      expect(fake.askSideQuestion).not.toHaveBeenCalled()
+    } finally {
+      await updateSessionRecord(SID, { archived: false, archive_reason: undefined } as never)
+    }
   })
 
   it('an answer it cannot read hands that turn\'s status back to the summary', async () => {

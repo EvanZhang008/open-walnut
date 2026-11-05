@@ -40,6 +40,8 @@ export interface SessionSendOptions {
 interface UseSessionSendReturn {
   optimisticMsgs: OptimisticMessage[];
   sendError: string | null;
+  /** The session a send from this panel actually went to, when an engine switch had replaced this one: the panel follows it. */
+  redirectedTo: string | null;
   /** Resolves true once the message is persisted server-side (RPC ok), false if the RPC rejected. */
   send: (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions) => Promise<boolean>;
   interruptSend: (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions) => Promise<boolean>;
@@ -192,6 +194,17 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // promoted panel must already hold the message the pending column showed.
   const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>(() => seededBubbles(activeSessionId));
   const [sendError, setSendError] = useState<string | null>(null);
+  const [redirectedTo, setRedirectedTo] = useState<string | null>(null);
+  useEffect(() => { setRedirectedTo(null); }, [activeSessionId]);
+  // A send the server delivered to the task's current session (this one was replaced): the bubble
+  // belongs there, and the panel follows (SessionPanel).
+  const followRedirect = useCallback((res: { deliveredTo?: string } | undefined, tempId: string, sentTo: string | null | undefined): boolean => {
+    if (!res?.deliveredTo || res.deliveredTo === sentTo) return false;
+    log.info('send', 'delivered to the session that replaced this one', { sessionId: sentTo, deliveredTo: res.deliveredTo });
+    setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
+    setRedirectedTo(res.deliveredTo);
+    return true;
+  }, []);
 
   // Ref for accessing current optimistic messages in callbacks without stale closures
   const msgsRef = useRef(optimisticMsgs);
@@ -333,7 +346,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(opts?.switchEngine ? { switchEngine: opts.switchEngine } : {}),
         ...(opts?.threadId ? { threadId: opts.threadId } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; engineSwitch?: { state?: string } }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; engineSwitch?: { state?: string }; deliveredTo?: string }>('session:send', rpcPayload);
+      if (followRedirect(res, tempId, sessionId)) return true;
       if (res?.engineSwitch) {
         // The message starts the task's new session: its bubble shows there, not in this one.
         log.info('send', 'engine switch accepted', { sessionId, state: res.engineSwitch.state });
@@ -403,7 +417,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
         ...(opts?.hints ? { hints: opts.hints } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; deliveredTo?: string }>('session:send', rpcPayload);
+      if (followRedirect(res, tempId, sessionId)) return true;
       if (res?.messageId) {
         const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
         setOptimisticMsgs((prev) => prev.map((m) =>
@@ -457,7 +472,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // land the message at the top level while the chip still promised a thread.
     // Harmless when the server re-drains the original row (it already carries it).
     buildImageRefsPayload(failedMsg.images)
-      .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>(
+      .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; deliveredTo?: string }>(
         'session:send',
         {
           sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
@@ -466,6 +481,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         },
       ))
       .then((res) => {
+        if (followRedirect(res, queueId, sessionId)) return;
         if (res?.messageId) {
           const adopted = statusOnAdopt(res.messageId, deliveredEarlyRef.current);
           setOptimisticMsgs((prev) => prev.map((m) =>
@@ -591,6 +607,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   return {
     optimisticMsgs,
     sendError,
+    redirectedTo,
     send,
     interruptSend,
     stopTurn,

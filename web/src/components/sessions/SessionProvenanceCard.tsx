@@ -44,6 +44,7 @@ import {
   type SessionEnvelopeSource,
 } from '@open-walnut/history-session-envelope';
 import { candidateTaskId, resolveRefInIndex } from '@/components/chat/session-mention';
+import { engineSwitchNoteEngine } from './engine-switch-note';
 import {
   ensureSessionMentionIndex,
   getSessionMentionIndex,
@@ -302,6 +303,17 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
         <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
         <span className="provenance-label">{envelopeDirectionLabel(kind, source)}</span>
         <EnvelopeDetails envelope={envelope} />
+      </div>
+    );
+  }
+
+  // An engine switch's ready note: one quiet row naming the engine (the note is for the model).
+  const switchedTo = engineSwitchNoteEngine(envelope);
+  if (switchedTo) {
+    return (
+      <div className="provenance-card provenance-card-slim" data-envelope-kind="engine-switch">
+        <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
+        <span className="provenance-label">Switched to {switchedTo}</span>
       </div>
     );
   }

@@ -174,7 +174,13 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     if (p.parent_tool_use_id) return false
     const msg = p.message as { content?: unknown } | undefined
     const content = msg ? msg.content : undefined
-    if (typeof content === 'string') return true
+    // The CLI's own echo of a local command it ran outside any turn (a live model
+    // change answers apply_flag_settings with one, and no result follows): no turn.
+    if (typeof content === 'string') {
+      const head = content.trimStart()
+      return !(head.startsWith('<local-command-stdout>') || head.startsWith('<local-command-stderr>')
+        || head.startsWith('<local-command-caveat>'))
+    }
     if (Array.isArray(content)) {
       return content.some((b) => b && typeof b === 'object' && (b as { type?: string }).type !== 'tool_result')
     }

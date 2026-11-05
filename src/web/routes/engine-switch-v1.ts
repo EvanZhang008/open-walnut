@@ -99,11 +99,16 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       res.status(400).json({ error: 'engine must be one of the engines Walnut offers', code: 'bad_engine' }); return
     }
     const text = typeof body.text === 'string' ? body.text : typeof body.message === 'string' ? body.message : ''
-    if (!text.trim()) { res.status(400).json({ error: 'text is the message the new session starts with', code: 'message_required' }); return }
+    if (body.when !== undefined && body.when !== 'now' && body.when !== 'turn_end') {
+      res.status(400).json({ error: 'when is "now" or "turn_end"', code: 'bad_when' }); return
+    }
     const { requestEngineSwitch } = await import('../../core/sessions/engine-switch.js')
     const waitFor = Math.min(Math.max(Number(body.wait_ms ?? 25_000) || 0, 0), 180_000)
+    // An empty text (the picker closed on another engine): the new session starts with the carried context alone.
     const work = requestEngineSwitch({
       taskId: String(req.params.id), engine: body.engine as SessionEngine, message: text,
+      ...(body.when === 'now' || body.when === 'turn_end' ? { when: body.when } : {}),
+      ...(body.detach === true ? { detach: true } : {}),
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
       ...(typeof body.effort === 'string' ? { effort: body.effort as SessionEffort } : {}),
       ...(typeof body.permission_mode === 'string' ? { permissionMode: body.permission_mode as SessionMode } : {}),

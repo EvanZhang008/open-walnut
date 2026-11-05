@@ -281,6 +281,8 @@ interface ModelPickerProps {
    *  the CLI's own settings decide at spawn). */
   onEffortSwitch?: (effort: SessionEffort) => void;
   onClose: () => void;
+  /** The anchor pill left the page (a re-layout): defaults to onClose. */
+  onAnchorLost?: () => void;
   /** Which provider's pane is showing. Default 'claude'. */
   engine?: ProviderId;
   /** Provider switch (rail click). Passed by DRAFT surfaces only — a live
@@ -330,7 +332,7 @@ interface ModelPickerProps {
 const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, speedReadout,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
@@ -591,7 +593,8 @@ export function ModelPicker({
   const placement = useMenuPlacement(popped, anchorRef ?? popRef, popRef, {
     // Centered ON the clicked pill (user call 2026-08-15), flipped up from
     // the bottom mode bar, clamped to the viewport by the hook.
-    preferSide: 'up', align: 'center', margin: 12, onAnchorLost: onClose,
+    // The pill leaving the page is no close the user made: a host may tell it apart.
+    preferSide: 'up', align: 'center', margin: 12, onAnchorLost: onAnchorLost ?? onClose,
   });
   React.useEffect(() => {
     if (!popped) return;

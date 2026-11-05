@@ -146,7 +146,7 @@ export async function planResume(args: {
   const engines = [...new Set(links.map((l) => engineCaps(l.rec.engine).displayName))].join(', ');
   const header = [
     `You are back on this task after it ran on ${engines}. Below are the ${missedTurns} turn${missedTurns === 1 ? '' : 's'} you missed, in order (the newest last); `
-      + 'everything before them you already have. Continue from where it stands; do not redo work already done. The user\'s new message follows.',
+      + 'everything before them you already have. Continue from where it stands; do not redo work already done. The user\'s new message, when there is one, follows.',
     ...(args.transcriptPath ? [`The full transcript of the task is at ${args.transcriptPath}; if you find you do not hold the earlier conversation, read it there.`] : []),
     'Paths, branches and results in it are from this same task; check live state before relying on it.',
   ].join(' ');

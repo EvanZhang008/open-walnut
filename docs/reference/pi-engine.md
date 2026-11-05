@@ -9,8 +9,10 @@ skills the same way a Claude Code session does.
 
 - New work: pick **Pi** in the launcher's engine toggle, or make it the default in Settings →
   Sessions → Default engine.
-- An existing task: the session menu's engine switch (op `task_switch_engine`, engine `pi`). The new
-  pi session gets the earlier conversation as context, so it carries on where Claude Code stopped.
+- An existing task: pick **Pi** on the engine rail of the composer's model picker and close the
+  picker; the switch runs at once, stopping a running turn first (op `task_switch_engine`, engine
+  `pi`). The new pi session gets the earlier conversation as context, so it carries on where Claude
+  Code stopped.
 - pi must be installed on the host the task runs on: `npm install -g @earendil-works/pi-coding-agent`.
   MCP servers need pi 0.99 or newer.
 

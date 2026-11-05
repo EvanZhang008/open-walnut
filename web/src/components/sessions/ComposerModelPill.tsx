@@ -93,6 +93,10 @@ export interface ComposerModelPillProps {
   onProviderSwitch?: (provider: string) => void;
   /** Per-engine lock reason for the rail (null = pickable). */
   providerLockReason?: (provider: string) => string | null;
+  /** The picker closed: a task session's pick of another engine switches then (EngineSwitch.tsx). */
+  onPickerClose?: () => void;
+  /** The picker closed without the user meaning it (its pill left the page): a pick is dropped. */
+  onPickerCancel?: () => void;
 }
 
 /**
@@ -106,6 +110,17 @@ export interface ComposerModelPillProps {
  * so a `/model` picked during the load was dropped (input cleared, no picker).
  * Without a `servedRef`, the value at mount counts as served.
  */
+/**
+ * An ACP engine's pill names the engine before the model ("Pi · Claude Opus 5.5"): one model runs
+ * on several engines, and on Pi a pill that read only "Claude Opus 5.5" left the user unable to
+ * tell which engine he was on (2026-11-05). The condensed pill keeps the engine word
+ * (shortModelName cuts at " · ").
+ */
+export function withEngineName(engine: string, model: string | null | undefined): string {
+  if (!model) return engine;
+  return model.toLowerCase().startsWith(engine.toLowerCase()) ? model : `${engine} \u00b7 ${model}`;
+}
+
 export function useOpenRequest(
   openNonce: number | undefined,
   servedRef: MutableRefObject<number> | undefined,
@@ -122,10 +137,16 @@ export function useOpenRequest(
 
 export function ComposerModelPill({
   sessionId, session, engineUi, onOptimistic, fallbackAssistant, pending, title, openNonce, openServedRef,
-  controls, onControl, onProviderSwitch, providerLockReason,
+  controls, onControl, onProviderSwitch, providerLockReason, onPickerClose, onPickerCancel,
 }: ComposerModelPillProps) {
   const { notify } = useNotifications();
   const [pickerOpen, setPickerOpen] = useState(false);
+  // A click on the pill that closes the picker closes it like Escape does (an engine pick switches).
+  const togglePicker = () => {
+    if (!pickerOpen) { setPickerOpen(true); return; }
+    setPickerOpen(false);
+    onPickerClose?.();
+  };
   // The model pill — the popout picker anchors here (portal to <body>, so a
   // narrow session column can't clip the panel). Kept live by a callback ref as
   // well as the click, because the picker can also be opened WITHOUT a click
@@ -205,6 +226,8 @@ export function ComposerModelPill({
       // No session to switch — the caller keeps the pick. '' is the picker's
       // "Auto" row (autoRow calls onSwitch('')), which means "no --model".
       pending.onPick(model || undefined);
+      // Picking a model closes the picker: the same close as Escape or a click outside.
+      onPickerClose?.();
       return;
     }
     if (!sessionId) return;
@@ -221,7 +244,7 @@ export function ComposerModelPill({
       console.error('Model switch failed:', err);
       onOptimistic({ model: prevModel });
     });
-  }, [sessionId, session?.model, onOptimistic, pending]);
+  }, [sessionId, session?.model, onOptimistic, pending, onPickerClose]);
 
   // ACP model switch — optimistic, revert + notify on failure. Same contract
   // the retired standalone Codex picker had, now driven from the shared
@@ -230,6 +253,7 @@ export function ComposerModelPill({
     setPickerOpen(false);
     if (pending) {
       pending.onPick(modelId || undefined);
+      onPickerClose?.();
       return;
     }
     if (!sessionId) return;
@@ -262,12 +286,13 @@ export function ComposerModelPill({
         sessionId,
       });
     });
-  }, [sessionId, session?.acpModel, session?.acpModelName, notify, engineUi.id, engineUi.displayName, onOptimistic, pending]);
+  }, [sessionId, session?.acpModel, session?.acpModelName, notify, engineUi.id, engineUi.displayName, onOptimistic, pending, onPickerClose]);
 
   const handleEffortSwitch = useCallback((effort: SessionEffort) => {
     setPickerOpen(false);
     if (pending) {
       pending.onPickEffort(effort);
+      onPickerClose?.();
       return;
     }
     if (!sessionId) return;
@@ -285,7 +310,7 @@ export function ComposerModelPill({
       console.error('Effort switch failed:', err);
       onOptimistic({ effort: prevEffort, effectiveEffort: prevEffective });
     });
-  }, [sessionId, session?.effort, session?.effectiveEffort, onOptimistic, pending]);
+  }, [sessionId, session?.effort, session?.effectiveEffort, onOptimistic, pending, onPickerClose]);
 
   const extraTitle = title ? ` ${title}` : '';
 
@@ -321,11 +346,12 @@ export function ComposerModelPill({
     : undefined;
   const handleAcpEffortControl = useCallback((value: string) => {
     setPickerOpen(false);
+    onPickerClose?.();
     if (!effortControl || !onControl) return;
     void onControl(effortControl.id, value).catch((error) => {
       log.warn('session-controls', 'effort change failed', { sessionId, error: String(error) });
     });
-  }, [effortControl, onControl, sessionId]);
+  }, [effortControl, onControl, sessionId, onPickerClose]);
 
   // In a condensed controls row the pill is one family word ("Opus"), followed
   // by the percentage only while the row has room for it; the effort badge
@@ -352,13 +378,13 @@ export function ComposerModelPill({
       className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
       ref={setPillEl}
       title={`Switch ${engineUi.displayName} model${extraTitle}`}
-      onClick={(e) => { pillRef.current = e.currentTarget; setPickerOpen((v) => !v); }}
+      onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
     >
       {/* 3 tiers: the provider's own name (minus its provider prefix — a pill
           reading "Amazon Bedrock/Claude…" is all provider, no model), else
           prettify the id, else the engine. */}
       {renderLabel(
-        acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName) ?? engineUi.displayName,
+        withEngineName(engineUi.displayName, acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName)),
         contextPercent != null && (
           <span className="session-detail-context-pct" data-condensed-detail> {contextPercent}%</span>
         ),
@@ -374,7 +400,7 @@ export function ComposerModelPill({
       className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
       ref={setPillEl}
       title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort${extraTitle}`}
-      onClick={(e) => { pillRef.current = e.currentTarget; setPickerOpen((v) => !v); }}
+      onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
     >
       {renderLabel(
         displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto'),
@@ -442,9 +468,10 @@ export function ComposerModelPill({
           cwd={pending?.cwd}
           onSwitch={handleModelSwitch}
           onEffortSwitch={handleEffortSwitch}
-          onClose={() => setPickerOpen(false)}
+          onClose={() => { setPickerOpen(false); onPickerClose?.(); }}
+          onAnchorLost={() => { setPickerOpen(false); onPickerCancel?.(); }}
           // A task session's rail is unlocked (onProviderSwitch): another engine
-          // takes over on the next message, in a new session of the same task.
+          // takes over when the picker closes, in a new session of the same task.
           // Without it (a side thread) the others stay locked.
           engine={engineUi.id}
           onProviderSwitch={onProviderSwitch}

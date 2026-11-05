@@ -259,7 +259,7 @@ export async function renderCarriedContext(
   const lines: string[] = [
     opening
       + `${meta.compacted ? 'its compaction summary and then every turn after it' : 'every turn'}, in order (the newest last). `
-      + 'Continue from where it stands; do not redo work it already did. The user\'s new message follows the context.',
+      + 'Continue from where it stands; do not redo work it already did. The user\'s new message, when there is one, follows the context.',
   ];
   if (meta.move) {
     lines.push(meta.move.work.length

@@ -29,6 +29,8 @@ const STATUS_TIMEOUT_MS = 3 * 60_000;
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlight = new Set<string>();
+/** The end of the question in flight per session, for a switch that must not stop a session mid-question. */
+const flightEnds = new Map<string, Promise<void>>();
 /** A turn end that came while an ask was in flight: asked again once that one settles. */
 const rerun = new Map<string, { taskId: string; turnEndedMs: number }>();
 /**
@@ -105,9 +107,15 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     return false;
   }
   inFlight.add(sessionId);
+  let ended!: () => void;
+  flightEnds.set(sessionId, new Promise<void>((r) => { ended = r; }));
   const askedAt = Date.now();
   let stored = false;
   try {
+    // A session an engine switch replaced is history: its task's status comes from the new session.
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const { isSupersededSession } = await import('./engine-switch-marker.js');
+    if (isSupersededSession(await getSessionByClaudeId(sessionId).catch(() => null))) return false;
     const { getTask } = await import('../task-manager.js');
     const task: Task | null = await getTask(taskId).catch(() => null);
     if (!task || task.phase === 'COMPLETE' || task.status === 'done') return false;
@@ -138,6 +146,8 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     return false;
   } finally {
     inFlight.delete(sessionId);
+    flightEnds.delete(sessionId);
+    ended();
     const next = rerun.get(sessionId);
     rerun.delete(sessionId);
     if (next && !timers.has(sessionId)) {
@@ -188,11 +198,28 @@ export function cancelStatusQuestion(sessionId: string, clearPending = true): vo
   if (clearPending && !inFlight.has(sessionId)) setReportPending(sessionId, false);
 }
 
+/**
+ * An engine switch is about to stop `sessionId`: no question is asked of it any more, and one in
+ * flight is let finish first (bounded). An ACP engine asks in the provider's own thread, so a
+ * question cut by the stop stayed there unanswered, and the session resumed on a switch back
+ * answered it into the chat (2026-11-05: FOR_USER lines in a Pi reply).
+ */
+export async function settleStatusQuestion(sessionId: string, maxMs = 20_000): Promise<void> {
+  cancelStatusQuestion(sessionId);
+  rerun.delete(sessionId);
+  const flight = flightEnds.get(sessionId);
+  if (!flight) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([flight, new Promise<void>((r) => { timer = setTimeout(r, maxMs); timer.unref?.(); })]);
+  if (timer) clearTimeout(timer);
+}
+
 /** Test-only. */
 export function __resetStatusQuestion(): void {
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
   inFlight.clear();
+  flightEnds.clear();
   rerun.clear();
   owned.clear();
 }

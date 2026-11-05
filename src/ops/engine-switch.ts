@@ -14,8 +14,8 @@ defineOp({
     + 'the oldest turns only when it would not fit the new engine\'s window) plus a transcript file of the whole task. '
     + 'Switching back to an engine the task used before resumes its earlier session there, given only the turns it missed, while that session\'s history is still a prefix of the task\'s conversation '
     + '(same host and directory, same model, nothing compacted or changed since, keeping its prompt cache); otherwise it starts a new session too. A task has one active session at a time; '
-    + 'its earlier sessions stay its history. text is the message the new session starts with. '
-    + 'While the task\'s session is in a turn the switch waits for that turn to end (state pending). '
+    + 'its earlier sessions stay its history. text is the message the new session starts with; without it the new session answers one ready line and waits. '
+    + 'While the task\'s session is in a turn the switch waits for that turn to end (state pending), unless when is "now", which stops the turn and switches at once (a person\'s pick in the app does that). '
     + 'The new session runs on the same host as the old one: a switch never moves the work. An engine that host cannot run (its CLI is not installed there; the custom engine runs on the primary machine only) is refused with 409 engine_not_on_host; '
     + 'moving the work to another host is task_move (same task). '
     + 'To change only the model, use the session\'s model switch instead. Only switch when the user asked for another engine; '
@@ -23,7 +23,8 @@ defineOp({
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     engine: z.enum(ENGINES).describe('The engine to switch to'),
-    text: z.string().min(1).describe('The message the new session starts with (what to do next)'),
+    text: z.string().optional().describe('The message the new session starts with (what to do next); omit to start it with the carried context alone'),
+    when: z.enum(['now', 'turn_end']).optional().describe('now: stop a running turn and switch at once; turn_end (an agent\'s default): wait for the turn to end'),
     model: z.string().min(1).optional().describe('Model for the new session; omit for the engine default'),
     effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Reasoning effort for a new Claude Code session'),
     permission_mode: z.enum(['plan', 'default', 'dontAsk', 'accept', 'auto', 'bypass']).optional().describe('Permission mode the new session starts in; omit to keep the current one'),

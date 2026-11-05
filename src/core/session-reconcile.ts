@@ -203,6 +203,9 @@ export function isPostTurnBookkeeping(parsed: Record<string, unknown>, type: str
   return false
 }
 
+/** Openings of the CLI's own echo lines of a local command (daemon-fold.ts lists the same). */
+export const CLI_LOCAL_COMMAND_ECHO = ['<local-command-stdout>', '<local-command-stderr>', '<local-command-caveat>'] as const
+
 /** A stream `user` line that STARTS a turn (not a tool_result echo, not subagent
  *  traffic). Exported so the lane-orphan healer
  *  (core/sessions/lane-orphan-recovery.ts) splits a stream into turns on exactly
@@ -212,7 +215,10 @@ export function isRealUserLine(parsed: Record<string, unknown>): boolean {
   if (parsed.subtype === 'walnut-injected') return true
   if (parsed.parent_tool_use_id) return false
   const content = (parsed.message as Record<string, unknown> | undefined)?.content
-  if (typeof content === 'string') return true
+  // The CLI's echo of a local command it ran outside a turn (2026-11-05: a live model
+  // change answers apply_flag_settings with `<local-command-stdout>Set model to …`, and no
+  // result follows, so the session read as working until its next turn). Not a turn start.
+  if (typeof content === 'string') return !CLI_LOCAL_COMMAND_ECHO.some((tag) => content.trimStart().startsWith(tag))
   if (Array.isArray(content)) {
     return content.some((b) => b && typeof b === 'object' && (b as { type?: string }).type !== 'tool_result')
   }
