@@ -396,7 +396,73 @@ describe('resume queue', () => {
     const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
     sar.noteLoss(rec, 'server_restart', before, { requireInfra: false })
     await w.advance(5_000)
-    w.patch('a', { process_status: 'running' })  // a human typed into it
+    // A human typed into it: the restart note rode on that message.
+    w.patch('a', { process_status: 'running', restartLoss: { ...w.loss('a')!, told: true } })
+    await w.advance(30_000)
+    expect(w.sends).toEqual([])
+    expect(w.loss('a')).toMatchObject({ state: 'resumed', reason: 'resumed by another message' })
+  })
+
+  it('a record that reads live with no message behind it is checked with the host (2026-11-04)', async () => {
+    // A runner the server had attached reported the dead process as a turn end
+    // and rewrote the record to idle; nothing reached the session.
+    const w = new World()
+    const sar = make(w)
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'host_restart', before, { requireInfra: false })
+    await w.advance(5_000)
+    w.patch('a', { process_status: 'idle' })
+    w.onSend = () => {}  // the respawn writes nothing the record would show yet
+    await w.advance(30_000)
+    expect(w.sends).toHaveLength(1)
+    // The stale idle is not "back"; its host reporting the resumed CLI is.
+    expect(w.loss('a')?.state).toBe('sent')
+    w.snapshots.set('a', snap({ cliState: 'running', turnActive: true }))
+    await w.advance(12_000)
+    expect(w.loss('a')).toMatchObject({ state: 'resumed' })
+    expect(w.loss('a')?.reason).toMatch(/^resumed \(attempt 1\)$/)
+  })
+
+  it('a live-reading record that never gets a fold (the reboot cleared the stream files) is resumed after a few minutes', async () => {
+    const w = new World()
+    const sar = make(w)
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'host_restart', before, { requireInfra: false })
+    await w.advance(5_000)
+    w.patch('a', { process_status: 'idle' })
+    w.snapshots.set('a', null)
+    await w.advance(2 * 60_000)
+    expect(w.sends).toEqual([])
+    await w.advance(5 * 60_000)
+    expect(w.sends).toHaveLength(1)
+  })
+
+  it('a live-reading record whose host does not answer is asked again, never taken for resumed', async () => {
+    const w = new World()
+    const sar = make(w)
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'host_restart', before, { requireInfra: false })
+    await w.advance(5_000)
+    w.patch('a', { process_status: 'idle' })
+    w.snapshots.set('a', null)
+    await w.advance(30_000)
+    expect(w.sends).toEqual([])
+    expect(w.loss('a')?.state).toBe('queued')
+    expect(sar.holdsHandBack(w.records.get('a')!)).toBe(true)
+    // The host answers: the process is dead, so the resume goes out.
+    w.snapshots.set('a', snap({ turnActive: true }))
+    await w.advance(70_000)
+    expect(w.sends).toHaveLength(1)
+  })
+
+  it('a live-reading record whose host says the process lives is not sent a second message', async () => {
+    const w = new World()
+    const sar = make(w)
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'host_restart', before, { requireInfra: false })
+    await w.advance(5_000)
+    w.patch('a', { process_status: 'running' })
+    w.snapshots.set('a', snap({ cliState: 'running', turnActive: true }))
     await w.advance(30_000)
     expect(w.sends).toEqual([])
     expect(w.loss('a')).toMatchObject({ state: 'resumed', reason: 'resumed by another message' })

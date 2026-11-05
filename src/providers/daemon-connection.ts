@@ -6810,6 +6810,11 @@ export class DaemonConnection {
             // helper — identical work on the snapshot branch above).
             await this.reattachRecoveredSession(s.claudeSessionId)
           } else {
+            // Restart recovery takes the loss on before the relabel below, so
+            // no hand-back the relabel sets off beats its verdict
+            // (core/sessions/restart-death.ts).
+            const { noteRestartDeath } = await import('../core/sessions/restart-death.js')
+            await noteRestartDeath(s, 'reconnect', 'daemon-reconnect:legacy')
             // Process died during disconnect — mark stopped so session is resumable.
             // Don't inject a message; user's next message will trigger --resume naturally.
             // For stuck-running case: emitting 'stopped' triggers server.ts

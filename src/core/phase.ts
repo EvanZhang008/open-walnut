@@ -494,6 +494,34 @@ const QUIET_TURN_TRIGGERS: ReadonlySet<PhaseTransitionTrigger> = new Set([
  * Single entry point for ALL session → phase updates.
  * Built-in retry (2 attempts) so Layer 1 is reliable on its own.
  */
+/** The source restart recovery's own hand-back carries (sessions/auto-recover-env.ts). */
+const AUTO_RECOVER_HANDBACK_SOURCE = 'auto-recover'
+
+/**
+ * Is this session's death held by restart recovery? A record that reads stopped
+ * or errored is held while recovery holds its loss. A record that reads live is
+ * held only for an edge that reports the death itself (`processAlive: false`):
+ * a runner the server had attached reports its dead process as a turn end and
+ * rewrites the record to a live status. A real turn of a live session is never
+ * held, whatever its loss says.
+ */
+async function restartRecoveryHolds(sessionId: string, processDied: boolean): Promise<boolean> {
+  try {
+    const { getSessionByClaudeIdSync } = await import('./session-tracker.js')
+    const rec = getSessionByClaudeIdSync(sessionId)
+    if (!rec) return false
+    const loss = rec.restartLoss
+    // A resume already sent is the resumed session's own: its errors hand back as usual.
+    if (loss?.state === 'sent') return false
+    const dead = rec.process_status === 'stopped' || rec.process_status === 'error'
+    if (!dead && !processDied) return false
+    const { getSessionAutoRecover } = await import('./session-auto-recover.js')
+    return getSessionAutoRecover()?.holdsHandBack(rec) === true
+  } catch {
+    return false
+  }
+}
+
 export async function applySessionPhase(
   taskId: string,
   trigger: PhaseTransitionTrigger,
@@ -565,6 +593,21 @@ export async function applySessionPhase(
     dropInterruptedWait(taskId, trigger)
     dropFireTurn(taskId)
   }
+  // A hand-back from a session restart recovery holds (sessions/restart-death.ts):
+  // its process was killed by a restart and the verdict is not in yet, or it
+  // will be resumed. Every death edge goes through here (a session error, a
+  // process-death result, a reconcile), so none can beat the verdict, which
+  // hands the task back itself when it does not resume (2026-11-04: eight
+  // sessions on a rebooted host were handed back first and never resumed).
+  if (newPhase === 'NEED_ACTION' && opts?.sessionId && source !== AUTO_RECOVER_HANDBACK_SOURCE
+    && (trigger === 'session:error' || trigger === 'session:result' || trigger === 'reconciler')
+    && await restartRecoveryHolds(opts.sessionId, opts.processAlive === false)) {
+    log.session.info('applySessionPhase: skip (restart recovery holds the hand-back)', {
+      taskId, currentPhase: task.phase, trigger, source, sessionId: opts.sessionId,
+    })
+    return { changed: false, oldPhase: task.phase }
+  }
+
   let resume: { waitUntil: string | null } | null = null
   if (newPhase === 'NEED_ACTION' && !opts?.noResume && hasInterruptedWait(taskId)
     && (trigger === 'session:result' || (trigger === 'reconciler' && opts?.turnEnd))) {

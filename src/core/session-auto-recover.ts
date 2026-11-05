@@ -84,6 +84,8 @@ const UNSTAMPED_HOLD_MS = 10 * 60_000
 const RECHECK_MS = 15_000
 /** Poll interval while a resume waits for its session to come back. */
 const SETTLE_POLL_MS = 2_000
+/** How long a live-reading record with no fold from its host waits before it is resumed anyway. */
+const NO_FOLD_GRACE_MS = 5 * 60_000
 /** How often a resume parked on its host's daemon looks again. */
 const HOST_WAIT_RECHECK_MS = 60_000
 
@@ -434,9 +436,27 @@ export class SessionAutoRecover {
         return
       }
       if (isLive(rec)) {
-        // A human, a peer or a trigger got there first; the note rode on it.
-        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'resumed by another message', waitingHost: undefined })
-        return
+        // A human, a peer or a trigger got there first; the note rode on it
+        // (marking it told). A record that reads live with no message behind it
+        // may be a dead process's own last word: a runner the server had attached
+        // reports the death as a turn end and rewrites the record (2026-11-04).
+        // The host says which.
+        // (A resume of ours that waited in the queue for the host is a message behind it.)
+        const ask = !loss.told && !loss.waitingHost
+        const snap = ask ? await this.deps.fetchSnapshot(rec).catch(() => null) : null
+        // No fold proves nothing either way (a reboot that cleared the stream
+        // files gives none at all): ask again for a few minutes, then resume
+        // anyway. The host's one-CLI-per-session guard refuses a spawn over a
+        // live CLI, so a resume of a session that lives costs nothing.
+        if (ask && !snap && this.deps.now() - lossClock(loss) < NO_FOLD_GRACE_MS) {
+          this.requeue(item, 60_000)
+          return
+        }
+        if (!ask || (snap && snap.cliState !== 'dead')) {
+          await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'resumed by another message', waitingHost: undefined })
+          return
+        }
+        log.session.info('restart recovery: the record reads live but its host says the process is dead', { sessionId: sid, status: rec.process_status })
       }
       const task = await this.deps.getTask(rec.taskId)
       if (!task || task.phase !== loss.phaseAtLoss) {
@@ -488,6 +508,7 @@ export class SessionAutoRecover {
       })
       if (this.stopped) return
       const revBefore = rec.statusRevision
+      const liveBefore = isLive(rec)
       // A delivery the host's daemon could not take puts the batch back in the
       // queue and says so only on the bus (the record is left as it was), and it
       // can say so before the send returns: listen first.
@@ -497,7 +518,7 @@ export class SessionAutoRecover {
         await this.deps.send(sid, RESUME_MESSAGE, { source: AUTO_RECOVER_SOURCE, taskId: rec.taskId, messageId: undelivered.messageId })
         const sentAt = new Date(this.deps.now()).toISOString()
         await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'queued' ? { ...cur, state: 'sent', sentAt } : cur)
-        await this.settle(item, attempts, revBefore, undelivered)
+        await this.settle(item, attempts, revBefore, undelivered, liveBefore)
       } finally {
         stopListening()
       }
@@ -514,14 +535,26 @@ export class SessionAutoRecover {
     }
   }
 
+  /** The host's fold says the process lives (no answer is not a yes). */
+  private async hostSaysAlive(rec: SessionRecord): Promise<boolean> {
+    const snap = await this.deps.fetchSnapshot(rec).catch(() => null)
+    return !!snap && snap.cliState !== 'dead'
+  }
+
   /** Hold the slot until the session is back, its spawn failed, or the timeout. */
-  private async settle(item: QueueItem, attempt: number, revBefore: number | undefined, undelivered: { error?: string; messageId?: string }): Promise<void> {
+  private async settle(item: QueueItem, attempt: number, revBefore: number | undefined, undelivered: { error?: string; messageId?: string }, liveBefore = false): Promise<void> {
     const deadline = this.deps.now() + this.cfg.settleTimeoutMs
+    let polls = 0
     while (!this.stopped && this.deps.now() < deadline) {
+      polls++
       await new Promise<void>((resolve) => { this.deps.setTimer(resolve, SETTLE_POLL_MS) })
       const rec = await this.deps.getSession(item.sid)
       if (!rec) return
-      if (isLive(rec)) {
+      // A record that already read live before the send is back once its status
+      // moved (the respawn writes one), else when its host says so (asked on the
+      // first poll, then every 5th).
+      if (isLive(rec) && (!liveBefore || rec.statusRevision !== revBefore
+        || ((polls === 1 || polls % 5 === 0) && await this.hostSaysAlive(rec)))) {
         await this.deps.patchLoss(item.sid, (cur) => cur && { ...cur, state: 'resumed', reason: `resumed (attempt ${attempt})`, waitingHost: undefined })
         log.session.info('restart recovery: session is back', { sessionId: item.sid, attempt })
         return

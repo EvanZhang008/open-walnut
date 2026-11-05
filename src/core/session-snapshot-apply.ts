@@ -471,6 +471,19 @@ export async function applySnapshot(
     return { outcome: 'shadow', diverged, projected }
   }
 
+  // A restart killed it (sessions/restart-death.ts): restart recovery takes the
+  // loss on before this apply writes the death, so the hand-backs below are held
+  // and the classification reads the phase the work died in (2026-11-04).
+  if (snapshot.cliState === 'dead' && TERMINAL.has(projected)) {
+    const { noteRestartDeath } = await import('./sessions/restart-death.js')
+    let daemonStartedAt: number | null = null
+    if (source !== 'reconnect-pull') {
+      const { getPooledSnapshotConnection } = await import('../providers/daemon-connection.js')
+      daemonStartedAt = getPooledSnapshotConnection(record.host)?.daemonStartedAt ?? null
+    }
+    await noteRestartDeath(record, source === 'reconnect-pull' ? 'reconnect' : 'report', `snapshot-apply:${source}`, daemonStartedAt)
+  }
+
   if (sameTurn()) sessionRunner.findSessionByClaudeId(sessionId)?.setForegroundFromSnapshot?.(snapshot, epochChanged)
 
   let reconnectActivityCleared = false

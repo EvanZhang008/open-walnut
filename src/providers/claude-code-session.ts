@@ -5561,6 +5561,7 @@ export class ClaudeCodeSession {
             turnGen: this._turnGen,
             result: this.fullText,
             isError: false,
+            processDied: true,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
         }
       }
