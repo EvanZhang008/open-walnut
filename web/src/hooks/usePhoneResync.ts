@@ -17,6 +17,7 @@
  */
 import { useEffect, useSyncExternalStore } from 'react';
 import { wsClient, type ConnectionState, type ResyncReason } from '@/api/ws';
+import { getUnpairedState } from '@/api/unpaired';
 import { log } from '@/utils/log';
 
 export interface ResyncState {
@@ -56,6 +57,8 @@ export function isLeaderAwayAnswer(status: number, body: unknown): boolean {
 }
 
 async function probeMac(): Promise<void> {
+  // Signed out: the sign-in page covers the console, and every probe would be refused.
+  if (getUnpairedState() !== 'ok') return;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), MAC_PROBE_DEADLINE_MS);
   try {

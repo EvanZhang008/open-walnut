@@ -257,7 +257,7 @@ test.describe('Open from a browser', () => {
     const input = phone.getByTestId('unpaired-code-input')
     await input.fill('zzzz-zzzz')
     await phone.getByTestId('unpaired-code-submit').click()
-    await expect(phone.getByTestId('unpaired-code-error')).toContainText('That code is wrong or has expired')
+    await expect(phone.getByTestId('unpaired-code-error')).toContainText('That code is wrong, already used or expired')
     // The code stays to be fixed; editing any character clears the line.
     await expect(input).toHaveValue('ZZZZ-ZZZZ')
     await shot(phone, '3-tunnel-wrong-code')
@@ -327,13 +327,16 @@ test.describe('Open from a browser', () => {
     const after = (await shown.getAttribute('href'))!
     expect(after.startsWith(`${tunnelUrl}/#pair=`)).toBe(true)
     expect(after).toMatch(/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/)
+    // And the computer says the sign-in worked, so the swapped link is no surprise.
+    await expect(page.getByTestId('browser-access-signed-in-note')).toContainText('A browser just signed in with the link')
     await phone.context().close()
   })
 
   // 2026-11-04, the user: "if cookie is cleared need another code"; "how long will cookie
-  // usually last". Safari removes an unopened site's localStorage after 7 days and keeps a
-  // script-written cookie 7 days at most: the server's own HttpOnly cookie stays.
-  test('a phone whose page storage was cleared stays signed in: its server cookie brings the token back', async ({ page, browser }) => {
+  // usually last"; then he asked for the way a well-known dashboard keeps a phone signed in.
+  // The page holds an access token of hours; the server keeps a refresh token in an HttpOnly
+  // cookie only the renewal path gets, which Safari's 7-day rules never reach.
+  test('a phone stays signed in: it renews by itself, and after Safari cleared its storage the refresh cookie signs it back in', async ({ page, browser }) => {
     // PW_VIDEO=1: the phone's own window is recorded too, with a line saying each step.
     const context = await browser.newContext({ ...phoneDevice(), ...(process.env.PW_VIDEO ? { recordVideo: { dir: test.info().outputPath('phone'), size: { width: 390, height: 844 } } } : {}) })
     const phone = await context.newPage()
@@ -345,39 +348,57 @@ test.describe('Open from a browser', () => {
     await phone.getByTestId('unpaired-code-submit').click()
     await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
     await settleSignedIn(phone)
-    const token = (await phone.evaluate(() => localStorage.getItem('walnut.deviceToken')))!
-    expect(token).toMatch(/.{20,}/)
-    await say('Signed in with a code')
+    const stored = () => phone.evaluate(() => ({ token: localStorage.getItem('walnut.deviceToken'), until: Number(localStorage.getItem('walnut.deviceTokenUntil')) })).catch(() => ({ token: null, until: 0 }))
+    const first = await stored()
+    expect(first.token).toMatch(/.{20,}/)
+    // An access token of 20 hours.
+    expect(first.until).toBeGreaterThan(Date.now() + 19 * 3_600_000)
+    expect(first.until).toBeLessThanOrEqual(Date.now() + 20 * 3_600_000)
+    await say('Signed in with a code: the page holds a token for 20 hours')
 
-    // The server set it, under its own name: HttpOnly (out of the page's reach), only
-    // on /api, Strict, for 400 days.
-    // Path=/api: only a URL under it lists the cookie.
-    const serverCookie = async () => (await context.cookies(`${tunnelUrl}/api/devices/browser-session`)).find((c) => c.name === 'walnut_signin')
-    await expect.poll(async () => (await serverCookie())?.httpOnly, { timeout: 15_000 }).toBe(true)
-    const first = (await serverCookie())!
-    expect(decodeURIComponent(first.value)).toBe(token)
-    expect(first.path).toBe('/api')
-    expect(first.sameSite).toBe('Strict')
-    // 400 days asked; an engine may keep less (this WebKit keeps 365): far past Safari's 7.
-    expect(first.expires * 1000).toBeGreaterThan(Date.now() + 300 * 86_400_000)
+    // The refresh cookie: set by the server, HttpOnly (no script reads it), sent only to the
+    // renewal path, Strict, for a year (this WebKit keeps 365 days at most anyway).
+    // One per origin (walnut_refresh, _s for https, _<port> for another port): this page's own.
+    const refreshCookie = async () => (await context.cookies(`${tunnelUrl}/api/auth/browser/refresh`)).find((c) => c.name.startsWith('walnut_refresh'))
+    const c1 = (await refreshCookie())!
+    expect(c1.httpOnly).toBe(true)
+    expect(c1.path).toBe('/api/auth/browser')
+    expect(c1.sameSite).toBe('Strict')
+    expect(c1.expires * 1000).toBeGreaterThan(Date.now() + 300 * 86_400_000)
+    // Nothing else of the site gets it.
+    expect((await context.cookies(`${tunnelUrl}/api/tasks`)).some((c) => c.name.startsWith('walnut_refresh'))).toBe(false)
+    expect(await phone.evaluate(() => document.cookie)).not.toContain('walnut_refresh')
+
+    // 20 hours on: the token is due, and the page renews it by itself when it comes back.
+    await phone.evaluate(() => localStorage.setItem('walnut.deviceTokenUntil', String(Date.now() - 60_000)))
+    await phone.reload()
+    await expect.poll(async () => (await stored()).token, { timeout: 30_000 }).not.toBe(first.token)
+    await settleSignedIn(phone)
+    const second = await stored()
+    expect(second.until).toBeGreaterThan(Date.now() + 19 * 3_600_000)
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
+    // The refresh token was traded too, and the old access token no longer opens anything.
+    expect((await refreshCookie())!.value).not.toBe(c1.value)
+    expect(await phone.evaluate(async (old) => (await fetch('/api/tasks', { headers: { Authorization: `Bearer ${old}` } })).status, first.token)).toBe(401)
+    await say('20 hours later: renewed by itself, a new token, no code')
 
     // What Safari does to a site left alone for 7 days: its script storage is gone, and so
-    // is the cookie its script wrote (walnut_device, kept 7 days at most). It happens while
-    // the site is not open, so the console is left first (a public JSON page of the same site).
+    // is the cookie its script wrote (walnut_device). It happens while the site is not open,
+    // so the console is left first (a public JSON page of the same site).
     await phone.goto(`${tunnelUrl}/api/v1/instance`)
     await phone.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
     await context.clearCookies({ name: 'walnut_device' })
     await say('7 days later: Safari wiped the page storage and the script cookie. Open Walnut again…')
     await phone.waitForTimeout(1_100)
     await phone.goto(tunnelUrl)
-    await expect.poll(() => phone.evaluate(() => localStorage.getItem('walnut.deviceToken')).catch(() => null), { timeout: 30_000 }).toBe(token)
+    await expect.poll(async () => (await stored()).token, { timeout: 30_000 }).toMatch(/.{20,}/)
     await phone.waitForLoadState('domcontentloaded')
     await settleSignedIn(phone)
     await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
-    await say('Still signed in: the server cookie gave the token back, no new code')
-    // Each open renews it: the expiry moved on.
-    await expect.poll(async () => (await serverCookie())!.expires, { timeout: 15_000 }).toBeGreaterThan(first.expires)
-    // The restored token writes too (a header, not the cookie).
+    const third = await stored()
+    expect(third.token).not.toBe(second.token)
+    await say('Still signed in: the refresh cookie gave a new token, no new code')
+    // The new token writes too.
     expect(await phone.evaluate(async () => (await fetch('/api/v1/devices/self', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status)).toBeLessThan(300)
     await shot(phone, '4b-storage-cleared-still-signed-in')
 
@@ -390,12 +411,53 @@ test.describe('Open from a browser', () => {
     await context.close()
   })
 
+  // 2026-11-04 review: a phone whose refresh cookie alone was lost kept retrying "Not connected"
+  // once its token ran out (the renewal answered 204, "nothing renews here").
+  test('a phone that kept its token but lost its refresh cookie reads signed out at its next renewal', async ({ page, browser }) => {
+    const context = await browser.newContext(phoneDevice())
+    const phone = await context.newPage()
+    await phone.goto(tunnelUrl)
+    await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
+    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
+    await phone.getByTestId('unpaired-code-submit').click()
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    await settleSignedIn(phone)
+    const own = (await context.cookies(`${tunnelUrl}/api/auth/browser/refresh`)).find((c) => c.name.startsWith('walnut_refresh'))!
+    await context.clearCookies({ name: own.name })
+    // Its token is due: the page renews when it comes back, and hears it never can.
+    await phone.evaluate(() => localStorage.setItem('walnut.deviceTokenUntil', String(Date.now() - 60_000)))
+    await phone.reload()
+    await expect(phone.getByTestId('unpaired-notice').locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
+    // It says why: nobody removed it.
+    await expect(phone.getByTestId('unpaired-notice')).toContainText('Its sign-in was cleared from this browser. Sign in again with a new link.')
+    await shot(phone, '4c-refresh-cookie-lost')
+    await context.close()
+  })
+
+  test('a phone signed in before sign-ins renewed carries over at its next open, with no new code', async ({ page, browser }) => {
+    // A browser token of the build before: no time, no refresh cookie.
+    const made = await page.request.post('/api/devices', { data: { name: `browser-${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}` } })
+    expect(made.status()).toBe(201)
+    const { token: legacy } = await made.json() as { token: string }
+    const context = await browser.newContext(phoneDevice())
+    await context.addInitScript((t) => { if (!localStorage.getItem('walnut.deviceToken')) localStorage.setItem('walnut.deviceToken', t) }, legacy)
+    const phone = await context.newPage()
+    await phone.goto(tunnelUrl)
+    await expect.poll(() => phone.evaluate(() => localStorage.getItem('walnut.deviceTokenUntil')).catch(() => null), { timeout: 30_000 }).toMatch(/^\d+$/)
+    const now = await phone.evaluate(() => localStorage.getItem('walnut.deviceToken'))
+    expect(now).not.toBe(legacy)
+    expect((await context.cookies(`${tunnelUrl}/api/auth/browser/refresh`)).some((c) => c.name.startsWith('walnut_refresh') && c.httpOnly)).toBe(true)
+    await settleSignedIn(phone)
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
+    await context.close()
+  })
+
   test('the same link again shows why, with the code filled in', async ({ browser }) => {
     const phone = await tunnelPage(browser)
     await phone.goto(link)
     const notice = phone.getByTestId('unpaired-notice')
     await expect(notice).toBeVisible({ timeout: 30_000 })
-    await expect(phone.getByTestId('unpaired-code-error')).toContainText('That code is wrong or has expired')
+    await expect(phone.getByTestId('unpaired-code-error')).toContainText('That code is wrong, already used or expired')
     await expect(phone.getByTestId('unpaired-code-input')).toHaveValue(link.split('#pair=')[1]!)
     expect(phone.url()).not.toContain('#pair')
     await shot(phone, '5-used-link')
@@ -429,6 +491,8 @@ test.describe('Open from a browser', () => {
     await expect(row.locator('.devices-name')).not.toContainText(mine.name)
     await expect(row.locator('.devices-meta')).toContainText('signed in')
     await expect(row.getByTestId('devices-show-qr')).toHaveCount(0)
+    // In the words of its group: a browser is signed out, never "removed".
+    await expect(row.getByTestId('devices-remove')).toHaveText('Sign out')
     await shot(page, '6-listed', devices)
     await row.getByTestId('devices-remove').click()
     await row.getByTestId('devices-remove').click()
@@ -439,12 +503,8 @@ test.describe('Open from a browser', () => {
     await expect(notice.locator('h1')).toHaveText('This browser was signed out', { timeout: 30_000 })
     await expectCoversConsole(phone)
     await shot(phone, '7-removed-browser')
-    // Try again reloads the page. (What the reload then shows depends on the
-    // auth rate limit: within a minute of the refusals above, every request
-    // from the tunnel's address gets a bare 429; reported, not this page's.)
-    const reloaded = phone.waitForEvent('framenavigated', { timeout: 30_000 })
-    await phone.getByTestId('unpaired-retry').click()
-    await reloaded
+    // A refused sign-in stays refused: no Try again that would show this page again.
+    await expect(phone.getByTestId('unpaired-retry')).toHaveCount(0)
     await phone.context().close()
   })
 
@@ -465,10 +525,9 @@ test.describe('Open from a browser', () => {
     await phone.reload()
     const notice = phone.getByTestId('unpaired-notice')
     await expect(notice.locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
-    await expect(notice).toContainText('Walnut no longer accepts this sign-in. It may have been removed on your computer. Sign in again below.')
-    const retry = phone.getByTestId('unpaired-retry')
-    await expect(retry).toBeVisible()
-    expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    // Its open socket was closed when the computer removed it, and the page kept why across the reload.
+    await expect(notice).toContainText('It was signed out from your computer. Sign in again with a new link.')
+    await expect(phone.getByTestId('unpaired-retry')).toHaveCount(0)
     await expectCoversConsole(phone)
     await shot(phone, '8-removed-phone')
     // Its cookie never signs it back in: with its storage cleared too, it still reads signed out.
@@ -477,6 +536,63 @@ test.describe('Open from a browser', () => {
     await expect(phone.getByTestId('unpaired-notice').locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
     expect(await phone.evaluate(() => localStorage.getItem('walnut.deviceToken'))).toBeNull()
     await context.close()
+  })
+
+  test('Sign out all browsers ends every browser at once: open phones read signed out without a reload', async ({ page, browser }) => {
+    const phones: Page[] = []
+    for (let i = 0; i < 2; i++) {
+      const context = await browser.newContext({ ...phoneDevice() })
+      const phone = await context.newPage()
+      await phone.goto(tunnelUrl)
+      await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
+      await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
+      await phone.getByTestId('unpaired-code-submit').click()
+      await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+      await settleSignedIn(phone)
+      phones.push(phone)
+    }
+    await openDevices(page)
+    const devices = await backToDevices(page)
+    const group = devices.getByTestId('devices-browsers-group')
+    const row = group.getByTestId('devices-sign-out-browsers-row')
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('Sign out browsers signed in with a link')
+    await shot(page, '8b-sign-out-all', group)
+    const button = row.getByTestId('devices-sign-out-browsers')
+    // Earlier tests on this server signed browsers in too: the row counts every one the list shows.
+    const listed = group.locator('[data-device-role="browser"][data-device-name^="browser-"]')
+    const names = await listed.evaluateAll((els) => els.map((el) => el.getAttribute('data-device-name') ?? ''))
+    const count = names.filter((n) => /^browser-[0-9a-f]{6}$/.test(n)).length
+    expect(count).toBeGreaterThanOrEqual(2)
+    // Exactly the rows of its group: the Walnut extension has its own (never signed out here).
+    expect(await group.locator('[data-device-role="browser"]').count()).toBe(count)
+    await expect(row).toContainText(`Signs out the ${count} browsers listed below. Each needs a new link to sign in again.`)
+    // The first click asks in words, with Cancel beside it; Cancel puts it back as it was.
+    await expect(button).toHaveText('Sign out all')
+    // A double-click only asks: its second click lands on Confirm and is not one.
+    await button.dblclick()
+    await expect(row.getByTestId('devices-sign-out-browsers-confirm')).toBeVisible()
+    await row.getByTestId('devices-sign-out-browsers-cancel').click()
+    await expect(group.locator('[data-device-role="browser"]')).toHaveCount(count)
+    await button.click()
+    await expect(row).toContainText(`Sign out the ${count} browsers listed below? Each needs a new link to sign in again.`)
+    await row.getByTestId('devices-sign-out-browsers-cancel').click()
+    await expect(button).toHaveText('Sign out all')
+    await button.click()
+    await shot(page, '8c-sign-out-all-confirm', group)
+    await row.getByTestId('devices-sign-out-browsers-confirm').click()
+    await expect(devices.getByTestId('devices-signed-out-note')).toHaveText(`Signed out ${count} browsers. Each needs a new link to sign in again.`)
+    // No signed-in browser is left, so the row goes with them.
+    await expect(group.locator('[data-device-role="browser"][data-device-name^="browser-"]')).toHaveCount(0, { timeout: 15_000 })
+    await expect(row).toHaveCount(0)
+    for (const phone of phones) {
+      // Its open socket was closed at the revoke (4401): it says so with no reload, and the
+      // console under it goes, with the tasks it showed.
+      await expect(phone.getByTestId('unpaired-notice').locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
+      await expect(phone.locator('.app-shell')).toHaveCount(0)
+      await expect(phone.getByTestId('unpaired-notice')).toContainText('It was signed out from your computer. Sign in again with a new link.')
+      await phone.context().close()
+    }
   })
 
   test('a Home Screen app is listed as iPhone Home Screen, apart from a Safari tab (D6)', async ({ page, browser }) => {

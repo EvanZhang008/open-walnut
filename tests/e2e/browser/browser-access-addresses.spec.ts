@@ -127,9 +127,15 @@ test('the one link is made by itself, goes to the always-on host first, hides it
   await expect(link).toHaveText(`${DEVBOX}/#pair=••••-••••`)
   await expect(row).not.toContainText('ABCD')
   await expect(row).not.toContainText('EFGH')
-  await expect(row).toContainText("Scan the QR code with the phone's camera, or copy the link to the phone and open it there: Walnut opens signed in, and stays signed in.")
+  await expect(row).toContainText("Scan the QR code with the phone's camera, or copy the link to the phone and open it there, not on this computer. It works once, for one phone, until")
   // The code rides in the link; it is not shown again on its own.
   await expect(page.getByTestId('browser-access-code-value')).toHaveCount(0)
+  // A phone with no camera or shared clipboard: the code in words, only on a click.
+  await page.getByTestId('browser-access-reveal-code').click()
+  await expect(page.getByTestId('browser-access-revealed-code')).toHaveText('ABCD-EFGH')
+  await expect(page.getByTestId('browser-access-typed')).toContainText("Type ABCD-EFGH on the phone's sign-in screen.")
+  await page.getByTestId('browser-access-hide-code').click()
+  await expect(row).not.toContainText('ABCD')
   await expectOneLinkOnly(page)
   // Made once on connect, with nothing pressed.
   expect(mints.count).toBe(1)

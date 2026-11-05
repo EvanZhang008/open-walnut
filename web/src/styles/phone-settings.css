@@ -234,10 +234,6 @@
   border-radius: 6px;
 }
 
-.devices-home-screen-hint {
-  margin: 0 0 16px;
-}
-
 /* Every control in a pane offers a finger 44 px (spec 4.2, C19). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane :is(.settings-button, .settings-input:not(textarea)) {

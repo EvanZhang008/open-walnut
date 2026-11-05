@@ -42,9 +42,11 @@ export function UnpairedCodeField({
   const scrollTimer = useRef<number | null>(null);
   const code = formatSignInCode(value);
   const shownError = error ?? (code.badChars ? SIGN_IN_BAD_CHARS : null);
-  // A refused code stays refused until it is edited (N23): sending it again
-  // would only spend another of the server's per-address attempts.
-  const canSubmit = isSubmittableSignInCode(code) && !busy && !refused;
+  // A refused code stays refused until it is edited (N23): sending it again would only
+  // spend another of the server's per-address attempts. The button still looks ready (a
+  // greyed one beside a full code read as broken, two reviewers): a press selects the
+  // code for the next one to replace it, and sends nothing.
+  const canSubmit = isSubmittableSignInCode(code) && !busy;
 
   // Caret to the end after every format: the code is short, nobody edits
   // its middle, and a reformat (a dash appearing) would otherwise strand it.
@@ -82,6 +84,12 @@ export function UnpairedCodeField({
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
+    if (refused) {
+      const el = inputRef.current;
+      el?.focus();
+      el?.setSelectionRange(0, el.value.length);
+      return;
+    }
     onSubmit(code.display);
   };
 

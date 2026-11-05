@@ -10,7 +10,7 @@ import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
 import { keepLastGood, readLastGood } from '@/utils/last-good';
 import { timeAgo } from '@/utils/time';
-import { fetchDevicesList } from './devices-list';
+import { fetchDevicesList, watchDevicesList } from './devices-list';
 import { DEVICES_CHANGED_EVENT } from './device-rows-copy';
 import { EMPTY_DEVICES_VIEW, cloudErrorLine, isDevicesView, mergeDevicesReply, type DeviceEntry, type DevicesListResponse, type DevicesView } from './devices-reply';
 import type { ExposeStatus } from './browser-access-status';
@@ -90,6 +90,9 @@ export function useDevicesData(opts: { replica: boolean; onTargets?: (kinds: Pai
     window.addEventListener(DEVICES_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(DEVICES_CHANGED_EVENT, onChanged);
   }, [refresh]);
+
+  // A browser that signs in (or out) on its own while the list is open shows up by itself.
+  useEffect(() => watchDevicesList(), []);
 
   // The server leaves Tailscale out of the list until its first probe answers (a newer
   // one sends the last probe's, marked stale): ask again a few times, so the card does

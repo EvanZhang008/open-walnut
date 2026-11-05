@@ -28,8 +28,20 @@ const SWEEP_MS = 10 * 60_000
 const FIRST_ROUND_MS = 10_000
 const PUT_TIMEOUT_MS = 15_000
 
-/** `id` = the record id (stable across the device's own rotations); the list hash ignores it. */
-export interface DeviceReplicaEntry { name: string; tokenHash: string; id?: string }
+/**
+ * `id` = the record id (stable across the device's own rotations); the list hash ignores it.
+ * `until` (ISO): a browser's access token is refused there after it (device-copy.ts);
+ * absent for a token that never expires. An older host server ignores it.
+ */
+export interface DeviceReplicaEntry { name: string; tokenHash: string; id?: string; until?: string }
+
+/**
+ * How long a host server still takes a browser's access token after it ran out
+ * here: while the Mac is away nothing renews it (only the Mac does), and the
+ * phone keeps working through that host meanwhile. After that it is refused
+ * there, and this Mac stops sending it.
+ */
+export const HOST_COPY_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 
 export interface DeviceReplicaDeps {
   /** Phones and browsers paired here, or null when the pairings cannot be read. */
@@ -47,8 +59,16 @@ export function deviceListHash(devices: DeviceReplicaEntry[]): string {
  * when the copy can keep it (device-copy.ts isDeviceCopyId): an id from a
  * hand-edited or older auth.json is left out, the device itself never is.
  */
-export function deviceReplicaEntry(r: { id?: unknown; name: string; tokenHash: string }): DeviceReplicaEntry {
-  return isDeviceCopyId(r.id) ? { id: r.id, name: r.name, tokenHash: r.tokenHash } : { name: r.name, tokenHash: r.tokenHash }
+export function deviceReplicaEntry(r: { id?: unknown; name: string; tokenHash: string; browserSignIn?: { accessUntil: string } }): DeviceReplicaEntry {
+  const base = isDeviceCopyId(r.id) ? { id: r.id, name: r.name, tokenHash: r.tokenHash } : { name: r.name, tokenHash: r.tokenHash }
+  const access = r.browserSignIn ? Date.parse(r.browserSignIn.accessUntil) : NaN
+  // An unreadable time fails closed, as on this Mac (device-store.ts accessExpired).
+  return r.browserSignIn ? { ...base, until: new Date((Number.isFinite(access) ? access : 0) + HOST_COPY_GRACE_MS).toISOString() } : base
+}
+
+/** Whether a host server would still take this row's token (a browser's within its grace). */
+export function hostStillTakes(e: DeviceReplicaEntry, now: number = Date.now()): boolean {
+  return !e.until || Date.parse(e.until) > now
 }
 
 async function defaultDeps(): Promise<DeviceReplicaDeps> {
@@ -63,6 +83,8 @@ async function defaultDeps(): Promise<DeviceReplicaDeps> {
       return records
         .filter((r) => r.kind !== 'machine' && !paired.revoked.has(r.tokenHash))
         .map(deviceReplicaEntry)
+        // A browser whose access token ran out a week ago leaves the copies (an older host checks no time).
+        .filter((e) => hostStillTakes(e))
     },
     targets: targets.replicaTargets,
   }

@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createDeviceCopy } from '../../src/host-server/device-copy.js'
 import {
-  syncDeviceReplica, deviceListHash, _resetDeviceReplicaForTesting, type DeviceReplicaDeps,
+  syncDeviceReplica, deviceListHash, deviceReplicaEntry, hostStillTakes, HOST_COPY_GRACE_MS, _resetDeviceReplicaForTesting, type DeviceReplicaDeps,
 } from '../../src/core/replication/device-replica.js'
 import type { ReplicaTarget } from '../../src/core/replication/replica-targets.js'
 import type { CloudReplicaReply } from '../../src/core/cloud-ingest.js'
@@ -137,5 +137,35 @@ describe('the Mac\'s device rounds', () => {
     wrong = false
     _resetDeviceReplicaForTesting()
     expect((await syncDeviceReplica(deps))[0].action).toBe('synced')
+  })
+})
+
+describe('a browser\'s access token on a host server (the Mac\'s grace)', () => {
+  it('is taken until the time the Mac sent, refused after it, and a time that does not read refuses', () => {
+    const copy = createDeviceCopy(path.join(dir, 'replica', 'devices.json'))
+    const later = new Date(Date.now() + 60_000).toISOString()
+    const past = new Date(Date.now() - 1_000).toISOString()
+    copy.put({ devices: [PHONE, { ...BROWSER, until: later }, { name: 'browser-0ff0ff', tokenHash: sha('gone-token'), until: past }, { name: 'browser-0ee0ee', tokenHash: sha('bad-time'), until: 'soon' }] })
+    expect(copy.verify('phone-token')).toBe('phone-1')
+    expect(copy.verify('browser-token')).toBe('browser-a1b2c3')
+    expect(copy.verify('gone-token')).toBeNull()
+    expect(copy.verify('bad-time')).toBeNull()
+    // The list hash is over name:tokenHash only, so an older Mac and this copy still agree.
+    expect(copy.hash()).toBe(deviceListHash([PHONE, BROWSER, { name: 'browser-0ff0ff', tokenHash: sha('gone-token') }, { name: 'browser-0ee0ee', tokenHash: sha('bad-time') }]))
+    // Kept across a restart.
+    const reread = createDeviceCopy(path.join(dir, 'replica', 'devices.json'))
+    expect(reread.verify('browser-token')).toBe('browser-a1b2c3')
+    expect(reread.verify('gone-token')).toBeNull()
+  })
+
+  it('the Mac sends a renewing browser\'s row with its access time plus a week, and none for a token that never expires', () => {
+    const accessUntil = '2026-11-04T20:00:00.000Z'
+    expect(deviceReplicaEntry({ name: 'browser-a1b2c3', tokenHash: BROWSER.tokenHash, browserSignIn: { accessUntil } }))
+      .toEqual({ name: 'browser-a1b2c3', tokenHash: BROWSER.tokenHash, until: new Date(Date.parse(accessUntil) + HOST_COPY_GRACE_MS).toISOString() })
+    expect(HOST_COPY_GRACE_MS).toBe(7 * 86_400_000)
+    expect(deviceReplicaEntry(PHONE)).toEqual(PHONE)
+    // A row past its time is no longer sent.
+    expect(hostStillTakes({ ...BROWSER, until: new Date(Date.now() - 1).toISOString() })).toBe(false)
+    expect(hostStillTakes(PHONE)).toBe(true)
   })
 })

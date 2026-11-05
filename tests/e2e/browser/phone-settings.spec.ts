@@ -401,7 +401,7 @@ test.describe('a phone signed in through a tunnel', () => {
     await own.getByTestId('devices-sign-out').click({ timeout: 30_000 })
     const sheet = phone.getByTestId('devices-sign-out-sheet')
     await expect(sheet.getByRole('heading')).toHaveText('Sign out this phone?')
-    await expect(sheet).toContainText('You will need a new code from your computer to sign in again.')
+    await expect(sheet).toContainText('You will need a new link from your computer to sign in again.')
     await shot(phone, 'sign-out-sheet')
     await sheet.getByRole('button', { name: 'Cancel', exact: true }).last().click()
     await expect(sheet).toHaveCount(0)

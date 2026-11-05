@@ -240,3 +240,12 @@ export function landingWay(i: Pick<WaysInput, 'listState' | 'cloudError'>, ways:
   if (pick) return pick.id;
   return i.cloudError ? 'cloud' : 'devices';
 }
+
+/**
+ * Whether Phones & Cloud may still move the address to its landing tab: only while the
+ * address names Phones & Cloud itself. A tab picked while the list was loading wins over
+ * the landing that the list's answer brings (the landing's replace ran after the pick).
+ */
+export function landingMayReplace(currentHash: string, paneId: string): boolean {
+  return currentHash === '' || currentHash === '#' || currentHash === `#${paneId}`;
+}

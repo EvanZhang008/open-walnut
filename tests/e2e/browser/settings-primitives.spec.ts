@@ -402,6 +402,14 @@ test.describe('controls', () => {
     await remove.click()
     await remove.click()
     expect(await page.evaluate(() => (window as unknown as { __h: { removed?: number } }).__h.removed ?? 0)).toBe(1)
+    // A double-click only arms it: its second click lands on the confirm step and is not one
+    // (a reviewer signed a phone out with one double-click).
+    await expect(remove).toHaveText('Remove')
+    await remove.dblclick()
+    await expect(remove).toHaveText('Confirm remove')
+    expect(await page.evaluate(() => (window as unknown as { __h: { removed?: number } }).__h.removed ?? 0)).toBe(1)
+    await remove.click()
+    expect(await page.evaluate(() => (window as unknown as { __h: { removed?: number } }).__h.removed ?? 0)).toBe(2)
   })
 })
 

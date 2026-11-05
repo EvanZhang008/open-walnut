@@ -7,15 +7,19 @@
  * first, and an unsigned browser gets the sign-in screen alone.
  *
  *   `#pair=<code>` in the address   trade it, then reload with the token
- *   a token already stored          boot at once (a revoked one still shows the
- *                                   notice when the first request is refused)
- *   anything else                   ask GET /api/devices/browser-session: the
- *                                   server's HttpOnly cookie gives a token back
- *                                   when Safari cleared this page's storage
- *                                   (device-token.ts), then reload with it; a
- *                                   refusal with the primary's code means sign
- *                                   in; an older server's answer falls back to
- *                                   GET /api/v1/me once without a token
+ *   a token that has not run out    boot at once (a revoked one still shows the
+ *                                   notice when the first request is refused;
+ *                                   one due soon is renewed by the console)
+ *   a token that ran out, or        renew first (device-token.ts): the refresh
+ *   none at all                     cookie gives a new pair, also when Safari
+ *                                   cleared this page's storage, and a token from
+ *                                   before renewing starts its pair. A new token
+ *                                   where there was none reloads the page with it;
+ *                                   the route's refusal means sign in; no answer
+ *                                   boots on the token held (the Mac away behind a
+ *                                   host server, whose copy still knows it), or
+ *                                   says so when there is none; anything else falls
+ *                                   back to GET /api/v1/me once without a token
  *
  * The computer Walnut runs on takes the probe too (a few ms there): the host
  * name cannot tell it from a tunnel, which may well be a loopback address.
@@ -28,13 +32,47 @@
  */
 
 import { consumePairFragment } from './browser-pair';
-import { getDeviceToken, restoreDeviceToken } from './device-token';
+import { getDeviceToken, renewSignIn, tokenExpired } from './device-token';
 import { getUnpairedState, noteAuthRefusal } from './unpaired';
 
 export type SignInGate = 'app' | 'sign-in' | 'probe-failed';
 
 const PROBE_MS = 5_000;
-const RESTORED_MARK = '#signed-in-again';
+/** What the builds before marked the address with (read once, for a page reloaded by one). */
+const RESTORED_HASH = '#signed-in-again';
+
+/**
+ * Set just before the reload after a restore and read once after it, so a page whose
+ * storage does not outlive a reload (some embedded browsers) boots instead of reloading
+ * forever. A cookie the page writes itself, never the address bar (a reviewer saw the
+ * mark flash there): the cookies are what such a page kept. One per port, as the token is.
+ */
+function restoreMarkName(): string {
+  const port = window.location.port;
+  return port ? `walnut_restored_${port}` : 'walnut_restored';
+}
+
+function restoreMarkAttrs(): string {
+  return `; Path=/; SameSite=Strict${window.location.protocol === 'https:' ? '; Secure' : ''}`;
+}
+
+function markRestore(): void {
+  try { document.cookie = `${restoreMarkName()}=1; Max-Age=60${restoreMarkAttrs()}`; } catch { /* cookies refused */ }
+}
+
+function takeRestoreMark(): boolean {
+  let found = false;
+  try {
+    const name = restoreMarkName();
+    found = String(document.cookie ?? '').split(';').some((c) => c.trim() === `${name}=1`);
+    if (found) document.cookie = `${name}=; Max-Age=0${restoreMarkAttrs()}`;
+  } catch { /* cookies refused */ }
+  if (window.location.hash === RESTORED_HASH) {
+    history.replaceState(history.state, '', `${window.location.pathname}${window.location.search}`);
+    return true;
+  }
+  return found;
+}
 
 export async function resolveSignInGate(): Promise<SignInGate> {
   const pairing = consumePairFragment();
@@ -51,25 +89,26 @@ export async function resolveSignInGate(): Promise<SignInGate> {
     window.location.reload();
     return new Promise<SignInGate>(() => {});
   }
-  // The reload after a restore says so in the address, so a page whose storage does
-  // not outlive a reload (some embedded browsers) boots instead of reloading forever.
-  const afterRestore = window.location.hash === RESTORED_MARK;
-  if (afterRestore) history.replaceState(history.state, '', `${window.location.pathname}${window.location.search}`);
-  if (getDeviceToken()) return 'app';
-  const kept = await restoreDeviceToken(PROBE_MS);
-  if (kept.kind === 'restored' && !afterRestore) {
+  const afterRestore = takeRestoreMark();
+  const held = getDeviceToken();
+  // Due soon, or from before renewing: the console renews it once it runs (startSignInRenewal).
+  if (held && !tokenExpired()) return 'app';
+  const renewed = await renewSignIn(PROBE_MS);
+  if (renewed.kind === 'renewed' && !held && !afterRestore) {
     // As after a code: modules that ran at import asked without the token.
-    window.location.hash = RESTORED_MARK;
+    markRestore();
     window.location.reload();
     return new Promise<SignInGate>(() => {});
   }
-  if (kept.kind === 'restored') return 'app';
-  if (kept.kind === 'held') return 'app';
-  if (kept.kind === 'no-answer') return 'probe-failed';
-  if (kept.kind === 'refused') {
-    noteAuthRefusal(kept.body);
-    return getUnpairedState() === 'ok' ? 'app' : 'sign-in';
+  if (renewed.kind === 'renewed' || renewed.kind === 'held') return 'app';
+  if (renewed.kind === 'refused') {
+    // The renewal's own code: the page can say why (its cookie gone, used elsewhere).
+    noteAuthRefusal(renewed.body);
+    return 'sign-in';
   }
+  // The token held still answers where renewing does not (a host server's copy while the Mac is away).
+  if (held) return 'app';
+  if (renewed.kind === 'no-answer') return 'probe-failed';
   try {
     const res = await fetch('/api/v1/me', { signal: AbortSignal.timeout(PROBE_MS), cache: 'no-store' });
     if (res.status !== 401) return 'app';

@@ -10,6 +10,7 @@
  */
 import { useState } from 'react';
 import { apiDelete } from '@/api/client';
+import { clearDeviceToken } from '@/api/device-token';
 import { PhoneConfirmSheet } from '@/components/common/PhoneConfirmSheet';
 import { SIGN_IN_SIGNED_OUT_FLAG } from '@/components/common/sign-in-copy';
 import { requestFailureText } from '@/utils/request-failure';
@@ -27,15 +28,21 @@ export function OwnDeviceSignOut({ name, touch }: { name: string; touch: boolean
     if (busy) return;
     setBusy(true);
     setError(null);
+    // Said before the request: the server closes this page's socket as it removes the
+    // device, and the page must read that as its own sign-out, never "from your computer".
+    try { sessionStorage.setItem(SIGN_IN_SIGNED_OUT_FLAG, 'self'); } catch { /* private mode */ }
     try {
       await apiDelete(`/api/devices/${encodeURIComponent(name)}`, { timeoutMs: TIMEOUT_MS });
     } catch (err) {
+      try { sessionStorage.removeItem(SIGN_IN_SIGNED_OUT_FLAG); } catch { /* private mode */ }
       log.warn('settings', 'self sign-out refused', { name, error: String(err) });
       setBusy(false);
       setError(requestFailureText(err, TIMEOUT_MS));
       return;
     }
-    try { sessionStorage.setItem(SIGN_IN_SIGNED_OUT_FLAG, 'self'); } catch { /* private mode */ }
+    // Nothing of the sign-in is kept (the server cleared its refresh cookie): a later visit
+    // shows the plain sign-in screen, never "signed out on your computer".
+    clearDeviceToken();
     log.info('settings', 'signed this browser out', { name });
     window.location.reload();
   };
@@ -54,7 +61,7 @@ export function OwnDeviceSignOut({ name, touch }: { name: string; touch: boolean
         open={open}
         name="sign-out"
         title={`Sign out this ${device}?`}
-        body="You will need a new code from your computer to sign in again."
+        body="You will need a new link from your computer to sign in again."
         confirmLabel="Sign out"
         cancelLabel="Cancel"
         destructive

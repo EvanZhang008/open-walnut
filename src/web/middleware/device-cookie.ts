@@ -36,6 +36,40 @@ export function deviceCookieHeader(token: string | null, secure: boolean): strin
 }
 
 /**
+ * The refresh token of a browser's renewing sign-in (core/browser-sign-in.ts),
+ * in a cookie sent only to the renewal path: HttpOnly, so no script reads it;
+ * set by the server, so Safari's 7-day rules never reach it; SameSite=Strict,
+ * so no other site's page makes the browser send it. A year, the sign-in's own
+ * idle limit, and set again at every renewal.
+ */
+export const REFRESH_COOKIE = 'walnut_refresh'
+export const REFRESH_COOKIE_PATH = '/api/auth/browser'
+export const REFRESH_COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60
+
+/**
+ * The refresh cookie's name for the page that asked: one per origin, as the
+ * access token its localStorage holds is. A cookie ignores the port, and an
+ * http page never sees a Secure one, so with one name two Walnuts on one host
+ * name (or its http and https pages) would overwrite each other's and each
+ * would sign the browser out as one that lost its cookie. `walnut_refresh`
+ * (http, default port), `walnut_refresh_s` (https, default port), with
+ * `_<port>` for any other port the browser named in its Host header.
+ */
+export function refreshCookieName(req: Pick<Request, 'headers'>, secure: boolean): string {
+  const host = String(req.headers.host ?? '')
+  const port = /:(\d{1,5})$/.exec(host)?.[1]
+  const base = secure ? `${REFRESH_COOKIE}_s` : REFRESH_COOKIE
+  return port ? `${base}_${port}` : base
+}
+
+export function refreshCookieHeader(name: string, token: string | null, secure: boolean): string {
+  const attrs = `Path=${REFRESH_COOKIE_PATH}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
+  return token
+    ? `${name}=${encodeURIComponent(token)}; ${attrs}; Max-Age=${REFRESH_COOKIE_MAX_AGE_S}`
+    : `${name}=; ${attrs}; Max-Age=0`
+}
+
+/**
  * Whether the page that asked is https. A tunnel or a reverse proxy ends TLS
  * before this server, so the page says so itself (`?secure=1`, from its own
  * location), beside the proxy's X-Forwarded-Proto. A Secure cookie on an http
@@ -50,7 +84,9 @@ export function pageIsSecure(req: Pick<Request, 'headers'> & { query?: unknown; 
   return first === 'https'
 }
 
-function cookieValue(raw: string, name: string): string {
+/** One cookie's value from a Cookie header ('' when absent or unreadable). */
+export function cookieValue(raw: string | undefined, name: string): string {
+  if (!raw) return ''
   for (const part of raw.split(';')) {
     const eq = part.indexOf('=')
     if (eq < 0 || part.slice(0, eq).trim() !== name) continue

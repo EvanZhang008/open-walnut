@@ -11,8 +11,16 @@ vi.mock('@/api/client', () => ({
   apiGet: vi.fn(() => new Promise((resolve) => { pending.push({ resolve }) })),
 }))
 
+const events = new Map<string, Set<() => void>>()
+vi.mock('@/api/ws', () => ({
+  wsClient: {
+    onEvent: vi.fn((name: string, cb: () => void) => { if (!events.has(name)) events.set(name, new Set()); events.get(name)!.add(cb) }),
+    offEvent: vi.fn((name: string, cb: () => void) => { events.get(name)?.delete(cb) }),
+  },
+}))
+
 const { apiGet } = await import('@/api/client')
-const { fetchDevicesList, devicesListChanged } = await import('../../web/src/components/settings/sections/cloud/devices-list.js')
+const { fetchDevicesList, devicesListChanged, watchDevicesList, DEVICES_POLL_MS, BROWSER_SIGNED_IN_EVENT } = await import('../../web/src/components/settings/sections/cloud/devices-list.js')
 
 beforeEach(() => {
   vi.mocked(apiGet).mockClear()
@@ -52,5 +60,42 @@ describe('fetchDevicesList', () => {
     expect(apiGet).toHaveBeenCalledTimes(2)
     pending.shift()!.resolve({})
     await second
+  })
+})
+
+describe('watchDevicesList (while a pane shows the list)', () => {
+  it('a browser signing in, or the clock, tells every reader once; a read still out is not stacked on; the last reader stops it all', async () => {
+    vi.useFakeTimers()
+    const told: string[] = []
+    vi.stubGlobal('document', { visibilityState: 'visible' })
+    vi.stubGlobal('window', { dispatchEvent: (e: Event) => { told.push(e.type); return true } })
+    try {
+      const stopA = watchDevicesList()
+      const stopB = watchDevicesList()
+      // One listener for both readers.
+      expect(events.get(BROWSER_SIGNED_IN_EVENT)?.size).toBe(1)
+      for (const cb of events.get(BROWSER_SIGNED_IN_EVENT)!) cb()
+      expect(told).toEqual(['walnut:devices-changed'])
+      vi.advanceTimersByTime(DEVICES_POLL_MS)
+      expect(told).toHaveLength(2)
+      // A slow read: the next tick waits for it.
+      const slow = fetchDevicesList()
+      vi.advanceTimersByTime(DEVICES_POLL_MS)
+      expect(told).toHaveLength(2)
+      pending.shift()!.resolve({})
+      await slow
+      vi.advanceTimersByTime(DEVICES_POLL_MS)
+      expect(told).toHaveLength(3)
+      stopA()
+      stopA()
+      expect(events.get(BROWSER_SIGNED_IN_EVENT)?.size).toBe(1)
+      stopB()
+      expect(events.get(BROWSER_SIGNED_IN_EVENT)?.size).toBe(0)
+      vi.advanceTimersByTime(DEVICES_POLL_MS * 3)
+      expect(told).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
   })
 })

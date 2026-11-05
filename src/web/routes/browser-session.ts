@@ -24,6 +24,10 @@
  * a phone signs back in through whichever server its address reaches, the Mac
  * away included; the plain host server answers it from its device copy while it
  * shows the alone page (host-server/browser-session.ts).
+ *
+ * A browser signed in since sign-ins renew (core/browser-sign-in.ts) holds a
+ * refresh cookie instead and never asks here; one of an older build that does
+ * gets 204 and the old cookie cleared.
  */
 
 import type { Request, Response } from 'express'
@@ -47,11 +51,20 @@ export function askedByThePage(headers: Request['headers']): boolean {
   return site === undefined || site === 'same-origin'
 }
 
-export function browserSessionHandler(req: Request, res: Response): void {
+export async function browserSessionHandler(req: Request, res: Response): Promise<void> {
   res.set('Cache-Control', 'no-store')
   const token = presentedToken(req)
   const device = (req as Request & { deviceName?: string }).deviceName
   if (!token || !device || !askedByThePage(req.headers)) {
+    res.status(204).end()
+    return
+  }
+  // A browser that renews its sign-in (core/browser-sign-in.ts) keeps its refresh
+  // cookie instead: a page of an older build asking here gets the old cookie cleared.
+  // Loaded here, not at the top: the plain host server imports this module.
+  const { renewsItself } = await import('../../core/browser-sign-in.js')
+  if (await renewsItself(token)) {
+    res.append('Set-Cookie', deviceCookieHeader(null, pageIsSecure(req)))
     res.status(204).end()
     return
   }

@@ -210,21 +210,71 @@ holding a removed token spends the token count on its first page load. In stage
 2 the token is copied to the server's followers the way phone tokens are today
 (device adoption), so the same browser keeps working while the leader is away.
 
-The browser keeps the token in localStorage, and keeps it signed in until the
-device is removed: no server-side expiry. Safari removes a site's script storage
-after 7 days of browsing without a visit to it, and keeps a cookie a script wrote
-7 days at most, so the token also lives in a cookie the server sets
-(`GET /api/devices/browser-session`, `src/web/routes/browser-session.ts`):
-`walnut_signin`, HttpOnly, SameSite=Strict, Path=/api, 400 days (the longest any
-browser keeps a cookie), renewed at every open. It has its own name beside the
-page's `walnut_device`, which the page rewrites at once when its token changes; a
-GET reads the page's cookie first. The route answers only a same-origin call
-(`Sec-Fetch-Site`). A page with empty storage asks the
-same route before it shows the sign-in screen; the cookie rides and the token
-comes back. Every server a phone's address reaches answers it itself, against its
-own device list: the primary, the companion, a host replica (a local row), and the
-plain host server on its alone page. A removed device's cookie is refused like its
-token.
+The sign-in renews itself (`src/core/browser-sign-in.ts`), so the token the page
+holds lasts hours and the long-lived credential is one no script can read:
+
+- the **access token** is the device token the page keeps in localStorage and
+  sends (headers, the WebSocket, the media cookie `walnut_device`). Its hash is the
+  record's `tokenHash` like any device token's, so every server checks it the same
+  way; the primary refuses it 20 hours after it was issued (`token_expired`);
+- the **refresh token** lives only in a cookie the server sets: `walnut_refresh`,
+  HttpOnly, SameSite=Strict, Path=/api/auth/browser, a year, set again at every
+  renewal. Safari's 7-day rules (script storage, script-written cookies) never
+  reach a cookie the server set. Its name is one per origin, as the access token's
+  localStorage is (`_s` for https, `_<port>` for a port other than the default):
+  a cookie ignores the port, so two Walnuts on one host name would otherwise
+  overwrite each other's.
+
+`POST /api/auth/browser/refresh` (`src/web/routes/browser-sign-in.ts`, public on a
+primary, same-origin calls only) trades the refresh token for a new pair once: the
+old one is recorded as spent. The page renews when a quarter of the token's life is
+left (at the latest five hours before), whenever it comes back to the foreground,
+and when a request is refused as `token_expired` (that request then goes again). A
+page whose storage Safari cleared renews from the cookie before it shows the
+sign-in screen. A spent refresh token presented again signs the browser out
+(someone else holds a copy), except within a minute of its use (two tabs at once:
+the same answer, or 409 and the page asks again) or when nothing issued since was
+ever used (an answer that never reached the phone: answered again). The access
+token a renewal replaced is answered `token_expired`, never as signed out, until
+the next renewal: a request the page sent before it stored the new one renews and
+goes again. A sign-in not renewed for a year ends (at its next renewal, and a sweep
+every 6 hours signs out one that never comes back), and so does one whose page
+comes to renew with its access token but no refresh cookie (`refresh_missing`: it
+could never renew again). Nothing is bound to an
+address: a phone moves between Wi-Fi and cellular. "Sign out browsers signed in with a link" in
+Settings ends at once every one it lists (`POST /api/devices/browser-sign-ins/revoke`
+with their `names`, so the count it asks about is the count signed out; with no
+body, every one), and removing a browser closes its open WebSocket at once (4401).
+A browser removed on the computer has its refresh token recorded with the revoked
+token hashes, so its page, opened again later, is told `device_removed` ("signed
+out from your computer") instead of only that its token is unknown; a sign-in that
+ended for its own reason (replayed, its cookie gone, a year unused) is not. Each
+browser's name is numbered when it signs in ("iPhone Safari 2"), one above the
+highest of its kind listed, so a row never takes the name of one removed before it. A WebSocket lives
+no longer than the access token it was opened with: it is closed with 4419 when
+that runs out, and the page renews if it has not and connects again. A browser
+signed in with a link never pairs another device and never has the owner's
+rights (`browser_cannot_pair`): a device it paired would hold a token with no time.
+
+Only the primary renews. A host replica and a plain host server forward the call
+to the Mac (cookies and the answer's Set-Cookie pass as they are); while the Mac is
+away they answer 503 and the page keeps the token it holds. Their device copy holds
+each browser's current access token with a time (`until`): its access time plus a
+week (`HOST_COPY_GRACE_MS`), so a phone keeps working through a host for a week of
+the Mac away, and a token past it is refused there. The Mac stops sending a row
+past its time, and a new token replaces the old at every renewal. An older host
+server ignores the time and keeps a row until the Mac's list drops it. A renewing
+browser is never copied to the companion (its token changes daily); a browser that
+carries over from before renewing has its old token refused for good on the Mac
+and its copy on the companion removed, as a device's own rotation does.
+
+A browser signed in before renewing existed holds a token with no time. Its first
+renewal sends it, and the server starts the pair in its place, so it never needs a
+new code; the `walnut_signin` cookie of the build before (HttpOnly, Path=/api, the
+whole token) counts the same way, and is cleared then. `GET
+/api/devices/browser-session` still answers such a browser, and a page of an older
+build asking it for a renewing one gets 204 and that cookie cleared. A token that
+never expires (the iOS app, the Walnut extension, an API key) is unchanged.
 
 ## A server on a host
 

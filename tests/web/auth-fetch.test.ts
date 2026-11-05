@@ -4,7 +4,7 @@
  * directly (notifications, quiet mode, status items), so those parts stayed empty.
  */
 import { describe, it, expect } from 'vitest'
-import { initWithDeviceToken } from '../../web/src/api/auth-fetch'
+import { heldOffWhileSignedOut, initWithDeviceToken } from '../../web/src/api/auth-fetch'
 import { deviceCookieLine } from '../../web/src/api/device-token'
 
 const PAGE = 'https://walnut.example.test/settings'
@@ -58,5 +58,22 @@ describe('deviceCookieLine', () => {
 
   it('expires it on sign-out', () => {
     expect(deviceCookieLine(null, true)).toMatch(/^walnut_device=; .*Max-Age=0$/)
+  })
+})
+
+// 2026-11-04, a reviewer's log: a signed-out phone kept asking a plugin's summary and the
+// renewal route every 15 to 30 s, each answered 401.
+describe('heldOffWhileSignedOut', () => {
+  it('holds back every same-origin /api call once the page knows why it was signed out', () => {
+    expect(heldOffWhileSignedOut('/api/plugins/slack/summary', PAGE, 'removed')).toBe(true)
+    expect(heldOffWhileSignedOut(new URL('https://walnut.example.test/api/notifications'), PAGE, 'cookie_gone')).toBe(true)
+  })
+  it('never signing in again, the check whether it is signed in, another origin, or a page signed in', () => {
+    for (const path of ['/api/v1/browser-pair', '/api/auth/browser/refresh?secure=1', '/api/v1/me']) {
+      expect(heldOffWhileSignedOut(path, PAGE, 'removed'), path).toBe(false)
+    }
+    expect(heldOffWhileSignedOut('https://elsewhere.example.test/api/x', PAGE, 'removed')).toBe(false)
+    expect(heldOffWhileSignedOut('/assets/app.js', PAGE, 'removed')).toBe(false)
+    expect(heldOffWhileSignedOut('/api/notifications', PAGE, null)).toBe(false)
   })
 })

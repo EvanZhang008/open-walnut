@@ -3,12 +3,22 @@
  * (WKWebView has no confirm/alert panel, so that dialog is a silent Cancel in
  * the Mac app).
  * First click arms it (`Confirm remove`) for 3s; only the second click calls
- * onConfirm. Width is reserved for the longer label, so nothing shifts.
+ * onConfirm, never the second click of a double-click. Width is reserved for the
+ * longer label, so nothing shifts.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { SettingsButton } from './SettingsButton'
 
 export const CONFIRM_ARM_MS = 3000
+
+/**
+ * The second click of a double-click (or more): the confirm step appears under the pointer,
+ * so that click lands on it, and a double-click would skip the question (a reviewer signed a
+ * phone out that way). A confirm ignores it; a keyboard press (detail 0) still confirms.
+ */
+export function isRepeatClick(e: Pick<MouseEvent, 'detail'>): boolean {
+  return e.detail > 1
+}
 
 export interface InlineConfirmButtonProps {
   onConfirm: () => void | Promise<unknown>
@@ -38,7 +48,8 @@ export function InlineConfirmButton({
     clearTimeout(timer.current)
     setArmed(false)
   }
-  const onClick = () => {
+  const onClick = (e: MouseEvent) => {
+    if (armed && isRepeatClick(e)) return
     if (!armed) {
       setArmed(true)
       clearTimeout(timer.current)

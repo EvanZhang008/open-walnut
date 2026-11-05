@@ -8,13 +8,15 @@ import { useNavigate } from 'react-router-dom';
 import { SettingsSection, SettingsGroup, SettingsLoadingRow } from '../SettingsSection';
 import { PHONES_CLOUD_PANE } from '../settings-way-panes';
 import { PANE_TITLE, TabBar, usePhonesCloudView } from './cloud/PhonesCloudTabs';
+import { landingMayReplace } from './cloud/ways-model';
 
 /** Phones & Cloud itself: opens the tab in use once the list says which. */
 export function PhonesCloudLanding() {
   const navigate = useNavigate();
   const view = usePhonesCloudView();
   useEffect(() => {
-    if (view.landing) navigate({ hash: `#${view.landing}` }, { replace: true });
+    // A tab the person picked while the list loaded stays open.
+    if (view.landing && landingMayReplace(window.location.hash, PHONES_CLOUD_PANE)) navigate({ hash: `#${view.landing}` }, { replace: true });
   }, [view.landing, navigate]);
   return (
     <SettingsSection id={PHONES_CLOUD_PANE} title={PANE_TITLE}>

@@ -168,6 +168,9 @@ async function unadoptOnCloud(hash: string): Promise<boolean> {
  * it did not adopt: an older build answers 404, a refusal 403).
  */
 export async function adoptOnCloud(record: DeviceRecord): Promise<CloudTwin | null> {
+  // A browser that renews its sign-in gets a new token every day (core/browser-sign-in.ts):
+  // a copy on the companion would go stale with each one. It signs in on this Mac only.
+  if (record.browserSignIn) return null
   const cloud = await getCloudPairingEndpointAsync()
   if (!cloud || isOwnCloudCredential(record.tokenHash, cloud)) return null
   const hash = record.tokenHash

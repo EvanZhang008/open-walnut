@@ -11,13 +11,26 @@
  * app, whose camera scan opens Safari instead, so the code field comes first.
  */
 
+import type { SignedOutReason } from '@/api/unpaired';
+
 export type SignInState = 'unpaired' | 'revoked' | 'signed-out' | 'probe-failed';
 
 export interface SignInCopyInput {
   state: SignInState;
   touch: boolean;
   standalone: boolean;
+  /** Revoked only: why, when the renewal said (api/unpaired.ts). */
+  reason?: SignedOutReason | null;
 }
+
+/** The revoked page's line under its title, by why the sign-in ended. */
+const REVOKED_LINE: Record<SignedOutReason | 'other', string> = {
+  cookie_gone: 'Its sign-in was cleared from this browser. Sign in again with a new link.',
+  used_elsewhere: 'Its sign-in was used from another device, so Walnut ended it to keep it safe. Sign in again with a new link.',
+  year_unused: 'It was not used for a year. Sign in again with a new link.',
+  removed: 'It was signed out from your computer. Sign in again with a new link.',
+  other: 'Removed on your computer, or its sign-in ended. Sign in again with a new link.',
+};
 
 export interface SignInCopy {
   title: string;
@@ -30,7 +43,8 @@ export interface SignInCopy {
   placeholder: string;
   submit: string;
   submitBusy: string;
-  footer: string;
+  /** The small line at the bottom; null when the page above already says it all. */
+  footer: string | null;
   /** Revoked only: a text button that reloads. */
   retry: string | null;
   /** Probe failed only: the error line and the button that asks again. */
@@ -53,36 +67,42 @@ export const SIGN_IN_BAD_CHARS = 'Codes never use 0, 1, I, L or O.';
 export const SIGN_IN_SIGNED_OUT_FLAG = 'walnut.signedOut';
 
 const NETWORK = 'Walnut did not answer. Check the connection, then try again.';
+/** A code that is wrong, was used already, or ran out (the server does not say which). */
+export const INVALID_CODE = 'That code is wrong, already used or expired. Make a new one in Walnut on your computer.';
 
-export function signInCopy({ state, touch, standalone }: SignInCopyInput): SignInCopy {
+export function signInCopy({ state, touch, standalone, reason = null }: SignInCopyInput): SignInCopy {
   const homeScreen = standalone && touch;
   const device = touch ? 'phone' : 'browser';
   const title = state === 'revoked' ? `This ${device} was signed out`
     : state === 'signed-out' ? 'Signed out'
     : 'Sign in to Walnut';
   const tagline = state === 'revoked'
-    ? 'Walnut no longer accepts this sign-in. It may have been removed on your computer. Sign in again below.'
+    ? REVOKED_LINE[reason ?? 'other']
     : state === 'signed-out'
       ? `This ${device} no longer has access to Walnut. Sign in again below.`
       : 'Your tasks, AI sessions and notes, from the computer Walnut runs on.';
   const step2 = homeScreen
     ? 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'
     : touch
-      ? 'Open the link shown under Open on your phone, on this phone.'
+      ? 'On this phone, open the link shown under Open on your phone.'
       : 'Open the link shown under Open on your phone in this browser, or paste it below.';
   const scanning = touch && !homeScreen;
   return {
     title,
     tagline,
-    steps: ['On your computer, open Walnut and go to Settings > Phones & Cloud.', step2],
-    codeHeading: scanning ? "Can't open the link?" : 'Sign-in code',
-    codeHint: scanning ? 'Paste the link here.' : null,
+    steps: ['On your computer, open Walnut and go to Settings > Phones & Cloud > Browser link.', step2],
+    codeHeading: 'Sign-in code',
+    // The computer shows the link with its code hidden: pasting it is the way, never typing.
+    codeHint: scanning ? "Can't open the link? Paste it here." : null,
     inputLabel: 'Sign-in code',
     placeholder: 'XXXX-XXXX',
     submit: 'Sign in',
     submitBusy: 'Signing in...',
-    footer: 'On the computer Walnut runs on? Open Walnut there; it needs no code.',
-    retry: state === 'revoked' ? 'Try again' : null,
+    // A phone is never the computer Walnut runs on, and a note about cookies was noise on a
+    // first visit (two reviewers): it has none. A signed-out page says why in its own line.
+    footer: touch ? null : 'On the computer Walnut runs on? Open Walnut there; it needs no code.',
+    // A refused sign-in stays refused: a reload would show the same page.
+    retry: null,
     probeError: state === 'probe-failed' ? NETWORK : null,
     probeRetry: state === 'probe-failed' ? 'Try again' : null,
     codeFirst: homeScreen,
@@ -93,7 +113,7 @@ export type SignInErrorKind = 'invalid_code' | 'rate_limited' | 'network' | 'oth
 
 /** The error line under the code field (spec 3.4). */
 export function errorMessage(kind: SignInErrorKind, status?: number, serverMessage?: string | null): string {
-  if (kind === 'invalid_code') return 'That code is wrong or has expired. Make a new one in Walnut on your computer.';
+  if (kind === 'invalid_code') return INVALID_CODE;
   if (kind === 'rate_limited') return 'Too many wrong codes. Wait a minute, then try again.';
   if (kind === 'network') return NETWORK;
   const server = typeof serverMessage === 'string' ? serverMessage.trim() : '';

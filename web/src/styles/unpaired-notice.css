@@ -52,6 +52,24 @@
   }
 }
 
+/* A short phone screen (an iPhone 15 with Safari's bars shows 659 px): tighter gaps,
+   so the Sign in button is on screen without scrolling. The phone layout's own query
+   (usePhoneLayout.ts), with the height inside it. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  @media (max-height: 700px) {
+    /* 40 px below the notch at least (the spec's own floor). */
+    .unpaired-notice {
+      padding-top: calc(var(--un-safe-top) + 40px);
+    }
+    .unpaired-notice .unpaired-notice-steps {
+      margin-top: 16px;
+    }
+    .unpaired-notice .unpaired-notice-rule {
+      margin: 16px 0;
+    }
+  }
+}
+
 /* A computer's browser: the same page, its column lower on a tall window. */
 @media (min-width: 769px) {
   .unpaired-notice {

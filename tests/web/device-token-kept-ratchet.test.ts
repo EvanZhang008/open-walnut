@@ -1,15 +1,17 @@
 /**
- * Every page that signs in with the device token in page storage also keeps it
- * where Safari's 7-day rules cannot reach (2026-11-04, the user: "if cookie is
- * cleared need another code"; "how long will cookie usually last"). Safari
- * removes an unopened site's localStorage after 7 days and keeps a cookie a
- * script wrote 7 days at most; the server's HttpOnly cookie
- * (routes/browser-session.ts) stays 400 days and is renewed at every open.
+ * Every page that signs in with the device token in page storage also keeps its
+ * sign-in where Safari's 7-day rules cannot reach (2026-11-04, the user: "if
+ * cookie is cleared need another code"; "how long will cookie usually last").
+ * Safari removes an unopened site's localStorage after 7 days and keeps a cookie
+ * a script wrote 7 days at most; a cookie the server set is neither. The console
+ * renews from the refresh cookie (routes/browser-sign-in.ts, a year, set again at
+ * every renewal); the plain host server's alone page restores a browser from
+ * before renewing from its `walnut_signin` cookie (routes/browser-session.ts).
  *
  * The class: a source file that reads `walnut.deviceToken`. Each one is listed
- * here as a page that boots on it (and must renew the cookie and restore from
- * it) or as code that runs inside the console after its sign-in gate (which did
- * both). A new reader fails until it is listed.
+ * here as a page that boots on it (and must ask the server's cookie for it) or
+ * as code that runs inside the console after its sign-in gate (which did). A
+ * new reader fails until it is listed.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,12 +19,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const ROOT = path.resolve(__dirname, '../..')
 const KEY = 'walnut.deviceToken'
-const ROUTE = '/api/devices/browser-session'
-
-/** Pages that read the token at their own start. */
-const BOOT_PAGES: Record<string, string> = {
-  'web/src/api/device-token.ts': 'the web console\'s token store (its sign-in gate, sign-in-gate.ts, restores through it)',
-  'src/host-server/alone-page.ts': 'the plain host server\'s alone page, its own script',
+/** Pages that read the token at their own start, with the server route each asks for its cookie. */
+const BOOT_PAGES: Record<string, { route: string; why: string }> = {
+  'web/src/api/device-token.ts': { route: '/api/auth/browser/refresh', why: 'the web console\'s token store (its sign-in gate, sign-in-gate.ts, renews through it)' },
+  'src/host-server/alone-page.ts': { route: '/api/devices/browser-session', why: 'the plain host server\'s alone page, its own script' },
 }
 
 /**
@@ -64,22 +64,25 @@ describe('the device token is kept past Safari\'s 7-day rules', () => {
   })
 
   it('every page that boots on it asks the server for its cookie', () => {
-    for (const file of Object.keys(BOOT_PAGES)) {
-      expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toContain(ROUTE)
+    for (const [file, { route }] of Object.entries(BOOT_PAGES)) {
+      expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toContain(route)
     }
-    expect(fs.readFileSync(path.join(ROOT, 'web/src/api/sign-in-gate.ts'), 'utf8')).toMatch(/restoreDeviceToken\(/)
+    expect(fs.readFileSync(path.join(ROOT, 'web/src/api/sign-in-gate.ts'), 'utf8')).toMatch(/renewSignIn\(/)
+    expect(fs.readFileSync(path.join(ROOT, 'web/src/main.tsx'), 'utf8')).toMatch(/startSignInRenewal\(\)/)
   })
 
-  it('the console renews the server cookie at every open, with its token, saying whether the page is https', async () => {
+  it('the console renews with a POST that sends the token it holds (a browser from before renewing starts its pair), saying whether the page is https', async () => {
     vi.resetModules()
     const calls: Array<[string, RequestInit | undefined]> = []
     vi.stubGlobal('window', { location: { protocol: 'https:' } })
-    vi.stubGlobal('localStorage', { getItem: () => 'tok-1', setItem: () => {}, removeItem: () => {} })
+    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === KEY ? 'tok-1' : null), setItem: () => {}, removeItem: () => {} })
     vi.stubGlobal('document', { cookie: '' })
+    vi.stubGlobal('navigator', {})
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => { calls.push([url, init]); return new Response(null, { status: 204 }) })
-    const { syncDeviceCookie } = await import('../../web/src/api/device-token')
-    syncDeviceCookie()
-    expect(calls.map((c) => c[0])).toEqual([`${ROUTE}?secure=1`])
+    const { renewSignIn } = await import('../../web/src/api/device-token')
+    expect((await renewSignIn()).kind).toBe('unknown')
+    expect(calls.map((c) => c[0])).toEqual(['/api/auth/browser/refresh?secure=1'])
+    expect(calls[0]![1]!.method).toBe('POST')
     expect(new Headers(calls[0]![1]!.headers).get('authorization')).toBe('Bearer tok-1')
   })
 })

@@ -133,6 +133,26 @@ describe('deviceChangeDecision (pure)', () => {
     }
   })
 
+  it('a browser signed in with a link (renewing, or from before renewing) pairs nothing and owns nothing: its token is meant to last hours', () => {
+    const legacy = rec('browser-a1b2c3')
+    const renewing = rec('browser-b2c3d4', { browserSignIn: { refreshHash: sha('r'), renewedAt: now, accessUntil: now } })
+    const withBrowsers: DeviceRegistry = { devices: [...reg.devices, legacy, renewing], owner: reg.owner }
+    for (const name of ['browser-a1b2c3', 'browser-b2c3d4']) {
+      for (const cloudMode of [true, false]) {
+        expect(deviceChangeDecision(withBrowsers, as(name), 'create', 'laundered', cloudMode))
+          .toEqual({ ok: false, refusal: expect.objectContaining({ status: 403, code: 'browser_cannot_pair', message: 'Pair new devices from the Mac, in Settings › Phones & Cloud, not from a browser signed in with a link.' }) })
+      }
+      expect(cloudRelayDecision(withBrowsers.devices, as(name), 'create')).toMatchObject({ ok: false, refusal: { code: 'browser_cannot_pair' } })
+      // It may still sign itself out.
+      expect(deviceChangeDecision(withBrowsers, as(name), 'revoke', name, true)).toEqual({ ok: true, by: 'self' })
+    }
+    // Recorded as the companion's owner (an older build's claim), it still has no owner rights.
+    const ownedByBrowser: DeviceRegistry = { devices: withBrowsers.devices, owner: { id: renewing.id!, via: 'claim' } }
+    expect(deviceChangeDecision(ownedByBrowser, as('browser-b2c3d4'), 'rotate', 'my-phone', true)).toMatchObject({ ok: false })
+    expect(apiKeyDecision(ownedByBrowser, as('browser-b2c3d4'), true)).toMatchObject({ ok: false })
+    expect(proofClaim({ devices: withBrowsers.devices, owner: null }, legacy, 'bridge-local-token')).toBeNull()
+  })
+
   it('on the Mac (not a companion) a recorded owner means nothing: the rule is the one the builds before had', () => {
     // The owner recorded is mac-second; the machine credential is mac-primary's.
     const mac: DeviceRegistry = { ...reg, owner: { id: other.id!, via: 'claim' } }

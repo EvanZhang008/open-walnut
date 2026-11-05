@@ -3,7 +3,7 @@
  * and the three way cards (web/src/components/settings/sections/cloud/ways-model.ts).
  */
 import { describe, expect, it } from 'vitest'
-import { deriveWays, landingWay, latestUse, type WaysInput } from '../../web/src/components/settings/sections/cloud/ways-model'
+import { deriveWays, landingMayReplace, landingWay, latestUse, type WaysInput } from '../../web/src/components/settings/sections/cloud/ways-model'
 
 const NOW = Date.parse('2026-10-28T12:00:00Z')
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString()
@@ -146,5 +146,18 @@ describe('the tab Phones & Cloud opens on', () => {
     expect(land({ expose: { enabled: true, provider: 'command', state: 'connected', since: 0 } })).toBe('devices')
     // A companion that does not answer: its tab, which says so.
     expect(land({ targets: [LAN, CLOUD], cloudError: 'down' })).toBe('cloud')
+  })
+})
+
+describe('the landing keeps a tab picked while the list loaded', () => {
+  // 2026-11-05, a WebKit run: the Browser link tab was picked while Phones & Cloud still
+  // loaded, then the list's answer moved the address to Devices on top of it.
+  it('replaces only while the address names Phones & Cloud itself', () => {
+    expect(landingMayReplace('#devices', 'devices')).toBe(true)
+    expect(landingMayReplace('', 'devices')).toBe(true)
+    expect(landingMayReplace('#', 'devices')).toBe(true)
+    expect(landingMayReplace('#devices-browser', 'devices')).toBe(false)
+    expect(landingMayReplace('#devices-phones', 'devices')).toBe(false)
+    expect(landingMayReplace('#cloud', 'devices')).toBe(false)
   })
 })

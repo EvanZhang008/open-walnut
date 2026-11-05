@@ -68,3 +68,13 @@
   color: var(--fg);
   user-select: all;
 }
+
+/* The code in words, on its own line under the link's note. */
+.browser-access-link-note + .browser-access-link-note {
+  display: block;
+  margin-top: 6px;
+}
+
+.browser-access-reveal {
+  font-size: inherit;
+}

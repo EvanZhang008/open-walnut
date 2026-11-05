@@ -28,7 +28,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
-import { isPairedDeviceId, verifyDeviceToken } from '../../core/device-auth.js'
+import { isExpiredAccessToken, isPairedDeviceId, verifyDeviceToken } from '../../core/device-auth.js'
 import { recordAuthFailure, isAuthRateLimited, RATE_LIMITED_BODY, RATE_LIMIT_RETRY_AFTER_S } from './auth-rate-limit.js'
 import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
@@ -60,7 +60,10 @@ const PUBLIC_GET_PATHS = new Set(['/v1/instance'])
 //   token (routes/browser-pair.ts); it has nothing else to present yet. Wrong
 //   codes are rate limited there, per caller address. Never on a replica: its
 //   /api/v1 forward would hand the internet a way to try the primary's codes.
-const PUBLIC_POST_PATHS = new Set(['/v1/browser-pair'])
+// - /auth/browser/refresh: a browser renews its sign-in with its refresh cookie
+//   (routes/browser-sign-in.ts), which is how an expired access token is
+//   replaced; the route checks what it was given, and wrong tokens count there.
+const PUBLIC_POST_PATHS = new Set(['/v1/browser-pair', '/auth/browser/refresh'])
 
 function isPublicGet(req: Request): boolean {
   return req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path)
@@ -163,6 +166,12 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   try {
     const cred = await validateBearerCredential(bearer)
     if (!cred || cred.kind === 'machine') {
+      // A browser's access token that ran out: its page renews it (routes/browser-sign-in.ts)
+      // instead of saying it was signed out. A real token, so no failure is counted.
+      if (!cred && await isExpiredAccessToken(bearer)) {
+        res.status(401).json({ error: 'This sign-in needs renewing.', code: 'token_expired' })
+        return
+      }
       recordAuthFailure(ip, bearer)
       log.web.warn('auth: invalid credential', { ip, machine: cred?.kind === 'machine' })
       res.status(401).json({ error: 'Invalid or revoked token', code: 'token_refused' })

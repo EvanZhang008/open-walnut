@@ -2168,6 +2168,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       import('./routes/host-servers.js'),
     ])
     app.use('/api/devices', browserCodeRouter)
+    // A browser renews its sign-in here (routes/browser-sign-in.ts): on the primary only
+    // (a host replica forwards it to the Mac before it reaches this app).
+    if (!isCompanion() && !isHostReplica()) {
+      const { browserRefreshRouter, browserSignInsRouter } = await import('./routes/browser-sign-in.js')
+      app.use('/api/auth/browser', browserRefreshRouter)
+      app.use('/api/devices', browserSignInsRouter)
+      // A browser not renewed for a year is signed out here (core/browser-sign-in.ts).
+      ;(await import('../core/browser-sign-in.js')).startBrowserSignInSweep()
+    }
     app.use('/api/expose', exposeRouter)
     app.use('/api/host-servers', hostServersRouter)
   }

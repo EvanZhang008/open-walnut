@@ -18,7 +18,8 @@
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { getUnpairedState, subscribeUnpaired } from '@/api/unpaired';
+import { getSignedOutReason, getUnpairedState, noteSignedIn, subscribeUnpaired } from '@/api/unpaired';
+import { getDeviceToken } from '@/api/device-token';
 import {
   exchangeBrowserCode, getFragmentPairState, subscribeFragmentPair, type FragmentPairState,
 } from '@/api/browser-pair';
@@ -39,6 +40,12 @@ export interface UnpairedNoticeProps {
 }
 
 const SLOW_PENDING_MS = 6_000;
+/**
+ * A signed-out page asks again whether this browser is still signed in (a refusal heard while
+ * Walnut restarted, a host's device copy behind): 5 s, 15 s, 45 s, then every 5 minutes, and
+ * whenever the page comes back or the network does.
+ */
+const RECHECK_REVOKED_MS = [5_000, 15_000, 45_000, 300_000];
 
 function matches(query: string): boolean {
   try { return window.matchMedia(query).matches; } catch { return false; }
@@ -63,10 +70,39 @@ function clearSignedOut(): void {
 
 export function UnpairedNotice({ probeFailed = false, onRetryProbe }: UnpairedNoticeProps = {}) {
   const state = useSyncExternalStore(subscribeUnpaired, getUnpairedState);
+  const reason = useSyncExternalStore(subscribeUnpaired, getSignedOutReason);
   const fragment = useSyncExternalStore(subscribeFragmentPair, getFragmentPairState);
   const [env] = useState(readEnv);
   // A scanned code is a new sign-in: the "Signed out" page no longer applies.
   useEffect(() => { if (fragment.phase === 'pending') clearSignedOut(); }, [fragment.phase]);
+  // A refusal heard while Walnut restarted is not a sign-out: asked again once, a token
+  // that still works takes the page away by itself.
+  useEffect(() => {
+    // The renewal said why it ended (its cookie gone, used elsewhere): that is final, nothing to ask.
+    if (state !== 'revoked' || !getDeviceToken() || reason) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let live = true;
+    const ask = () => {
+      if (!live || !getDeviceToken()) return;
+      void fetch('/api/v1/me', { cache: 'no-store' }).then((res) => { if (live && res.ok) noteSignedIn(); }).catch(() => {});
+    };
+    const next = () => {
+      const wait = RECHECK_REVOKED_MS[Math.min(tries, RECHECK_REVOKED_MS.length - 1)];
+      tries += 1;
+      timer = setTimeout(() => { ask(); next(); }, wait);
+    };
+    const back = () => { if (document.visibilityState !== 'hidden') ask(); };
+    next();
+    window.addEventListener('focus', back);
+    window.addEventListener('online', back);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      window.removeEventListener('focus', back);
+      window.removeEventListener('online', back);
+    };
+  }, [state, reason]);
   // A `#pair=` code being traded shows its pending page before the console
   // boots (main.tsx), so the phone never sits on a blank page. A scanned code
   // that failed while an older sign-in still works (a used QR scanned again)
@@ -77,7 +113,7 @@ export function UnpairedNotice({ probeFailed = false, onRetryProbe }: UnpairedNo
     ? <PendingPage />
     : <SignInPage
         state={signInState}
-        copy={signInCopy({ state: signInState, ...env })}
+        copy={signInCopy({ state: signInState, ...env, reason })}
         fragment={fragment}
         onRetryProbe={onRetryProbe}
       />;
@@ -129,7 +165,7 @@ function SignInPage({ state, copy, fragment, onRetryProbe }: {
     >
       {/* After a scanned link failed, "Can't scan it?" no longer fits: the scan worked. */}
       <h2 className="unpaired-notice-h2" id="unpaired-code-heading">{fragment.phase === 'failed' ? SIGN_IN_FAILED_SCAN_HEADING : copy.codeHeading}</h2>
-      {copy.codeHint && <p className="unpaired-notice-hint">{copy.codeHint}</p>}
+      {copy.codeHint && fragment.phase !== 'failed' && <p className="unpaired-notice-hint">{copy.codeHint}</p>}
       <CodeForm copy={copy} fragment={fragment} />
     </section>
   );
@@ -146,7 +182,7 @@ function SignInPage({ state, copy, fragment, onRetryProbe }: {
         )}
         {copy.probeError && <ProbeRetry message={copy.probeError} label={copy.probeRetry ?? 'Try again'} onRetry={onRetryProbe} />}
         {copy.codeFirst ? <>{code}<hr className="unpaired-notice-rule" />{steps}</> : <>{steps}<hr className="unpaired-notice-rule" />{code}</>}
-        <p className="unpaired-notice-more">{copy.footer}</p>
+        {copy.footer && <p className="unpaired-notice-more">{copy.footer}</p>}
       </div>
     </div>
   );

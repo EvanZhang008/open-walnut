@@ -4,7 +4,7 @@
 // any later install misses it.
 import './utils/trace-dispatchers';
 import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { AppErrorBoundary } from './components/common/AppErrorBoundary';
@@ -30,7 +30,9 @@ import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
 import { installAuthFetch } from './api/auth-fetch';
-import { syncDeviceCookie } from './api/device-token';
+import { STORAGE_KEY as DEVICE_TOKEN_KEY, startSignInRenewal, syncDeviceCookie } from './api/device-token';
+import { getUnpairedState, subscribeUnpaired } from './api/unpaired';
+import { hasPendingPairCode } from './api/browser-pair';
 import { resolveSignInGate, type SignInGate } from './api/sign-in-gate';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { installOpenLinks } from './utils/open-link';
@@ -60,7 +62,8 @@ installOpenLinks();
 // alone instead of a console whose every request is refused.
 // While a `#pair=` code is being traded the sign-in screen shows its pending
 // state, until the reload that follows a right one.
-const signInRoot = /^#pair=/.test(window.location.hash) ? createRoot(document.getElementById('root')!) : null;
+// A code kept from a trade that got no answer before a reload counts too.
+const signInRoot = hasPendingPairCode() ? createRoot(document.getElementById('root')!) : null;
 signInRoot?.render(<StrictMode><UnpairedNotice /></StrictMode>);
 // A probe that got no answer (D5) shows the sign-in screen with its error line
 // and Try again, and probes again by itself every few seconds: the first answer
@@ -88,8 +91,39 @@ async function retryProbe(): Promise<void> {
   applyGate(await resolveSignInGate());
 }
 void resolveSignInGate().then(applyGate);
+// A sign-in link opened in a tab that already shows Walnut changes only the
+// fragment, so nothing loads: load the page again and the gate trades the code.
+window.addEventListener('hashchange', () => { if (/^#pair=/.test(window.location.hash)) window.location.reload(); });
+// Signed out while the console runs (removed on the computer, its cookie gone): the
+// console goes, with every task and note it drew and every request it would go on
+// making, and the signed-out page stays alone. Signed in again (a refusal undone by
+// its recheck): the page loads afresh.
+let appRoot: Root | null = null;
+let signedOutRoot: Root | null = null;
+function leaveConsoleIfSignedOut(): void {
+  const now = getUnpairedState();
+  if (signedOutRoot) {
+    if (now === 'ok') window.location.reload();
+    return;
+  }
+  if (!booted || !appRoot || now !== 'revoked') return;
+  appRoot.unmount();
+  appRoot = null;
+  void import('./api/ws').then(({ wsClient }) => wsClient.disconnect());
+  signedOutRoot = createRoot(document.getElementById('root')!);
+  signedOutRoot.render(<StrictMode><UnpairedNotice /></StrictMode>);
+}
+// Also once the console has mounted: a refusal can land while it is still loading.
+subscribeUnpaired(() => queueMicrotask(leaveConsoleIfSignedOut));
+// This tab shows the sign-in screen (or the signed-out notice) and another tab of
+// this browser just signed in: the token is this tab's too.
+window.addEventListener('storage', (e) => {
+  if (e.key === DEVICE_TOKEN_KEY && e.newValue && (!booted || getUnpairedState() !== 'ok')) window.location.reload();
+});
 
 function bootApp(): void {
+  // A browser signed in with a code renews its sign-in before it runs out (api/device-token.ts).
+  startSignInRenewal();
   // Persist browser console logs to disk (view with: open-walnut logs -s browser)
   initBrowserLogger();
   installPluginHostRuntime();
@@ -181,10 +215,11 @@ function bootApp(): void {
         componentStack: (errorInfo?.componentStack ?? '').slice(0, 2000),
       });
     };
-    createRoot(document.getElementById('root')!, {
+    appRoot = createRoot(document.getElementById('root')!, {
       onUncaughtError: logReactError('uncaught render error (root unmounted)'),
       onCaughtError: logReactError('render error caught by boundary'),
-    }).render(
+    });
+    appRoot.render(
       <StrictMode>
         <BrowserRouter>
           <ConfirmProvider>
@@ -195,5 +230,6 @@ function bootApp(): void {
         </BrowserRouter>
       </StrictMode>,
     );
+    queueMicrotask(leaveConsoleIfSignedOut);
   });
 }

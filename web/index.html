@@ -28,6 +28,8 @@
       html[data-theme="dark"] { background: #000000; }
       .boot-splash { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
       .boot-splash img { display: block; width: 64px; height: 64px; border-radius: 14px; }
+      .boot-splash[data-line] { flex-direction: column; }
+      .boot-splash[data-line]::after { content: attr(data-line); margin-top: 14px; font: 15px/20px -apple-system, BlinkMacSystemFont, system-ui, sans-serif; color: #8a8a8e; }
     </style>
     <script>
       (function() {
@@ -52,6 +54,16 @@
   <body>
     <!-- Replaced by React's first render (the sign-in page or the console). -->
     <div id="root"><div class="boot-splash" aria-hidden="true" data-testid="boot-splash"><img src="/walnut-icon.png" width="64" height="64" alt="" /></div></div>
+    <script>
+      // The reload right after a sign-in (api/browser-pair.ts marks it): one line under the
+      // logo, so the hand-off from "Signing in" reads as progress, not a stalled page.
+      try {
+        if (sessionStorage.getItem('walnut.openingAfterSignIn')) {
+          sessionStorage.removeItem('walnut.openingAfterSignIn');
+          document.querySelector('.boot-splash').setAttribute('data-line', 'Opening Walnut...');
+        }
+      } catch (e) {}
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

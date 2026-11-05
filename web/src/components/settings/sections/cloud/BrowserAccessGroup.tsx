@@ -29,13 +29,15 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { apiGet, apiPost, apiPut } from '@/api/client';
 import { answerFoundHost } from '@/api/hosts';
 import { log } from '@/utils/log';
-import { SettingsEmpty, SettingsGroup, SettingsRow } from '../../SettingsSection';
+import { SettingsEmpty, SettingsGroup, SettingsNotice, SettingsRow } from '../../SettingsSection';
+import { BROWSER_SIGNED_IN_EVENT } from './devices-list';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { ToggleSwitch } from '../../inputs/ToggleSwitch';
 import { SegmentedControl } from '../../inputs/SegmentedControl';
 import { CopyButton } from '../../inputs/CopyButton';
 import { copyTextRobust } from '@/utils/clipboard';
 import { saveErrorMessage } from '../../settings-pane-context';
+import { DEVICES_TAB } from '../../settings-way-panes';
 import { describeExpose, exposePollMs, type ExposeResponse, type ExposeStatus, optionFits } from './browser-access-status';
 import { isDeviceCaller } from './device-caller';
 import { PHONE_LINK_QR_SHOWN, phoneLinkQr } from './phone-link-qr';
@@ -70,8 +72,9 @@ let sharedCode: BrowserCode | null = null;
  *  link lasts ten minutes. */
 const drawnQr = new Map<string, string>();
 
-/** The server's word that a browser signed in with a link's code (src/web/routes/browser-pair.ts). */
-const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in';
+
+/** How long "A browser just signed in" stays after a link was used. */
+const SIGNED_IN_NOTE_MS = 15_000;
 
 /** The link as shown: its code hidden, since a screenshot or a recording of Settings must not sign anyone in. Copy takes it whole. */
 export function maskedLink(link: string): string {
@@ -111,6 +114,9 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
     });
   }, []);
   const [codeError, setCodeError] = useState<string | null>(null);
+  // The code shown in words, for a phone with no camera or shared clipboard: on a click
+  // only, so a screenshot of Settings shows no code by itself; a new code hides it again.
+  const [revealedFor, setRevealedFor] = useState<string | null>(null);
   const readSeq = useRef(0);
   // Option fields the person is typing in: a poll must not overwrite them.
   const editing = useRef(new Set<string>());
@@ -259,7 +265,18 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
     const timer = setTimeout(() => { emptyTries.current += 1; setCode(null); }, 5_000 * 3 ** emptyTries.current);
     return () => clearTimeout(timer);
   }, [code, setCode]);
-  useEvent(BROWSER_SIGNED_IN_EVENT, () => { setCode(null); });
+  // Its link is used up: a new one for the next phone, and a line saying the sign-in worked.
+  const [signedIn, setSignedIn] = useState<{ who: 'browser' | 'extension'; at: number } | null>(null);
+  useEvent(BROWSER_SIGNED_IN_EVENT, (data) => {
+    setCode(null);
+    const name = (data as { name?: unknown } | null)?.name;
+    setSignedIn({ who: typeof name === 'string' && name.startsWith('extension-') ? 'extension' : 'browser', at: Date.now() });
+  });
+  useEffect(() => {
+    if (signedIn === null) return;
+    const timer = setTimeout(() => setSignedIn(null), SIGNED_IN_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [signedIn]);
   // The QR of the link on screen, looked up by that link: while one is drawn for a new link, the
   // old link's QR never shows.
   const [, setQrDrawn] = useState(0);
@@ -412,6 +429,7 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
                 )}
                 <ToggleSwitch
                   id="browser-access-enabled"
+                  aria-label="Open from anywhere"
                   checked={settings.enabled}
                   busy={busy}
                   data-testid="browser-access-enabled"
@@ -421,6 +439,15 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
             }
           />
         </>
+      )}
+      {signedIn !== null && !deviceCaller && (
+        <div data-testid="browser-access-signed-in-note">
+          <SettingsNotice kind="success" role="status">
+            {signedIn.who === 'extension'
+              ? 'The Walnut extension just signed in with the code. The link below is a new one, for the next phone.'
+              : 'A browser just signed in with the link; it is listed under Devices. The link below is a new one, for the next phone.'}
+          </SettingsNotice>
+        </div>
       )}
       {deviceCaller ? (
         <SettingsRow
@@ -463,7 +490,22 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
                           onAuxClick={(e) => e.preventDefault()}
                           data-testid="browser-access-link"
                         >{maskedLink(address.link)}</a>
-                        <span className="browser-access-link-note">{`Scan the QR code with the phone's camera, or copy the link to the phone and open it there: Walnut opens signed in, and stays signed in. One phone, once, until ${until}; then a new link and QR code show here.`}</span>
+                        <span className="browser-access-link-note">{`Scan the QR code with the phone's camera, or copy the link to the phone and open it there, not on this computer. It works once, for one phone, until ${until}.`}</span>
+                        <span className="browser-access-link-note" data-testid="browser-access-typed">
+                          {revealedFor === code.code ? (
+                            <>
+                              {'Type '}
+                              <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-revealed-code">{code.code}</span>
+                              {' on the phone\'s sign-in screen. '}
+                              <button type="button" className="settings-addons-link browser-access-reveal" onClick={() => setRevealedFor(null)} data-testid="browser-access-hide-code">Hide</button>
+                            </>
+                          ) : (
+                            <>
+                              {'No camera? '}
+                              <button type="button" className="settings-addons-link browser-access-reveal" onClick={() => setRevealedFor(code.code)} data-testid="browser-access-reveal-code">Show the code to type</button>
+                            </>
+                          )}
+                        </span>
                       </span>
                     </span>
                   )}
@@ -472,6 +514,19 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
           />
         );
       })()}
+      {/* Where the phones this link signed in are, and signed out: one step from here. */}
+      {!deviceCaller && (
+        <SettingsRow
+          label="Signed-in browsers"
+          help="Listed under Devices, where each one can be signed out."
+          data-testid="browser-access-signed-in-row"
+          control={(
+            <a className="settings-button settings-button-default" href={`#${DEVICES_TAB}`} data-testid="browser-access-devices-link">
+              <span className="settings-button-stack"><span className="settings-button-label">Devices</span></span>
+            </a>
+          )}
+        />
+      )}
     </SettingsGroup>
   );
 }

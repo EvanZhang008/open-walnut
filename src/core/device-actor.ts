@@ -36,7 +36,7 @@
  *    device that made it and stops working when that device's pairing goes.
  */
 
-import { isPhoneRecord, recordForToken, tokenMatchesHash, type CompanionOwner, type DeviceRecord, type DeviceRegistry } from './device-store.js'
+import { isBrowserSignInRecord, isPhoneRecord, recordForToken, tokenMatchesHash, type CompanionOwner, type DeviceRecord, type DeviceRegistry } from './device-store.js'
 
 export { isPhoneRecord, newDeviceId, platformFromInfo, recordForToken, type DevicePlatform } from './device-store.js'
 
@@ -54,7 +54,7 @@ export const LOCAL_ACTOR: DeviceActor = { local: true }
 export type DeviceChange = 'rotate' | 'revoke' | 'create'
 
 export type DeviceRefusalCode =
-  | 'device_change_refused' | 'phone_cannot_pair' | 'api_key_cannot_pair' | 'not_a_device' | 'api_keys_refused'
+  | 'device_change_refused' | 'phone_cannot_pair' | 'browser_cannot_pair' | 'api_key_cannot_pair' | 'not_a_device' | 'api_keys_refused'
 
 /** A refused change to a device record. The routes answer `status` with `{ error, code }`. */
 export class DeviceChangeRefused extends Error {
@@ -69,6 +69,8 @@ export class DeviceChangeRefused extends Error {
  * that ends in a command has no period, so the command copies cleanly.
  */
 const PHONE_CANNOT_PAIR = 'Pair new devices from the Mac, in Settings › Phones & Cloud, not from a phone.'
+// A browser's sign-in lasts hours and renews itself (browser-sign-in.ts): a device it paired would never expire.
+const BROWSER_CANNOT_PAIR = 'Pair new devices from the Mac, in Settings › Phones & Cloud, not from a browser signed in with a link.'
 const API_KEY_CANNOT_PAIR = 'An API key cannot pair, re-pair or remove devices.'
 
 /** Said to a self-call made for a caller off this Mac that asks to pair a new device. */
@@ -123,7 +125,7 @@ export function ownsMachineCredentials(devices: readonly DeviceRecord[], device:
  * Never a phone, whatever the file says.
  */
 export function hasOwnerRights(reg: DeviceRegistry, device: DeviceRecord, cloudMode: boolean): boolean {
-  if (device.kind === 'machine' || isPhoneRecord(device)) return false
+  if (device.kind === 'machine' || isPhoneRecord(device) || isBrowserSignInRecord(device)) return false
   const recorded = cloudMode ? ownerRecord(reg) : undefined
   return recorded ? recorded === device : ownsMachineCredentials(reg.devices, device)
 }
@@ -143,7 +145,7 @@ export function companionOwnerRecord(reg: DeviceRegistry): DeviceRecord | undefi
  * own), and a phone is never made an owner. Returns the new owner, or null.
  */
 export function proofClaim(reg: DeviceRegistry, me: DeviceRecord | undefined, proof: string | undefined): CompanionOwner | null {
-  if (!proof || !me?.id || me.kind === 'machine' || isPhoneRecord(me)) return null
+  if (!proof || !me?.id || me.kind === 'machine' || isPhoneRecord(me) || isBrowserSignInRecord(me)) return null
   if (ownerRecord(reg)) return null
   if (reg.devices.some((d) => d.kind === 'machine' && liveOwnerOf(d, reg.devices) !== undefined && liveOwnerOf(d, reg.devices) !== me)) return null
   const local = reg.devices.find((d) => d.kind === 'machine' && d.name === PRIMARY_MACHINE_CREDENTIAL && liveOwnerOf(d, reg.devices) === undefined)
@@ -182,7 +184,8 @@ export function deviceChangeDecision(
   const target = reg.devices.find((d) => d.name === name)
   if (target?.kind === 'machine') return refuse(403, 'device_change_refused', machineTargetRefusal(name, cloudMode))
   if (me && me.kind !== 'machine' && change === 'create') {
-    return isPhoneRecord(me) ? refuse(403, 'phone_cannot_pair', PHONE_CANNOT_PAIR) : { ok: true, by: 'new' }
+    if (isPhoneRecord(me)) return refuse(403, 'phone_cannot_pair', PHONE_CANNOT_PAIR)
+    return isBrowserSignInRecord(me) ? refuse(403, 'browser_cannot_pair', BROWSER_CANNOT_PAIR) : { ok: true, by: 'new' }
   }
   if (me && target && me === target) return { ok: true, by: 'self' }
   if (me && target && hasOwnerRights(reg, me, cloudMode)) return { ok: true, by: 'owner' }
@@ -214,6 +217,7 @@ export function cloudRelayDecision(
   if ('local' in actor) return { ok: true, by: 'local' }
   const me = 'token' in actor ? recordForToken(devices, actor.token) : undefined
   if (change === 'create' && me && isPhoneRecord(me)) return refuse(403, 'phone_cannot_pair', PHONE_CANNOT_PAIR)
+  if (change === 'create' && me && isBrowserSignInRecord(me)) return refuse(403, 'browser_cannot_pair', BROWSER_CANNOT_PAIR)
   return refuse(403, 'device_change_refused', CLOUD_RELAY_REFUSAL)
 }
 

@@ -28,7 +28,7 @@ import {
 } from './device-actor.js'
 import { resetClaimForTesting } from './device-claim.js'
 import {
-  cleanSelfInfo, freshRecord, isPhoneRecord, ownByProof, platformFromInfo, readRegistry, readRegistryAndRevoked, recordForToken, resetInstanceIdForTesting,
+  accessExpired, cleanSelfInfo, freshRecord, hashesEqual, isPhoneRecord, ownByProof, platformFromInfo, readRegistry, readRegistryAndRevoked, recordForToken, resetInstanceIdForTesting,
   sha256Hex, tombstone, updateAuth, validateDeviceName,
   type DevicePlatform, type DeviceRecord, type DeviceRegistry, type DeviceSelfInfo, type LockedAuth,
 } from './device-store.js'
@@ -65,6 +65,8 @@ export interface DeviceInfo {
 const LAST_USED_WRITE_THROTTLE_MS = 60_000
 // Per-device throttle for lastUsedAt disk writes.
 const lastUsedWriteAt = new Map<string, number>()
+/** Token hashes whose first-use write is under way (verifyDeviceToken): a burst of first requests writes once. */
+const firstUseWrites = new Set<string>()
 
 /** The proof a caller presented makes it the owner (device-actor.ts proofClaim): record that first. */
 function applyProof(auth: LockedAuth, by: DeviceActor, proof: string | undefined): void {
@@ -93,12 +95,12 @@ function goneWith(auth: LockedAuth, target: DeviceRecord): DeviceRecord[] {
  * the same write. A recorded owner among them is no owner any more. Returns
  * the names gone.
  */
-function removeGone(auth: LockedAuth, gone: readonly DeviceRecord[]): string[] {
+function removeGone(auth: LockedAuth, gone: readonly DeviceRecord[], markRefresh = true): string[] {
   // Before the filter: ownerRecord looks the owner up among the records left.
   const owner = ownerRecord(auth)
   auth.devices = auth.devices.filter((d) => !gone.includes(d))
   if (owner && gone.includes(owner)) auth.owner = null
-  tombstone(auth, gone.map((d) => d.tokenHash))
+  tombstone(auth, gone.flatMap((d) => [d.tokenHash, ...(markRefresh && d.browserSignIn ? [d.browserSignIn.refreshHash] : [])]))
   return gone.map((d) => d.name)
 }
 
@@ -247,18 +249,28 @@ export async function verifyDeviceToken(token: string, opts: { touch?: boolean }
     log.web.warn('device-auth: a revoked token was presented, and its record is back; refused', { name: matched.name })
     return null
   }
+  // A browser's access token lasts hours; its page renews it (browser-sign-in.ts).
+  if (accessExpired(matched)) return null
 
   const now = Date.now()
   const lastWrite = lastUsedWriteAt.get(matched.name) ?? 0
-  if (opts.touch !== false && now - lastWrite >= LAST_USED_WRITE_THROTTLE_MS) {
+  // A token's first use is written at once, whatever the throttle says: a renewing
+  // sign-in reads it to tell a pair that reached its browser from a lost answer
+  // (browser-sign-in.ts), and a request still out with the token before it can
+  // set this name's throttle after the renewal reset it.
+  const firstUse = !matched.lastUsedAt && !firstUseWrites.has(matched.tokenHash)
+  if (opts.touch !== false && (firstUse || now - lastWrite >= LAST_USED_WRITE_THROTTLE_MS)) {
     lastUsedWriteAt.set(matched.name, now)
+    if (firstUse) firstUseWrites.add(matched.tokenHash)
     const name = matched.name
     // Best-effort — a failed lastUsedAt write must never fail auth. Locked RMW
     // on a FRESH read: persisting the snapshot loaded above could revert a
     // concurrent CLI device add/revoke (auth.json has two writer processes).
     try {
+      const tokenHash = matched.tokenHash
       await updateAuth((fresh) => {
-        const device = fresh.devices.find((d) => d.name === name)
+        // Only the pairing this token is: a renewal (browser-sign-in.ts) or a re-pair may have replaced it meanwhile.
+        const device = fresh.devices.find((d) => d.name === name && d.tokenHash === tokenHash)
         if (!device) return { persist: false, result: undefined }
         device.lastUsedAt = new Date(now).toISOString()
         return { persist: true, result: undefined }
@@ -268,9 +280,54 @@ export async function verifyDeviceToken(token: string, opts: { touch?: boolean }
         name,
         error: err instanceof Error ? err.message : String(err),
       })
+    } finally {
+      firstUseWrites.delete(matched.tokenHash)
     }
   }
   return matched.kind ? { name: matched.name, kind: matched.kind, ...(matched.bridgeScope === 'status-only' ? { bridgeScope: matched.bridgeScope } : {}) } : { name: matched.name }
+}
+
+/**
+ * Whether `token` is a browser's access token that ran out (and nothing else
+ * refuses it): the auth middleware then answers `token_expired`, so the page
+ * renews its sign-in instead of saying it was signed out.
+ */
+export async function isExpiredAccessToken(token: string): Promise<boolean> {
+  if (!token) return false
+  const { devices, revoked } = await readRegistryAndRevoked()
+  const hash = sha256Hex(token)
+  // The access token a renewal just replaced: a request sent before the page stored the new one.
+  let replaced = false
+  for (const d of devices) {
+    const b = d.browserSignIn
+    if (b?.replacedHash && hashesEqual(hash, b.replacedHash)) replaced = true
+    // The token a carry-over replaced, while its answer may still be on its way (browser-sign-in.ts).
+    if (b?.migratedFrom && !d.lastUsedAt && hashesEqual(hash, b.migratedFrom)) replaced = true
+  }
+  if (replaced) return true
+  const matched = recordForToken(devices, token)
+  return !!matched && !revoked.has(hash) && accessExpired(matched)
+}
+
+/**
+ * When a renewing sign-in's access token `token` runs out (epoch ms), or null
+ * for a token that never does (or one nothing here knows). An open WebSocket
+ * lives no longer than the token it was opened with (ws/handler.ts).
+ */
+export async function accessTokenUntil(token: string): Promise<number | null> {
+  if (!token) return null
+  const until = recordForToken(await listDeviceRecords(), token)?.browserSignIn?.accessUntil
+  const ms = until ? Date.parse(until) : NaN
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * Forget when `name` last wrote its lastUsedAt: a renewal cleared it, and the
+ * first use of the new token must be written at once (browser-sign-in.ts reads
+ * it to tell an answer that never arrived from a replay).
+ */
+export function resetLastUsedThrottle(name: string): void {
+  lastUsedWriteAt.delete(name)
 }
 
 export interface RevokeOptions {
@@ -282,6 +339,13 @@ export interface RevokeOptions {
    * would only bounce the request back.
    */
   fromTwin?: boolean
+  /**
+   * A browser's sign-in ended for a reason its own page is told (browser-sign-in.ts: its
+   * refresh token used twice, its cookie gone, a year unused). Any other removal records
+   * its refresh token as revoked too, so a page that comes back with it hears it was
+   * signed out on the computer, not only that the token is unknown.
+   */
+  endedBySignIn?: boolean
 }
 
 export interface DeviceRevokeOutcome {
@@ -316,7 +380,7 @@ async function revokeWith(name: string, opts: RevokeOptions, decide: (auth: Lock
     const gone = goneWith(auth, target)
     const pairings = pairingsOf(auth.devices, gone)
     intent.plan = await writeRevokeIntent(pairings, opts.fromTwin ? [] : pairings.map((d) => d.tokenHash))
-    return { persist: true, result: removeGone(auth, gone) }
+    return { persist: true, result: removeGone(auth, gone, !opts.endedBySignIn) }
   }, () => stampRevokeTime(intent), () => dropRevokeIntent(intent))
   if (!removed.includes(name) || !intent.plan) return { revoked: false, push: null, twin: null }
   for (const n of removed) lastUsedWriteAt.delete(n)
@@ -485,7 +549,15 @@ export function notifyPaired(name: string): void {
 
 /** List devices — never exposes token hashes. */
 export async function listDevices(): Promise<DeviceInfo[]> {
-  return (await readRegistry()).devices.map(({ name, createdAt, lastUsedAt, kind, info, adoptedFrom }) => ({ name, createdAt, lastUsedAt, kind, info, ...(adoptedFrom ? { adoptedFrom } : {}) }))
+  return (await readRegistry()).devices.map(({ name, createdAt, lastUsedAt, kind, info, adoptedFrom, browserSignIn }) => ({
+    name,
+    createdAt,
+    // A renewal is a use: its new token has no use of its own until its first request.
+    lastUsedAt: lastUsedAt ?? browserSignIn?.renewedAt,
+    kind,
+    info,
+    ...(adoptedFrom ? { adoptedFrom } : {}),
+  }))
 }
 
 /**

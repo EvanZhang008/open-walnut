@@ -10,13 +10,11 @@
  * Walnut".
  */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { getDeviceToken } from '@/api/device-token';
 import { SettingsSection } from '../../SettingsSection';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { DEVICES_TAB, WAY_PANES, type PhonesCloudTab } from '../../settings-way-panes';
 import { useBrowserLinkName } from './browser-link-name';
 import { useDevicesData, useExposeStatus, type DeviceEntry } from './useDevicesData';
-import { isIosSafariTab } from './device-caller';
 import { DEVICES_INTRO, deriveWays, landingWay, type NowLine, type Way, type WayDot } from './ways-model';
 import '@/styles/devices-ways.css';
 
@@ -105,6 +103,9 @@ export function usePhonesCloudView(): PhonesCloudView {
 export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: PhonesCloudTab | null }) {
   // A narrow pane scrolls the bar sideways: bring the open tab into it (the bar only, never the page).
   const barRef = useRef<HTMLElement>(null);
+  // A tab's tag and dot arrive with the data and widen it: the open tab is brought into
+  // view again then (it stayed cut off at the right edge of a phone).
+  const shape = tabs.map((t) => `${t.id}:${t.label}:${t.tag ?? ''}:${t.dot ?? ''}`).join('|');
   useLayoutEffect(() => {
     const bar = barRef.current;
     const tab = bar?.querySelector<HTMLElement>('[aria-current="page"]');
@@ -113,9 +114,25 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
     const right = left + tab.offsetWidth;
     if (left < bar.scrollLeft) bar.scrollLeft = Math.max(0, left - 12);
     else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth + 12;
-  }, [current, tabs.length]);
+  }, [current, shape]);
+  // Which sides have more tabs past the edge: that edge fades, so a phone sees the bar scrolls.
+  const [more, setMore] = useState('');
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const read = () => {
+      const left = bar.scrollLeft > 1;
+      const right = bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1;
+      setMore([left ? 'left' : '', right ? 'right' : ''].filter(Boolean).join(' '));
+    };
+    read();
+    bar.addEventListener('scroll', read, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
+    ro?.observe(bar);
+    return () => { bar.removeEventListener('scroll', read); ro?.disconnect(); };
+  }, [shape]);
   return (
-    <nav ref={barRef} className="pc-tabs" aria-label={PANE_TITLE} data-testid="pc-tabs">
+    <nav ref={barRef} className="pc-tabs" aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
       {tabs.map((t) => (
         // A same-page hash link: SettingsPage turns it into a hash replace, as for the nav.
         <a
@@ -156,17 +173,10 @@ function NowLineView({ now }: { now: NowLine }) {
 /** The bar, then what this tab is and when to use it, then (on the tab in use) how the phone gets in now. */
 export function PhonesCloudTabHead({ tab, view }: { tab: PhonesCloudTab; view: PhonesCloudView }) {
   const t = view.tabs.find((x) => x.id === tab);
-  // Only a Safari tab signed in with a token can lose it after a week (N2-36):
-  // a tab on the Mac's own address holds none, so the tip would say nothing true.
-  const [homeScreenHint] = useState(() => isIosSafariTab() && !!getDeviceToken());
+  // No "add to Home Screen or Safari signs you out in a week" tip any more: a
+  // browser's sign-in renews from a cookie Safari's 7-day rule never clears.
   return (
     <div className="pc-head">
-      {homeScreenHint && (
-        <p className="settings-row-help devices-home-screen-hint" data-testid="devices-home-screen-hint">
-          Add Walnut to your Home Screen (Share &gt; Add to Home Screen) to keep this phone signed in. Safari may sign it
-          out after a week without a visit.
-        </p>
-      )}
       <TabBar tabs={view.tabs} current={tab} />
       {t && (
         <div className="pc-intro" data-testid={`pc-intro-${tab}`}>

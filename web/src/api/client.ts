@@ -1,4 +1,4 @@
-import { getDeviceToken } from './device-token';
+import { getDeviceToken, renewSignIn } from './device-token';
 import { noteAuthRefusal } from './unpaired';
 import { asDeadlineError } from '../utils/request-failure';
 import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
@@ -161,6 +161,16 @@ export function getLowFetchQueueStats(): { inFlight: number; queued: number } {
 const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
 
 /**
+ * attemptRequest's ask to send once more with the token held now, after its
+ * slot is released: the browser's sign-in ran out (`renew`: renew it first,
+ * api/device-token.ts) or was renewed while the request was out. A 401 is the
+ * auth middleware's, so the first attempt never reached a handler.
+ */
+class RetryWithToken {
+  constructor(readonly renew: boolean, readonly refusal: ApiError) {}
+}
+
+/**
  * The page is going away (a reload, a navigation, the window closing): the
  * browser cancels every request still in flight, which reaches us as a
  * "Failed to fetch" from fetch() or from the body read. That is the page's own
@@ -227,6 +237,8 @@ interface RequestExtra {
   /** Send with fetch keepalive, so a page reload or exit does not cancel it (small bodies only).
    *  Every write made while the page hides or leaves gets it without asking. */
   keepalive?: boolean;
+  /** Already sent again with a new token (RetryWithToken): a second 401 stands. */
+  tokenRetried?: boolean;
 }
 
 function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
@@ -248,20 +260,38 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   if (isWriteMethod(method) && !extra?.opId) extra = { ...extra, opId: mintOpId() };
   if (isWriteMethod(method) && writeMayOutlivePage()) {
     extra = { ...extra, keepalive: true };
-    // The page is going: JS stops before a queued request would get its slot.
-    if (pageLeaving || exitEdge) return attemptRequest<T>(method, path, body, extra);
+    // The page is going: JS stops before a queued request would get its slot (and before a renewal would land).
+    if (pageLeaving || exitEdge) {
+      return attemptRequest<T>(method, path, body, extra).catch((err: unknown) => {
+        throw err instanceof RetryWithToken ? err.refusal : err;
+      });
+    }
   }
   const priority = priorityOf(method, extra);
   await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal);
   let retryWithBypass = false;
+  let retryWithToken: RetryWithToken | null = null;
   try {
     extra?.onDispatch?.();
     return await attemptRequest<T>(method, path, body, extra);
   } catch (err) {
     if (err === RETRY_WITH_CACHE_BYPASS) retryWithBypass = true;
+    else if (err instanceof RetryWithToken) retryWithToken = err;
     else throw err;
   } finally {
     releaseFetchSlot(priority);
+  }
+  if (retryWithToken) {
+    if (retryWithToken.renew) {
+      const renewed = await renewSignIn();
+      if (renewed.kind !== 'renewed' && renewed.kind !== 'held') {
+        // Only the renewal route's own refusal says this browser is signed out; anything else
+        // (no answer, a server that does not renew) leaves the refusal as it is, asked again later.
+        if (renewed.kind === 'refused') noteAuthRefusal(renewed.body);
+        throw retryWithToken.refusal;
+      }
+    }
+    return request<T>(method, path, body, { ...extra, tokenRetried: true });
   }
   // Cache-race retry re-enters through the gate (fresh slot, fresh timer) —
   // retrying while still holding the slot would double-book the pool.
@@ -278,7 +308,7 @@ async function fetchOnce(path: string, opts: RequestInit): Promise<Response> {
   }
 }
 
-async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string; keepalive?: boolean }): Promise<T> {
+async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string; keepalive?: boolean; tokenRetried?: boolean }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   // Created AFTER slot acquisition — the timer measures the network round
   // trip only, never time spent waiting for a connection.
@@ -346,8 +376,16 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     }
     // quietStatuses: statuses the caller EXPECTS in some environments (e.g. a
     // 503 "feature disabled") — warn keeps them out of the error-log audit.
-    const quiet = extra?.quietStatuses?.includes(res.status) ?? false;
+    // A sign-in that ran out is renewed and sent again below: expected, not an error.
+    const quiet = (extra?.quietStatuses?.includes(res.status) ?? false)
+      || (res.status === 401 && (errBody as { code?: unknown } | undefined)?.code === 'token_expired');
     (quiet ? console.warn : console.error)(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
+    if (res.status === 401 && deviceToken && !extra?.tokenRetried) {
+      const code = (errBody as { code?: unknown } | undefined)?.code;
+      // Renewed while this was out, or ran out: sent again with the token held then.
+      if (deviceToken !== getDeviceToken()) throw new RetryWithToken(false, new ApiError(res.status, message, errBody));
+      if (code === 'token_expired') throw new RetryWithToken(true, new ApiError(res.status, message, errBody));
+    }
     // Only a refusal of the credential this browser holds NOW says it is signed
     // out: a request sent before a `#pair=` code was traded carried none.
     if (res.status === 401 && (deviceToken ?? null) === getDeviceToken()) noteAuthRefusal(errBody);

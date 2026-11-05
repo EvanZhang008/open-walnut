@@ -27,7 +27,13 @@ const MAX_DEVICES = 500
  * list hash stays over `name:tokenHash`, so an older host server and a newer
  * Mac still agree on it.
  */
-export interface DeviceCopyEntry { name: string; tokenHash: string; id?: string }
+export interface DeviceCopyEntry {
+  name: string
+  tokenHash: string
+  id?: string
+  /** ISO: a browser's access token is refused here after it (the Mac's grace, device-replica.ts). None: never expires. */
+  until?: string
+}
 
 const ID_RE = /^[A-Za-z0-9._:-]{1,80}$/
 
@@ -73,12 +79,15 @@ function clean(raw: unknown): DeviceCopyEntry[] | null {
   if (!Array.isArray(raw) || raw.length > MAX_DEVICES) return null
   const out: DeviceCopyEntry[] = []
   for (const d of raw) {
-    const r = d as { name?: unknown; tokenHash?: unknown; id?: unknown } | null
+    const r = d as { name?: unknown; tokenHash?: unknown; id?: unknown; until?: unknown } | null
     if (!r || typeof r.name !== 'string' || !r.name || r.name.length > NAME_MAX) return null
     if (typeof r.tokenHash !== 'string' || !HASH_RE.test(r.tokenHash)) return null
     // A bad id (a hand-edited or older auth.json on the Mac) drops from its row
     // only: refusing the list for it would stop every revoke reaching this copy.
-    out.push(isDeviceCopyId(r.id) ? { id: r.id, name: r.name, tokenHash: r.tokenHash } : { name: r.name, tokenHash: r.tokenHash })
+    const row: DeviceCopyEntry = isDeviceCopyId(r.id) ? { id: r.id, name: r.name, tokenHash: r.tokenHash } : { name: r.name, tokenHash: r.tokenHash }
+    // A time that does not read fails closed: the row is kept and its token refused.
+    if (r.until !== undefined) row.until = typeof r.until === 'string' && Number.isFinite(Date.parse(r.until)) ? r.until : new Date(0).toISOString()
+    out.push(row)
   }
   return out
 }
@@ -114,6 +123,8 @@ export function createDeviceCopy(file: string): DeviceCopy {
     for (const d of devices) {
       if (crypto.timingSafeEqual(candidate, Buffer.from(d.tokenHash, 'hex'))) matched = d
     }
+    // A browser's access token past the Mac's grace: nothing here renews it.
+    if (matched?.until && !(Date.parse(matched.until) > Date.now())) return null
     return matched ? { name: matched.name, id: matched.id ?? null } : null
   }
 

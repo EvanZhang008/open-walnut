@@ -79,6 +79,62 @@ export interface DeviceRecord {
   info?: DeviceSelfInfo
   /** Copied here from the other box's registry so the same token works on both (device-adoption.ts). */
   adoptedFrom?: 'cloud' | 'primary'
+  /**
+   * A browser signed in with a code renews its own sign-in (browser-sign-in.ts):
+   * `tokenHash` is then the hash of a short-lived access token, refused here
+   * after `accessUntil`. Absent: a token that never expires (the app, the
+   * extension, a browser not renewed since this field came).
+   */
+  browserSignIn?: BrowserSignInState
+}
+
+/** A browser's renewing sign-in (browser-sign-in.ts). */
+export interface BrowserSignInState {
+  /** sha256 hex of the refresh token its HttpOnly cookie holds; traded once for a new pair. */
+  refreshHash: string
+  /** ISO: the sign-in or its last renewal. The sign-in ends a year after it. */
+  renewedAt: string
+  /** ISO: the access token (`tokenHash`) is refused after this. */
+  accessUntil: string
+  /**
+   * The refresh tokens already traded, newest last: one presented again is a
+   * replay. `lost`: traded again because the answer to the one before it never
+   * reached the browser (browser-sign-in.ts).
+   */
+  spent?: Array<{ hash: string; at: string; lost?: true }>
+  /**
+   * sha256 hex of the access token the last renewal replaced. Presented, it is
+   * answered as one that ran out, never as signed out: a request the page sent
+   * just before it stored the new token (browser-sign-in.ts).
+   */
+  replacedHash?: string
+  /**
+   * sha256 hex of the never-expiring token of a browser from before renewing
+   * that this pair replaced. While no token issued for it was used, that token
+   * is answered again: the carry-over's answer may never have reached the
+   * browser (browser-sign-in.ts). Gone at the next renewal.
+   */
+  migratedFrom?: string
+}
+
+/** The name routes/browser-pair.ts gives a browser (the extension's is `extension-…`, which never renews). */
+export const BROWSER_SIGN_IN_NAME = /^browser-[0-9a-f]{6}$/
+
+/**
+ * A browser signed in with a code, renewing or from before renewing existed.
+ * Like a phone, it never pairs another device: its token is meant to last hours.
+ */
+export function isBrowserSignInRecord(d: Pick<DeviceRecord, 'name' | 'browserSignIn'>): boolean {
+  return !!d.browserSignIn || BROWSER_SIGN_IN_NAME.test(d.name)
+}
+
+/**
+ * A renewing sign-in whose access token ran out (or whose time does not read,
+ * which fails closed). A record without one never expires.
+ */
+export function accessExpired(d: Pick<DeviceRecord, 'browserSignIn'>, now: number = Date.now()): boolean {
+  if (!d.browserSignIn) return false
+  return !(Date.parse(d.browserSignIn.accessUntil) > now)
 }
 
 /** What a paired client tells us about itself. All fields optional/untrusted. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { browserKindFromUserAgent } from '../../src/core/browser-kind'
+import { browserKindFromUserAgent, numberedDeviceName } from '../../src/core/browser-kind'
 import { browserRowLabels } from '../../web/src/components/settings/sections/browser-labels'
 
 const IPHONE_SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
@@ -44,5 +44,43 @@ describe('browserRowLabels (N2-21)', () => {
     expect(labels.get('browser-bbbbbb')).toBe('iPhone Safari 2')
     expect(labels.get('browser-cccccc')).toBe('Mac Chrome')
     expect(labels.get('browser-dddddd')).toBe('Browser')
+  })
+
+  it('a name numbered at sign-in is kept: removing one never renames the next', () => {
+    const rows = [
+      { name: 'browser-aaaaaa', createdAt: '2026-01-01T00:00:00Z', info: { deviceName: 'iPhone Safari' } },
+      { name: 'browser-bbbbbb', createdAt: '2026-01-02T00:00:00Z', info: { deviceName: 'iPhone Safari 2' } },
+      { name: 'browser-cccccc', createdAt: '2026-01-03T00:00:00Z', info: { deviceName: 'iPhone Safari 3' } },
+    ]
+    const after = browserRowLabels(rows.filter((r) => r.name !== 'browser-bbbbbb'))
+    expect(after.get('browser-aaaaaa')).toBe('iPhone Safari')
+    expect(after.get('browser-cccccc')).toBe('iPhone Safari 3')
+    // A record from before numbering repeats a kind: numbered past every recorded name.
+    const mixed = browserRowLabels([...rows, { name: 'browser-dddddd', createdAt: '2026-01-04T00:00:00Z', info: { deviceName: 'iPhone Safari' } }])
+    expect(mixed.get('browser-dddddd')).toBe('iPhone Safari 4')
+    expect(new Set(mixed.values()).size).toBe(4)
+  })
+})
+
+describe('numberedDeviceName (written at sign-in)', () => {
+  it('one above the highest listed of that kind; the bare kind when none', () => {
+    expect(numberedDeviceName('iPhone Safari', [])).toBe('iPhone Safari')
+    expect(numberedDeviceName('iPhone Safari', ['iPhone Safari'])).toBe('iPhone Safari 2')
+    expect(numberedDeviceName('iPhone Safari', ['iPhone Safari 3', 'Mac Chrome', undefined])).toBe('iPhone Safari 4')
+    expect(numberedDeviceName('Mac Chrome', ['Mac Chrome Beta', 'Mac Chrome 2'])).toBe('Mac Chrome 3')
+  })
+
+  it('two records from before numbering (Settings shows them 1 and 2): the next is 3, and no row is renamed', () => {
+    const before = [
+      { name: 'browser-aaaaaa', createdAt: '2026-01-01T00:00:00Z', info: { deviceName: 'iPhone Safari' } },
+      { name: 'browser-bbbbbb', createdAt: '2026-01-02T00:00:00Z', info: { deviceName: 'iPhone Safari' } },
+    ]
+    const shown = browserRowLabels(before)
+    const next = numberedDeviceName('iPhone Safari', before.map((r) => r.info.deviceName))
+    expect(next).toBe('iPhone Safari 3')
+    const after = browserRowLabels([...before, { name: 'browser-cccccc', createdAt: '2026-01-03T00:00:00Z', info: { deviceName: next } }])
+    expect(after.get('browser-aaaaaa')).toBe(shown.get('browser-aaaaaa'))
+    expect(after.get('browser-bbbbbb')).toBe(shown.get('browser-bbbbbb'))
+    expect(after.get('browser-cccccc')).toBe('iPhone Safari 3')
   })
 })

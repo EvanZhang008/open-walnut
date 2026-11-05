@@ -34,3 +34,21 @@ export function browserKindFromUserAgent(ua: string | undefined, opts: { standal
   const name = [device, app].filter(Boolean).join(' ')
   return name || 'Browser'
 }
+
+/**
+ * "iPhone Safari", then "iPhone Safari 2", "iPhone Safari 3": one above the highest a
+ * listed device of that kind holds, written at sign-in, so a listed row keeps its name
+ * when another is removed (Settings showed the next phone under a removed one's name).
+ * Records from before numbering all hold the bare kind; Settings numbers those 1..n by
+ * sign-in order (web browser-labels.ts), so n of them hold the numbers up to n.
+ */
+export function numberedDeviceName(kind: string, taken: ReadonlyArray<string | undefined>): string {
+  let top = taken.filter((t) => t === kind).length
+  for (const t of taken) {
+    if (t?.startsWith(`${kind} `)) {
+      const n = Number(t.slice(kind.length + 1))
+      if (Number.isInteger(n) && n > 1) top = Math.max(top, n)
+    }
+  }
+  return top === 0 ? kind : `${kind} ${top + 1}`
+}

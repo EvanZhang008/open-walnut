@@ -41,7 +41,21 @@ interface Client {
   mode: ClientMode
   /** Entity ids (sessionId / taskId) this connection cares about in lightweight mode. */
   interest: Set<string>
+  /** The paired device the upgrade's token named, if any: its revoke closes this socket. */
+  device?: string
 }
+
+/** Close code of a socket whose device was signed out (revoked) while it was open. */
+export const WS_SIGNED_OUT = 4401
+/**
+ * Close code of a socket whose browser access token ran out: the page renews its
+ * sign-in and connects again at once (core/browser-sign-in.ts). A socket lives no
+ * longer than the token it was opened with.
+ */
+export const WS_RENEW_SIGN_IN = 4419
+
+/** The device a primary upgrade's token named (verifyPrimaryUpgrade), carried to 'connection'. */
+type DeviceUpgrade = IncomingMessage & { walnutDevice?: string; walnutAccessUntil?: number }
 
 let wss: WebSocketServer | null = null
 const clients = new Set<Client>()
@@ -398,11 +412,38 @@ async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise
   const cred = token === null ? null : await validateBearerCredential(token)
   // Machine tokens are bridge-only: a daemon credential must not open the RPC surface.
   if (!cred || cred.kind === 'machine') {
+    const { isExpiredAccessToken } = await import('../../core/device-auth.js')
+    // A browser's access token that ran out is a real one: its page renews it and connects again.
+    if (!cred && token && await isExpiredAccessToken(token)) {
+      log.ws.info('ws upgrade refused: the sign-in needs renewing', { ip })
+      return 401
+    }
     recordAuthFailure(ip, presented.kind === 'token' ? presented.token : presented.raw)
     log.ws.warn('ws upgrade refused: invalid credential', { ip, machine: cred?.kind === 'machine', unreadable: token === null })
     return 401
   }
+  if (cred.kind === 'device') {
+    (request as DeviceUpgrade).walnutDevice = cred.name
+    const { accessTokenUntil } = await import('../../core/device-auth.js')
+    const until = token ? await accessTokenUntil(token) : null
+    if (until !== null) (request as DeviceUpgrade).walnutAccessUntil = until
+  }
   return 'ok'
+}
+
+let revokeWatch: (() => void) | null = null
+
+/** A device signed out (removed, or its sign-in replayed) loses its open sockets at once. */
+async function closeRevokedDevices(): Promise<void> {
+  if (revokeWatch) return
+  const { onCredentialsRevoked } = await import('../../core/device-auth.js')
+  revokeWatch ??= onCredentialsRevoked((names) => {
+    for (const client of clients) {
+      if (!client.device || !names.includes(client.device)) continue
+      log.ws.info('closing the socket of a signed-out device', { device: client.device })
+      try { client.ws.close(WS_SIGNED_OUT, 'signed_out') } catch { /* gone */ }
+    }
+  })
 }
 
 /**
@@ -431,6 +472,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
   // echoed back in a response header. So the answer is `walnut.v1` or nothing.
   wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, handleProtocols: (protocols) => selectWsProtocol(protocols) })
   registerSetInterest()
+  void closeRevokedDevices().catch(() => { /* a revoke still ends every request; the socket closes at its next reconnect */ })
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
     // First, before any interceptor: Node drops its own error listener before
@@ -562,11 +604,19 @@ export function attachWss(server: HttpServer): WebSocketServer {
     }).catch(() => socket.destroy())
   }
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, request?: IncomingMessage) => {
     // New connections default to "global" mode (full firehose) — unchanged behavior.
-    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set() }
+    const device = (request as DeviceUpgrade | undefined)?.walnutDevice
+    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), ...(device ? { device } : {}) }
     clients.add(client)
     log.ws.info('client connected', { clientCount: clients.size })
+    // A browser's socket ends with its access token: the page renews and comes back (WS_RENEW_SIGN_IN).
+    const accessUntil = (request as DeviceUpgrade | undefined)?.walnutAccessUntil
+    const renewTimer = accessUntil === undefined ? null : setTimeout(() => {
+      log.ws.info('closing a socket whose sign-in ran out', { device })
+      try { ws.close(WS_RENEW_SIGN_IN, 'renew_sign_in') } catch { /* gone */ }
+    }, Math.min(Math.max(accessUntil - Date.now(), 0), 2 ** 31 - 1))
+    renewTimer?.unref?.()
     if (connectEvent) {
       try {
         const ev = connectEvent()
@@ -589,12 +639,14 @@ export function attachWss(server: HttpServer): WebSocketServer {
     })
 
     ws.on('close', () => {
+      if (renewTimer) clearTimeout(renewTimer)
       clients.delete(client)
       for (const l of disconnectListeners) { try { l(ws) } catch { /* listener error ignored */ } }
       log.ws.info('client disconnected', { clientCount: clients.size })
     })
 
     ws.on('error', () => {
+      if (renewTimer) clearTimeout(renewTimer)
       clients.delete(client)
       for (const l of disconnectListeners) { try { l(ws) } catch { /* listener error ignored */ } }
       log.ws.warn('client error, removing', { clientCount: clients.size })

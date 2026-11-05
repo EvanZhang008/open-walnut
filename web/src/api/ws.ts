@@ -6,7 +6,8 @@
  */
 
 import { log } from '@/utils/log';
-import { getDeviceToken } from './device-token';
+import { getDeviceToken, renewalDue, renewSignIn, tokenExpired } from './device-token';
+import { getUnpairedState, noteAuthRefusal, subscribeUnpaired } from './unpaired';
 import { wsProtocolsFor } from '../../../src/lib/ws-bearer-protocol';
 import { mintOpId } from './op-id';
 import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
@@ -85,7 +86,14 @@ const WS_CLOSE_CODES: Record<number, string> = {
   1003: 'unsupported', 1006: 'abnormal (no close frame)',
   1011: 'server error', 1012: 'server restart', 1013: 'try again later',
   4001: 'leader away (host replica)', 4002: 'leader back (host replica)',
+  4401: 'signed out (this device was removed)',
+  4419: 'sign-in ran out (renew, then connect again)',
 };
+
+/** The server closes a removed device's socket with this (src/web/ws/handler.ts WS_SIGNED_OUT). */
+const WS_SIGNED_OUT = 4401;
+/** And one whose access token ran out with this (WS_RENEW_SIGN_IN): renew if needed, connect again at once. */
+const WS_RENEW_SIGN_IN = 4419;
 
 /**
  * Largest RPC frame we will put on the wire.
@@ -155,6 +163,9 @@ class WsClient {
   connect() {
     if (this.ws) return;
     this.disposed = false;
+    // Every path in (a reconnect, a resync, an RPC's lazy connect): a signed-out page opens
+    // nothing until it is signed in again, since the server would refuse it.
+    if (getUnpairedState() !== 'ok') { this.reconnectOnSignIn(); return; }
     this.setState('connecting');
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -204,12 +215,23 @@ class WsClient {
       for (const cb of [...this.closeListeners]) {
         try { cb(ev.code); } catch { /* one listener never stops the reconnect */ }
       }
+      // This browser was signed out (removed in Settings, its sign-in used elsewhere): say so now.
+      if (ev.code === WS_SIGNED_OUT) noteAuthRefusal({ code: 'device_removed' });
       // A host replica's handover (4001 leader_away, 4002 leader_back): the next
       // socket lands on the side that answers now, so reconnect at once, with
       // the backoff reset. No reload: `_ws:reconnected` refetches every store.
       const handover = ev.code === WS_LEADER_AWAY || ev.code === WS_LEADER_BACK;
-      if (handover) this.reconnectDelay = 1000;
-      if (!this.disposed) this.scheduleReconnect(handover ? 0 : undefined);
+      const renew = ev.code === WS_RENEW_SIGN_IN;
+      if (handover || renew) this.reconnectDelay = 1000;
+      if (this.disposed) return;
+      // The token this socket was opened with ran out: the page usually renewed it already.
+      if (renew && (tokenExpired() || renewalDue())) {
+        void renewSignIn().then((r) => {
+          // Signed out meanwhile (its refresh cookie gone, removed in Settings): say so now.
+          if (r.kind === 'refused') noteAuthRefusal(r.body);
+        }).finally(() => { if (!this.disposed) this.scheduleReconnect(0); });
+      }
+      else this.scheduleReconnect(handover || renew ? 0 : undefined);
     };
 
     ws.onerror = () => {
@@ -519,6 +541,8 @@ class WsClient {
   /** `delayMs` (a handover's 0) leaves the backoff as it is; the plain path grows it. */
   private scheduleReconnect(delayMs?: number) {
     if (this.reconnectTimer) return;
+    // A signed-out page asks nothing until it is signed in again: every try would be refused.
+    if (getUnpairedState() !== 'ok') { this.reconnectOnSignIn(); return; }
     const delay = delayMs ?? this.reconnectDelay;
     log.info('ws', 'reconnecting', { delayMs: delay });
     this.reconnectTimer = setTimeout(() => {
@@ -526,6 +550,20 @@ class WsClient {
       this.connect();
     }, delay);
     if (delayMs === undefined) this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
+  }
+
+  private stopWaitingForSignIn: (() => void) | null = null;
+
+  /** Connect again at once when this browser is signed in again (a new link, a refusal undone). */
+  private reconnectOnSignIn() {
+    if (this.stopWaitingForSignIn) return;
+    this.stopWaitingForSignIn = subscribeUnpaired(() => {
+      if (getUnpairedState() !== 'ok') return;
+      this.stopWaitingForSignIn?.();
+      this.stopWaitingForSignIn = null;
+      this.reconnectDelay = 1000;
+      if (!this.disposed && !this.ws) this.scheduleReconnect(0);
+    });
   }
 
   /**

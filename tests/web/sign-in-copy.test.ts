@@ -9,12 +9,14 @@ import {
   SIGN_IN_PENDING_LINE, SIGN_IN_PENDING_SLOW,
 } from '../../web/src/components/common/sign-in-copy'
 
-const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud.'
-const STEP2_TOUCH = 'Open the link shown under Open on your phone, on this phone.'
+const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud > Browser link.'
+const STEP2_TOUCH = 'On this phone, open the link shown under Open on your phone.'
 const STEP2_DESK = 'Open the link shown under Open on your phone in this browser, or paste it below.'
 const STEP2_HOME = 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'
 const TAGLINE = 'Your tasks, AI sessions and notes, from the computer Walnut runs on.'
-const REVOKED = 'Walnut no longer accepts this sign-in. It may have been removed on your computer. Sign in again below.'
+const REVOKED_PHONE = 'Removed on your computer, or its sign-in ended. Sign in again with a new link.'
+const REVOKED_DESK = REVOKED_PHONE
+const HINT = "Can't open the link? Paste it here."
 const FOOTER = 'On the computer Walnut runs on? Open Walnut there; it needs no code.'
 const NETWORK = 'Walnut did not answer. Check the connection, then try again.'
 
@@ -24,11 +26,14 @@ describe('signInCopy', () => {
     expect(c.title).toBe('Sign in to Walnut')
     expect(c.tagline).toBe(TAGLINE)
     expect(c.steps).toEqual([STEP1, STEP2_TOUCH])
-    expect(c.codeHeading).toBe("Can't open the link?")
-    expect(c.codeHint).toBe('Paste the link here.')
+    expect(c.codeHeading).toBe('Sign-in code')
+    expect(c.codeHint).toBe(HINT)
     expect(c.submit).toBe('Sign in')
     expect(c.submitBusy).toBe('Signing in...')
-    expect(c.footer).toBe(FOOTER)
+    // No note on a phone: it is never the computer Walnut runs on (2026-11-04, two reviewers).
+    expect(c.footer).toBeNull()
+    // A computer's browser may be the one Walnut runs on.
+    expect(signInCopy({ state: 'unpaired', touch: false, standalone: false }).footer).toBe(FOOTER)
     expect(c.inputLabel).toBe('Sign-in code')
     expect(c.placeholder).toBe('XXXX-XXXX')
     expect(c.retry).toBeNull()
@@ -44,16 +49,32 @@ describe('signInCopy', () => {
     expect(c.codeHint).toBeNull()
   })
 
-  it('revoked says which device was signed out and offers a retry', () => {
+  it('revoked says why when the renewal said: cookies cleared, used elsewhere, a year unused', () => {
+    const line = (reason: 'cookie_gone' | 'used_elsewhere' | 'year_unused' | 'removed') => signInCopy({ state: 'revoked', touch: true, standalone: false, reason }).tagline
+    expect(line('removed')).toBe('It was signed out from your computer. Sign in again with a new link.')
+    expect(line('cookie_gone')).toBe('Its sign-in was cleared from this browser. Sign in again with a new link.')
+    expect(line('used_elsewhere')).toBe('Its sign-in was used from another device, so Walnut ended it to keep it safe. Sign in again with a new link.')
+    expect(line('year_unused')).toBe('It was not used for a year. Sign in again with a new link.')
+    expect(signInCopy({ state: 'revoked', touch: true, standalone: false, reason: null }).tagline).toBe(REVOKED_PHONE)
+  })
+
+  it('a phone page has no footer in any state; a computer browser keeps its one line', () => {
+    for (const state of ['unpaired', 'revoked', 'signed-out', 'probe-failed'] as const) {
+      expect(signInCopy({ state, touch: true, standalone: false, reason: 'removed' }).footer, state).toBeNull()
+      expect(signInCopy({ state, touch: false, standalone: false }).footer, state).toBe(FOOTER)
+    }
+  })
+
+  it('revoked says which device was signed out and how to come back; no retry (a reload shows the same page)', () => {
     const phone = signInCopy({ state: 'revoked', touch: true, standalone: false })
     expect(phone.title).toBe('This phone was signed out')
-    expect(phone.tagline).toBe(REVOKED)
-    expect(phone.retry).toBe('Try again')
+    expect(phone.tagline).toBe(REVOKED_PHONE)
+    expect(phone.retry).toBeNull()
     expect(phone.steps).toEqual([STEP1, STEP2_TOUCH])
-    expect(phone.codeHeading).toBe("Can't open the link?")
+    expect(phone.codeHeading).toBe('Sign-in code')
     const desk = signInCopy({ state: 'revoked', touch: false, standalone: false })
     expect(desk.title).toBe('This browser was signed out')
-    expect(desk.tagline).toBe(REVOKED)
+    expect(desk.tagline).toBe(REVOKED_DESK)
   })
 
   it('signed out by itself: no retry', () => {
@@ -109,7 +130,7 @@ describe('signInCopy', () => {
 
 describe('errorMessage', () => {
   it('has one line per kind', () => {
-    expect(errorMessage('invalid_code', 400)).toBe('That code is wrong or has expired. Make a new one in Walnut on your computer.')
+    expect(errorMessage('invalid_code', 400)).toBe('That code is wrong, already used or expired. Make a new one in Walnut on your computer.')
     expect(errorMessage('rate_limited', 429)).toBe('Too many wrong codes. Wait a minute, then try again.')
     expect(errorMessage('network')).toBe(NETWORK)
     expect(errorMessage('other', 500, 'Walnut is restarting.')).toBe('Walnut is restarting.')

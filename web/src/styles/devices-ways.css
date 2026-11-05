@@ -14,6 +14,19 @@
   scrollbar-width: none;
 }
 .pc-tabs::-webkit-scrollbar { display: none; }
+/* More tabs past an edge (PhonesCloudTabs.tsx TabBar): that edge fades out. */
+.pc-tabs[data-more='right'] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+.pc-tabs[data-more='left'] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
+}
+.pc-tabs[data-more='left right'] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+}
 .pc-tab {
   flex: 0 0 auto;
   display: inline-flex;

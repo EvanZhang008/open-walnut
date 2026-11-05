@@ -2,15 +2,16 @@ import { useState, useEffect, useRef } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
-import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
+import { InlineConfirmButton, isRepeatClick } from '../inputs/InlineConfirmButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useSettingsSaved } from '../settings-pane-context';
 import { formatAbsoluteTime } from './addons-format';
 import { apiDelete } from '@/api/client';
-import { devicesListChanged } from './cloud/devices-list';
+import { BROWSER_SIGNED_IN_EVENT, devicesListChanged } from './cloud/devices-list';
+import { useEvent } from '@/hooks/useWebSocket';
 import { PairQrDialog, type PairQrPhase } from './cloud/PairQrDialog';
 import { PhonesCloudTabHead, usePhonesCloudView } from './cloud/PhonesCloudTabs';
-import { DEVICES_TAB } from '../settings-way-panes';
+import { DEVICES_TAB, WAY_PANES } from '../settings-way-panes';
 import { requestFailureText } from '@/utils/request-failure';
 import { deviceNameForServer } from './device-name';
 import { browserRowLabels } from './browser-labels';
@@ -23,6 +24,7 @@ import { draftKey } from '@/utils/drafts';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
 import { ownFirst, useDeviceCaller } from './cloud/device-caller';
 import { OwnDeviceSignOut } from './cloud/OwnDeviceSignOut';
+import { SIGNED_IN_BROWSER, SignOutAllBrowsers, type SignOutResult } from './cloud/SignOutAllBrowsers';
 import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './cloud/device-rows-copy';
 
 import '@/styles/settings-sections-addons.css';
@@ -96,6 +98,10 @@ export function DevicesSection() {
   // Minting + QR rendering is shared with the Cloud Companion section.
   const { created, qrDataURL, error, busy, mint, dismiss } = usePairDevice();
   const [rowError, setRowError] = useState<RowError | null>(null);
+  // "Signed out 4 browsers.", after Sign out (the rows it names are gone), until the pane closes.
+  const [signedOut, setSignedOut] = useState<SignOutResult | null>(null);
+  // A browser that signs in after it makes the line old news: it goes.
+  useEvent(BROWSER_SIGNED_IN_EVENT, () => setSignedOut(null));
   // "Unpair this Mac" is two deliberate clicks with the warning between them.
   const [unpairArmed, setUnpairArmed] = useState(false);
   // Show QR and Pair new device: the code opens in a dialog in front of the user.
@@ -238,9 +244,15 @@ export function DevicesSection() {
   // The phone used most recently leads: it is the one the line above the cards is about.
   const byLastUse = (a: { lastUsedAt?: string }, b: { lastUsedAt?: string }) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '');
   const phones = ownFirst(rows.filter((r) => (r.role ?? 'phone') === 'phone').sort(byLastUse), caller.name);
-  const browsers = ownFirst(rows.filter((r) => r.role === 'browser'), caller.name);
+  // The browser in use leads (a phone signed in again leaves its old sign-in below).
+  const browsers = ownFirst(rows.filter((r) => r.role === 'browser').sort(byLastUse), caller.name);
   // "iPhone Safari", "iPhone Safari 2": the kind recorded at sign-in, never the id (N2-21).
   const browserLabels = browserRowLabels(rows.filter((r) => r.role === 'browser'));
+  // Signed in with a link, apart from the Walnut extension: the group's rows are exactly the
+  // ones its sign-out row signs out, so the count it asks about is the rows it sits above.
+  const linkBrowsers = browsers.filter((r) => SIGNED_IN_BROWSER.test(r.name));
+  const extensions = browsers.filter((r) => !SIGNED_IN_BROWSER.test(r.name));
+  const signedInBrowsers = linkBrowsers.map((r) => r.name);
   const macs = rows.filter((r) => r.role === 'mac');
   const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac' && r.role !== 'browser');
   const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
@@ -268,7 +280,7 @@ export function DevicesSection() {
           <SettingsButton
             variant="danger"
             data-testid="devices-unpair-self-confirm"
-            onClick={() => { setUnpairArmed(false); void revoke(d.name, ['cloud'], 'unpair'); }}
+            onClick={(e) => { if (isRepeatClick(e)) return; setUnpairArmed(false); void revoke(d.name, ['cloud'], 'unpair'); }}
           >
             Unpair this Mac
           </SettingsButton>
@@ -301,6 +313,7 @@ export function DevicesSection() {
           ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
         ].join(', ')
       : ROLE_NOTE[role];
+    const shownName = role === 'browser' ? browserLabels.get(d.name) ?? 'Browser' : d.name;
     return (
       <SettingsRow
         key={d.name}
@@ -309,7 +322,7 @@ export function DevicesSection() {
         data-device-role={role}
         label={
           <span className="settings-addons-inline devices-name">
-            <span className="settings-addons-ellipsis" title={d.name}>{role === 'browser' ? browserLabels.get(d.name) ?? 'Browser' : d.name}</span>
+            <span className="settings-addons-ellipsis" title={d.name}>{shownName}</span>
             {own && <span className="devices-own-tag" data-testid="devices-own-tag">{caller.touch ? 'This phone' : 'This browser'}</span>}
             {/* A browser signs in on this Mac only: a "Local" tag on every row tells nothing. */}
             {role !== 'browser' && d.kinds.map((k) => (
@@ -326,7 +339,7 @@ export function DevicesSection() {
               <SettingsButton
                 variant="text"
                 disabled={busy}
-                aria-label={`Show a new QR code for ${d.name}`}
+                aria-label={`Show a new QR code for ${shownName}`}
                 data-testid="devices-show-qr"
                 onClick={() => repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind)))}
               >
@@ -335,8 +348,11 @@ export function DevicesSection() {
             )}
             {/* This Mac's own cloud record never reaches here (renderSelfRow). */}
             {role !== 'self' && (
+              // A browser signed in with a link is signed out, in the words its group and the
+              // Browser link tab use; a paired phone or the extension is removed.
               <InlineConfirmButton
-                aria-label={`Remove ${d.name}`}
+                {...(SIGNED_IN_BROWSER.test(d.name) ? { label: 'Sign out', confirmLabel: 'Confirm sign out' } : {})}
+                aria-label={`${SIGNED_IN_BROWSER.test(d.name) ? 'Sign out' : 'Remove'} ${shownName}`}
                 data-testid="devices-remove"
                 onConfirm={() => revoke(d.name, d.kinds)}
               />
@@ -368,11 +384,34 @@ export function DevicesSection() {
         </SettingsGroup>
         )}
 
-        {browsers.length > 0 && (
+        {linkBrowsers.length > 0 && (
           // Browsers signed in with a code (a phone's Safari, another computer):
           // their own group, so a signed-in phone never reads "No phones paired yet".
-          <SettingsGroup heading="Signed-in browsers" headingTrailing={String(browsers.length)} data-testid="devices-browsers-group">
-            {browsers.map(renderRow)}
+          <SettingsGroup heading="Signed-in browsers" headingTrailing={String(linkBrowsers.length)} data-testid="devices-browsers-group">
+            {/* First, so it stays in reach above a long list; with one browser, its own row's
+                Sign out is the same action. */}
+            {!caller.isDevice && signedInBrowsers.length >= 2 && (
+              <SignOutAllBrowsers
+                names={signedInBrowsers}
+                onDone={async (result) => {
+                  // The list first, then the line: it never says "signed out" beside rows still listed.
+                  devicesListChanged(); await refresh(); window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
+                  setSignedOut(result.line ? result : null);
+                }}
+              />
+            )}
+            {linkBrowsers.map(renderRow)}
+          </SettingsGroup>
+        )}
+        {/* Said where the browsers were, even when none is left to list. */}
+        {signedOut && (
+          <div data-testid="devices-signed-out-note">
+            <SettingsNotice kind={signedOut.kind} role={signedOut.kind === 'error' ? 'alert' : 'status'}>{signedOut.line}</SettingsNotice>
+          </div>
+        )}
+        {extensions.length > 0 && (
+          <SettingsGroup heading="Walnut extension" headingTrailing={extensions.length > 1 ? String(extensions.length) : undefined} data-testid="devices-extensions-group">
+            {extensions.map(renderRow)}
           </SettingsGroup>
         )}
 
@@ -385,6 +424,19 @@ export function DevicesSection() {
         )}
 
         <SettingsGroup heading="Add a phone" data-testid="devices-add-group">
+          {/* The other way in: a phone's browser, from anywhere, with a sign-in link (its own tab). */}
+          {!caller.isDevice && (
+            <SettingsRow
+              label="Phone browser"
+              help="Open Walnut in a phone's browser from anywhere, signed in with a link."
+              data-testid="devices-add-browser-row"
+              control={(
+                <a className="settings-button settings-button-default" href={`#${WAY_PANES.browser}`} data-testid="devices-add-browser-link">
+                  <span className="settings-button-stack"><span className="settings-button-label">Browser link</span></span>
+                </a>
+              )}
+            />
+          )}
           {/* Three long labels left the copy a word-wide column beside them: stack the row. */}
           {showPicker && (
             <SettingsRow

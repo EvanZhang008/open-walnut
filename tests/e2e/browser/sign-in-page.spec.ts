@@ -18,7 +18,7 @@ import { serveProductionBundle } from './production-bundle'
 const SHOTS = '/tmp/mobile-web'
 const PHONE = devices['iPhone 15']
 const NETWORK = 'Walnut did not answer. Check the connection, then try again.'
-const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud.'
+const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud > Browser link.'
 
 test.setTimeout(120_000)
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
@@ -139,11 +139,12 @@ test.describe('on an iPhone', () => {
     await expect(notice.locator('.unpaired-notice-tagline')).toHaveText('Your tasks, AI sessions and notes, from the computer Walnut runs on.')
     await expect(notice.locator('.unpaired-notice-steps li')).toHaveText([
       `1${STEP1}`,
-      '2Open the link shown under Open on your phone, on this phone.',
+      '2On this phone, open the link shown under Open on your phone.',
     ])
-    await expect(notice.locator('h2')).toHaveText("Can't open the link?")
-    await expect(notice.locator('.unpaired-notice-hint')).toHaveText('Paste the link here.')
-    await expect(notice.locator('.unpaired-notice-more')).toHaveText('On the computer Walnut runs on? Open Walnut there; it needs no code.')
+    await expect(notice.locator('h2')).toHaveText('Sign-in code')
+    await expect(notice.locator('.unpaired-notice-hint')).toHaveText("Can't open the link? Paste it here.")
+    // No small print on a phone (a note about cookies was noise on a first visit).
+    await expect(notice.locator('.unpaired-notice-more')).toHaveCount(0)
     await expect(page.getByTestId('unpaired-code-input')).toHaveAttribute('aria-label', 'Sign-in code')
     await expect(page.getByTestId('unpaired-code-input')).toHaveAttribute('placeholder', 'XXXX-XXXX')
     await expect(page.getByTestId('unpaired-code-submit')).toHaveText('Sign in')
@@ -173,8 +174,8 @@ test.describe('on an iPhone', () => {
       .map((el) => el.className))
     expect(intoNotch).toEqual([])
     await page.evaluate(() => { const n = document.querySelector('[data-testid="unpaired-notice"]')!; n.scrollTo(0, n.scrollHeight) })
-    const footer = (await notice.locator('.unpaired-notice-more').boundingBox())!
-    expect(footer.y + footer.height).toBeLessThanOrEqual(vp.height - 34)
+    const last = (await notice.locator('.unpaired-notice-column > :last-child').boundingBox())!
+    expect(last.y + last.height).toBeLessThanOrEqual(vp.height - 34)
     await shot(page, 'phone-safe-area')
   })
 
@@ -220,7 +221,7 @@ test.describe('on an iPhone', () => {
     await refuseProbe(page)
     let mode: 'hold' | 'abort' | 'rate' | 'wrong' = 'hold'
     await page.route((url) => url.pathname === '/api/v1/browser-pair', async (route) => {
-      if (mode === 'hold') { await new Promise((r) => setTimeout(r, 2_000)); return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: { code: 'invalid_code', message: 'That code is wrong or has expired. Make a new one in Walnut on your computer.' } }) }) }
+      if (mode === 'hold') { await new Promise((r) => setTimeout(r, 2_000)); return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: { code: 'invalid_code', message: 'That code is wrong, already used or expired. Make a new one in Walnut on your computer.' } }) }) }
       if (mode === 'abort') return route.abort('failed')
       if (mode === 'rate') return route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ error: { code: 'rate_limited', message: 'Too many wrong codes. Wait a minute, then try again.' } }) })
       return route.continue()
@@ -243,14 +244,23 @@ test.describe('on an iPhone', () => {
     expect(busy.ariaBusy).toBe('true')
     expect(busy.ms).toBeLessThanOrEqual(100)
     await shot(page, 'phone-submitting')
-    await expect(error).toHaveText('That code is wrong or has expired. Make a new one in Walnut on your computer.')
+    await expect(error).toHaveText('That code is wrong, already used or expired. Make a new one in Walnut on your computer.')
     await expect(input).toHaveValue('ZZZZ-ZZZZ')
     await expect(input).toBeEnabled()
     await expect(input).toHaveAttribute('aria-describedby', await error.getAttribute('id') ?? 'missing')
     await expect(input).not.toBeFocused()
     await shot(page, 'phone-wrong-code')
-    // N23: the refused code cannot be sent again as is, and it reads at 22 px.
-    await expect(submit).toBeDisabled()
+    // N23: the refused code is not sent again as is: Sign in looks ready, and a press selects
+    // the code for the next one to replace, with no request. It reads at 22 px.
+    await expect(submit).toBeEnabled()
+    let sent = 0
+    page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/v1/browser-pair') sent += 1 })
+    await submit.click()
+    await expect(input).toBeFocused()
+    expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 9])
+    await expect(error).toBeVisible()
+    expect(sent).toBe(0)
+    await input.evaluate((el: HTMLInputElement) => el.blur())
     expect(await input.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBe(22)
     // A finger edits from the end of the code.
     await tapAtEnd(input)
@@ -302,12 +312,13 @@ test.describe('on an iPhone', () => {
     const again = await browser.newPage({ ...pageOptions() })
     await refuseProbe(again)
     await again.goto(`/#pair=${code}`)
-    await expect(again.getByTestId('unpaired-code-error')).toHaveText('That code is wrong or has expired. Make a new one in Walnut on your computer.', { timeout: 30_000 })
+    await expect(again.getByTestId('unpaired-code-error')).toHaveText('That code is wrong, already used or expired. Make a new one in Walnut on your computer.', { timeout: 30_000 })
     await expect(again.getByTestId('unpaired-code-input')).toHaveValue(code)
     await expect(again.getByTestId('unpaired-notice').locator('h1')).toHaveText('Sign in to Walnut')
     // N23: the link worked, so the code section no longer asks "Can't open the link?".
     await expect(again.locator('#unpaired-code-heading')).toHaveText('Sign-in code')
-    await expect(again.getByTestId('unpaired-code-submit')).toBeDisabled()
+    await expect(again.locator('.unpaired-notice-hint')).toHaveCount(0)
+    await expect(again.getByTestId('unpaired-code-submit')).toBeEnabled()
     await shot(again, 'phone-used-link')
     await again.close()
   })
@@ -317,10 +328,11 @@ test.describe('on an iPhone', () => {
     await page.goto('/')
     const notice = page.getByTestId('unpaired-notice')
     await expect(notice.locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
-    await expect(notice.locator('.unpaired-notice-tagline')).toHaveText('Walnut no longer accepts this sign-in. It may have been removed on your computer. Sign in again below.')
-    const retry = page.getByTestId('unpaired-retry')
-    await expect(retry).toHaveText('Try again')
-    expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    await expect(notice.locator('.unpaired-notice-tagline')).toHaveText('Removed on your computer, or its sign-in ended. Sign in again with a new link.')
+    // A refused sign-in stays refused: no Try again that would show this page again.
+    await expect(page.getByTestId('unpaired-retry')).toHaveCount(0)
+    // The console under it is gone, with what it drew (a lost phone keeps no tasks on screen).
+    await expect(page.locator('.app-shell')).toHaveCount(0)
     const vp = page.viewportSize()!
     const box = (await notice.boundingBox())!
     expect(box).toMatchObject({ x: 0, y: 0, width: vp.width })
@@ -329,8 +341,6 @@ test.describe('on an iPhone', () => {
       !!document.elementFromPoint(innerWidth * x!, innerHeight * y!)?.closest('[data-testid="unpaired-notice"]')))
     expect(covered).toBe(true)
     await shot(page, 'phone-revoked')
-    await retry.click()
-    await expect(notice.locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
   })
 
   test('signed out by itself: Signed out, no Try again; a new code clears the mark', async ({ page }) => {
@@ -361,7 +371,7 @@ test.describe('on an iPhone', () => {
       await openSignIn(page)
       await page.getByTestId('unpaired-code-input').fill('abcd-ef0h')
       await expect(page.getByTestId('unpaired-code-error')).toBeVisible()
-      for (const sel of ['.unpaired-notice-title', '.unpaired-notice-tagline', '.unpaired-notice-steps li', '.unpaired-notice-hint', '.unpaired-notice-more', '.unpaired-notice-error']) {
+      for (const sel of ['.unpaired-notice-title', '.unpaired-notice-tagline', '.unpaired-notice-steps li', '.unpaired-notice-hint', '.unpaired-notice-error']) {
         expect(await contrastOf(page, `[data-testid="unpaired-notice"] ${sel}`), `${scheme} ${sel}`).toBeGreaterThanOrEqual(4.5)
       }
       const edge = await page.getByTestId('unpaired-code-input').evaluate((el) => {
@@ -442,7 +452,7 @@ test.describe('on a computer browser', () => {
     await refuseToken(page, 'stale-desk-token-0123456789')
     await page.goto('/')
     await expect(page.getByTestId('unpaired-notice').locator('h1')).toHaveText('This browser was signed out', { timeout: 30_000 })
-    await expect(page.getByTestId('unpaired-retry')).toBeVisible()
+    await expect(page.getByTestId('unpaired-retry')).toHaveCount(0)
     await shot(page, 'desktop-revoked')
   })
 })

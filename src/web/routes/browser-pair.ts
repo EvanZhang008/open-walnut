@@ -7,23 +7,28 @@
  *     address with the code after `#pair=`, which a browser never sends to a server.
  *     `addresses` adds the tunnels of the servers on this Mac's hosts, which stay up
  *     while it sleeps (Connect your phone prefers those).
- *   POST /api/v1/browser-pair { code, client? } → { token, name, deviceName }
+ *   POST /api/v1/browser-pair[?secure=1] { code, client? } → { token, name, deviceName, accessUntil?, accessMs? }
+ *     A browser's sign-in renews itself (core/browser-sign-in.ts): `token` is its
+ *     access token, refused after `accessUntil`, and the answer sets the refresh
+ *     cookie its page renews with (routes/browser-sign-in.ts).
  *     `client: 'extension'` is the Walnut browser extension: its device is named
- *     `extension-<hex>` and shown as "Walnut extension (Chrome on Mac)".
+ *     `extension-<hex>` and shown as "Walnut extension (Chrome on Mac)"; its token
+ *     never expires (it keeps it in the extension's own storage).
  *     Public (the browser has nothing else yet). Wrong codes are rate limited per
  *     caller address in their own count: through a tunnel every caller is the
  *     tunnel's loopback address, and a browser still holding a removed token
  *     spends the token count on its first page load, which must not lock it out
  *     of entering a fresh code. A right code clears both counts for the address.
  *   GET /api/devices/browser-session → { token, name } | 204
- *     Keeps the token in a long-lived HttpOnly cookie (routes/browser-session.ts).
+ *     A browser signed in before sign-ins renewed kept its token in a long-lived
+ *     HttpOnly cookie (routes/browser-session.ts); its pages still ask.
  */
 
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { consumeBrowserCode, mintBrowserCode } from '../../core/browser-pairing.js'
-import { createDeviceAs, listDevices, setDeviceInfo } from '../../core/device-auth.js'
-import { browserKindFromUserAgent } from '../../core/browser-kind.js'
+import { createDeviceAs, listDeviceRecords, listDevices, setDeviceInfo } from '../../core/device-auth.js'
+import { browserKindFromUserAgent, numberedDeviceName } from '../../core/browser-kind.js'
 import { LOCAL_ACTOR } from '../../core/device-actor.js'
 import { clearAuthFailures, isAuthRateLimited, recordAuthFailure } from '../middleware/auth-rate-limit.js'
 import { getExposeRuntime } from '../expose-runtime.js'
@@ -34,6 +39,8 @@ import { isPersonAtThisMachine } from './expose.js'
 import { log } from '../../logging/index.js'
 import { bus } from '../../core/event-bus.js'
 import { BROWSER_SESSION_PATH, browserSessionHandler } from './browser-session.js'
+import { beginBrowserSignIn } from '../../core/browser-sign-in.js'
+import { pageIsSecure, refreshCookieHeader, refreshCookieName } from '../middleware/device-cookie.js'
 
 /** A browser signed in with a link's code: the web's phone link makes the next one. */
 export const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in'
@@ -41,9 +48,9 @@ export const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in'
 export const browserCodeRouter = Router()
 export const browserPairV1Router = Router()
 
-// A signed-in browser renews its long-lived cookie at every open, and signs back in
-// from it when Safari cleared its page storage (routes/browser-session.ts).
-browserCodeRouter.get(BROWSER_SESSION_PATH, browserSessionHandler)
+// A browser signed in before sign-ins renewed keeps its long-lived cookie, and signs
+// back in from it when Safari cleared its page storage (routes/browser-session.ts).
+browserCodeRouter.get(BROWSER_SESSION_PATH, (req, res, next) => { browserSessionHandler(req, res).catch(next) })
 
 /** One address a browser can open Walnut at, with the code after `#pair=`. */
 export interface SignInAddress {
@@ -135,7 +142,7 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     if (typeof code !== 'string' || code.length > 32 || !consumeBrowserCode(code)) {
       recordAuthFailure(codeKey)
       log.web.warn('browser sign-in: wrong or expired code', { ip })
-      res.status(400).json({ error: { code: 'invalid_code', message: 'That code is wrong or has expired. Make a new one in Walnut on your computer.' } })
+      res.status(400).json({ error: { code: 'invalid_code', message: 'That code is wrong, already used or expired. Make a new one in Walnut on your computer.' } })
       return
     }
     const body = req.body as { standalone?: unknown; client?: unknown } | undefined
@@ -145,14 +152,24 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     // Settings names the row by what it is ("iPhone Safari"), not by the id (N2-21).
     // Only deviceName: no model/os, so this never claims a platform for the record.
     const kind = browserKindFromUserAgent(req.get('user-agent'), { standalone: body?.standalone === true })
-    const deviceName = extension ? extensionDeviceName(kind) : kind
+    const taken = (await listDeviceRecords()).filter((d) => d.name !== name).map((d) => d.info?.deviceName)
+    const deviceName = numberedDeviceName(extension ? extensionDeviceName(kind) : kind, taken)
     await setDeviceInfo(name, { deviceName }).catch(() => false)
     clearAuthFailures(codeKey)
     clearAuthFailures(ip)
     log.web.info('browser signed in', { device: name })
     // Its link is used up: Settings shows the next one (BrowserAccessGroup's phone link).
     bus.emit(BROWSER_SIGNED_IN_EVENT, { name }, ['web-ui'], { source: 'browser-pair' })
-    res.json({ token: device.token, name, deviceName })
+    // A browser's token lasts hours and its page renews it; one that could not start renewing keeps a token that never expires.
+    const signIn = extension ? null : await beginBrowserSignIn(name, device.token).catch((err: unknown) => {
+      log.web.warn('browser sign-in: renewing could not start; this browser keeps a token that never expires', { name, error: err instanceof Error ? err.message : String(err) })
+      return null
+    })
+    if (signIn) {
+      const secure = pageIsSecure(req)
+      res.append('Set-Cookie', refreshCookieHeader(refreshCookieName(req, secure), signIn.refreshToken, secure))
+    }
+    res.json({ token: device.token, name, deviceName, ...(signIn ? { accessUntil: signIn.accessUntil, accessMs: signIn.accessMs } : {}) })
   } catch (err) {
     next(err)
   }
