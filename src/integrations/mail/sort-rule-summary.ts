@@ -28,11 +28,15 @@ function joinOr(items: string[]): string {
 export function summarizeWhen(when: RuleWhen, ctx: SummaryContext = {}): string {
   const parts: string[] = []
   const froms = when.from === undefined ? [] : Array.isArray(when.from) ? when.from : [when.from]
+  // A subject pattern with no sender or group leads the sentence on its own: the list reads the
+  // patterns in one column instead of after the same five words on every row.
+  const patternLeads = froms.length === 0 && when.group === undefined && typeof when.subject === 'object' && when.subject !== null
   if (when.group !== undefined && froms.length === 0) parts.push(`Mail Walnut groups as ${when.group.trim()}`)
+  else if (patternLeads) parts.push(`Subject matches /${(when.subject as { re: string }).re}/`)
   else parts.push(froms.length > 0 ? `From ${joinOr(froms.map((one) => one.trim()))}` : 'Mail')
   if (when.group !== undefined && froms.length > 0) parts.push(`grouped as ${when.group.trim()}`)
   if (typeof when.subject === 'string') parts.push(`with "${when.subject}" in the subject`)
-  else if (when.subject) parts.push(`with a subject matching /${when.subject.re}/`)
+  else if (when.subject && !patternLeads) parts.push(`with a subject matching /${when.subject.re}/`)
   if (when.listId) parts.push(`on the list ${when.listId}`)
   if (when.addressedToMe === true) parts.push('sent to you directly')
   if (when.addressedToMe === false) parts.push('sent to a group')

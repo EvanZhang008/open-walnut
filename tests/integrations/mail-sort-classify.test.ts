@@ -431,6 +431,16 @@ describe('rule summaries (Settings, GET /rules, the propose drafts)', () => {
     expect(summarizeRule({ when: { cc: true, sender: 'automated' }, then: 'Group mail' }, ctx))
       .toBe('Mail where you are only in Cc from an automated sender \u2192 Group mail')
   })
+  it('a subject pattern with no sender leads its sentence; after a sender it follows', () => {
+    expect(summarizeRule({ when: { subject: { re: 'build \\d+ passed' } }, then: 'Build results' }, ctx))
+      .toBe('Subject matches /build \\d+ passed/ \u2192 Build results')
+    expect(summarizeRule({ when: { subject: { re: '^re: ' }, addressedToMe: true }, then: 'Important' }, ctx))
+      .toBe('Subject matches /^re: / sent to you directly \u2192 Important')
+    expect(summarizeRule({ when: { from: 'issues@*', subject: { re: 'build \\d+' } }, then: 'Builds' }, ctx))
+      .toBe('From issues@* with a subject matching /build \\d+/ \u2192 Builds')
+    expect(summarizeRule({ when: { group: 'Newsletters', subject: { re: 'weekly' } }, then: 'Not important' }, ctx))
+      .toBe('Mail Walnut groups as Newsletters with a subject matching /weekly/ \u2192 Not important')
+  })
   it('a message rule shows its label, or a short id when it has none', () => {
     expect(summarizeRule({ when: { message: '<m1@example.invalid>' }, then: 'Important', label: 'Only the mail "Lease" from Pier, Dana, Sep 28' }))
       .toBe('Only the mail "Lease" from Pier, Dana, Sep 28 \u2192 Important')

@@ -111,9 +111,12 @@ export function summaryParts(rule: Pick<MailRuleView, 'summary' | 'when'>): Summ
     ];
   };
   const subject = rule.when.subject;
-  const marker = subject && typeof subject === 'object' ? `matching /${subject.re}/` : null;
-  const at = marker ? summary.indexOf(marker) : -1;
-  if (!marker || at < 0 || !subject || typeof subject !== 'object') return target(summary);
+  if (!subject || typeof subject !== 'object') return target(summary);
+  // `Subject matches /x/` leads a rule with no sender; `... with a subject matching /x/` follows
+  // one (and is what an older server writes for every rule).
+  const word = [`matches /${subject.re}/`, `matching /${subject.re}/`].map((marker) => ({ marker, at: summary.indexOf(marker) })).find((one) => one.at >= 0);
+  if (!word) return target(summary);
+  const { marker, at } = word;
   // The pattern as code, without the slashes the editor asks people to leave out.
   const { re } = subject;
   let cut = PATTERN_SHOWN_CHARS - 1;
@@ -122,7 +125,7 @@ export function summaryParts(rule: Pick<MailRuleView, 'summary' | 'when'>): Summ
   const code: SummaryPart = re.length > PATTERN_SHOWN_CHARS
     ? { text: `${re.slice(0, cut)}\u2026`, code: true, full: re }
     : { text: re, code: true };
-  return [{ text: summary.slice(0, at + 'matching '.length) }, code, ...target(summary.slice(at + marker.length))];
+  return [{ text: summary.slice(0, at + marker.indexOf('/')) }, code, ...target(summary.slice(at + marker.length))];
 }
 
 /** The preview line; for a rule the user switched off, what it would match once on. */

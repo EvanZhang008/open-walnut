@@ -209,9 +209,16 @@ describe('mail rule editor rows', () => {
 
   it('shows a summary\'s subject pattern as code without slashes, and its target on one line', () => {
     const re = '(?=.{0,500}invoice)(?=.{0,500}paid)';
-    expect(summaryParts({ summary: `Mail with a subject matching /${re}/ \u2192 Not important`, when: { subject: { re } } })).toEqual([
-      { text: 'Mail with a subject matching ' }, { text: re, code: true }, { text: ' ' }, { text: '\u2192 Not important', nowrap: true },
+    expect(summaryParts({ summary: `Subject matches /${re}/ \u2192 Not important`, when: { subject: { re } } })).toEqual([
+      { text: 'Subject matches ' }, { text: re, code: true }, { text: ' ' }, { text: '\u2192 Not important', nowrap: true },
     ]);
+    // After a sender, and as an older server words every rule.
+    expect(summaryParts({ summary: 'From issues@* with a subject matching /build \\d+/ \u2192 Builds', when: { from: 'issues@*', subject: { re: 'build \\d+' } } })).toEqual([
+      { text: 'From issues@* with a subject matching ' }, { text: 'build \\d+', code: true }, { text: ' ' }, { text: '\u2192 Builds', nowrap: true },
+    ]);
+    expect(summaryParts({ summary: `Mail with a subject matching /${re}/ \u2192 Not important`, when: { subject: { re } } })[1]).toEqual({ text: re, code: true });
+    // A pattern holding a slash or the word itself is still cut at its own place.
+    expect(summaryParts({ summary: 'Subject matches /a\\/b matches c/ \u2192 Important', when: { subject: { re: 'a\\/b matches c' } } })[1]).toEqual({ text: 'a\\/b matches c', code: true });
     expect(summaryParts({ summary: 'From issues@*', when: { from: 'issues@*' } })).toEqual([{ text: 'From issues@*' }]);
     expect(summaryParts({ summary: 'From issues@* \u2192 Build results', when: { from: 'issues@*' } })).toEqual([
       { text: 'From issues@*' }, { text: ' ' }, { text: '\u2192 Build results', nowrap: true },
@@ -220,18 +227,18 @@ describe('mail rule editor rows', () => {
 
   it('shows the head of a pattern over 60 characters, the whole one in its tooltip', () => {
     const at60 = 'a'.repeat(PATTERN_SHOWN_CHARS);
-    expect(summaryParts({ summary: `Mail with a subject matching /${at60}/ \u2192 Important`, when: { subject: { re: at60 } } })[1])
+    expect(summaryParts({ summary: `Subject matches /${at60}/ \u2192 Important`, when: { subject: { re: at60 } } })[1])
       .toEqual({ text: at60, code: true });
     const long = `(invoice|receipt|${'x'.repeat(80)})`;
-    const parts = summaryParts({ summary: `Mail with a subject matching /${long}/ \u2192 Important`, when: { subject: { re: long } } });
+    const parts = summaryParts({ summary: `Subject matches /${long}/ \u2192 Important`, when: { subject: { re: long } } });
     expect(parts).toEqual([
-      { text: 'Mail with a subject matching ' },
+      { text: 'Subject matches ' },
       { text: `${long.slice(0, PATTERN_SHOWN_CHARS - 1)}\u2026`, code: true, full: long },
       { text: ' ' }, { text: '\u2192 Important', nowrap: true },
     ]);
     // A cut never splits a surrogate pair (test data: U+1F600 straddling the cut).
     const emoji = `${'a'.repeat(PATTERN_SHOWN_CHARS - 2)}\u{1F600}${'b'.repeat(10)}`;
-    const shown = summaryParts({ summary: `Mail with a subject matching /${emoji}/`, when: { subject: { re: emoji } } })[1]!.text;
+    const shown = summaryParts({ summary: `Subject matches /${emoji}/`, when: { subject: { re: emoji } } })[1]!.text;
     expect(shown).toBe(`${'a'.repeat(PATTERN_SHOWN_CHARS - 2)}\u2026`);
   });
 
