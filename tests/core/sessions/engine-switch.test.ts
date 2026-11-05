@@ -585,6 +585,43 @@ describe('engine switch inside a task', () => {
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed' });
   }, 40_000);
 
+  it('a session resumed with a context it never read keeps it through the next round trip', async () => {
+    // Review round 5: Claude -> Codex (work) -> Claude resumed with nothing typed -> Pi -> Claude:
+    // the resume replaced Claude's unread context (Codex's work) with an empty delta.
+    const { taskId, sid } = await taskOn('claude');
+    const codex = (await requestEngineSwitch({ taskId, engine: 'codex', message: 'On Codex.', source: 'test' })).sessionId!;
+    edges.history[codex] = [
+      { role: 'user', text: 'On Codex.', timestamp: '2026-10-20T11:00:00Z', hints: [{ kind: 'engine-switch', text: 'claude context' }] },
+      { role: 'assistant', text: 'Codex found OSPREY in the logs.', timestamp: '2026-10-20T11:05:00Z' },
+    ];
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', source: 'test' });
+    expect(back).toMatchObject({ sessionId: sid, resumed: true });
+    expect((await getSessionByClaudeId(sid))?.switchContext?.text).toContain('OSPREY');
+    const pi = await requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    expect((await getSessionByClaudeId(pi.sessionId!))?.switchContext?.text).toContain('OSPREY');
+    const again = await requestEngineSwitch({ taskId, engine: 'claude', source: 'test' });
+    expect(again).toMatchObject({ sessionId: sid, resumed: true });
+    expect((await getSessionByClaudeId(sid))?.switchContext?.text).toContain('OSPREY');
+  });
+
+  it('what the next message carries is budgeted as one: over the window, the transcript is named instead', async () => {
+    // Review round 5: the history and an unread context each fit, together they did not.
+    const { taskId, sid } = await taskOn('claude');
+    const big = (word: string) => Array.from({ length: 9000 }, (_, i) => `${word} line ${i} of the long investigation notes.`).join('\n');
+    edges.history[sid] = [...HISTORY, { role: 'assistant', text: big('ALPHA'), timestamp: '2026-10-20T10:02:00Z' }];
+    const codex = (await requestEngineSwitch({ taskId, engine: 'codex', message: 'On Codex.', source: 'test' })).sessionId!;
+    edges.history[codex] = [
+      { role: 'user', text: 'On Codex.', timestamp: '2026-10-20T11:00:00Z' },
+      { role: 'assistant', text: big('BRAVO'), timestamp: '2026-10-20T11:05:00Z' },
+    ];
+    await requestEngineSwitch({ taskId, engine: 'claude', source: 'test' });
+    const pi = await requestEngineSwitch({ taskId, engine: 'pi', source: 'test' });
+    const ctx = (await getSessionByClaudeId(pi.sessionId!))?.switchContext?.text ?? '';
+    expect(ctx).toContain('too long for this engine');
+    expect(ctx).toMatch(/transcript is at \S+/);
+    expect(ctx).not.toContain('BRAVO line 8000');
+  });
+
   /** The CLI ends its turn on the Stop a switch sends. */
   const endTurnOnInterrupt = (name: string) => bus.subscribe(name, async (e) => {
     if (e.name !== EventNames.SESSION_INTERRUPT) return;

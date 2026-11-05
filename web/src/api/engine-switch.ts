@@ -51,6 +51,13 @@ export interface SwitchEngineAnswer {
 
 /** How long a switch keeps trying while the server is away (a deploy restart takes 10 to 60 s). */
 export const SWITCH_RETRY_TOTAL_MS = 90_000;
+/** A newer pick for the same task took this one's place before a retry: nothing more is sent. */
+export class SwitchSuperseded extends Error {
+  constructor() { super('A newer engine pick took the place of this one.'); this.name = 'SwitchSuperseded'; }
+}
+/** taskId -> the generation of its newest pick in this tab. */
+const latestPick = new Map<string, number>();
+
 /** The wait before each new attempt. */
 export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000];
 
@@ -68,7 +75,12 @@ export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000];
 export async function switchTaskEngine(taskId: string, pick: { engine: string; model?: string; effort?: string }): Promise<SwitchEngineAnswer> {
   const deadline = Date.now() + SWITCH_RETRY_TOTAL_MS;
   const opId = mintOpId();
+  // A newer pick for the task ends this one's retries (review round 5: a Pi pick still retrying
+  // after the user picked Codex could switch the task back to Pi once Walnut was back).
+  const generation = (latestPick.get(taskId) ?? 0) + 1;
+  latestPick.set(taskId, generation);
   for (let attempt = 0; ; attempt++) {
+    if (attempt > 0 && latestPick.get(taskId) !== generation) throw new SwitchSuperseded();
     const left = deadline - Date.now();
     try {
       return await apiPost<SwitchEngineAnswer>(`/api/v1/tasks/${encodeURIComponent(taskId)}/switch-engine`, {

@@ -349,7 +349,7 @@ export function movingFrom(sessionIdOrTask: { sessionId?: string; taskId?: strin
  * engine switch replaced, its task's active session (waiting for a switch still
  * starting). Never throws: an unknown answer keeps `sessionId`.
  */
-export async function activeSessionFor(sessionId: string): Promise<string> {
+export async function activeSessionFor(sessionId: string, messageId?: string): Promise<string> {
   try {
     // A message for the session a running switch replaces waits for the switch:
     // it then belongs in the new session (or in this one again, when the start failed).
@@ -359,6 +359,11 @@ export async function activeSessionFor(sessionId: string): Promise<string> {
     if (switching) await awaitSwitch(switching);
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const rec = await getSessionByClaudeId(sessionId);
+    // The session a running switch is starting, which a panel follows at once: its message waits
+    // until the switch stored what the session carries (review round 5), never the switch's own
+    // first message (`qm-<switch id>`).
+    const into = rec?.taskId ? inFlight.get(rec.taskId) : undefined;
+    if (into && into.from !== sessionId && !messageId?.startsWith('qm-es-')) await awaitSwitch(rec!.taskId!);
     if (!rec || !isSupersededSession(rec) || !rec.taskId) return sessionId;
     await awaitSwitch(rec.taskId);
     const { taskConversation } = await import('./task-session-claim.js');
@@ -644,16 +649,20 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   // Claude -> Pi -> Codex with no message lost Claude's conversation): it goes along. A session
   // holding one ran no turn since, so its own history adds nothing but what it resumed with.
   const tracker = await import('../session-tracker.js');
-  let unread = (await tracker.getSessionByClaudeId(old.claudeSessionId).catch(() => undefined))?.switchContext?.text;
-  // Budgeted for the engine before; one that does not fit this engine's window points at the
-  // task's whole transcript instead (written above for this switch).
-  if (unread && transcriptPath && estimateTokens(unread) > Math.floor(window * CARRY_WINDOW_SHARE)) {
-    unread = renderHintBlock(ENGINE_SWITCH_HINT, `The conversation carried from the engines before is too long for this engine's context window, so it is not repeated here. The task's whole transcript is at ${transcriptPath}: read the parts you need before you go on.`);
-  }
-  const blocks = unread
+  const unread = (await tracker.getSessionByClaudeId(old.claudeSessionId).catch(() => undefined))?.switchContext?.text;
+  const budget = Math.floor(window * CARRY_WINDOW_SHARE);
+  // One budget for everything the next message carries (review round 5: two blocks each under it
+  // could pass the window together): over it, the task's whole transcript (written above for this
+  // switch) is named instead.
+  const fit = (parts: string[]): string[] => {
+    if (!transcriptPath || estimateTokens(parts.join('\n')) <= budget) return parts;
+    log.session.info('engine switch: the carried context does not fit the target window; it points at the transcript', { taskId: task.id, budget });
+    return [renderHintBlock(ENGINE_SWITCH_HINT, `The conversation carried from the engines before is too long for this engine's context window, so it is not repeated here. The task's whole transcript is at ${transcriptPath}: read the parts you need before you go on.${cut}`)];
+  };
+  const blocks = fit(unread
     ? [...(ctx.messages.some((m) => m.role === 'user' || m.role === 'assistant') ? [renderHintBlock(ENGINE_SWITCH_HINT, carried.text)] : []),
       unread, ...(cut ? [renderHintBlock(ENGINE_SWITCH_HINT, cut)] : [])]
-    : [renderHintBlock(ENGINE_SWITCH_HINT, carried.text + cut)];
+    : [renderHintBlock(ENGINE_SWITCH_HINT, carried.text + cut)]);
   if (carried.trimmedTurns > 0) {
     // The user is told in the session (a system row) as well as the model in its context.
     log.session.info('engine switch: carried context trimmed to fit the target window', {
@@ -662,7 +671,10 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   }
   // No message: no turn now. The context waits for the session's next message (stashSwitchContext).
   const words = await switchWords(state);
-  const resumeBlock = resume ? renderHintBlock(ENGINE_SWITCH_HINT, resume.text + cut) : undefined;
+  // The session resumed may itself hold a context it never read (resumed idle earlier): it stays,
+  // ahead of the turns it missed since (review round 5), under the same one budget.
+  const targetUnread = resume ? (await tracker.getSessionByClaudeId(resume.prev.claudeSessionId).catch(() => undefined))?.switchContext?.text : undefined;
+  const resumeBlock = resume ? fit([...(targetUnread ? [targetUnread] : []), renderHintBlock(ENGINE_SWITCH_HINT, resume.text + cut)]).join('\n') : undefined;
   const message = words ? composeHinted(words, { before: blocks, after: [] }) : '';
   const mode = state.to.permission_mode ?? old.mode;
   return {

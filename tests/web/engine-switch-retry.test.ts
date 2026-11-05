@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { OP_ID_HEADER } from '../../web/src/api/op-id'
-import { switchTaskEngine, SWITCH_RETRY_TOTAL_MS } from '../../web/src/api/engine-switch'
+import { switchTaskEngine, SWITCH_RETRY_TOTAL_MS, SwitchSuperseded } from '../../web/src/api/engine-switch'
 
 type Answer = { status: number; body: unknown } | 'network'
 
@@ -67,6 +67,18 @@ describe('an engine switch across a server restart', () => {
     const r = await settle(switchTaskEngine('t1', { engine: 'pi' }))
     expect('err' in r && (r.err as { body?: { code?: string } }).body?.code).toBe('same_engine')
     expect(calls).toHaveLength(1)
+  })
+
+  it('a newer pick for the task ends the older one\'s retries: it never sends again', async () => {
+    // Review round 5: a Pi pick still retrying after the user picked Codex could switch the task back.
+    answers.push('network', { status: 200, body: { state: 'done', taskId: 't1', sessionId: 'codex-1' } })
+    const pi = switchTaskEngine('t1', { engine: 'pi' }).then((ok) => ({ ok }), (err) => ({ err }))
+    await vi.advanceTimersByTimeAsync(10)
+    const codex = await settle(switchTaskEngine('t1', { engine: 'codex' }))
+    expect(codex).toEqual({ ok: { state: 'done', taskId: 't1', sessionId: 'codex-1' } })
+    const r = await pi
+    expect('err' in r && r.err).toBeInstanceOf(SwitchSuperseded)
+    expect(calls).toHaveLength(2)
   })
 
   it('a server that never comes back: it gives up within 90 seconds of the pick, with the network error', async () => {

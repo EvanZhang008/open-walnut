@@ -142,6 +142,6 @@ describe('every surface that holds a session id stays on the task\'s current con
 
   it('the server never lets a replaced session take a message', () => {
     const queue = read('src/core/session-message-queue.ts');
-    expect(queue).toContain('sessionId = await activeSessionFor(sessionId);');
+    expect(queue).toContain('sessionId = await activeSessionFor(sessionId, opts?.messageId);');
   });
 });

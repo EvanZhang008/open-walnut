@@ -238,7 +238,7 @@ export async function sendMessageToSession(
   // A session an engine switch replaced never takes a message: it goes to the
   // task's active session (sessions/engine-switch.ts).
   const { activeSessionFor, movingFrom } = await import('./sessions/engine-switch.js');
-  sessionId = await activeSessionFor(sessionId);
+  sessionId = await activeSessionFor(sessionId, opts?.messageId);
   await refuseOrgDeliveryWhileOff(sessionId, opts?.source, opts?.taskId);
   // Its task is moving to another host: the row is held here and goes with the task.
   const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');

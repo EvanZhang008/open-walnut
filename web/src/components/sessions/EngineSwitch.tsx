@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { SessionRecord } from '@/types/session';
-import { cancelEngineSwitch, switchTaskEngine } from '@/api/engine-switch';
+import { cancelEngineSwitch, switchTaskEngine, SwitchSuperseded } from '@/api/engine-switch';
 import { browserGaveUp } from '@/utils/request-failure';
 import { engineEntry, hostEngineLockReason, resolveEngine } from '@/utils/engines';
 import type { EngineCatalogEntry } from '@/utils/engines';
@@ -124,8 +124,9 @@ export function useEngineSwitchPick(opts: {
     log.info('engine-switch', 'picker closed on another engine: switching now', { sessionId, taskId, engine: p.engine, model: p.model });
     switchTaskEngine(taskId, p).catch((err: unknown) => {
       log.warn('engine-switch', 'switch refused', { sessionId, taskId, engine: p.engine, error: errorText(err) });
-      // The panel moved on meanwhile (the switch took, and it followed): this answer is not its own.
-      if (shownSidRef.current !== sessionId) return;
+      // The panel moved on meanwhile (the switch took, and it followed), or a newer pick replaced
+      // this one: this answer is not the panel's to show.
+      if (shownSidRef.current !== sessionId || err instanceof SwitchSuperseded) return;
       watched.current = null;
       setSending(null);
       setRefused({ engine: p.engine, error: errorText(err), ...(noAnswer(err) ? { unconfirmed: true } : {}) });
