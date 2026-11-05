@@ -7,6 +7,7 @@
 import type { Task } from '@open-walnut/core';
 import { MARKED_ASK, NEEDS_CATEGORY_LABELS, needsLineOf, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
 import { taskUserState } from '@/utils/session-status';
+import { stateSectionNoNeeds } from '@/components/tasks/status-sections';
 
 export const EXT_TASKS_MAX = 30;
 
@@ -45,11 +46,11 @@ const newest = (a: Task, b: Task) => String(b.updated_at ?? '').localeCompare(St
  * answer does not make it vanish from under them.
  */
 export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> = new Set()): { needs: ExtTaskRow[]; focus: ExtTaskRow[] } {
-  // Open, and not parked out of sight: Home hides a WAITING task unless its own work goes on or it
-  // has something to read (TodoPanel's hiddenAsWaiting), so the panel does too.
+  // Open, and not parked out of sight: Home folds a parked task away unless its own work goes on or
+  // it has something to read (status-sections' stateSectionNoNeeds), so the panel does too.
   const open = tasks.filter((t) => {
     const state = taskUserState(t);
-    const parked = t.phase === 'WAITING' && state !== 'working' && state !== 'read' && !kept.has(t.id);
+    const parked = state !== 'done' && stateSectionNoNeeds(t) === 'waiting' && !kept.has(t.id);
     return state !== 'done' && !t.plugin_only && !parked;
   });
   // Focus is the board's Focus tier, as Home counts it: every open task in it, whatever it needs
