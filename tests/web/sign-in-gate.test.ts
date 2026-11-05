@@ -16,23 +16,41 @@ let store: Map<string, string>
 let fetchMock: ReturnType<typeof vi.fn<Fetch>>
 let reload: ReturnType<typeof vi.fn>
 
-function page(hash: string) {
+function page(hash: string, port = '') {
   store = new Map()
   reload = vi.fn()
   fetchMock = vi.fn<Fetch>()
-  vi.stubGlobal('window', { location: { hash, pathname: '/', search: '', protocol: 'https:', reload } })
+  vi.stubGlobal('window', { location: { hash, pathname: '/', search: '', protocol: 'https:', port, reload } })
   vi.stubGlobal('history', { state: null, replaceState: (_s: unknown, _t: string, url: string) => { (window.location as { hash: string }).hash = url.includes('#') ? url.slice(url.indexOf('#')) : '' } })
   vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } })
-  // `cookie` reads the last line written, as the tests before read it; `cookieWrites` keeps each.
+  // A small cookie jar (a write with Max-Age=0 removes its name); `cookieWrites` keeps each line.
   cookieWrites = []
-  vi.stubGlobal('document', { get cookie() { return cookieRead ?? cookieWrites[cookieWrites.length - 1] ?? '' }, set cookie(v: string) { cookieRead = undefined; cookieWrites.push(v) } })
-  cookieRead = undefined
+  jar = new Map()
+  vi.stubGlobal('document', {
+    get cookie() { return [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
+    set cookie(line: string) {
+      cookieWrites.push(line)
+      const [pair, ...attrs] = line.split(';')
+      const at = pair!.indexOf('=')
+      const name = pair!.slice(0, at).trim()
+      if (attrs.some((a) => /^max-age=0$/i.test(a.trim()))) jar.delete(name)
+      else jar.set(name, pair!.slice(at + 1))
+    },
+  })
   vi.stubGlobal('fetch', fetchMock)
 }
 
 let cookieWrites: string[] = []
-/** What the page's cookies read as, set by a test (the browser's jar, not the last write). */
-let cookieRead: string | undefined
+let jar = new Map<string, string>()
+/** Cookies the browser already holds (`a=1; b=2`), as the server or an earlier page set them. */
+function cookies(line: string) {
+  for (const part of line.split(';')) {
+    const at = part.indexOf('=')
+    jar.set(part.slice(0, at).trim(), part.slice(at + 1))
+  }
+}
+/** The mark the server sets beside the refresh cookie (this stub page is https, default port). */
+const MARKED = 'walnut_renews_s=1'
 
 /** Answer each URL the gate asks with its own reply; any other URL fails the test. */
 function answer(routes: Record<string, () => Response>) {
@@ -66,13 +84,23 @@ describe('resolveSignInGate', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('a browser the server answers without a token (this computer) boots', async () => {
+  // 2026-11-05, main CI: this computer's own pages sent a renewal at every load, which a
+  // closing page then left aborted in 19 browser specs.
+  it('a browser the server answers without a token (this computer) boots, asking only the probe', async () => {
     page('')
+    answer({ '/api/v1/me': () => json(200, { kind: 'human' }) })
+    const { resolveSignInGate } = await gate()
+    expect(await resolveSignInGate()).toBe('app')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/me'])
+  })
+
+  it('with no token, the renewal is asked only with the refresh cookie\'s mark: a POST with no token', async () => {
+    page('')
+    cookies(`other=1; ${MARKED}`)
     answer({ '/api/auth/browser/refresh?secure=1': () => new Response(null, { status: 204 }), '/api/v1/me': () => json(200, { kind: 'human' }) })
     const { resolveSignInGate } = await gate()
     expect(await resolveSignInGate()).toBe('app')
     expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/auth/browser/refresh?secure=1', '/api/v1/me'])
-    // A POST, with no token to send.
     expect(fetchMock.mock.calls[0]![1]?.method).toBe('POST')
     expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).has('authorization')).toBe(false)
   })
@@ -81,6 +109,7 @@ describe('resolveSignInGate', () => {
   // unopened site's localStorage after 7 days; the refresh cookie the server set stays.
   it('a page Safari cleared renews from its refresh cookie: the new token stored with its time, then a reload', async () => {
     page('')
+    cookies(MARKED)
     answer({ '/api/auth/browser/refresh?secure=1': () => json(200, { token: 'new-token', name: 'browser-1', accessUntil: 1_900_000_000_000, accessMs: 72_000_000 }) })
     const { resolveSignInGate } = await gate()
     const result = Promise.race([resolveSignInGate(), new Promise((r) => setTimeout(() => r('pending'), 50))])
@@ -97,6 +126,7 @@ describe('resolveSignInGate', () => {
 
   it('storage that refuses the token: this page holds it and boots without a reload loop', async () => {
     page('')
+    cookies(MARKED)
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError') }, removeItem: () => {} })
     answer({ '/api/auth/browser/refresh?secure=1': () => json(200, { token: 'new-token', name: 'browser-1', accessUntil: 1_900_000_000_000, accessMs: 72_000_000 }) })
     const { resolveSignInGate } = await gate()
@@ -111,6 +141,7 @@ describe('resolveSignInGate', () => {
     for (const code of ['refresh_refused', 'refresh_reused', 'refresh_expired']) {
       vi.resetModules()
       page('')
+      cookies(MARKED)
       answer({ '/api/auth/browser/refresh?secure=1': () => json(401, { code }) })
       const { resolveSignInGate, getUnpairedState } = await gate()
       expect(await resolveSignInGate(), code).toBe('sign-in')
@@ -121,7 +152,7 @@ describe('resolveSignInGate', () => {
 
   it('a renewal right after a renewal reload boots instead of reloading again (storage that does not outlive a reload)', async () => {
     page('')
-    cookieRead = 'other=1; walnut_restored=1'
+    cookies(`other=1; walnut_restored=1; ${MARKED}`)
     answer({ '/api/auth/browser/refresh?secure=1': () => json(200, { token: 'new-token', name: 'browser-1', accessUntil: 1_900_000_000_000, accessMs: 72_000_000 }) })
     const { resolveSignInGate } = await gate()
     expect(await resolveSignInGate()).toBe('app')
@@ -132,6 +163,7 @@ describe('resolveSignInGate', () => {
 
   it('a page an older build reloaded with the mark in its address boots too, and the address is cleaned', async () => {
     page('#signed-in-again')
+    cookies(MARKED)
     answer({ '/api/auth/browser/refresh?secure=1': () => json(200, { token: 'new-token', name: 'browser-1', accessUntil: 1_900_000_000_000, accessMs: 72_000_000 }) })
     const { resolveSignInGate } = await gate()
     expect(await resolveSignInGate()).toBe('app')
@@ -143,6 +175,7 @@ describe('resolveSignInGate', () => {
     for (const status of [429, 503]) {
       vi.resetModules()
       page('')
+      cookies(MARKED)
       answer({ '/api/auth/browser/refresh?secure=1': () => json(status, { error: 'busy' }) })
       expect(await (await gate()).resolveSignInGate(), String(status)).toBe('probe-failed')
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -151,6 +184,7 @@ describe('resolveSignInGate', () => {
 
   it('two tabs at once: a 409 asks again, and the next answer is taken', async () => {
     page('')
+    cookies(MARKED)
     let calls = 0
     answer({ '/api/auth/browser/refresh?secure=1': () => (++calls === 1 ? json(409, { code: 'refresh_raced' }) : json(200, { token: 'new-token', name: 'browser-1', accessUntil: 1_900_000_000_000, accessMs: 72_000_000 })) })
     // Loaded before the clock is faked: a module load waits on real timers.
@@ -169,6 +203,7 @@ describe('resolveSignInGate', () => {
 
   it('an older server without the route falls back to the probe', async () => {
     page('')
+    cookies(MARKED)
     answer({ '/api/auth/browser/refresh?secure=1': () => json(404, { error: 'not found' }), '/api/v1/me': () => json(401, { code: 'not_paired' }) })
     const { resolveSignInGate, getUnpairedState } = await gate()
     expect(await resolveSignInGate()).toBe('sign-in')
@@ -210,7 +245,7 @@ describe('resolveSignInGate', () => {
 
   it('a refusal with the primary code gets the sign-in screen alone', async () => {
     page('')
-    answer({ '/api/auth/browser/refresh?secure=1': () => new Response(null, { status: 204 }), '/api/v1/me': () => json(401, { code: 'not_paired' }) })
+    answer({ '/api/v1/me': () => json(401, { code: 'not_paired' }) })
     const { resolveSignInGate, getUnpairedState } = await gate()
     expect(await resolveSignInGate()).toBe('sign-in')
     expect(getUnpairedState()).toBe('unpaired')
@@ -218,9 +253,15 @@ describe('resolveSignInGate', () => {
 
   it('a 401 without the code (another server sign-in) boots; an unreachable server is a failed probe (D5)', async () => {
     page('')
-    // A companion's auth answers the renewal too, with no code of the route's: not this route speaking.
     fetchMock.mockResolvedValue(json(401, { error: 'Authentication required' }))
     expect(await (await gate()).resolveSignInGate()).toBe('app')
+    vi.resetModules()
+    // A companion's auth answers the renewal too, with no code of the route's: not this route speaking.
+    page('')
+    cookies(MARKED)
+    fetchMock.mockResolvedValue(json(401, { error: 'Authentication required' }))
+    expect(await (await gate()).resolveSignInGate()).toBe('app')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/auth/browser/refresh?secure=1', '/api/v1/me'])
     vi.resetModules()
     page('')
     fetchMock.mockRejectedValue(new TypeError('Load failed'))
@@ -318,9 +359,67 @@ describe('resolveSignInGate', () => {
     const session = new Map<string, string>([['walnut.pendingPairCode', JSON.stringify({ code: 'ABCD-EFGH', at: Date.now() - 11 * 60_000 })]])
     page('')
     vi.stubGlobal('sessionStorage', { getItem: (k: string) => session.get(k) ?? null, setItem: (k: string, v: string) => { session.set(k, v) }, removeItem: (k: string) => { session.delete(k) } })
-    answer({ '/api/auth/browser/refresh?secure=1': () => new Response(null, { status: 204 }), '/api/v1/me': () => json(401, { code: 'not_paired' }) })
+    answer({ '/api/v1/me': () => json(401, { code: 'not_paired' }) })
     expect(await (await gate()).resolveSignInGate()).toBe('sign-in')
-    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/auth/browser/refresh?secure=1', '/api/v1/me'])
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/me'])
     expect(session.has('walnut.pendingPairCode')).toBe(false)
+  })
+})
+
+describe('the refresh cookie\'s mark', () => {
+  it('the page reads the name the server writes, for each origin, behind a proxy that rewrote Host too', async () => {
+    const { refreshMarkName } = await import('../../web/src/api/device-token')
+    const { refreshCookieHeaders } = await import('../../src/web/middleware/device-cookie')
+    for (const [protocol, port] of [['http:', ''], ['https:', ''], ['http:', '3457'], ['https:', '8443']] as const) {
+      const secure = protocol === 'https:'
+      const origin = `${protocol}//walnut.example${port ? `:${port}` : ''}`
+      // As the browser sends it, and as a reverse proxy may pass it on (Host rewritten to the upstream).
+      for (const headers of [{ host: port ? `walnut.example:${port}` : 'walnut.example', origin }, { host: '127.0.0.1:3456', origin }]) {
+        const mark = refreshCookieHeaders({ headers }, 'refresh-token', secure)[1]!
+        expect(mark.split(';')[0], `${origin} ${headers.host}`).toBe(`${refreshMarkName(protocol, port)}=1`)
+        // A script can read it, and it holds no secret.
+        expect(mark).not.toMatch(/HttpOnly|refresh-token/i)
+        expect(mark).toMatch(/Path=\//)
+      }
+    }
+  })
+
+  it('a page on another port reads its own mark only', async () => {
+    page('', '8443')
+    cookies(`${MARKED}`)
+    answer({ '/api/v1/me': () => json(401, { code: 'not_paired' }) })
+    expect(await (await gate()).resolveSignInGate()).toBe('sign-in')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/me'])
+    vi.resetModules()
+    page('', '8443')
+    cookies('walnut_renews_s_8443=1')
+    answer({ '/api/auth/browser/refresh?secure=1': () => json(401, { code: 'refresh_missing' }) })
+    expect(await (await gate()).resolveSignInGate()).toBe('sign-in')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/auth/browser/refresh?secure=1'])
+  })
+})
+
+// The review of 2026-11-05: a page whose storage was cleared still holding the sign-in cookie
+// of a build before (walnut_signin, walnut_device) is answered by the probe as that device.
+describe('a sign-in cookie of a build before, with no token and no mark', () => {
+  it('the probe answers as a device: its cookie is traded for a pair, and the page reloads with it', async () => {
+    page('')
+    answer({
+      '/api/v1/me': () => json(200, { kind: 'human', device: { name: 'browser-1' } }),
+      '/api/auth/browser/refresh?secure=1': () => json(200, { token: 'new-token', name: 'browser-1', accessUntil: 1_900_000_000_000, accessMs: 72_000_000 }),
+    })
+    const { resolveSignInGate } = await gate()
+    const result = Promise.race([resolveSignInGate(), new Promise((r) => setTimeout(() => r('pending'), 50))])
+    expect(await result).toBe('pending')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/me', '/api/auth/browser/refresh?secure=1'])
+    expect(store.get('walnut.deviceToken')).toBe('new-token')
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('the probe answering as no device (this computer) asks nothing more', async () => {
+    page('')
+    answer({ '/api/v1/me': () => json(200, { kind: 'human' }) })
+    expect(await (await gate()).resolveSignInGate()).toBe('app')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/me'])
   })
 })

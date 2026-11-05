@@ -34,6 +34,9 @@ let base = ''
 /** This server's refresh cookie for an http page and an https one (one per origin: device-cookie.ts refreshCookieName). */
 let RC = ''
 let RCS = ''
+/** The mark beside each, which a page with no token reads before it asks the renewal path. */
+let MC = ''
+let MCS = ''
 
 beforeAll(async () => {
   const server = await startServer({ port: 0, dev: true })
@@ -41,6 +44,8 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${port}`
   RC = `walnut_refresh_${port}`
   RCS = `walnut_refresh_s_${port}`
+  MC = `walnut_renews_${port}`
+  MCS = `walnut_renews_s_${port}`
 })
 
 afterAll(async () => {
@@ -114,9 +119,17 @@ describe('signing a browser in', () => {
     expect(Number(c.attrs.get('max-age'))).toBe(REFRESH_COOKIE_MAX_AGE_S)
     expect(REFRESH_COOKIE_MAX_AGE_S).toBe(365 * 86_400)
     expect(c.attrs.has('secure')).toBe(false)
+    // Its mark: readable by the page (no HttpOnly), on every path, no secret in it, as long-lived.
+    const m = cookies(res).get(MC)!
+    expect(m.value).toBe('1')
+    expect(m.attrs.get('path')).toBe('/')
+    expect(m.attrs.has('httponly')).toBe(false)
+    expect(m.attrs.get('samesite')).toBe('Strict')
+    expect(Number(m.attrs.get('max-age'))).toBe(REFRESH_COOKIE_MAX_AGE_S)
     expect((await me(token)).status).toBe(200)
     // An https page (a tunnel ends TLS first) says so, and its cookie is Secure.
     expect(cookies((await pair('?secure=1')).res).get(RCS)!.attrs.has('secure')).toBe(true)
+    expect(cookies((await pair('?secure=1')).res).get(MCS)!.attrs.has('secure')).toBe(true)
   })
 
   it('each browser of one kind is numbered when it signs in, and keeps its number when another is removed', async () => {
@@ -145,7 +158,7 @@ describe('signing a browser in', () => {
     const body = await res.json() as { token: string; name: string; accessUntil?: number }
     expect(body.name).toMatch(/^extension-/)
     expect(body.accessUntil).toBeUndefined()
-    expect([...cookies(res).keys()].some((k) => k.startsWith('walnut_refresh'))).toBe(false)
+    expect([...cookies(res).keys()].some((k) => k.startsWith('walnut_refresh') || k.startsWith('walnut_renews'))).toBe(false)
   })
 })
 
@@ -161,6 +174,7 @@ describe('renewing', () => {
     const next = cookies(res).get(RCS)!
     expect(next.value).not.toBe(s.refresh)
     expect(next.attrs.has('secure')).toBe(true)
+    expect(cookies(res).get(MCS)!.value).toBe('1')
     expect((await me(body.token)).status).toBe(200)
     // The token it replaced reads as one that ran out (a request the page sent before it stored the
     // new one renews and goes again), never as signed out.
@@ -198,6 +212,7 @@ describe('renewing', () => {
     expect(replay.status).toBe(401)
     expect((await replay.json()).code).toBe('refresh_reused')
     expect(Number(cookies(replay).get(RC)!.attrs.get('max-age'))).toBe(0)
+    expect(Number(cookies(replay).get(MC)!.attrs.get('max-age'))).toBe(0)
     expect((await listDeviceRecords()).some((d) => d.name === s.name)).toBe(false)
     expect((await me(token)).status).toBe(401)
   })
@@ -208,6 +223,7 @@ describe('renewing', () => {
     expect(res.status).toBe(401)
     expect((await res.json()).code).toBe('refresh_missing')
     expect(Number(cookies(res).get(RC)!.attrs.get('max-age'))).toBe(0)
+    expect(Number(cookies(res).get(MC)!.attrs.get('max-age'))).toBe(0)
     expect((await me(s.token)).status).toBe(401)
     expect((await listDeviceRecords()).some((d) => d.name === s.name)).toBe(false)
   })
@@ -215,14 +231,30 @@ describe('renewing', () => {
   it('another Walnut on the same host name (another port) keeps its own cookie: neither reads nor clears the other\'s', async () => {
     const s = await pair()
     // A cookie ignores the port: the browser sends both servers' cookies to each.
-    const res = await renew({ Cookie: `walnut_refresh_1=from-another-walnut; ${RC}=${encodeURIComponent(s.refresh)}` })
+    const res = await renew({ Cookie: `walnut_refresh_1=from-another-walnut; walnut_renews_1=1; ${RC}=${encodeURIComponent(s.refresh)}` })
     expect(res.status).toBe(200)
-    expect([...cookies(res).keys()]).toEqual([RC])
+    expect([...cookies(res).keys()]).toEqual([RC, MC])
     // Only the other one's: this page's own cookie is gone, so it can never renew.
     const t = await pair()
-    const lost = await renew({ Cookie: 'walnut_refresh_1=from-another-walnut', Authorization: `Bearer ${t.token}` })
+    const lost = await renew({ Cookie: 'walnut_refresh_1=from-another-walnut; walnut_renews_1=1', Authorization: `Bearer ${t.token}` })
     expect((await lost.json()).code).toBe('refresh_missing')
-    expect([...cookies(lost).keys()]).toEqual([RC])
+    expect([...cookies(lost).keys()]).toEqual([RC, MC])
+    // With nothing of its own, the other's mark is not cleared either.
+    expect((await renew({ Cookie: 'walnut_refresh_1=from-another-walnut; walnut_renews_1=1' })).headers.getSetCookie()).toEqual([])
+  })
+
+  // The review of 2026-11-05: a reverse proxy may pass Host on as its upstream (127.0.0.1:3456)
+  // while the page is https on the default port; the page names its mark from its own location.
+  it('the mark is named from the page\'s Origin, which a proxy leaves as the browser sent it', async () => {
+    _resetAuthRateLimitForTesting()
+    const res = await renew({ Cookie: `${RCS}=made-up`, Origin: 'https://walnut.example' }, '?secure=1')
+    expect(res.status).toBe(401)
+    // The page's mark (https, no port) is the one cleared, beside this server's refresh cookie.
+    expect([...cookies(res).keys()]).toEqual([RCS, 'walnut_renews_s'])
+    const ok = await pair('?secure=1')
+    const again = await renew({ Cookie: `${RCS}=${encodeURIComponent(ok.refresh)}`, Origin: 'https://walnut.example' }, '?secure=1')
+    expect(again.status).toBe(200)
+    expect(cookies(again).get('walnut_renews_s')!.value).toBe('1')
   })
 
   it('within its first minute, a second tab gets the same pair', async () => {
@@ -238,9 +270,15 @@ describe('renewing', () => {
     expect(bad.status).toBe(401)
     expect((await bad.json()).code).toBe('refresh_refused')
     expect(Number(cookies(bad).get(RC)!.attrs.get('max-age'))).toBe(0)
+    expect(Number(cookies(bad).get(MC)!.attrs.get('max-age'))).toBe(0)
     _resetAuthRateLimitForTesting()
     const none = await renew()
     expect(none.status).toBe(204)
+    expect(none.headers.getSetCookie()).toEqual([])
+    // A mark with no refresh cookie beside it (one cleared alone) is cleared, so the page stops asking.
+    const markOnly = await renew({ Cookie: `${MC}=1` })
+    expect(markOnly.status).toBe(204)
+    expect(Number(cookies(markOnly).get(MC)!.attrs.get('max-age'))).toBe(0)
     // This computer, with no cookie: nothing to renew, no sign-in screen.
     expect((await fetch(`${base}/api/auth/browser/refresh`, { method: 'POST' })).status).toBe(204)
   })
@@ -387,6 +425,7 @@ describe('signing out', () => {
     const res = await fetch(`${base}/api/devices/${s.name}`, { method: 'DELETE', headers: { ...PHONE, Authorization: `Bearer ${s.token}` } })
     expect(res.status).toBe(200)
     expect(Number(cookies(res).get(RC)!.attrs.get('max-age'))).toBe(0)
+    expect(Number(cookies(res).get(MC)!.attrs.get('max-age'))).toBe(0)
     // Removing another device from this computer sets no cookie of its own.
     const t = await pair()
     expect(cookies(await fetch(`${base}/api/devices/${t.name}`, { method: 'DELETE' })).size).toBe(0)
@@ -406,6 +445,7 @@ describe('signing out', () => {
       expect(res.status).toBe(401)
       expect((await res.json()).code).toBe('device_removed')
       expect(Number(cookies(res).get(RC)!.attrs.get('max-age'))).toBe(0)
+      expect(Number(cookies(res).get(MC)!.attrs.get('max-age'))).toBe(0)
     }
     // A sign-in that ended for its own reason (here, its cookie gone) is not "removed on the computer".
     const t = await pair()

@@ -62,11 +62,56 @@ export function refreshCookieName(req: Pick<Request, 'headers'>, secure: boolean
   return port ? `${base}_${port}` : base
 }
 
-export function refreshCookieHeader(name: string, token: string | null, secure: boolean): string {
+function refreshCookieHeader(name: string, token: string | null, secure: boolean): string {
   const attrs = `Path=${REFRESH_COOKIE_PATH}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
   return token
     ? `${name}=${encodeURIComponent(token)}; ${attrs}; Max-Age=${REFRESH_COOKIE_MAX_AGE_S}`
     : `${name}=; ${attrs}; Max-Age=0`
+}
+
+/**
+ * Beside the refresh cookie, one a script can see that holds no secret (`=1`): a page
+ * with no token asks the renewal path only when it is there (web/src/api/sign-in-gate.ts),
+ * so the computer Walnut runs on and a browser never signed in send no renewal at all.
+ * Set by the server like the refresh cookie, so it outlives what Safari clears with the
+ * page's storage. One per origin, as the refresh cookie is.
+ */
+export const REFRESH_MARK_COOKIE = 'walnut_renews'
+
+/**
+ * The mark's name for the page that asked, `walnut_renews[_s][_<port>]`, which the page
+ * computes from its own location (web/src/api/device-token.ts refreshMarkName). Read from
+ * the page's Origin, which a reverse proxy leaves as the browser sent it while it may
+ * rewrite Host (`127.0.0.1:3456` behind an https site); from Host as the refresh
+ * cookie's name when the request carries none.
+ */
+export function refreshMarkNameFor(req: Pick<Request, 'headers'>, secure: boolean): string {
+  const origin = req.headers.origin
+  if (typeof origin === 'string' && origin !== 'null') {
+    try {
+      const url = new URL(origin)
+      if (url.protocol === 'https:' || url.protocol === 'http:') {
+        return `${REFRESH_MARK_COOKIE}${url.protocol === 'https:' ? '_s' : ''}${url.port ? `_${url.port}` : ''}`
+      }
+    } catch { /* not a URL: as Host names it */ }
+  }
+  return REFRESH_MARK_COOKIE + refreshCookieName(req, secure).slice(REFRESH_COOKIE.length)
+}
+
+function refreshMarkHeader(name: string, on: boolean, secure: boolean): string {
+  const attrs = `Path=/; SameSite=Strict${secure ? '; Secure' : ''}`
+  return on ? `${name}=1; ${attrs}; Max-Age=${REFRESH_COOKIE_MAX_AGE_S}` : `${name}=; ${attrs}; Max-Age=0`
+}
+
+/**
+ * The page's refresh cookie and its mark, set (a token) or cleared (null) together:
+ * the only way a route writes either.
+ */
+export function refreshCookieHeaders(req: Pick<Request, 'headers'>, token: string | null, secure: boolean): string[] {
+  return [
+    refreshCookieHeader(refreshCookieName(req, secure), token, secure),
+    refreshMarkHeader(refreshMarkNameFor(req, secure), token !== null, secure),
+  ]
 }
 
 /**

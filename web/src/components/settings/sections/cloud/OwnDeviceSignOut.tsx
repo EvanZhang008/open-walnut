@@ -32,7 +32,10 @@ export function OwnDeviceSignOut({ name, touch }: { name: string; touch: boolean
     // device, and the page must read that as its own sign-out, never "from your computer".
     try { sessionStorage.setItem(SIGN_IN_SIGNED_OUT_FLAG, 'self'); } catch { /* private mode */ }
     try {
-      await apiDelete(`/api/devices/${encodeURIComponent(name)}`, { timeoutMs: TIMEOUT_MS });
+      // An https page says so, as at sign-in: a tunnel may send no X-Forwarded-Proto, and the
+      // server clears the refresh cookie of the scheme it reads.
+      const secure = window.location.protocol === 'https:' ? '?secure=1' : '';
+      await apiDelete(`/api/devices/${encodeURIComponent(name)}${secure}`, { timeoutMs: TIMEOUT_MS });
     } catch (err) {
       try { sessionStorage.removeItem(SIGN_IN_SIGNED_OUT_FLAG); } catch { /* private mode */ }
       log.warn('settings', 'self sign-out refused', { name, error: String(err) });

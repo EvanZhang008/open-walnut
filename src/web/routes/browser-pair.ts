@@ -40,7 +40,7 @@ import { log } from '../../logging/index.js'
 import { bus } from '../../core/event-bus.js'
 import { BROWSER_SESSION_PATH, browserSessionHandler } from './browser-session.js'
 import { beginBrowserSignIn } from '../../core/browser-sign-in.js'
-import { pageIsSecure, refreshCookieHeader, refreshCookieName } from '../middleware/device-cookie.js'
+import { pageIsSecure, refreshCookieHeaders } from '../middleware/device-cookie.js'
 
 /** A browser signed in with a link's code: the web's phone link makes the next one. */
 export const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in'
@@ -167,7 +167,7 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     })
     if (signIn) {
       const secure = pageIsSecure(req)
-      res.append('Set-Cookie', refreshCookieHeader(refreshCookieName(req, secure), signIn.refreshToken, secure))
+      res.append('Set-Cookie', refreshCookieHeaders(req, signIn.refreshToken, secure))
     }
     res.json({ token: device.token, name, deviceName, ...(signIn ? { accessUntil: signIn.accessUntil, accessMs: signIn.accessMs } : {}) })
   } catch (err) {

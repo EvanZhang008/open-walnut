@@ -11,8 +11,8 @@
  *                                   notice when the first request is refused;
  *                                   one due soon is renewed by the console)
  *   a token that ran out, or        renew first (device-token.ts): the refresh
- *   none at all                     cookie gives a new pair, also when Safari
- *                                   cleared this page's storage, and a token from
+ *   none but the refresh cookie's   cookie gives a new pair, also when Safari
+ *   mark                            cleared this page's storage, and a token from
  *                                   before renewing starts its pair. A new token
  *                                   where there was none reloads the page with it;
  *                                   the route's refusal means sign in; no answer
@@ -32,7 +32,7 @@
  */
 
 import { consumePairFragment } from './browser-pair';
-import { getDeviceToken, renewSignIn, tokenExpired } from './device-token';
+import { getDeviceToken, hasRefreshMark, renewSignIn, tokenExpired, type RenewResult } from './device-token';
 import { getUnpairedState, noteAuthRefusal } from './unpaired';
 
 export type SignInGate = 'app' | 'sign-in' | 'probe-failed';
@@ -93,25 +93,42 @@ export async function resolveSignInGate(): Promise<SignInGate> {
   const held = getDeviceToken();
   // Due soon, or from before renewing: the console renews it once it runs (startSignInRenewal).
   if (held && !tokenExpired()) return 'app';
-  const renewed = await renewSignIn(PROBE_MS);
-  if (renewed.kind === 'renewed' && !held && !afterRestore) {
-    // As after a code: modules that ran at import asked without the token.
-    markRestore();
-    window.location.reload();
-    return new Promise<SignInGate>(() => {});
+  // As after a code: modules that ran at import asked without the token.
+  const reloadWithToken = (renewed: RenewResult) => renewed.kind === 'renewed' && !held && !afterRestore;
+  // A token, or the refresh cookie's mark (Safari cleared this page's storage): renew.
+  if (held || hasRefreshMark()) {
+    const renewed = await renewSignIn(PROBE_MS);
+    if (reloadWithToken(renewed)) {
+      markRestore();
+      window.location.reload();
+      return new Promise<SignInGate>(() => {});
+    }
+    if (renewed.kind === 'renewed' || renewed.kind === 'held') return 'app';
+    if (renewed.kind === 'refused') {
+      // The renewal's own code: the page can say why (its cookie gone, used elsewhere).
+      noteAuthRefusal(renewed.body);
+      return 'sign-in';
+    }
+    // The token held still answers where renewing does not (a host server's copy while the Mac is away).
+    if (held) return 'app';
+    if (renewed.kind === 'no-answer') return 'probe-failed';
   }
-  if (renewed.kind === 'renewed' || renewed.kind === 'held') return 'app';
-  if (renewed.kind === 'refused') {
-    // The renewal's own code: the page can say why (its cookie gone, used elsewhere).
-    noteAuthRefusal(renewed.body);
-    return 'sign-in';
-  }
-  // The token held still answers where renewing does not (a host server's copy while the Mac is away).
-  if (held) return 'app';
-  if (renewed.kind === 'no-answer') return 'probe-failed';
   try {
     const res = await fetch('/api/v1/me', { signal: AbortSignal.timeout(PROBE_MS), cache: 'no-store' });
-    if (res.status !== 401) return 'app';
+    if (res.status !== 401) {
+      // A sign-in cookie of a build before (walnut_signin, walnut_device) answered for a page
+      // with no token: trade it for a pair, or the console would read and never write.
+      const me = res.ok ? await res.json().catch(() => null) as { device?: unknown } | null : null;
+      if (!held && me?.device) {
+        const renewed = await renewSignIn(PROBE_MS);
+        if (reloadWithToken(renewed)) {
+          markRestore();
+          window.location.reload();
+          return new Promise<SignInGate>(() => {});
+        }
+      }
+      return 'app';
+    }
     noteAuthRefusal(await res.json().catch(() => null));
     return getUnpairedState() === 'ok' ? 'app' : 'sign-in';
   } catch {

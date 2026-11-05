@@ -17,13 +17,29 @@ function json(status: number, body: unknown): Response {
 let store: Map<string, string>
 let calls: Call[]
 
-function browser(token: string | null, until?: number) {
+/** The mark the server sets beside the refresh cookie (an http page, default port). */
+const MARK = 'walnut_renews=1'
+
+function browser(token: string | null, until?: number, cookie = MARK) {
   store = new Map()
   if (token) store.set('walnut.deviceToken', token)
   if (until !== undefined) store.set('walnut.deviceTokenUntil', String(until))
   calls = []
   vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } })
-  vi.stubGlobal('document', { cookie: '', visibilityState: 'visible', addEventListener: () => {} })
+  // A small cookie jar: the page writes walnut_device beside the server's mark, as a browser keeps both.
+  const jar = new Map<string, string>()
+  for (const part of cookie.split(';')) if (part.includes('=')) jar.set(part.slice(0, part.indexOf('=')).trim(), part.slice(part.indexOf('=') + 1))
+  vi.stubGlobal('document', {
+    get cookie() { return [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
+    set cookie(line: string) {
+      const [pair, ...attrs] = line.split(';')
+      const name = pair!.slice(0, pair!.indexOf('=')).trim()
+      if (attrs.some((a) => /^max-age=0$/i.test(a.trim()))) jar.delete(name)
+      else jar.set(name, pair!.slice(pair!.indexOf('=') + 1))
+    },
+    visibilityState: 'visible',
+    addEventListener: () => {},
+  })
   vi.stubGlobal('navigator', {})
 }
 
@@ -230,6 +246,30 @@ describe('when renewal is due', () => {
     vi.stubGlobal('window', { location: { protocol: 'http:' } })
     m = await import('../../web/src/api/device-token')
     expect(m.renewalDueAt()).toBeNull()
+  })
+
+  // 2026-11-05: a phone signed in before the mark existed has its refresh cookie and no mark;
+  // its storage cleared before its next renewal would mean signing in again.
+  it('a token whose refresh cookie has no mark renews at once, and once: one that brought none is not asked again', async () => {
+    const now = Date.now()
+    browser('t', now + 10 * 3_600_000, '')
+    vi.stubGlobal('window', { location: { protocol: 'http:' } })
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { token: 'next', name: 'browser-1', accessUntil: now + 72_000_000, accessMs: 72_000_000 })))
+    const m = await import('../../web/src/api/device-token')
+    expect(m.renewalDueAt()).toBe(0)
+    expect((await m.renewSignIn()).kind).toBe('renewed')
+    // The answer set no mark here (a stub): the new token renews at its own time.
+    expect(m.renewalDueAt()).toBe(now + 72_000_000 - 5 * 3_600_000)
+    expect(store.get('walnut.renewMarkAsked')).toBe('next')
+    // With the mark there, nothing is kept.
+    vi.resetModules()
+    browser('t', now + 10 * 3_600_000)
+    vi.stubGlobal('window', { location: { protocol: 'http:' } })
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { token: 'next', name: 'browser-1', accessUntil: now + 72_000_000, accessMs: 72_000_000 })))
+    const marked = await import('../../web/src/api/device-token')
+    expect(marked.renewalDueAt()).toBe(now + 5 * 3_600_000)
+    expect((await marked.renewSignIn()).kind).toBe('renewed')
+    expect(store.has('walnut.renewMarkAsked')).toBe(false)
   })
 
   it('a 204 from the route (a token it never renews) is remembered, so the next open does not ask', async () => {

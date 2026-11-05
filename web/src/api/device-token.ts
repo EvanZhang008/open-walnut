@@ -108,6 +108,7 @@ export function clearDeviceToken(): void {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(UNTIL_KEY);
     localStorage.removeItem(LIFETIME_KEY);
+    localStorage.removeItem(MARK_ASKED_KEY);
   } catch {
     // ignore
   }
@@ -146,6 +147,43 @@ const DEFAULT_LIFETIME_MS = 20 * 60 * 60 * 1000;
 /** Renew this long before the token runs out, at most (a quarter of its lifetime when shorter). */
 const RENEW_AHEAD_MAX_MS = 5 * 60 * 60 * 1000;
 
+/**
+ * The mark the server sets beside the refresh cookie (src/web/middleware/device-cookie.ts
+ * refreshMarkNameFor, one per origin as that cookie is). The refresh cookie is HttpOnly, so
+ * this is how a page knows it has one: with no token, the sign-in gate asks the renewal path
+ * only when it is there, so this computer's own page and a browser never signed in send
+ * nothing but the sign-in probe.
+ */
+export function refreshMarkName(protocol: string, port: string): string {
+  return `walnut_renews${protocol === 'https:' ? '_s' : ''}${port ? `_${port}` : ''}`;
+}
+
+export function hasRefreshMark(): boolean {
+  try {
+    const name = refreshMarkName(window.location.protocol, window.location.port);
+    return String(document.cookie ?? '').split(';').some((c) => c.trim() === `${name}=1`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The token a renewal was asked for because its mark was missing: one signed in before the
+ * mark existed renews once, early, so its storage cleared later still renews from the
+ * cookie. Kept with the token, so a mark that never comes asks once, not at every open.
+ */
+const MARK_ASKED_KEY = 'walnut.renewMarkAsked';
+
+function markMissing(token: string): boolean {
+  if (hasRefreshMark()) return false;
+  try { return localStorage.getItem(MARK_ASKED_KEY) !== token; } catch { return false; }
+}
+
+function noteMarkAsked(token: string): void {
+  if (hasRefreshMark()) { try { localStorage.removeItem(MARK_ASKED_KEY); } catch { /* storage refused */ } return; }
+  try { localStorage.setItem(MARK_ASKED_KEY, token); } catch { /* storage refused: asked again next open */ }
+}
+
 function refreshUrl(): string {
   return window.location.protocol === 'https:' ? `${REFRESH_URL}?secure=1` : REFRESH_URL;
 }
@@ -164,11 +202,14 @@ export type RenewResult =
 
 /** When renewal is due for the token held now (epoch ms), or null when it never is. */
 export function renewalDueAt(): number | null {
-  if (!getDeviceToken()) return null;
+  const token = getDeviceToken();
+  if (!token) return null;
   const until = getDeviceTokenUntil();
   if (until === 'never') return null;
   // A token from before renewing: due now, which starts its pair.
   if (until === null) return 0;
+  // Its refresh cookie has no mark (signed in before the mark existed): due now, once.
+  if (markMissing(token)) return 0;
   const lifetime = Number(read(LIFETIME_KEY, heldLifetime)) || DEFAULT_LIFETIME_MS;
   return until - Math.min(RENEW_AHEAD_MAX_MS, lifetime / 4);
 }
@@ -272,7 +313,10 @@ async function renewOnce(timeoutMs: number): Promise<RenewResult> {
     if (typeof body?.token !== 'string' || !body.token) return { kind: 'unknown' };
     const until = typeof body.accessUntil === 'number' ? body.accessUntil : undefined;
     const lifetimeMs = typeof body.accessMs === 'number' ? body.accessMs : undefined;
-    return { kind: setDeviceToken(body.token, { until, lifetimeMs }) ? 'renewed' : 'held' };
+    const kept = setDeviceToken(body.token, { until, lifetimeMs });
+    // The answer set the mark beside the cookie; one that did not stays asked for this token.
+    if (until !== undefined) noteMarkAsked(body.token);
+    return { kind: kept ? 'renewed' : 'held' };
   }
   return { kind: 'no-answer' };
 }

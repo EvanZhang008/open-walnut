@@ -24,7 +24,7 @@ import { tailscaleSummary } from '../../core/tailnet.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { requestOrigin } from '../middleware/request-origin.js'
-import { pageIsSecure, refreshCookieHeader, refreshCookieName } from '../middleware/device-cookie.js'
+import { pageIsSecure, refreshCookieHeaders } from '../middleware/device-cookie.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
 import { fetchErrorCode, fetchErrorDetail, isFetchAbort } from '../../lib/fetch-error.js'
 import {
@@ -600,7 +600,7 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
     // later, is a browser that was never signed in (not one removed on the computer).
     if (callerDevice(req) === name) {
       const secure = pageIsSecure(req)
-      res.append('Set-Cookie', refreshCookieHeader(refreshCookieName(req, secure), null, secure))
+      res.append('Set-Cookie', refreshCookieHeaders(req, null, secure))
     }
     res.json({
       ok: true,

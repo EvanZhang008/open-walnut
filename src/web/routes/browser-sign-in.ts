@@ -30,7 +30,7 @@ import { DeviceChangeRefused } from '../../core/device-actor.js'
 import { BROWSER_SIGN_IN_NAME, renewBrowserSignIn } from '../../core/browser-sign-in.js'
 import { log } from '../../logging/index.js'
 import {
-  DEVICE_COOKIE, SIGNIN_COOKIE, cookieValue, deviceCookieHeader, pageIsSecure, refreshCookieHeader, refreshCookieName,
+  DEVICE_COOKIE, SIGNIN_COOKIE, cookieValue, deviceCookieHeader, pageIsSecure, refreshCookieHeaders, refreshCookieName, refreshMarkNameFor,
 } from '../middleware/device-cookie.js'
 import { isAuthRateLimited, recordAuthFailure, RATE_LIMITED_BODY, RATE_LIMIT_RETRY_AFTER_S } from '../middleware/auth-rate-limit.js'
 import { askedByThePage } from './browser-session.js'
@@ -41,8 +41,8 @@ export const BROWSER_REFRESH_API_PATH = '/auth/browser/refresh'
 
 export const browserRefreshRouter = Router()
 
-function signedOut(res: Response, cookie: string, secure: boolean, code: string, error: string): void {
-  res.append('Set-Cookie', refreshCookieHeader(cookie, null, secure))
+function signedOut(req: Request, res: Response, secure: boolean, code: string, error: string): void {
+  res.append('Set-Cookie', refreshCookieHeaders(req, null, secure))
   res.status(401).json({ error, code })
 }
 
@@ -69,7 +69,7 @@ browserRefreshRouter.post('/refresh', async (req: Request, res: Response, next: 
     const out = await renewBrowserSignIn({ refreshToken, oldToken })
     switch (out.kind) {
       case 'renewed':
-        res.append('Set-Cookie', refreshCookieHeader(cookie, out.refreshToken, secure))
+        res.append('Set-Cookie', refreshCookieHeaders(req, out.refreshToken, secure))
         // The long-lived token of the builds before goes: the refresh cookie replaces it.
         if (cookieValue(raw, SIGNIN_COOKIE)) res.append('Set-Cookie', deviceCookieHeader(null, secure))
         res.json({ token: out.token, name: out.name, accessUntil: out.accessUntil, accessMs: out.accessMs })
@@ -81,26 +81,27 @@ browserRefreshRouter.post('/refresh', async (req: Request, res: Response, next: 
         res.status(429).set('Retry-After', '60').json({ error: 'This sign-in renewed too often; try again in a minute.', code: 'rate_limited' })
         return
       case 'replayed':
-        signedOut(res, cookie, secure, 'refresh_reused', 'This browser was signed out: its sign-in was used from somewhere else. Sign in again with a new link.')
+        signedOut(req, res, secure, 'refresh_reused', 'This browser was signed out: its sign-in was used from somewhere else. Sign in again with a new link.')
         return
       case 'idle':
-        signedOut(res, cookie, secure, 'refresh_expired', 'This browser was signed out after a year without use. Sign in again with a new link.')
+        signedOut(req, res, secure, 'refresh_expired', 'This browser was signed out after a year without use. Sign in again with a new link.')
         return
       case 'lost':
-        signedOut(res, cookie, secure, 'refresh_missing', 'This browser was signed out: its sign-in cookie is gone. Sign in again with a new link.')
+        signedOut(req, res, secure, 'refresh_missing', 'This browser was signed out: its sign-in cookie is gone. Sign in again with a new link.')
         return
       case 'refused':
         if (out.removed) {
           // A token it once issued, not a guess: no count toward the address limit.
-          signedOut(res, cookie, secure, 'device_removed', 'This browser was signed out on the computer Walnut runs on. Sign in again with a new link.')
+          signedOut(req, res, secure, 'device_removed', 'This browser was signed out on the computer Walnut runs on. Sign in again with a new link.')
           return
         }
         recordAuthFailure(ip, refreshToken || oldToken)
         log.web.warn('browser sign-in: a renewal with a token nothing here knows', { ip, cookie: !!refreshToken })
-        signedOut(res, cookie, secure, 'refresh_refused', 'This browser is not signed in any more. Sign in again with a new link.')
+        signedOut(req, res, secure, 'refresh_refused', 'This browser is not signed in any more. Sign in again with a new link.')
         return
       case 'nothing':
-        if (out.staleCookie) res.append('Set-Cookie', refreshCookieHeader(cookie, null, secure))
+        // A mark left with no refresh cookie beside it (one cleared alone) goes too: the page stops asking.
+        if (out.staleCookie || cookieValue(raw, refreshMarkNameFor(req, secure))) res.append('Set-Cookie', refreshCookieHeaders(req, null, secure))
         res.status(204).end()
         return
     }
