@@ -977,6 +977,8 @@ function buildProcessStopTwin(kind: 'standalone' | 'template') {
     isProcessGroupAlive: groupAlive,
     reapSession: reaped, persistRegistry: persist,
     cancelTurnRetry: vi.fn(), clearTurnRetryStreak: vi.fn(), logMsg: vi.fn(), wsId: () => 1,
+    // A reused pid is daemon-stop-missing-start-time-twins.test.ts's subject; here the pid is the CLI's.
+    pidNowRunsAnotherProgram: () => false,
     setTimeout,
     sendOk: (_ws: unknown, id: number, data: Record<string, unknown>) => { replies.push({ id, ok: true, data }) },
     sendError: (_ws: unknown, id: number, error: string) => { replies.push({ id, ok: false, error }) },
