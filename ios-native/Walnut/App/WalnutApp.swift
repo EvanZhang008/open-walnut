@@ -336,6 +336,8 @@ struct MainTabView: View {
         // the AI something. `FilePreviewDockOverlay` reads the dock store itself
         // so this five-tab body is not invalidated by dock state changes.
         .overlay(alignment: .bottom) { FilePreviewDockOverlay() }
+        // Talk to Walnut's words that did not reach the CEO chat, offered on return.
+        .talkUnsentSheet()
         // Voice Quick Action: switch to Chat so its composer is on screen and
         // can pick the request up. Both edges are needed — a cold launch has the
         // mailbox already armed before this view exists (`onAppear`), a warm one

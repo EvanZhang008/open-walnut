@@ -116,7 +116,7 @@ struct SessionQueueSheet: View {
             managing = QueueRowRef(id: message.id)
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(message.message)
+                Text(message.shownText)
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .lineLimit(4)

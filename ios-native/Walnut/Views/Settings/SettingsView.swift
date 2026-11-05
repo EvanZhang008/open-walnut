@@ -7,6 +7,7 @@ enum SettingsRoute: Hashable {
     case connectionRoutes
     case voiceHistory
     case focusMusic
+    case talkToWalnut
 }
 
 /// Settings tab — connection status card, server info (Wave 2 /v1/config),
@@ -27,6 +28,7 @@ struct SettingsView: View {
     @AppStorage(PushRegistration.modeKey, store: AppPrefs.defaults) private var notificationMode = PushRegistration.Mode.always.rawValue
     @AppStorage(WorkCardController.enabledKey, store: AppPrefs.defaults) private var workCardEnabled = true
     @State private var push = PushRegistration.shared
+    @State private var talkOutbox = TalkOutbox.shared
 
     /// Wave-2 server info (GET /v1/config projection + chat stats). Best-effort:
     /// an old server without the endpoints just hides the block.
@@ -84,6 +86,7 @@ struct SettingsView: View {
                 case .connectionRoutes: ConnectionRoutesView()
                 case .voiceHistory: VoiceHistoryView()
                 case .focusMusic: FocusMusicView()
+                case .talkToWalnut: TalkSetupView()
                 }
             }
             .confirmationDialog(
@@ -292,6 +295,19 @@ struct SettingsView: View {
 
     private var voiceSection: some View {
         Section {
+            // Talk to Walnut: the Action Button shortcut to the CEO chat. The row
+            // counts what it could not send, the one thing here that needs a tap.
+            NavigationLink(value: SettingsRoute.talkToWalnut) {
+                LabeledContent {
+                    let unsent = talkOutbox.unsent.count
+                    if unsent > 0 {
+                        Text("\(unsent) not sent").foregroundStyle(.red)
+                    }
+                } label: {
+                    Label("Action Button", systemImage: "button.programmable")
+                }
+            }
+            .accessibilityIdentifier("settings.talkToWalnut")
             NavigationLink(value: SettingsRoute.voiceHistory) {
                 Label("Past Voice", systemImage: "waveform")
             }

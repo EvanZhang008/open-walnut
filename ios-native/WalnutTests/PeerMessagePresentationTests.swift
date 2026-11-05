@@ -335,3 +335,26 @@ final class PeerMessagePresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(long.height, rendered + 6, "reserved \(long.height), rendered \(rendered)")
     }
 }
+
+/// A queued row shows what the person wrote, not the Walnut notes riding in front.
+final class QueuedRowWordsTests: XCTestCase {
+    private func row(_ message: String) -> SessionQueuedMessage {
+        SessionQueuedMessage(id: "qm-1", message: message, status: "pending", enqueuedAt: nil)
+    }
+
+    func testANoticeRidingInFrontOfThePersonsWordsIsLeftOut() {
+        let notice = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"task-routing-policy\" note=\"current default instructions\">\nWalnut changed your default instructions.\n</walnut-message>"
+        XCTAssertEqual(row(notice + "\n\nThis is a test from the action button.").shownText, "This is a test from the action button.")
+    }
+
+    func testARowOfPlainWordsIsShownAsItIs() {
+        XCTAssertEqual(row("look into the build").shownText, "look into the build")
+    }
+
+    func testARowOfNotesAloneNamesThem() {
+        let note = "<walnut-message kind=\"reply\" from=\"Build check [1234abcd]\" title=\"Checks passed\">\nbody\n</walnut-message>"
+        let shown = row(note).shownText
+        XCTAssertFalse(shown.contains("<walnut-message"))
+        XCTAssertFalse(shown.isEmpty)
+    }
+}

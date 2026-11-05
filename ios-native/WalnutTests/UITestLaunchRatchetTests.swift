@@ -100,7 +100,8 @@ final class UITestLaunchRatchetTests: XCTestCase {
     /// TEXT, like the cases above: the property is about the call sites.
     func testEveryAttachToTheAppUnderTestIsGatedOnTheSpringBoardOptIn() throws {
         for source in try uiTestSources() {
-            for use in Self.attachSites(in: source.text) where !Self.isSafariWatch(use, file: source.name) {
+            for use in Self.attachSites(in: source.text)
+                where !Self.isSafariWatch(use, file: source.name) && !Self.isPinnedShortcutsRun(use, file: source.name) {
                 XCTAssertTrue(
                     use.enclosing.hasPrefix("test"),
                     """
@@ -140,6 +141,41 @@ final class UITestLaunchRatchetTests: XCTestCase {
 
     private static func isSafariWatch(_ use: AttachSite, file: String) -> Bool {
         use.bundleID == safariID && file == safariWatchFile && use.enclosing == safariWatchFunction
+    }
+
+    /// The Shortcuts app, for Talk to Walnut's run only: tapping its tile runs the
+    /// intent in Walnut's process. That run is pinned when the test launched
+    /// Walnut through the helper first (the discard port) and checks Walnut is
+    /// still running right before the tap, so iOS never starts an unpinned Walnut
+    /// for it. Anywhere else, or without both, it is an ordinary attach.
+    static let shortcutsID = "com.apple.shortcuts"
+    static let shortcutsRunFile = "TalkToWalnutUITests.swift"
+
+    private static func isPinnedShortcutsRun(_ use: AttachSite, file: String) -> Bool {
+        use.bundleID == shortcutsID && file == shortcutsRunFile && use.enclosing.hasPrefix("test")
+            && shortcutsRunProblems(in: use.body).isEmpty
+    }
+
+    static func shortcutsRunProblems(in body: String) -> [String] {
+        let attach = "XCUIApplication(bundleIdentifier: \"\(shortcutsID)\")"
+        guard let site = body.range(of: attach) else { return ["no Shortcuts attach"] }
+        var problems: [String] = []
+        guard let launch = body.range(of: "UITestLaunch.launch("), launch.lowerBound < site.lowerBound else {
+            return ["Walnut is not launched through UITestLaunch.launch before the Shortcuts attach"]
+        }
+        if body[site.upperBound...].range(of: "XCTAssertNotEqual(app.state, .notRunning") == nil {
+            problems.append("no check that Walnut still runs before the Shortcuts tile is tapped")
+        }
+        return problems
+    }
+
+    func testAShortcutsRunIsAllowedOnlyWhenWalnutIsPinnedFirst() {
+        let attach = "let shortcuts = XCUIApplication(bundleIdentifier: \"\(Self.shortcutsID)\")\n"
+        let launch = "let app = UITestLaunch.launch([])\n"
+        let check = "XCTAssertNotEqual(app.state, .notRunning, \"\")\n"
+        XCTAssertEqual(Self.shortcutsRunProblems(in: launch + attach + check), [])
+        XCTAssertFalse(Self.shortcutsRunProblems(in: attach + launch + check).isEmpty, "attached before the pinned launch")
+        XCTAssertFalse(Self.shortcutsRunProblems(in: launch + attach).isEmpty, "no running check")
     }
 
     /// The one Safari attach exists, in the one function, and that function only

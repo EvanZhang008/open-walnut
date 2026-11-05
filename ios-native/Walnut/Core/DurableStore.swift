@@ -60,6 +60,12 @@ enum DurableStore {
         }
     }
 
+    /// Read at once, for a small store its owner needs before it can answer
+    /// anything (Talk to Walnut's unsent words).
+    static func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
+        ioQueue.sync { decode(type, key: key) }
+    }
+
     static func loadAsync<T: Decodable>(_ type: T.Type, key: String) async -> T? {
         await withCheckedContinuation { continuation in
             ioQueue.async {

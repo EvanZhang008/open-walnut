@@ -1,0 +1,108 @@
+import ActivityKit
+import Foundation
+import UIKit
+
+/// Shows a take's progress where the person looks with Walnut closed: the Lock
+/// Screen and the Dynamic Island.
+@MainActor
+protocol TalkActivityPresenting: AnyObject {
+    /// Start the Live Activity for a new take. False when iOS refused it (Live
+    /// Activities turned off for Walnut), which the caller reports.
+    func start(_ state: TalkActivityAttributes.ContentState) -> Bool
+    func update(_ state: TalkActivityAttributes.ContentState)
+    /// End it, showing `state` in the Dynamic Island briefly and on the Lock
+    /// Screen for `linger` (0: gone at once).
+    func end(_ state: TalkActivityAttributes.ContentState, linger: TimeInterval)
+    /// End what a process that died mid-take left showing as still going. A
+    /// finished one ("Sent", "Not sent") stays until its own time is up.
+    func endLeftovers()
+}
+
+@MainActor
+final class TalkLiveActivity: TalkActivityPresenting {
+    private var activity: Activity<TalkActivityAttributes>?
+    /// Every change waits for the one before, so an update never lands after
+    /// the end that followed it.
+    private var queue: Task<Void, Never>?
+
+    func start(_ state: TalkActivityAttributes.ContentState) -> Bool {
+        for old in Activity<TalkActivityAttributes>.activities where old.id != activity?.id {
+            enqueue { await old.end(nil, dismissalPolicy: .immediate) }
+        }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            AppLog.warn("talk", "live activities disabled", [:])
+            return false
+        }
+        do {
+            activity = try Activity.request(
+                attributes: TalkActivityAttributes(),
+                content: ActivityContent(state: state, staleDate: nil),
+                pushType: nil
+            )
+            return true
+        } catch {
+            AppLog.error("talk", "live activity refused", ["error": String(describing: error)])
+            return false
+        }
+    }
+
+    func update(_ state: TalkActivityAttributes.ContentState) {
+        guard let activity else { return }
+        enqueue { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+    }
+
+    func end(_ state: TalkActivityAttributes.ContentState, linger: TimeInterval) {
+        guard let activity else { return }
+        self.activity = nil
+        let content = ActivityContent(state: state, staleDate: nil)
+        guard linger > 0 else {
+            enqueue { await activity.end(content, dismissalPolicy: .immediate) }
+            return
+        }
+        // An ended activity leaves the Dynamic Island at once and stays only on
+        // the Lock Screen, so an unlocked phone would never see "Sent": show the
+        // outcome in the island first, then end it.
+        let hold = min(linger, Self.islandHold)
+        let keepRunning = UIApplication.shared.beginBackgroundTask(withName: "talk-activity-end")
+        // The outcome expands the island so the person reads it: a take that is
+        // lost with a sound (it must not pass unnoticed), anything else in
+        // silence: a send showing the words Walnut heard, a take saved to go
+        // out later, nothing heard.
+        let alert = AlertConfiguration(
+            title: "\(state.title)", body: "\(state.subtitle)",
+            sound: state.needsAttention ? .default : .named(Self.silentSound)
+        )
+        enqueue {
+            await activity.update(content, alertConfiguration: alert)
+            try? await Task.sleep(for: .seconds(hold))
+            await activity.end(content, dismissalPolicy: .after(Date().addingTimeInterval(max(0, linger - hold))))
+            await MainActor.run { UIApplication.shared.endBackgroundTask(keepRunning) }
+        }
+    }
+
+    /// A bundled sound of silence: an alert must name a sound, and a sent take
+    /// should only show, never ring.
+    static let silentSound = "talk-silent.caf"
+
+    /// How long the outcome shows in the Dynamic Island before the activity ends.
+    static let islandHold: TimeInterval = 3
+
+    func endLeftovers() {
+        for old in Activity<TalkActivityAttributes>.activities where old.id != activity?.id {
+            switch old.content.state.phase {
+            case .listening, .transcribing, .sending:
+                enqueue { await old.end(nil, dismissalPolicy: .immediate) }
+            case .sent, .failed:
+                continue
+            }
+        }
+    }
+
+    private func enqueue(_ work: @escaping @Sendable () async -> Void) {
+        let previous = queue
+        queue = Task {
+            await previous?.value
+            await work()
+        }
+    }
+}

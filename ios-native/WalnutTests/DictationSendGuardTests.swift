@@ -16,6 +16,8 @@ final class DictationSendGuardTests: XCTestCase {
             "The note editor saves as the person types and has no Send; its source sheet's Done only closes it, and words still on their way land in the note and are saved.",
         "Stores/VoiceModeController.swift":
             "Voice mode has no Send button: each take is sent by the voice loop itself when it stops.",
+        "Talk/TalkRecorder.swift":
+            "Talk to Walnut has no text box: Send, a pause or a second press stops the recording first, then the words are made from the whole take and sent.",
         "Views/Inbox/InboxItemConfirmation.swift":
             "The work goal is reviewed before anything is sent, and Review and Confirm are held while the goal records or transcribes.",
     ]

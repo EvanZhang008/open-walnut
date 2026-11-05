@@ -31,7 +31,9 @@ targets:
         buildPhase: resources
       # The lock-screen work card's model, shared with the widget extension.
       - path: Shared
-    # The widget extension draws the lock-screen work card (a Live Activity).
+    # The widget extension draws the lock-screen work card and Talk to Walnut's
+    # take (both Live Activities); iOS keeps a recording an AudioRecordingIntent
+    # started only while its activity shows.
     dependencies:
       - target: WalnutWidgets
         embed: true
@@ -160,6 +162,10 @@ targets:
     sources:
       - path: WalnutWidgets
       - path: Shared
+      # Talk to Walnut's activity and its Send / Cancel intents, compiled into
+      # both targets; iOS runs the intents in the app, and WIDGET_EXTENSION
+      # leaves their bodies empty here.
+      - path: Walnut/TalkShared
     info:
       path: WalnutWidgets/Info.plist
       properties:
@@ -188,6 +194,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         # The script above reads the app's Info.plist and writes this target's.
         ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) WIDGET_EXTENSION
   # Hosted unit tests (@testable import Walnut). Covers LiveMarkdownWindow
   # invariants, MessageRow pure helpers, clipProvisional, and the long-session
   # markdown rendering perf gates (see WalnutTests/MarkdownPerfTests.swift).

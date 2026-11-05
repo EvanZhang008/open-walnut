@@ -12,6 +12,13 @@ protocol AudioCapture: AnyObject {
 
 extension AVAudioRecorder: AudioCapture {}
 
+/// A capture that reports its own loudness (the DEBUG file replay Talk to
+/// Walnut's tests drive). A real take reads the recorder's meters instead.
+protocol AudioLevelSource: AnyObject {
+    /// dBFS: -160 is silence, 0 the loudest.
+    var level: Float { get }
+}
+
 /// Voice-input recorder: mic → CAF (signed 16-bit PCM, 16kHz mono) → server transcription.
 /// The server routes to the best engine (Mac whisper via bridge when
 /// reachable, OpenAI Whisper as the cloud fallback) — the phone just uploads.
@@ -154,6 +161,15 @@ final class VoiceRecorder: NSObject {
     /// and the quick action's own surface is where they were most likely spoken.
     @ObservationIgnored var ownsOrphanTakes = false
 
+    /// The surface of Talk to Walnut (the Action Button shortcut). Its takes are
+    /// shown and retried only on its own list of unsent words (`TalkOutbox`):
+    /// a composer's saved-recording row never offers them, so one take is never
+    /// offered for a resend in two places.
+    nonisolated static let talkSurface = "talk-to-walnut"
+
+    /// The store id of the take recording now, nil while none is.
+    var liveTakeID: String? { state == .recording ? recordingID : nil }
+
     /// Stable per-instance identity for the store's drain gate, so a claim can be
     /// released by its owner and only by its owner.
     @ObservationIgnored private let drainOwnerID = UUID().uuidString
@@ -230,6 +246,8 @@ final class VoiceRecorder: NSObject {
             try store.preserveOrThrow(id: id, reason: "recording", surface: originStamp)
             let rec = try AVAudioRecorder(url: url, settings: Self.captureSettings)
             rec.delegate = self
+            // Meters cost nothing measurable and let Talk to Walnut hear a pause.
+            rec.isMeteringEnabled = true
             guard rec.record() else {
                 store.preserve(id: id, reason: "start-failed")
                 errorMessage = "Could not start recording"
@@ -453,6 +471,43 @@ final class VoiceRecorder: NSObject {
         refreshPending()
     }
 
+    /// Loudness of the live take in dBFS (-160 silence, 0 loudest), for Talk to
+    /// Walnut's pause detection. Nil while nothing records.
+    func liveLevel() -> Float? {
+        guard state == .recording, let capture else { return nil }
+        if let recorder = capture as? AVAudioRecorder {
+            recorder.updateMeters()
+            return recorder.averagePower(forChannel: 0)
+        }
+        return (capture as? AudioLevelSource)?.level
+    }
+
+    /// Transcribe one kept take again, by its store id (a Talk to Walnut resend).
+    /// Nil means still no words, with `errorMessage` saying why; the take stays.
+    func transcribeKept(id: String) async -> String? {
+        guard state == .idle else {
+            errorMessage = "Another recording is in progress. Try again in a moment."
+            return nil
+        }
+        guard let recording = store.recording(id: id) else {
+            errorMessage = "That recording is no longer on this iPhone."
+            return nil
+        }
+        if let saved = recording.transcript, recording.reason != "recovered" { return saved }
+        errorMessage = nil
+        state = .transcribing
+        defer {
+            state = .idle
+            refreshPending()
+            VoiceHistorySync.shared.kick()
+        }
+        switch await transcribeOne(url: recording.audioURL, id: id, trigger: .userRetry) {
+        case .text(let text): return text
+        case .alreadySaved: return store.recording(id: id)?.transcript
+        case .failed, .cancelled: return nil
+        }
+    }
+
     /// Stop WITHOUT transcribing but KEEP the audio (view dismissed mid-take,
     /// forced teardown). Recoverable via the pending-recordings affordance.
     func preserveAndStop(reason: String) {
@@ -481,6 +536,12 @@ final class VoiceRecorder: NSObject {
         surface.isEmpty ? nil : surface
     }
 
+    /// May this recorder count, retry or discard `recording`? Every take but a
+    /// Talk to Walnut one, which only the Talk recorder sees (`talkSurface`).
+    func showsHere(_ recording: VoiceRecordingStore.Recording) -> Bool {
+        (recording.surface == Self.talkSurface) == (surface == Self.talkSurface)
+    }
+
     /// May an AUTOMATIC drain (foreground, reconnect, appear) touch this take?
     ///
     /// The rule is ownership, and it is deliberately strict: a drain runs with no
@@ -499,7 +560,7 @@ final class VoiceRecorder: NSObject {
     /// buckets the UI must not conflate. Completed history is not retryable.
     func refreshPending() {
         let live = recordingID
-        let recs = store.pending().filter { $0.id != live }
+        let recs = store.pending().filter { $0.id != live && showsHere($0) }
         pendingCount = recs.filter { !$0.isTerminal }.count
         failedCount = recs.count - pendingCount
         recoverableFailedCount = recs.filter { $0.isTerminal && $0.retryStillPlausible }.count
@@ -545,7 +606,7 @@ final class VoiceRecorder: NSObject {
         let storeRef = store
         var recs = await Task.detached(priority: .utility) { storeRef.pending() }.value
         guard state == .idle else { return nil }
-        recs = recs.filter { $0.id != live }
+        recs = recs.filter { $0.id != live && showsHere($0) }
         // An automatic drain only works takes THIS composer owns; a manual retry
         // works whatever the visible row is offering (see `ownsForAutomaticDrain`).
         if !userInitiated { recs = recs.filter { ownsForAutomaticDrain($0) } }
@@ -679,7 +740,7 @@ final class VoiceRecorder: NSObject {
     /// retired takes: they have their own row and their own Discard, so one
     /// button can never sweep away recordings the other row is talking about.
     func discardPending() {
-        for rec in store.pending() where rec.id != recordingID && !rec.isTerminal {
+        for rec in store.pending() where rec.id != recordingID && !rec.isTerminal && showsHere(rec) {
             store.discard(id: rec.id)
         }
         refreshPending()
@@ -689,7 +750,7 @@ final class VoiceRecorder: NSObject {
     /// Delete the takes that couldn't be transcribed — the primary action on
     /// the retired row. Only explicit user deletion removes these files.
     func discardFailed() {
-        for rec in store.pending() where rec.id != recordingID && rec.isTerminal {
+        for rec in store.pending() where rec.id != recordingID && rec.isTerminal && showsHere(rec) {
             AppLog.info("voice", "retired recording discarded", [
                 "id": rec.id, "attempts": String(rec.attempts),
                 "lastErrorKind": rec.lastErrorKind?.rawValue ?? "none",
@@ -1035,6 +1096,26 @@ final class VoiceRecorder: NSObject {
         elapsed = 0
         state = .recording
         store.preserve(id: id, reason: "recording", surface: originStamp)
+    }
+
+    /// DEBUG replay: a take whose "microphone" is an audio file (16 kHz mono
+    /// 16-bit PCM CAF) played back in real time, so a simulator run of Talk to
+    /// Walnut sends real words through the real upload and transcription. The
+    /// file is copied into the store like a recorded take.
+    func _beginReplayTake(source: URL) -> Bool {
+        guard state == .idle, let capture = TalkReplayCapture(url: source) else { return false }
+        let id = UUID().uuidString
+        let url = store.newRecordingURL(id: id)
+        do {
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.copyItem(at: source, to: url)
+        } catch {
+            errorMessage = "Could not read the replay file."
+            return false
+        }
+        _testBeginTake(capture: capture, url: url, id: id)
+        startTicker()
+        return true
     }
 
     /// Test hook: drive the interruption path directly (no way to synthesize

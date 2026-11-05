@@ -158,6 +158,23 @@ struct SessionQueuedMessage: Codable, Identifiable, Equatable {
     let enqueuedAt: String?
 
     var enqueuedDate: Date? { WalnutTask.parseISO(enqueuedAt) }
+    /// What a queued row shows: the words the person wrote, without the Walnut
+    /// notes that ride in front of them (a changed-instructions notice, a peer's
+    /// envelope). A row of Walnut notes alone names them instead.
+    var shownText: String {
+        guard let segments = PeerMessagePresentation.segments(message) else { return message }
+        let words = segments.compactMap { segment -> String? in
+            if case .text(let text) = segment { return text }
+            return nil
+        }
+        .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty { return words }
+        let notes = segments.compactMap { segment -> String? in
+            if case .message(let note) = segment { return note.accessibilityLabel }
+            return nil
+        }
+        return notes.isEmpty ? message : notes.joined(separator: "\n")
+    }
     /// Only still-pending messages can be edited/deleted (409 otherwise).
     var isPending: Bool { status == "pending" }
 }

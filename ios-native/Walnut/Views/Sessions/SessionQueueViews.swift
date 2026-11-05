@@ -80,7 +80,7 @@ struct SessionQueueStrip: View {
                     // Squeezed to one line: the first message in words, and the way to the rest.
                     HStack(spacing: 8) {
                         Button { onOpen(QueueRowRef(id: first.id)) } label: {
-                            Text(first.message)
+                            Text(first.shownText)
                                 .font(.subheadline)
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
@@ -88,7 +88,7 @@ struct SessionQueueStrip: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(first.message)
+                        .accessibilityLabel(first.shownText)
                         .accessibilityHint("Opens it to edit, send now or withdraw")
                         .accessibilityIdentifier("session.queue.row.\(first.id)")
                         showAllButton
@@ -223,9 +223,7 @@ struct SessionQueueStrip: View {
             } label: {
                 HStack(alignment: .center, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
-                        // A Walnut notice or a task's note reads as who sent it and its title,
-                        // never its envelope's markup.
-                        Text(PeerMessagePresentation.previewLine(row.message))
+                        Text(row.shownText)
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineLimit(2)
@@ -249,7 +247,7 @@ struct SessionQueueStrip: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(PeerMessagePresentation.previewLine(row.message))
+            .accessibilityLabel(row.shownText)
             .accessibilityHint("Opens it to edit, send now or withdraw")
             .accessibilityIdentifier("session.queue.row.\(row.id)")
 
