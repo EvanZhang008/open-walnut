@@ -42,7 +42,7 @@ struct SessionTimelineBody: View {
     @State private var activityDetail: TimelineActivityDetail?
     /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
     /// reference opens, so a task reads the same wherever it was cited.
-    @State private var openedTask: InboxTaskDestination?
+    @State private var openedTask: TaskOpenTarget?
 
     /// The queue rows by the id of the message they hold (the bubble's `clientMessageId`).
     private var queueRowsByMessage: [String: SessionQueuedMessage] {
@@ -109,7 +109,7 @@ struct SessionTimelineBody: View {
                     case .openActivity(let detail):
                         activityDetail = detail
                     case .openTask(let id):
-                        openedTask = InboxTaskDestination(
+                        openedTask = TaskOpenTarget(
                             id: id, title: TaskMentionResolver.shared.title(for: id))
                     case .previewFile(let ref):
                         // HTML keeps the rendered WKWebView preview (and its dock
@@ -138,7 +138,9 @@ struct SessionTimelineBody: View {
                 // Loading until the first transcript answer; empty state for
                 // BOTH "no tail exported" and "tail with zero renderable rows"
                 // (same conditions as the original page).
-                if store.loadedOnce || store.transcriptMissing {
+                if store.transcriptUnreadable && !store.loadedOnce {
+                    SessionTimelineUnreadableState(onRetry: onRefresh)
+                } else if store.loadedOnce || store.transcriptMissing {
                     SessionTimelineEmptyState()
                 } else {
                     SessionTimelineLoadingState()
@@ -165,7 +167,7 @@ struct SessionTimelineBody: View {
             TimelineActivitySheet(detail: detail)
         }
         .sheet(item: $openedTask) { destination in
-            InboxTaskSheet(destination: destination)
+            TaskSessionSheet(target: destination)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -183,6 +185,43 @@ struct SessionTimelineLoadingState: View {
         }
         .frame(maxWidth: .infinity)
         .timelinePlaceholderInset(vertical: 120)
+    }
+}
+
+/// The transcript could not be read (its host is out of reach, the phone is offline): never
+/// "No transcript yet", which reads as a task that did nothing. The store keeps retrying.
+struct SessionTimelineUnreadableState: View {
+    var onRetry: (() async -> Void)?
+    @State private var retrying = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.icloud")
+                .font(.system(size: 40))
+                .foregroundStyle(.tertiary)
+            Text("Can't load this conversation")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text("Its computer can't be read right now. Walnut keeps trying.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if let onRetry {
+                Button {
+                    retrying = true
+                    Task { await onRetry(); retrying = false }
+                } label: {
+                    if retrying { ProgressView() } else { Text("Try Again") }
+                }
+                .buttonStyle(.bordered)
+                .disabled(retrying)
+                .accessibilityIdentifier("session.transcript.retry")
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .timelinePlaceholderInset(vertical: 100)
+        .padding(.horizontal, 32)
+        .accessibilityIdentifier("session.transcript.unreadable")
     }
 }
 

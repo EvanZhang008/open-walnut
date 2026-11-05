@@ -20,6 +20,20 @@ enum PeerMessagePresentation {
     private static let attribute = try! NSRegularExpression(pattern: #"([a-z][a-z0-9-]*)="([^"]*)""#)
     private static let handleSuffix = try! NSRegularExpression(pattern: #"\s*\[[a-fA-F0-9]{4,}\]$"#)
 
+    /// One plain line for a short preview (a queued row): each envelope as "Sender: title", the
+    /// words around it as they are; text with no envelope comes back unchanged.
+    static func previewLine(_ rawText: String) -> String {
+        guard let parts = segments(rawText, received: true) else { return rawText }
+        return parts.map { part -> String in
+            switch part {
+            case .text(let t): return t.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .message(let m): return m.accessibilityLabel
+            }
+        }
+        .filter { !$0.isEmpty }
+        .joined(separator: " \u{00B7} ")
+    }
+
     /// What a received row shows when this build cannot read its envelope.
     static let unreadableReceived = PeerMessageDescription(sender: "Walnut", title: "Message received")
 

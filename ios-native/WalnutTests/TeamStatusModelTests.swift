@@ -38,6 +38,12 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(b.notStarted, 1)
         XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 3 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.")
         XCTAssertTrue(b.hasTeam)
+        // On the leader's own page its own row is left out, and its team still shows.
+        let mine = TeamStatusModel.build(ownerId: "lead", tasks: tasks, includeOwner: false, now: Self.now)
+        XCTAssertFalse(mine.open.contains { $0.id == "lead" })
+        XCTAssertEqual(mine.open.count + 1, b.open.count)
+        XCTAssertTrue(mine.hasTeam)
+        XCTAssertFalse(TeamStatusModel.build(ownerId: "lead", tasks: [tasks[0]], includeOwner: false, now: Self.now).hasTeam)
     }
 
     func testFallbackWithoutStoredStatusReadsThePhaseAsAnOlderServerMeantIt() {

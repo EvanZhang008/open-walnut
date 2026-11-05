@@ -130,6 +130,20 @@ op_again() { # $1 = op, $2 = JSON args
 # host_copy, waited for: a big file answers running:true first, host_copy_result waits on.
 copy() { # $1 = JSON args; prints the finished answer
   local got id
+  # This Walnut's own Mac (the last resort) is no other host: host_copy refuses a copy to itself
+  # (same_host), so the file is copied here.
+  if got=$(printf '%s' "$1" | python3 -c '
+import json, os, shutil, sys
+a = json.load(sys.stdin)
+if "__local__" not in (a.get("to_host"), a.get("from_host")): sys.exit(3)
+src, dst = os.path.expanduser(a["from"]), os.path.expanduser(a["to"])
+os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+shutil.copyfile(src, dst)
+print(json.dumps({"outcome": "Copied on this computer to " + dst}))'); then
+    printf '%s' "$got"; return 0
+  elif [ $? -ne 3 ]; then
+    return 1
+  fi
   got=$(op_again host_copy "$1") || return 1
   while printf '%s' "$got" | js 'sys.exit(0 if d.get("running") else 1)'; do
     id=$(printf '%s' "$got" | js 'print(d.get("copyId") or "")')
@@ -261,7 +275,10 @@ repo_refs() {
 }
 REFS=()
 while IFS= read -r p; do REFS+=("$p"); done < <(repo_refs)
-( cd "$ROOT" && git ls-files -co --exclude-standard -z -- ios-native scripts/lib ${REFS[@]+"${REFS[@]}"} | tar --null -T - -czf "$LOCAL/src.tgz" ) \
+# Only the files the tree has now: a tracked file deleted in the working tree (not committed yet)
+# is left out, as the build there would not see it either; tar would refuse the whole pack.
+( cd "$ROOT" && git ls-files -co --exclude-standard -z -- ios-native scripts/lib ${REFS[@]+"${REFS[@]}"} \
+    | while IFS= read -r -d '' f; do [ -e "$f" ] && printf '%s\0' "$f"; done | tar --null -T - -czf "$LOCAL/src.tgz" ) \
   || die "could not pack the sources"
 say "packed $(du -h "$LOCAL/src.tgz" | cut -f1) of sources ($(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" status --porcelain -- ios-native | grep -q . && echo ', with uncommitted changes'))"
 

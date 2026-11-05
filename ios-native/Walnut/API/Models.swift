@@ -606,6 +606,9 @@ struct WalnutUserStatus: Codable, Equatable {
     /// The CEO or a VP: what its Threads (the user's own requests to it) hold for him. nil on
     /// other tasks, on a node with none shown, and from an older server (additive, 2026-11-03).
     var threads: WalnutThreadCounts? = nil
+    /// Between a turn's end and its report: `waitingOn` is Walnut's placeholder ("Its report on
+    /// the turn that just ended"), never words to show the user (additive, 2026-10).
+    var transient: Bool? = nil
 }
 
 /// `user_status.threads` (server `src/core/org/thread-view.ts` `ThreadCounts`): how many threads

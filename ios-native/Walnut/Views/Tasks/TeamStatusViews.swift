@@ -40,7 +40,8 @@ struct TaskStatusCard: View {
                     .accessibilityIdentifier(TeamStatusModel.isToRead(s) ? "task.userStatus.read" : "task.userStatus.ask")
                 if !TeamStatusModel.isToRead(s) { CheckedCaption(status: s, font: .caption, id: "task.userStatus.checked") }
             }
-            if state == .waiting {
+            // A turn just ended and its report is still coming: no placeholder words.
+            if state == .waiting, s?.transient != true {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(s?.kind == "stuck" ? UserStatePill.stuckText : .primary)
@@ -147,7 +148,7 @@ struct TeamStatusSection: View {
     @State private var confirmStop = false
 
     var body: some View {
-        let board = TeamStatusModel.build(ownerId: ownerId, tasks: tasks.tasks)
+        let board = TeamStatusModel.build(ownerId: ownerId, tasks: tasks.tasks, includeOwner: false)
         if board.hasTeam {
             let stopped = tasks.tasks.first(where: { $0.id == ownerId })?.teamStop
             VStack(alignment: .leading, spacing: 10) {
@@ -179,7 +180,7 @@ struct TeamStatusSection: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(rows) { row in
-                            Button { opened = row.task } label: { TeamStatusRowView(row: row) }
+                            Button { opened = row.task } label: { TeamStatusRowView(row: row, flat: filter != nil) }
                                 .buttonStyle(.plain)
                                 // On the button, not its label: the row keeps its own id, and
                                 // `.contain` keeps the ids inside (.checked, .due, .live, .partial).
@@ -201,9 +202,11 @@ struct TeamStatusSection: View {
             } message: {
                 Text("Every working task in it stops, and its triggers and wake clocks go off until you resume it.")
             }
+            // A team row opens that task's conversation (its task page only when it has none).
             .sheet(item: $opened) { t in
-                TaskDetailSheet(task: t)
-                    .presentationDetents([.medium, .large])
+                TaskSessionSheet(target: TaskOpenTarget(id: t.id, title: t.title))
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
         }
     }
@@ -276,21 +279,17 @@ struct TeamStatusSection: View {
                     + Text(lines.joined(separator: "; ") + "."))
                     .font(.subheadline)
             }
-            Text(TeamStatusModel.countsLine(b))
-                .font(.subheadline)
         }
         .accessibilityIdentifier("task.team.brief")
     }
 
     private func chips(_ b: TeamStatusBoard) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
-                chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
-                ForEach(UserState.groups, id: \.self) { s in
-                    chip("\(b.counts[s]) \(s.label)", on: filter == s, dot: UserStatePill.color(s)) { filter = s }
-                }
+        // Wrapped onto a second line, never scrolled off the screen's edge.
+        OrgChipFlow(spacing: 0) {
+            chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
+            ForEach(UserState.groups, id: \.self) { s in
+                chip("\(b.counts[s]) \(s.label)", on: filter == s, dot: UserStatePill.color(s)) { filter = s }
             }
-            .padding(.horizontal, 2)
         }
     }
 
@@ -308,7 +307,7 @@ struct TeamStatusSection: View {
             .overlay(Capsule().stroke(on ? Color.primary : Color.secondary.opacity(0.35), lineWidth: on ? 1.5 : 1))
             // The capsule stays small; the whole 48pt band around it takes the tap.
             .padding(.horizontal, 2)
-            .frame(minHeight: 48)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -318,107 +317,85 @@ struct TeamStatusSection: View {
 
 struct TeamStatusRowView: View {
     let row: TeamStatusRow
+    /// A filter is on: a row whose leader the filter hides keeps no indent, so it never hangs off nothing.
+    var flat = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let s = row.status
         let time = RowTime(date: TeamStatusModel.rowTime(row))
-        VStack(alignment: .leading, spacing: 3) {
+        Group {
             if typeSize.isAccessibilitySize {
-                // No room for three things on one line at these sizes: the title gets its own.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        UserStatePill(state: row.state, stuck: row.isStuck)
-                        Spacer(minLength: 4)
-                        time
+                VStack(alignment: .leading, spacing: 3) {
+                    // No room for three things on one line at these sizes: the title gets its own.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            UserStatePill(state: row.state, stuck: row.isStuck)
+                            Spacer(minLength: 4)
+                            time
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            UserStatePill(state: row.state, stuck: row.isStuck)
+                            time
+                        }
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        UserStatePill(state: row.state, stuck: row.isStuck)
-                        time
-                    }
-                }
-                Text(row.task.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(3)
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    UserStatePill(state: row.state, stuck: row.isStuck)
                     Text(row.task.title)
                         .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-                    Spacer(minLength: 4)
-                    time
+                        .lineLimit(3)
+                    details
                 }
-            }
-            if row.depth == 0 {
-                Text("Lead").font(.caption2).foregroundStyle(.secondary)
-            }
-            if row.state == .needs {
-                if let need = TeamStatusModel.needLine(s) {
-                    NeedLineView(need: need, toRead: row.isToRead, font: .footnote, id: "task.team.need")
-                }
-                if !row.isToRead { CheckedCaption(status: s, font: .caption, id: "task.team.checked") }
-            } else if row.state == .waiting {
-                Text(TeamStatusModel.waitingLine(s))
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(row.isStuck ? UserStatePill.stuckText : .primary)
-            }
-            if let due = s?.due {
-                Text(due.state == "overdue" ? "Overdue: was due \(TeamStatusModel.dueText(due.at))" : "Due \(TeamStatusModel.dueText(due.at))")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill((due.state == "overdue" ? Color.red : Color.orange).opacity(0.18)))
-                    .accessibilityIdentifier("task.team.due")
-            }
-            if let report = row.task.resultReport, report.isPartial {
-                // Its latest result left things not done: "Done" alone would overstate it.
-                // Stacked, so a large text size never squeezes the list into a few words.
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Partial")
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange.opacity(0.2)))
-                    Text("Not done: \((report.notDone ?? []).joined(separator: "; "))")
-                        .font(.footnote)
-                        // The whole list at the largest sizes; the task's own card shows it too.
-                        .lineLimit(typeSize.isAccessibilitySize ? nil : 6)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("task.team.partial")
-            }
-            if row.state == .working, let live = row.task.liveActivity {
-                // Read from its session by the server, never the model's words; the spans tick here.
-                TimelineView(.periodic(from: .now, by: 15)) { ctx in
-                    let line = LiveActivityFormat.line(live, now: ctx.date.addingTimeInterval(AppClock.demoOffset))
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        // A symbol in the text's own font: it grows with it and is centred on the
-                        // first line the way a letter is (a fixed-size glyph sat on the baseline).
-                        Image(systemName: "circle.fill")
-                            .font(.footnote.weight(.medium))
-                            .imageScale(.small)
-                            .foregroundStyle(line.quiet ? Color.orange : UserStatePill.textColor(.working))
-                            .accessibilityHidden(true)
-                        Text(line.text)
-                            .font(.footnote.weight(.medium).monospacedDigit())
-                            .foregroundStyle(line.quiet ? Color.orange : Color.primary)
-                            .lineLimit(4)
+            } else {
+                // A dot, not the pill: the title gets the row's width (2026-11-04 review: a
+                // "Waiting / snoozed" pill took a third of it). The label still reads its state.
+                // The lines under the title start where the title does, right of the dot.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "circle.fill")
+                        .font(.subheadline)
+                        .imageScale(.small)
+                        .foregroundStyle(row.isStuck ? UserStatePill.stuckText : UserStatePill.color(row.state))
+                        .accessibilityLabel(row.state.label)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(row.task.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            Spacer(minLength: 4)
+                            time
+                        }
+                        details
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("task.team.live")
                 }
-            }
-            if let now = s?.now, !now.isEmpty {
-                Text(now).font(.footnote).foregroundStyle(.secondary)
-            }
-            if row.state != .needs, let next = s?.next, !next.isEmpty {
-                Text("Next: \(next)").font(.footnote).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 8)
+        // A worker's worker sits under its leader.
+        .padding(.leading, flat ? 0 : CGFloat(max(0, row.depth - 1)) * 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    /// One line under the title, what the user reads at a glance: what it needs from him,
+    /// else what it does now, else on whom it waits (2026-11-04, the user on the phone's
+    /// team list: too long; no command lines, Partial lists or Next lines here, the task's
+    /// own page has them).
+    @ViewBuilder
+    private var details: some View {
+        let s = row.status
+        if row.state == .needs, let need = TeamStatusModel.needLine(s) {
+            NeedLineView(need: need, toRead: row.isToRead, font: .footnote, id: "task.team.need")
+        } else if let line = OrgNodeTasksModel.line(row.task) {
+            Text(line)
+                .font(.footnote)
+                .foregroundStyle(row.isStuck ? UserStatePill.stuckText : .secondary)
+                .lineLimit(1)
+        }
+        if let due = s?.due {
+            Text(due.state == "overdue" ? "Overdue: was due \(TeamStatusModel.dueText(due.at))" : "Due \(TeamStatusModel.dueText(due.at))")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill((due.state == "overdue" ? Color.red : Color.orange).opacity(0.18)))
+                .accessibilityIdentifier("task.team.due")
+        }
     }
 }
 

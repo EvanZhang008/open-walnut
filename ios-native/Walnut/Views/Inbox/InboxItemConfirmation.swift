@@ -19,7 +19,7 @@ struct InboxItemConfirmation: View {
     private let store = InboxItemStore.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @State private var openedTask: InboxTaskDestination?
+    @State private var openedTask: TaskOpenTarget?
     @FocusState private var goalFocused: Bool
     /// The work goal's recorder, held here so the footer can wait for a take:
     /// a plan reviewed or confirmed mid-take would go without the spoken words.
@@ -124,7 +124,7 @@ struct InboxItemConfirmation: View {
                                 Text(existing.status == "saved" ? "Review and start existing task" : "Existing work").font(.body.weight(.semibold))
                                 Text(existing.task?.title ?? "Task saved").font(.body)
                                 if let goal = existing.goal { Text("Confirmed work goal: \(goal)").font(.body).textSelection(.enabled) }
-                                Button("Open existing task") { openedTask = InboxTaskDestination(id: existing.taskId, title: existing.task?.title) }.frame(minHeight: 44)
+                                Button("Open existing task") { openedTask = TaskOpenTarget(id: existing.taskId, title: existing.task?.title) }.frame(minHeight: 44)
                             }
                             Text("Work goal").font(.body.weight(.semibold))
                             if retry {
@@ -189,7 +189,7 @@ struct InboxItemConfirmation: View {
                 store.expirePlan(key, planId: plan.id)
             }
             .sheet(item: $openedTask) { destination in
-                InboxItemReadOnlyTaskSheet(key: key, destination: destination).presentationDetents([.large])
+                TaskSessionSheet(target: destination).presentationDetents([.large])
             }
         }
     }

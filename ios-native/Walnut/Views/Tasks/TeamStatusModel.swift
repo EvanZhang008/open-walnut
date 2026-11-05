@@ -82,7 +82,9 @@ struct TeamStatusBoard: Equatable {
     var notStarted: Int { waiting.filter { $0.status?.kind == "not-started" }.count }
     var open: [TeamStatusRow] { needs + working + waiting }
     /// The lead has a team to show (one subtask at least, open or recently done).
-    var hasTeam: Bool { open.count + done.count > 1 }
+    /// Whether the owner's own row is among the rows (`build`'s `includeOwner`).
+    var ownerIncluded = true
+    var hasTeam: Bool { open.count + done.count > (ownerIncluded ? 1 : 0) }
 
     func rows(_ s: UserState) -> [TeamStatusRow] {
         switch s {
@@ -141,11 +143,13 @@ enum TeamStatusModel {
         return WalnutTask.parseISO(row.status?.at) ?? WalnutTask.parseISO(t.updatedAt) ?? .distantPast
     }
 
-    static func build(ownerId: String, tasks: [WalnutTask], now: Date = AppClock.now()) -> TeamStatusBoard {
+    /// `includeOwner` false leaves the owner's own row out: on its own page the leader is the page,
+    /// so a row of it in its team reads as a mistake.
+    static func build(ownerId: String, tasks: [WalnutTask], includeOwner: Bool = true, now: Date = AppClock.now()) -> TeamStatusBoard {
         var children: [String: [WalnutTask]] = [:]
         for t in tasks { if let p = t.parentTaskId, p != t.id { children[p, default: []].append(t) } }
         var members: [(WalnutTask, Int)] = []
-        if let owner = tasks.first(where: { $0.id == ownerId }) { members.append((owner, 0)) }
+        if includeOwner, let owner = tasks.first(where: { $0.id == ownerId }) { members.append((owner, 0)) }
         var seen: Set<String> = [ownerId]
         func visit(_ id: String, _ depth: Int) {
             guard depth <= depthCap else { return }
@@ -159,6 +163,7 @@ enum TeamStatusModel {
 
         let cutoff = now.addingTimeInterval(-Double(doneWindowDays) * 86_400)
         var board = TeamStatusBoard()
+        board.ownerIncluded = includeOwner && members.first?.1 == 0
         for (task, depth) in members {
             let s = state(of: task)
             if s == .done, (WalnutTask.parseISO(task.completedAt ?? task.updatedAt) ?? .distantPast) < cutoff { continue }

@@ -770,7 +770,7 @@ enum TimelineRowAction {
     case previewFile(ref: FilePathRef)
     /// Open a task in the app's task sheet. Raised when a tapped link is a task
     /// mention (`TaskMentionLink`, `walnut-task://`): the hosts present
-    /// `InboxTaskSheet`, the same sheet a letter's task reference opens.
+    /// `TaskSessionSheet`, the same sheet a letter's task reference opens.
     case openTask(id: String)
     case toggleExpanded(rowID: String)
     /// A thinking or tool row was tapped: present the activity drawer. Carries

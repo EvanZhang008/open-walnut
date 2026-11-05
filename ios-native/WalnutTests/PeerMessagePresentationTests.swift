@@ -16,6 +16,15 @@ final class PeerMessagePresentationTests: XCTestCase {
         }
     }
 
+    /// A queued row previews its envelope as sender and title, never the markup (2026-11-04 review:
+    /// a node chat's Queued box listed raw `<walnut-message …>` text).
+    func testPreviewLineReadsAnEnvelopeAsSenderAndTitle() {
+        XCTAssertEqual(PeerMessagePresentation.previewLine(envelope()), "Build check: Checks passed")
+        XCTAssertEqual(PeerMessagePresentation.previewLine("Please also\n" + envelope()), "Please also \u{00B7} Build check: Checks passed")
+        XCTAssertEqual(PeerMessagePresentation.previewLine("plain words"), "plain words")
+        XCTAssertFalse(PeerMessagePresentation.previewLine(envelope()).contains("<walnut-message"))
+    }
+
     func testLongReplyExposesOnlySenderAndTitle() throws {
         let text = envelope(body: String(repeating: "INTERNAL_BODY\n", count: 2_000), extra: "asked=\"PRIVATE_REQUEST\" request=\"rq-fixture\"")
         XCTAssertEqual(try descriptions(text), [PeerMessageDescription(sender: "Build check", title: "Checks passed")])

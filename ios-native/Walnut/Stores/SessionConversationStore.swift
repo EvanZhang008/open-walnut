@@ -259,6 +259,9 @@ final class SessionConversationStore {
     var dead = false
     var errorMessage: String?
     var transcriptMissing = false
+    /// The last transcript read failed for a reason other than "there is none" (the host could
+    /// not be read, the network): the page says so instead of "No transcript yet".
+    var transcriptUnreadable = false
     var loadedOnce = false
 
     private static let pollSeconds: Double = 5
@@ -655,6 +658,7 @@ final class SessionConversationStore {
             // out of reach for this one read): the row stays as it was.
             if fresh && rich && next.rich != false { setCanPage(next.pageable == true) }
             transcriptMissing = false
+            transcriptUnreadable = false
             loadedOnce = true
             // Failure-fallback polling (below) has done its job once a load
             // lands and the normal delivery paths are healthy again. Keep
@@ -667,7 +671,10 @@ final class SessionConversationStore {
             return false
         } catch {
             guard isActive, !Task.isCancelled else { return false }
-            if !loadedOnce { transcriptMissing = true }
+            if !loadedOnce {
+                transcriptMissing = true
+                transcriptUnreadable = Self.isUnreadable(error)
+            }
             // Self-heal: nothing retried a failed transcript load unless the
             // page happened to be in a polling fallback already — a transient
             // network error on open()/resume() left "No transcript yet" on
@@ -677,6 +684,13 @@ final class SessionConversationStore {
             startPolling(keepStream: true)
             return false
         }
+    }
+
+    /// A failed read that is not "this session has no transcript" (404): the server could not
+    /// read it now (`transcript_unavailable`, a host out of reach) or the phone is offline.
+    nonisolated static func isUnreadable(_ error: Error) -> Bool {
+        if case APIError.server(let status, _, _, _, _) = error { return status != 404 }
+        return true
     }
 
     /// Rebuild history from the transcript and drop optimistic bubbles that the

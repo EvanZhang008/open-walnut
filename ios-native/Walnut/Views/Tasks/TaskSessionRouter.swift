@@ -21,9 +21,9 @@ final class TaskSessionRouter {
     /// The row whose tap is asking the server where to go (nil = none). Drives that
     /// row's spinner; a second tap supersedes it.
     var resolvingRowId: String?
-    /// The New Session draft, and WHICH TASK it is about (nil = no sheet). An item, not
-    /// a Bool beside a task: two values that must agree about one sheet is how a draft
-    /// opens with the previous row's task attached.
+    /// The tab's sheet: a task-less New Session draft, or a sessionless task's page (nil = no
+    /// sheet). An item, not a Bool beside a task: two values that must agree about one sheet
+    /// is how a sheet opens with the previous row's task attached.
     var draftSeed: BoardModel.BoardDraftSeed?
 
     /// Bumped by every tap and by every page change made elsewhere: a lookup that comes
@@ -118,10 +118,8 @@ final class TaskSessionRouter {
     /// Open a session the session LIST does not carry, by id.
     ///
     /// The failure branch is the point: a 404 (the record really is gone), an offline
-    /// phone or the lookup deadline all land in the draft ATTACHED to the task, never
-    /// in a dead end and never in an unlinked draft. The toast says why, because a tap
-    /// that quietly produces a different destination than the row promised is worse
-    /// than the wait.
+    /// phone or the lookup deadline all land on the task's page (`TaskSessionSheet`, which
+    /// tries the session once more and says why it shows the task), never in a dead end.
     private func resolveThenOpen(
         sessionId: String, row: BoardRow, fallback: BoardModel.BoardDraftSeed,
         tasks: TasksStore, show: @escaping (WalnutSession) -> Void
@@ -133,7 +131,6 @@ final class TaskSessionRouter {
             guard gen == generation else { return }
             resolvingRowId = nil
             guard let resolved else {
-                tasks.transientError = "Couldn't open that session. Starting a new one for this task."
                 openDraft(fallback, for: row, tasks: tasks)
                 return
             }

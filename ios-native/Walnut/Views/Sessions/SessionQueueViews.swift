@@ -215,7 +215,9 @@ struct SessionQueueStrip: View {
             } label: {
                 HStack(alignment: .center, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(row.message)
+                        // A Walnut notice or a task's note reads as who sent it and its title,
+                        // never its envelope's markup.
+                        Text(PeerMessagePresentation.previewLine(row.message))
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineLimit(2)
@@ -239,7 +241,7 @@ struct SessionQueueStrip: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(row.message)
+            .accessibilityLabel(PeerMessagePresentation.previewLine(row.message))
             .accessibilityHint("Opens it to edit, send now or withdraw")
             .accessibilityIdentifier("session.queue.row.\(row.id)")
 

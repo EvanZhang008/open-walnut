@@ -59,7 +59,7 @@ struct LetterReaderView: View {
     @State private var decisionGeometry = DecisionNoteGeometry()
     /// The session a status line opened.
     @State private var openedSession: WalnutSession?
-    @State private var openedTask: InboxTaskDestination?
+    @State private var openedTask: TaskOpenTarget?
     /// Sessions a status line names that the tasks store does not hold, looked
     /// up by id: found ones open, the rest make the line plain text, so a tap
     /// never ends in "couldn't open that session".
@@ -148,7 +148,7 @@ struct LetterReaderView: View {
             SessionConversationView(session: session)
         }
         .sheet(item: $openedTask) { destination in
-            InboxTaskSheet(destination: destination)
+            TaskSessionSheet(target: destination)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -660,7 +660,7 @@ struct LetterReaderView: View {
         if voice.state == .recording { voice.preserveAndStop(reason: "task-opened") }
         if decisionVoice.state == .recording { decisionVoice.preserveAndStop(reason: "task-opened") }
         replyField.endEditing()
-        openedTask = InboxTaskDestination(id: id, title: title)
+        openedTask = TaskOpenTarget(id: id, title: title)
     }
 
     private func deliveryLine(_ note: String) -> some View {

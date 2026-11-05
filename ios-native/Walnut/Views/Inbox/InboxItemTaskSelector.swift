@@ -13,7 +13,7 @@ struct InboxItemTaskSelector: View {
     @State private var loading = false
     @State private var error: String?
     @State private var preview: InboxTaskCandidate?
-    @State private var openedTask: InboxTaskDestination?
+    @State private var openedTask: TaskOpenTarget?
     @State private var searchGeneration = 0
     @FocusState private var searchFocused: Bool
     @State private var acceptingInput = true
@@ -25,7 +25,7 @@ struct InboxItemTaskSelector: View {
                 Text("\(selected.projectLabel) · \(selected.phaseLabel)").font(.caption)
                 if !selected.canAttach {
                     Text("This task is completed. Open it to review or choose an open task.").font(.caption)
-                    Button("Open task") { openedTask = InboxTaskDestination(id: selected.id, title: selected.title) }.frame(minHeight: 44)
+                    Button("Open task") { openedTask = TaskOpenTarget(id: selected.id, title: selected.title) }.frame(minHeight: 44)
                     Button("Choose another task") {
                         var draft = store.draft(key); draft.selected = nil; draft.input.selectedTaskId = nil
                         store.setDraft(draft, key: key)
@@ -118,7 +118,7 @@ struct InboxItemTaskSelector: View {
             }
             .onAppear { acceptingInput = true; searchFocused = true }
             .onDisappear { acceptingInput = false }
-            .sheet(item: $openedTask) { destination in InboxItemReadOnlyTaskSheet(key: key, destination: destination).presentationDetents([.large]) }
+            .sheet(item: $openedTask) { destination in TaskSessionSheet(target: destination).presentationDetents([.large]) }
             .navigationDestination(item: $preview) { candidate in
                 InboxItemTaskPreview(key: key, candidate: candidate, onOpenTask: onOpenTask)
             }

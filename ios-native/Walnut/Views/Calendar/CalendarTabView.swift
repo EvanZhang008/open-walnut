@@ -103,8 +103,8 @@ struct CalendarTabView: View {
         // read and tapped under the pill.
         .overlay(alignment: .bottomLeading) { todayButton }
         .sheet(item: $selectedTask) { task in
-            TaskDetailSheet(task: task)
-                .presentationDetents([.medium, .large])
+            TaskSessionSheet(target: TaskOpenTarget(id: task.id, title: task.title))
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $createDraft) { draft in

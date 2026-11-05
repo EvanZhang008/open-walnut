@@ -88,6 +88,12 @@ struct TasksTabView: View {
                 if returnsToBoard { drawer.setOpen(true) }
             }
         }) { seed in
+            if let taskId = seed.taskId {
+                // A task with no session opens its page, as a task tapped anywhere else does
+                // (`TaskSessionSheet`); its New Session is on that page.
+                TaskSessionSheet(target: TaskOpenTarget(id: taskId, title: seed.taskTitle))
+                    .presentationDetents([.large])
+            } else {
             NavigationStack {
                 NewSessionChatView(
                     taskId: seed.taskId,
@@ -103,6 +109,7 @@ struct TasksTabView: View {
                 }
             }
             .presentationDetents([.large])
+            }
         }
         // MainTabView has brought this tab forward: the email's words join whatever the draft
         // already holds (never replacing what the person typed), and the task-less draft opens.

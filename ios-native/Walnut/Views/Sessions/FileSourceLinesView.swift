@@ -52,13 +52,13 @@ struct FilePathLinkHandling: ViewModifier {
     @State private var dirTarget: DirectoryTarget?
     /// A task mention (`walnut-task://`, `TaskMentions`): the same task sheet the
     /// timeline and a letter's task reference open.
-    @State private var taskTarget: InboxTaskDestination?
+    @State private var taskTarget: TaskOpenTarget?
 
     func body(content: Content) -> some View {
         content
             .environment(\.openURL, OpenURLAction { url in
                 if let taskID = TaskMentionLink.taskID(from: url) {
-                    taskTarget = InboxTaskDestination(
+                    taskTarget = TaskOpenTarget(
                         id: taskID, title: TaskMentionResolver.shared.title(for: taskID))
                     return .handled
                 }
@@ -83,7 +83,7 @@ struct FilePathLinkHandling: ViewModifier {
             }
             .sheet(item: $dirTarget) { DirectoryPreviewSheet(target: $0) }
             .sheet(item: $taskTarget) { destination in
-                InboxTaskSheet(destination: destination)
+                TaskSessionSheet(target: destination)
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }

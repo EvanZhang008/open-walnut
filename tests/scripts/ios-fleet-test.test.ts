@@ -54,6 +54,8 @@ if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.l
 const at = (seq, n) => seq[Math.min(n, seq.length - 1)]
 if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; return { host: m.host, known: l != null, loadPerCpu: l } }) }) }
 if (op === 'host_copy') {
+  // As the real op: a copy from or to this computer itself is refused.
+  if (args.to_host === '__local__' || args.from_host === '__local__') { process.stderr.write('walnut: Walnut API error (same_host): Both sides are your own host (__local__)'); process.exit(1) }
   if (args.from_host && args.from.endsWith('.log')) {
     // The job's log file in the task's folder there: the whole run, result line last.
     const r = mac(args.from_host).result || { exit: 0, state: 'passed' }
@@ -80,6 +82,9 @@ if (op === 'host_exec') {
     fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('\\nset -uo pipefail\\n', '\\n# ' + 'an inserted comment that moves every later line '.repeat(8) + '\\nset -uo pipefail\\n'))
   }
   if (args.background) fs.writeFileSync(path.join(dir, 'run-' + args.host), String(turn('runs-' + args.host)))
+  // On this computer the run really leaves its results in the task's folder under HOME (the test's dir).
+  const home = args.background && args.host === '__local__' && (args.argv[2].split('D="$HOME/')[1] || '').split('"')[0]
+  if (home) { fs.mkdirSync(path.join(dir, home), { recursive: true }); fs.copyFileSync(outTgz, path.join(dir, home, 'out.tgz')) }
   out(args.background ? { jobId: 'hx-' + args.host, running: true } : { exitCode: 0, running: false })
 }
 if (op === 'host_exec_read') {
@@ -149,9 +154,13 @@ beforeEach(() => {
   fs.writeFileSync(path.join(repo, 'tests/fixtures/other.json'), '{}\n')
   fs.writeFileSync(path.join(repo, 'ios-native/WalnutTests/RepoTests.swift'),
     'let a = root.appendingPathComponent("tests/fixtures/thing")\nlet b = "src/core/types.ts"\nlet c = "src/missing.ts"\n')
+  fs.writeFileSync(path.join(repo, 'ios-native/Walnut/Old.swift'), 'struct Old {}\n')
   git('init', '-q'); git('add', '.'); git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'base')
   // Uncommitted work goes too; build output git ignores does not.
   fs.writeFileSync(path.join(repo, 'ios-native/Walnut/New.swift'), 'struct New {}\n')
+  // A tracked file deleted and not committed yet stays behind, never fails the pack
+  // (2026-11-04: tar refused the whole run on one such file).
+  fs.rmSync(path.join(repo, 'ios-native/Walnut/Old.swift'))
   fs.mkdirSync(path.join(repo, 'ios-native/DerivedData'), { recursive: true })
   fs.writeFileSync(path.join(repo, 'ios-native/DerivedData/big.o'), 'x')
 })
@@ -226,6 +235,11 @@ describe('ios-fleet-test.sh', () => {
     expect(r2.status, r2.stderr).toBe(0)
     expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 3.1 per CPU, over 0.75')
     expect(r2.stderr).toMatch(/using __local__ \(__local__\): load 0\.2 per CPU; no other iOS Mac can take the run/)
+    // Sources out and results back are copied on this computer: host_copy refuses a copy to itself
+    // (2026-11-04: "could not send the sources to __local__").
+    expect(r2.stderr).toContain('Copied on this computer to')
+    expect(r2.calls.filter((c) => c.op === 'host_copy' && (c.args.to_host === '__local__' || c.args.from_host === '__local__'))).toEqual([])
+    expect(r2.stderr).toContain('Passed: 41 passed')
   })
 
   it('an edit to the script while it runs does not change the run (bash reads the whole script first)', () => {

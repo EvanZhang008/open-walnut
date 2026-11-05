@@ -5,6 +5,9 @@ import SwiftUI
 struct MarkdownView: View {
     let blocks: [MarkdownBlock]
     var onToggleTask: ((Int, Bool) -> Void)?
+    /// The paragraph, list and quote text style; `.markdownBodyFont(_:)` sets it for a compact
+    /// place (a thread card), everything else keeps `.body`.
+    @Environment(\.markdownBodyFont) private var bodyFont
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 6) {
@@ -30,7 +33,7 @@ struct MarkdownView: View {
 
         case .paragraph(let text):
             Text(text)
-                .font(.body)
+                .font(bodyFont)
                 .lineSpacing(4)
                 .padding(.vertical, 2)
                 .textSelection(.enabled)
@@ -45,11 +48,11 @@ struct MarkdownView: View {
                         .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 5 }
                 case .number(let n):
                     Text("\(n).")
-                        .font(.body.monospacedDigit())
+                        .font(bodyFont.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 Text(text)
-                    .font(.body)
+                    .font(bodyFont)
                     .lineSpacing(3)
                     .textSelection(.enabled)
             }
@@ -63,7 +66,7 @@ struct MarkdownView: View {
                     .foregroundStyle(checked ? Theme.tint : Color(.tertiaryLabel))
                     .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 7 }
                 Text(text)
-                    .font(.body)
+                    .font(bodyFont)
                     .lineSpacing(3)
                     .foregroundStyle(checked ? Color.secondary : Color.primary)
                     .strikethrough(checked, color: .secondary)
@@ -95,7 +98,7 @@ struct MarkdownView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         Text(line)
-                            .font(.body)
+                            .font(bodyFont)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -159,4 +162,20 @@ struct MarkdownView: View {
         return MarkdownTableView(header: header, rows: rendered, omitted: rows.count - rendered.count)
             .padding(.vertical, 4)
     }
+}
+
+private struct MarkdownBodyFontKey: EnvironmentKey {
+    static let defaultValue: Font = .body
+}
+
+extension EnvironmentValues {
+    var markdownBodyFont: Font {
+        get { self[MarkdownBodyFontKey.self] }
+        set { self[MarkdownBodyFontKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// The body text style of every `MarkdownView` inside.
+    func markdownBodyFont(_ font: Font) -> some View { environment(\.markdownBodyFont, font) }
 }

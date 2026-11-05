@@ -20,7 +20,7 @@ struct ChatTimelineBody: View {
     @State private var activityDetail: TimelineActivityDetail?
     /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
     /// reference opens, so a task reads the same wherever it was cited.
-    @State private var openedTask: InboxTaskDestination?
+    @State private var openedTask: TaskOpenTarget?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29). The empty state used to be
@@ -72,7 +72,7 @@ struct ChatTimelineBody: View {
                     case .openActivity(let detail):
                         activityDetail = detail
                     case .openTask(let id):
-                        openedTask = InboxTaskDestination(
+                        openedTask = TaskOpenTarget(
                             id: id, title: TaskMentionResolver.shared.title(for: id))
                     case .previewFile(let ref):
                         // Personal AI chat always runs on the primary box.
@@ -137,7 +137,7 @@ struct ChatTimelineBody: View {
             TimelineActivitySheet(detail: detail)
         }
         .sheet(item: $openedTask) { destination in
-            InboxTaskSheet(destination: destination)
+            TaskSessionSheet(target: destination)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }

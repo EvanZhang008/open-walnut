@@ -272,6 +272,7 @@ struct MainTabView: View {
     @State private var approvals = ApprovalCenter.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var contentLink = ContentActionLink.shared
+    @State private var orgLink = OrgNodeLink.shared
 
     var body: some View {
         TabView(selection: $selection) {
@@ -386,6 +387,10 @@ struct MainTabView: View {
         }
         .onChange(of: contentLink.draft) { _, request in
             if request != nil { selection = .tasks }
+        }
+        // An Org node's page (a thread push): ChatView opens the node's chat and its page.
+        .onChange(of: orgLink.pending) { _, request in
+            if request != nil { selection = .chat }
         }
         // Any letter push (a silent one included) refreshes the list, so the tab
         // badge is right even when the user is reading something else. This does

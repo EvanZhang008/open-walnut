@@ -1,0 +1,138 @@
+import SwiftUI
+
+/// The three views of an Org node beside its chat, as on the web Org page's side bar: Threads
+/// first (his own requests), then Tasks and Brief.
+enum OrgNodeTab: String, CaseIterable, Identifiable, Hashable {
+    case threads, tasks, brief
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .threads: return "Threads"
+        case .tasks: return "Tasks"
+        case .brief: return "Brief"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .threads: return "bubble.left.and.text.bubble.right"
+        case .tasks: return "checklist"
+        case .brief: return "doc.text"
+        }
+    }
+}
+
+/// Which node page to show, and on which view: an item for `navigationDestination`.
+struct OrgNodeRoute: Hashable, Identifiable {
+    let nodeId: String
+    let name: String
+    let isMain: Bool
+    let sessionId: String?
+    var tab: OrgNodeTab = .threads
+    var threadId: String? = nil
+    var id: String { "\(nodeId)|\(tab.rawValue)|\(threadId ?? "")" }
+}
+
+/// An Org node's page on the phone: one of Threads, Tasks and Brief at a time, picked at the top.
+/// Its chat stays a Back away.
+struct OrgNodePage: View {
+    let route: OrgNodeRoute
+    @State private var tab: OrgNodeTab
+    @State private var threads: OrgThreadsStore
+    @Environment(TasksStore.self) private var tasks
+
+    init(route: OrgNodeRoute) {
+        self.route = route
+        _tab = State(initialValue: route.tab)
+        _threads = State(initialValue: OrgThreadsStore(taskId: route.nodeId))
+    }
+
+    private var node: WalnutTask? { tasks.tasks.first { $0.id == route.nodeId } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("View", selection: $tab) {
+                ForEach(OrgNodeTab.allCases) { t in
+                    Text(label(t)).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .accessibilityIdentifier("org.node.tabs")
+            Divider()
+            Group {
+                switch tab {
+                case .threads:
+                    OrgThreadsView(store: threads, name: route.name, sessionId: route.sessionId, focusThreadId: route.threadId)
+                case .tasks:
+                    OrgNodeTasksView(nodeId: route.nodeId, isMain: route.isMain)
+                case .brief:
+                    OrgBriefView(taskId: route.nodeId, name: route.name)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle(route.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await threads.load() }
+        // The node's own row moves when its threads change (its status carries their counts).
+        .onChange(of: node?.userStatus?.threads) { Task { await threads.load() } }
+        .accessibilityIdentifier("org.node.page")
+    }
+
+    private func label(_ t: OrgNodeTab) -> String {
+        guard t == .threads else { return t.label }
+        let shown = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.count }
+            ?? node?.userStatus?.threads?.shown ?? 0
+        return shown > 0 ? "Threads \(shown)" : "Threads"
+    }
+}
+
+/// The row at the top of an Org node's chat that opens its Threads, Tasks and Brief, each its own
+/// page. Threads lead and carry the count of the ones for him (coloured when one waits on him).
+struct OrgNodeBar: View {
+    let node: WalnutTask
+    let open: (OrgNodeTab) -> Void
+
+    var body: some View {
+        let counts = node.userStatus?.threads
+        HStack(spacing: 8) {
+            ForEach(OrgNodeTab.allCases) { t in
+                Button { open(t) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: t.symbol).font(.footnote)
+                        Text(t.label).font(.subheadline.weight(.medium))
+                        if t == .threads {
+                            let n = counts?.shown ?? 0
+                            Text("\(n)")
+                                .font(.caption.monospacedDigit().weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                // The drawer's count for the same node (ChatDrawerOrg): one colour for one number.
+                                .background(n > 0 ? UserStatePill.color(.needs) : Color(.systemGray3), in: Capsule())
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 36)
+                    .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(t == .threads ? "Threads, \(counts?.shown ?? 0)" : t.label)
+                .accessibilityIdentifier("org.bar.\(t.rawValue)")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
+        // A visible edge: the chat scrolls under the bar, and a line cut by it must read as scrolled.
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5)
+        }
+        .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+        .zIndex(1)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("org.bar")
+    }
+}

@@ -43,6 +43,12 @@ struct SessionConversationView: View {
     @State private var showControls = false
     /// Full task detail for the linked task — every task capability in place.
     @State private var showTask = false
+    /// An Org node's Threads, Tasks or Brief page, pushed over its chat.
+    @State private var orgRoute: OrgNodeRoute?
+    /// An Org node page to open once this chat appears (a thread push), and whether it did.
+    private let orgPageOnOpen: OrgNodePageOpen?
+    @State private var orgPageOnOpenDone = false
+    @State private var fetchedTask: WalnutTask?
     /// The CEO's or a VP's memory and instructions (the row after Task Details).
     @State private var showMemory = false
     // Wave-2 extras — presented from the session menu.
@@ -78,9 +84,10 @@ struct SessionConversationView: View {
     /// The page's own height, which caps the permission cards' scroll box.
     @State private var pageHeight: CGFloat = 0
 
-    init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off) {
+    init(session: WalnutSession, voiceModeOnOpen: VoiceModeOnOpen = .off, orgPageOnOpen: OrgNodePageOpen? = nil) {
         self.session = session
         self.voiceModeOnOpen = voiceModeOnOpen
+        self.orgPageOnOpen = orgPageOnOpen
         let store = SessionConversationStore(session: session)
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
@@ -102,14 +109,21 @@ struct SessionConversationView: View {
     init(session: WalnutSession, store: SessionConversationStore) {
         self.session = session
         self.voiceModeOnOpen = .off
+        self.orgPageOnOpen = nil
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
         _queue = State(initialValue: Self.makeQueue(sessionId: session.id, store: store))
     }
 
-    var body: some View {
+    /// The page's banners, permission cards and timeline, top to bottom (split out of `body`: one
+    /// expression this long no longer type-checks in time on newer Xcode).
+    private var pageStack: some View {
         VStack(spacing: 0) {
+            // An Org node's chat (the CEO, a VP): its Threads, Tasks and Brief one tap away.
+            if let node = orgNode {
+                OrgNodeBar(node: node) { openOrgPage($0) }
+            }
             // Only after 10 s of continuous absence (SessionConnectionNotice):
             // a ~1.3 s bridge redial never reaches the reader.
             if store.connectionNotice == .unreachable {
@@ -163,6 +177,23 @@ struct SessionConversationView: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: store.connectionNotice)
         }
+    }
+
+    /// An Org node's chat opens its page on top when asked (a push, a link), and reads the linked
+    /// task by id when the list does not carry it.
+    private func orgNodeHooks<V: View>(_ content: V) -> some View {
+        content
+            .navigationDestination(item: $orgRoute) { route in
+                OrgNodePage(route: route)
+            }
+            .onAppear { openOrgPageOnOpen() }
+            .onChange(of: orgNode?.id) { openOrgPageOnOpen() }
+            .onChange(of: orgPageOnOpen) { orgPageOnOpenDone = false; openOrgPageOnOpen() }
+            .task(id: session.taskId) { await fetchLinkedTaskIfMissing() }
+    }
+
+    var body: some View {
+        orgNodeHooks(pageStack)
         // Same keyboard-safety rule as ChatView: any sibling that overflows the
         // keyboard-shrunk proposal pushes the inset composer down by half that
         // overflow, straight under the predictive bar. See
@@ -208,12 +239,13 @@ struct SessionConversationView: View {
             // Task Details is the same sheet.
             ToolbarItem(placement: .principal) {
                 if session.taskId != nil, tasksStore != nil {
-                    Button { showTask = true } label: {
+                    // An Org node's title opens its page (Threads first); its task details stay in ⋯.
+                    Button { if orgNode != nil { openOrgPage(.threads) } else { showTask = true } } label: {
                         navTitle(opensTask: true)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("session.title")
-                    .accessibilityHint("Shows the task's details")
+                    .accessibilityHint(orgNode != nil ? "Shows its threads, tasks and brief" : "Shows the task's details")
                 } else {
                     navTitle(opensTask: false)
                 }
@@ -258,6 +290,8 @@ struct SessionConversationView: View {
                 TaskDetailSheet(task: linkedTask ?? SessionTaskRow.placeholder(id: taskId, title: session.taskTitle))
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+                    // Opaque: at the medium detent the glass let the tab bar and the stop button show through.
+                    .presentationBackground(Color(uiColor: .systemGroupedBackground))
             }
         }
         .sheet(isPresented: $showMemory) {
@@ -652,11 +686,39 @@ struct SessionConversationView: View {
         return tasksStore?.tasks.first { $0.id == taskId }
     }
 
+    /// The linked task when it is an Org node (the CEO or a VP), else nil. The live row first; a
+    /// task the list projection leaves out (the CEO's ask) is read once by id.
+    private var orgNode: WalnutTask? {
+        guard let task = linkedTask ?? fetchedTask, task.orgRole == "main" || task.orgRole == "lead" else { return nil }
+        return task
+    }
+
+    /// The linked task read by id when the list does not carry it (whether it is an Org node).
+    private func fetchLinkedTaskIfMissing() async {
+        guard fetchedTask == nil, linkedTask == nil, let taskId = session.taskId, tasksStore != nil else { return }
+        if let detail = try? await WalnutAPI().taskDetail(id: taskId) { fetchedTask = WalnutTask(detail: detail) }
+    }
+
+    /// The page a push asked for, once, as soon as the chat knows it is an Org node's.
+    private func openOrgPageOnOpen() {
+        guard let open = orgPageOnOpen, !orgPageOnOpenDone, orgNode != nil else { return }
+        orgPageOnOpenDone = true
+        openOrgPage(open.tab, threadId: open.threadId)
+    }
+
+    private func openOrgPage(_ tab: OrgNodeTab, threadId: String? = nil) {
+        guard let node = orgNode else { return }
+        orgRoute = OrgNodeRoute(
+            nodeId: node.id, name: TaskMentions.shownTitle(node.title, orgRole: node.orgRole),
+            isMain: node.orgRole == "main", sessionId: session.id, tab: tab, threadId: threadId)
+    }
+
     /// The two-line principal title. A chevron says it opens something when it does.
     private func navTitle(opensTask: Bool) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 3) {
-                Text(session.rowTitle)
+                // An Org node goes by the name the drawer and its page use (CEO, "X VP").
+                Text(orgNode.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) } ?? session.rowTitle)
                     .font(.headline)
                     .lineLimit(1)
                 if opensTask {

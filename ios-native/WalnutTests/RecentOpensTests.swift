@@ -223,8 +223,8 @@ final class RecentOpensTests: XCTestCase {
         XCTAssertNil(TasksTabView.restorableSession(detailsOnly, liveSessions: []))
     }
 
-    /// A tap on a task with no session opens its attached draft, the task's page for
-    /// now, so the task is listed as opened.
+    /// A tap on a task with no session opens the task's page (the tab's sheet, seeded with
+    /// the task), so the task is listed as opened.
     func testOpeningASessionlessTasksDraftListsTheTask() {
         let store = TasksStore(transport: MockTaskTransport())
         let router = TaskSessionRouter()

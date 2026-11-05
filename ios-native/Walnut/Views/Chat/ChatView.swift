@@ -29,6 +29,9 @@ struct ChatView: View {
     /// the user back in it. `ChatPlaceGuardTests` fails on a session pushed here
     /// any other way.
     @State private var openedAskSession: WalnutSession?
+    /// The node page a thread push asked for, opened over the node's chat as it appears.
+    @State private var orgPageOnOpen: (sessionId: String, open: OrgNodePageOpen)?
+    @State private var orgLink = OrgNodeLink.shared
     /// The launch restore of the pushed session has run (it decides once; after
     /// that the page is the user's).
     @State private var placeRestored = false
@@ -155,7 +158,9 @@ struct ChatView: View {
                 MessageListView()
             }
             .navigationDestination(item: $openedAskSession) { session in
-                SessionConversationView(session: session)
+                SessionConversationView(
+                    session: session,
+                    orgPageOnOpen: orgPageOnOpen?.sessionId == session.id ? orgPageOnOpen?.open : nil)
                     // Another session is another page: a launch restore that finds
                     // the task moved on swaps it in place (`restorePlace`).
                     .id(session.id)
@@ -251,6 +256,11 @@ struct ChatView: View {
             if request != nil { openContentChat() }
         }
         .onAppear { if contentLink.chat != nil { openContentChat() } }
+        // A thread push: the node's chat, with its Threads page on top.
+        .onChange(of: orgLink.pending) { _, request in
+            if request != nil { openLinkedOrgNode() }
+        }
+        .onAppear { if orgLink.pending != nil { openLinkedOrgNode() } }
         .alert(sessionlessOrgNode?.name ?? "Start this conversation", isPresented: Binding(
             get: { sessionlessOrgNode != nil },
             set: { if !$0 { sessionlessOrgNode = nil } }
@@ -388,6 +398,36 @@ struct ChatView: View {
             openedAskSession = session
         } else {
             chat.errorMessage = "Couldn't open \(name). Try again in a moment."
+        }
+    }
+
+    /// An Org node a push or a link named by its task: its current session, with the page it asked
+    /// for opened over it. A node with no session yet says so instead.
+    private func openLinkedOrgNode() {
+        guard let request = orgLink.consume() else { return }
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { drawer = 0 }
+        let name = tasks?.tasks.first { $0.id == request.taskId }.map { TaskMentions.shownTitle($0.title, orgRole: $0.orgRole) } ?? "the chat"
+        let token = UUID()
+        orgOpening = (token, name)
+        Task {
+            defer { if orgOpening?.token == token { orgOpening = nil } }
+            do {
+                let detail = try await WalnutAPI().taskDetail(id: request.taskId)
+                tasks?.noteSessionIds(taskId: request.taskId, ids: detail.sessionIds ?? [])
+                guard orgOpening?.token == token else { return }
+                guard let sessionId = detail.currentSessionId else {
+                    chat.errorMessage = "\(TaskMentions.shownTitle(detail.title, orgRole: detail.orgRole)) has no chat yet."
+                    return
+                }
+                // Already on this chat, the page sees the new request and opens it itself.
+                orgPageOnOpen = (sessionId, OrgNodePageOpen(tab: request.tab, threadId: request.threadId, at: request.requestedAt))
+                await openOrgSession(sessionId, taskId: request.taskId, name: name, token: token)
+            } catch {
+                guard orgOpening?.token == token else { return }
+                chat.errorMessage = Self.orgFailure(name, error)
+            }
         }
     }
 
