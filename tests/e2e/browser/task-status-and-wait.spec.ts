@@ -282,7 +282,10 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await shot(menu, 'menu-waiting-picker', browserName)
   await until.locator('.dp-pill', { hasText: /^2h$/ }).click()
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
-  await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeTruthy()
+  // Wait for the pick itself to be stored: the default clock is already there, so a
+  // read before the pick's write lands still sees DEFAULT_WAIT_HOURS.
+  const hoursOut = async () => (Date.parse((await taskOf(task.id)).wait_until) - Date.now()) / 3_600_000
+  await expect.poll(hoursOut, { timeout: 10_000 }).toBeLessThan(2.1)
   const waiting = await taskOf(task.id)
   expect(waiting.phase).toBe('WAITING')
   expect(waiting.unread).toBeFalsy()

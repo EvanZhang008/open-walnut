@@ -87,6 +87,26 @@ describe('the default clock: a task entering WAITING with no wait_until named', 
     expect((await getTask(id)).wait_until).toBe(UNTIL);
   });
 
+  // The status menu sends two writes for one choice: Waiting (no time named, so the default
+  // clock), then the user's pick from the until row, which carries `phase: 'WAITING'` too.
+  // They are separate requests, so the server may get them in either order, and a retried
+  // status write may arrive after both. The user's pick wins every order.
+  it.each([
+    ['status first, then the pick', ['status', 'pick']],
+    ['the pick first, then the status', ['pick', 'status']],
+    ['status, pick, then a retried status', ['status', 'pick', 'status']],
+  ] as const)('the menu\'s two writes end on the user\'s pick: %s', async (_label, order) => {
+    for (const pick of [UNTIL, '']) {
+      const { task } = await addTask({ title: `Parked from the menu ${pick || 'no limit'}` });
+      for (const write of order) {
+        await updateTask(task.id, write === 'status' ? { phase: 'WAITING' } : { phase: 'WAITING', wait_until: pick }, { source: 'user' });
+      }
+      const t = await getTask(task.id);
+      expect(t.phase).toBe('WAITING');
+      expect(t.wait_until, `${order.join(' > ')} with ${pick || '""'}`).toBe(pick || undefined);
+    }
+  });
+
   it('the raw (sync-pull) path fills the same default on the move into WAITING', async () => {
     const { task } = await addTask({ title: 'Pulled into waiting' });
     const before = Date.now();

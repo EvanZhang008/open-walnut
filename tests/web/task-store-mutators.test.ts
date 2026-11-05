@@ -378,6 +378,41 @@ describe('the optimistic Waiting clock', () => {
     expect(rows()[0]).toMatchObject({ phase: 'WAITING', wait_until: undefined })
   })
 
+  // The status menu's Waiting then its until pick: two writes, two echoes, which may come
+  // back in either order, and a stale broadcast of the status write (the default clock) may
+  // still arrive while the pick's write is unanswered. The row ends on the user's pick.
+  it.each([
+    ['the status echo first', ['status', 'pick']],
+    ['the pick echo first, the status echo late', ['pick', 'status']],
+  ] as const)('Waiting then an until pick keeps the pick whatever order the echoes come in: %s', async (_label, order) => {
+    const PICK = '2026-10-06T10:00:00.000Z'
+    let answerPick = () => {}
+    api.updateTask
+      .mockResolvedValueOnce(task({ phase: 'WAITING' }))
+      .mockImplementationOnce(() => new Promise<Task>((resolve) => { answerPick = () => resolve(task({ phase: 'WAITING', wait_until: PICK })) }))
+    const store = mount([task()])
+    store.setPhase('task-1', 'WAITING')
+    const defaultClock = rows()[0].wait_until!
+    expect(defaultClock).not.toBe(PICK)
+    store.update('task-1', { phase: 'WAITING', wait_until: PICK })
+    expect(rows()[0].wait_until).toBe(PICK)
+    const echo = { status: { wait_until: defaultClock }, pick: { wait_until: PICK } }
+    for (const write of order) {
+      eventHandlers.get('task:updated')?.({ task: task({ phase: 'WAITING', ...echo[write] }) })
+      expect(rows()[0].wait_until, `after the ${write} echo`).toBe(PICK)
+    }
+    // Both echo guards are spent: a stale broadcast carrying the default clock reaches the
+    // merge, and the pick, still unanswered, is laid over it.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'WAITING', wait_until: defaultClock }) })
+    expect(rows()[0].wait_until).toBe(PICK)
+    answerPick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'WAITING', wait_until: PICK }) })
+    expect(rows()[0].wait_until).toBe(PICK)
+    expect(api.updateTask.mock.calls.map((c) => c[1])).toEqual([{ phase: 'WAITING' }, { phase: 'WAITING', wait_until: PICK }])
+  })
+
   it('a task already waiting keeps its clock on a same-phase write, and loses it on the way out', () => {
     const store = mount([task({ phase: 'WAITING', wait_until: '2026-10-06T10:00:00.000Z', phase_changed_at: '2026-09-01T00:00:00.000Z' })])
     store.setPhase('task-1', 'WAITING')

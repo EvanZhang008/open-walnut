@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 233,
+  "count": 231,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -211,8 +211,6 @@
     "task-multi-select-batch.spec.ts :: selection bar shows Complete and Delete directly, not behind a caret",
     "task-reopen-on-message.spec.ts :: a completed task returns to in progress when its session is messaged again",
     "task-row-wrap.spec.ts :: crowded rows wrap metadata without squeezing titles or moving actions",
-    "task-status-and-wait.spec.ts :: Waiting from the menu: the until row, the collapsed row, the task row and the detail pane all say it",
-    "task-status-and-wait.spec.ts :: the Projects view keeps only Running and Collapse; Waiting comes back through Status",
     "task-store-toast-undo-instant.spec.ts :: Undo on the \"Task created\" toast drops the board row before the DELETE is answered",
     "task-tags-key-value.spec.ts :: Settings, Tags: a key gets a link, one tag turns it off and back on, and the pills follow",
     "task-url-restoration.spec.ts :: exact taskless deep link is restored by Back during a failed warm refresh",
@@ -451,8 +449,6 @@
     "task-multi-select-batch.spec.ts :: selection bar shows Complete and Delete directly, not behind a caret": "Error: expect(locator).toBeVisible() failed",
     "task-reopen-on-message.spec.ts :: a completed task returns to in progress when its session is messaged again": "Error: expect(locator).toHaveClass(expected) failed",
     "task-row-wrap.spec.ts :: crowded rows wrap metadata without squeezing titles or moving actions": "Error: no clipped or overflowing metadata at 306px",
-    "task-status-and-wait.spec.ts :: Waiting from the menu: the until row, the collapsed row, the task row and the detail pane all say it": "Error: expect(received).toBeGreaterThan(expected)",
-    "task-status-and-wait.spec.ts :: the Projects view keeps only Running and Collapse; Waiting comes back through Status": "",
     "task-store-toast-undo-instant.spec.ts :: Undo on the \"Task created\" toast drops the board row before the DELETE is answered": "Error: expect(locator).toBeVisible() failed",
     "task-tags-key-value.spec.ts :: Settings, Tags: a key gets a link, one tag turns it off and back on, and the pills follow": "Test timeout of 30000ms exceeded.",
     "task-url-restoration.spec.ts :: exact taskless deep link is restored by Back during a failed warm refresh": "Error: expect(locator).toHaveAttribute(expected) failed",
