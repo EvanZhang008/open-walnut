@@ -2028,7 +2028,7 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
 `host_exec_stop`), through the Mac's link to it; the host's daemon runs it (capability
 `host-exec-v1`). The caller is the session in `x-walnut-caller-sid`.
 
-- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background?, wait_for?, wait_ms? }` →
+- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background?, strict?, keep?, wait_for?, wait_ms? }` →
   `200 { host, jobId, running, exitCode, signal, timedOut, ms, cwd, output, truncated,
   outputBytes, logFile, redactedLines? }`. `command` runs in the user's login shell; `argv`
   runs a program with no shell parsing. A run ends by `timeout_ms` (default 120000, at
@@ -2057,7 +2057,7 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   with nothing run (also for `host_mcp`, `host_http`, `host_copy` and `host_daemon_update`).
   A body with `grant_id` is refused (`400 bad_request`): a run under one grant has its own route.
 - `POST /api/v1/host-exec/grants/:grantId/exec { host, command | argv, cwd?, timeout_ms?,
-  background?, allow_prompts?, strict?, job_id? }` (op `host_exec_pinned`, additive,
+  background?, allow_prompts?, strict?, keep?, job_id? }` (op `host_exec_pinned`, additive,
   2026-11-04; the server lists `host-exec-pinned-v1` in `GET /api/v1/status` `capabilities`,
   and an older one answers `404`) → the same run and answer as `POST /hosts/:host/exec`, under
   that grant only. Walnut makes no grant (not the own-host one either) and sends no letter. The
@@ -2188,6 +2188,24 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   `400 wait_for_needs_daemon_upgrade`, also before anything runs.
   A `job_id` this task already ran answers that run with `sameJob: true`, and with
   `sameJobCommand` (that run's command) when the call sent another command, which did not run.
+  `keep: true` (additive, 2026-11) starts the run where this task's last keep call on that host
+  ended: its working directory (unless the call names `cwd`, which wins) and its exported
+  variables, new, changed and unset ones; at its end its own directory and exported variables
+  are kept for the next keep call there. The server shapes the line (any daemon runs it); it
+  needs bash (under sh it does nothing) and the task's directory on that host: the state is
+  `$WALNUT_TASK_DIR/host-exec/keep.sh` there, 0600, written whole through a temp file (two runs
+  at once: the last to end wins), and its values never come back in an answer. Not kept: shell
+  functions, aliases, unexported variables, shell options, traps, and `PWD OLDPWD SHLVL _`,
+  `WALNUT_TASK_DIR`, `WALNUT_HOST_EXEC_JOB`, `walnut_*`, `BASH_*` and readonly variables. It is saved when the line
+  ends, `exit N` and SIGTERM (a stop, the deadline) included; not when the line sets its own
+  EXIT trap, runs `exec`, is killed by SIGKILL, or runs with `background: true` (that run starts
+  from the state and saves nothing). With `strict`, keep's restore runs first (outside
+  `set -e`) and its EXIT trap stands in for strict's own; the failed step is named the same.
+  A kept directory that is gone, or a state file that cannot be read, is said on the output's
+  first line (`walnut: ...`) and the run goes on without it. The answer adds `keep: { saves }`
+  (false for a background run). Refusals: `400 bad_request` for a `keep` that is not a boolean
+  or comes with `argv`, `409 task_dir_unset` on a host with no task directory for the task,
+  each before anything runs.
 - `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
 - `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`) → updates the Walnut
   daemon on a machine that joined over the host network to this server's build, now:

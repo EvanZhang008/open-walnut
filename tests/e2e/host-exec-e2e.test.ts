@@ -493,6 +493,45 @@ describe('host_exec', () => {
     expect(String(pipe.result.outcome)).toContain('Exit 141 is SIGPIPE')
   }, 60_000)
 
+  it('keep: a call starts where this task\'s last keep call there ended; a call without keep is untouched', async () => {
+    const home = path.join(hostRoot, 'home')
+    const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
+    const first = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'mkdir -p keep-e2e && cd keep-e2e && export KEEP_E2E=one KEEP_E2E_SECRET=s3cr3t-keep-value', keep: true }, SID)
+    expect(first).toMatchObject({ status: 200, body: { exitCode: 0, output: '', keep: { saves: true } } })
+    // The host got the line keep shaped, which names no value of its own.
+    const sentLine = String(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params.command)
+    expect(sentLine).toMatch(/^if \[ -n "\$\{BASH_VERSION:-\}" \]; then /)
+    expect(sentLine.endsWith('; mkdir -p keep-e2e && cd keep-e2e && export KEEP_E2E=one KEEP_E2E_SECRET=s3cr3t-keep-value')).toBe(true)
+    // A call without keep starts fresh, and leaves the kept state alone.
+    const plain = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'pwd; echo "${KEEP_E2E:-unset}"; cd /; export KEEP_E2E=plain' }, SID)
+    expect(plain.body).toMatchObject({ exitCode: 0, output: `${home}\nunset\n` })
+    expect(plain.body.keep).toBeUndefined()
+    const second = await executeOp('host_exec', { host: 'macbox', command: 'pwd; echo "$KEEP_E2E"', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(second.result).toMatchObject({ exitCode: 0, output: `${home}/keep-e2e\none\n`, keep: { saves: true } })
+    expect(String(second.result.outcome)).toMatch(/^Exit 0 on macbox \(bash\) after .*It started where this task's last keep call on macbox ended .* at its end carry to the next keep call there\./)
+    // Values stay on the host: in the task's 0600 file there, never in an answer.
+    expect(JSON.stringify(second.result)).not.toContain('s3cr3t-keep-value')
+    const state = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.sh')
+    expect((await fs.stat(state)).mode & 0o777).toBe(0o600)
+    expect(await fs.readFile(state, 'utf8')).toContain('KEEP_E2E_SECRET')
+    // With strict: the failed step is named as without keep, and where it stopped carries.
+    const strict = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cd /\ngrep -q zz-nomatch /dev/null\necho never', strict: true, keep: true }, SID)
+    expect(strict.body).toMatchObject({ exitCode: 1, failedStep: { exitCode: 1, command: 'grep -q zz-nomatch /dev/null', line: 2 } })
+    expect(strict.body.output).not.toContain('never')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "$PWD $KEEP_E2E"', keep: true }, SID)).body.output).toBe('/ one\n')
+    // A background keep run starts from the state and saves nothing.
+    const bg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "bg in $PWD"; export KEEP_BG=1', keep: true, background: true, wait_for: { output: 'bg in' } }, SID)
+    expect(bg.body).toMatchObject({ keep: { saves: false }, waitedFor: { matched: 'output', match: 'bg in /' } })
+    await until(async () => (await api('GET', `/api/v1/hosts/macbox/exec/${String(bg.body.jobId)}`, undefined, SID)).body.running === false, 'the background keep run to end')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "${KEEP_BG:-unset}"', keep: true }, SID)).body.output).toBe('unset\n')
+    // A wrong keep, or keep with argv, runs nothing.
+    const before = sent.filter((m) => m.cmd === 'exec.run').length
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true', keep: 'yes' }, SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { argv: ['true'], keep: true }, SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    expect((await executeOp('host_exec', { host: 'macbox', command: 'true', keep: 'yes' }, opts)).ok).toBe(false)
+    expect(sent.filter((m) => m.cmd === 'exec.run').length).toBe(before)
+  }, 60_000)
+
   it('a revoked grant stops the task and the next call asks the user again; Deny is kept', async () => {
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants
     expect(await api('DELETE', `/api/v1/host-exec/grants/${g.id}`, undefined, SID)).toMatchObject({ status: 403, body: { code: 'human_only' } })
@@ -763,6 +802,18 @@ describe('host_exec', () => {
     const long = await api('POST', '/api/v1/hosts/oldmac/exec', { command: `echo ${'x'.repeat(9000)} >/dev/null; echo long` }, OWN_SID)
     expect(long).toMatchObject({ status: 200, body: { output: 'long\n', shell: null, taskDir: null } })
     expect(await api('POST', '/api/v1/hosts/oldmac/exec', { command: `echo ${'x'.repeat(9000)} > "$WALNUT_TASK_DIR/x"` }, OWN_SID)).toMatchObject({ status: 409, body: { code: 'task_dir_unset', taskDir } })
+    // keep runs there too, shaped by the server; with no task directory there, or a line keep makes
+    // too long for that daemon, it is refused in keep's words before anything runs.
+    expect((await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'export OLD_KEEP=1; cd /', keep: true }, OWN_SID)).body).toMatchObject({ exitCode: 0, keep: { saves: true } })
+    expect((await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'echo "$OLD_KEEP $PWD"', keep: true }, OWN_SID)).body.output).toBe('1 /\n')
+    const runs = sent.filter((m) => m.cmd === 'exec.run').length
+    const nodir = await api('POST', '/api/v1/hosts/oldmac-nodir/exec', { command: 'true', keep: true }, OWN_SID)
+    expect(nodir).toMatchObject({ status: 409, body: { code: 'task_dir_unset' } })
+    expect(nodir.body.error).toContain('keep:true keeps this task\'s shell state in its task directory on oldmac-nodir')
+    const tooLong = await api('POST', '/api/v1/hosts/oldmac/exec', { command: `echo ${'x'.repeat(7000)} >/dev/null`, keep: true }, OWN_SID)
+    expect(tooLong).toMatchObject({ status: 409, body: { code: 'task_dir_unset' } })
+    expect(tooLong.body.error).toMatch(/^keep:true makes this line too long for the older Walnut daemon on oldmac/)
+    expect(sent.filter((m) => m.cmd === 'exec.run').length).toBe(runs)
   }, 30_000)
 
   it('the hard stop survives an older Walnut rewriting the grants file', async () => {

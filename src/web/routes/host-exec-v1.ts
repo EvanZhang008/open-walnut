@@ -2,7 +2,7 @@
  * Commands on another host for a task's session (core/hosts/host-exec.ts), and
  * the user's grants for them (core/hosts/exec-grants.ts). Additive to v1.
  *
- *   POST   /api/v1/hosts/:host/exec                  { command | argv, cwd?, timeout_ms?, background?, allow_prompts?, strict?, job_id?, wait_for?, wait_ms? } → the run
+ *   POST   /api/v1/hosts/:host/exec                  { command | argv, cwd?, timeout_ms?, background?, allow_prompts?, strict?, keep?, job_id?, wait_for?, wait_ms? } → the run
  *   GET    /api/v1/hosts/:host/exec                  → { jobs } this task's runs there, running and recent
  *   GET    /api/v1/hosts/:host/exec/:jobId?offset=&wait_ms=&wait_for= → the job's output
  *
@@ -101,6 +101,8 @@ function runBody(b: Record<string, unknown>) {
     background: b.background === true,
     allow_prompts: b.allow_prompts === true,
     strict: b.strict === true,
+    // As sent: anything but a boolean is refused before anything runs (host-exec-keep.ts checkKeep).
+    ...(b.keep !== undefined ? { keep: b.keep as boolean } : {}),
     ...(typeof b.job_id === 'string' ? { job_id: b.job_id } : {}),
     ...(b.wait_for !== undefined ? { wait_for: b.wait_for } : {}),
     ...(num(b.wait_ms) !== undefined ? { wait_ms: num(b.wait_ms) } : {}),
@@ -123,7 +125,7 @@ hostExecV1Router.post('/hosts/:host/exec', (req: Request, res: Response, next: N
 
 /*
  * POST /api/v1/host-exec/grants/:id/exec { host, command | argv, cwd?, timeout_ms?, background?,
- * allow_prompts?, strict?, job_id?, wait_for?, wait_ms? }: the same run, under that grant only (host-exec.ts grant_id).
+ * allow_prompts?, strict?, keep?, job_id?, wait_for?, wait_ms? }: the same run, under that grant only (host-exec.ts grant_id).
  * No grant is made and no letter sent; the grant must be the calling task's on `host`, live, and
  * the host open, at the start and again right before the run is sent. GET /api/v1/status lists
  * `host-exec-pinned-v1` on a server that has this route.

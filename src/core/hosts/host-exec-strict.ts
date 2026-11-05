@@ -61,18 +61,19 @@ const TAG_RE = /\t\((in a subshell, )?bash (\d+)(?:, (?:pid|bg) (\d+))?\)$/
  * trap (measured 2026-11-05 on 3.2, 4.2 and 5.2: `true` then a failing `grep -q` named no step without
  * it). It keeps the exit code, and a caller's own EXIT trap replaces it and keeps that too. Set before
  * the ERR trap, so the last command of Walnut's own that bash 4 may name is that trap (failedStepOf
- * never names it).
+ * never names it). With keep (host-exec-keep.ts) keep's own EXIT trap, set before this prefix, does
+ * the same job (`exitTrap` false).
  */
-const prefix = (jobId: string, seal: string) => `set -e; (set -o pipefail) 2>/dev/null && set -o pipefail; if [ -n "\${BASH_VERSION:-}" ]; then set -E; trap : EXIT; trap 'walnut_rc=$? walnut_ps="\${PIPESTATUS[*]}"; walnut_in="${BASH_TAG}\${BASH_VERSINFO[0]:-0}, bg \${!:-0})"; [ "\${BASH_SUBSHELL:-0}" = 0 ] || walnut_in="${SUBSHELL_TAG}\${BASH_VERSINFO[0]:-0}, pid \${BASHPID:-0})"; case $- in *e*) printf "\\n${strictMark(jobId, seal)} %s [%s] line %s: %s%s\\n" "$walnut_rc" "$walnut_ps" "\${LINENO:-0}" "$BASH_COMMAND" "$walnut_in" >&2;; esac' ERR; fi`
-/** Walnut's own commands, which bash 4 may name as the step that failed after them. */
-const OWN_COMMAND_RE = /^trap (?:'walnut_rc=|: EXIT$)/
+const prefix = (jobId: string, seal: string, exitTrap = true) => `set -e; (set -o pipefail) 2>/dev/null && set -o pipefail; if [ -n "\${BASH_VERSION:-}" ]; then set -E; ${exitTrap ? 'trap : EXIT; ' : ''}trap 'walnut_rc=$? walnut_ps="\${PIPESTATUS[*]}"; walnut_in="${BASH_TAG}\${BASH_VERSINFO[0]:-0}, bg \${!:-0})"; [ "\${BASH_SUBSHELL:-0}" = 0 ] || walnut_in="${SUBSHELL_TAG}\${BASH_VERSINFO[0]:-0}, pid \${BASHPID:-0})"; case $- in *e*) printf "\\n${strictMark(jobId, seal)} %s [%s] line %s: %s%s\\n" "$walnut_rc" "$walnut_ps" "\${LINENO:-0}" "$BASH_COMMAND" "$walnut_in" >&2;; esac' ERR; fi`
+/** Walnut's own commands, which bash 4 may name as the step that failed after them (keep's EXIT trap too). */
+const OWN_COMMAND_RE = /^trap (?:'walnut_rc=|'walnut_ks=1;|: EXIT$)/
 
-export function strictLine(line: string, jobId: string): string {
+export function strictLine(line: string, jobId: string, opts: { exitTrap?: boolean } = {}): string {
   if (!/^hx-[A-Za-z0-9_-]+$/.test(jobId)) throw new Error(`strictLine: not a job id: ${jobId}`)
   // On the line's own first line, so bash counts the lines as the caller wrote them (its errors and
   // $LINENO; 2026-11-05 review 12: `cd /nope` on line 2 read "line 3"). Nothing after it: a line cut
   // off (`echo a &&`, `cat <<EOF` with no end) stays the syntax error bash makes of it (code review 13).
-  return `${prefix(jobId, sealFor(jobId, true)!)}; ${line}`
+  return `${prefix(jobId, sealFor(jobId, true)!, opts.exitTrap !== false)}; ${line}`
 }
 
 export interface FailedStep {

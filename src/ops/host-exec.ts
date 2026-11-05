@@ -27,6 +27,15 @@ defineOp({
       + 'function runs when it is called that way, so `f || echo x` runs all of f). failedStep names the step, and the output '
       + 'ends with Walnut\'s line `walnut strict <job_id>: exit N [pipe codes] line L: command`, which a wait never matches. '
       + 'A `trap … ERR` of your own replaces the one strict names the step with.',
+    'Shell state across calls. keep:true starts the run where this task\'s last keep call on that host ended: its working '
+      + 'directory (unless you give cwd, which wins) and its exported variables, new, changed and unset ones (a venv\'s PATH and '
+      + 'VIRTUAL_ENV too); at its end its own directory and exported variables carry to the next keep call there. Calls without '
+      + 'keep never see or change that state. Not carried: shell functions (a venv\'s `deactivate`), aliases, unexported variables, '
+      + 'shell options, traps. It is saved when the line ends, `exit N` and a stop (SIGTERM) included, but not when the line sets '
+      + 'its own EXIT trap, runs `exec`, is killed hard (SIGKILL), or runs with background:true (that run starts from the kept '
+      + 'state and saves nothing). It needs bash (under sh it does nothing) and a task directory there (else 409 '
+      + 'task_dir_unset): the state is a 0600 file in it, and values never come back in the answer. A kept directory that '
+      + 'is gone says so on the first line of output, and the run starts in the home directory. With argv it is refused.',
     'The host. `host` is an alias or a selector ("@ios"), never your own host. The first call for this task on a host asks the '
       + 'user by letter (403 exec_grant_required): do other work; a notice comes when they allow it. A revoke, or the host '
       + 'closed in Settings, ends a waiting call at once with a 403; runs already going keep going to their deadline, and '
@@ -88,6 +97,7 @@ defineOp({
     background: z.boolean().optional().describe('Start it and return a job_id at once; read it with host_exec_read'),
     allow_prompts: z.boolean().optional().describe('The user agreed this command may show a dialog on that host\'s screen (a 409 may_prompt asked for it)'),
     strict: z.boolean().optional().describe('Run under set -e and pipefail: stop at the first command that fails outside an if, while, && or || test, and name it in failedStep: {exitCode, command, line, pipeStatus}'),
+    keep: z.boolean().optional().describe('Start where this task\'s last keep call on that host ended (its directory, unless cwd is given, and its exported variables), and carry this run\'s to the next keep call there (not with background:true)'),
     job_id: z.string().regex(/^hx-[A-Za-z0-9_-]{4,64}$/).optional().describe('The id this run gets (hx-...; the walnut CLI picks one). The same id again from this task answers that run, never a second one'),
     wait_for: WAIT_FOR.optional().describe('Return as soon as one holds: {output: a JavaScript regular expression tested on each output line, flags, partial, port: a TCP port listening there, file: a path there}'),
     wait_ms: z.number().int().min(0).optional().describe('With wait_for: how long the call waits for it, at most 600000 (default: a foreground run to its deadline, a background one 120000); timeout_ms stays the run\'s deadline'),
@@ -119,6 +129,7 @@ defineOp({
     background: z.boolean().optional().describe('Start it and return a job_id at once; read it with host_exec_read'),
     allow_prompts: z.boolean().optional().describe('The user agreed this command may show a dialog on that host\'s screen (a 409 may_prompt asked for it)'),
     strict: z.boolean().optional().describe('Run under set -e and pipefail: stop at the first command that fails outside an if, while, && or || test, and name it in failedStep: {exitCode, command, line, pipeStatus}'),
+    keep: z.boolean().optional().describe('Start where this task\'s last keep call on that host ended (its directory, unless cwd is given, and its exported variables), and carry this run\'s to the next keep call there (not with background:true)'),
     job_id: z.string().regex(/^hx-[A-Za-z0-9_-]{4,64}$/).optional().describe('The id this run gets (hx-...; the walnut CLI picks one). The same id again from this task answers that run, never a second one'),
     wait_for: WAIT_FOR.optional().describe('Return as soon as one holds: {output: a JavaScript regular expression tested on each output line, flags, partial, port: a TCP port listening there, file: a path there}'),
     wait_ms: z.number().int().min(0).optional().describe('With wait_for: how long the call waits for it, at most 600000 (default: a foreground run to its deadline, a background one 120000); timeout_ms stays the run\'s deadline'),

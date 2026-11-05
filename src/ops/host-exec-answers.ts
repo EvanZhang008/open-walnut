@@ -423,10 +423,26 @@ function ownErrTrap(b: Record<string, unknown>, args: Record<string, unknown>): 
   return /\btrap\b[^\n]*\bERR\b/.test(args.command) ? 'Its line sets its own `trap … ERR`, which replaces the one strict names the failing step with, so no step is named.' : ''
 }
 
+/** What keep did (host-exec-keep.ts): where the run started, and whether its end carries to the next keep call. */
+function keepLine(b: Record<string, unknown>, args: Record<string, unknown>): string {
+  if (args.keep !== true || b.sameJob) return ''
+  const k = b.keep && typeof b.keep === 'object' ? b.keep as { saves?: unknown } : null
+  if (!k) return 'The Walnut server is older than keep, so it ran this without it: no state was restored or saved.'
+  const from = named(args.cwd)
+    ? `It started in the cwd you gave, with the exported variables this task's last keep call on ${String(b.host)} left`
+    : `It started where this task's last keep call on ${String(b.host)} ended (its directory and exported variables; the home directory on the first)`
+  if (k.saves !== true) return `${from}; as a background run, its own directory and variables do not carry to the next keep call.`
+  return `${from}, and its directory and exported variables ${b.running ? 'carry to the next keep call there once it ends' : 'at its end carry to the next keep call there'}.`
+}
+
+const named = (cwd: unknown) => typeof cwd === 'string' && cwd.trim() !== ''
+
 /** The run in two lines: how it ended, then the output, so an agent reads it like its own Bash tool. */
 export function runOutcome(body: unknown, args: Record<string, unknown> = {}) {
   const b = (body ?? {}) as Record<string, unknown>
-  const where = `${String(b.host)}${b.cwd ? ` in ${String(b.cwd)}` : ''}${typeof b.shell === 'string' ? ` (${b.shell})` : ''}`
+  // A keep run without cwd started in its kept directory, not the one the host spawned it in.
+  const shownCwd = b.cwd && !(b.keep && args.keep === true && !named(args.cwd))
+  const where = `${String(b.host)}${shownCwd ? ` in ${String(b.cwd)}` : ''}${typeof b.shell === 'string' ? ` (${b.shell})` : ''}`
   const waited = waitLine(b, args)
   // A wait's sentence already says the run's state: the host and how long it ran come after it, once.
   const head = waited ? `${waited}${b.running ? '' : ` It ran ${secs(b.ms)} on ${where}.`}` : exiting(b)
@@ -454,6 +470,7 @@ export function runOutcome(body: unknown, args: Record<string, unknown> = {}) {
     b.truncated ? `Only the last part of the output is here; the whole log is ${String(b.logFile)} on that host (host_exec_read with offset 0).${matchBefore(b)}` : '',
     typeof args.wait_ms === 'number' && args.wait_ms > 600_000 && args.wait_for !== undefined ? `A wait_for waits at most 600 s, so this call waited that long, not the wait_ms you asked for.` : '',
     ownErrTrap(b, args),
+    keepLine(b, args),
     b.more ? `More output follows: host_exec_read with offset ${String(b.nextOffset)}.` : '',
     failedLine(b),
     b.redactedLines ? `${String(b.redactedLines)} line(s) that looked like a credential were hidden${b.redactedToEnd ? ': a private key\'s BEGIN line with no END in this output hid every line after it' : ''}.` : '',

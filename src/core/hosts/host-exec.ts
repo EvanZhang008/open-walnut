@@ -102,6 +102,8 @@ export interface ExecParams {
   allow_prompts?: boolean
   /** Stop at the first failing command, pipes included, and name it in the answer (host-exec-strict.ts). */
   strict?: boolean
+  /** Start where this task's last keep call on this host ended, and carry this one's end to the next (host-exec-keep.ts). */
+  keep?: boolean
   /**
    * The run's id, chosen by the caller before the call leaves (the walnut CLI does): an answer
    * lost on the way back (2026-11-03: `hub_timeout` from a loaded Mac, the run started there)
@@ -441,6 +443,9 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const waitFor = waits.checkWaitFor(params.wait_for)
   // Every refusal of the call's own arguments comes before the grant, so a bad call never asks the user.
   if (params.wait_ms !== undefined && !waitFor) throw new HostExecError('wait_ms is how long the call waits for wait_for: give wait_for too, or leave wait_ms out (host_exec_read with wait_ms waits for a run to end). Nothing ran.', 400, 'bad_request')
+  const keepMod = await import('./host-exec-keep.js')
+  keepMod.checkKeep(params.keep, hasCommand)
+  const keep = params.keep === true
   const asked = typeof params.job_id === 'string' && params.job_id !== '' ? params.job_id : null
   if (asked !== null && !JOB_ID_RE.test(asked)) throw new HostExecError('job_id must be hx- and 4 to 64 letters, digits, - or _ (the walnut CLI picks one)', 400, 'bad_request')
   // Any grant_id at all is the pinned mode: an empty or malformed one is refused, never read as none.
@@ -491,16 +496,15 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     await waits.assertWaitSupported(conn, host, waitFor)
-    // Strict shapes the line here, after the dialog guards read the user's own text.
-    const strict = params.strict === true && hasCommand
-    const { strictLine } = await import('./host-exec-strict.js')
-    const runParams = strict ? { ...params, command: strictLine(params.command!, jobId) } : params
-    ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, strict ? strictLine(line, jobId) : line))
+    // Strict and keep shape the line here, after the dialog guards read the user's own text.
+    const shaped = keepMod.shapedLine(params, jobId)
+    const runParams = shaped !== null ? { ...params, command: shaped } : params
+    ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, shaped ?? line))
     // Last look before anything reaches the host: from here to the send nothing waits.
     used = await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
   } catch (err) {
     release(jobId) // nothing was sent: the slot is free
-    throw err
+    throw keep ? keepMod.keepRefusal(err, await hostName(host)) : err
   }
   running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + timeoutMs + REPLY_MARGIN_MS, at: Date.now() })
   // This task's runs there, for host_exec_list (an older host does not say whose a job is).
@@ -537,7 +541,8 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
       return sameJob(caller, host, jobId, t0, again)
     }
     release(jobId)
-    throw daemonError(reply, 'the host refused the command')
+    const refused = daemonError(reply, 'the host refused the command')
+    throw keep ? keepMod.keepRefusal(refused, await hostName(host)) : refused
   }
   // The host has it now: a refresh may judge it by the host's list from here on.
   const entry = running.get(jobId)
@@ -571,6 +576,8 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   if (cut && out.running === true && waits.ranOut(waited?.waitedFor)) out.heldMs = Date.now() - t0
   // It waited for a slot under a cap first: the answer says how long (2026-11-05 review).
   if (slotMs >= 1_000) out.slotWaitMs = slotMs
+  // What keep does with this run's end: saves it, or (background) not.
+  if (keep) out.keep = { saves: !background }
   // A deadline over the most a run of its kind may have ran with that most: the answer says so (2026-11-05 review 12).
   if (typeof params.timeout_ms === 'number' && params.timeout_ms > cap) out.timeoutCappedMs = cap
   const step = out.failedStep as import('./host-exec-strict.js').FailedStep | undefined
@@ -594,7 +601,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   if (out.failedStep && typeof out.failedStep === 'object') { delete (out.failedStep as { bashLine?: number }).bashLine; delete (out.failedStep as { inner?: true }).inner }
   log.session.info('host exec', {
     taskId: caller.taskId, fromHost: caller.host, host, jobId, cwd: reply.cwd, background, running: out.running, shell: out.shell, legacy: !conn.hasCapability('host-exec-v2'),
-    exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0, waitedFor: waited?.waitedFor.matched,
+    exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0, waitedFor: waited?.waitedFor.matched, ...(keep ? { keep: true } : {}),
     command: preview.slice(0, 200),
   })
   return out
