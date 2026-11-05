@@ -20,6 +20,7 @@ import { isHistoryUserTurn } from '../../lib/history-turn-window.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { isPersonSource } from './send-sent-by.js';
+import { walnutCommandFor } from './walnut-commands.js';
 
 /** What the model is told about a framed line: it is a request to carry out, not the user's typing. */
 const NOTE_WALNUT_SEND = 'automatic message from Walnut: carry it out as its text says; your user did not type it';
@@ -46,10 +47,9 @@ export function frameAsWalnut(text: string, source: string | undefined): string 
   // into his own hook or routine gets that pass: a command from any other sender is framed, because
   // the CLI records a command's arguments as typed words (an agent could put "approved" in them).
   if (text.trimStart().startsWith('/') && /^(hook:|routine)/.test(source ?? '')) return text;
-  // Walnut's idle compaction (sessions/idle-compaction.ts) sends the bare command, no arguments.
-  if (source === 'idle-compact' && text.trim() === '/compact') return text;
-  // So does the recovery of a conversation that no longer fits (sessions/context-full-recovery.ts).
-  if (source === 'context-compact' && text.trim() === '/compact') return text;
+  // Walnut's own commands (the idle compaction, the recovery of a full context) go out raw too:
+  // only the listed line of each, whose own words say Walnut sent it (sessions/walnut-commands.ts).
+  if (walnutCommandFor(source, text)) return text;
   return buildWalnutMessage({
     kind: 'peer-note',
     attrs: { from: `Walnut (${sourceLabel(source)})`, note: NOTE_WALNUT_SEND },

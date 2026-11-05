@@ -537,13 +537,23 @@ export async function executeCompactSession(
 // ── Queued-message management (WS session:get-queue/edit-queued/delete-queued twins) ──
 
 /** List a session's pending/processing queued messages. */
+/**
+ * The queue rows a person's queue strip shows: Walnut's own quiet commands (its /compact) are no
+ * message of his, and the phone's strip would draw one as his (sessions/walnut-commands.ts).
+ */
+export async function withoutWalnutRows<T extends { id: string; message: string }>(rows: T[]): Promise<T[]> {
+  const { isQuietRowId } = await import('./quiet-turn.js');
+  const { walnutCommandNotice } = await import('./walnut-commands.js');
+  return rows.filter((m) => !isQuietRowId(m.id) && !walnutCommandNotice(m.message));
+}
+
 export async function getSessionQueuePayload(sessionId: string): Promise<{ messages: unknown[] }> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   if (!(await getSessionByClaudeId(sessionId))) throw new SessionControlError('session not found', 404);
   const { getQueue } = await import('../session-message-queue.js');
   const { displayQueueRow } = await import('./reference-cards.js');
   const { presentAfterTurn } = await import('./queue-after-turn.js');
-  return { messages: (await getQueue(sessionId)).map(presentAfterTurn).map(displayQueueRow) };
+  return { messages: (await withoutWalnutRows(await getQueue(sessionId))).map(presentAfterTurn).map(displayQueueRow) };
 }
 
 /** Edit a still-pending queued message's text. */

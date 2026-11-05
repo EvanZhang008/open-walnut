@@ -5,7 +5,7 @@
  * Code 2.1.312 refuses at its blocking limit with auto-compact off (2026-11-05 transcript).
  *
  * Pinned: the person's message that got the error is compacted for and sent again, word for word,
- * in one Walnut note; the compaction is the bare command; the session ends idle, not in error; at
+ * in one Walnut note; the compaction is Walnut's listed command line; the session ends idle, not in error; at
  * most two compactions an hour start by themselves, the third overflow waits for a person's
  * Compact and resend (the Retry route), which works past the cap.
  */
@@ -24,6 +24,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { CONTEXT_COMPACT_COMMAND as CONTEXT_COMPACT_TEXT } from '../../src/core/sessions/walnut-commands.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -64,7 +65,7 @@ async function task(id: string): Promise<any> {
 const sentTexts = (sid: string) => daemon.getCommandHistoryFor('send')
   .filter((c) => c.payload.sid === sid)
   .map((c) => String(c.payload.text ?? c.payload.message ?? ''))
-const compacts = (sid: string) => sentTexts(sid).filter((s) => s.trim() === '/compact').length
+const compacts = (sid: string) => sentTexts(sid).filter((s) => s.trim() === CONTEXT_COMPACT_TEXT).length
 const sessionCards = async (sid: string): Promise<any[]> => ((await req('GET', '/api/notifications')).json?.feed ?? [])
   .filter((n: any) => n.recoveryKey === `session:${sid}`)
 

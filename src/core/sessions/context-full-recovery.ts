@@ -32,12 +32,14 @@ import {
   quietTurnKind, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
 } from './quiet-turn.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
+import { CONTEXT_COMPACT_COMMAND } from './walnut-commands.js';
 
 /** The send source of the recovery's `/compact` (send-frame passes it raw; an agent's, never a person's). */
 export const CONTEXT_COMPACT_SOURCE = 'context-compact';
 /** The send source of the note that resends what got no answer. */
 export const CONTEXT_RESEND_SOURCE = 'context-recovery';
-export const CONTEXT_COMPACT_TEXT = '/compact';
+/** Its line: the command, and words that tell every history reader Walnut sent it (sessions/walnut-commands.ts). */
+export const CONTEXT_COMPACT_TEXT = CONTEXT_COMPACT_COMMAND;
 /** Compactions that start by themselves per session per hour; a person's click is not counted against it. */
 export const MAX_ATTEMPTS_PER_HOUR = 2;
 const HOUR_MS = 60 * 60_000;

@@ -44,8 +44,12 @@ import type { SessionHistoryMessage } from './session-history.js';
  * 5 (2026-10-29): Claude Code's `api-request-blob` lines are no longer rows. A
  * version-4 parse holds them as user rows (a session's MEMORY.md, CLAUDE.md and
  * old hint text, stamped with the parse time) and kept serving them after the fix.
+ *
+ * 6 (2026-11-05): a command Walnut sent itself (its `/compact`, sessions/walnut-commands.ts)
+ * is a notice row, and a slash command's queue enqueue is the twin of its command line. A
+ * version-5 parse holds them as user rows, twice.
  */
-export const HISTORY_CACHE_SCHEMA = 5;
+export const HISTORY_CACHE_SCHEMA = 6;
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a

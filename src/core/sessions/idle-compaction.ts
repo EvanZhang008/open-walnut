@@ -49,10 +49,12 @@ import {
   beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled, onQuietTurnEnd, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
 } from './quiet-turn.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
+import { IDLE_COMPACT_COMMAND } from './walnut-commands.js';
 
 /** The send source of the idle compaction's `/compact` (send-sent-by: an agent's; framing passes it raw). */
 export const IDLE_COMPACT_SOURCE = 'idle-compact';
-export const IDLE_COMPACT_TEXT = '/compact';
+/** Its line: the command, and words that tell every history reader Walnut sent it (sessions/walnut-commands.ts). */
+export const IDLE_COMPACT_TEXT = IDLE_COMPACT_COMMAND;
 /** A cache this close to expiring is left alone: the compaction would not start in time. */
 const TOO_LATE_MS = 15_000;
 

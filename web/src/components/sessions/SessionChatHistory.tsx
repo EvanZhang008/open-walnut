@@ -29,6 +29,7 @@ import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamCh
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { IDLE_COMPACTING_TEXT, useIdleCompacting } from './CompactContext';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
+import { isWalnutCommandNotice } from '../../../../src/core/sessions/walnut-commands';
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneTimeline';
@@ -4730,7 +4731,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (items.length === 1 && !answerThinking && !riders && !isInboundPart(items[0].part) && !sends(items[0].part)) { renderOne(items[0]); return; }
     // A compaction and the summary it left are said as themselves, one fold deep at most: under a
     // fold they read "2 notices" and hid that the session was compacted (2026-11-04 review).
-    const compactRow = (m: SessionHistoryMessage) => m.role === 'system' && ((m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE) || isIdleCompactLine(m.text));
+    const compactRow = (m: SessionHistoryMessage) => m.role === 'system' && ((m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE) || isIdleCompactLine(m.text) || isWalnutCommandNotice(m.text));
     if (!answerThinking && !riders && items.some((x) => rowsOf(x.part).some(compactRow))
       && items.every((x) => isContextPart(x.part) || rowsOf(x.part).every(compactRow))) {
       for (const x of items) renderOne(x);

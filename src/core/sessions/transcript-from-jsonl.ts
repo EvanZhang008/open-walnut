@@ -13,6 +13,7 @@ import { transcriptSentBy, personTextOf, type TranscriptSentBy } from './transcr
 import { nonHumanOrigin } from '../../lib/history-session-envelope.js'
 import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
 import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
+import { walnutCommandNotice } from './walnut-commands.js'
 
 export const TRANSCRIPT_TAIL_ROWS = 200
 // Tail-only read: ~200 rendered rows fit comfortably in the last 512KB even
@@ -107,6 +108,9 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
       // everything the human's turn carries survives.
       if (typeof content === 'string') {
         const text = content.trim()
+        // A command Walnut sent itself is its notice, never the person's message; the phone draws
+        // no notice rows, as the primary's projection leaves its system rows out (sessions/walnut-commands.ts).
+        if (walnutCommandNotice(text)) continue
         if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp, nonHumanOrigin(parsed.origin)))
       } else if (Array.isArray(content)) {
         for (const block of content) {

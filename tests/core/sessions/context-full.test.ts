@@ -11,6 +11,7 @@ import {
 } from '../../../src/core/sessions/context-full-recovery.js'
 import { resetQuietTurnsForTest, quietTurnKind, noteQuietTurnDelivery, noteTurnStart, noteSessionSend, addQuietTurnEndListener } from '../../../src/core/sessions/quiet-turn.js'
 import { EventNames } from '../../../src/core/event-bus.js'
+import { CONTEXT_COMPACT_COMMAND as CONTEXT_COMPACT_TEXT } from '../../../src/core/sessions/walnut-commands.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
 // Every way a full context is worded to Walnut: Claude Code's own refusal at its blocking limit
@@ -188,7 +189,7 @@ describe('ContextFullRecovery', () => {
     ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: false, result: 'ok', turnGen: 1 })
     deliver('qm-2', 'the wait ran out', 2, 'agent')
     await overflow(2)
-    expect(sends).toEqual([expect.objectContaining({ text: '/compact', source: 'context-compact' })])
+    expect(sends).toEqual([expect.objectContaining({ text: CONTEXT_COMPACT_TEXT, source: 'context-compact' })])
     expect(quietTurnKind(SID)).toBe('context-compact')
     expect(rec.contextRecovery).toMatchObject({ state: 'compacting', attempts: ['2026-11-05T16:40:00.000Z'] })
 
@@ -215,7 +216,7 @@ describe('ContextFullRecovery', () => {
       // That message gets "Prompt is too long" too: now the compaction runs, for both.
       deliver('qm-2', 'are you there?', 3)
       await overflow(3)
-      expect(sends.filter((x) => x.text === '/compact')).toHaveLength(2)
+      expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(2)
       expect(rec.contextRecovery).toMatchObject({ state: 'compacting', attempts: ['2026-11-05T16:40:00.000Z'] })
       await compactEnds(4)
       expect(sends.at(-1)!.text).toContain('hi')
@@ -280,11 +281,11 @@ describe('ContextFullRecovery', () => {
     // The resend is on its way; its turn already overflows (the compaction freed too little).
     nowMs += 1_000
     await overflow(4)
-    expect(sends.filter((x) => x.text === '/compact')).toHaveLength(1)
+    expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(1)
     release()
     await settle()
     // Round one wrote done, then round two started: its compacting state and both attempts stand.
-    expect(sends.filter((x) => x.text === '/compact')).toHaveLength(2)
+    expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(2)
     expect(rec.contextRecovery?.state).toBe('compacting')
     expect(rec.contextRecovery!.attempts).toHaveLength(2)
     await compactEnds(5)
@@ -322,7 +323,7 @@ describe('ContextFullRecovery', () => {
     expect(sends).toHaveLength(1)
     pending = false
     expect(await recovery.recoverNow(SID)).toBe(true)
-    expect(sends.filter((x) => x.text === '/compact')).toHaveLength(2)
+    expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(2)
   })
 
   it('an overflow that lands while a cut-short run is still letting go starts the next run', async () => {
@@ -335,7 +336,7 @@ describe('ContextFullRecovery', () => {
       deliver('qm-2', 'still there?', 3)
       ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: true, result: 'Prompt is too long', turnGen: 3 })
       await settle()
-      expect(sends.filter((x) => x.text === '/compact')).toHaveLength(2)
+      expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(2)
       await compactEnds(4)
       expect(sends.at(-1)!.text).toContain('still there?')
     } finally { off() }
@@ -496,10 +497,10 @@ describe('ContextFullRecovery', () => {
     holdResend = new Promise((r) => { release = r })
     await compactEnds(3)
     expect(await recovery.recoverNow(SID)).toBe(true)
-    expect(sends.filter((x) => x.text === '/compact')).toHaveLength(1)
+    expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(1)
     release()
     await settle()
-    expect(sends.filter((x) => x.text === '/compact')).toHaveLength(2)
+    expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(2)
     expect(rec.contextRecovery?.state).toBe('compacting')
   })
 
@@ -520,7 +521,7 @@ describe('ContextFullRecovery', () => {
       expect(recovery.isRunning(SID)).toBe(false)
       expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: 'The compaction did not finish.' })
       expect(await recovery.recoverNow(SID)).toBe(true)
-      expect(sends.filter((x) => x.text === '/compact')).toHaveLength(2)
+      expect(sends.filter((x) => x.text === CONTEXT_COMPACT_TEXT)).toHaveLength(2)
     } finally { off(); vi.useRealTimers() }
   })
 
@@ -542,7 +543,7 @@ describe('ContextFullRecovery', () => {
     await overflow(2)
     deliver('qm-2', 'are you there', 3)
     await overflow(3)
-    expect(sends.filter((s) => s.text === '/compact')).toHaveLength(1)
+    expect(sends.filter((s) => s.text === CONTEXT_COMPACT_TEXT)).toHaveLength(1)
   })
 
   it(`starts at most ${MAX_ATTEMPTS_PER_HOUR} by itself in an hour, then waits for a person, whose click is not capped`, async () => {
@@ -554,13 +555,13 @@ describe('ContextFullRecovery', () => {
     }
     deliver('qm-x', 'ask again', 30)
     await overflow(30)
-    expect(sends.filter((s) => s.text === '/compact')).toHaveLength(MAX_ATTEMPTS_PER_HOUR)
+    expect(sends.filter((s) => s.text === CONTEXT_COMPACT_TEXT)).toHaveLength(MAX_ATTEMPTS_PER_HOUR)
     expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: expect.stringMatching(/did not free enough room/) })
     // Only the recovery that gave up raises the session's error card.
     expect(cards).toHaveLength(1)
 
     expect(await recovery.recoverNow(SID)).toBe(true)
-    expect(sends.filter((s) => s.text === '/compact')).toHaveLength(MAX_ATTEMPTS_PER_HOUR + 1)
+    expect(sends.filter((s) => s.text === CONTEXT_COMPACT_TEXT)).toHaveLength(MAX_ATTEMPTS_PER_HOUR + 1)
     await compactEnds(31)
     expect(sends.at(-1)!.text).toContain('ask again')
     // An hour on, it compacts by itself again.
@@ -579,7 +580,7 @@ describe('ContextFullRecovery', () => {
   it('two overflows at once start one compaction and count one attempt', async () => {
     deliver('qm-1', 'hi', 2)
     await Promise.all([recovery.onOverflow(SID), recovery.onOverflow(SID)])
-    expect(sends.filter((s) => s.text === '/compact')).toHaveLength(1)
+    expect(sends.filter((s) => s.text === CONTEXT_COMPACT_TEXT)).toHaveLength(1)
     expect(rec.contextRecovery!.attempts).toHaveLength(1)
   })
 

@@ -10,6 +10,7 @@ import {
 } from '../../../src/core/sessions/quiet-turn.js';
 import { lastWorkTurnEnd } from '../../../src/core/sessions/status-reconcile.js';
 import { frameForSource } from '../../../src/core/sessions/send-frame.js';
+import { IDLE_COMPACT_COMMAND } from '../../../src/core/sessions/walnut-commands.js';
 
 beforeEach(() => { resetQuietTurnsForTest(); vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); onQuietTurnEnd(null); resetQuietTurnsForTest(); });
@@ -149,9 +150,10 @@ describe('the status loop reads the turn before a quiet one', () => {
 });
 
 describe('the command reaches the CLI as a command', () => {
-  it('the idle compaction\'s bare /compact is not framed; anything else from it is', () => {
-    expect(frameForSource('/compact', 'idle-compact')).toBe('/compact');
+  it('the idle compaction\'s own line is not framed; anything else from it is', () => {
+    expect(frameForSource(IDLE_COMPACT_COMMAND, 'idle-compact')).toBe(IDLE_COMPACT_COMMAND);
+    expect(frameForSource('/compact', 'idle-compact')).not.toBe('/compact');
     expect(frameForSource('/compact now please', 'idle-compact')).not.toBe('/compact now please');
-    expect(frameForSource('/compact', 'peer')).not.toBe('/compact');
+    expect(frameForSource(IDLE_COMPACT_COMMAND, 'peer')).not.toBe(IDLE_COMPACT_COMMAND);
   });
 });

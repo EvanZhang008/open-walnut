@@ -44,6 +44,7 @@ import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import { IDLE_COMPACT_HISTORY_TEXT, IDLE_COMPACT_UUID_PREFIX } from './sessions/prompt-cache.js';
+import { isWalnutCommandNotice, walnutCommandNotice } from './sessions/walnut-commands.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
 import { messageAbout, readAboutTag } from './org/message-about.js';
@@ -987,7 +988,7 @@ function logSkippedRewindCuts(skipped: readonly SkippedRewindCut[] | undefined):
 export function floatCompactCommands(rows: SessionHistoryMessage[], parentIds: (string | undefined)[]): void {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const isCommand = (r.role === 'user' && /^\/compact(\s|$)/.test(r.text)) || (r.role === 'system' && r.text === IDLE_COMPACT_HISTORY_TEXT);
+    const isCommand = (r.role === 'user' && /^\/compact(\s|$)/.test(r.text)) || (r.role === 'system' && isWalnutCommandNotice(r.text));
     if (!isCommand) continue;
     for (let j = i - 1; j >= 0 && j >= i - 2; j--) {
       const above = rows[j];
@@ -1158,7 +1159,10 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (tb) text = tb.text;
     }
     if (typeof text === 'string') {
-      userTwinTexts.push({ index: i, content: text, claimed: false, injected: isInjectedLine(raw) });
+      // A slash command's line is the CLI's tags around what was sent: its twin enqueue holds the
+      // command as typed ("/compact <args>"), so the two are matched by the shown form.
+      const shown = /^<command-(name|message|args)>/.test(text) ? transformInjectedUserText(text) : undefined;
+      userTwinTexts.push({ index: i, content: typeof shown === 'string' ? shown : text, claimed: false, injected: isInjectedLine(raw) });
     }
   }
   const skipEnqueueIndices = new Set<number>();
@@ -1886,9 +1890,14 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (transformed === null) continue;
       if (transformed !== undefined) { text = transformed; peerMail = /^<teammate-message/.test(receivedText); }
     }
-    // Walnut's idle compaction (sessions/idle-compaction.ts): its command line is Walnut's, not the user's.
-    if (msg.role === 'user' && mapMsgId.startsWith(IDLE_COMPACT_UUID_PREFIX) && text.trim() === '/compact') {
-      result.push({ role: 'system', text: IDLE_COMPACT_HISTORY_TEXT, timestamp: msg.timestamp, msgId: mapMsgId, systemVariant: 'info' });
+    // A command Walnut sent itself (an idle compaction, the recovery of a full context): its own
+    // words say so, and it is Walnut's notice, never the user's message (sessions/walnut-commands.ts).
+    // Before the words, the idle compaction's bare `/compact` was known only by its uuid, which the
+    // CLI keeps for a line it reads at once (not for one it queued first).
+    const walnutNotice = msg.role !== 'user' ? undefined
+      : walnutCommandNotice(text) ?? (mapMsgId.startsWith(IDLE_COMPACT_UUID_PREFIX) && text.trim() === '/compact' ? IDLE_COMPACT_HISTORY_TEXT : undefined);
+    if (walnutNotice) {
+      result.push({ role: 'system', text: walnutNotice, timestamp: msg.timestamp, msgId: mapMsgId, systemVariant: 'info' });
       resultParentIds.push(msg.parentToolUseId);
       continue;
     }

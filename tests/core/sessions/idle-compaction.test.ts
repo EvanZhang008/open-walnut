@@ -4,7 +4,7 @@
  * session is not idle on that same request.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { IdleCompaction, IDLE_COMPACT_SOURCE, resolveIdleCompactionConfig, skipReason, type IdleCompactionDeps } from '../../../src/core/sessions/idle-compaction.js';
+import { IdleCompaction, IDLE_COMPACT_SOURCE, IDLE_COMPACT_TEXT, resolveIdleCompactionConfig, skipReason, type IdleCompactionDeps } from '../../../src/core/sessions/idle-compaction.js';
 import {
   isQuietTurn, noteQuietTurnDelivery, noteSessionSend, onQuietTurnEnd, quietTurnRow, resetQuietTurnsForTest,
 } from '../../../src/core/sessions/quiet-turn.js';
@@ -123,7 +123,7 @@ describe('when it fires', () => {
     await h.ic.onTurnEnd(SID);
     h.now.ms = T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS;
     await h.runDue();
-    expect(h.sends).toEqual([{ sid: SID, text: '/compact', source: IDLE_COMPACT_SOURCE }]);
+    expect(h.sends).toEqual([{ sid: SID, text: IDLE_COMPACT_TEXT, source: IDLE_COMPACT_SOURCE }]);
     expect(isQuietTurn(SID)).toBe(true);
     expect(h.notes[0]).toBe('Compacting this idle session before its prompt cache expires in about 3 min: 400K tokens, past 85% (383K) of the 450K auto-compaction window this session uses.');
     expect(h.state.rec?.idleCompaction).toMatchObject({ priorTurnEnd: new Date(T0 + 30_000).toISOString(), tokens: 400_000 });
@@ -283,7 +283,7 @@ describe('when it fires', () => {
     expect(h.sends).toEqual([]);
     h.ic.handleEvent(ev(EventNames.SESSION_WILL_REAP, { sessionId: SID, remainingMs: 240_000 }, 'session-health-monitor'));
     for (let i = 0; i < 50 && h.sends.length === 0; i++) await new Promise((r) => setTimeout(r, 0));
-    expect(h.sends).toEqual([{ sid: SID, text: '/compact', source: IDLE_COMPACT_SOURCE }]);
+    expect(h.sends).toEqual([{ sid: SID, text: IDLE_COMPACT_TEXT, source: IDLE_COMPACT_SOURCE }]);
     expect(h.timers[0]!.cleared).toBe(true);
     expect(h.ic.armedFor(SID)).toBeUndefined();
   });

@@ -23,6 +23,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
 import { bus } from '../../src/core/event-bus.js'
+import { IDLE_COMPACT_COMMAND as IDLE_COMPACT_TEXT } from '../../src/core/sessions/walnut-commands.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 // The cache lives an hour; this lead sends the compaction 5 s after the request.
@@ -101,9 +102,9 @@ describe('a big idle session with a 1-hour cache', () => {
     const before = await task(w.taskId)
 
     // The compaction goes out as the bare command.
-    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === '/compact'), 20_000)
+    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === IDLE_COMPACT_TEXT), 20_000)
     const compactLine = sentTexts(w.sid).find((s) => s.includes('/compact'))!
-    expect(compactLine.trim()).toBe('/compact')
+    expect(compactLine.trim()).toBe(IDLE_COMPACT_TEXT)
 
     // While it runs and after it ends: no phase move, never Working.
     const seen = new Set<string>()
@@ -127,14 +128,14 @@ describe('a big idle session with a 1-hour cache', () => {
     await until('quiet end stored', () => getSessionByClaudeId(w.sid), (r) => !!r?.idleCompaction?.endedAt)
 
     // Nothing else was sent to the session for it (no status question, no notice).
-    expect(sentTexts(w.sid).filter((s) => s.trim() !== '/compact' && !s.includes('big-context-turn'))).toEqual([])
+    expect(sentTexts(w.sid).filter((s) => s.trim() !== IDLE_COMPACT_TEXT && !s.includes('big-context-turn'))).toEqual([])
     const after = await task(w.taskId)
     expect(after.phase).toBe(before.phase)
   }, 90_000)
 
   it('a person writing while it compacts is answered as an ordinary turn, never a quiet one', async () => {
     const w = await startBig('big-context-turn:400000:1h')
-    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === '/compact'), 20_000)
+    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === IDLE_COMPACT_TEXT), 20_000)
     await sendMessageToSession(w.sid, 'big-context-turn:60000:1h', { source: 'ui', taskId: w.taskId })
     // Their turn reads as Working at some point and ends handed back, with its own answer.
     const seen = new Set<string>()
@@ -151,7 +152,7 @@ describe('a big idle session with a 1-hour cache', () => {
   // the compaction as its own turn (started, init, answer, result); that turn hands the task back.
   it('a plain message typed while it compacts is answered and hands the task back', async () => {
     const w = await startBig('big-context-turn:400000:1h')
-    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === '/compact'), 20_000)
+    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === IDLE_COMPACT_TEXT), 20_000)
     await sendMessageToSession(w.sid, 'what changed in the parser?', { source: 'ui', taskId: w.taskId })
     const seen = new Set<string>()
     const t = await until('their turn handed back', async () => {
@@ -169,7 +170,7 @@ describe('a big idle session with a 1-hour cache', () => {
   it('a Stop while it compacts cancels it, and nothing else moves', async () => {
     const w = await startBig('big-context-turn:400000:1h')
     const before = await task(w.taskId)
-    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === '/compact'), 20_000)
+    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === IDLE_COMPACT_TEXT), 20_000)
     await until('compacting', async () => sessionRunner.findSessionByClaudeId(w.sid)?.inTurn ?? false, (v) => v, 10_000)
     const stop = await req('POST', `/api/sessions/${w.sid}/interrupt`)
     expect(stop.status, JSON.stringify(stop.json)).toBeLessThan(300)
@@ -179,7 +180,7 @@ describe('a big idle session with a 1-hour cache', () => {
     await new Promise((r) => setTimeout(r, 1500))
     const after = await task(w.taskId)
     expect(after.phase).toBe(before.phase)
-    expect(sentTexts(w.sid).filter((s) => s.trim() === '/compact')).toHaveLength(1)
+    expect(sentTexts(w.sid).filter((s) => s.trim() === IDLE_COMPACT_TEXT)).toHaveLength(1)
   }, 90_000)
 
   // 2026-11-04 review: "Compact first", then Stop. The CLI cancels it; the task stayed IN_PROGRESS
@@ -217,7 +218,7 @@ describe('a big idle session with a 1-hour cache', () => {
     const below = await startBig('big-context-turn:300000:1h')
     await new Promise((r) => setTimeout(r, 9_000))
     for (const w of [short, small, below]) {
-      expect(sentTexts(w.sid).some((s) => s.trim() === '/compact')).toBe(false)
+      expect(sentTexts(w.sid).some((s) => s.trim().startsWith('/compact'))).toBe(false)
       expect((await getSessionByClaudeId(w.sid))?.idleCompaction).toBeUndefined()
     }
     expect((await getSessionByClaudeId(below.sid))?.promptCache).toMatchObject({ tokens: 300_040, compactsAt: 450_000 })
