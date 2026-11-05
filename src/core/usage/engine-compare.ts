@@ -101,6 +101,8 @@ export interface EngineCompareRow {
   noUsageDone: number;
   /** Closed tasks that never ran a session (their start failed): neither finished nor open. */
   notStarted: number;
+  /** Finished tasks with a known time (the time median's samples). */
+  timedDone: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched: number;
   medianCostUsd: number | null;
@@ -151,7 +153,8 @@ export interface CompareInput {
   tasks: readonly Task[];
   /** By session id: what Walnut's record says. */
   sessions: ReadonlyMap<string, { engine?: SessionEngine; startedAt?: string; model?: string; cliModel?: string; acpModel?: string;
-    process_status?: string; status_history?: { process_status?: string }[]; errorCount?: number }>;
+    process_status?: string; status_history?: { process_status?: string }[]; errorCount?: number;
+    contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number }>;
   spend: ReadonlyMap<string, TaskSpend>;
   followUps: (taskId: string) => number;
   range: { start?: string; end?: string };
@@ -172,6 +175,13 @@ function usageUnknown(spend: TaskSpend | undefined): boolean {
 function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
   const fam = modelFamily(b.model) ?? ENGINE_FAMILY[resolveEngine(b.engine)] ?? 'Other';
   return `${builderLabel({ engine: b.engine })} · ${fam}${b.model ? ` (${b.model})` : ''}`;
+}
+
+/** A session that ran at least one turn: it holds context, a summary, a compaction or a reply. */
+function sessionRanTurn(s: CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R | undefined : never): boolean {
+  if (!s) return false;
+  const r = s as { contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number };
+  return r.contextTokens != null || !!r.lastCompactUuid || !!r.summary || (r.messageCount ?? 0) > 1;
 }
 
 function median(xs: number[]): number | null {
@@ -236,7 +246,12 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const session = sid ? input.sessions.get(sid) : undefined;
     // Never ran a session (its start failed before one, and it was closed): not work the engine finished.
     const closed = t.phase === 'COMPLETE' && !!t.completed_at;
-    const notStarted = closed && !sid && !firstStart(t, input.sessions);
+    const spend = input.spend.get(t.id);
+    // Never ran a turn, on any engine: its start failed (the evidence), it has no usage, and no session of
+    // it holds a conversation. Closed like that, it is not work the engine finished (Claude Code makes its
+    // session record before the spawn, an ACP engine only after it, so the record alone says nothing).
+    const ranTurn = !!spend || sessionsOf(t).some((id) => sessionRanTurn(input.sessions.get(id)));
+    const notStarted = closed && !ranTurn && ((t.start_failures ?? 0) > 0 || t.last_start?.state === 'failed');
     const done = closed && !notStarted;
     // From its first session's start (a restart, an engine switch or a recovery starts another)
     // to its first completion (a reopen adds the idle time before it otherwise).
@@ -246,9 +261,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const finishedAt = t.first_completed_at && t.completed_at && t.first_completed_at < t.completed_at ? t.first_completed_at : t.completed_at;
     // Finished: the day it finished. Reopened and open again: the day it first finished, so the
     // rework stays in the period of the work it reopened. Never finished: the day it started.
-    const day = input.dayOf(done ? t.completed_at! : t.first_completed_at ?? startedAt);
+    const day = input.dayOf(t.first_completed_at ?? (closed ? t.completed_at! : startedAt));
     if (!inRange(day, input.range)) continue;
-    const spend = input.spend.get(t.id);
     const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine ?? t.last_start?.engine);
     const family = modelFamily(spend?.model) ?? modelFamily(session?.acpModel ?? session?.cliModel ?? session?.model)
       ?? modelFamily(t.engine_pick?.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
@@ -275,10 +289,12 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     candidates.push({
       byCost, byPick, taskId: t.id, title: t.title, project: t.project ?? '', key: byCost.key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
-      costUsd: spend?.costUsd ?? 0, partialCost: !spend || spend.unpriced > 0 || spend.unknown > 0, noUsage: usageUnknown(spend),
-      partialTokens: !spend || spend.unknown > 0, tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
+      // A task that never ran cost nothing: a known $0, not an unknown.
+      costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
+      partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       followUps: input.followUps(t.id), reopens: t.reopens ?? 0, errored, split: !!t.engine_pick,
-      switched: !!byPick && byPick.familyKey !== byCost.familyKey, everDone: !notStarted && (done || !!t.first_completed_at), notStarted, finishedAt: done ? t.completed_at! : '',
+      // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
+      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!t.first_completed_at), notStarted, finishedAt: done ? t.completed_at! : '',
     });
   }
   const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: entryLabelOf(b), weight: b.weight }));
@@ -314,7 +330,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // The medians are of finished tasks: only those can make them a floor (a task that just started cannot).
       // A finished task with no usage at all is left out of the medians (noUsageDone), not a floor of them.
       partialCostDone: known.filter((p) => p.partialCost).length, partialTokensDone: known.filter((p) => p.partialTokens).length,
-      noUsageDone: done.length - known.length,
+      noUsageDone: done.length - known.length, timedDone: done.filter((p) => p.hours !== null).length,
       // Under the column the split assigned, in either view.
       noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && (splitView ? p.byPick?.key : p.byPick?.familyKey) === key).length,
       // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").

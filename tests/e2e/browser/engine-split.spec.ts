@@ -34,7 +34,7 @@ function row(key: string, label: string, done: number, extra: Record<string, unk
 function engines(project: string | null) {
   const rows: Record<string, unknown>[] = [
     row('claude|Claude', 'Claude Code · Claude', project ? 20 : 34, { split: 5 }),
-    row('codex|GPT', 'Codex · GPT', 6, { partialCost: 0,  medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, reviewCostPerTask: 6.5, followUpsPerTask: 0.6, split: 6, switched: 2, errored: 3, erroredShare: 0.38 }),
+    row('codex|GPT', 'Codex · GPT', 6, { partialCost: 0,  medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, reviewCostPerTask: 6.5, followUpsPerTask: 0.6, split: 6, switched: 2, errored: 3, erroredShare: 0.38, noUsageDone: 2 }),
     row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 1.5, followUpsPerTask: 2 }),
     // A fourth engine whose model has no price: its cost is a floor and never "cheapest".
     row('opencode|Other', 'OpenCode · Other', 7, { medianCostUsd: null, medianTokens: null, partialCost: 7, noUsage: 7, medianHours: 2.5, reviewsPerTask: 2.9, erroredShare: 0.1 }),
@@ -117,7 +117,9 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('time', 2)).toHaveText('1.9 h')
   await expect(cell('time', 2)).toHaveAttribute('data-best', 'true')
   await expect(cell('cost', 2)).toHaveText('$12.50')
-  await expect(cell('cost', 2)).toHaveAttribute('data-best', 'true')
+  // Its median rests on 4 known costs of 6 finished (2 have no usage): too few to call it cheapest.
+  await expect(cell('cost', 2)).not.toHaveAttribute('data-best', 'true')
+  await expect(cell('cost', 2)).toHaveAttribute('title', '2 finished tasks with no usage recorded are left out of this median')
   await expect(cell('cost', 4)).toHaveText('-')
   await expect(cell('cost', 4)).toHaveAttribute('data-partial', 'true')
   // No usage recorded for it: its tokens are unknown too, never the "best" zero.

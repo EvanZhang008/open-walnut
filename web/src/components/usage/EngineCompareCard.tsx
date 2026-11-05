@@ -53,7 +53,13 @@ interface Metric {
   excluded?: (r: EngineCompareRow) => string | undefined;
   /** Shown only when some column has it (a row that is all zeros says nothing). */
   onlyWhenAny?: boolean;
+  /** How many tasks the value rests on (ranked only with FEW or more); default the finished tasks. */
+  samples?: (r: EngineCompareRow) => number;
 }
+
+// The medians' own samples: a cost median of one known task among five finished is not five samples.
+const knownDone = (r: EngineCompareRow) => r.done - (r.noUsageDone ?? 0);
+const timedDone = (r: EngineCompareRow) => r.timedDone ?? r.done;
 
 const leftOutOfMedian = (r: EngineCompareRow) => (r.noUsageDone ?? 0) > 0
   ? `${finishedWord(r.noUsageDone ?? 0)} with no usage recorded ${(r.noUsageDone ?? 0) === 1 ? 'is' : 'are'} left out of this median` : undefined;
@@ -81,13 +87,13 @@ const METRICS: Metric[] = [
   { id: 'open', label: 'Still open', value: (r) => r.open, show: (n) => String(n ?? 0) },
   { id: 'notstarted', label: 'Never started', help: 'Closed after a start that failed before any session ran: counted as an error, not as finished work.', value: (r) => r.notStarted ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
-  { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true },
+  { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true, samples: timedDone },
   { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: medianCostPartial,
-    partialNote: (n) => `${finishedWord(n)} leave out ${LEFT_OUT}: the median is a floor`, excluded: leftOutOfMedian },
+    partialNote: (n) => `${finishedWord(n)} leave out ${LEFT_OUT}: the median is a floor`, excluded: leftOutOfMedian, samples: knownDone },
   { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => (allUnknown(r) ? null : r.costUsd), show: (n) => (n === null ? '-' : money(n)), partial: totalPartial,
     partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
-    partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian },
+    partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian, samples: knownDone },
   { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review" or "Reviewer"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
@@ -103,10 +109,13 @@ const METRICS: Metric[] = [
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
 function bestOf(rows: EngineCompareRow[], m: Metric): string | null {
   if (!m.lower) return null;
-  const judged = rows.filter((r) => r.done >= FEW && m.value(r) !== null && !(m.partial && m.partial(r) > 0));
+  const judged = rows.filter((r) => (m.samples ?? ((x: EngineCompareRow) => x.done))(r) >= FEW && m.value(r) !== null && !(m.partial && m.partial(r) > 0));
   if (judged.length < 2) return null;
   const sorted = [...judged].sort((a, b) => (m.value(a) as number) - (m.value(b) as number));
-  return (m.value(sorted[0]) as number) < (m.value(sorted[1]) as number) ? sorted[0].key : null;
+  // A best the eye can see: two values that read the same ("1 min" and "1 min") mark neither.
+  const [a, b] = sorted;
+  if (m.show(m.value(a), a) === m.show(m.value(b), b)) return null;
+  return (m.value(a) as number) < (m.value(b) as number) ? a.key : null;
 }
 
 /**
@@ -204,7 +213,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
               </table>
             </div>
             <p className="usage-bd-foot">
-              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} Finished tasks count by the day they finished, reopened ones by the day they first finished, open ones by the day they started. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
+              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} A task counts by the day it first finished (a reopened one too), or the day it started if it never finished. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more finished tasks; "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
             </p>
             {!data.splitOnly && split?.on && (
               <p className="usage-bd-foot" data-testid="usage-engines-bias">Counting every task: a lead may have picked an engine by hand for some of them, so this is not a fair test. "Assigned by the split" is.</p>

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
-  _resetSplitReservations, builderLabel, chooseBuilder, isReviewerTask, MAX_BEHIND, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders, splitCredits,
+  _resetSplitReservations, releaseSplitReservation, builderLabel, chooseBuilder, isReviewerTask, MAX_BEHIND, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders, splitCredits,
 } from '../../../src/core/agents/engine-split.js';
 
 const picksFile = path.join(WALNUT_HOME, 'cache', 'engine-split.json');
@@ -134,6 +134,14 @@ describe('picks', () => {
     await recordPick(a!.key, 'ta', a!.at, now);
     // b never records (its start failed): three minutes on, only the recorded pick counts.
     expect(Object.fromEntries(await recentPickCounts(now + 180_000))).toEqual({ [a!.key]: 1 });
+  });
+
+  it('a released reservation (its start lost the race to keep the pick) takes no turn', async () => {
+    const now = Date.now();
+    const yes = async () => true;
+    const lost = await pickSplitEngine(two, yes, now, 'race');
+    releaseSplitReservation('race', lost!.key);
+    expect((await pickSplitEngine(two, yes, now, 'next'))?.key).toBe(lost!.key);
   });
 
   it('a task picked again (its old entry was removed) counts its new pick before it is recorded', async () => {

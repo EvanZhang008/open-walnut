@@ -331,6 +331,35 @@ describe('round-7 counting', () => {
   });
 });
 
+describe('round-8 counting', () => {
+  const at = '2026-11-02T00:00:00.000Z';
+  it('a Claude Code start that failed before a turn is "never started" too, though its session record exists', () => {
+    // Claude Code writes its session record (with startedAt) before the spawn; the turn never ran.
+    const t = done('ccfail', 0.005, { start_failures: 1, engine_pick: { key: 'claude', engine: 'claude', at } });
+    const row = aggregateEngineCompare(input([t, done('real', 2)], { real: { costUsd: 5 } })).rows[0];
+    expect(row).toMatchObject({ done: 1, notStarted: 1, errored: 1, medianHours: 2 });
+  });
+
+  it('a never-started task costs a known $0: it makes no total or median unknown', () => {
+    const fail = (id: string) => task({ id, phase: 'COMPLETE', completed_at: '2026-11-02T00:01:00.000Z', start_failures: 1,
+      last_start: { id: 'x', at, state: 'failed', engine: 'claude' } });
+    const row = aggregateEngineCompare(input([done('a', 1), done('b', 1), fail('n1'), fail('n2')], { a: { costUsd: 10 }, b: { costUsd: 20 } })).rows[0];
+    expect(row).toMatchObject({ costUsd: 30, noUsage: 0, partialCost: 0, partialTokens: 0, notStarted: 2 });
+  });
+
+  it('a task finished, reopened and finished again stays in the period it first finished', () => {
+    const t = done('twice', 1, { completed_at: '2026-11-10T00:00:00.000Z', first_completed_at: '2026-10-30T00:00:00.000Z', reopens: 1 });
+    const oct = aggregateEngineCompare(input([t], {}, { range: { start: '2026-10-01', end: '2026-10-31' } }));
+    const nov = aggregateEngineCompare(input([t], {}, { range: { start: '2026-11-01', end: '2026-11-30' } }));
+    expect([oct.taskCount, nov.taskCount]).toEqual([1, 0]);
+  });
+
+  it('a model with no known family (a proxy alias) is no move within one engine', () => {
+    const inp = input([done('al', 1, { engine_pick: { key: 'claude', engine: 'claude', at } })], { al: { costUsd: 1, model: 'my-proxy-alias' } });
+    expect(aggregateEngineCompare({ ...inp, splitOnly: true }).tasks[0].switched).toBe(false);
+  });
+});
+
 describe('errors that a later start hides', () => {
   it('a start that failed before a session counts as an error even after a later start succeeded', () => {
     const at = '2026-11-02T00:00:00.000Z';

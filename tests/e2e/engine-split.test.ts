@@ -155,6 +155,9 @@ describe('the engine split', () => {
     await expect.poll(async () => (await getSessionsForTask(placeholder.id)).length, { timeout: 20_000 }).toBeGreaterThan(0)
     const [record] = await getSessionsForTask(placeholder.id)
     expect(/sonnet/i.test(record?.cliModel ?? '')).toBe(kept?.key === 'claude:sonnet')
+    // The losing start's pick took no turn: the next new task goes to the other entry.
+    const next = await op('task_create', { title: 'After the double start', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
+    expect(next.enginePick?.key).not.toBe(kept?.key)
   }, 60_000)
 
   it('a task completed before first_completed_at existed keeps its completion through a reopen, on both write paths', async () => {
@@ -187,11 +190,11 @@ describe('the engine split', () => {
     expect(finished).toMatchObject({ done: true, reopens: 1, reviews: 1, split: true })
     const row = r.body.rows.find((x: { key: string }) => x.key === finished.key)
     expect(row).toMatchObject({ engine: 'claude', done: 1, reopens: 1, reviewsPerTask: 1 })
-    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(12)
-    expect(r.body.taskCount).toBe(12)
+    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(13)
+    expect(r.body.taskCount).toBe(13)
     // Only the split's own picks: the starts that named an engine or a model drop out.
     const fair = await api('GET', '/api/usage/engines?project=Marina&split=1')
-    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 10 })
+    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 11 })
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
     expect(r.body.projects).toEqual([{ project: 'Marina', tasks: expect.any(Number) }])
   }, 60_000)

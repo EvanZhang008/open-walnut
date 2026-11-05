@@ -239,7 +239,7 @@ async function splitPick(task: Task, params: SessionStartParams) {
   // A task that holds a conversation continues it on the engine it has. A session whose spawn
   // failed before a turn is no conversation: its retry keeps the split's pick.
   if ((task.session_id || task.exec_session_id || task.session_ids?.length) && await taskConversation(task.id)) return null;
-  const { splitApplies, splitBuilders, pickSplitEngine, recordPick } = await import('../agents/engine-split.js');
+  const { splitApplies, splitBuilders, pickSplitEngine, recordPick, releaseSplitReservation } = await import('../agents/engine-split.js');
   const named = params.engine !== undefined || !!params.effort || (!!params.model && params.model !== 'default');
   // A second start of a task already starting is refused just after this (alreadyStarted): it never picks.
   if (pendingStarts.has(task.id)) return null;
@@ -269,7 +269,11 @@ async function splitPick(task: Task, params: SessionStartParams) {
     const wrote = await updateTaskRaw(task.id, { engine_pick: kept }, { source: 'task-start', shouldUpdate: (current) => current.engine_pick?.key === stale });
     if (!wrote.changed) {
       const current = await getTask(task.id);
-      if (current.engine_pick) return { ...current.engine_pick, reused: true };
+      if (current.engine_pick) {
+        // Another start of this task kept its pick first: this one's turn is not taken.
+        if (current.engine_pick.key !== pick.key) releaseSplitReservation(task.id, pick.key);
+        return { ...current.engine_pick, reused: true };
+      }
     }
     await recordPick(pick.key, task.id, pick.at);
   } catch (err) {

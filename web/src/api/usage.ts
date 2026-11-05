@@ -225,6 +225,8 @@ export interface EngineCompareRow {
   noUsageDone?: number;
   /** Closed tasks that never ran a session. */
   notStarted?: number;
+  /** Finished tasks with a known time. */
+  timedDone?: number;
   /** Tasks the split assigned whose cost mostly ran on another engine. */
   switched?: number;
   medianCostUsd: number | null;

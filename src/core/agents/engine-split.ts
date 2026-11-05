@@ -165,6 +165,11 @@ const RESERVE_MS = 120_000;
 /** Tests only. */
 export function _resetSplitReservations(): void { reserved.length = 0; }
 
+/** Drop a start's reservation that will never run (it lost the race to keep its task's pick). */
+export function releaseSplitReservation(taskId: string, key: string): void {
+  for (let i = reserved.length - 1; i >= 0; i--) if (reserved[i].taskId === taskId && reserved[i].key === key) reserved.splice(i, 1);
+}
+
 /** `tasks`: the entry the file holds for each task. */
 type Recent = { counts: Map<string, number>; tasks: Map<string, string>; sequence: string[] };
 

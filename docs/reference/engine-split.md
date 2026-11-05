@@ -52,13 +52,13 @@ tokens only for a tie); counting only the split's tasks, it counts under the eng
 assigned it, and "Moved to another engine" counts those whose cost mostly ran elsewhere. A
 task with no usage recorded (or only requests with no token counts) has an unknown cost and
 tokens, never a zero, and a start that failed counts as an error even after a later start
-succeeded. A task counts in the period of the day it finished; a reopened one, still open
-again, in the period it first finished, so its rework stays with the work it reopened.
+succeeded. A task counts in the period of the day it first finished, reopened or not, so its rework
+stays with the work it reopened; one that never finished, by the day it started.
 
 In that view each split entry is its own column, so two entries of one engine and family
 (Claude Code and Claude Code on Sonnet) are compared side by side. A closed task that never
-ran a session (its start failed) is neither finished nor open: it counts as not started, and
-as an error.
+ran a turn (its start failed, on any engine) is neither finished nor open: it counts as not
+started, as an error, and at a known cost of $0.
 
 `split=1` counts only the tasks the split assigned, the fair test (a lead may have picked an
 engine by hand for the rest). `split=auto`, the card's default, does so while the split is on
