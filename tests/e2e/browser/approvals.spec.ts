@@ -299,7 +299,7 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await expect.poll(async () => {
     const n = (await page.locator('.app-shell > .sidebar').boundingBox())!
     const b = (await card.boundingBox())!
-    const fits = Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 240
+    const fits = Math.round(b.x - (n.x + n.width)) === 16 && b.x + b.width <= 800 && b.width >= 160
     return fits ? 'fits' : `card x${Math.round(b.x)} w${Math.round(b.width)}; nav x${Math.round(n.x)} w${Math.round(n.width)} h${Math.round(n.height)}; stack ${await page.getByTestId('corner-stack').getAttribute('class')}`
   }).toBe('fits')
   await page.setViewportSize(vp)

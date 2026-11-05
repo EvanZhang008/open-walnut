@@ -83,7 +83,7 @@ function inSight(el: Element): boolean {
 const MIN_BESIDE_PX = 280;
 const FULL_WIDTH_PX = 380;
 /** The narrowest the stack keeps to inside the page's left column; a narrower one it reaches past. */
-const MIN_INSIDE_PX = 200;
+const MIN_INSIDE_PX = 160;
 /** The most of a page's left columns the corner keeps inside: past it the columns are page content. */
 const MAX_COLUMNS_PX = 440;
 /** A window this short keeps the corner to its short forms as soon as two kinds show. */

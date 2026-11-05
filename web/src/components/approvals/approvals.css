@@ -433,7 +433,7 @@
   cursor: pointer;
 }
 .approval-aside:hover { background: var(--bg-hover); }
-/* One line however narrow the corner (the Settings nav leaves it ~200px): the count gives way. */
+/* One line however narrow the corner (a narrow left column leaves it ~160px): the count gives way. */
 .approval-aside { white-space: nowrap; }
 .approval-aside > span { flex: none; }
 .approval-aside > span:nth-child(2) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
