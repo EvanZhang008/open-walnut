@@ -30,7 +30,7 @@ async function unlock(page: Page) {
   await expect(form.or(page.getByTestId('pw-app'))).toBeVisible({ timeout: 20_000 })
   if (await form.isVisible()) {
     await page.getByLabel('Master password').fill(MASTER)
-    await page.getByRole('button', { name: 'Unlock' }).click()
+    await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   }
   await expect(page.getByTestId('pw-app')).toBeVisible({ timeout: 30_000 })
 }

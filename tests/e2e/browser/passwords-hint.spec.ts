@@ -45,7 +45,7 @@ test('setup refuses a hint that gives the password away, then takes a good one',
   if (!(await setup.isVisible())) {
     if (await unlock.isVisible()) {
       await page.getByLabel('Master password').fill(MASTER)
-      await page.getByRole('button', { name: 'Unlock' }).click()
+      await page.getByRole('button', { name: 'Unlock', exact: true }).click()
     }
     await expect(page.getByTestId('pw-app')).toBeVisible()
     test.info().annotations.push({ type: 'note', description: 'vault already set up: setup step skipped' })
@@ -81,7 +81,7 @@ test('Settings sets the hint with the master password; the unlock screen shows i
   await expect(unlock.or(page.getByTestId('pw-app'))).toBeVisible()
   if (await unlock.isVisible()) {
     await page.getByLabel('Master password').fill(MASTER)
-    await page.getByRole('button', { name: 'Unlock' }).click()
+    await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   }
   await expect(page.getByTestId('pw-app')).toBeVisible()
 
@@ -128,12 +128,12 @@ test('Settings sets the hint with the master password; the unlock screen shows i
   await expect(unlock).toBeVisible()
   await expect(page.getByTestId('pw-show-hint')).toBeVisible()
   await page.getByLabel('Master password').fill('not my password')
-  await page.getByRole('button', { name: 'Unlock' }).click()
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(unlock.getByRole('alert')).toContainText(/wrong master password/i)
   await expect(page.getByTestId('pw-hint-shown')).toHaveText(`Hint: ${HINT2}`)
   await shot(page, 'web-unlock-wrong-password')
   await page.getByLabel('Master password').fill(MASTER)
-  await page.getByRole('button', { name: 'Unlock' }).click()
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(page.getByTestId('pw-app')).toBeVisible()
 })
 
@@ -143,7 +143,7 @@ test('Settings removes the hint, and the unlock screen has no link then', async 
   await expect(unlock.or(page.getByTestId('pw-app'))).toBeVisible()
   if (await unlock.isVisible()) {
     await page.getByLabel('Master password').fill(MASTER)
-    await page.getByRole('button', { name: 'Unlock' }).click()
+    await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   }
   const section = await openSettings(page)
   const group = section.getByTestId('pw-hint-settings')

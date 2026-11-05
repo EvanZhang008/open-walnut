@@ -495,7 +495,7 @@ test('locked: the menu says so and opens the unlock; Remove in Settings disconne
   await page.locator('#go').click()
   await expect(page.locator('#welcome')).toBeVisible()
   const bar = await frameOf(page, 'savebar.html')
-  await expect(bar.getByRole('button', { name: 'Unlock' })).toBeVisible()
+  await expect(bar.getByRole('button', { name: 'Unlock', exact: true })).toBeVisible()
   await expect(bar.getByTestId('savebar-save')).toHaveCount(0)
   const un = await popup()
   await un.getByLabel('Master password').fill(MASTER)

@@ -33,7 +33,7 @@ async function unlockIfLocked(page: Page) {
   await expect(unlock.or(app).or(page.getByRole('heading', { name: 'Set up Passwords' }))).toBeVisible()
   if (await unlock.isVisible()) {
     await page.getByLabel('Master password').fill(MASTER)
-    await page.getByRole('button', { name: 'Unlock' }).click()
+    await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   }
   await expect(app).toBeVisible()
 }
@@ -179,10 +179,10 @@ test('lock, a wrong password, unlock, and a reload keeps the section and the ite
   await expect(unlock).toBeVisible()
   await expect(page.getByTestId('pw-app')).toHaveCount(0)
   await page.getByLabel('Master password').fill('not my password')
-  await page.getByRole('button', { name: 'Unlock' }).click()
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(unlock.getByRole('alert')).toContainText(/wrong master password/i)
   await page.getByLabel('Master password').fill(MASTER)
-  await page.getByRole('button', { name: 'Unlock' }).click()
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(page.getByTestId('pw-section-logins')).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('pw-detail').getByRole('heading', { name: SITE })).toBeVisible()
 
@@ -323,7 +323,7 @@ test('a forgotten master password: the recovery code sets a new one and gives a 
   // The old master password no longer opens it; the new one does.
   await page.getByTestId('pw-lock').click()
   await page.getByLabel('Master password').fill(MASTER)
-  await page.getByRole('button', { name: 'Unlock' }).click()
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(page.getByTestId('pw-unlock').getByRole('alert')).toContainText(/wrong master password/i)
   // The used code works no more; the new one sets the old password back for a rerun.
   await reset(code, MASTER)
