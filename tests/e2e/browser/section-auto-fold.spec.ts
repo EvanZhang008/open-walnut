@@ -310,6 +310,44 @@ test.describe('status folds: one rule', () => {
     await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'false')
   })
 
+  test('a group the user may be reading folds once the window goes to the background', async ({ page }) => {
+    // Headless WebKit is always in front, so the window's focus and visibility are stubbed here,
+    // and the events the browser sends when it goes to the background are sent by hand.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __front: boolean; __shown: boolean }
+      w.__front = true; w.__shown = true
+      Document.prototype.hasFocus = function () { return w.__front }
+      Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true, get: () => (w.__shown ? 'visible' : 'hidden') })
+    })
+    await isolateUiPrefs(page)
+    await presetPanelDesign(page, 'status')
+    await page.clock.install()
+    const stamp = Date.now()
+    await page.goto('/')
+    await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+    await seed(page, `Backland${stamp}`, `back parked ${stamp}`, { phase: 'WAITING' })
+    await page.reload()
+    await selectSection(page, 'All')
+    const panel = page.locator('.todo-panel').first()
+    const toolbarBox = (await panel.locator('.todo-panel-toolbar').first().boundingBox())!
+    const onToolbar = () => page.mouse.move(Math.round(toolbarBox.x + 20), Math.round(toolbarBox.y + toolbarBox.height / 2))
+    for (const leave of ['blur', 'hidden'] as const) {
+      await setStatusSectionOpen(panel, 'waiting', true)
+      await page.clock.fastForward(14 * MIN)
+      await onToolbar()
+      // Due while they may be reading the panel: it waits.
+      await page.clock.fastForward(MIN + 2_000)
+      await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'true')
+      await page.evaluate((how) => {
+        const w = window as unknown as { __front: boolean; __shown: boolean }
+        if (how === 'blur') { w.__front = false; window.dispatchEvent(new Event('blur')) }
+        else { w.__shown = false; document.dispatchEvent(new Event('visibilitychange')) }
+      }, leave)
+      await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'false')
+      await page.evaluate(() => { const w = window as unknown as { __front: boolean; __shown: boolean }; w.__front = true; w.__shown = true })
+    }
+  })
+
   test('groups opened a moment apart fold together', async ({ page }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')

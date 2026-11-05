@@ -142,6 +142,22 @@ test.describe('Mia: removing and clearing', () => {
     await page.mouse.move(2, 2)
     await expect(filterRow(page)).toHaveCount(0, { timeout: 1_000 })
     await expect(row(page, 'fb-mia-h2')).toBeVisible()
+    // The pointer staying on the panel holds the row until the user moves on: a click elsewhere
+    // lets it go once that click has landed, and so does a scroll.
+    for (const moveOn of ['click', 'wheel'] as const) {
+      await addFilter(page, 'project', 'Garden')
+      const chipX = filterChip(page, 'project').locator('.fb-chip-x')
+      const at = await box(chipX)
+      await page.mouse.click(at.x + at.width / 2, at.y + at.height / 2)
+      await expect(filterRow(page)).toContainText('No filters')
+      const target = row(page, 'fb-mia-h2')
+      const tb = await box(target)
+      await page.mouse.move(tb.x + 30, tb.y + tb.height / 2)
+      await expect(filterRow(page)).toContainText('No filters')
+      if (moveOn === 'click') await page.mouse.click(tb.x + 30, tb.y + tb.height / 2)
+      else await page.mouse.wheel(0, 40)
+      await expect(filterRow(page)).toHaveCount(0, { timeout: 1_000 })
+    }
   })
 
   test('C6 + C32: keyboard reaches body, x and Clear; Backspace removes at once and focus walks next, previous, Display', async ({ page, browserName }) => {

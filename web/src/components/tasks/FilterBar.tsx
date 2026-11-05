@@ -194,7 +194,8 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     c.buttonRef.current?.focus({ preventScroll: true });
   };
   // The held row stays while the pointer is anywhere on the panel: it goes once the pointer
-  // leaves the panel, so the list never slides up under a pointer resting on it.
+  // leaves the panel, so the list never slides up under a pointer resting on it, or once the
+  // user moves on (a click elsewhere, done; a scroll, which moves the list anyway).
   const holdArea = () => c.rowRef.current?.closest('.todo-panel') ?? c.rowRef.current;
   const outsideHoldArea = (x: number, y: number) => {
     const r = holdArea()?.getBoundingClientRect();
@@ -225,8 +226,19 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     const onMove = (e: PointerEvent) => {
       if (outsideRef.current(e.clientX, e.clientY)) leaveRef.current();
     };
+    // After the click has landed, never between its press and release.
+    const onClick = (e: MouseEvent) => {
+      if (!(e.target instanceof Node && c.rowRef.current?.contains(e.target))) setTimeout(() => leaveRef.current(), 0);
+    };
+    const onWheel = () => leaveRef.current();
     window.addEventListener('pointermove', onMove, { passive: true });
-    return () => window.removeEventListener('pointermove', onMove);
+    window.addEventListener('click', onClick, true);
+    window.addEventListener('wheel', onWheel, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('click', onClick, true);
+      window.removeEventListener('wheel', onWheel);
+    };
   }, [linger, holdHeight, collapsing, c.rowRef]);
   const openChipMenu = (dim: FilterDim, anchor: HTMLElement) =>
     setChipMenu((cur) => (cur?.dim === dim ? null : { dim, anchor }));
