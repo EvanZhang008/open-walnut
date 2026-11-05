@@ -106,5 +106,6 @@ export function createUsagePages() {
 
 export { scanCostState, priceUsage };
 export { scanSessionCost, SESSION_COST_DAY_SPLIT } from './session-cost-core.js';
+export { scanCodexOutside, CODEX_OUTSIDE_SCAN } from './codex-outside-core.js';
 export { createUsageBudgetRuntime } from './usage-budget-runtime.js';
 export { createBudgetControl } from './usage-budget-control.js';

@@ -149,6 +149,11 @@ export type CostView = 'all' | 'walnut' | 'agents';
 export interface CostTokens { input: number; output: number; cacheRead: number; cacheWrite: number }
 export interface CostLine { key: string; label: string; costUsd: number; requests: number; tokens: CostTokens; unpriced: number }
 export interface CostTaskLine extends CostLine { taskId?: string; sessionId?: string; project: string; hosts: string[]; engines: string[] }
+/** Who started the work: Walnut, or something else on a host (a bare `codex exec`, a terminal `claude`). */
+export type CostOrigin = 'all' | 'walnut' | 'outside';
+export interface CostStartedLine { costUsd: number; requests: number; tokens: number }
+/** One account Codex usage went through; `direct` ones bill the account Codex is signed in to, not a proxy. */
+export interface CostAccountLine { key: string; label: string; direct: boolean; costUsd: number; requests: number; outsideRequests: number; tokens: number }
 export interface CostUnpriced { model: string; where: string; requests: number }
 export interface CostFold { count: number; costUsd: number; requests: number; tokens?: number }
 /** One breakdown (agent, model, project, host...): its lines over the period and each day's cost per line key. */
@@ -165,6 +170,12 @@ export interface CostReport {
   totals: CostLine;
   daily: { date: string; costUsd: number; requests: number }[];
   groups: CostGroup[];
+  /** Codex usage by account, when the period has any (older servers leave it out). */
+  accounts?: CostAccountLine[];
+  /** The origin counted; older servers leave it out and count everything. */
+  origin?: CostOrigin;
+  /** What each origin cost in the period, whatever `origin` picks. */
+  started?: { walnut: CostStartedLine; outside: CostStartedLine; imported?: CostStartedLine };
   tasks?: CostTaskLine[];
   moreTasks?: CostFold;
   shortSessions?: CostFold & { lines: CostTaskLine[] };
@@ -182,10 +193,11 @@ export interface CostReport {
 }
 
 /** `engine`: one coding engine's key, agents view only; absent or 'all' counts every engine. */
-export function fetchUsageCosts(view: CostView, range: { start?: string; end?: string }, engine?: string): Promise<CostReport> {
+export function fetchUsageCosts(view: CostView, range: { start?: string; end?: string }, engine?: string, origin: CostOrigin = 'all'): Promise<CostReport> {
   const q: Record<string, string> = { view };
   if (range.start) q.start = range.start;
   if (range.end) q.end = range.end;
   if (view === 'agents' && engine && engine !== 'all') q.engine = engine;
+  if (origin !== 'all') q.origin = origin;
   return apiGet('/api/usage/costs', q);
 }

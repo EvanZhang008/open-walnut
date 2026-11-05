@@ -8,6 +8,7 @@ import { link } from '../hosts/link.js';
 import type { UsageFilter } from './types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import type { DayBucket } from './cost-rollup.js';
+import { outsideHosts } from './outside-codex.js';
 import type { SessionCostScan } from '../../providers/session-cost-core.js';
 
 let store: ResponseUsageStore | undefined;
@@ -111,7 +112,21 @@ async function collect(since: string | undefined, until: string) {
   // Sums for pairs an import could not refresh (thresholds changed) come from the rebuild.
   if (!rollup.isReady()) await rollup.backfill();
   const engines = await collectEngineSessions(sessions, sinceFor);
-  return { since, until, results, engines };
+  // Every host Walnut knows, whatever engine its sessions use: a host with only terminal Codex runs counts too.
+  const outside = await collectOutside(sessions, outsideHosts(hosts.keys(), sessions.map(s => s.host ?? '__local__'), Object.keys(config.hosts ?? {}))).catch((error) => {
+    log.usage.warn('outside codex collection failed', { error: String(error) });
+    return undefined;
+  });
+  return { since, until, results, engines, outside };
+}
+
+/** Codex runs no Walnut session started (an agent's `codex exec`), read from each host's own rollout files. */
+async function collectOutside(sessions: Awaited<ReturnType<typeof listSessions>>, hosts: string[]) {
+  const { DaemonFileReader } = await import('../daemon-file-reader.js');
+  const { collectOutsideCodex } = await import('./outside-codex.js');
+  const usage = responseUsageStore();
+  return collectOutsideCodex({ rollup: usage.rollup, hosts, timeZone: usage.timezone, reader: host => new DaemonFileReader(host),
+    knownIds: host => sessions.filter(s => s.engine === 'codex' && (s.host ?? '__local__') === host).map(s => s.claudeSessionId) });
 }
 
 /** Engines whose own session records session-cost-core can read (Claude comes from usage.scan). */

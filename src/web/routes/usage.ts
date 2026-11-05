@@ -27,7 +27,7 @@ usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) =
   } catch (err) { next(err) }
 })
 
-// GET /api/usage/costs?view=all|walnut|agents&start&end&engine: the Usage & Costs page,
+// GET /api/usage/costs?view=all|walnut|agents&start&end&engine&origin=all|walnut|outside: the Usage & Costs page,
 // dollars (tokens x public prices) and tokens for a period, read from the
 // per-day sums (cost-report.ts), never from the per-response table. `engine`
 // (claude, codex, opencode, goose...) counts one coding engine; agents view only.
@@ -40,7 +40,9 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
     ])
     const store = responseUsageStore()
     const engine = typeof req.query.engine === 'string' && req.query.engine !== 'all' ? req.query.engine : undefined
-    const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end), engine }, {
+    // `origin`: work Walnut started or work it did not (a bare `codex exec`, a terminal `claude`); absent counts both.
+    const origin = req.query.origin === 'walnut' || req.query.origin === 'outside' ? req.query.origin : 'all'
+    const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end), engine, origin }, {
       rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: (await getConfig()).usage?.prices,
       tasks: async (ids) => new Map((ids.length ? await listTasksByIds(ids) : []).map(t => [t.id,
         { title: t.title, project: t.project ?? '', routine: !!t.routine_start }])),

@@ -3637,3 +3637,32 @@ describe('session cost day split parity (session-cost-day-v1)', () => {
     }
   })
 })
+
+// usage.codexOutside (codex-outside-v1): both twins answer it by the same rules, and the source twin
+// advertises it only when its sidecar carries the scan.
+describe('codex outside usage parity (codex-outside-v1)', () => {
+  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8')
+  const capsSrc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-capabilities.ts'), 'utf8')
+
+  it("'codex-outside-v1' is advertised, not required, and sidecar-gated on the core's marker in the source twin", () => {
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES')
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart))).not.toMatch(/'codex-outside-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart))).toMatch(/'codex-outside-v1'/)
+    expect(template).toMatch(/SIDECAR_GATED_CAPABILITIES = new Set\(\[[^\]]*'codex-outside-v1'/)
+    expect(template).toMatch(/usageCore\.CODEX_OUTSIDE_SCAN === true\) caps\.push\('codex-outside-v1'\)/)
+  })
+
+  it('both twins route usage.codexOutside to the shared scan with the same request fields', () => {
+    expect(standalone).toMatch(/case 'usage\.codexOutside': return cmdUsageCodexOutside/)
+    expect(template).toMatch(/case 'usage\.codexOutside': return cmdUsageCodexOutside/)
+    for (const field of ['byDay', 'thresholds', 'knownSessionIds', 'since', 'cursor', 'budgetMs']) {
+      expect(standalone).toMatch(new RegExp(`scanCodexOutside\\(\\{[\\s\\S]{0,900}${field}`))
+      expect(template).toMatch(new RegExp(`scanCodexOutside\\(\\{[\\s\\S]{0,900}${field}`))
+    }
+    // Read-only: the scan names no write call.
+    const core = fs.readFileSync(path.join(ROOT, 'src/providers/codex-outside-core.ts'), 'utf8')
+    expect(core).not.toMatch(/writeFile|appendFile|unlink|rename\(|rm\(|mkdir|O_WRONLY|O_RDWR|O_CREAT/)
+  })
+})

@@ -21,7 +21,8 @@ import { currentPriceSnapshot, ensurePriceBook, priceBookInfo, priceThresholds, 
 import { DEFAULT_PRICING } from './pricing.js';
 import { priceBucket } from './session-cost-pricing.js';
 import type { SessionCostBucket } from '../../providers/session-cost-core.js';
-import type { CostRollup } from './cost-rollup.js';
+import { originKey, type CostRollup, type RunOrigin } from './cost-rollup.js';
+import { codexAccount, directoryLabel } from './codex-account.js';
 import { addPriced, emptyLine, GroupAcc, partsOf, REPORTED_KIND, sorted, TokenAcc, WORK_KINDS, workKindOf,
   type Priced, type Sums, type WorkKind } from './cost-report-parts.js';
 import type { Database as DatabaseType } from '../../lib/sqlite.js';
@@ -30,6 +31,11 @@ export type CostView = 'walnut' | 'agents' | 'all';
 
 export interface CostTokens { input: number; output: number; cacheRead: number; cacheWrite: number }
 export interface CostLine { key: string; label: string; costUsd: number; requests: number; tokens: CostTokens; unpriced: number }
+/** One account Codex usage went through, direct (billed to the signed-in account) ones first. */
+export interface CostAccountLine { key: string; label: string; direct: boolean; costUsd: number; requests: number; outsideRequests: number; tokens: number }
+/** Who started the work: Walnut (its sessions and own calls) or something else on a host (a bare `codex exec`, the Codex app). */
+export type CostOrigin = 'all' | 'walnut' | 'outside';
+export interface CostStartedLine { costUsd: number; requests: number; tokens: number }
 export interface CostTaskLine extends CostLine { taskId?: string; sessionId?: string; project: string; hosts: string[]; engines: string[] }
 
 /** Requests no price could be put on, by model and where they came from (a feature or an engine). */
@@ -53,6 +59,12 @@ export interface CostReport {
   tasks?: CostTaskLine[];
   moreTasks?: CostFold;
   shortSessions?: CostFold & { lines: CostTaskLine[] };
+  /** Codex usage by the account it went through (agents and all), when the period has any with a known account. */
+  accounts?: CostAccountLine[];
+  /** The one origin counted ('all' counts both). */
+  origin: CostOrigin;
+  /** What each origin cost in the period, whatever `origin` picks, so the filter shows what it leaves out. */
+  started: { walnut: CostStartedLine; outside: CostStartedLine; imported: CostStartedLine };
   unpricedModels: string[];
   unpriced: CostUnpriced[];
   prices: { source: string; asOf?: string };
@@ -221,7 +233,7 @@ function trackerRows(db: DatabaseType, thresholds: number[], start: string | und
   return rows.map(r => ({ ...r, date: fmt.format(new Date(`${r.hour}:00Z`)), cacheWrite1h: 0 }));
 }
 
-export async function buildCostReport(view: CostView, range: { start?: string; end?: string; engine?: string }, deps: CostReportDeps): Promise<CostReport> {
+export async function buildCostReport(view: CostView, range: { start?: string; end?: string; engine?: string; origin?: CostOrigin }, deps: CostReportDeps): Promise<CostReport> {
   await ensurePriceBook();
   const thresholds = priceThresholds(deps.overrides);
   deps.rollup.setThresholds(thresholds);
@@ -237,14 +249,6 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
   };
   const all = view === 'all';
   const tokens = new TokenAcc();
-  /** One priced row: into the total, its day, and each group it names. */
-  const count = (date: string, p: Priced, into: [GroupAcc, string, string][]) => {
-    addPriced(totals, p);
-    if (all) tokens.add(date, p);
-    const d = daily.get(date) ?? { date, costUsd: 0, requests: 0 };
-    d.costUsd += p.costUsd; d.requests += p.requests; daily.set(date, d);
-    for (const [g, key, label] of into) g.add(key, label, date, p);
-  };
   const unpriced = new Map<string, CostUnpriced>();
   /** Names what could not be priced and where it came from, so the page can say why. */
   const noteUnpriced = (model: string, where: string, p: Priced) => {
@@ -253,9 +257,26 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const u = unpriced.get(key) ?? { model, where, requests: 0 };
     u.requests += p.unpriced; unpriced.set(key, u);
   };
+  /** One priced row: into the total, its day, and each group it names. */
+  const originFilter = range.origin === 'walnut' || range.origin === 'outside' ? range.origin : 'all';
+  const started = { walnut: { costUsd: 0, requests: 0, tokens: 0 }, outside: { costUsd: 0, requests: 0, tokens: 0 }, imported: { costUsd: 0, requests: 0, tokens: 0 } };
+  /** Counts a row unless the origin filter leaves it out; false when it did. */
+  const count = (date: string, p: Priced, into: [GroupAcc, string, string][], by: 'walnut' | 'outside' | 'imported' = 'walnut', note?: [string, string]): boolean => {
+    const t = started[by];
+    t.costUsd += p.costUsd; t.requests += p.requests; t.tokens += p.input + p.output + p.cacheRead + p.cacheWrite5m + p.cacheWrite1h;
+    // A bill brought in from outside covers everything on the account: it counts under All only.
+    if (originFilter !== 'all' && originFilter !== by) return false;
+    if (note) noteUnpriced(note[0], note[1], p);
+    addPriced(totals, p);
+    if (all) tokens.add(date, p);
+    const d = daily.get(date) ?? { date, costUsd: 0, requests: 0 };
+    d.costUsd += p.costUsd; d.requests += p.requests; daily.set(date, d);
+    for (const [g, key, label] of into) g.add(key, label, date, p);
+    return true;
+  };
   const engine = view === 'agents' && range.engine && ENGINE_KEY.test(range.engine) ? range.engine : null;
   const report: CostReport = { view, range: { start: range.start ?? null, end: range.end ?? null }, engine, engines: [], totals, daily: [],
-    groups: [], unpricedModels: [], unpriced: [], prices: priceBookInfo(), ready };
+    groups: [], unpricedModels: [], unpriced: [], prices: priceBookInfo(), ready, origin: originFilter, started };
   // The whole picture names each model once, as it is priced: an alias row joins its model.
   const modelLine = (raw: string): [string, string] => {
     if (!all) return [raw, pricer.label(raw)];
@@ -276,8 +297,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     };
     for (const r of deps.rollup.query({ start: range.start, end: range.end, sources: ['chat'], by: ['date', 'host'] })) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
-      noteUnpriced(r.model, featureLabel('chat'), p);
-      count(r.date, p, walnutInto(r.model, 'chat', featureLabel('chat'), r.host as string));
+      count(r.date, p, walnutInto(r.model, 'chat', featureLabel('chat'), r.host as string), 'walnut', [r.model, featureLabel('chat')]);
     }
     for (const r of trackerRows(deps.db, thresholds, range.start, range.end, deps.timeZone)) {
       let p = pricer.price(r.model, r.band, r, r.recorded > 0);
@@ -286,10 +306,9 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const aliased = pricer.resolve(r.model) !== r.model;
       if ((p.unpriced || aliased) && r.recorded > 0) p = { ...p, costUsd: r.recorded, unpriced: 0, parts: { [REPORTED_KIND]: r.recorded } };
       else if (r.costOnly > 0) p = { ...p, costUsd: p.costUsd + r.costOnly, unpriced: 0, parts: { ...p.parts, [REPORTED_KIND]: (p.parts?.[REPORTED_KIND] ?? 0) + r.costOnly } };
-      noteUnpriced(r.model, featureLabel(r.source, r.agent), p);
       const feature = r.source === 'plugin' && r.agent?.startsWith('plugin:') ? `plugin:${r.agent}` : r.source;
       // Walnut's own helper calls run in this server, on the machine it serves from.
-      count(r.date, p, walnutInto(r.model, feature, featureLabel(r.source, r.agent), LOCAL_HOST));
+      count(r.date, p, walnutInto(r.model, feature, featureLabel(r.source, r.agent), LOCAL_HOST), 'walnut', [r.model, featureLabel(r.source, r.agent)]);
     }
   }
   if (view === 'agents' || all) {
@@ -300,24 +319,42 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     report.engines = [...seen].sort((a, b) => b[1] - a[1]).map(([key]) => ({ key, label: engineLabel(key) }));
     const rows = engine ? rows0.filter(r => r.engine === engine) : rows0;
     const sessions = await deps.sessions();
+    const origins = deps.rollup.origins();
+    const accounts = new Map<string, CostAccountLine>();
     const perTask = new Map<string, { taskId?: string; sessionId: string; lineKey: string; hosts: Set<string>; engines: Set<string>;
-      priced: CostLine; days: Map<string, { p: Priced; subagent: boolean; sessionId: string }[]> }>();
+      priced: CostLine; folder?: RunOrigin; outside: boolean; days: Map<string, { p: Priced; subagent: boolean; sessionId: string; outside: boolean }[]> }>();
     const byEngine = group(all ? 'agent' : 'engine', all ? 'By agent' : 'By engine'), byModel = group('model', 'By model');
     const byHost = group('host', 'By host'), byKind = group('kind', 'By kind of work');
     for (const r of rows) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
-      noteUnpriced(r.model, engineLabel(r.engine), p);
       const [mk, ml] = modelLine(r.model);
-      count(r.date, p, [[byEngine, r.engine, engineLabel(r.engine)], [byModel, mk, ml], [byHost, r.host, r.host]]);
+      const origin = origins.get(originKey(r.host, r.sessionId as string));
       const session = sessions.get(r.sessionId as string);
       const taskId = (r.taskId as string | null) ?? session?.taskId ?? undefined;
-      const lineKey = taskId ? `task:${taskId}` : `session:${r.sessionId}`;
+      // Outside Walnut only when the host's own Codex rollout says no Walnut session ran it. A row with no
+      // task or record is not taken for one: Walnut removes the records of deleted tasks, not their usage.
+      const outside = !!origin?.outside;
+      const into: [GroupAcc, string, string][] = [[byEngine, r.engine, engineLabel(r.engine)], [byModel, mk, ml], [byHost, r.host, r.host]];
+      if (r.engine === 'codex') {
+        const a = codexAccount(origin?.provider);
+        into.push([group('account', 'Codex by account'), a.key, a.label]);
+        if (originFilter === 'all' || originFilter === (outside ? 'outside' : 'walnut')) {
+          const line = accounts.get(a.key) ?? { key: a.key, label: a.label, direct: a.direct, costUsd: 0, requests: 0, outsideRequests: 0, tokens: 0 };
+          line.costUsd += p.costUsd; line.requests += p.requests; if (outside) line.outsideRequests += p.requests;
+          line.tokens += p.input + p.output + p.cacheRead + p.cacheWrite5m + p.cacheWrite1h;
+          accounts.set(a.key, line);
+        }
+      }
+      if (!count(r.date, p, into, outside ? 'outside' : 'walnut', [r.model, engineLabel(r.engine)])) continue;
+      // A run Walnut started no session for, with no task directory: one line per folder, not per run.
+      const folder = outside && origin && !taskId ? origin : undefined;
+      const lineKey = taskId ? `task:${taskId}` : folder ? `dir:${r.host}:${folder.cwd}` : `session:${r.sessionId}`;
       // The line opens the first session seen for it (a task may have several).
       const t = perTask.get(lineKey) ?? { taskId, sessionId: r.sessionId as string, lineKey,
-        hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, ''), days: new Map() };
+        hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, ''), days: new Map(), outside, ...(folder ? { folder } : {}) };
       t.hosts.add(r.host); t.engines.add(r.engine); addPriced(t.priced, p);
       const day = t.days.get(r.date) ?? [];
-      day.push({ p, subagent: r.agent === 'subagent', sessionId: r.sessionId as string }); t.days.set(r.date, day);
+      day.push({ p, subagent: r.agent === 'subagent', sessionId: r.sessionId as string, outside }); t.days.set(r.date, day);
       perTask.set(lineKey, t);
     }
     const tasks = await deps.tasks([...perTask.values()].flatMap(t => t.taskId ? [t.taskId] : []));
@@ -326,12 +363,15 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const task = t.taskId ? tasks.get(t.taskId) : undefined;
       const session = !task && t.sessionId ? sessions.get(t.sessionId) : undefined;
       const project = task?.project ?? session?.project ?? '';
-      const title = oneLine(task?.title || session?.title || (t.taskId ? 'Removed task' : 'Session without a task'));
+      const title = oneLine(task?.title || session?.title || (t.folder ? `${originatorLabel(t.folder.originator)} in ${directoryLabel(t.folder.cwd)}`
+        : t.taskId ? 'Removed task' : t.outside ? 'Session started outside Walnut' : 'Session without a task'));
       // A project and a routine are known only once the task is read, so their days come from the task's.
       for (const [date, rows] of t.days) {
-        for (const { p, subagent, sessionId } of rows) {
-          byProject.add(project, project || 'Inbox', date, p);
-          const kind: WorkKind = workKindOf({ subagent, routineTask: task?.routine, sessionType: sessions.get(sessionId)?.type });
+        for (const { p, subagent, sessionId, outside } of rows) {
+          // No project to put an outside run under: its folder stands in.
+          if (t.folder && !project) byProject.add(`dir:${t.folder.cwd}`, directoryLabel(t.folder.cwd), date, p);
+          else byProject.add(project, project || 'Inbox', date, p);
+          const kind: WorkKind = workKindOf({ subagent, routineTask: task?.routine, sessionType: sessions.get(sessionId)?.type, outside });
           byKind.add(kind, WORK_KINDS[kind], date, p);
         }
       }
@@ -345,6 +385,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const rest = kept.slice(TOP_TASKS);
     if (rest.length) report.moreTasks = fold(rest);
     if (short.length) report.shortSessions = { ...fold(short), lines: short.slice(0, 50) };
+    if (accounts.size) report.accounts = [...accounts.values()].sort((a, b) => Number(b.direct) - Number(a.direct) || b.costUsd - a.costUsd || b.requests - a.requests);
   }
   if (all) {
     // Days before Walnut kept usage, brought in from outside (a provider's usage bill): no
@@ -353,21 +394,21 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const byProject = group('project', 'By project'), byKind = group('kind', 'By kind of work');
     for (const r of deps.rollup.query({ start: range.start, end: range.end, sources: ['import'], by: ['date', 'host'] })) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
-      noteUnpriced(r.model, IMPORTED_LABEL, p);
       const [mk, ml] = modelLine(r.model);
       count(r.date, p, [[byAgent, IMPORTED_KEY, IMPORTED_LABEL], [byModel, mk, ml], [byProject, IMPORTED_KEY, IMPORTED_LABEL],
-        [byHost, r.host as string, r.host as string], [byKind, 'imported', WORK_KINDS.imported]]);
+        [byHost, r.host as string, r.host as string], [byKind, 'imported', WORK_KINDS.imported]], 'imported', [r.model, IMPORTED_LABEL]);
     }
   }
-  const order = all ? ['agent', 'model', 'project', 'host', 'kind', 'feature']
+  const order = all ? ['agent', 'model', 'project', 'host', 'account', 'kind', 'feature']
     : view === 'walnut' ? ['feature', 'model']
     // One engine picked: its "By engine" would be one row saying the total again.
-    : [...(engine ? [] : ['engine']), 'model', 'host', 'project'];
+    : [...(engine ? [] : ['engine']), 'model', 'host', 'project', 'account'];
   report.groups = order.flatMap(id => groups.get(id) ? [groups.get(id)!.result()] : []);
   if (all) report.groups.splice(report.groups.findIndex(g => g.id === 'feature'), 0, tokens.result());
   report.stored = deps.rollup.hostBounds();
   report.daily = [...daily.values()].sort((a, b) => a.date.localeCompare(b.date));
-  report.unpricedModels = [...pricer.unpricedModels].sort();
+  // Named from what this period's counted rows could not be priced, so a filter leaves out the others' models.
+  report.unpricedModels = [...new Set([...unpriced.values()].map(u => u.model))].sort();
   report.unpriced = [...unpriced.values()].sort((a, b) => b.requests - a.requests);
   return report;
 }
@@ -383,6 +424,13 @@ const LOCAL_HOST = '__local__';
 /** A provider's routing prefix ("global.anthropic.") is not part of the model's name. */
 export function shortModel(model: string): string {
   return model.replace(/^(?:[a-z]{2,6}\.)?(?:anthropic|openai|meta|amazon|mistral|deepseek|qwen|google)\./i, '');
+}
+
+/** How the person reads who started a Codex run. */
+export function originatorLabel(originator: string): string {
+  if (originator === 'codex_exec') return 'Codex exec';
+  if (originator === 'codex-tui' || originator === 'codex_cli_rs') return 'Codex terminal';
+  return originator || 'Codex';
 }
 
 function fold(rows: CostLine[]): CostFold {

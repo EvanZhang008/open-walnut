@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchUsageCosts, type CostReport, type CostView } from '@/api/usage';
+import { fetchUsageCosts, type CostOrigin, type CostReport, type CostView } from '@/api/usage';
 import type { TimeSelection } from './useUsageOverview';
 import { keepLastGood, readLastGood } from '@/utils/last-good';
 
@@ -11,8 +11,8 @@ const isReport = (v: unknown): v is CostReport => !!v && typeof v === 'object'
  * range), so the kept reports stay a handful whatever days the pane is opened on; the report's
  * own range is checked on read, so a slot from yesterday's "7 days" is not shown as today's.
  */
-export function usageKeepKey(view: CostView, preset: TimeSelection['preset'], engine: string): string {
-  return `walnut:last-good:usage-costs:v2:${JSON.stringify([view, preset, engine])}`;
+export function usageKeepKey(view: CostView, preset: TimeSelection['preset'], engine: string, origin: CostOrigin = 'all'): string {
+  return `walnut:last-good:usage-costs:v3:${JSON.stringify([view, preset, engine, origin])}`;
 }
 
 function localDay(date: Date): string {
@@ -42,7 +42,7 @@ export function costRange(time: TimeSelection): { start?: string; end?: string }
  * dropped. While past usage is still being summed, or a collection is running,
  * it reads again a few seconds later.
  */
-export function useUsageCosts(view: CostView, time: TimeSelection, engine = 'all') {
+export function useUsageCosts(view: CostView, time: TimeSelection, engine = 'all', origin: CostOrigin = 'all') {
   const [report, setReport] = useState<CostReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,16 +58,16 @@ export function useUsageCosts(view: CostView, time: TimeSelection, engine = 'all
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchUsageCosts(view, range, wanted);
+      const data = await fetchUsageCosts(view, range, wanted, origin);
       if (mine === seq.current) setReport(data);
       // A report still being summed is not kept: the next open would show partial totals as final.
-      if (data.ready) keepLastGood(usageKeepKey(view, time.preset, wanted), data);
+      if (data.ready) keepLastGood(usageKeepKey(view, time.preset, wanted, origin), data);
     } catch (err) {
       if (mine === seq.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (mine === seq.current) setLoading(false);
     }
-  }, [view, range, wanted]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, range, wanted, origin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -80,9 +80,9 @@ export function useUsageCosts(view: CostView, time: TimeSelection, engine = 'all
 
   // The last report this browser kept for exactly this view, period and engine, until the server's comes
   // (2026-11-04, the user: "cache should cache for long tie until the real data come").
-  const kept = useMemo(() => readLastGood(usageKeepKey(view, time.preset, wanted), isReport), [view, time.preset, range, wanted]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kept = useMemo(() => readLastGood(usageKeepKey(view, time.preset, wanted, origin), isReport), [view, time.preset, range, wanted, origin]); // eslint-disable-line react-hooks/exhaustive-deps
   const fits = (r: CostReport | null) => !!r && r.view === view && (r.range.start ?? undefined) === range.start
-    && (r.range.end ?? undefined) === range.end && (r.engine ?? 'all') === wanted;
+    && (r.range.end ?? undefined) === range.end && (r.engine ?? 'all') === wanted && (r.origin ?? 'all') === origin;
   // A report for another view, period or engine is not this one's: show it only while the new one loads.
   const fromKept = !fits(report) && !!kept && fits(kept.value);
   const current = fits(report) ? report : fromKept ? kept!.value : null;

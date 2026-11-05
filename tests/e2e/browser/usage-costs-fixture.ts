@@ -55,10 +55,15 @@ export interface FixtureOptions {
   imported?: { from: string; to: string }
 }
 
-function wholePicture(start: string | null, end: string | null, opts: FixtureOptions = {}) {
+/** The share of the period's cost that Walnut did not start (a bare codex exec, a terminal claude). */
+const OUTSIDE_SHARE = 0.18
+
+function wholePicture(start: string | null, end: string | null, opts: FixtureOptions = {}, origin = 'all') {
   const agents = agentsReport('agents', start, end)
   const walnutCost = 68.37
-  const total = agents.totals.costUsd + walnutCost
+  const everything = agents.totals.costUsd + walnutCost
+  const keep = origin === 'outside' ? OUTSIDE_SHARE : origin === 'walnut' ? 1 - OUTSIDE_SHARE : 1
+  const total = everything * keep
   const scale = (lines: ReturnType<typeof line>[], to: number) => {
     const sum = lines.reduce((n, l) => n + l.costUsd, 0)
     return lines.map((l) => ({ ...l, costUsd: l.costUsd / sum * to }))
@@ -73,6 +78,8 @@ function wholePicture(start: string | null, end: string | null, opts: FixtureOpt
       line('subagent', 'Subagents', (total - walnutCost) * 0.2, 15_000), line('routine', 'Routines', (total - walnutCost) * 0.1, 6_000),
       line('walnut', 'Walnut itself', walnutCost, 3270)] },
     // The shares Opus showed over a summer: cache reads most of the tokens, under half the cost.
+    { id: 'account', heading: 'Codex by account', lines: [line('amazon-bedrock', 'Bedrock account', 520 * keep, 7_400), line('local-proxy', 'Local proxy', 210 * keep, 3_100),
+      line('bp', 'Proxy: bp', 80 * keep, 900)] },
     { id: 'token', heading: 'By token type', lines: [tokenLine('cacheRead', 'Cache read', total * 0.48, 95_000_000_000),
       tokenLine('cacheWrite1h', 'Cache write, 1 hour', total * 0.38, 1_900_000_000), tokenLine('output', 'Output', total * 0.13, 280_000_000),
       tokenLine('cacheWrite5m', 'Cache write, 5 minutes', total * 0.007, 52_000_000), tokenLine('input', 'Input', total * 0.003, 3_000_000)] },
@@ -80,14 +87,21 @@ function wholePicture(start: string | null, end: string | null, opts: FixtureOpt
   ].map((g) => ({ ...g, lines: [...g.lines].sort((a, b) => b.costUsd - a.costUsd), daily: perDay(g.lines, start, end) }))
   const daily = groups[0].daily.map((d) => ({ date: d.date, costUsd: Object.values(d.costs).reduce((a, b) => a + b, 0), requests: 1000 }))
   const from = opts.storedFrom ?? '2026-09-01'
-  return { ...agents, view: 'all', engine: null, totals: line('total', 'Total', total, 64_270, 14), daily, groups,
+  const accounts = [
+    { key: 'amazon-bedrock', label: 'Bedrock account', direct: true, costUsd: 520 * keep, requests: 7_400, outsideRequests: 6_900, tokens: 1_358_000_000 },
+    { key: 'local-proxy', label: 'Local proxy', direct: false, costUsd: 210 * keep, requests: 3_100, outsideRequests: 0, tokens: 400_000_000 },
+    { key: 'bp', label: 'Proxy: bp', direct: false, costUsd: 80 * keep, requests: 900, outsideRequests: 800, tokens: 151_000_000 },
+  ]
+  const started = { walnut: { costUsd: everything * (1 - OUTSIDE_SHARE), requests: 52_000, tokens: 9_100_000_000 },
+    outside: { costUsd: everything * OUTSIDE_SHARE, requests: 12_270, tokens: 1_900_000_000 } }
+  return { ...agents, view: 'all', engine: null, origin, started, accounts, totals: line('total', 'Total', total, 64_270, 14), daily, groups,
     stored: [{ host: '__local__', from, to: end ?? '2026-09-23' }, { host: 'devbox', from, to: end ?? '2026-09-23' },
       ...(opts.imported ? [{ host: 'Cloud usage bill', ...opts.imported, imported: true }] : [])],
     ...(opts.fresh ? { countedUntil: [{ host: '__local__', until: new Date().toISOString() }, { host: 'devbox', until: new Date().toISOString() }] } : {}) }
 }
 
-export function costReport(view: string, start: string | null, end: string | null, engine: string | null = null, opts: FixtureOptions = {}) {
-  if (view === 'all') return wholePicture(start, end, opts)
+export function costReport(view: string, start: string | null, end: string | null, engine: string | null = null, opts: FixtureOptions = {}, origin = 'all') {
+  if (view === 'all') return wholePicture(start, end, opts, origin)
   return agentsReport(view, start, end, engine)
 }
 
@@ -143,7 +157,7 @@ export async function routeCosts(page: import('@playwright/test').Page, hold?: (
     asked.push(url)
     await hold?.(url)
     return route.fulfill({ json: costReport(url.searchParams.get('view') ?? 'walnut', url.searchParams.get('start'), url.searchParams.get('end'),
-      url.searchParams.get('engine'), opts) })
+      url.searchParams.get('engine'), opts, url.searchParams.get('origin') ?? 'all') })
   })
   return asked
 }

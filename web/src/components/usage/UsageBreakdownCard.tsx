@@ -15,6 +15,7 @@ export const BREAKDOWNS: { value: BreakdownId; label: string; noun: string }[] =
   { value: 'model', label: 'Model', noun: 'Model' },
   { value: 'project', label: 'Project', noun: 'Project' },
   { value: 'host', label: 'Host', noun: 'Host' },
+  { value: 'account', label: 'Account', noun: 'Codex account' },
   { value: 'kind', label: 'Kind', noun: 'Kind of work' },
   { value: 'token', label: 'Token type', noun: 'Token type' },
 ];
@@ -76,7 +77,10 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
   report: CostReport; days: string[]; loading: boolean; onPick: (b: Bucket) => void;
 }) {
   const hostName = useHostDisplayLabels();
-  const [breakdown, setBreakdown] = usePersistentState<BreakdownId>('walnut-usage-breakdown', 'agent', isBreakdown);
+  const [picked, setBreakdown] = usePersistentState<BreakdownId>('walnut-usage-breakdown', 'agent', isBreakdown);
+  // Account is offered only when the period has Codex usage to split; a kept pick of it falls back to Agent meanwhile.
+  const offered = BREAKDOWNS.filter((b) => b.value !== 'account' || report.groups.some((g) => g.id === 'account'));
+  const breakdown: BreakdownId = offered.some((b) => b.value === picked) ? picked : 'agent';
   const [grainPick, setGrain] = usePersistentState<Granularity | 'auto'>('walnut-usage-grain', 'auto', isGrain);
   const [open, setOpen] = useState(false);
   // Until the user picks one, the grain follows the period (days, weeks past three months, months past two years).
@@ -105,7 +109,7 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
           <span className="usage-bd-switch">
             <span className="usage-bd-switch-label">Break down by</span>
             <SegmentedControl aria-label="Break down by" value={breakdown} onChange={(v) => { setBreakdown(v); setOpen(false); }}
-              options={BREAKDOWNS.map((b) => ({ value: b.value, label: b.label, testId: `usage-breakdown-${b.value}` }))} />
+              options={offered.map((b) => ({ value: b.value, label: b.label, testId: `usage-breakdown-${b.value}` }))} />
           </span>
           <span className="usage-bd-switch">
             <span className="usage-bd-switch-label">Each point is a</span>

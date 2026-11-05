@@ -113,16 +113,17 @@ export function partsOf(lines: { kind: string; costUsd: number }[]): Partial<Rec
 
 /** The kind of work a row was. A routine's run counts as a routine, its subagents too. */
 export const WORK_KINDS = { interactive: 'Interactive', subagent: 'Subagents', routine: 'Routines', walnut: 'Walnut itself',
-  imported: 'Imported' } as const;
+  imported: 'Imported', outside: 'Outside Walnut' } as const;
 export type WorkKind = keyof typeof WORK_KINDS;
 
 /**
- * A coding session's row: a routine's when its task was made by a routine run (or
+ * A coding session's row: outside Walnut when no Walnut session ran it, a routine's when its task was made by a routine run (or
  * the session is a scheduled one), a subagent's when a subagent made it, else the
  * user's own work. A trigger firing into a task the user works in is not told apart
  * from the user's turns there: the rollup sums by day, not by turn.
  */
-export function workKindOf(row: { subagent: boolean; routineTask?: boolean; sessionType?: string }): WorkKind {
+export function workKindOf(row: { subagent: boolean; routineTask?: boolean; sessionType?: string; outside?: boolean }): WorkKind {
+  if (row.outside) return 'outside';
   if (row.routineTask || row.sessionType === 'cron' || row.sessionType === 'triage' || row.sessionType === 'hook') return 'routine';
   return row.subagent ? 'subagent' : 'interactive';
 }

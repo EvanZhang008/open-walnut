@@ -386,6 +386,21 @@ export class DaemonFileReader implements SessionFileReader {
     return reply.result ?? null
   }
 
+  /**
+   * One page of the Codex runs no Walnut session started, read on the host from Codex's own
+   * rollout files (codex-outside-v1; null on a daemon without it). Newest first: ask again
+   * with the answer's `next` as `cursor` until it has none.
+   */
+  async readCodexOutside(params: { thresholds: number[]; byDay: { timeZone: string }; known: string[]; since?: string; cursor?: string; budgetMs?: number }, timeoutMs = 40_000): Promise<unknown | null> {
+    await this.resolve()
+    const conn = await link(this.host)
+    await conn.connect()
+    if (!conn.hasCapability('codex-outside-v1')) return null
+    const reply = await conn.send('usage.codexOutside', params, timeoutMs)
+    if (!reply.ok) throw new Error(String(reply.error ?? 'Codex usage read failed'))
+    return reply.result ?? null
+  }
+
   /** Rename/move a path. The daemon refuses an existing target (EEXIST). */
   async renamePath(from: string, to: string): Promise<void> {
     const conn = await this.mutateConnection()

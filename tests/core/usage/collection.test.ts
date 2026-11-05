@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({ send: vi.fn(), connect: vi.fn(), sessions: vi.
 vi.mock('../../../src/core/config-manager.js', () => ({ getConfig: mocks.config }));
 vi.mock('../../../src/core/session-tracker.js', () => ({ listSessions: mocks.sessions }));
 vi.mock('../../../src/providers/daemon-connection.js', () => ({ getDaemonConnection: async () => ({
-  connect: mocks.connect, hasCapability: () => true, send: mocks.send,
+  // A daemon without codex-outside-v1: the outside-Codex pass asks nothing, so the call counts below stay the scan's.
+  connect: mocks.connect, hasCapability: (cap: string) => cap !== 'codex-outside-v1', send: mocks.send,
 }) }));
 import { collectUsage, responseUsageStore, collectionState } from '../../../src/core/usage/collection.js';
 import { reconcileUsage } from '../../../src/providers/usage-reconcile-core.js';

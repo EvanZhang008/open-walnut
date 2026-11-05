@@ -332,7 +332,7 @@ describe('cost report', () => {
     const all = await buildCostReport('agents', {}, deps());
     expect(all.engine).toBeNull();
     expect(all.totals.costUsd).toBeCloseTo(6, 9);
-    expect(all.groups.map(g => g.id)).toEqual(['engine', 'model', 'host', 'project']);
+    expect(all.groups.map(g => g.id)).toEqual(['engine', 'model', 'host', 'project', 'account']);
     const only = await buildCostReport('agents', { engine: 'codex' }, deps());
     expect(only.engine).toBe('codex');
     expect(only.engines).toEqual([{ key: 'codex', label: 'Codex' }, { key: 'claude', label: 'Claude Code' }]);
@@ -340,7 +340,7 @@ describe('cost report', () => {
     expect(only.totals.costUsd).toBeCloseTo(2, 9);
     expect(only.daily).toEqual([{ date: '2026-10-19', costUsd: 2, requests: 2 }]);
     // One engine: no "By engine" group, and every other group holds only its sessions.
-    expect(only.groups.map(g => g.id)).toEqual(['model', 'host', 'project']);
+    expect(only.groups.map(g => g.id)).toEqual(['model', 'host', 'project', 'account']);
     expect(only.groups.find(g => g.id === 'model')!.lines.map(l => l.label)).toEqual(['gpt-6.1-sol']);
     expect(only.groups.find(g => g.id === 'host')!.lines.map(l => l.label)).toEqual(['devbox']);
     expect(only.tasks!.map(l => [l.label, l.engines, l.hosts])).toEqual([['Task t2', ['Codex'], ['devbox']]]);

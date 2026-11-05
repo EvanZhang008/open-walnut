@@ -290,6 +290,9 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // usage.sessionCost honours `byDay: { timeZone }` (buckets split by local day, for
   // the Usage page's Today / 7 days). An older daemon ignores it and answers undivided.
   'session-cost-day-v1',
+  // usage.codexOutside (codex-outside-core.ts): the Codex runs no Walnut session started, read
+  // host-side from Codex's own rollout files, in time-budgeted pages. Sidecar-gated in the source twin.
+  'codex-outside-v1',
   // Session budgets on the owning host (usage-budget-runtime.ts): spend priced from the
   // engine's own usage with the server's pushed price list; paused at the limit or on
   // an unpriced request; usage.budget.list for the server's pause notices.

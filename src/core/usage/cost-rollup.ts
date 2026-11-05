@@ -28,6 +28,21 @@ export interface ImportRow {
   input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number;
 }
 
+/**
+ * Where a Codex run came from, kept beside the sums in a table of its own (the sums table's
+ * columns are positional, so it never grows one). `outside`: Walnut started no session for it
+ * (an agent's `codex exec`, the desktop app); `provider` is Codex's `model_provider`, the account
+ * its requests went through.
+ */
+export interface RunOrigin {
+  host: string; sessionId: string; originator: string; provider: string; cwd: string; outside: boolean;
+  /** The rows of this run were written by the outside pass (a child thread of a Walnut run included), not by a Walnut session's read. */
+  stored: boolean; firstAt: string; lastAt: string;
+}
+
+/** A pass a time budget cut short: where it goes on, with the window it had and the files it could not read so far. */
+export interface OutsideResume { cursor: string; since?: string; startedAt: string; key: string; unreadable?: string[] }
+
 export interface DayBucket {
   day: string; model: string; band: number; responses: number;
   input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; cacheWrite: number;
@@ -51,7 +66,10 @@ export class CostRollup {
       PRIMARY KEY (date, host, source, engine, session_id, model, agent, band));
       CREATE INDEX IF NOT EXISTS idx_usage_rollup_date ON usage_rollup(date);
       CREATE INDEX IF NOT EXISTS idx_usage_rollup_session ON usage_rollup(session_id);
-      CREATE TABLE IF NOT EXISTS usage_rollup_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS usage_rollup_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS usage_rollup_origin (
+        host TEXT NOT NULL, session_id TEXT NOT NULL, originator TEXT NOT NULL, provider TEXT NOT NULL, cwd TEXT NOT NULL,
+        outside INTEGER NOT NULL, stored INTEGER NOT NULL DEFAULT 0, first_at TEXT NOT NULL, last_at TEXT NOT NULL, PRIMARY KEY (host, session_id));`);
     // Until the price book is read, imports band by the thresholds the stored sums
     // were built with, so a restart neither drops them nor forces a rebuild.
     const built = this.meta('claude_built');
@@ -74,6 +92,58 @@ export class CostRollup {
   enginesKey(host: string): string { return this.meta(`engines_built:${host}`) ?? ''; }
   markEnginesBuilt(host: string, key: string): void { this.setMeta(`engines_built:${host}`, key); }
   get key(): string { return this.thresholdsKey; }
+
+  /** When and under which thresholds a host's outside Codex runs were last all read ('' = never). */
+  outsideScan(host: string): { at: string; key: string } {
+    return { at: this.meta(`outside_at:${host}`) ?? '', key: this.meta(`outside_key:${host}`) ?? '' };
+  }
+  markOutsideScanned(host: string, at: string, key: string): void {
+    this.setMeta(`outside_at:${host}`, at); this.setMeta(`outside_key:${host}`, key);
+  }
+
+  /** How many passes in a row each rollout file could not be read on this host (by file name). */
+  outsideMisses(host: string): Record<string, number> {
+    try { return JSON.parse(this.meta(`outside_misses:${host}`) ?? '{}') as Record<string, number>; } catch { return {}; }
+  }
+  setOutsideMisses(host: string, misses: Record<string, number>): void { this.setMeta(`outside_misses:${host}`, JSON.stringify(misses)); }
+
+  /** Forgets that any host's outside runs were read, so the next collection reads them all again (a bill changed what they add to). */
+  resetOutsideScans(): void {
+    this.db.prepare("DELETE FROM usage_rollup_meta WHERE key LIKE 'outside_at:%' OR key LIKE 'outside_resume:%'").run();
+    this.setMeta('outside_gen', String(Number(this.meta('outside_gen') ?? '0') + 1));
+  }
+  /** Counts the resets: a pass that started under another number must not mark its hosts as read. */
+  outsideGeneration(): string { return this.meta('outside_gen') ?? '0'; }
+
+  /** Where a pass a time budget cut short goes on from (absent: none is half done). */
+  outsideResume(host: string): OutsideResume | undefined {
+    const raw = this.meta(`outside_resume:${host}`);
+    if (!raw) return undefined;
+    try { return JSON.parse(raw) as OutsideResume; } catch { return undefined; }
+  }
+  setOutsideResume(host: string, state: OutsideResume | undefined): void {
+    if (state) this.setMeta(`outside_resume:${host}`, JSON.stringify(state));
+    else this.db.prepare('DELETE FROM usage_rollup_meta WHERE key=?').run(`outside_resume:${host}`);
+  }
+
+  /** True when this session has rows a Walnut session's own read wrote (the outside pass rewrites only its own). */
+  hasOwnSession(host: string, sessionId: string, engine: string): boolean {
+    const known = this.db.prepare('SELECT stored FROM usage_rollup_origin WHERE host=? AND session_id=?').get(host, sessionId) as { stored: number } | undefined;
+    if (known?.stored) return false;
+    return !!this.db.prepare('SELECT 1 FROM usage_rollup WHERE session_id=? AND engine=? LIMIT 1').get(sessionId, engine);
+  }
+
+  recordOrigins(rows: RunOrigin[]): void {
+    const put = this.db.prepare('INSERT OR REPLACE INTO usage_rollup_origin VALUES (?,?,?,?,?,?,?,?,?)');
+    this.db.transaction(() => { for (const r of rows) put.run(r.host, r.sessionId, r.originator, r.provider, r.cwd, r.outside ? 1 : 0, r.stored ? 1 : 0, r.firstAt, r.lastAt); })();
+  }
+
+  origins(): Map<string, RunOrigin> {
+    const rows = this.db.prepare('SELECT host, session_id sid, originator, provider, cwd, outside, stored, first_at first_day, last_at last_day FROM usage_rollup_origin').all() as
+      { host: string; sid: string; originator: string; provider: string; cwd: string; outside: number; stored: number; first_day: string; last_day: string }[];
+    return new Map(rows.map(r => [originKey(r.host, r.sid), { host: r.host, sessionId: r.sid, originator: r.originator, provider: r.provider,
+      cwd: r.cwd, outside: !!r.outside, stored: !!r.stored, firstAt: r.first_day, lastAt: r.last_day }]));
+  }
 
   private meta(key: string): string | undefined {
     return (this.db.prepare('SELECT value FROM usage_rollup_meta WHERE key=?').get(key) as { value: string } | undefined)?.value;
@@ -194,9 +264,17 @@ export class CostRollup {
     return rows.map(r => ({ host: r.host, from: r.first_day, to: r.last_day, ...(r.imported ? { imported: true as const } : {}) }));
   }
 
+  /** The days an import covers: each is the account's whole bill, so runs read later for those days are not added again. */
+  importedDays(): Set<string> {
+    return new Set((this.db.prepare("SELECT DISTINCT date d FROM usage_rollup WHERE source = 'import'").all() as { d: string }[]).map(r => r.d));
+  }
+
   /** The first day usage Walnut recorded itself is stored (an import stops short of it, so no day is counted twice). */
   firstOwnDay(): string | null {
-    return (this.db.prepare("SELECT MIN(date) d FROM usage_rollup WHERE source != 'import'").get() as { d: string | null }).d;
+    // Runs the outside pass stored are not Walnut's own records: a bill may still cover their days (the pass skips those
+    // for the cloud account), and counting them here would pull an import's cutoff back and drop the bill on its next import.
+    return (this.db.prepare(`SELECT MIN(date) d FROM usage_rollup u WHERE source != 'import' AND NOT EXISTS (
+      SELECT 1 FROM usage_rollup_origin o WHERE o.host = u.host AND o.session_id = u.session_id AND o.outside = 1 AND o.stored = 1)`).get() as { d: string | null }).d;
   }
 
   /**
@@ -220,6 +298,8 @@ export class CostRollup {
       this.db.prepare("DELETE FROM usage_rollup WHERE source='import' AND host=?").run(label);
       const all = [...sums.values()];
       await this.writeRows(all);
+      // The days a bill covers decide which outside runs are added: they are read again against the new ones.
+      this.resetOutsideScans();
       const days = all.map(r => r.date).sort();
       return { stored: all.length, skipped, from: days[0] ?? null, to: days[days.length - 1] ?? null };
     });
@@ -284,6 +364,8 @@ function bandOf(prompt: number, thresholds: number[]): number {
   for (const t of thresholds) if (prompt > t) n++;
   return n;
 }
+
+export function originKey(host: string, sessionId: string): string { return `${host}\u0000${sessionId}`; }
 
 function rowKey(r: RollupRow): string {
   return [r.date, r.host, r.source, r.engine, r.sessionId, r.model, r.agent, r.band].join('\u0000');

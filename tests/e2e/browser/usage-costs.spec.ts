@@ -401,3 +401,58 @@ test('a reopened pane shows its last report at once while the server is slow, th
   await expect(page.getByTestId('usage-kept')).toHaveCount(0)
   await expect(page.getByTestId('usage-total-cost')).toHaveText(total)
 })
+
+test('work Walnut did not start is counted by default, a filter narrows it, and the account billed directly leads', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => { if (!/due to access control checks|Load failed/.test(e.message)) errors.push(e.message) })
+  await page.goto('about:blank')
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('usage-spec-fresh')) return
+    for (const k of ['walnut-usage-breakdown', 'walnut-usage-origin']) localStorage.removeItem(k)
+    sessionStorage.setItem('usage-spec-fresh', '1')
+  })
+  const asked = await routeCosts(page)
+  await openUsage(page)
+  const money = (text: string | null) => Number((text ?? '').replace(/[^0-9.]/g, ''))
+
+  // Both origins count by default, each choice names what it holds, and the first read asks for no filter.
+  await expect(page.getByRole('radiogroup', { name: 'Started by' })).toBeVisible()
+  expect(asked.every((u) => !u.searchParams.has('origin'))).toBe(true)
+  const all = money(await page.getByTestId('usage-total-cost').textContent())
+  await expect(page.getByTestId('usage-origin-outside')).toContainText('Outside Walnut $')
+  const outsideAmount = money(await page.getByTestId('usage-origin-outside').textContent())
+  expect(outsideAmount).toBeGreaterThan(0)
+  expect(outsideAmount).toBeLessThan(all)
+
+  // What bills the signed-in account directly is called out beside the total.
+  await expect(page.getByTestId('usage-direct-cost')).toContainText('Billed directly')
+  expect(money(await page.getByTestId('usage-direct-cost').textContent())).toBeGreaterThan(0)
+  // The account Codex went through: the one billed directly is first and marked.
+  const accounts = page.getByTestId('usage-accounts')
+  await expect(accounts).toBeVisible()
+  const rows = accounts.locator('.usage-account')
+  await expect(rows).toHaveCount(3)
+  await expect(rows.first()).toContainText('Bedrock account')
+  await expect(rows.first()).toContainText('Billed directly')
+  await expect(rows.first()).toContainText('outside Walnut')
+  await expect(rows.nth(1)).not.toContainText('Billed directly')
+
+  // Account is a breakdown of its own, with the same lines.
+  await page.getByTestId('usage-breakdown-account').click()
+  await expect(rowNames(page, 'account')).toHaveText(['Bedrock account', 'Local proxy', 'Proxy: bp'])
+
+  // Narrowing to what Walnut did not start asks the server, shows that share, and keeps the other choice's amount.
+  await page.getByTestId('usage-origin-outside').click()
+  await expect.poll(() => asked.at(-1)?.searchParams.get('origin')).toBe('outside')
+  await expect.poll(async () => money(await page.getByTestId('usage-total-cost').textContent())).toBeCloseTo(outsideAmount, 0)
+  await expect(page.getByTestId('usage-origin-walnut')).toContainText('Walnut $')
+  // The choice survives a reload.
+  await page.reload()
+  await expect(page.locator('.app-shell')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('link', { name: 'Settings', exact: true }).click()
+  await page.getByTestId('settings-nav-usage').click()
+  await expect(page.getByTestId('usage-origin-outside')).toHaveAttribute('aria-checked', 'true')
+  await page.getByTestId('usage-origin-all').click()
+  await expect.poll(async () => money(await page.getByTestId('usage-total-cost').textContent())).toBeCloseTo(all, 0)
+  expect(errors).toEqual([])
+})

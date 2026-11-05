@@ -3,14 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow, SettingsLoadingRow, SettingsEmpty } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useUsageCosts } from '@/hooks/useUsageCosts';
 import type { TimeSelection } from '@/hooks/useUsageOverview';
 import { formatTokens as formatTokenCount } from '@/utils/format';
 import { timeAgo } from '@/utils/time';
 import { UsageBreakdownCard } from '@/components/usage/UsageBreakdownCard';
+import { UsageAccounts } from '@/components/usage/UsageAccounts';
 import { dayLabel, periodDays } from '@/components/usage/breakdown-model';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
-import { collectUsage, type CostLine, type CostReport, type CostTaskLine, type Period } from '@/api/usage';
+import { collectUsage, type CostLine, type CostOrigin, type CostReport, type CostTaskLine, type Period } from '@/api/usage';
 import { openSessionOnHome } from '@/utils/open-session';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/settings-sections-addons.css';
@@ -46,9 +48,23 @@ function volume(requests: number, tokens?: number): string {
   return tokens === undefined ? count(requests, 'request') : `${count(requests, 'request')} · ${formatTokens(tokens)} tokens`;
 }
 
+const ORIGINS: { value: CostOrigin; label: string }[] = [
+  { value: 'all', label: 'All' }, { value: 'walnut', label: 'Walnut' }, { value: 'outside', label: 'Outside Walnut' },
+];
+const isOrigin = (v: unknown): v is CostOrigin => ORIGINS.some((o) => o.value === v);
+
+/** A choice names what it holds in this period, so the filter shows what it leaves out. */
+function originLabel(value: CostOrigin, label: string, report: CostReport | null | undefined): string {
+  const s = report?.started;
+  if (!s) return label;
+  const usd = value === 'all' ? s.walnut.costUsd + s.outside.costUsd + (s.imported?.costUsd ?? 0) : s[value].costUsd;
+  return `${label} ${money(usd)}`;
+}
+
 export function UsageSection() {
   const [time, setTime] = useState<TimeSelection>({ preset: '30d' });
-  const { report, current, keptAt, loading, error, refresh, range } = useUsageCosts('all', time);
+  const [origin, setOrigin] = usePersistentState<CostOrigin>('walnut-usage-origin', 'all', isOrigin);
+  const { report, current, keptAt, loading, error, refresh, range } = useUsageCosts('all', time, 'all', origin);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
   const update = async () => {
@@ -87,6 +103,14 @@ export function UsageSection() {
             </span>
           }
         />
+        <SettingsRow
+          label="Started by"
+          title="Work Walnut started, or Codex runs it did not (a codex exec from a shell, the Codex app or terminal). Both count by default."
+          control={
+            <SegmentedControl aria-label="Started by" value={origin} onChange={setOrigin}
+              options={ORIGINS.map((o) => ({ value: o.value, label: originLabel(o.value, o.label, shown), testId: `usage-origin-${o.value}` }))} />
+          }
+        />
       </SettingsGroup>
 
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't load usage: ${error}`}</SettingsNotice>}
@@ -108,6 +132,7 @@ export function UsageSection() {
               <UsageBreakdownCard report={shown} days={days} loading={loading}
                 onPick={(b) => setTime(time.preset === 'custom' && time.start === b.start && time.end === b.end
                   ? { preset: '30d' } : { preset: 'custom', start: b.start, end: b.end })} />
+              <UsageAccounts accounts={shown.accounts} />
               <TaskList report={shown} heading="Most expensive tasks" />
             </>
           )}
@@ -135,11 +160,14 @@ function Headline({ report, days }: { report: CostReport; days: string[] }) {
   const unpriced = unpricedNote(report);
   const busiest = report.daily.reduce<CostReport['daily'][number] | undefined>((m, d) => (!m || d.costUsd > m.costUsd ? d : m), undefined);
   const dayCount = Math.max(1, days.length);
+  // Codex usage that bills the account Codex is signed in to, not a proxy: shown beside the total so it is not missed.
+  const direct = (report.accounts ?? []).filter((a) => a.direct).reduce((n, a) => n + a.costUsd, 0);
   return (
     <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
-      <div className="settings-addons-stats">
+      <div className="settings-addons-stats" data-count={direct > 0 ? 4 : 3}>
         <Stat value={money(t.costUsd)} label="Estimated cost" testId="usage-total-cost" />
         <Stat value={money(t.costUsd / dayCount)} label="Average day" testId="usage-average-day" />
+        {direct > 0 && <Stat value={money(direct)} label="Billed directly" testId="usage-direct-cost" highlight />}
         <Stat value={busiest && busiest.costUsd > 0 ? money(busiest.costUsd) : '-'} label={busiest && busiest.costUsd > 0 ? `Busiest day, ${dayLabel(busiest.date)}` : 'Busiest day'} />
       </div>
       <p className="settings-addons-muted usage-headline-note" data-testid="usage-volume">
@@ -150,9 +178,10 @@ function Headline({ report, days }: { report: CostReport; days: string[] }) {
   );
 }
 
-function Stat({ value, label, testId }: { value: string; label: string; testId?: string }) {
+function Stat({ value, label, testId, highlight }: { value: string; label: string; testId?: string; highlight?: boolean }) {
   return (
-    <div className="settings-addons-stat" data-testid={testId}>
+    <div className="settings-addons-stat" data-testid={testId} data-direct={highlight || undefined}
+      title={highlight ? 'Codex requests billed to the account Codex is signed in to, not through a proxy.' : undefined}>
       <span className="settings-addons-stat-value">{value}</span>
       <span className="settings-addons-stat-label">{label}</span>
     </div>

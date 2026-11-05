@@ -5,7 +5,7 @@
  */
 import type { CostGroup, CostLine } from '@/api/usage';
 
-export type BreakdownId = 'agent' | 'model' | 'project' | 'host' | 'kind' | 'token';
+export type BreakdownId = 'agent' | 'model' | 'project' | 'host' | 'account' | 'kind' | 'token';
 export type Granularity = 'day' | 'week' | 'month';
 
 export interface Bucket { start: string; end: string; label: string; short: string }
@@ -29,7 +29,9 @@ const AGENT_SLOT: Record<string, number> = { claude: 0, codex: 1, opencode: 2, g
 /** Token kinds and kinds of work keep theirs too, so the table reads the same on every visit. */
 const FIXED_SLOT: Partial<Record<BreakdownId, Record<string, number>>> = {
   agent: AGENT_SLOT,
-  kind: { interactive: 0, subagent: 1, routine: 2, imported: 4, walnut: 5 },
+  kind: { interactive: 0, subagent: 1, routine: 2, outside: 3, imported: 4, walnut: 5 },
+  // The account billed directly keeps the warm slot, so it reads apart from the proxies.
+  account: { 'amazon-bedrock': 1, 'local-proxy': 0, unknown: 5 },
   token: { cacheRead: 0, cacheWrite1h: 1, output: 2, cacheWrite5m: 3, input: 4, reported: 5 },
 };
 

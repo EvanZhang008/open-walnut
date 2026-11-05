@@ -228,7 +228,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4161,6 +4161,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);
+    case 'usage.codexOutside': return cmdUsageCodexOutside(ws, id, cmd);
     case 'usage.budget.get': return cmdUsageBudget(ws, id, cmd, false);
     case 'usage.budget.configure': return cmdUsageBudget(ws, id, cmd, true);
     case 'usage.budget.list': return cmdUsageBudgetList(ws, id, cmd);
@@ -13381,6 +13382,7 @@ function daemonCapabilities() {
   if (usageCore) caps.push('usage-scan-v1');
   if (usageCore && typeof usageCore.scanSessionCost === 'function') caps.push('session-cost-v1');
   if (usageCore && typeof usageCore.scanSessionCost === 'function' && usageCore.SESSION_COST_DAY_SPLIT === true) caps.push('session-cost-day-v1');
+  if (usageCore && typeof usageCore.scanCodexOutside === 'function' && usageCore.CODEX_OUTSIDE_SCAN === true) caps.push('codex-outside-v1');
   if (usageBudget && budgetControl) caps.push('budget-v2');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
@@ -13751,6 +13753,25 @@ async function cmdUsageSessionCost(ws, id, cmd) {
     });
     sendOk(ws, id, { result });
   } catch (err) { sendError(ws, id, 'usage.sessionCost failed: ' + err.message); }
+}
+
+// 'codex-outside-v1': Codex runs no Walnut session started (an agent's codex exec run, the
+// desktop app), read from Codex's own rollout files, one time-budgeted page per call
+// (codex-outside-core.ts via the usage-core.cjs sidecar). Read-only. Keep in sync with daemon-standalone.ts.
+async function cmdUsageCodexOutside(ws, id, cmd) {
+  if (!usageCore || typeof usageCore.scanCodexOutside !== 'function') return sendError(ws, id, 'usage.codexOutside unsupported: sidecar not loaded');
+  const zone = cmd.byDay && cmd.byDay.timeZone;
+  try {
+    const result = await usageCore.scanCodexOutside({
+      byDay: { timeZone: typeof zone === 'string' ? zone : 'UTC' },
+      thresholds: Array.isArray(cmd.thresholds) ? cmd.thresholds.filter((t) => typeof t === 'number') : [],
+      knownSessionIds: Array.isArray(cmd.known) ? cmd.known.filter((s) => typeof s === 'string') : [],
+      ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}),
+      ...(typeof cmd.cursor === 'string' ? { cursor: cmd.cursor } : {}),
+      ...(typeof cmd.budgetMs === 'number' ? { budgetMs: Math.min(Math.max(cmd.budgetMs, 1000), 30000) } : {}),
+    });
+    sendOk(ws, id, { result });
+  } catch (err) { sendError(ws, id, 'usage.codexOutside failed: ' + err.message); }
 }
 
 async function cmdChangesCompute(ws, id, cmd) {
