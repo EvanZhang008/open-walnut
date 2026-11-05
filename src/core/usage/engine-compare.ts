@@ -211,14 +211,22 @@ function sessionsOf(t: Task): string[] {
     .filter((x): x is string => !!x))];
 }
 
-/** The earliest start among every session the task held. */
+/**
+ * When the task's work began: the earliest start among its sessions that ran a turn, so a failed
+ * start's empty session (kept in legacy_session_ids after a retry) never dates or times the work;
+ * with no session showing a turn (an older record, an engine that reports none), the earliest of all.
+ */
 function firstStart(t: Task, sessions: CompareInput['sessions']): string | undefined {
   let first: string | undefined;
+  let firstRan: string | undefined;
   for (const id of sessionsOf(t)) {
-    const at = sessions.get(id)?.startedAt;
-    if (at && (!first || at < first)) first = at;
+    const s = sessions.get(id);
+    const at = s?.startedAt;
+    if (!at) continue;
+    if (!first || at < first) first = at;
+    if (sessionRanTurn(s) && (!firstRan || at < firstRan)) firstRan = at;
   }
-  return first;
+  return firstRan ?? first;
 }
 
 function inRange(day: string, range: { start?: string; end?: string }): boolean {

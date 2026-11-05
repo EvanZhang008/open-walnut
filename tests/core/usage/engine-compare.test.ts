@@ -393,6 +393,19 @@ describe('round-9 counting', () => {
     expect(aggregateEngineCompare(inp).rows[0]).toMatchObject({ done: 1, notStarted: 1, errored: 1, timedDone: 1 });
   });
 
+  it('a failed start kept as history, closed in October, retried and finished in November, counts in November', () => {
+    // The failed start's empty session (2026-10-10) stays in legacy_session_ids; the work ran in November.
+    const t = task({ id: 'retry', phase: 'COMPLETE', session_ids: ['s-work'], legacy_session_ids: ['s-empty'], reopens: 1, start_failures: 1,
+      first_completed_at: '2026-10-10T00:05:00.000Z', completed_at: '2026-11-03T01:00:00.000Z' });
+    const inp = input([t], { retry: { costUsd: 4 } }, { range: { start: '2026-11-01', end: '2026-11-30' } });
+    (inp.sessions as Map<string, object>).set('s-empty', { startedAt: '2026-10-10T00:00:00.000Z', process_status: 'error', errorCount: 1 });
+    (inp.sessions as Map<string, object>).set('s-work', { startedAt: '2026-11-03T00:00:00.000Z', contextTokens: 9000 });
+    const out = aggregateEngineCompare(inp);
+    expect(out.taskCount).toBe(1);
+    expect(out.tasks[0]).toMatchObject({ done: true, hours: 1, reopens: 0 });
+    expect(out.rows[0].reopenedShare).toBe(0);
+  });
+
   it('a session that ran turns and later errored is finished work, not "never started"', () => {
     const t = done('worked', 3);
     const inp = input([t], { worked: { costUsd: 2 } });
