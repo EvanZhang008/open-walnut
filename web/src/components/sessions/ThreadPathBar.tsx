@@ -3,10 +3,11 @@
  * ribbon of the levels from the main conversation down to the deepest question
  * the reader went to, at the top of the Tree Mode body.
  *
- *   [Main conversation v] > [6 title v] > [6.1 title L v] > [6.1.2 title R v]   Cmd[ Cmd] move the pair
+ *   [Main conversation v] > [6 title v] > [6.1 title L v] > [6.1.2 title R v]   Cmd[ Cmd] move the pages
  *
- * The two pages in the halves wear L and R (`only` for a single page). A click
- * on a segment moves the pair there (useTreeSplit); its caret opens the
+ * The pages on screen wear L, M and R (`only` for a single page). A click on a
+ * segment on screen focuses that page, one off screen slides the pages to it
+ * (useTreeSplit); its caret opens the
  * questions at the same level, with their status words, and a pick switches
  * the segment (the levels right of it are cut back to it).
  *
@@ -31,7 +32,7 @@ import '@/styles/tree-split.css';
 const MENU_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .thread-drawer`;
 const CMD = '\u2318';
 /** The badge's words for a screen reader, read as part of the segment's name. */
-const ROLE_NAME: Record<NonNullable<SegmentRole>, string> = { L: '(left half)', R: '(right half)', only: '(on screen)' };
+const ROLE_NAME: Record<NonNullable<SegmentRole>, string> = { L: '(left page)', M: '(middle page)', R: '(right page)', only: '(on screen)' };
 
 export interface PathBarSegment {
   key: string;
@@ -55,7 +56,7 @@ export interface PathBarLevelItem {
 
 export interface ThreadPathBarProps {
   segments: PathBarSegment[];
-  /** Two halves on screen (the hint says `move the pair`). */
+  /** Pages side by side (the hint says `move the pages`). */
   split: boolean;
   /** Titles only on the pages on screen, no key hint. */
   narrow: boolean;
@@ -69,7 +70,7 @@ export interface ThreadPathBarProps {
 export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) {
   const [open, setOpen] = useState<number | null>(null);
   const caretRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  // The segments changed under an open list (the pick moved the pair): close it.
+  // The segments changed under an open list (the pick moved the pages): close it.
   const sig = p.segments.map((s) => s.key).join('\n');
   useEffect(() => { setOpen(null); }, [sig]);
   const mod = isMacPlatform() ? CMD : 'Ctrl ';
@@ -110,9 +111,9 @@ export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) 
         })}
       </ol>
       {!p.narrow && p.segments.length > 1 && (
-        <span className="tree-path-hint" aria-hidden="true">
+        <span className="tree-path-hint" aria-hidden="true" title={`${mod}[ / ${mod}] ${p.split ? 'move the pages' : 'move along the path'}`}>
           <kbd>{mod}[</kbd><kbd>{mod}]</kbd>
-          <span>{p.split ? 'move the pair' : 'move along the path'}</span>
+          <span>{p.split ? 'move the pages' : 'move along the path'}</span>
         </span>
       )}
       {open !== null && (

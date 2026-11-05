@@ -204,7 +204,7 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
     if (key && status !== 'resolved' && status !== 'suggested') action = doneButton('Archive', true);
     return (
       <div ref={headerRef} className="thread-stack-header" data-depth={depth} data-half={inHalf.side}>
-        <HalfRow half={inHalf} label={node ? undefined : PENDING_ROW_LABEL} title={shown.title}
+        <HalfRow half={inHalf} label={node ? undefined : PENDING_ROW_LABEL} title={shown.title} question={question}
           status={node ? status : undefined} rename={rename}>
           {action}
           {menuButton}
@@ -252,10 +252,32 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
             <SplitIcon />
           </button>
         )}
+        {half?.onShowSibling && (
+          <button type="button" className="thread-half-split" title="Show the sibling question above"
+            aria-label="Show the sibling question" onClick={half.onShowSibling}>
+            <SiblingIcon />
+          </button>
+        )}
       </div>
       {subtitle && <div className="thread-stack-subtitle" title={question} style={subPad !== null ? { paddingLeft: subPad } : undefined}>{subtitle}</div>}
       {overlays}
     </div>
+  );
+}
+
+function SwapIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6" />
+    </svg>
+  );
+}
+
+function SiblingIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="11" rx="2" /><path d="M2 6.5h12" />
+    </svg>
   );
 }
 
@@ -267,32 +289,70 @@ function SplitIcon() {
   );
 }
 
-type HalfOnScreen = TreeHalf & { side: 'L' | 'R' };
+type HalfOnScreen = TreeHalf & { side: 'L' | 'M' | 'R' | 'S' };
 
-const SIDE_NAME: Record<'L' | 'R', string> = { L: 'Left half', R: 'Right half' };
+const SIDE_NAME: Record<'L' | 'M' | 'R' | 'S', string> = { L: 'Left page', M: 'Middle page', R: 'Right page', S: 'Sibling page' };
+
+/** `Previous · 1 of 2`: in a narrow column only the word stays (CSS); the whole is the tooltip. */
+function WhereTag({ where }: { where: string }) {
+  const at = where.indexOf(' \u00b7 ');
+  if (at < 0) return <span className="thread-half-where">{where}</span>;
+  return (
+    <span className="thread-half-where" title={where}>
+      {where.slice(0, at)}<span className="thread-half-where-pos">{where.slice(at)}</span>
+    </span>
+  );
+}
 
 /** One half's row: its badge, the question's label (or what the page is), its
  *  status word, the page's own actions, and a close button back to one pane. */
-function HalfRow({ half, label, title, status, rename, children }: {
+function HalfRow({ half, label, title, question, status, rename, children }: {
   half: HalfOnScreen;
   /** What the page is when it has no label: `Main conversation`, `New question`. */
   label?: string;
   title?: string;
+  /** The question's own words: the row's tooltip, so a page whose question is
+   *  scrolled out of sight (the sibling's third of the column) still says it. */
+  question?: string;
   status?: ThreadStackHeaderStatus;
   rename?: ReactNode;
   children?: ReactNode;
 }) {
+  // Every page's row names it: its number, then its title (the composer below
+  // writes to it, and the sibling page is on no segment of the path bar).
   const name = label ?? half.number ?? '';
+  const shownTitle = !label && title && title !== name ? title : undefined;
   return (
     <div className="thread-stack-row thread-half-row" data-half={half.side}>
-      <span className="thread-half-badge" title={SIDE_NAME[half.side]} aria-hidden="true">{half.side}</span>
+      {half.side === 'S' ? (
+        <WhereTag where={half.where ?? ''} />
+      ) : (
+        <span className="thread-half-badge" title={SIDE_NAME[half.side]} aria-hidden="true">{half.side}</span>
+      )}
       <span className="tree-sr-only">{SIDE_NAME[half.side]}: </span>
-      {rename ?? <span className="thread-half-name" title={title ?? name}>{name}</span>}
+      {rename ?? (
+        <>
+          <span className="thread-half-name" title={question ?? title ?? name}>{name}</span>
+          {shownTitle && <span className="thread-half-title" title={question ?? shownTitle}>{shownTitle}</span>}
+        </>
+      )}
       {status && <ThreadStatusWord status={status} className="thread-half-status" />}
       <span className="thread-half-gap" />
       {children}
+      {half.onSwap && (
+        <button type="button" className="thread-half-swap" title="Swap: open this question below, the one below comes up"
+          aria-label="Swap with the page below" onClick={half.onSwap}>
+          <SwapIcon /><span>Swap</span>
+        </button>
+      )}
+      {half.onShowSibling && (
+        <button type="button" className="thread-half-split" title="Show the sibling question above"
+          aria-label="Show the sibling question" onClick={half.onShowSibling}>
+          <SiblingIcon />
+        </button>
+      )}
       {half.onClose && (
-        <button type="button" className="thread-half-close" title="Close this half" aria-label={`Close the ${SIDE_NAME[half.side].toLowerCase()}`} onClick={half.onClose}>
+        <button type="button" className="thread-half-close" title={half.side === 'M' ? 'Close this page and the one left of it' : 'Close this page'} aria-label={`Close the ${SIDE_NAME[half.side].toLowerCase()}`} onClick={half.onClose}>
           <ThreadCloseIcon size={12} />
         </button>
       )}

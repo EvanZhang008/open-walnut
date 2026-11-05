@@ -19,6 +19,16 @@
  * session; a delivery that came in while the session was still working (the rows
  * before it end in a tool call, not an answer) belongs to the turn it interrupted.
  * The live turn is the caller's to leave `open`. Pure: tests/web/turn-shape.test.ts.
+ *
+ * A session with questions shapes each question's turns on its own rows
+ * (`pageOf`): one reply that answered two questions is cut into a part per
+ * question (tagged-reply-split.ts), and a question sent while another turn ran
+ * sits in the middle of that turn. Shaped over the whole transcript, the turn's
+ * answer was the LAST part, so the part answering this question read as
+ * narration before it and folded as "An update" (2026-11-04, the user: "why
+ * this is update lol this is just an response"). Each question's turns are the
+ * turns as its own page shows them, so a person's message is answered by the
+ * last words filed under its own question.
  */
 import { readTurnMarker, type MarkerTurnMessage } from './turn-end-marker';
 
@@ -47,9 +57,59 @@ export interface TurnShapeOptions {
   stripTag?: (text: string) => string;
   /** The last turn is still running: it stays `open`. */
   streaming: boolean;
+  /** The question a row is filed under (`''` = the main conversation). Each
+   *  question's turns are shaped on its own rows; absent, every row is one page. */
+  pageOf?: (i: number) => string;
 }
 
-export function shapeTurns(messages: readonly MarkerTurnMessage[], opts: TurnShapeOptions): TurnShape[] {
+/** A turn and the rows it holds (global indices, in order), when its question's
+ *  rows interleave with another's; absent, it is the range start..end. */
+export interface PagedTurnShape extends TurnShape {
+  rows?: readonly number[];
+}
+
+export function shapeTurns(messages: readonly MarkerTurnMessage[], opts: TurnShapeOptions): PagedTurnShape[] {
+  const pageOf = opts.pageOf;
+  if (!pageOf) return shapeRun(messages, opts);
+  const byPage = new Map<string, number[]>();
+  messages.forEach((_, i) => {
+    const key = pageOf(i);
+    const list = byPage.get(key);
+    if (list) list.push(i); else byPage.set(key, [i]);
+  });
+  if (byPage.size <= 1) return shapeRun(messages, opts);
+  // The newest turn is the one holding the newest row: only it may stay open while live.
+  const lastPage = pageOf(messages.length - 1);
+  const out: PagedTurnShape[] = [];
+  for (const [page, idx] of byPage) {
+    const sub = idx.map((i) => messages[i]);
+    const at = (j: number) => idx[j];
+    const shapes = shapeRun(sub, {
+      ...opts,
+      isSent: (m, j) => opts.isSent(m, at(j)),
+      isPerson: (m, j) => opts.isPerson(m, at(j)),
+      isCleanNoAction: (j) => opts.isCleanNoAction(at(j)),
+      streaming: opts.streaming && page === lastPage,
+    });
+    for (const t of shapes) {
+      const first = Math.max(t.start, 0);
+      const rows = idx.slice(first, t.end);
+      out.push({
+        start: t.start >= 0 ? at(t.start) : -1,
+        end: rows.length > 0 ? rows[rows.length - 1] + 1 : (t.start >= 0 ? at(t.start) + 1 : 0),
+        byPerson: t.byPerson,
+        kind: t.kind,
+        answer: t.answer >= 0 ? at(t.answer) : -1,
+        rows,
+      });
+    }
+  }
+  // Transcript order by each turn's first row: callers read the last one as the newest.
+  const firstRow = (t: PagedTurnShape) => (t.rows && t.rows.length > 0 ? t.rows[0] : Math.max(t.start, 0));
+  return out.sort((a, b) => firstRow(a) - firstRow(b));
+}
+
+function shapeRun(messages: readonly MarkerTurnMessage[], opts: TurnShapeOptions): TurnShape[] {
   const stripTag = opts.stripTag ?? ((t: string) => t);
   const bounds: number[] = [];
   messages.forEach((m, i) => { if (m.role === 'user' && opts.isSent(m, i)) bounds.push(i); });

@@ -525,10 +525,15 @@ export function normalizePassageComments(value: unknown): import('../types.js').
     const sentAt = iso(entry.sentAt, 'sentAt');
     const removedAt = iso(entry.removedAt, 'removedAt');
     const doc = normalizeCommentDoc(entry.doc);
+    const thread = entry.thread;
+    if (thread !== undefined && thread !== null && (typeof thread !== 'string' || thread.length > MAX_PIN_ID_CHARS)) {
+      throw new SessionControlError('passage_comments[].thread must be a question head id', 400);
+    }
     out.push({
       id, msgId, role, quote, text, comment, createdAt,
       ...(updatedAt ? { updatedAt } : {}), ...(sentAt ? { sentAt } : {}), ...(removedAt ? { removedAt } : {}),
       ...(doc ? { doc } : {}),
+      ...(typeof thread === 'string' && thread ? { thread } : {}),
     });
   }
   return out;

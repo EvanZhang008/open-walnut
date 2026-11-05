@@ -101,6 +101,9 @@ export interface SessionPassageComment {
   removedAt?: string;
   /** About a passage of a document: the comment lives in its sidecar file. */
   doc?: SessionPassageCommentDoc;
+  /** Made on a question in Tree Mode: that question's head id (absent = the main
+   *  conversation). It waits for, and is sent with, that question's next message. */
+  thread?: string;
 }
 
 /** Mirrors SessionPassageCommentDoc in src/core/types.ts. */

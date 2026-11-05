@@ -66,6 +66,7 @@ import { draftHash, draftKey } from '@/utils/drafts';
 import { useDraft } from '@/hooks/useDraft';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
+import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { fitsAsComment, passageGist } from '@/utils/passage-comments';
 import { ICON_PIN } from './MessageActionIcons';
 import { passageExtent, rangePoint, sameBoundaries, sameHeldPoint, useHeldPassage, type HeldPoint } from './useHeldPassage';
@@ -583,19 +584,26 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
   // composer, sent with the next message); the text fallback is for a passage that
   // cannot be kept that way.
   const comments = useSessionCommentsApi();
+  // Tree Mode: a comment belongs to the page it was made on (each half names its
+  // own), waits in that page's composer and goes with that page's next message.
+  const threadsView = useSessionThreadsApi();
+  const commentPage = threadsView.viewMode === 'stack' ? threadsView.currentThreadKey : undefined;
   const canQuote = comments.canComment || !!onQuoteInChat;
   const keepPassage = useCallback((note: string): boolean => {
     if (!state?.text.trim()) return false;
     // Past the record's caps (a very long passage or comment) the text path keeps it.
     if (comments.canComment && state.msgId && state.quote.exact.trim() && fitsAsComment(state.text, note, comments.comments)) {
-      comments.add({ msgId: state.msgId, role: state.role, quote: state.quote, text: state.text, comment: note });
+      comments.add({
+        msgId: state.msgId, role: state.role, quote: state.quote, text: state.text, comment: note,
+        ...(commentPage !== undefined ? { pageKey: commentPage } : {}),
+      });
       return true;
     }
     if (!onQuoteInChat) return false;
     log.info('session', 'quoting a passage in the chat as text', { sessionId, msgId: state.msgId, chars: state.text.length });
     onQuoteInChat(state.text, note || undefined);
     return true;
-  }, [comments, onQuoteInChat, sessionId, state]);
+  }, [comments, onQuoteInChat, sessionId, state, commentPage]);
 
   const quoteInChat = useCallback(() => {
     if (!keepPassage('')) return;

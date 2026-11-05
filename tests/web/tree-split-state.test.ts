@@ -1,15 +1,18 @@
 /**
  * Tree Mode's split screen (design 4, the path bar): the pure rules in
  * web/src/utils/tree-split-state.ts and the path bar's model
- * (web/src/components/sessions/tree-path-model.ts). The pair is (left, right) =
- * (trail[k-1], trail[k]); Cmd+[ / Cmd+] move it one level, a segment click puts
- * that segment on the right, a pick from a level's list switches it and cuts
- * the levels right of it, a close leaves one page, a narrow pane never splits.
+ * (web/src/components/sessions/tree-path-model.ts). The pages on screen are the
+ * last n of the path (n = 1 to 3: the reader's cap, the room, the path); Cmd+[ /
+ * Cmd+] move them one level, a segment click on a page on screen only focuses
+ * it and one off screen slides the pages, a pick from a level's list switches
+ * it and cuts the levels right of it, a narrow pane shows one page.
  */
 import { describe, expect, it } from 'vitest';
 import {
-  NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, barShown, closeHalfTarget, isPrefix, isTreeSplitRecord, levelHeading, levelKeys,
-  levelPickMoves, pairChordDir, pairMoveTarget, readOnlyLandings, sameTreeSplit, segmentRoles, segmentTarget, splitShown, trailFor, trailHeadsOf, trailKeysOf,
+  answeringPages,
+  CUTTING_VIAS, MAX_PANES, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, THREE_PANES_MIN_WIDTH, askPlacement, barShown, closePaneMove, isPrefix,
+  isTreeSplitRecord, levelHeading, levelKeys, levelPickMoves, pairChordDir, pairMoveTarget, paneCap, paneCount, readOnlyLandings, retargetNav,
+  roomFor, sameTreeSplit, segmentRoles, segmentTarget, splitShown, trailFor, trailHeadsOf, trailKeysOf, withPaneCap,
 } from '@/utils/tree-split-state';
 import { pathBarHeading, pathBarLevelItems, pathBarSegments } from '@/components/sessions/tree-path-model';
 import { panelHistoryOf } from '@/utils/find-scope';
@@ -74,49 +77,97 @@ describe('the trail the path bar shows', () => {
   });
 });
 
-describe('split or single', () => {
-  it('splits only when chosen, with room for two halves, below Main', () => {
-    expect(splitShown({ split: true, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
-    expect(splitShown({ split: true, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
-    expect(splitShown({ split: true, width: 0, depth: 3 })).toBe(false);
-    expect(splitShown({ split: true, width: 1400, depth: 0 })).toBe(false);
-    expect(splitShown({ split: false, width: 1400, depth: 2 })).toBe(false);
+describe('how many pages sit side by side', () => {
+  it('as many as fit, up to the reader\'s cap and the path', () => {
+    expect(roomFor(0)).toBe(1);
+    expect(roomFor(SPLIT_MIN_WIDTH - 1)).toBe(1);
+    expect(roomFor(SPLIT_MIN_WIDTH)).toBe(2);
+    expect(roomFor(THREE_PANES_MIN_WIDTH - 1)).toBe(2);
+    expect(roomFor(THREE_PANES_MIN_WIDTH)).toBe(3);
+    expect(paneCount({ cap: 3, width: 1400, pathLength: 4 })).toBe(3);
+    expect(paneCount({ cap: 3, width: 1400, pathLength: 2 })).toBe(2);
+    expect(paneCount({ cap: 3, width: 900, pathLength: 4 })).toBe(2);
+    expect(paneCount({ cap: 1, width: 1400, pathLength: 4 })).toBe(1);
+    expect(paneCount({ cap: 3, width: 1400, pathLength: 1 })).toBe(1);
+    expect(splitShown({ cap: 3, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
+    expect(splitShown({ cap: 3, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
+    expect(splitShown({ cap: 3, width: 1400, depth: 0 })).toBe(false);
+    expect(splitShown({ cap: 1, width: 1400, depth: 2 })).toBe(false);
+  });
+  it('a record from before the cap reads as the most pages (its split:false was the old default, not a choice)', () => {
+    expect(paneCap({ split: false, trail: [] })).toBe(MAX_PANES);
+    expect(paneCap(NO_TREE_SPLIT)).toBe(MAX_PANES);
+    expect(withPaneCap(NO_TREE_SPLIT, 1)).toEqual({ split: false, trail: [], panes: 1 });
+    expect(withPaneCap({ split: false, trail: ['a'] }, 3)).toEqual({ split: true, trail: ['a'], panes: 3 });
+    expect(withPaneCap(NO_TREE_SPLIT, 9).panes).toBe(MAX_PANES);
   });
   it('shows the bar in Tree Mode once there is a level besides Main', () => {
     expect(barShown({ stackMode: true, trailLength: 2 })).toBe(true);
     expect(barShown({ stackMode: true, trailLength: 1 })).toBe(false);
-    expect(barShown({ stackMode: false, trailLength: 4 })).toBe(false);
+    expect(barShown({ stackMode: false, trailLength: 3 })).toBe(false);
   });
-  it('marks the pair L and R, or the single page only', () => {
-    expect(segmentRoles(4, 3, true)).toEqual([null, null, 'L', 'R']);
-    expect(segmentRoles(4, 1, true)).toEqual(['L', 'R', null, null]);
-    expect(segmentRoles(4, 3, false)).toEqual([null, null, null, 'only']);
-    expect(segmentRoles(4, 0, false)).toEqual(['only', null, null, null]);
+  it('marks the pages on screen L, M, R (or the single page only)', () => {
+    expect(segmentRoles(4, 3, 2)).toEqual([null, null, 'L', 'R']);
+    expect(segmentRoles(4, 1, 2)).toEqual(['L', 'R', null, null]);
+    expect(segmentRoles(4, 3, 3)).toEqual([null, 'L', 'M', 'R']);
+    expect(segmentRoles(3, 2, 3)).toEqual(['L', 'M', 'R']);
+    expect(segmentRoles(4, 3, 1)).toEqual([null, null, null, 'only']);
+    expect(segmentRoles(4, 0, 1)).toEqual(['only', null, null, null]);
   });
 });
 
-describe('moving the pair', () => {
-  it('Cmd+[ / Cmd+] move one level and stop at the ends (Main is at most the left half)', () => {
-    expect(pairMoveTarget(4, 3, -1, true)).toBe(2);
-    expect(pairMoveTarget(4, 2, 1, true)).toBe(3);
-    expect(pairMoveTarget(4, 3, 1, true)).toBeNull();
-    expect(pairMoveTarget(4, 1, -1, true)).toBeNull();
-    // Single: the page itself moves, down to Main.
-    expect(pairMoveTarget(4, 1, -1, false)).toBe(0);
-    expect(pairMoveTarget(4, 0, -1, false)).toBeNull();
+describe('moving along the path', () => {
+  it('Cmd+[ / Cmd+] move the pages one level and stop at the ends, never shrinking the split', () => {
+    expect(pairMoveTarget(4, 3, -1, 2)).toBe(2);
+    expect(pairMoveTarget(4, 2, 1, 2)).toBe(3);
+    expect(pairMoveTarget(4, 3, 1, 2)).toBeNull();
+    expect(pairMoveTarget(4, 1, -1, 2)).toBeNull();
+    expect(pairMoveTarget(4, 3, -1, 3)).toBe(2);
+    expect(pairMoveTarget(3, 2, -1, 3)).toBeNull();
+    expect(pairMoveTarget(5, 4, -1, 3)).toBe(3);
+    // One page: it moves alone, down to Main.
+    expect(pairMoveTarget(4, 1, -1, 1)).toBe(0);
+    expect(pairMoveTarget(4, 0, -1, 1)).toBeNull();
   });
-  it('a segment click puts that segment on the right, Main pairs with level 1', () => {
-    expect(segmentTarget(4, 2, true)).toBe(2);
-    expect(segmentTarget(4, 0, true)).toBe(1);
-    expect(segmentTarget(4, 0, false)).toBe(0);
-    expect(segmentTarget(4, 3, false)).toBe(3);
-    expect(segmentTarget(4, 9, true)).toBe(3);
+  it('a segment on screen only takes the focus; one left of the pages slides them; one right goes there', () => {
+    expect(segmentTarget(4, 2, 3, 2)).toBeNull();
+    expect(segmentTarget(4, 3, 3, 2)).toBeNull();
+    expect(segmentTarget(4, 0, 3, 2)).toBe(1);
+    expect(segmentTarget(4, 1, 3, 2)).toBe(2);
+    expect(segmentTarget(4, 0, 3, 3)).toBe(2);
+    expect(segmentTarget(4, 3, 1, 2)).toBe(3);
+    expect(segmentTarget(4, 0, 3, 1)).toBe(0);
+    expect(segmentTarget(4, 9, 1, 2)).toBe(3);
   });
-  it('closing the left half keeps the right page, closing the right shows its parent', () => {
-    expect(closeHalfTarget('L', 3)).toBe(3);
-    expect(closeHalfTarget('R', 3)).toBe(2);
-    expect(closeHalfTarget('R', 1)).toBe(0);
+  it('closing the right page closes its level; closing a left one shows one page fewer', () => {
+    expect(closePaneMove('R', 3, 3)).toEqual({ target: 2, panes: 3 });
+    expect(closePaneMove('R', 1, 2)).toEqual({ target: 0, panes: 2 });
+    expect(closePaneMove('L', 3, 3)).toEqual({ target: 3, panes: 2 });
+    expect(closePaneMove('L', 3, 2)).toEqual({ target: 3, panes: 1 });
   });
+});
+
+describe('a navigation while pages sit side by side (2026-11-04: picking Main dropped to one page)', () => {
+  const trail = [ROOT_THREAD_KEY, 'a', 'b', 'c'];
+  const at = (n: number) => trail.slice(0, n + 1);
+  it('onto a level on screen: it only takes the focus', () => {
+    expect(retargetNav({ path: at(1), trail, panes: 2, room: 2, toPath: at(0), via: 'map' })).toEqual({ kind: 'focus', key: ROOT_THREAD_KEY });
+    expect(retargetNav({ path: at(3), trail, panes: 3, room: 3, toPath: at(1), via: 'path-bar-list' })).toEqual({ kind: 'focus', key: 'a' });
+  });
+  it('onto a level left of the pages: they slide, as many as fit', () => {
+    expect(retargetNav({ path: at(3), trail, panes: 2, room: 2, toPath: at(0), via: 'drawer' })).toEqual({ kind: 'path', path: at(1) });
+    expect(retargetNav({ path: at(3), trail, panes: 2, room: 3, toPath: at(0), via: 'crumb' })).toEqual({ kind: 'path', path: at(2) });
+  });
+  it('as asked: a deeper level, the page on screen, another question, one page, a cut', () => {
+    expect(retargetNav({ path: at(1), trail, panes: 2, room: 2, toPath: at(3), via: 'map' })).toBeNull();
+    expect(retargetNav({ path: at(2), trail, panes: 2, room: 2, toPath: at(2), via: 'map' })).toBeNull();
+    expect(retargetNav({ path: at(2), trail, panes: 2, room: 2, toPath: [ROOT_THREAD_KEY, 'x'], via: 'map' })).toBeNull();
+    expect(retargetNav({ path: at(2), trail, panes: 1, room: 1, toPath: at(0), via: 'map' })).toBeNull();
+    for (const via of CUTTING_VIAS) expect(retargetNav({ path: at(2), trail, panes: 2, room: 2, toPath: at(1), via })).toBeNull();
+  });
+});
+
+describe('the chord', () => {
   it('reads Cmd+[ / Cmd+] on a Mac and Ctrl elsewhere, and nothing else', () => {
     const k = (key: string, m: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) => ({
       key, code: key === '[' ? 'BracketLeft' : key === ']' ? 'BracketRight' : 'KeyA', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...m,
@@ -164,7 +215,7 @@ describe('a level\'s list', () => {
 describe('the path bar model', () => {
   const index: ThreadMetaIndex = new Map();
   it('draws one segment per level with its number, title and role', () => {
-    const segs = pathBarSegments([...FULL, 'pending:x'], segmentRoles(5, 4, true), tree, index, labels);
+    const segs = pathBarSegments([...FULL, 'pending:x'], segmentRoles(5, 4, 2), tree, index, labels);
     expect(segs.map((s) => [s.number ?? '', s.title, s.role])).toEqual([
       ['', 'Main conversation', null],
       ['6', 'Who may impersonate', null],
@@ -190,7 +241,11 @@ describe('the kept record', () => {
     expect(isTreeSplitRecord({ split: 'yes', trail: [] })).toBe(false);
     expect(isTreeSplitRecord({ split: true, trail: [1] })).toBe(false);
     expect(isTreeSplitRecord(null)).toBe(false);
-    expect(sameTreeSplit(NO_TREE_SPLIT, { split: false, trail: [] })).toBe(true);
+    expect(isTreeSplitRecord({ split: true, trail: [], panes: 2 })).toBe(true);
+    expect(isTreeSplitRecord({ split: true, trail: [], panes: 4 })).toBe(false);
+    expect(isTreeSplitRecord({ split: true, trail: [], panes: 1.5 })).toBe(false);
+    expect(sameTreeSplit(NO_TREE_SPLIT, { split: true, trail: [], panes: MAX_PANES })).toBe(true);
+    expect(sameTreeSplit(NO_TREE_SPLIT, { split: true, trail: [] })).toBe(false);
     expect(sameTreeSplit({ split: true, trail: ['a'] }, { split: true, trail: ['b'] })).toBe(false);
   });
 });
@@ -221,6 +276,12 @@ describe('an Ask from a passage the tree does not know yet (an answer still stre
   it('a passage the tree knows keeps its own question', () => {
     expect(askPlacement({ path, onScreenKey: 'k6', known: 'k4' }).parentKey).toBe('k4');
   });
+  it('hangs on the sibling page above the right one, which is no level of the path', () => {
+    expect(askPlacement({ path, onScreenKey: 'k62', onScreenPath: [ROOT_THREAD_KEY, 'k6', 'k62'] }))
+      .toEqual({ parentKey: 'k62', base: [ROOT_THREAD_KEY, 'k6', 'k62'] });
+    // A path that is not the named page's own is not trusted.
+    expect(askPlacement({ path, onScreenKey: 'k62', onScreenPath: [ROOT_THREAD_KEY, 'k6'] }).parentKey).not.toBe('k62');
+  });
   it('a pending page on top stands for the page on screen (no named page)', () => {
     expect(askPlacement({ path: [...path, 'pending'], pendingParentKey: 'k61' })).toEqual({ parentKey: 'k61', base: path });
   });
@@ -237,3 +298,16 @@ describe('a find from no chat of a split panel searches the main stack', () => {
     expect(panelHistoryOf({ querySelectorAll: () => [left] } as unknown as Element)).toBeNull();
   });
 });
+
+describe('answeringPages: only the page a turn answers offers Stop', () => {
+  it('is null with no turn running', () => {
+    expect(answeringPages(false, new Map([['1', 'answering']]))).toBeNull()
+  })
+  it('names the questions being answered, never the queued ones', () => {
+    expect([...answeringPages(true, new Map([['1', 'answering'], ['1.2', 'queued'], ['2', 'failed']]))!]).toEqual(['1'])
+  })
+  it('a turn answering no question is the main conversation\'s', () => {
+    expect([...answeringPages(true, new Map([['1.2', 'queued']]))!]).toEqual([''])
+    expect([...answeringPages(true, new Map())!]).toEqual([''])
+  })
+})

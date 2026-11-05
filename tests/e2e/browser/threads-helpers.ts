@@ -49,7 +49,17 @@ export interface OpenThreadsOpts {
    *  chose "Keep open", so specs about the labelled panel see it; `default` leaves
    *  the preference unset (the product default: folded to the rail). */
   map?: 'open' | 'default'
+  /** Tree Mode's pages side by side. `one` (the helper's default) is a reader who
+   *  set the one-page view (the cap kept for the column), so a spec about the
+   *  single page's chrome, landing and marks keeps one page at any width; `room`
+   *  is the product default, as many pages as the width holds (the Tree Mode
+   *  split specs). */
+  pages?: 'one' | 'room'
 }
+
+/** Where the panel keeps its view (panel-view.ts, under view-memory's key): the
+ *  home column's place is `home-column|<session>`. */
+const PANEL_VIEW_KEY = 'open-walnut-view:panel.view'
 
 /** Open a fixture session's column through the task board (idempotent: an
  *  already open column is reused, since clicking its task again would close it). */
@@ -65,6 +75,18 @@ export async function openThreadsSession(
       if (open) localStorage.setItem('walnut:thread-map.v1', 'open')
       else localStorage.removeItem('walnut:thread-map.v1')
     }, (opts.map ?? 'open') === 'open')
+    await page.evaluate(([key, place, one]) => {
+      let pairs: Array<[string, Record<string, unknown>]> = []
+      try { const v = JSON.parse(localStorage.getItem(key) ?? '[]'); if (Array.isArray(v)) pairs = v } catch { /* none kept */ }
+      const at = pairs.findIndex(([k]) => k === place)
+      // A record names its split view (`null`: none), else the panel reads it as nothing kept.
+      const rec: Record<string, unknown> = at >= 0 ? { ...pairs[at][1] } : { view: null }
+      if (one) rec.tree = { split: false, trail: [], panes: 1 }
+      else if (rec.tree) delete rec.tree
+      if (at >= 0) pairs[at] = [place, rec]
+      else pairs.push([place, rec])
+      localStorage.setItem(key, JSON.stringify(pairs))
+    }, [PANEL_VIEW_KEY, `home-column|${sessionId}`, (opts.pages ?? 'one') === 'one'] as const)
     const search = page.locator('.todo-search-input')
     const task = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
     // The board search answers in well under a second on an idle machine, but a

@@ -1,3 +1,4 @@
+import type { NavRetarget } from '@/utils/tree-split-state';
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { fetchSession, updateSession } from '@/api/sessions';
 import type { ImageAttachment } from '@/api/chat';
@@ -314,6 +315,8 @@ export interface UsePanelThreadsArgs {
   escapeProbe?: ComposerProbe;
   /** Cmd+[ / Cmd+] on the panel (useTreeSplit fills it). */
   onPairMove?: (dir: -1 | 1) => boolean;
+  /** Tree Mode's split: what a navigation onto a level of the trail does instead (useThreadStack). */
+  retarget?: (toPath: readonly string[], via: string) => NavRetarget | null;
   focusComposer: () => void;
 }
 
@@ -360,11 +363,14 @@ export const FOLLOW_UP_PLACEHOLDER = 'Follow up on this question…';
 
 /** The composer on a question page names the question it posts into (N35,
  *  prototype 01's `Replying in <title>`): `Reply in “<title>”…`, the title cut
- *  to 40 characters so a narrow column still shows the verb. */
+ *  to 28 characters so the placeholder fits one line of a Tree Mode page's
+ *  composer, a third of the sheet (a textarea's placeholder gets no ellipsis of
+ *  its own). */
+export const PLACEHOLDER_TITLE_MAX = 28;
 export function followUpPlaceholder(title: string | undefined): string {
   const t = (title ?? '').trim();
   if (!t) return FOLLOW_UP_PLACEHOLDER;
-  const short = t.length > 40 ? `${t.slice(0, 39).trimEnd()}…` : t;
+  const short = t.length > PLACEHOLDER_TITLE_MAX ? `${t.slice(0, PLACEHOLDER_TITLE_MAX - 1).trimEnd()}…` : t;
   return `Reply in “${short}”…`;
 }
 
@@ -380,7 +386,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     setHistoryComplete(complete ?? true);
   }, []);
   const [derived, setDerived] = useState<ThreadDerived>(EMPTY_DERIVED);
-  const [pinJump, setPinJump] = useState<{ pinKey: string; seq: number } | null>(null);
+  const [pinJump, setPinJump] = useState<{ pinKey: string; seq: number; at?: number } | null>(null);
   /** Key to when this tab last sent into that question (its mark waits from then). */
   const [askedAt, setAskedAt] = useState<ReadonlyMap<string, number>>(() => new Map());
   const noteAsked = useCallback((key: string) => {
@@ -424,6 +430,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     historyComplete, keepPending, answeredAtOf,
     ...(args.escapeProbe ? { escapeProbe: args.escapeProbe } : {}),
     ...(args.onPairMove ? { onPairMove: args.onPairMove } : {}),
+    ...(args.retarget ? { retarget: args.retarget } : {}),
   });
   const actions = useThreadActions({
     sessionId, tree, meta, toast, nav: stack.bridge,
@@ -667,7 +674,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   const requestPinJump = useCallback((pinKey: string, threadKey: string) => {
     const s = refs.current.stack.api;
     if (threadKey !== s.currentKey) s.pushTo(threadKey, 'pin');
-    setPinJump((prev) => ({ pinKey, seq: (prev?.seq ?? 0) + 1 }));
+    setPinJump((prev) => ({ pinKey, seq: (prev?.seq ?? 0) + 1, at: Date.now() }));
   }, []);
 
   const [headJump, setHeadJump] = useState<{ threadKey: string; seq: number } | null>(null);

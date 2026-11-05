@@ -181,3 +181,19 @@
 .pending-comments-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* A plain quote has only its words to show: let them take the row. */
 .pending-comments-jump[data-kind="quote"] .pending-comments-where { flex: 1 1 auto; max-width: none; }
+
+/* Tree Mode's pages are narrow: a pending comment reads as two lines, its
+   passage, then the note (two lines at most), so it can be checked before it goes. */
+.session-panel-chat-col.is-tree-split .pending-comments-list { max-height: calc(3 * 56px); }
+.session-panel-chat-col.is-tree-split .pending-comments-row { height: auto; align-items: flex-start; }
+.session-panel-chat-col.is-tree-split .pending-comments-jump { flex-wrap: wrap; row-gap: 1px; padding: 5px 6px; }
+.session-panel-chat-col.is-tree-split .pending-comments-where { flex: 1 1 100%; max-width: 100%; }
+.session-panel-chat-col.is-tree-split .pending-comments-text {
+  flex: 1 1 100%;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.session-panel-chat-col.is-tree-split .pending-comments-remove { margin-top: 4px; }

@@ -17,6 +17,8 @@ export interface SessionCommentsApi {
     comment: string;
     /** About a passage of a document (its comment lives in the doc's sidecar). */
     doc?: SessionPassageCommentDoc;
+    /** The Tree Mode page it was made on (a thread key, '' = the main conversation). */
+    pageKey?: string;
   }) => void;
   remove: (id: string) => void;
   /** Ask the timeline (or, for a doc's entry, its doc) to show this one's passage (a tray row's click). */

@@ -1,14 +1,17 @@
 /**
  * Tree Mode's split screen for one session panel (design 4, the path bar): the
- * trail the path bar shows, split or single, which pair is on screen, and the
- * moves (Cmd+[ / Cmd+], a segment click, a pick from a level's list, closing a
- * half). The rules are tree-split-state.ts; the choice and the trail are kept
- * with the panel's view (panel-view.ts), so a reload shows the same pair.
+ * trail the path bar shows, how many pages sit side by side (one to three), and
+ * the moves (Cmd+[ / Cmd+], a segment click, a pick from a level's list,
+ * closing a page). The rules are tree-split-state.ts; the cap and the trail are
+ * kept with the panel's view (panel-view.ts), so a reload shows the same pages.
  *
  * The question stack stays the one owner of the page on the RIGHT (its path is
  * root..right page): every move here is a stack navigation, so drafts, landing,
- * Esc and the URL keep working as they did. The left half is the right page's
- * parent and has no state of its own.
+ * Esc and the URL keep working as they did. The pages left of it are the levels
+ * above it on the path and have no state of their own. A navigation onto a level
+ * already on screen only focuses it, and one onto a level left of the pages
+ * slides them (`retarget`, called by the stack for every navigation): moving
+ * along the path never collapses the split.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { ThreadStackApi } from '@/contexts/SessionThreadsContext';
@@ -17,15 +20,17 @@ import type { ThreadTree } from '@/utils/thread-tree';
 import { questionLabels } from '@/utils/question-tag';
 import { widthTier } from '@/utils/thread-stack-state';
 import {
-  PATH_BAR_NARROW, SPLIT_MIN_WIDTH, barShown as barShownOf, closeHalfTarget, isPrefix, levelPickMoves, pairMoveTarget, segmentRoles,
-  segmentTarget, splitShown as splitShownOf, trailFor, trailHeadsOf, trailKeysOf, type SegmentRole, type TreeSplitRecord,
+  MAX_PANES, PATH_BAR_NARROW, SPLIT_MIN_WIDTH, THREE_PANES_MIN_WIDTH, barShown as barShownOf, closePaneMove, isPrefix, levelPickMoves,
+  paneCap, paneCount, pairMoveTarget, retargetNav, roomFor, segmentRoles, segmentTarget, trailFor, trailHeadsOf, trailKeysOf,
+  withPaneCap, type NavRetarget, type SegmentRole, type TreeSplitRecord,
 } from '@/utils/tree-split-state';
 import { log } from '@/utils/log';
+import { SIBLING_MIN_PANEL_HEIGHT, SIBLING_SHARE_DEFAULT, clampSiblingShare, siblingPartner, type SiblingPartner } from '@/utils/tree-sibling';
 
 /** The panel's own composer (the one that stays when the split closes). */
 const MAIN_COMPOSER = '.session-panel-input:not(.tree-split-input) .chat-input-textarea';
 
-const WIDTH_TIERS = [PATH_BAR_NARROW, SPLIT_MIN_WIDTH] as const;
+const WIDTH_TIERS = [SPLIT_MIN_WIDTH, PATH_BAR_NARROW, THREE_PANES_MIN_WIDTH] as const;
 
 export interface UseTreeSplitArgs {
   sessionId: string;
@@ -44,14 +49,18 @@ export interface UseTreeSplitArgs {
   markViewed: (key: string) => void;
   /** When the newest answer of `key` landed, if it has one. */
   answeredAtOf: (key: string) => number | undefined;
+  /** A page on screen takes the focus (a move to it changed nothing else); `via`, the move's. */
+  onFocusPane: (key: string, via?: string) => void;
 }
 
 export interface TreeSplit {
   /** The path bar is on screen (Tree Mode, a level besides Main). */
   barShown: boolean;
-  /** Two halves on screen. */
+  /** More than one page on screen. */
   splitShown: boolean;
-  /** The chat area has room for two halves (the single header offers Split). */
+  /** The pages on screen, left to right; the last is the stack's page (the panel's own timeline). */
+  paneKeys: string[];
+  /** The chat area has room for two pages (the single header offers Split). */
   wide: boolean;
   /** Narrower than PATH_BAR_NARROW: the bar shows titles only on the pages on screen. */
   narrowBar: boolean;
@@ -60,7 +69,7 @@ export interface TreeSplit {
   /** The right page's index on the trail (the single page's when not split). */
   shownIndex: number;
   roles: SegmentRole[];
-  /** The left half's page, when split. */
+  /** The left page, when split (the first of paneKeys). */
   leftKey: string | null;
   rightKey: string;
   labels: ReadonlyMap<string, string>;
@@ -69,8 +78,23 @@ export interface TreeSplit {
   goToSegment: (j: number) => void;
   /** A question picked from segment `j`'s list. */
   pickAtLevel: (j: number, key: string) => void;
-  closeHalf: (side: 'L' | 'R') => void;
+  /** The x of a page: the right one closes its level, a left one shows one page fewer. */
+  closePane: (key: string) => void;
+  /** Back to as many pages as fit (the one-page view's Split). */
   openSplit: () => void;
+  /** What a stack navigation does instead while pages sit side by side (useThreadStack's `retarget`). */
+  retarget: (toPath: readonly string[], via: string) => NavRetarget | null;
+  /** The sibling question shown above the right page (tree-sibling.ts), or none. */
+  sibling: SiblingPartner | null;
+  /** The right page has a sibling the reader closed (its header offers it back). */
+  siblingClosed: boolean;
+  siblingShare: number;
+  /** The sibling becomes the right page; the page that was there comes up. */
+  swapSibling: () => void;
+  closeSibling: () => void;
+  showSibling: () => void;
+  /** The divider moved (`commit`: the drag ended, keep it with the panel's view). */
+  setSiblingShare: (share: number, commit: boolean) => void;
 }
 
 export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
@@ -93,7 +117,8 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read through the signatures
   }, [pathSig, keptSig, treeReady]);
 
-  // Asking splits (the level it was asked in on the left, the new question on the right).
+  // Asking shows the pages side by side again when the reader had one page:
+  // the level it was asked in beside the new question.
   const navSeq = stack.nav?.seq;
   const navVia = stack.nav?.via;
   const stackModeRef = useRef(stackMode);
@@ -101,19 +126,22 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   useEffect(() => {
     if (navSeq === undefined || !stackModeRef.current) return;
     if (navVia !== 'ask' && navVia !== 'same-passage') return;
-    setRecord((prev) => (prev.split ? prev : { ...prev, split: true }));
+    setRecord((prev) => (paneCap(prev) > 1 ? prev : withPaneCap(prev, MAX_PANES)));
     log.info('threads', 'tree split on ask', { sessionId: a.sessionId });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per navigation
   }, [navSeq]);
 
-  // The chat area's width TIER: a resize re-renders only across a tier.
+  // The chat area's width TIER: a resize re-renders only across a tier. The
+  // panel's height only says whether a second chat fits above the right page.
   const [widthBucket, setWidthBucket] = useState(0);
+  const [tall, setTall] = useState(false);
   const { panelRef, chatColRef } = a;
   useLayoutEffect(() => {
     if (!stackMode) return;
     const read = () => {
       const w = chatColRef.current?.getBoundingClientRect().width || panelRef.current?.getBoundingClientRect().width || 0;
       setWidthBucket(widthTier(w, WIDTH_TIERS));
+      setTall((panelRef.current?.getBoundingClientRect().height ?? 0) >= SIBLING_MIN_PANEL_HEIGHT);
     };
     read();
     if (typeof ResizeObserver === 'undefined') return;
@@ -125,21 +153,31 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   const wide = widthBucket >= SPLIT_MIN_WIDTH;
   const narrowBar = widthBucket > 0 && widthBucket < PATH_BAR_NARROW;
 
+  const cap = paneCap(record);
+  /** Pages that may sit side by side: the reader's cap and the room. */
+  const room = Math.min(cap, roomFor(widthBucket));
   const shownIndex = stack.path.length - 1;
-  const split = stackMode && splitShownOf({ split: record.split, width: widthBucket, depth: shownIndex });
+  const panes = stackMode ? paneCount({ cap, width: widthBucket, pathLength: stack.path.length }) : 1;
+  const split = panes > 1;
   const bar = barShownOf({ stackMode, trailLength: trail.length });
-  const roles = useMemo(() => segmentRoles(trail.length, shownIndex, split), [trail.length, shownIndex, split]);
-  const leftKey = split ? stack.path[stack.path.length - 2] ?? null : null;
+  const roles = useMemo(() => segmentRoles(trail.length, shownIndex, panes), [trail.length, shownIndex, panes]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read through the signature
+  const paneKeys = useMemo(() => stack.path.slice(stack.path.length - panes), [pathSig, panes]);
+  const leftKey = split ? paneKeys[0] : null;
   const labels = useMemo(() => questionLabels(tree, a.metaIndex), [tree, a.metaIndex]);
 
-  // The left half's question is on screen: viewed, again when an answer lands there.
-  const leftAnsweredAt = leftKey !== null ? a.answeredAtOf(leftKey) : undefined;
+  // The pages beside the stack's are on screen: viewed, again when an answer lands there.
+  const sideKeys = paneKeys.slice(0, -1);
+  const sideSig = sideKeys.map((k) => `${k}\u0001${a.answeredAtOf(k) ?? ''}`).join('\n');
   const markViewedRef = useRef(a.markViewed);
   markViewedRef.current = a.markViewed;
-  useEffect(() => { if (leftKey) markViewedRef.current(leftKey); }, [leftKey, leftAnsweredAt]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read through the signature
+  useEffect(() => { for (const k of sideKeys) markViewedRef.current(k); }, [sideSig]);
 
-  const live = useRef({ trail, shownIndex, split, bar, stack });
-  live.current = { trail, shownIndex, split, bar, stack };
+  const onFocusPaneRef = useRef(a.onFocusPane);
+  onFocusPaneRef.current = a.onFocusPane;
+  const live = useRef({ trail, shownIndex, split, bar, stack, panes, room, paneKeys });
+  live.current = { trail, shownIndex, split, bar, stack, panes, room, paneKeys };
 
   const goTo = useCallback((t: number, via: string) => {
     const { trail: tr, shownIndex: at, stack: s } = live.current;
@@ -152,47 +190,124 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
   const moveBy = useCallback((dir: -1 | 1) => {
     const l = live.current;
     if (!l.bar) return false;
-    const t = pairMoveTarget(l.trail.length, l.shownIndex, dir, l.split);
+    const t = pairMoveTarget(l.trail.length, l.shownIndex, dir, l.panes);
     if (t !== null) goTo(t, dir < 0 ? 'pair-left' : 'pair-right');
     return true;
   }, [goTo]);
 
   const goToSegment = useCallback((j: number) => {
     const l = live.current;
-    goTo(segmentTarget(l.trail.length, j, l.split), 'path-bar');
+    const t = segmentTarget(l.trail.length, j, l.shownIndex, l.panes);
+    if (t === null) { const key = l.trail[j]; if (key !== undefined) onFocusPaneRef.current(key); return; }
+    goTo(t, 'path-bar');
   }, [goTo]);
 
   const pickAtLevel = useCallback((j: number, key: string) => {
     const l = live.current;
-    if (!levelPickMoves(l.trail, j, key)) return;
+    if (!levelPickMoves(l.trail, j, key)) {
+      if (l.paneKeys.includes(key)) onFocusPaneRef.current(key);
+      else goToSegment(j);
+      return;
+    }
     l.stack.pushTo(key, 'path-bar-list');
-  }, []);
+  }, [goToSegment]);
 
-  const closeHalf = useCallback((side: 'L' | 'R') => {
+  const closePane = useCallback((key: string) => {
     const l = live.current;
-    // The left half goes away with either close: focus in it (its composer,
-    // its close button) moves to the composer that stays, never to <body>.
-    // Safari gives a clicked button no focus, so a press on Close drops the
-    // composer's focus onto <body> before this runs: that counts as the half's.
+    const side: 'L' | 'R' = key === l.paneKeys[l.paneKeys.length - 1] ? 'R' : 'L';
+    // The page goes away with its close: focus in it (its composer, its close
+    // button) moves to the composer that stays, never to <body>. Safari gives a
+    // clicked button no focus, so a press on Close drops the composer's focus
+    // onto <body> before this runs: that counts as the page's.
     const panel = panelRef.current;
     const active = document.activeElement;
-    const leftHadFocus = !active || active === document.body
-      || !!panel?.querySelector('.tree-split-left')?.contains(active);
-    setRecord((prev) => (prev.split ? { ...prev, split: false } : prev));
-    goTo(closeHalfTarget(side, l.shownIndex), side === 'R' ? 'close-right' : 'close-left');
-    if (leftHadFocus) {
+    const sideHadFocus = !active || active === document.body
+      || [...(panel?.querySelectorAll('.tree-split-left') ?? [])].some((el) => el.contains(active));
+    // A page left of the right one closes with the pages left of it: the ones
+    // right of it stay (the left page alone: one fewer).
+    const at = l.paneKeys.indexOf(key);
+    const move = closePaneMove(side, l.shownIndex, at > 0 ? l.paneKeys.length - at : l.panes);
+    if (side === 'R') {
+      // The level is closed: the trail ends left of it.
+      const cut = l.stack.path.slice(0, move.target + 1);
+      setRecord((prev) => {
+        const heads = trailHeadsOf(tree, cut);
+        return { ...prev, trail: heads };
+      });
+      goTo(move.target, 'close-right');
+    } else {
+      setRecord((prev) => withPaneCap(prev, move.panes));
+      log.info('threads', 'tree split pane closed', { sessionId: a.sessionId, panes: move.panes });
+    }
+    if (sideHadFocus) {
       requestAnimationFrame(() => {
         panel?.querySelector<HTMLTextAreaElement>(MAIN_COMPOSER)?.focus({ preventScroll: true });
       });
     }
-  }, [goTo, setRecord, panelRef]);
+  }, [goTo, setRecord, panelRef, tree, a.sessionId]);
 
   const openSplit = useCallback(() => {
-    setRecord((prev) => (prev.split ? prev : { ...prev, split: true }));
+    setRecord((prev) => withPaneCap(prev, MAX_PANES));
+  }, [setRecord]);
+
+  const retarget = useCallback((toPath: readonly string[], via: string): NavRetarget | null => {
+    const l = live.current;
+    if (!stackModeRef.current) return null;
+    const r = retargetNav({ path: l.stack.path, trail: l.trail, panes: l.panes, room: l.room, toPath, via });
+    if (r?.kind === 'focus') onFocusPaneRef.current(r.key, via);
+    if (r) log.info('threads', 'tree split keeps its pages', { sessionId: a.sessionId, via, kind: r.kind });
+    return r;
+  }, [a.sessionId]);
+
+  // The sibling above the right page: the one the reader swapped from, else the
+  // previous one asked. Only the right page (the question worked on) has one.
+  const [swap, setSwap] = useState<{ from: string; to: string } | null>(null);
+  const rightKey = stack.currentKey;
+  const partnerOf = useMemo(
+    () => (stackMode && treeReady ? siblingPartner(tree, rightKey, hiddenKeys, swap?.to === rightKey ? swap.from : undefined) : null),
+    [stackMode, treeReady, tree, rightKey, hiddenKeys, swap],
+  );
+  // Only where pages may sit side by side: one page (the reader's one-page view,
+  // or a column with room for one) is the plain page, nothing above it.
+  const sideBySide = room > 1;
+  const siblingClosed = sideBySide && !!partnerOf && record.sibling === false;
+  const sibling = sideBySide && partnerOf && !siblingClosed && tall ? partnerOf : null;
+  const [dragShare, setDragShare] = useState<number | null>(null);
+  const siblingShare = clampSiblingShare(dragShare ?? record.siblingShare ?? SIBLING_SHARE_DEFAULT);
+  const siblingRef = useRef(sibling);
+  siblingRef.current = sibling;
+  // The sibling on screen is viewed too, again when an answer lands there.
+  const sibSig = sibling ? `${sibling.key}\u0001${a.answeredAtOf(sibling.key) ?? ''}` : '';
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read through the signature
+  useEffect(() => { if (sibling) markViewedRef.current(sibling.key); }, [sibSig]);
+  const swapSibling = useCallback(() => {
+    const sib = siblingRef.current;
+    const from = live.current.stack.currentKey;
+    if (!sib) return;
+    setSwap({ from, to: sib.key });
+    log.info('threads', 'tree sibling swapped', { sessionId: a.sessionId, from, to: sib.key });
+    live.current.stack.pushTo(sib.key, 'sibling');
+  }, [a.sessionId]);
+  const closeSibling = useCallback(() => {
+    setRecord((prev) => ({ ...prev, sibling: false }));
+    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLTextAreaElement>(MAIN_COMPOSER)?.focus({ preventScroll: true }));
+  }, [setRecord, panelRef]);
+  const showSibling = useCallback(() => {
+    setRecord((prev) => {
+      const { sibling: _off, ...rest } = prev;
+      return rest;
+    });
+  }, [setRecord]);
+  const setSiblingShare = useCallback((share: number, commit: boolean) => {
+    const s = clampSiblingShare(share);
+    if (!commit) { setDragShare(s); return; }
+    setDragShare(null);
+    setRecord((prev) => (prev.siblingShare === s ? prev : { ...prev, siblingShare: s }));
   }, [setRecord]);
 
   return {
-    barShown: bar, splitShown: split, wide, narrowBar, trail, shownIndex, roles, leftKey,
-    rightKey: stack.currentKey, labels, moveBy, goToSegment, pickAtLevel, closeHalf, openSplit,
+    barShown: bar, splitShown: split, paneKeys, wide, narrowBar, trail, shownIndex, roles, leftKey,
+    rightKey, labels, moveBy, goToSegment, pickAtLevel, closePane, openSplit, retarget,
+    sibling, siblingClosed, siblingShare, swapSibling, closeSibling, showSibling, setSiblingShare,
   };
 }

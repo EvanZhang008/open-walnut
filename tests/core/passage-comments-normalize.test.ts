@@ -46,6 +46,8 @@ describe('normalizePassageComments', () => {
     [[entry({ doc: { path: 'design.md', commentId: 'c-1' } })], /doc\.path must be an absolute path/],
     [[entry({ doc: { path: '/d.md', commentId: '' } })], /doc\.commentId/],
     [[entry({ doc: { path: '/d.md', commentId: 'c-1', host: 3 } })], /doc\.host/],
+    [[entry({ thread: 7 })], /passage_comments\[\]\.thread/],
+    [[entry({ thread: 'x'.repeat(201) })], /passage_comments\[\]\.thread/],
   ])('refuses %j', (value, message) => {
     expect(() => normalizePassageComments(value)).toThrow(message);
   });
@@ -59,6 +61,11 @@ describe('normalizePassageComments', () => {
       { path: '/notes/d.md', commentId: 'c-0a1b2c3d' },
       { path: '/notes/d.md', commentId: 'c-0a1b2c3d', host: 'devbox', reply: true },
     ]);
+  });
+
+  it('keeps the question a comment was made on (Tree Mode: it waits on that page)', () => {
+    const out = normalizePassageComments([entry({ thread: 'u-head-1' }), entry({ id: 'c-2', thread: '' }), entry({ id: 'c-3', thread: null })]);
+    expect(out.map((c) => c.thread)).toEqual(['u-head-1', undefined, undefined]);
   });
 
   it('caps the list', () => {

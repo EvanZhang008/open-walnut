@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { nextSamePassageKeys } from '@/utils/thread-same-passage';
 import { claimPress, isPressClaimed } from '@/utils/thread-mark-hit';
 import { toastClock } from '@/components/sessions/ThreadPanelToast';
-import { FOLLOW_UP_PLACEHOLDER, followUpPlaceholder } from '@/hooks/useSessionThreads';
+import { FOLLOW_UP_PLACEHOLDER, PLACEHOLDER_TITLE_MAX, followUpPlaceholder } from '@/hooks/useSessionThreads';
 import { windowOnMatch } from '@/utils/thread-search-window';
 import { flattenTree, hitSnippet, matchRanges } from '@/utils/thread-tree-rows';
 import { buildThreadTree, ROOT_THREAD_KEY } from '@/utils/thread-tree';
@@ -68,12 +68,12 @@ describe('toast clock (N39)', () => {
 });
 
 describe('composer names the question (N35)', () => {
-  it('reads Reply in <title>, cut to 40 characters', () => {
+  it('reads Reply in <title>, cut to 28 characters', () => {
     expect(followUpPlaceholder('Buffer flush order')).toBe('Reply in “Buffer flush order”…');
     const long = 'Point 21: the island pass reads the quarry before it writes';
     const p = followUpPlaceholder(long);
-    expect(p.startsWith('Reply in “Point 21: the island pass reads')).toBe(true);
-    expect(p.length).toBeLessThanOrEqual('Reply in “”…'.length + 40);
+    expect(p.startsWith('Reply in “Point 21: the island pass')).toBe(true);
+    expect(p.length).toBeLessThanOrEqual('Reply in “”…'.length + PLACEHOLDER_TITLE_MAX);
     expect(followUpPlaceholder('')).toBe(FOLLOW_UP_PLACEHOLDER);
   });
 });

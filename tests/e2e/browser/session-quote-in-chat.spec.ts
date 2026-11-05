@@ -119,7 +119,9 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await shot(page, 'ask-here-card')
   })
 
-  test('Tree Mode on a question page: Quote goes back to the main conversation, the question keeps its draft', async ({ page }) => {
+  // 2026-11-05, the user: the comment flow stays on its page. A quote on a
+  // question page waits in that page's composer and goes with its question.
+  test('Tree Mode on a question page: Quote stays on the page, its quote waits with the draft', async ({ page }) => {
     const panel = await open(page, MAP_SESSION, MAP_TASK, MAP_READY)
     await mapRow(panel, MAP_TITLES.Q4).click()
     await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
@@ -130,12 +132,12 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await centreInHistory(page, panel, phrase, { tolerance: 20 })
     await selectPassage(page, panel, phrase)
     await pill(page).getByRole('button', { name: 'Quote' }).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
-    await expect(composer).toHaveValue('')
+    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(composer).toHaveValue('a follow-up for Q4')
     await expect(composer).toBeFocused()
     await expectQuoteRow(panel, phrase)
-    await shot(page, 'tree-back-to-main')
-    // The question's own words wait on its page.
+    await shot(page, 'tree-quote-stays')
+    // A move away and back keeps the question's own words on its page.
     await mapRow(panel, MAP_TITLES.Q4).click()
     await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
     await expect(composer).toHaveValue('a follow-up for Q4')

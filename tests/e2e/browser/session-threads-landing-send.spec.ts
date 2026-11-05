@@ -72,9 +72,9 @@ test.describe('Question stack landing after a send', () => {
     test(`a new question asked and sent on a question page pops back onto its passage, ${label} (C4)`, async ({ page, request }) => {
       await page.goto('/')
       await page.waitForLoadState('networkidle')
-      const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-      // The panel's own page: the right half once the Ask below splits the pane
-      // (the page it was asked on goes left, and comes back right on Esc).
+      const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY, { pages: 'room' })
+      // The panel's own page: the right page of the pages side by side (the page
+      // it was asked on is left of it, and comes back right on Esc).
       const view = mainPage(panel)
       await openAsked(page, view, 'Late flush risk', 1)
       await openAsked(page, view, 'Reader skip cost', 2)
@@ -91,9 +91,9 @@ test.describe('Question stack landing after a send', () => {
       // composer is the new page's box.
       await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
       await expectDepth(view, 3)
-      // The column is wide enough for two halves: the Ask splits it, the page it
-      // was asked on goes left.
-      await expect(panel.locator('.tree-split-left')).toBeVisible()
+      // The column is wide enough for pages side by side: the page it was
+      // asked on is left of the new one.
+      await expect(panel.locator('.tree-split-left').first()).toBeVisible()
       await expect(view.locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
       await expect(panel.locator('.thread-card')).toHaveCount(0)
       const box = mainComposer(panel)
@@ -110,16 +110,14 @@ test.describe('Question stack landing after a send', () => {
       expect(new Set(settled).size, `scrollTop per frame: ${tops.join(',')}`).toBe(1)
       const landed = await passagePlace(view, phrase)
       await shot(page, `c4-sent-pop-${at}`)
-      // Esc keeps the split: the page comes back as the RIGHT half, whose
-      // one-line row (and the path bar above) moved its timeline box.
-      await expect(panel.locator('.tree-split-left')).toBeVisible()
+      // Esc keeps the pages side by side: the page comes back as the RIGHT page.
+      await expect(panel.locator('.tree-split-left').first()).toBeVisible()
       await expect(view.locator('.thread-stack-header[data-half="R"]')).toBeVisible()
-      // The box moved exactly as far as the page's header row did (the
-      // single page's header with its subtitle, then the half's one-line row),
-      // and it did move: this is the split case, not a skipped check.
+      // The box moved exactly as far as the page's header row did (a sibling
+      // page above the right page, its row; often not at all, since the pages
+      // were side by side already when it was asked).
       const moved = landed.boxTop - asked.boxTop
       const headMoved = (await headerBottom(view)) - askedHead
-      expect(moved, `box moved ${moved}, header moved ${headMoved}`).not.toBe(0)
       expect(Math.abs(moved - headMoved), `box moved ${moved}, header moved ${headMoved}`).toBeLessThanOrEqual(1)
       // The passage comes back to the same place on screen, so inside the box it
       // is off by the box's move and nothing else.

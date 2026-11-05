@@ -394,18 +394,10 @@ test.describe('Question stack', () => {
     await expect(palette).toHaveCount(0)
     await expectDepth(panel, 2)
     await textarea.fill('')
-    // The model picker takes its Esc too.
-    const pill = panel.locator('.composer-controls-bar [data-control-id="model"] button').first()
-    if (await pill.isVisible()) await pill.click()
-    else {
-      await panel.getByTestId('composer-overflow-btn').click()
-      await page.getByTestId('composer-overflow-item-model').click()
-    }
-    const picker = page.locator('.model-picker').first()
-    await expect(picker).toBeVisible({ timeout: 10_000 })
-    await page.keyboard.press('Escape')
-    await expect(page.locator('.model-picker')).toHaveCount(0)
-    await expectDepth(panel, 2)
+    // A question page's composer is the light one (2026-11-05, the user: only
+    // the main conversation's has the model): no picker here to take an Esc.
+    await expect(panel.locator('.session-panel-input .composer-controls-bar [data-control-id="model"]')).toHaveCount(0)
+    await expect(panel.getByTestId('composer-overflow-btn')).toHaveCount(0)
 
     // C50: fullscreen at depth 2: two Esc pop, only the third leaves fullscreen.
     await panel.locator('button[title="Expand to full screen"]').click()

@@ -58,7 +58,7 @@ describe('the left half reads the panel\'s timeline and fetches nothing', () => 
   });
 
   it('the panel publishes only while the left half shows, and passes the left half a stable history prop', () => {
-    expect(PANEL).toMatch(/publishTimeline=\{treeLeftShown \? timelineShare : undefined\}/);
+    expect(PANEL).toMatch(/publishTimeline=\{treeGrid \? timelineShare : undefined\}/);
     expect(PANEL).toMatch(/const leftHistory = useMemo\(/);
     expect(PANEL).toMatch(/history=\{leftHistory\}/);
   });

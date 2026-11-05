@@ -24,10 +24,10 @@ async function pinPanelWidth(page: Page, width: number): Promise<void> {
     flex: 0 0 ${width}px !important; width: ${width}px !important; min-width: ${width}px !important; max-width: ${width}px !important; }` })
 }
 
-async function openDense(page: Page, width: number): Promise<Locator> {
+async function openDense(page: Page, width: number, pages: 'one' | 'room' = 'one'): Promise<Locator> {
   await page.goto('/')
   await pinPanelWidth(page, width)
-  const panel = await openThreadsSession(page, DENSE_SESSION, TASK)
+  const panel = await openThreadsSession(page, DENSE_SESSION, TASK, undefined, { pages })
   await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
   return panel
 }
@@ -188,11 +188,11 @@ test.describe('Slice 1 fixes, round 3', () => {
   })
 
   test('fullscreen: Ask on already asked passages, Esc back: each sentence lands where it was, the note stays on its page (C4)', async ({ page }) => {
-    const panel = await openDense(page, 720)
+    const panel = await openDense(page, 720, 'room')
     await panel.locator('button[title="Expand to full screen"]').click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
-    // The sheet is wide enough for two halves, so each Ask splits it: the page
-    // asked on goes left, the new question is the panel's own page on the right.
+    // The sheet is wide enough for pages side by side: the page asked on is
+    // left of the new question, the panel's own page on the right.
     const right = mainPage(panel)
     const history = right.locator('.session-history')
     // Where the sentence sits on SCREEN: a pop keeps it there (landingTarget),
@@ -213,7 +213,7 @@ test.describe('Slice 1 fixes, round 3', () => {
       await expect(right.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i + 1))
       await expect(history).toHaveAttribute('data-view-mode', 'stack')
       await expect(panel.locator('.thread-card')).toHaveCount(0)
-      await expect(panel.locator('.tree-split-left')).toBeVisible()
+      await expect(panel.locator('.tree-split-left').first()).toBeVisible()
       await expect(note).toHaveCount(1)
       await page.mouse.move(10, 10)
     }

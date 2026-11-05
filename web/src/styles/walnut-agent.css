@@ -242,8 +242,10 @@
   /* The row's 6px gap plus the button's 6px padding, less the list's 5px. */
   margin-right: -7px;
 }
-/* The card's own border/box-shadow transition fades this in and out. */
-.session-panel.session-panel-unread .session-panel-input .chat-input-box {
+/* The card's own border/box-shadow transition fades this in and out. Only the
+   panel's own composer: Tree Mode's other pages (.tree-split-input) are pages
+   of the same chat, and every composer ringed red read as an error. */
+.session-panel.session-panel-unread .session-panel-input:not(.tree-split-input) .chat-input-box {
   border-color: rgba(255, 59, 48, 0.6);
   background-image: linear-gradient(rgba(255, 59, 48, 0.05), rgba(255, 59, 48, 0.05));
   box-shadow: var(--glass-g4-shadow), 0 0 0 3px rgba(255, 59, 48, 0.14);

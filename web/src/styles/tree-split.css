@@ -5,12 +5,13 @@
  * Layout: the bar is a flow sibling right under the panel's glass header (it
  * clears it the way the panel's first flow child does), so nothing below it
  * scrolls under the header: the bodies below take no header room
- * (--sp-header-h: 0 for them). Split, the chat column is a grid:
+ * (--sp-header-h: 0 for them). Split, the chat column is a grid of
+ * --tree-panes columns (2 or 3, set by the panel):
  *
- *   [ chat bar (a view open beside the chat)    ]
- *   [ path bar                                  ]
- *   [ left half (timeline + composer) | body    ]
- *   [                                 | composer]
+ *   [ chat bar (a view open beside the chat)                ]
+ *   [ path bar                                              ]
+ *   [ left page | middle page (of three) | body (own page)  ]
+ *   [ (timeline + composer each)         | composer         ]
  *
  * Single, the chat column stays `display: contents` and the bar is one more
  * flex row of the panel.
@@ -108,6 +109,18 @@
   white-space: nowrap;
 }
 .tree-path-bar[data-narrow] .tree-path-seg:not([data-shown]):not([data-first]) .tree-path-title { display: none; }
+/* Narrow: a level off screen is its number alone, with no list caret, whole;
+   the page on screen keeps its number, its role and its caret whole, and its
+   title gives way. */
+.tree-path-bar[data-narrow] .tree-path-seg:not([data-shown]) { flex-shrink: 0; padding-right: 12px; }
+.tree-path-bar[data-narrow] .tree-path-seg:not([data-shown]) .tree-path-caret { display: none; }
+.tree-path-bar[data-narrow] .tree-path-seg[data-shown] { flex-shrink: 1; min-width: 132px; }
+/* A level off screen gives its words to the pages on screen first. */
+.tree-path-seg:not([data-shown]):not([data-first]) .tree-path-title { max-width: 150px; }
+.tree-path-bar { container: tree-path / inline-size; }
+@container tree-path (max-width: 1180px) {
+  .tree-path-hint span { display: none; }
+}
 .tree-path-bar[data-narrow] .tree-path-seg[data-first]:not([data-shown]) .tree-path-title { max-width: 44px; }
 .tree-path-role {
   flex: none;
@@ -171,8 +184,9 @@
 /* The split */
 .session-panel-chat-col.is-tree-split {
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: repeat(var(--tree-panes, 2), minmax(0, 1fr));
+  /* chat bar, path bar, the sibling page (none: 0), the page, its composer */
+  grid-template-rows: auto auto minmax(0, var(--tree-sibling-top, 0fr)) minmax(0, 1fr) auto;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -180,14 +194,15 @@
   position: relative;
 }
 /* Every child has its place: a child left to auto placement would open an
-   implicit row under the composer. Anything besides the five rows below (the
+   implicit row under the composer. Anything besides the rows below (the
    task peek, a later overlay) covers the whole column, as it does unsplit. */
 .session-panel-chat-col.is-tree-split > * { grid-area: 1 / 1 / -1 / -1; }
 .session-panel-chat-col.is-tree-split > .session-chat-bar { grid-area: 1 / 1 / 2 / -1; }
 .session-panel-chat-col.is-tree-split > .tree-path-bar { grid-area: 2 / 1 / 3 / -1; }
-.session-panel-chat-col.is-tree-split > .tree-split-left { grid-row: 3 / 5; grid-column: 1; }
-.session-panel-chat-col.is-tree-split > .session-panel-body { grid-row: 3; grid-column: 2; min-height: 0; }
-.session-panel-chat-col.is-tree-split > .session-panel-input { grid-row: 4; grid-column: 2; }
+.session-panel-chat-col.is-tree-split > .tree-split-left { grid-row: 3 / 6; }
+.session-panel-chat-col.is-tree-split > .tree-split-sibling { grid-row: 3; border-right: 0; }
+.session-panel-chat-col.is-tree-split > .session-panel-body { grid-row: 4; grid-column: var(--tree-panes, 2); min-height: 0; }
+.session-panel-chat-col.is-tree-split > .session-panel-input { grid-row: 5; grid-column: var(--tree-panes, 2); }
 
 .tree-split-left {
   display: flex;
@@ -226,6 +241,23 @@
   font: 600 12.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .thread-half-status { flex: none; }
+.thread-half-row .thread-half-name { flex: none; }
+.thread-half-title {
+  flex: 0 1 auto;
+  min-width: 3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+/* A page's header in a narrow column: its title keeps the room, the status is
+   its glyph alone (the word is its tooltip). */
+.thread-stack-header[data-half] { container: tree-half / inline-size; }
+@container tree-half (max-width: 440px) {
+  .thread-half-status .thread-status-word-text { display: none; }
+}
 .thread-half-gap { flex: 1 1 auto; min-width: 4px; }
 .thread-half-close, .thread-half-split {
   display: inline-grid;
@@ -253,4 +285,103 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* The sibling page (tree-sibling.ts): a regular page above the right one, its
+   own timeline and light composer, and the divider under it. */
+.tree-split-sibling .tree-split-input { padding-bottom: 4px; }
+.thread-half-where {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--fg-secondary);
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+/* Its title never gives way to the buttons, and Swap keeps its word: in a
+   narrow column the place tag ("Next · 2 of 2", its tooltip) and the status go. */
+.tree-split-sibling { container: tree-sibling / inline-size; }
+.thread-half-row[data-half="S"] .thread-half-title { flex: 1 1 auto; min-width: 4em; }
+.thread-half-row[data-half="S"] .thread-half-gap { flex: 0 0 0; min-width: 0; }
+@container tree-sibling (max-width: 460px) {
+  /* Narrow: the tag keeps its word ("Next", "Previous": how it relates to the
+     page below), its place goes to the tooltip; Archive is in the "⋯" menu. */
+  .thread-half-row[data-half="S"] .thread-half-status { display: none; }
+  .thread-half-row[data-half="S"] .thread-half-where-pos { display: none; }
+  .thread-half-row[data-half="S"] .thread-stack-done-split { display: none; }
+}
+.thread-half-swap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.thread-half-swap:hover { background: var(--bg-hover); color: var(--fg); }
+.tree-sibling-divider {
+  position: relative;
+  flex: none;
+  height: 9px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  cursor: row-resize;
+  touch-action: none;
+}
+.tree-sibling-divider:hover,
+.tree-sibling-divider:focus-visible { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); outline: none; }
+.tree-sibling-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--fg-secondary);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--fg) 14%, transparent);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  z-index: 1;
+}
+.tree-sibling-knob:hover { color: var(--accent-text); border-color: var(--accent); }
+
+/* A light composer (Tree Mode's pages but Main) is one row: the text, then the
+   mic and send on its right, growing with the text. What rides above the text
+   (a comment tray, images, a quote pill) keeps a line of its own. */
+.chat-input-box[data-light="true"] { flex-direction: row; flex-wrap: wrap; align-items: flex-end; }
+.chat-input-box[data-light="true"] > * { flex: 1 0 100%; min-width: 0; }
+.chat-input-box[data-light="true"] > .chat-input-textarea {
+  flex: 1 1 0%;
+  min-height: 0;
+  padding: 9px 4px 9px 12px;
+}
+/* No query container here: an inline-size container is as wide as its padding
+   when its width is its content's (flex: auto), and its buttons spill out. */
+.chat-input-box[data-light="true"] > .chat-input-controls { flex: 0 0 auto; padding: 0 5px 4px 0; container-type: normal; }
+.chat-input-box[data-light="true"] .chat-input-controls-spacer { display: none; }
+/* Its placeholder ("Reply in <title>…") is one line, cut with an ellipsis: a
+   long title wrapped it to a second line the one-row box clipped. Typed text
+   still wraps and grows the box. */
+.chat-input-box[data-light="true"] > .chat-input-textarea:placeholder-shown {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-input-box[data-light="true"] > .chat-input-textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

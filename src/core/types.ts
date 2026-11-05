@@ -2846,6 +2846,10 @@ export interface SessionPassageComment {
    *  comment itself lives in the document's sidecar file (`<name>.comments.md`),
    *  and this entry only carries it to the model with the next message. */
   doc?: SessionPassageCommentDoc;
+  /** The question it was made on in Tree Mode (that question's head id; absent =
+   *  the main conversation): it waits for, and is sent with, that question's next
+   *  message. */
+  thread?: string;
 }
 
 export interface SessionPassageCommentDoc {

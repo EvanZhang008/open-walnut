@@ -113,6 +113,14 @@ interface ChatInputProps {
    * becomes Stop while a turn streams with an empty box.
    */
   compact?: boolean;
+  /**
+   * LIGHT composer: the text box, the mic and send, nothing else. No "+" menu
+   * and no controls slot (mode, model): a page of Tree Mode other than the main
+   * conversation sends with the session's settings as they are (2026-11-05, the
+   * user: "only main chat have the + the bypass the model selection, other just
+   * voice and send"). Pasting a picture still attaches it.
+   */
+  light?: boolean;
   showCommands?: boolean;
   /** Session-mode: external slash commands for autocomplete. Selecting inserts text instead of executing. */
   sessionCommands?: SlashCommandItem[];
@@ -246,7 +254,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1558,7 +1566,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           text row on top; controls row below: [+] · slot (Bypass/btw/Note) ·
           spacer · mic · send. Mic stays next to send. */}
       <div className="chat-input-row">
-        <div className="chat-input-box" data-mic-bubble-anchor="">
+        <div className="chat-input-box" data-mic-bubble-anchor="" data-light={light ? 'true' : undefined}>
           {contextPill}
           {/* Inline task context pill */}
           {focusedTask && onClearFocus && (
@@ -1617,6 +1625,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           {!compact && (
           <div className="chat-input-controls">
         {/* "+" attach menu — anchors a small popover of attachment actions */}
+        {!light && (
         <div className="chat-plus-group" ref={plusGroupRef}>
           <button
             ref={plusBtnRef}
@@ -1791,8 +1800,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </div>
           )}
         </div>
+        )}
         {/* Blocked: the send controls go, the box and its mic and "+" stay. */}
-        {!sendBlocked && controlsSlot}
+        {!sendBlocked && !light && controlsSlot}
         <span className="chat-input-controls-spacer" />
         <MicButton
           onTranscribe={(text) => writeDictation(text, false)}

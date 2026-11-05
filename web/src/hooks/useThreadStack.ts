@@ -9,7 +9,7 @@
  * ONE row pipeline by `currentKey`. The pure rules live in thread-stack-state.ts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { askPlacement } from '@/utils/tree-split-state';
+import { askPlacement, type NavRetarget } from '@/utils/tree-split-state';
 import type { SessionPinnedQuote, SessionThreadAnchor } from '@/types/session';
 import type { ThreadStackApi, ThreadStackNav } from '@/contexts/SessionThreadsContext';
 import type {
@@ -62,6 +62,10 @@ export interface UseThreadStackArgs {
   escapeProbe?: ComposerProbe;
   /** Cmd+[ / Cmd+] (Tree Mode's path bar, useTreeSplit): true when used. */
   onPairMove?: (dir: -1 | 1) => boolean;
+  /** Tree Mode's split (useTreeSplit.retarget): what a navigation onto a level
+   *  of the trail does instead while pages sit side by side (focus a page on
+   *  screen, or slide the pages), or null to go as asked. */
+  retarget?: (toPath: readonly string[], via: ThreadNavVia) => NavRetarget | null;
   toast: ThreadToastApi;
   /** Focus the composer without moving the timeline. */
   focusComposer: () => void;
@@ -276,10 +280,16 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   /** Every navigation goes through here: plan, capture the page being left,
    *  keep or drop a pending page's draft, then swap the path. */
-  const navigate = useCallback((toPath: string[], via: ThreadNavVia, toPending?: ThreadPendingPage, opts?: LeaveOpts) => {
+  /** 'focus': the split kept its pages and focused the level (its composer has the focus). */
+  const navigate = useCallback((askedPath: string[], via: ThreadNavVia, toPending?: ThreadPendingPage, opts?: LeaveOpts): 'focus' | 'moved' | 'none' => {
     const s = stateRef.current;
+    // Pages side by side (Tree Mode's split): a move onto a level already on
+    // screen only focuses it, one onto a level left of them slides them.
+    const re = toPending ? null : argsRef.current.retarget?.(askedPath, via) ?? null;
+    if (re?.kind === 'focus') return 'focus';
+    const toPath = re?.kind === 'path' ? re.path : askedPath;
     const plan = planNavigation(s.path, toPath);
-    if (plan.direction === 'none') return;
+    if (plan.direction === 'none') return 'none';
     // The reader moved before a waiting reload restore found its page: his move wins.
     restored.current = true;
     const a = argsRef.current;
@@ -335,6 +345,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       sessionId: a.sessionId, headId: headOf(plan.to), from: headOf(plan.from), to: headOf(plan.to), via,
     });
     queueMicrotask(persist);
+    return 'moved';
   }, [landings, markViewed, headOf, persist]);
 
   const pushTo = useCallback((key: string, via: ThreadNavVia, opts?: LeaveOpts) => {
@@ -375,24 +386,26 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   /** Ask on a passage (spec 5.4): the question already about this exact passage,
    *  or a pending page on top of the page the passage is on. Nothing is written. */
-  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean; onScreenKey?: string }) => {
+  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean; onScreenKey?: string; onScreenPath?: readonly string[] }) => {
     const a = argsRef.current;
     const focus = opts?.focusComposer !== false;
     const same = findSamePassageThread(a.tree, a.anchors, a.hiddenKeys, { parent: target.msgId, quote: target.quote });
     if (same) {
-      navigate(stackPathOf(a.tree, same), 'same-passage');
-      if (focus) a.focusComposer();
+      // A question on screen beside the page took the focus itself.
+      const went = navigate(stackPathOf(a.tree, same), 'same-passage');
+      if (went !== 'focus' && focus) a.focusComposer();
       return;
     }
     // A passage in an answer that is still streaming (or not refetched yet) is
     // not in the tree: it is on the page on screen, so the question goes on top
     // of THAT page, never under Main (C4). A passage of a FILE hangs off root.
-    // The split's left half names its own page (`onScreenKey`): a passage there
-    // is on the right page's parent, not on the right page.
+    // A page beside the right one names its own (`onScreenKey`, and its path when
+    // it is no level of the stack's, the sibling page): a passage there is on
+    // that page, not on the right page.
     const s = stateRef.current;
     const isFile = fileOfParent(target.msgId) !== null;
     const known = isFile ? ROOT_THREAD_KEY : a.tree.byRow.get(target.msgId)?.key;
-    const place = askPlacement({ path: s.path, pendingParentKey: s.pending?.parentKey, known, onScreenKey: opts?.onScreenKey });
+    const place = askPlacement({ path: s.path, pendingParentKey: s.pending?.parentKey, known, onScreenKey: opts?.onScreenKey, onScreenPath: opts?.onScreenPath });
     const parentKey = place.parentKey;
     const pending: ThreadPendingPage = {
       pageKey: pendingPageKey(target.msgId, target.quote.exact),

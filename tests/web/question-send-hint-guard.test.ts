@@ -88,12 +88,14 @@ describe('guard: every send filed under a question names the question', () => {
     // Tree Mode's split: the left half's composer posts through the panel's one
     // composer send (engine switch, pending comments, then sendAnchored with
     // the left page as its question), and its comment card through sendToQuestion.
-    expect(panel).toMatch(/const leftComposerSend = useMemo\(\(\) => withComments\(\(message, images\) => sendFor\(message, images, leftKeyRef\.current \?\? undefined\)\)/);
+    expect(panel).toMatch(/const sideSend = useCallback\(\(key: string, message: string, images\?: ImageAttachment\[\]\) => \(\s*withComments\(\(m, im\) => sendFor\(m, im, key\), \(\) => key\)\(message, images\)/);
+    expect(panel).toMatch(/withComments\(\(m, im\) => sendAnchored\(m, im, true, key\), \(\) => key\)/);
     expect(panel).toMatch(/return sendAnchored\(message, images, false, targetKey\);/);
     expect(panel).toMatch(/return threadSend\(message, images, interrupt, targetKey\);/);
-    expect(panel).toMatch(/onSend=\{leftComposerSend\}/);
+    // Every page beside the panel's own (left of it, the sibling above it) sends through it.
+    expect(panel.match(/onSendFor=\{sideSend\}/g)?.length).toBe(2);
     const left = files.find((f) => f.rel === 'web/src/components/sessions/TreeSplitLeft.tsx')!.src;
-    expect(left).toMatch(/const ok = await onSend\(text, images\);/);
+    expect(left).toMatch(/const ok = await onSendFor\(leftKey, text, images\);/);
     expect(left).toMatch(/sendToTarget: \(text: string, images\?: ImageAttachment\[\]\) => base\.sendToQuestion\(leftKey, text, images\)/);
     expect(left).toMatch(/<ChatInput\s+onSend=\{send\}/);
   });

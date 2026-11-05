@@ -30,11 +30,16 @@ function newId(): string {
 
 const same = (a: readonly SessionPassageComment[], b: readonly SessionPassageComment[]) => JSON.stringify(a) === JSON.stringify(b);
 
-export interface SessionCommentsStore extends SessionCommentsApi {
+/** What the store's add takes: the context's input, the page already turned into its question's head id. */
+export type SessionCommentInput = Omit<Parameters<SessionCommentsApi['add']>[0], 'pageKey'> & { thread?: string };
+
+export interface SessionCommentsStore extends Omit<SessionCommentsApi, 'add'> {
+  add: (input: SessionCommentInput) => void;
   /** Waiting for the next send (and not claimed by one in flight). */
   pending: SessionPassageComment[];
-  /** A send takes the pending ones: nobody else will carry them. */
-  claim: () => SessionPassageComment[];
+  /** A send takes the pending ones (those `which` picks: the composer's own
+   *  question in Tree Mode): nobody else will carry them. */
+  claim: (which?: (c: SessionPassageComment) => boolean) => SessionPassageComment[];
   /** The send with `ids` was accepted (they become marks) or refused (they wait again). */
   settle: (ids: readonly string[], accepted: boolean) => void;
 }
@@ -126,14 +131,15 @@ export function useSessionComments(
     flushRef.current();
   }, [serverList, loaded, adopt]);
 
-  const add = useCallback<SessionCommentsApi['add']>(({ msgId, role, quote, text, comment, doc }) => {
+  const add = useCallback(({ msgId, role, quote, text, comment, doc, thread }: SessionCommentInput) => {
     if (!msgId || !quote.exact.trim() || !text.trim()) return;
     const entry: SessionPassageComment = {
       id: newId(), msgId, role, quote, text, comment: comment.trim(), createdAt: new Date().toISOString(),
       ...(doc ? { doc } : {}),
+      ...(thread ? { thread } : {}),
     };
     log.info('session', entry.comment ? 'passage comment added' : 'passage quote added', {
-      sessionId, msgId, id: entry.id, chars: text.length, commentChars: entry.comment.length, docPath: doc?.path ?? null,
+      sessionId, msgId, id: entry.id, chars: text.length, commentChars: entry.comment.length, docPath: doc?.path ?? null, thread: thread ?? null,
     });
     persist([...listRef.current, entry]);
   }, [persist, sessionId]);
@@ -144,8 +150,8 @@ export function useSessionComments(
     persist(markRemoved(listRef.current, id, new Date().toISOString()));
   }, [persist, sessionId]);
 
-  const claim = useCallback(() => {
-    const taken = listRef.current.filter((c) => isPending(c) && !sendingRef.current.has(c.id));
+  const claim = useCallback((which?: (c: SessionPassageComment) => boolean) => {
+    const taken = listRef.current.filter((c) => isPending(c) && !sendingRef.current.has(c.id) && (!which || which(c)));
     if (!taken.length) return taken;
     for (const c of taken) sendingRef.current.add(c.id);
     setSending(new Set(sendingRef.current));

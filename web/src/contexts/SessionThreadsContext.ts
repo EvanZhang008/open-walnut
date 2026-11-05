@@ -46,7 +46,7 @@ export interface ThreadStackApi {
    *  `onScreenKey`: the page the passage is on when the tree does not know its row
    *  yet (an answer still streaming), for a timeline that is not the stack's top
    *  page (Tree Mode's split left half). */
-  ask: (target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean; onScreenKey?: string }) => void;
+  ask: (target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean; onScreenKey?: string; onScreenPath?: readonly string[] }) => void;
   /** Where each page was left (page key), shared with the timeline's landing. */
   landings: PageLandings;
   /** The timeline records the page it is leaving (scrollTop + passage top)
@@ -170,8 +170,9 @@ export interface SessionThreadsApi {
   revealInTree: () => void;
   /** Resend the unanswered question of `key` under the same anchor. */
   retry: (key: string) => void;
-  /** A pin jump waiting for its page (drawer pin row, off-page rail pin). */
-  pinJump: { pinKey: string; seq: number } | null;
+  /** A pin jump waiting for its page (drawer pin row, off-page rail pin), and
+   *  when it was asked: a page that shows the pin only later never replays it. */
+  pinJump: { pinKey: string; seq: number; at?: number } | null;
   /** Go to the pin's page (through the stack), then land on the pin + flash. */
   requestPinJump: (pinKey: string, threadKey: string) => void;
   /** Conversation Mode: a question picked outside the timeline (the drawer). The

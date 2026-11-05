@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { ContextFullBanner } from './ContextFullBanner';
@@ -123,7 +123,7 @@ import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionRetryButton } from './SessionRetryButton';
-import type { SessionRecord, SessionThreadMeta, TaskPhase } from '@/types/session';
+import type { SessionPassageComment, SessionRecord, SessionThreadMeta, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
@@ -164,6 +164,9 @@ import { IslandHostContext, type IslandHost } from '@/components/chat/island-hos
 import { MessageAboutContext } from './message-about';
 import { dropSavedColumn } from '@/utils/layout-record';
 import { useTreeSplit } from '@/hooks/useTreeSplit';
+import { answeringPages, type NavRetarget } from '@/utils/tree-split-state';
+import { siblingRows } from '@/utils/tree-sibling';
+import { TreeSiblingDivider } from './TreeSiblingDivider';
 import { ThreadPathBar } from './ThreadPathBar';
 import { TreeSplitLeft } from './TreeSplitLeft';
 import { TreeHalfContext, type TreeHalf } from './tree-half-context';
@@ -188,6 +191,8 @@ function boardPaneWidthWithChat(windowWidth: number, chatPct: number): number {
 }
 /** How long a hidden (kept-alive) VS Code view survives before it is unmounted. */
 const CODE_VIEW_HIDDEN_TTL_MS = 10 * 60_000;
+/** No comments waiting on a page (one array, so a page's memo holds). */
+const NO_COMMENTS: SessionPassageComment[] = [];
 /** Keys that are not typing, so pressing one alone never marks the task read. */
 const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift', 'CapsLock', 'Fn', 'OS']);
 
@@ -559,9 +564,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
+      // The model picker is the main conversation's (Tree Mode): with no page of
+      // Main on screen, Main comes into view first, and its composer opens it.
+      if (!fullComposerShownRef.current) threadsForInsert.current.stack.api.popTo(ROOT_THREAD_KEY, 'model');
       setModelPickerRequest((n) => n + 1);
     }
   }, []);
+  /** A composer with the "+" menu, mode and model is on screen (ownComposerLight). */
+  const fullComposerShownRef = useRef(true);
 
   // The record's own id, not the prop: a deep link may address the session by a
   // unique PREFIX, and the shared store is keyed by the canonical provider id
@@ -905,25 +915,22 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     },
   }), []);
   const handleComposerValue = useCallback((text: string) => { composerTextRef.current = text; }, []);
-  // Tree Mode's split screen has a second composer (the left half's): Esc reads
-  // the one that holds the focus, so words typed there keep the page too.
-  const leftComposerWrapRef = useRef<HTMLDivElement>(null);
+  // Tree Mode's split screen has a composer per page: Esc reads the one that
+  // holds the focus, so words typed in a page left of the panel's keep it too.
+  const sideComposerOf = useCallback((el: Element | null): HTMLTextAreaElement | null => {
+    if (!(el instanceof HTMLTextAreaElement) || !panelRef.current?.contains(el)) return null;
+    return el.closest('.tree-split-input') ? el : null;
+  }, []);
   const escapeProbe = useMemo(() => ({
-    focused: () => {
-      const el = document.activeElement;
-      return composerProbe.focused() || (!!el && el.tagName === 'TEXTAREA' && !!leftComposerWrapRef.current?.contains(el));
-    },
-    text: () => {
-      const el = document.activeElement;
-      if (el instanceof HTMLTextAreaElement && leftComposerWrapRef.current?.contains(el)) return el.value;
-      return composerProbe.text();
-    },
-  }), [composerProbe]);
+    focused: () => composerProbe.focused() || !!sideComposerOf(document.activeElement),
+    text: () => sideComposerOf(document.activeElement)?.value ?? composerProbe.text(),
+  }), [composerProbe, sideComposerOf]);
   /** Cmd+[ / Cmd+]: filled by useTreeSplit below (the stack registers the keys first). */
   const pairMoveRef = useRef<((dir: -1 | 1) => boolean) | null>(null);
-  // The split's left page, read by the left composer's send (set below).
-  const leftKeyRef = useRef<string | null>(null);
   const onPairMove = useCallback((dir: -1 | 1) => pairMoveRef.current?.(dir) ?? false, []);
+  /** A navigation while pages sit side by side: filled by useTreeSplit below. */
+  const retargetRef = useRef<((toPath: readonly string[], via: string) => NavRetarget | null) | null>(null);
+  const retargetNav = useCallback((toPath: readonly string[], via: string) => retargetRef.current?.(toPath, via) ?? null, []);
   // Focus-only composer request (Ask about a passage / Ask here). Separate from
   // prefillNonce on purpose: the quote must NOT be written into the draft — it
   // rides the chip and is composed at send time — so the user's typed text stays.
@@ -967,6 +974,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     composer: composerProbe,
     escapeProbe,
     onPairMove,
+    retarget: retargetNav,
     focusComposer: focusComposerKeep,
   });
   const threadsApi = threads.api;
@@ -988,12 +996,28 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     chatColRef,
     markViewed: threadsApi.markViewed,
     answeredAtOf,
+    // Back to the passage a page was asked about, on a page on screen: it lands there again.
+    onFocusPane: (key, via) => focusPaneRef.current(key, true, via === 'quote-head'),
   });
   pairMoveRef.current = treeSplit.moveBy;
-  leftKeyRef.current = treeSplit.leftKey;
-  // The panel's timeline publishes, the left half reads (timeline-share.ts).
+  retargetRef.current = treeSplit.retarget;
+  // The panel's timeline publishes, the pages left of it read (timeline-share.ts).
   const timelineShare = useMemo(() => createTimelineShare(), [sessionId]);
-  const treeLeftShown = treeSplit.splitShown && treeSplit.leftKey !== null;
+  const treeLeftShown = treeSplit.splitShown;
+  /** The pages left of the panel's own, left to right. */
+  const sidePaneKeys = treeLeftShown ? treeSplit.paneKeys.slice(0, -1) : [];
+  /** The sibling question above the panel's own page (tree-sibling.ts). */
+  const treeSibling = treeSplit.sibling;
+  /** The chat column is Tree Mode's grid: pages side by side, or a sibling above the page. */
+  const treeGrid = treeLeftShown || !!treeSibling;
+  // A move to a page already on screen: it flashes and its composer takes the
+  // focus; the panel's own page asks for its composer as a click on it would.
+  const [paneFocus, setPaneFocus] = useState<{ key: string; n: number; flash: boolean; land: boolean } | null>(null);
+  const focusPaneRef = useRef<(key: string, flash?: boolean, land?: boolean) => void>(() => {});
+  focusPaneRef.current = (key: string, flash = true, land = false) => {
+    setPaneFocus((prev) => ({ key, n: (prev?.n ?? 0) + 1, flash, land }));
+    if (key === threads.stack.api.currentKey) focusComposerKeep();
+  };
   const pathSegments = useMemo(
     () => pathBarSegments(treeSplit.trail, treeSplit.roles, threadTree, threadsApi.metaIndex, treeSplit.labels),
     [treeSplit.trail, treeSplit.roles, threadTree, threadsApi.metaIndex, treeSplit.labels],
@@ -1003,17 +1027,46 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     unread: threadsApi.unreadKeys, labels: treeSplit.labels,
   }), [threadTree, treeSplit.trail, treeSplit.labels, threadsApi.hiddenKeys, threadsApi.metaIndex, threadsApi.derived.live, threadsApi.unreadKeys]);
   const pathHeading = useCallback((j: number) => pathBarHeading(treeSplit.trail, j, treeSplit.labels), [treeSplit.trail, treeSplit.labels]);
-  const { closeHalf: closeTreeHalf, openSplit: openTreeSplit } = treeSplit;
-  const closeLeftHalf = useCallback(() => closeTreeHalf('L'), [closeTreeHalf]);
-  const closeRightHalf = useCallback(() => closeTreeHalf('R'), [closeTreeHalf]);
+  const { closePane: closeTreePane, openSplit: openTreeSplit } = treeSplit;
+  const rightKeyNow = treeSplit.rightKey;
+  const closeRightHalf = useCallback(() => closeTreePane(rightKeyNow), [closeTreePane, rightKeyNow]);
   const rightNumber = treeSplit.labels.get(treeSplit.rightKey);
-  // What the panel's own timeline is in the split: the right half, or (single,
+  // What the panel's own timeline is in the split: the right page, or (one page,
   // with room for two) the page whose row offers Split.
+  const showTreeSibling = treeSplit.siblingClosed ? treeSplit.showSibling : undefined;
   const rightHalf = useMemo<TreeHalf | null>(() => {
-    if (treeLeftShown) return { side: 'R', ...(rightNumber ? { number: rightNumber } : {}), onClose: closeRightHalf };
-    if (treeSplit.barShown && treeSplit.wide && treeSplit.shownIndex >= 1) return { side: 'only', onSplit: openTreeSplit };
+    const sib = showTreeSibling ? { onShowSibling: showTreeSibling } : {};
+    if (treeLeftShown) return { side: 'R', ...(rightNumber ? { number: rightNumber } : {}), onClose: closeRightHalf, ...sib };
+    if (treeSplit.barShown && treeSplit.wide && treeSplit.shownIndex >= 1) return { side: 'only', onSplit: openTreeSplit, ...sib };
+    if (showTreeSibling) return { side: 'only', ...sib };
     return null;
-  }, [treeLeftShown, rightNumber, closeRightHalf, treeSplit.barShown, treeSplit.wide, treeSplit.shownIndex, openTreeSplit]);
+  }, [treeLeftShown, rightNumber, closeRightHalf, treeSplit.barShown, treeSplit.wide, treeSplit.shownIndex, openTreeSplit, showTreeSibling]);
+  // Tree Mode: a comment waits on the page it was made on (its question's head
+  // id), in that page's composer; one whose question is gone or hidden waits on Main.
+  const treeMode = threads.stack.enabled;
+  const treeModeRef = useRef(treeMode);
+  treeModeRef.current = treeMode;
+  const keyOfHead = useMemo(() => new Map(threadTree.threads.map((n) => [n.headId, n.key] as const)), [threadTree]);
+  const hiddenThreadKeys = threadsApi.hiddenKeys;
+  const commentPageOf = useCallback((c: SessionPassageComment): string => {
+    const key = c.thread ? keyOfHead.get(c.thread) : undefined;
+    return key !== undefined && !hiddenThreadKeys.has(key) ? key : ROOT_THREAD_KEY;
+  }, [keyOfHead, hiddenThreadKeys]);
+  const pendingCommentsOf = useCallback((page: string) => (treeMode
+    ? commentsStore.pending.filter((c) => commentPageOf(c) === page)
+    : commentsStore.pending), [treeMode, commentsStore.pending, commentPageOf]);
+  const ownPendingComments = useMemo(
+    () => pendingCommentsOf(treeMode ? threads.stack.api.currentKey : ROOT_THREAD_KEY),
+    [pendingCommentsOf, treeMode, threads.stack.api.currentKey],
+  );
+  // The pages beside the panel's own: left of it, and the sibling above it.
+  const besideKeys = treeSibling ? [...sidePaneKeys, treeSibling.key] : sidePaneKeys;
+  const sidePaneSig = besideKeys.join('\n');
+  const sidePending = useMemo(
+    () => new Map(besideKeys.map((k) => [k, pendingCommentsOf(k)] as const)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read through its signature
+    [sidePaneSig, pendingCommentsOf],
+  );
   const openComposerTarget = useCallback((key: string) => threadsApi.requestCard(key, 'composer-chip'), [threadsApi]);
   // × lets go of the quoted question only: an open card stays (opening one never set it).
   const clearQuote = threadsApi.clearQuote;
@@ -1168,9 +1221,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         // it (ChatInput reloads the draft on the key change).
         try { leadStoredDraft(rootKey, text); } catch { /* storage unavailable */ }
         const t = threadsForInsert.current;
-        if (t.api.viewMode === 'linear') t.api.clearQuote('insert', { keepDraft: true });
-        else t.stack.api.popTo(ROOT_THREAD_KEY, 'insert');
-        setComposerFocusNonce((n) => n + 1);
+        if (t.api.viewMode === 'linear') {
+          t.api.clearQuote('insert', { keepDraft: true });
+          setComposerFocusNonce((n) => n + 1);
+        } else {
+          t.stack.api.popTo(ROOT_THREAD_KEY, 'insert');
+          // Main may stay a page beside the panel's own (Tree Mode keeps its
+          // pages): its composer takes the focus then, never the question's.
+          requestAnimationFrame(() => {
+            if (threadsForInsert.current.stack.api.currentKey === ROOT_THREAD_KEY) setComposerFocusNonce((n) => n + 1);
+            else focusPaneRef.current(ROOT_THREAD_KEY, false);
+          });
+        }
       } else if (detail.mode === 'lead' && draftLeads) {
         // A lead the draft already starts with (the same row clicked twice) only refocuses.
         setComposerFocusNonce((n) => n + 1);
@@ -1194,13 +1256,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // to the main conversation first; that question keeps its own draft.
   const quoteInChat = useCallback((passage: string, comment?: string) => {
     const t = threadsForInsert.current;
-    if (t.draftKey !== sessionDraftKey(sessionId)) {
-      // Conversation Mode: let go of the quoted question; Tree Mode: back to Main.
-      if (t.api.viewMode === 'linear') t.api.clearQuote('quote-in-chat', { keepDraft: true });
-      else {
-        t.api.requestCard(null, 'quote-in-chat');
-        t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
-      }
+    // Conversation Mode: let go of the quoted question. Tree Mode stays where the
+    // reader is (2026-11-04, the user: "even comment stay the same tree mode"):
+    // the quote goes into the composer of the page on screen.
+    if (t.draftKey !== sessionDraftKey(sessionId) && t.api.viewMode === 'linear') {
+      t.api.clearQuote('quote-in-chat', { keepDraft: true });
     }
     setPrefillText(buildPassagePrefill(passage, comment));
     setPrefillMode('stack');
@@ -1225,22 +1285,29 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     },
     jump: commentsStore.jump,
     canComment: commentsStore.canComment,
-    add: (input) => {
+    add: ({ pageKey, ...input }) => {
       // A doc comment is written beside its passage: the reader stays in the doc.
       if (input.doc) { addPassageComment(input); return; }
       const t = threadsForInsert.current;
-      if (t.draftKey !== sessionDraftKey(sessionId)) {
-        if (t.api.viewMode === 'linear') t.api.clearQuote('quote-in-chat', { keepDraft: true });
-        else {
-          t.api.requestCard(null, 'quote-in-chat');
-          t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
-        }
+      // Tree Mode: the comment stays on the page it was made on, in the view the
+      // reader is in (never a trip back to Main, never another page: 2026-11-04,
+      // the user: "even comment stay the same tree mode"), and goes with that
+      // page's next message. Conversation Mode lets go of the quoted question.
+      if (t.api.viewMode === 'stack') {
+        const head = pageKey ? t.api.tree.byKey.get(pageKey)?.headId : undefined;
+        addPassageComment({ ...input, ...(head ? { thread: head } : {}) });
+      } else {
+        if (t.draftKey !== sessionDraftKey(sessionId)) t.api.clearQuote('quote-in-chat', { keepDraft: true });
+        addPassageComment(input);
       }
-      addPassageComment(input);
       autoCollapsed.current = false;
       setChatCollapsed(false);
-      // A phone keeps its keyboard down while the user marks more passages.
-      if (!phoneLayer) setComposerFocusNonce((n) => n + 1);
+      // A phone keeps its keyboard down while the user marks more passages. A
+      // comment made on a page left of the panel's own focuses that page's composer.
+      if (!phoneLayer) {
+        if (t.api.viewMode === 'stack' && pageKey !== undefined && pageKey !== t.stack.api.currentKey) focusPaneRef.current(pageKey, false);
+        else setComposerFocusNonce((n) => n + 1);
+      }
     },
   }), [commentsStore.comments, commentsStore.remove, commentsStore.requestJump, commentsStore.jump, commentsStore.canComment, addPassageComment, sessionId, phoneLayer]);
   // Messages the CLI had queued behind the turn that a Stop dropped: like Esc in
@@ -1979,16 +2046,22 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // The send CLAIMS them at once, so a second send before this one is accepted
   // cannot carry them again. A slash command is a command, not a message: it goes
   // as typed and the comments wait.
+  // Tree Mode: each page's composer carries only the comments made on that page
+  // (`pageOf` names it at send time; null outside Tree Mode: all of them).
   const claimComments = commentsStore.claim;
   const settleComments = commentsStore.settle;
+  const commentPageOfRef = useRef(commentPageOf);
+  commentPageOfRef.current = commentPageOf;
   const withComments = useCallback((
     sendFn: (message: string, images?: ImageAttachment[]) => Promise<boolean>,
+    pageOf: () => string | null,
   ) => async (message: string, images?: ImageAttachment[]): Promise<boolean> => {
     if (message.trimStart().startsWith('/')) return sendFn(message, images);
-    const carried = claimComments();
+    const page = pageOf();
+    const carried = claimComments(page === null ? undefined : (c) => commentPageOfRef.current(c) === page);
     if (carried.length === 0) return sendFn(message, images);
     const ids = carried.map((c) => c.id);
-    log.info('session-panel', 'sending with passage comments', { sessionId, count: carried.length });
+    log.info('session-panel', 'sending with passage comments', { sessionId, count: carried.length, page: page === null ? null : page === ROOT_THREAD_KEY ? 'main' : 'question' });
     let ok = false;
     try {
       ok = await sendFn(composeWithComments(carried, message), images);
@@ -1997,11 +2070,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     }
     return ok;
   }, [sessionId, claimComments, settleComments]);
-  const handleComposerSend = useMemo(() => withComments(handleSend), [withComments, handleSend]);
-  const handleInterruptSend = useMemo(() => withComments(handleInterruptSendRaw), [withComments, handleInterruptSendRaw]);
-  // The split's left half: the same rules into ITS question (useTreeSplit's leftKey).
-  const leftComposerSend = useMemo(() => withComments((message, images) => sendFor(message, images, leftKeyRef.current ?? undefined)), [withComments, sendFor]);
-  const leftInterruptSend = useMemo(() => withComments((message, images) => sendAnchored(message, images, true, leftKeyRef.current ?? undefined)), [withComments, sendAnchored]);
+  const ownCommentPage = useCallback(() => (treeModeRef.current ? threadsForInsert.current.stack.api.currentKey : null), []);
+  const handleComposerSend = useMemo(() => withComments(handleSend, ownCommentPage), [withComments, handleSend, ownCommentPage]);
+  const handleInterruptSend = useMemo(() => withComments(handleInterruptSendRaw, ownCommentPage), [withComments, handleInterruptSendRaw, ownCommentPage]);
+  // A page left of the panel's own: the same rules into ITS question.
+  const sideSend = useCallback((key: string, message: string, images?: ImageAttachment[]) => (
+    withComments((m, im) => sendFor(m, im, key), () => key)(message, images)
+  ), [withComments, sendFor]);
+  const sideInterruptSend = useCallback((key: string, message: string, images?: ImageAttachment[]) => (
+    withComments((m, im) => sendAnchored(m, im, true, key), () => key)(message, images)
+  ), [withComments, sendAnchored]);
 
   const handleStopTurn = useCallback(() => {
     void stopTurn(sessionId);
@@ -2019,6 +2097,28 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     retryFailed(queueId, sessionId);
   }, [sessionId, retryFailed]);
 
+  // The chat column's box: its width beside a view, and Tree Mode's page count
+  // (tree-split.css lays the pages out by it).
+  const chatColWidth = splitOpen && !chatCollapsed ? chatPanel.width : undefined;
+  const treePanes = treeLeftShown ? treeSplit.paneKeys.length : treeGrid ? 1 : 0;
+  const siblingTop = treeSibling ? siblingRows(treeSplit.siblingShare).top : undefined;
+  const chatColStyle = useMemo<CSSProperties | undefined>(() => {
+    if (chatColWidth === undefined && !treePanes) return undefined;
+    return {
+      ...(chatColWidth !== undefined ? { width: chatColWidth, flex: `0 0 ${chatColWidth}` } : {}),
+      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes) } : {}),
+      ...(siblingTop ? { ['--tree-sibling-top' as string]: siblingTop } : {}),
+    } as CSSProperties;
+  }, [chatColWidth, treePanes, siblingTop]);
+  // A move to the panel's own page while pages sit side by side: it flashes.
+  useEffect(() => {
+    if (!paneFocus?.flash || paneFocus.key !== threads.stack.api.currentKey || !treeGrid) return;
+    bodyRef.current?.animate?.(
+      [{ boxShadow: 'inset 0 0 0 2px var(--accent)' }, { boxShadow: 'inset 0 0 0 2px transparent' }],
+      { duration: 700, easing: 'ease-out' },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per move
+  }, [paneFocus?.n]);
   const ps = session?.process_status;
   // Phase is forwarded to SessionChatHistory for resume detection logic,
   // not for UI display in this panel.
@@ -2047,6 +2147,33 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   }), [sessionId, session?.engine, taskPhase, initialPromptText, session?.cwd, session?.host, session?.lane, optimisticMsgs,
     handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, dismissFailed, chatTaskClick, onSessionClick,
     handleFileOpen, quoteInChat, timelineShare]);
+
+  // Shift+Tab in a composer: the session's next mode.
+  const toggleSessionMode = session && !plainChat ? () => {
+    if (engineUi.configModes) {
+      const control = sessionControls.find((candidate) => candidate.id === 'mode');
+      const next = nextSessionControlValue(control);
+      if (control && next) void setSessionControl(control.id, next);
+      return;
+    }
+    const cur = session.mode || 'default';
+    setModeOptimistic(
+      enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!,
+    );
+  } : undefined;
+  // Tree Mode: only the main conversation's composer carries the "+" menu, the
+  // mode and the model (2026-11-05, the user: "only main chat have the + the
+  // bypass the model selection, other just voice and send"). On a question's page
+  // the panel's own composer is the light one, and Main's page beside it, when
+  // it is on screen, gets the full one.
+  const ownComposerLight = treeMode && threads.stack.api.currentKey !== ROOT_THREAD_KEY;
+  // Tree Mode's pages side by side: only the page a turn answers offers Stop;
+  // every other page's composer sends (its message waits for the turn).
+  const streamPages = useMemo(
+    () => (treeGrid ? answeringPages(composerStreaming, threadsApi.derived.live) : null),
+    [treeGrid, composerStreaming, threadsApi.derived.live],
+  );
+  const pageStreaming = (key: string): boolean => (treeGrid ? !!streamPages?.has(key) : composerStreaming);
 
   // Header content — prefer the linked task title; fall back to session metadata.
   const sessionFallbackTitle = session?.title || session?.description || session?.slug || null;
@@ -2300,6 +2427,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       },
     ];
   };
+  fullComposerShownRef.current = !ownComposerLight || sidePaneKeys.includes(ROOT_THREAD_KEY);
+  // Main's page beside a question's: the panel's full composer controls (see ownComposerLight).
+  const mainFullComposer = session && !plainChat && ownComposerLight ? {
+    controlsSlot: <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />,
+    addMenuControls: { handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] },
+    plusMenuActions: plusActions,
+    ...(toggleSessionMode ? { onToggleMode: toggleSessionMode } : {}),
+  } : undefined;
 
   // The agent handed this back (turn ended, errored, or waits on a decision).
   const needsAction = !!sessionTask && taskNeedsAction(sessionTask);
@@ -3183,11 +3318,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}${treeSplit.barShown ? ' has-tree-bar' : ''}${treeLeftShown ? ' is-tree-split' : ''}`}
+            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${treeSibling ? ' has-tree-sibling' : ''}`}
             data-time-view="chat"
             onClick={handleServiceLinkClick}
             ref={chatColCallbackRef}
-            style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
+            style={chatColStyle}
           >
             {/* The chat's own segment of the full-width bar: the left view's
                 toolbar + this strip read as ONE bar split by the column divider,
@@ -3222,26 +3357,78 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 onPick={treeSplit.pickAtLevel}
               />
             )}
-            {treeLeftShown && treeSplit.leftKey !== null && (
+            {sidePaneKeys.length > 0 && (
               <IslandHostContext.Provider value={islandHost}>
               <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
-              <TreeSplitLeft
-                historyKey={`${sessionId}:${rewindEpoch}:left`}
-                history={leftHistory}
-                leftKey={treeSplit.leftKey}
-                rightKey={treeSplit.rightKey}
-                {...(treeSplit.labels.get(treeSplit.leftKey) ? { number: treeSplit.labels.get(treeSplit.leftKey) } : {})}
-                onClose={closeLeftHalf}
-                composerWrapRef={leftComposerWrapRef}
-                mentionCwd={session?.cwd}
-                mentionHost={session?.host}
-                onSend={leftComposerSend}
-                onInterruptSend={leftInterruptSend}
-                onStop={handleStopTurn}
-                isStreaming={composerStreaming}
-                sendBlocked={macSessionAway}
-                allowEmptySend={commentsStore.pending.length > 0}
-              />
+              {sidePaneKeys.map((key, i) => (
+                <TreeSplitLeft
+                  // By place, not by question: a slide of the pages keeps each
+                  // timeline and lands it on its new page (as Cmd+[ always did).
+                  key={`side-${i}`}
+                  column={i + 1}
+                  side={i === 0 ? 'L' : 'M'}
+                  historyKey={`${sessionId}:${rewindEpoch}:side-${i}`}
+                  history={leftHistory}
+                  leftKey={key}
+                  rightKey={treeSplit.paneKeys[i + 1]}
+                  {...(treeSplit.labels.get(key) ? { number: treeSplit.labels.get(key) } : {})}
+                  onClose={closeTreePane}
+                  mentionCwd={session?.cwd}
+                  mentionHost={session?.host}
+                  onSendFor={sideSend}
+                  onInterruptSendFor={sideInterruptSend}
+                  onStop={handleStopTurn}
+                  isStreaming={pageStreaming(key)}
+                  sendBlocked={macSessionAway}
+                  pendingComments={sidePending.get(key) ?? NO_COMMENTS}
+                  onJumpComment={commentsStore.requestJump}
+                  onRemoveComment={commentsStore.remove}
+                  focusSeq={paneFocus?.key === key ? paneFocus.n : 0}
+                  flash={paneFocus?.key === key && paneFocus.flash}
+                  landSeq={paneFocus?.key === key && paneFocus.land ? paneFocus.n : 0}
+                  {...(key === ROOT_THREAD_KEY && mainFullComposer ? { fullComposer: mainFullComposer } : {})}
+                />
+              ))}
+              </MessageAboutContext.Provider>
+              </IslandHostContext.Provider>
+            )}
+            {treeSibling && (
+              <IslandHostContext.Provider value={islandHost}>
+              <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
+                <TreeSplitLeft
+                  key="sibling"
+                  column={treePanes}
+                  side="S"
+                  historyKey={`${sessionId}:${rewindEpoch}:sibling`}
+                  history={leftHistory}
+                  leftKey={treeSibling.key}
+                  rightKey={treeSplit.rightKey}
+                  {...(treeSplit.labels.get(treeSibling.key) ? { number: treeSplit.labels.get(treeSibling.key) } : {})}
+                  where={`${treeSibling.before ? 'Previous' : 'Next'} \u00b7 ${treeSibling.position} of ${treeSibling.count}`}
+                  onSwap={treeSplit.swapSibling}
+                  onClose={treeSplit.closeSibling}
+                  divider={(
+                    <TreeSiblingDivider
+                      share={treeSplit.siblingShare}
+                      onShare={treeSplit.setSiblingShare}
+                      onSwap={treeSplit.swapSibling}
+                      pageRef={bodyRef}
+                    />
+                  )}
+                  mentionCwd={session?.cwd}
+                  mentionHost={session?.host}
+                  onSendFor={sideSend}
+                  onInterruptSendFor={sideInterruptSend}
+                  onStop={handleStopTurn}
+                  isStreaming={pageStreaming(treeSibling.key)}
+                  sendBlocked={macSessionAway}
+                  pendingComments={sidePending.get(treeSibling.key) ?? NO_COMMENTS}
+                  onJumpComment={commentsStore.requestJump}
+                  onRemoveComment={commentsStore.remove}
+                  focusSeq={paneFocus?.key === treeSibling.key ? paneFocus.n : 0}
+                  flash={paneFocus?.key === treeSibling.key && paneFocus.flash}
+                  landSeq={0}
+                />
               </MessageAboutContext.Provider>
               </IslandHostContext.Provider>
             )}
@@ -3259,7 +3446,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
-            publishTimeline={treeLeftShown ? timelineShare : undefined}
+            publishTimeline={treeGrid ? timelineShare : undefined}
             engine={session?.engine}
             phase={taskPhase}
             initialPrompt={initialPromptText}
@@ -3333,7 +3520,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               so a presence flip never takes what is being typed. */}
           {macSessionAway && <MacAwayComposer />}
           <PendingCommentsTray
-            pending={commentsStore.pending}
+            pending={ownPendingComments}
             onJump={commentsStore.requestJump}
             onRemove={commentsStore.remove}
           />
@@ -3353,9 +3540,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onSend={handleComposerSend}
             onInterruptSend={handleInterruptSend}
             // Pending quotes and comments are a message by themselves.
-            allowEmptySend={commentsStore.pending.length > 0}
+            allowEmptySend={ownPendingComments.length > 0}
             onStop={handleStopTurn}
-            isStreaming={composerStreaming}
+            isStreaming={pageStreaming(threads.stack.api.currentKey)}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
               ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
@@ -3382,18 +3569,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             prefillText={prefillText}
             prefillNonce={prefillNonce}
             prefillMode={prefillMode}
-            onToggleMode={session && !plainChat ? () => {
-              if (engineUi.configModes) {
-                const control = sessionControls.find((candidate) => candidate.id === 'mode');
-                const next = nextSessionControlValue(control);
-                if (control && next) void setSessionControl(control.id, next);
-                return;
-              }
-              const cur = session.mode || 'default';
-              setModeOptimistic(
-                enabledModes[(enabledModes.indexOf(cur) + 1) % enabledModes.length]!,
-              );
-            } : undefined}
+            onToggleMode={toggleSessionMode}
+            // Tree Mode, a question's page: the text box, the mic and send only;
+            // the "+" menu, Bypass and the model are the main conversation's.
+            light={ownComposerLight}
           />
         </div>
             {/* The active tab's task (a Board chip, or a task clicked in the chat in full

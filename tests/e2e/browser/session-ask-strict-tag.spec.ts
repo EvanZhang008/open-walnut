@@ -165,8 +165,9 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
     await selectPassage(page, mainPage(panel), `processed your message: ${QUESTION}`, '[data-message-id][data-msg-role="assistant"]')
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2', { timeout: 15_000 })
-    // 1100px splits: the question it was asked on on the left, the new one with its composer on the right.
-    await expect(panel.locator('.tree-split-left')).toBeVisible()
+    // An Ask shows the pages side by side again: the question it was asked on
+    // left of the new one, which has the panel's composer.
+    await expect(panel.locator('.tree-split-left').first()).toBeVisible()
     const composer = mainComposer(panel)
     await composer.click()
     await composer.fill(`MOCK_ASK_ECHO_THREAD ${NESTED}`)
@@ -187,10 +188,14 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
     const pathNums = panel.locator('.tree-path-num')
     await expect(pathNums.filter({ hasText: new RegExp(`^${nested.replace('.', '\\.')}$`) }).first()).toBeVisible({ timeout: 15_000 })
     await expect(pathNums.filter({ hasText: new RegExp(`^${seq}$`) })).toHaveCount(0)
-    // So does the question map, which a split half draws as the thin rail
-    // without numbers: one pane again shows the map's own numbers.
-    await panel.locator('.tree-split-left').getByRole('button', { name: 'Close the left half' }).click()
-    await expect(panel.locator('.tree-split-left')).toHaveCount(0)
+    // So does the question map, which a page beside another draws as the thin
+    // rail without numbers: one page again shows the map's own numbers.
+    const sides = panel.locator('.tree-split-left:not(.tree-split-sibling)')
+    while (await sides.count() > 0) {
+      const n = await sides.count()
+      await sides.first().getByRole('button', { name: /^Close the (left|middle) page$/ }).click()
+      await expect(sides).toHaveCount(n - 1)
+    }
     const badges = panel.locator('.thread-map-num')
     await expect(badges.filter({ hasText: new RegExp(`^${nested.replace('.', '\\.')}$`) }).first()).toBeVisible({ timeout: 15_000 })
     await expect(badges.filter({ hasText: new RegExp(`^${seq}$`) })).toHaveCount(0)

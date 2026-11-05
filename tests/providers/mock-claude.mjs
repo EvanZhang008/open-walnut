@@ -420,6 +420,8 @@ if (inputFormat === 'stream-json') {
           queuedUserLines.push(parsed);
           if (parsed.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state: 'queued', session_id: outputSessionId }) + '\n');
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onUserLine) {
+          // Every user line a turn starts on is filed under the uuid it came with.
+          lastInputUserUuid = parsed.uuid ?? null;
           announceStarted(parsed);
           const c = parsed.message.content;
           onUserLine(typeof c === 'string' ? c : JSON.stringify(c));
@@ -884,6 +886,10 @@ if (outputFormat === 'stream-json') {
     };
     const queued = queuedUserLines.shift();
     if (queued) {
+      // Its turn files its own user line under the uuid it was sent with, as the
+      // real CLI does; the previous turn's uuid gave it that line's id, so a
+      // question's follow-up queued behind a running turn lost its anchor.
+      lastInputUserUuid = queued.uuid ?? null;
       if (queued.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: queued.uuid, state: 'started', session_id: outputSessionId }) + '\n');
       if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' }) + '\n');
       const c = queued.message.content;

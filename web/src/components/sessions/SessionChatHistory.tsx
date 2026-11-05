@@ -67,7 +67,7 @@ import { ThreadStackFrame, ThreadMarkTipLayer } from './ThreadStackFrame';
 import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
-import { useTreeHalf } from './tree-half-context';
+import { isSidePage, useTreeHalf } from './tree-half-context';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { envelopeSteps, foldStepsPhrase, walnutCompactLine, type FoldStep } from './fold-steps';
@@ -78,7 +78,7 @@ import { isEnvelopeOnly, parseSessionEnvelopes, type EnvelopeSegment } from '@op
 import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
 import { RowDisclosureScope, disclosureIds } from './row-disclosure';
 import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
-import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
+import { shapeTurns, type PagedTurnShape as TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundSend } from './session-outbound';
 import { isRoutedQuestion } from './tool-run-phrase';
@@ -206,6 +206,9 @@ function sendRefsOf(t: SessionHistoryTool): string[] {
  * anchors STABLE (no shifting on partial deletion, which no longer exists).
  * ═══════════════════════════════════════════════════════════════════════════════
  */
+
+/** A pin jump lands on a page that shows the pin within this long of the ask (a page's rows may load a moment later). */
+const PIN_JUMP_FRESH_MS = 4000;
 
 export interface OptimisticMessage extends SessionHistoryMessage {
   queueId: string;
@@ -1554,7 +1557,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  the left half (its own page, no panel-wide chrome of its own). */
   const treeHalf = useTreeHalf();
   const inTreeHalf = !!treeHalf && treeHalf.side !== 'only';
-  const leftHalf = treeHalf?.side === 'L';
+  // A page left of the panel's own (L, or M of three): it reads the panel's timeline.
+  const leftHalf = isSidePage(treeHalf);
   const hasQuestions = threadTree.threads.length > 1 || !!stack.pending || stack.draftPages.length > 0;
   const stackMode = threadsApi.viewMode === 'stack' && hasQuestions;
   /** Conversation Mode with questions: every turn in order, each question's
@@ -2064,6 +2068,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!pin) return;
     if (stackMode && rowThreadKey(pin.msgId) !== currentKey) return;
     pinJumpLandedRef.current = pinJump;
+    // Tree Mode's pages: the pin's page was already on screen beside this one
+    // and landed it; this page showing the pin's question later is no jump.
+    if (pinJump.at !== undefined && Date.now() - pinJump.at > PIN_JUMP_FRESH_MS) return;
     jumpToPin(pinJump.pinKey, { armBack: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request, or when its page arrives
   }, [pinJump?.seq, currentKey]);
@@ -2702,9 +2709,32 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A send from the comment card is the exception: the reader is up at the
   // passage with the card, and the answer arrives in the card, so the timeline
   // stays where it is (the flag is armed by the card's send, consumed here).
+  // In Tree Mode every half reads the same bubbles, and a send in one half must
+  // never move another (2026-11-04, the user: "talk to right panel, the left
+  // panel all of a sudden jumps to bottom"): only a bubble of this page counts.
+  // A pending Ask's first bubble is filed under a key the tree learns a render
+  // later, so on a pending page a bubble of a question the tree does not know is
+  // this page's.
   const cardSendHold = useRef(false);
+  const ownBubbleCount = useMemo(() => {
+    const list = optimisticMessages ?? [];
+    if (!stackMode) return list.length;
+    let n = 0;
+    for (const m of list) {
+      const key = rowThreadKey(m.msgId ?? m.userUuid ?? m.walnutMessageId);
+      if (key === currentKey || (pagePending && !threadTree.byKey.has(key))) n++;
+    }
+    return n;
+  }, [optimisticMessages, stackMode, rowThreadKey, currentKey, pagePending, threadTree]);
+  // A move to another page brings that page's bubbles along: no send, no follow.
+  const bubblePageRef = useRef(currentKey);
   useLayoutEffect(() => {
-    const len = optimisticMessages?.length ?? 0;
+    const len = ownBubbleCount;
+    if (bubblePageRef.current !== currentKey) {
+      bubblePageRef.current = currentKey;
+      prevOptimisticLen.current = len;
+      return;
+    }
     if (len > prevOptimisticLen.current) {
       if (cardSendHold.current) {
         cardSendHold.current = false;
@@ -2714,7 +2744,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
     }
     prevOptimisticLen.current = len;
-  }, [optimisticMessages?.length]);
+  }, [ownBubbleCount, currentKey]);
 
   // 送达标记和等待提示会在后续帧增高内容，保持原本贴底的阅读位置。
   useEffect(() => {
@@ -3383,25 +3413,37 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // the no-action set, a shape settled while quiet holds while the next turn streams.
   const settledShapes = useRef<Map<string, TurnShape['kind']>>(new Map());
   const turnShapes = useMemo(() => {
-    const keyOf = (t: TurnShape) => (t.start >= 0 ? (messages[t.start].msgId ?? `${messages[t.start].timestamp}:${t.start}`) : 'head');
+    // A page's turn before its first sent row (several pages may have one) is keyed by its first row.
+    const keyOf = (t: TurnShape) => (t.start >= 0 ? (messages[t.start].msgId ?? `${messages[t.start].timestamp}:${t.start}`)
+      : t.rows?.length ? `head:${messages[t.rows[0]].msgId ?? t.rows[0]}` : 'head');
     const shapes = shapeTurns(messages, {
       isSent: isHistorySentRow,
       isPerson: isHistoryUserTurn,
       isCleanNoAction: (i) => noActionSet.has(i),
       stripTag: stripQuestionTag,
       streaming: false,
+      // Each question's turns on its own rows (turn-shape.ts): a reply cut into a
+      // part per question answers each one with its own part.
+      ...(threadTree.threads.length > 1 ? { pageOf: (i: number) => rowThreadKey(messages[i].msgId ?? messages[i].walnutMessageId) } : {}),
     });
+    // The newest turn holds the newest row (questions' turns interleave).
+    const lastRow = messages.length - 1;
+    let li = shapes.length - 1;
+    for (let k = shapes.length - 1; k >= 0; k--) {
+      const t = shapes[k];
+      if (t.rows ? t.rows[t.rows.length - 1] === lastRow : t.end === messages.length) { li = k; break; }
+    }
     if (!isStreaming) {
       settledShapes.current = new Map(shapes.map((t) => [keyOf(t), t.kind]));
-      const last = shapes[shapes.length - 1];
+      const last = shapes[li];
       const answerId = last && last.kind === 'answered' ? messages[last.answer]?.msgId : undefined;
-      if (answerId && watchedReplies.current.ids.has(answerId)) shapes[shapes.length - 1] = { ...last, kind: 'open', answer: -1 };
+      if (answerId && watchedReplies.current.ids.has(answerId)) shapes[li] = { ...last, kind: 'open', answer: -1 };
       return shapes;
     }
-    const last = shapes[shapes.length - 1];
-    if (last && settledShapes.current.get(keyOf(last)) !== last.kind) shapes[shapes.length - 1] = { ...last, kind: 'open', answer: -1 };
+    const last = shapes[li];
+    if (last && settledShapes.current.get(keyOf(last)) !== last.kind) shapes[li] = { ...last, kind: 'open', answer: -1 };
     return shapes;
-  }, [messages, isStreaming, noActionSet]);
+  }, [messages, isStreaming, noActionSet, threadTree, rowThreadKey]);
   // processToolsOf's per-part answers; a new map whenever what they read changes.
   const processToolsCache = useMemo(
     () => new WeakMap<HistoryPart, SessionHistoryTool[] | null>(),
@@ -4834,7 +4876,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   // Each row's turn (turn-shape.ts); a turn an Asked-from list hangs off renders open.
   const turnOfIndex = new Map<number, TurnShape>();
-  for (const t of turnShapes) for (let g = Math.max(0, t.start); g < t.end; g++) turnOfIndex.set(g, t);
+  for (const t of turnShapes) {
+    if (t.rows) for (const g of t.rows) turnOfIndex.set(g, t);
+    else for (let g = Math.max(0, t.start); g < t.end; g++) turnOfIndex.set(g, t);
+  }
   const askedTurns = new Set<TurnShape>();
   visibleHistoryParts.forEach((part, i) => {
     const t = turnOfIndex.get(headOf(part).globalIndex);
