@@ -202,7 +202,7 @@
   padding: 0 4px 2px 0;
   cursor: pointer;
 }
-.org-detail-who { flex: 1; min-width: 0; }
+.org-detail-who { flex: 1 1 14em; min-width: 0; }
 .org-detail-title {
   margin: 0;
   font-size: 16px;
@@ -233,8 +233,13 @@
 
 /* The right of the node's one header row: the chat's status and kebab (SessionPanel headerSlot) and
    the side bar's switch. */
-.org-detail-tools { flex: none; display: flex; align-items: center; gap: 6px; }
-.org-detail-chat-tools { display: inline-flex; align-items: center; gap: 6px; }
+/* When the name and the chat's pills cannot both be read on one line, the tools go to a
+   line of their own under the name and wrap there, instead of cutting the name or a pill
+   to a few letters (2026-11-04, the user: "make the lable another line if the space is
+   narrow"). The name keeps at least about 14 characters before that happens. */
+.org-detail-head { flex-wrap: wrap; row-gap: 8px; }
+.org-detail-tools { flex: 0 1 auto; max-width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.org-detail-chat-tools { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
 .org-detail-chat-tools:empty { display: none; }
 .org-rail-toggle {
   position: relative; flex: none; width: 28px; height: 28px; display: inline-grid; place-items: center;

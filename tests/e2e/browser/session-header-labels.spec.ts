@@ -334,7 +334,9 @@ test('only a Worker: no tags control, and the Worker pill opens its team', async
   expect(await titleRowParts(panel)).toEqual(['kebab'])
 })
 
-test('a narrow row draws each state pill as its letter and keeps the title', async ({ page, browserName }) => {
+test('a narrow row puts the labels on a line under the title, each in full', async ({ page, browserName }) => {
+  // 2026-11-04, the user, on a narrow column whose title read "Aut..." beside "Wait un...":
+  // "maybe we shoud make the lable another line if the space is narrow".
   test.setTimeout(150_000)
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const { taskId: lead, sessionId } = await ownSession(`Header narrow lead ${stamp}`)
@@ -349,11 +351,19 @@ test('a narrow row draws each state pill as its letter and keeps the title', asy
   // Narrow the panel itself (the column) below the row's fold width.
   await panel.evaluate((el) => { (el as HTMLElement).style.width = '400px'; (el as HTMLElement).style.flex = 'none' })
   await expect(row).toHaveAttribute('data-header-fit', 'tight')
+  const title = (await panel.locator('.session-panel-title-area').boundingBox())!
   for (const pill of [trigger, row.locator('[data-testid="leader-pill"]')]) {
-    await expect(pill.locator('.task-pill-long')).toBeHidden()
-    expect(await pill.evaluate((el) => getComputedStyle(el, '::after').content)).toMatch(/^"[A-Z]"$/)
+    // The word, not a letter, on the line under the title.
+    await expect(pill.locator('.task-pill-long')).toBeVisible()
+    expect(await pill.evaluate((el) => el.scrollWidth - el.clientWidth), 'the pill shows its whole label').toBeLessThanOrEqual(1)
+    expect((await pill.boundingBox())!.y, 'the label sits under the title').toBeGreaterThanOrEqual(title.y + title.height - 1)
   }
-  await expectTitleRoom(panel, 0.4)
+  // The kebab stays on the title's line, at its end.
+  const kebab = (await row.locator('.task-kebab-btn').last().boundingBox())!
+  expect(kebab.y).toBeLessThan(title.y + title.height)
+  expect(kebab.x).toBeGreaterThanOrEqual(title.x + title.width - 1)
+  // The title has the whole first line but the kebab.
+  await expectTitleRoom(panel, 0.8)
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-narrow.png`, animations: 'disabled' })
   // Wide again: the words come back.

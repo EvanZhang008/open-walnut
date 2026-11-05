@@ -7,6 +7,7 @@
  * Shown above the chat while `record.cwdGone` is set; the parked message row offers the same
  * button through ContinueInNewFolderButton.
  */
+import { NoticeToken, PanelNotice } from './PanelNotice';
 import { useCallback, useState } from 'react';
 import { continueInNewFolder, type ContinueInNewFolderResult } from '@/api/sessions';
 import { log } from '@/utils/log';
@@ -64,15 +65,14 @@ export function FolderGoneBanner({ sessionId, cwdGone, onDone }: {
       ? `Walnut found its conversation history, so it can continue in ${where}, with the whole conversation. The old folder is not recreated.`
       : `Walnut could not check yet whether its conversation history is still there. It can continue in ${where}; the old folder is not recreated.`;
   return (
-    <div className="session-error-banner session-error-banner--idle session-folder-gone-banner" data-testid="folder-gone-banner">
-      <span className="session-error-banner-icon"><WarningTriangleIcon size={14} /></span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="session-error-banner-text"><strong>This session's folder is gone:</strong> <code>{cwdGone.cwd}</code></div>
-        <div className="session-error-banner-text folder-gone-detail">{text}</div>
-      </div>
-      <div className="folder-gone-actions">
-        <ContinueInNewFolderButton sessionId={sessionId} history={cwdGone.history} onDone={onDone} />
-      </div>
-    </div>
+    <PanelNotice
+      className="session-error-banner session-error-banner--idle session-folder-gone-banner"
+      testId="folder-gone-banner"
+      icon={<WarningTriangleIcon size={14} />}
+      actions={<ContinueInNewFolderButton sessionId={sessionId} history={cwdGone.history} onDone={onDone} />}
+    >
+      <div className="session-error-banner-text"><strong>This session's folder is gone:</strong> <NoticeToken text={cwdGone.cwd} code /></div>
+      <div className="session-error-banner-text folder-gone-detail">{text}</div>
+    </PanelNotice>
   );
 }

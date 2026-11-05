@@ -11,7 +11,7 @@
  *   - the header folds the link tags into ONE control beside the title (2026-11-02,
  *     SessionHeaderLabels.tsx; the state pills stay on the row): its flyout lists every link
  *     whole, 20px, uncut (2026-10-25, "it somehow get cropped out"), and the title keeps its
- *     room, in a wide and a narrow column.
+ *     room, in a wide and a narrow column (narrow: the control goes to a line under the title).
  *
  * The fixture task `pw-task-links` (test-server.ts) holds the tags; its two existing files are
  * written by the fixture, the third never is. `pw-task-links-gone-<browser>` links only files
@@ -152,7 +152,16 @@ test('a narrower column never squeezes the title out, and the links stay one cli
   await expectHeaderLabel(panel, 'Test matrix r5')
   await fs.mkdir(SHOT_DIR, { recursive: true })
   for (const width of [560, 420, 340, 260, 200]) {
-    await panel.evaluate((el, w) => { (el as HTMLElement).style.flex = `0 0 ${w}px`; (el as HTMLElement).style.width = `${w}px` }, width)
+    // Narrow the column's width only. The panel sits in a column-direction flex box, where a
+    // flex basis is its HEIGHT: `flex: 0 0 200px` crushed the panel to 200px tall, and once a
+    // narrow row put the labels on a line under the title the composer covered that line.
+    await panel.evaluate((el, w) => {
+      const box = el as HTMLElement
+      const parent = box.parentElement ? getComputedStyle(box.parentElement) : null
+      const row = parent?.display.includes('flex') && parent.flexDirection.startsWith('row')
+      if (row) box.style.flex = `0 0 ${w}px`
+      box.style.width = `${w}px`
+    }, width)
     await page.waitForTimeout(400)
     const state = await panel.evaluate((el) => {
       const row = el.querySelector('.session-panel-header-top')!.getBoundingClientRect()
@@ -163,13 +172,19 @@ test('a narrower column never squeezes the title out, and the links stay one cli
       return {
         titleWidth: t.width, titleNatural: (title as HTMLElement).scrollWidth,
         btnLeft: btn ? btn.getBoundingClientRect().left : null, titleRight: t.right,
+        btnTop: btn ? btn.getBoundingClientRect().top : null, titleBottom: t.bottom,
+        tight: el.querySelector('.session-panel-header-top')!.getAttribute('data-header-fit') === 'tight',
         metaRight: m.getBoundingClientRect().right, rowRight: row.right,
       }
     })
     expect(state.titleWidth, `${width}px: the title keeps its room`).toBeGreaterThanOrEqual(Math.min(48, state.titleNatural) - 1)
     expect(state.metaRight, `${width}px: nothing leaves the row`).toBeLessThanOrEqual(state.rowRight + 1)
     expect(state.btnLeft, `${width}px: the labels control stays on the row`).not.toBeNull()
-    expect(state.btnLeft!, `${width}px: the labels control stays right of the title`).toBeGreaterThanOrEqual(state.titleRight - 1)
+    // A wide row keeps the control right of the title; a narrow one (data-header-fit="tight")
+    // puts it on a line under the title (2026-11-04, the user: "maybe we shoud make the
+    // lable another line if the space is narrow"). Either way it never covers the title.
+    if (state.tight) expect(state.btnTop!, `${width}px: the labels control sits on the line under the title`).toBeGreaterThanOrEqual(state.titleBottom - 1)
+    else expect(state.btnLeft!, `${width}px: the labels control stays right of the title`).toBeGreaterThanOrEqual(state.titleRight - 1)
     await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-column-${width}.png` })
   }
   // The labels never fold away: at the narrowest the flyout still names the link whole.

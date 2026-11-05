@@ -1,13 +1,13 @@
 import { useLayoutEffect, useState } from 'react';
 
-/** Below this width the session title row draws each state pill as its letter. */
+/** Below this width the session title row puts its labels on a line under the title. */
 export const TITLE_ROW_TIGHT_PX = 440;
 
 /**
  * Whether the session header's title row is narrow (a third column, a slim window), so
- * its state pills (Wait, Cron, Trigger, Worker, Leader) read as one letter each and the
- * title keeps its room. One width for the whole row, never pill by pill, so a row never
- * mixes words and letters. Read with a ResizeObserver rather than a CSS container
+ * its labels (Wait, Cron, Trigger, Worker, Leader, the tags) move to a line under the
+ * title, each in full, and the title keeps the whole first line. One width for the whole
+ * row, never label by label. Read with a ResizeObserver rather than a CSS container
  * query: a container query needs layout containment on the row, which would make it the
  * containing block of any fixed-position child drawn inside it.
  *

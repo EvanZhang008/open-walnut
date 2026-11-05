@@ -1,17 +1,20 @@
 /**
- * A narrow session column keeps both header rows on one line (2026-10-02 report:
+ * A narrow session column keeps its header readable (2026-10-02 report:
  * three columns side by side, or the Mac app zoomed in, wrapped the tool row one
  * chip per line, drew the window buttons over the chips, and ran the title row's
  * pills past the panel edge over the phase circle).
  *
  * Real density: the task carries the pills a busy task has (Trigger, Worker,
  * Leader · 1), on a real session on the fixture server. They stay on the title
- * row (2026-11-03: only link tags fold into the tags control; no status badge),
- * as words in a wide row and as letters in a narrow one. The column is clamped
- * to the widths the report showed (400 → 180px); at each one every row is a
- * single line inside the panel, the hidden chips sit in a "..." menu that opens
- * them, the title keeps all the room the pills and the kebab leave it, each pill
- * opens what it opens, and a widened column gets everything back.
+ * row (2026-11-03: only link tags fold into the tags control; no status badge):
+ * beside the title in a wide row, and on a line of their own under the title,
+ * each in full, in a narrow one (2026-11-04, the user: "maybe we shoud make the
+ * lable another line if the space is narrow"), the kebab staying on the title's
+ * line. The column is clamped to the widths the report showed (400 → 180px); at
+ * each one the tool row is a single line inside the panel, the hidden chips sit in
+ * a "..." menu that opens them, the title keeps all the room the kebab (and in a
+ * wide row the pills) leave it, each pill opens what it opens, and a widened
+ * column gets everything back.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -69,7 +72,7 @@ async function quickStart(page: Page, composer: Locator, prompt: string): Promis
 
 /** The pills a busy task carries: a parent (Worker), a subtask (Leader · 1), a trigger. */
 async function dressAsBusyTask(taskId: string): Promise<void> {
-  await api('PATCH', `/api/tasks/${taskId}`, { title: 'Pulse orphan EventsCrd manual cleanup across the fleet' })
+  await api('PATCH', `/api/tasks/${taskId}`, { title: 'Garden shed stale thumbnail tidy-up across the archive' })
   const parent = await api<{ task: { id: string } }>('POST', '/api/tasks', { title: `Narrow header parent ${Date.now()}`, source: 'local', project: 'Work' })
   litterTasks.unshift(parent.task.id)
   await api('PATCH', `/api/tasks/${taskId}`, { parent_task_id: parent.task.id })
@@ -86,13 +89,20 @@ interface HeaderState {
   panelRight: number
   toolRow: { lines: number; visible: string[]; hidden: string[]; overflowBy: number }
   titleRow: {
-    lines: number; overflowBy: number; titleWidth: number; pillsStartAfterTitle: boolean
+    lines: number; overflowBy: number; titleWidth: number; pillsClearOfTitle: boolean
     /** What the title row's right side shows, in order: 'pill', 'labels' (the tags control), 'kebab'. */
     items: string[]
     /** Room between the title's end and the first thing after it when the title is cut (else 0). */
     slackWhenCut: number
     pillCount: string
-    letters: boolean
+    /** The labels sit on a line under the title (a narrow row). */
+    labelsBelow: boolean
+    /** Every pill shows its whole label (nothing cut to letters or an ellipsis). */
+    pillsWhole: boolean
+    /** The row measured narrow (data-header-fit="tight"). */
+    tight: boolean
+    /** The widest gap between two pills side by side on one line (they sit together, never spread). */
+    pillGap: number
   }
   moreVisible: boolean
 }
@@ -131,13 +141,33 @@ async function headerState(panel: Locator): Promise<HeaderState> {
         lines: tops([...titleRowEls, ...metaKids]),
         overflowBy: overflow(metaKids),
         titleWidth: Math.round(titleBox.width),
-        pillsStartAfterTitle: metaKids.every((el) => el.getBoundingClientRect().left >= titleBox.right - 1),
+        pillsClearOfTitle: metaKids.every((el) => {
+          const b = el.getBoundingClientRect()
+          return b.left >= titleBox.right - 1 || b.top >= titleBox.bottom - 1
+        }),
         items: metaKids.map((el) => el === labels ? 'labels'
           : el.matches('.task-kebab-btn') || el.querySelector('.task-kebab-btn') ? 'kebab'
             : el.matches('.task-row-pill, .task-waiting-chip') ? 'pill' : `other:${el.className}`),
-        slackWhenCut: cut && metaKids[0] ? Math.round(metaKids[0].getBoundingClientRect().left - titleBox.right) : 0,
+        // The first thing after the title on its own line: the first pill in a wide row, the
+        // kebab in a narrow one (the pills went to the line under it).
+        slackWhenCut: (() => {
+          const next = metaKids.find((el) => Math.abs(el.getBoundingClientRect().top - titleBox.top) < titleBox.height)
+          return cut && next ? Math.round(next.getBoundingClientRect().left - titleBox.right) : 0
+        })(),
         pillCount: String(metaKids.filter((el) => el.matches('.task-row-pill, .task-waiting-chip')).length),
-        letters: header.querySelector('.session-panel-header-top')!.getAttribute('data-header-fit') === 'tight',
+        labelsBelow: metaKids.filter((el) => el.matches('.task-row-pill, .task-waiting-chip'))
+          .every((el) => el.getBoundingClientRect().top >= titleBox.bottom - 1),
+        pillsWhole: metaKids.filter((el) => el.matches('.task-row-pill, .task-waiting-chip'))
+          .every((el) => el.scrollWidth <= el.clientWidth + 1),
+        tight: header.querySelector('.session-panel-header-top')!.getAttribute('data-header-fit') === 'tight',
+        pillGap: (() => {
+          const boxes = metaKids.filter((el) => el.matches('.task-row-pill, .task-waiting-chip')).map((el) => el.getBoundingClientRect())
+          let widest = 0
+          for (let i = 1; i < boxes.length; i++) {
+            if (Math.abs(boxes[i]!.top - boxes[i - 1]!.top) < 2) widest = Math.max(widest, Math.round(boxes[i]!.left - boxes[i - 1]!.right))
+          }
+          return widest
+        })(),
       },
       moreVisible: !!header.querySelector('[data-header-more]'),
     }
@@ -161,9 +191,14 @@ async function settleAt(page: Page, panel: Locator, width: number | null): Promi
 function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.toolRow.lines, `${label}: the tool row wrapped`).toBeLessThanOrEqual(1)
   expect(state.toolRow.overflowBy, `${label}: the tool row runs past the panel`).toBeLessThanOrEqual(0)
-  expect(state.titleRow.lines, `${label}: the title row wrapped`).toBeLessThanOrEqual(1)
+  // One line when wide; when narrow, the title's line and the labels' line under it.
+  expect(state.titleRow.lines, `${label}: the title row wrapped`).toBeLessThanOrEqual(state.titleRow.tight ? 2 : 1)
+  if (state.titleRow.tight) expect(state.titleRow.labelsBelow, `${label}: the labels sit on the line under the title`).toBe(true)
+  // The labels sit together from the start of their line, never spread edge to edge.
+  expect(state.titleRow.pillGap, `${label}: the pills are spread apart`).toBeLessThanOrEqual(8)
+  expect(state.titleRow.pillsWhole, `${label}: a pill is cut`).toBe(true)
   expect(state.titleRow.overflowBy, `${label}: the title row runs past the panel`).toBeLessThanOrEqual(0)
-  expect(state.titleRow.pillsStartAfterTitle, `${label}: a pill or the kebab overlaps the title`).toBe(true)
+  expect(state.titleRow.pillsClearOfTitle, `${label}: a pill or the kebab overlaps the title`).toBe(true)
   // The task has no link tag, so no tags control: its three state pills (Trigger, Worker,
   // Leader) and the kebab sit beside the title.
   expect(state.titleRow.items, `${label}: the state pills and the kebab sit beside the title`).toEqual(['pill', 'pill', 'pill', 'kebab'])
@@ -217,7 +252,7 @@ function expectMonotonic(wider: HeaderState, narrower: HeaderState, label: strin
   expect(narrower.titleRow.titleWidth, `${label}: the title grew in a narrower column`).toBeLessThanOrEqual(wider.titleRow.titleWidth)
 }
 
-test('a narrow column keeps both header rows on one line, from 400px down to 180px', async ({ page }) => {
+test('a narrow column keeps the tool row on one line and the labels whole under the title, from 400px down to 180px', async ({ page }) => {
   test.setTimeout(240_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -257,14 +292,14 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
   expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))
   expect(states[180].toolRow.visible[0]).toBe('fork')
-  // A narrow row draws the pills as letters (W, T, L); a wide one keeps the words.
-  expect(wide.titleRow.letters).toBe(false)
-  expect(states[240].titleRow.letters).toBe(true)
-  expect(states[180].titleRow.letters).toBe(true)
-  // The title keeps room at 180px beside the three letters and the kebab (a few letters
-  // and the ellipsis; the hover text has the rest), and more at 240px.
-  expect(states[180].titleRow.titleWidth).toBeGreaterThanOrEqual(38)
-  expect(states[240].titleRow.titleWidth).toBeGreaterThanOrEqual(65)
+  // A narrow row puts the pills, in full, on a line under the title; a wide one keeps them beside it.
+  expect(wide.titleRow.tight).toBe(false)
+  expect(wide.titleRow.lines).toBe(1)
+  expect(states[240].titleRow.tight).toBe(true)
+  expect(states[180].titleRow.tight).toBe(true)
+  // The title has its line to itself but the kebab: room to read it even at 180px.
+  expect(states[180].titleRow.titleWidth).toBeGreaterThanOrEqual(90)
+  expect(states[240].titleRow.titleWidth).toBeGreaterThanOrEqual(150)
 
   // 180px: the "..." menu names every hidden view, then the hidden window buttons (the
   // tool row's overflow stays on the tool row; the kebab below is the task's menu). Opening
@@ -300,8 +335,8 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await page.keyboard.press('Escape')
   await expect(kebab).toHaveCount(0, { timeout: 10_000 })
 
-  // At 180px the letters still are the pills (the words stay for readers), and each one
-  // opens what it opens: the Trigger flyout anchors to a real box inside the window.
+  // At 180px the pills, on their own line, read in full, and each one opens what it
+  // opens: the Trigger flyout anchors to a real box inside the window.
   await expect(meta.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
   await expect(meta.locator('[data-testid="leader-pill"]')).toHaveText('Leader · 1')
   await expect(meta.locator('[data-testid="task-trigger-pill"]')).toHaveText('Trigger')

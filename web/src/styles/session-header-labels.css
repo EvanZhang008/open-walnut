@@ -107,20 +107,28 @@
 }
 .org-detail-chat-tools .task-waiting-chip { max-width: 180px; }
 
-/* A narrow row (data-header-fit="tight", useTitleRowTight.ts): every state pill reads as
-   its letter (W, T, L, C, E) and the wait is cut shorter, the whole row at once. The word
-   stays in the DOM for readers and tests; the hover text keeps the rest. */
-.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta [data-short] > .task-pill-long {
-  display: none;
+/* A narrow row (data-header-fit="tight", useTitleRowTight.ts): the labels go to a line
+   of their own under the title, each in full, so neither the title nor a label is cut
+   to a few letters (2026-11-04, the user, on a column where the title read "Aut..."
+   beside "Wait un...": "maybe we shoud make the lable another line if the space is
+   narrow"). The kebab stays on the title's line. The meta box steps out of the layout
+   (display: contents) so its children can sit on two lines of the one row. */
+.session-panel-header-top[data-header-fit="tight"] {
+  flex-wrap: wrap;
+  /* The row's space-between would spread the labels' line edge to edge; they sit
+     together from the start (the title area grows, so the kebab still ends line one). */
+  justify-content: flex-start;
+  column-gap: 4px;
+  row-gap: 4px;
 }
-.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta [data-short]::after {
-  content: attr(data-short);
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-area { flex: 1 1 0; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta { display: contents; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta > .task-quick-actions { order: 1; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta > :not(.task-quick-actions) { order: 3; max-width: 100%; }
+/* The line break between the title line and the labels' line, only when there are labels. */
+.session-panel-header-top[data-header-fit="tight"]:has(.session-panel-title-meta > :not(.task-quick-actions))::after {
+  content: '';
+  flex-basis: 100%;
+  order: 2;
 }
-.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .session-panel-embedded-badge > svg { display: none; }
-.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .task-waiting-chip { max-width: 72px; }
-.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta { gap: 2px; }
-.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta :is(.task-trigger-pill, .task-team-pill, .session-cron-pill, .session-panel-embedded-badge) {
-  min-width: 16px;
-  padding-inline: 3px;
-  justify-content: center;
-}
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .task-waiting-chip { max-width: 100%; }

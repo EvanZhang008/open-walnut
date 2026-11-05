@@ -17,8 +17,9 @@
  *     stays interactive (no blocking spinner);
  *   - once the host is proven reachable the banner says so instead of repeating
  *     the unreachability claim;
- *   - the action button reads "Reconnect", and using it neither swaps the session
- *     nor adds any message to the conversation.
+ *   - a reachable host's notice offers no button (send a message resumes it); for
+ *     a host not yet proven reachable the button reads "Reconnect", and using it
+ *     neither swaps the session nor adds any message to the conversation.
  *
  * Only the three session HTTP responses are shaped (the fixture session is
  * healthy, so 'error' has to be injected); every click, every render and both
@@ -169,8 +170,10 @@ test('opening an error session re-checks the host once and the banner stops clai
   await expect(panel.locator('.session-error-banner--idle')).toHaveCount(1)
   await banner.screenshot({ path: `${SCREENSHOT_DIR}/banner-reachable.png` })
 
-  // 3. The action reads as a reconnect, not as "run something".
-  await expect(banner.locator('.session-retry-btn')).toHaveText('Reconnect')
+  // 3. One way on, said once: the composer under the notice. No Reconnect beside
+  //    "Send a message to resume it" (2026-11-04, the user: two different answers to
+  //    one fact). The button stays for a host the recheck could not reach (below).
+  await expect(banner.locator('.session-retry-btn')).toHaveCount(0)
 
   // 4. Exactly one recheck for one open.
   expect(calls.n, 'recheck must fire once per open, not per render').toBe(1)
@@ -351,9 +354,11 @@ test('the real /recheck route answers a bounded, honest shape', async ({ page })
 test('a LOCAL session says Recheck, not Reconnect, and its banner names no host', async ({ page }) => {
   const calls = { n: 0 }
   await freezeSessionInError(page, { host: null, hostname: null, errorMessage: null })
+  // The answer waits a moment, so the notice is seen while the check runs: that is
+  // when it still offers its button.
   await stubRecheck(page, {
     checked: true, reachable: true, alive: false, processStatus: 'error', infraClaim: true,
-  }, calls)
+  }, calls, 1200)
 
   const panel = await openSessionPanel(page)
   const banner = panel.locator('.session-error-banner')
@@ -368,6 +373,10 @@ test('a LOCAL session says Recheck, not Reconnect, and its banner names no host'
   // that carries information — no "X is reachable" about the machine it is on.
   await expect(banner).toContainText("process is not running", { timeout: 10_000 })
   await expect(banner).not.toContainText('is reachable')
+  await expect(banner).not.toContainText('Reconnect')
+  // ...and no button: the composer is the way on (2026-11-04, the user: a button beside
+  // "Send a message to resume it" gave two different answers to one fact).
+  await expect(banner.locator('.session-retry-btn')).toHaveCount(0)
 
   await banner.screenshot({ path: `${SCREENSHOT_DIR}/banner-local-recheck.png` })
   expect(calls.n, 'a local session still gets exactly one recheck').toBe(1)
@@ -376,12 +385,15 @@ test('a LOCAL session says Recheck, not Reconnect, and its banner names no host'
 test('a REMOTE session keeps the Reconnect wording', async ({ page }) => {
   const calls = { n: 0 }
   await freezeSessionInError(page)
+  // The answer waits a moment, so the button is seen while the check runs; once the
+  // host is proven reachable the notice offers none (the composer is the way on).
   await stubRecheck(page, {
     checked: true, reachable: true, alive: false, processStatus: 'error', infraClaim: true,
-  }, calls)
+  }, calls, 1200)
 
   const panel = await openSessionPanel(page)
   const banner = panel.locator('.session-error-banner')
   await expect(banner.locator('.session-retry-btn')).toHaveText('Reconnect', { timeout: 30_000 })
   await expect(banner).toContainText('is reachable', { timeout: 10_000 })
+  await expect(banner.locator('.session-retry-btn')).toHaveCount(0)
 })

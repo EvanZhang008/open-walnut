@@ -155,6 +155,7 @@ import { useToolRowFit } from './useSessionHeaderFit';
 import { SessionHeaderMoreMenu } from './SessionHeaderMore';
 import { SessionHeaderLabels } from './SessionHeaderLabels';
 import { useTitleRowTight } from './useTitleRowTight';
+import { NoticeToken, PanelNotice } from './PanelNotice';
 import '@/styles/session-header-fit.css';
 import '@/styles/session-plain-chat.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
@@ -523,7 +524,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // menu). Hidden items stay mounted under data-hidden="true"; the menu proxies to
   // them. The title row has nothing to fold: its labels are one control already.
   const toolRowRef = useRef<HTMLDivElement>(null);
-  // A narrow title row draws its state pills as letters (useTitleRowTight.ts).
+  // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts).
   const [titleRowRef, titleRowTight] = useTitleRowTight();
   const toolFit = useToolRowFit(toolRowRef);
   const hid = (id: string) => (toolFit.hidden.has(id) ? 'true' : 'false');
@@ -2948,25 +2949,31 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           const hostLabel = session?.hostname || session?.host || '';
           const bannerText = checking
             ? 'Checking connection\u2026'
-            : provedReachable
-              ? (isRemote
-                  ? `${hostLabel} is reachable, and this session's process is not running. Send a message to resume it.`
-                  : "This session's process is not running. Send a message to resume it.")
-              : isReconnecting ? 'Reconnecting to remote host...' : errorText;
+            : isReconnecting ? 'Reconnecting to remote host...' : errorText;
+          // Reachable and stopped: the way on is the composer under this notice, so the
+          // notice says that and offers no button that would say something else
+          // (2026-11-04, the user's screenshot: a Reconnect button beside "Send a
+          // message to resume it", two different answers to one fact).
+          const reachableText = (
+            <>
+              {isRemote && <><NoticeToken text={hostLabel} /> is reachable, and </>}
+              {isRemote ? "this session's" : "This session's"} process is not running. Send a message to resume it.
+            </>
+          );
           return (
-            <div className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}>
-              <span className="session-error-banner-icon">{spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0E' : <WarningTriangleIcon size={14} />}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {isRemote && session?.host && !checking && !provedReachable
-                  ? <SessionHostErrorText host={session.host} label={hostLabel} reconnecting={isReconnecting} fallback={bannerText} />
-                  : <span className="session-error-banner-text">{bannerText}</span>}
-                {!calm && session?.errorMessage && (() => {
-                  const sug = getErrorSuggestion(session.errorMessage, { host: session.host, provider: session.provider, hostProblem: hostHasProblem });
-                  return sug ? <ErrorSuggestionLink {...sug} /> : null;
-                })()}
-              </div>
-              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={reloadRecord} />
-            </div>
+            <PanelNotice
+              className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}
+              icon={spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0E' : <WarningTriangleIcon size={14} />}
+              actions={provedReachable ? null : <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={reloadRecord} />}
+            >
+              {isRemote && session?.host && !checking && !provedReachable
+                ? <SessionHostErrorText host={session.host} label={hostLabel} reconnecting={isReconnecting} fallback={bannerText} />
+                : <span className="session-error-banner-text">{provedReachable ? reachableText : bannerText}</span>}
+              {!calm && session?.errorMessage && (() => {
+                const sug = getErrorSuggestion(session.errorMessage, { host: session.host, provider: session.provider, hostProblem: hostHasProblem });
+                return sug ? <ErrorSuggestionLink {...sug} /> : null;
+              })()}
+            </PanelNotice>
           );
         })()}
         {ps === 'stopped' && session?.errorMessage && (() => {
@@ -2976,20 +2983,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           // banner scared users into thinking the session broke (2026-08-10).
           const idle = session.errorMessage.match(/^No output for (\d+) min$/i);
           if (!idle) return null;
+          // Routine, and the way on is the composer: no button beside it to say otherwise.
           return (
-            <div className="session-error-banner session-error-banner--idle">
-              <span className="session-error-banner-icon"><PauseGlyphIcon size={14} /></span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <span className="session-error-banner-text">
-                  Auto-stopped after {idle[1]} min idle. The conversation is preserved — send a message to resume it.
-                </span>
-                {(() => {
-                  const sug = getErrorSuggestion(session.errorMessage!, { host: session.host, provider: session.provider });
-                  return sug ? <ErrorSuggestionLink {...sug} /> : null;
-                })()}
-              </div>
-              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={reloadRecord} />
-            </div>
+            <PanelNotice className="session-error-banner session-error-banner--idle" icon={<PauseGlyphIcon size={14} />}>
+              <span className="session-error-banner-text">
+                Auto-stopped after {idle[1]} min idle. The conversation is kept: send a message to resume it.
+              </span>
+              {(() => {
+                const sug = getErrorSuggestion(session.errorMessage!, { host: session.host, provider: session.provider });
+                return sug ? <ErrorSuggestionLink {...sug} /> : null;
+              })()}
+            </PanelNotice>
           );
         })()}
         {!historyLoading && (ps === 'stopped' || ps === 'error') && !session?.archived
@@ -2998,13 +3002,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           // A turn whose only output is an error row (a failed native command) is not
           // empty: its error is already on screen, and a restart would not fix it.
           && !historyMessages.some(m => m.role === 'system' && m.systemVariant === 'error') && (
-          <div className="session-error-banner" style={{ background: 'color-mix(in srgb, var(--warning) 8%, transparent)', borderColor: 'color-mix(in srgb, var(--warning) 25%, transparent)' }}>
-            <span className="session-error-banner-icon"><WarningTriangleIcon size={14} /></span>
-            <span className="session-error-banner-text">Session returned empty — Claude may have encountered an issue.</span>
-            <button className="session-retry-btn" onClick={handleRestart} disabled={restartBusy}>
-              {restartBusy ? 'Restarting...' : 'Restart'}
-            </button>
-          </div>
+          <PanelNotice
+            className="session-error-banner session-error-banner--warning"
+            icon={<WarningTriangleIcon size={14} />}
+            actions={(
+              <button className="session-retry-btn" onClick={handleRestart} disabled={restartBusy}>
+                {restartBusy ? 'Restarting...' : 'Restart'}
+              </button>
+            )}
+          >
+            <span className="session-error-banner-text panel-notice-prose">Session returned empty: Claude may have run into a problem.</span>
+          </PanelNotice>
         )}
         {/* Split container: when a view (Changed/Files/Terminal) is open, becomes
             [ left panel | chat ] as a flex row; when closed it's display:contents so

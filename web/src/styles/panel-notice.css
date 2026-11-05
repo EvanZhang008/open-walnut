@@ -1,0 +1,92 @@
+/* A notice inside a session panel (PanelNotice.tsx): the words take the whole width,
+   the icon sits at the start of the first line, the actions on a row under the words.
+   The box and tone stay on the caller's class (.session-error-banner and its red,
+   amber and grey modifiers). */
+.panel-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  /* Its own width decides how its buttons sit (the narrow rule at the end). */
+  container-type: inline-size;
+}
+/* flow-root: the floated icon stays inside the body, and the words wrap beside it on
+   the first line and under it after. */
+.panel-notice-body {
+  display: flow-root;
+  min-width: 0;
+}
+/* Exactly one line of the words tall, so only the first line goes beside it and every
+   later line starts at the box's left edge; the glyph is centred on that line and takes
+   the notice's tone. */
+.panel-notice-icon {
+  float: left;
+  height: 1.4em;
+  height: 1lh;
+  margin: 0 6px 0 0;
+  display: flex;
+  align-items: center;
+  color: var(--fg-secondary);
+}
+.panel-notice-glyph { display: inline-flex; font-size: 14px; line-height: 1; }
+.session-error-banner:not(.session-error-banner--idle):not(.session-error-banner--reconnecting):not(.session-error-banner--warning) > .panel-notice-body > .panel-notice-icon { color: var(--danger, #ff3b30); }
+.session-error-banner--warning > .panel-notice-body > .panel-notice-icon { color: var(--warning); }
+.session-error-banner--reconnecting .panel-notice-icon { animation: spin 1.5s linear infinite; }
+/* The words read as prose at any width: break between words, a long token only when it
+   alone is wider than the box. */
+.panel-notice .session-error-banner-text {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+/* An error's raw text keeps the code font, one size under the words around it (the code
+   font reads larger at the same size). */
+.panel-notice .session-error-banner-text:not(.panel-notice-prose) { font-size: 12px; }
+.panel-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.panel-notice-actions > * { max-width: 100%; }
+/* A host name or path: one line, an ellipsis when it is wider than the box, all of it on hover.
+   It leaves room for the icon (14px and its 6px margin), so a notice that starts with a host
+   name keeps it on the icon's line instead of leaving the icon alone on a line of its own. */
+.panel-notice-token {
+  display: inline-block;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* A path: the head gives way first, the last folder stays whole. */
+.panel-notice-token--path { display: inline-flex; overflow: visible; }
+.panel-notice-token-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-notice-token-tail { flex-shrink: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A flex box beside a float keeps out of its way as a whole, which would give the icon a
+   column after all: the host sentence and its parts stack as plain blocks instead. */
+.panel-notice-body > .session-host-error { display: block; }
+.panel-notice-body > .session-host-error > * + * { margin-top: 4px; }
+/* Walnut's own sentence in an error notice reads as prose; only an error's raw text keeps
+   the banner's code font. */
+.panel-notice .session-error-banner-text.panel-notice-prose { font-family: inherit; }
+/* An error notice's first line is its headline, most often Walnut's own sentence about
+   the host ("Connection lost: unable to reach remote host"): prose, in the box's red, at
+   the words' size. The details under it keep the code font. */
+.panel-notice .session-host-error > .session-error-banner-text:first-child,
+.session-error-banner:not(.session-error-banner--idle):not(.session-error-banner--reconnecting):not(.session-error-banner--warning) > .panel-notice-body > .panel-notice-icon + .session-error-banner-text {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+}
+/* A warning (the session returned empty): an amber box with words in the text colour. */
+.session-error-banner.session-error-banner--warning {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 25%, transparent);
+}
+.session-error-banner--warning .session-error-banner-text { color: var(--fg); }
+/* In a narrow notice the buttons that wrap under each other take the whole width, so
+   they line up as one stack and not as loose chips of different widths. */
+@container (max-width: 260px) {
+  .panel-notice-actions > * { flex: 1 1 100%; }
+}
