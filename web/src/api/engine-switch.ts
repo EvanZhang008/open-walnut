@@ -3,7 +3,8 @@
  * (server: src/web/routes/engine-switch-v1.ts, core/sessions/engine-switch.ts).
  */
 import { ApiError, apiDelete, apiGet, apiPost } from './client';
-import { withWriteRetry } from './write-retry';
+import { writeRetryable } from './write-retry';
+import { mintOpId } from './op-id';
 
 export interface TaskSessionRow {
   session_id: string;
@@ -48,8 +49,10 @@ export interface SwitchEngineAnswer {
   sessionId?: string;
 }
 
-/** How long a switch waits for a server that went away mid-request (a deploy restart takes 10 to 60 s). */
-export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000, 5000, 5000, 8000, 8000, 8000, 10_000, 10_000, 10_000, 15_000];
+/** How long a switch keeps trying while the server is away (a deploy restart takes 10 to 60 s). */
+export const SWITCH_RETRY_TOTAL_MS = 90_000;
+/** The wait before each new attempt. */
+export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000];
 
 /**
  * Switch the task's engine now (the picker closed on another engine): a running turn is
@@ -57,24 +60,28 @@ export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000, 5000, 5000, 8000,
  * the switch is checked; the task row reports the rest (`engine_switch`).
  *
  * A request cut by a lost connection or a server restart (2026-11-05: "Load failed" during a
- * deploy) is tried again under the same op id until the server is back, so the server applies
- * the pick once. A retry that finds the earlier attempt took effect reads as that: the task
- * already on the engine (`same_engine`), or the switch still running (`switch_in_progress`).
+ * deploy) is tried again under the same op id until SWITCH_RETRY_TOTAL_MS have passed, each
+ * attempt and wait cut to the time left, so the server applies the pick once. A retry that finds
+ * the earlier attempt took effect reads as that: the task already on the engine (`same_engine`),
+ * or the switch still running (`switch_in_progress`).
  */
 export async function switchTaskEngine(taskId: string, pick: { engine: string; model?: string; effort?: string }): Promise<SwitchEngineAnswer> {
-  let attempts = 0;
-  try {
-    return await withWriteRetry((opId) => {
-      attempts += 1;
-      return apiPost<SwitchEngineAnswer>(`/api/v1/tasks/${encodeURIComponent(taskId)}/switch-engine`, {
+  const deadline = Date.now() + SWITCH_RETRY_TOTAL_MS;
+  const opId = mintOpId();
+  for (let attempt = 0; ; attempt++) {
+    const left = deadline - Date.now();
+    try {
+      return await apiPost<SwitchEngineAnswer>(`/api/v1/tasks/${encodeURIComponent(taskId)}/switch-engine`, {
         engine: pick.engine, ...(pick.model ? { model: pick.model } : {}), ...(pick.effort ? { effort: pick.effort } : {}),
         when: 'now', detach: true, wait_ms: 15_000,
-      }, { timeoutMs: 30_000, opId });
-    }, SWITCH_RETRY_DELAYS_MS.length, (i) => SWITCH_RETRY_DELAYS_MS[i] ?? 15_000);
-  } catch (err) {
-    const code = err instanceof ApiError ? (err.body as { code?: unknown } | undefined)?.code : undefined;
-    if (attempts > 1 && code === 'same_engine') return { state: 'done', taskId };
-    if (attempts > 1 && code === 'switch_in_progress') return { state: 'switching', taskId };
-    throw err;
+      }, { timeoutMs: Math.max(1000, Math.min(30_000, left)), opId });
+    } catch (err) {
+      const code = err instanceof ApiError ? (err.body as { code?: unknown } | undefined)?.code : undefined;
+      if (attempt > 0 && code === 'same_engine') return { state: 'done', taskId };
+      if (attempt > 0 && code === 'switch_in_progress') return { state: 'switching', taskId };
+      const wait = SWITCH_RETRY_DELAYS_MS[Math.min(attempt, SWITCH_RETRY_DELAYS_MS.length - 1)];
+      if (!writeRetryable(err) || Date.now() + wait >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
 }

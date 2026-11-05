@@ -3111,6 +3111,9 @@ export interface SessionRecord {
   acpJournalPath?: string;
   /** Capability snapshot from the adapter's initialize response. */
   acpCapabilities?: AcpSessionCapabilities;
+  /** A Walnut status question in this ACP thread ended before its answer (a stop, a timeout, a user
+   *  prompt): the thread may hold it unanswered, so the next user prompt says so (acp-session.ts). */
+  acpControlCut?: boolean;
   /** ACP sessions only: current base model selected through session/set_config_option. */
   acpModel?: string;
   /** Provider-advertised display name for `acpModel`. Absent on records written

@@ -21,7 +21,8 @@ import {
   readAcpSessionHistoryState,
   _resetAcpHistoryCacheForTesting,
 } from '../../src/providers/acp-session-history.js'
-import { CONTROL_PROMPT_GUARD, ControlToolRefusedError, AcpSession } from '../../src/providers/acp-session.js'
+import { CONTROL_PROMPT_GUARD, CONTROL_CUT_NOTE, ControlToolRefusedError, AcpSession } from '../../src/providers/acp-session.js'
+import { parseHinted } from '../../src/core/hints/hint-format.js'
 
 let tmpDir: string
 
@@ -974,6 +975,26 @@ describe('ACP session record primitives', () => {
       await sending
       expect(sent.map((s) => s.command)).not.toContain('acpCancel')
       expect(sent.at(-1)!.params.commandId).toBe('acp-prompt:qm-pi-wait')
+    })
+
+    // 2026-11-05: an engine switch stopped Pi in the middle of a status question; the question
+    // stayed in Pi's thread unanswered, and after a switch back Pi answered it (FOR_USER_* lines)
+    // instead of the user's next message.
+    it('a question cut before its answer: the next user prompt says so, once', async () => {
+      const { session, sent, accept } = rig('rt-cut')
+      const answer = session.requestTurnCompleteSelfReport('STATUS question', 100)
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      accept(0)
+      await expect(answer).rejects.toThrow(/timed out/)
+      ;(session as unknown as { _controlCancel: Promise<void> | null })._controlCancel = null
+      await session.sendAccepted('hello', 'qm-after-cut').catch(() => {})
+      const first = sent.find((p) => p.commandId === 'acp-prompt:qm-after-cut')!
+      expect(String(first.text)).toContain(CONTROL_CUT_NOTE)
+      expect(String(first.text).endsWith('hello')).toBe(true)
+      expect(parseHinted(String(first.text)).text).toBe('hello')
+      await session.sendAccepted('again', 'qm-after-cut-2').catch(() => {})
+      const second = sent.find((p) => p.commandId === 'acp-prompt:qm-after-cut-2')!
+      expect(String(second.text)).not.toContain(CONTROL_CUT_NOTE)
     })
 
     it('a stop drops the questions still queued; they are never sent', async () => {

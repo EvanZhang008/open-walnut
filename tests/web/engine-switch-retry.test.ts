@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { OP_ID_HEADER } from '../../web/src/api/op-id'
-import { switchTaskEngine, SWITCH_RETRY_DELAYS_MS } from '../../web/src/api/engine-switch'
+import { switchTaskEngine, SWITCH_RETRY_TOTAL_MS } from '../../web/src/api/engine-switch'
 
 type Answer = { status: number; body: unknown } | 'network'
 
@@ -69,12 +69,15 @@ describe('an engine switch across a server restart', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('a server that never comes back: it gives up after 90 seconds with the network error', async () => {
+  it('a server that never comes back: it gives up within 90 seconds of the pick, with the network error', async () => {
+    const t0 = Date.now()
+    const at: number[] = []
+    vi.mocked(fetch).mockImplementation(async () => { at.push(Date.now() - t0); throw new TypeError('Load failed') })
     const r = await settle(switchTaskEngine('t1', { engine: 'pi' }))
     expect('err' in r && r.err).toBeInstanceOf(TypeError)
-    expect(calls).toHaveLength(SWITCH_RETRY_DELAYS_MS.length + 1)
-    const waited = SWITCH_RETRY_DELAYS_MS.reduce((a, b) => a + b, 0)
-    expect(waited).toBeGreaterThanOrEqual(60_000)
-    expect(waited).toBeLessThanOrEqual(150_000)
+    expect(at.length).toBeGreaterThan(5)
+    // One deadline for the whole switch: no attempt starts after it.
+    expect(Math.max(...at)).toBeLessThan(SWITCH_RETRY_TOTAL_MS)
+    expect(SWITCH_RETRY_TOTAL_MS).toBe(90_000)
   })
 })

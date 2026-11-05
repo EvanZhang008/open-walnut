@@ -82,3 +82,15 @@
   text-align: center;
   font-size: 12px;
 }
+
+/* A switch divider's words wrap in a narrow column instead of running off its edge. */
+.task-earlier-divider span {
+  white-space: normal;
+  text-align: center;
+  min-width: 0;
+  max-width: 85%;
+}
+.task-earlier-divider::before,
+.task-earlier-divider::after {
+  min-width: 12px;
+}

@@ -40,12 +40,16 @@ type ServerSwitch = NonNullable<Task['engine_switch']>;
 const openedOnPurpose = new Set<string>();
 export function markOpenedOnPurpose(sessionId: string): void { openedOnPurpose.add(sessionId); }
 
+/** A fetch that never got an answer ("Load failed", "Failed to fetch", a deadline), after every retry. */
+function noAnswer(err: unknown): boolean {
+  return err instanceof TypeError || browserGaveUp(err);
+}
+
 function errorText(err: unknown): string {
   const body = (err as { body?: { error?: unknown } } | null)?.body;
   if (body && typeof body.error === 'string') return body.error;
-  // A fetch that never got an answer ("Load failed", "Failed to fetch"), after every retry.
-  if (err instanceof TypeError || browserGaveUp(err)) {
-    return 'Walnut did not answer for 90 seconds (it may be restarting); the task stays on this session. Pick the engine again once it is back';
+  if (noAnswer(err)) {
+    return 'Walnut did not answer for 90 seconds (it may be restarting). If the engine shown here did not change, pick it again once Walnut is back';
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -62,7 +66,7 @@ export function useEngineSwitchPick(opts: {
   const pickRef = useRef<EngineSwitchPick | null>(null);
   pickRef.current = pick;
   // A switch the server refused before it began (an engine the host cannot run, say).
-  const [refused, setRefused] = useState<{ engine: string; error: string } | null>(null);
+  const [refused, setRefused] = useState<{ engine: string; error: string; unconfirmed?: boolean } | null>(null);
   // Asked for and not yet seen on the server: the line says it starts at once.
   const [sending, setSending] = useState<string | null>(null);
   useEffect(() => { setPick(null); setRefused(null); setSending(null); }, [sessionId]);
@@ -101,6 +105,8 @@ export function useEngineSwitchPick(opts: {
   const serverIdRef = useRef<string | undefined>(undefined);
   serverIdRef.current = server?.id;
   const sentOver = useRef<string | undefined>(undefined);
+  const shownSidRef = useRef(sessionId);
+  shownSidRef.current = sessionId;
   useEffect(() => { watched.current = null; }, [sessionId]);
   if (server && (server.state === 'pending' || server.state === 'switching')) watched.current = server.id;
   const markSent = useCallback(() => { watched.current = 'sent'; }, []);
@@ -118,9 +124,11 @@ export function useEngineSwitchPick(opts: {
     log.info('engine-switch', 'picker closed on another engine: switching now', { sessionId, taskId, engine: p.engine, model: p.model });
     switchTaskEngine(taskId, p).catch((err: unknown) => {
       log.warn('engine-switch', 'switch refused', { sessionId, taskId, engine: p.engine, error: errorText(err) });
+      // The panel moved on meanwhile (the switch took, and it followed): this answer is not its own.
+      if (shownSidRef.current !== sessionId) return;
       watched.current = null;
       setSending(null);
-      setRefused({ engine: p.engine, error: errorText(err) });
+      setRefused({ engine: p.engine, error: errorText(err), ...(noAnswer(err) ? { unconfirmed: true } : {}) });
     });
   }, [sessionId, taskId]);
   const commitRef = useRef(commitNow);
@@ -162,7 +170,7 @@ function engineName(catalog: readonly EngineCatalogEntry[], engine: string | und
 export function EngineSwitchLine({ pick, server, refused, sending, catalog, taskId, onUndo }: {
   pick: EngineSwitchPick | null;
   server: ServerSwitch | undefined;
-  refused?: { engine: string; error: string } | null;
+  refused?: { engine: string; error: string; unconfirmed?: boolean } | null;
   /** The engine a closed picker just asked for, before the server's state arrives. */
   sending?: string | null;
   catalog: readonly EngineCatalogEntry[];
@@ -178,7 +186,11 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
       log.warn('engine-switch', 'cancel failed', { taskId, error: err instanceof Error ? err.message : String(err) });
     } finally { setBusy(false); }
   }, [taskId]);
-  const toName = useMemo(() => engineName(catalog, server?.to.engine ?? pick?.engine ?? sending ?? undefined), [catalog, server?.to.engine, pick?.engine, sending]);
+  // The engine of the row shown (review round 4: after a switch to Pi, picking Claude Code read
+  // "Pi"): the server's only for its own pending, switching or failed row.
+  const serverLive = server?.state === 'pending' || server?.state === 'switching' || server?.state === 'failed';
+  const toName = useMemo(() => engineName(catalog, pick?.engine ?? sending ?? (serverLive ? server?.to.engine : undefined) ?? undefined),
+    [catalog, server?.to.engine, serverLive, pick?.engine, sending]);
   const held = server?.display_text ?? server?.message;
   // A move to another host (task_move) is the same switch with another host: it reads as a move.
   const moveTo = server?.move ? (!server.to.host || server.to.host === '__local__' ? 'this Mac' : server.to.host) : null;
@@ -219,7 +231,9 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
   if (refused && !pick) {
     return (
       <div className="engine-switch-line engine-switch-line-error" role="alert" data-testid="engine-switch-line" data-state="refused">
-        <span className="engine-switch-text">The switch to {engineName(catalog, refused.engine)} did not start: {refused.error}</span>
+        <span className="engine-switch-text">{refused.unconfirmed
+          ? <>The switch to {engineName(catalog, refused.engine)} is not confirmed: {refused.error}</>
+          : <>The switch to {engineName(catalog, refused.engine)} did not start: {refused.error}</>}</span>
         <button type="button" className="engine-switch-btn" onClick={onUndo}>Dismiss</button>
       </div>
     );

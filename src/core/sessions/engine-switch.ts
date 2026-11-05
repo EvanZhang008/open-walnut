@@ -44,7 +44,7 @@ import { engineSwitchedReason, isSupersededSession } from './engine-switch-marke
 import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-resume.js';
 import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import {
-  CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, readActiveContext, renderCarriedContext, targetWindowTokens,
+  CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, renderCarriedContext, targetWindowTokens,
 } from './engine-switch-context.js';
 
 export class EngineSwitchError extends Error {
@@ -644,7 +644,12 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   // Claude -> Pi -> Codex with no message lost Claude's conversation): it goes along. A session
   // holding one ran no turn since, so its own history adds nothing but what it resumed with.
   const tracker = await import('../session-tracker.js');
-  const unread = (await tracker.getSessionByClaudeId(old.claudeSessionId).catch(() => undefined))?.switchContext?.text;
+  let unread = (await tracker.getSessionByClaudeId(old.claudeSessionId).catch(() => undefined))?.switchContext?.text;
+  // Budgeted for the engine before; one that does not fit this engine's window points at the
+  // task's whole transcript instead (written above for this switch).
+  if (unread && transcriptPath && estimateTokens(unread) > Math.floor(window * CARRY_WINDOW_SHARE)) {
+    unread = renderHintBlock(ENGINE_SWITCH_HINT, `The conversation carried from the engines before is too long for this engine's context window, so it is not repeated here. The task's whole transcript is at ${transcriptPath}: read the parts you need before you go on.`);
+  }
   const blocks = unread
     ? [...(ctx.messages.some((m) => m.role === 'user' || m.role === 'assistant') ? [renderHintBlock(ENGINE_SWITCH_HINT, carried.text)] : []),
       unread, ...(cut ? [renderHintBlock(ENGINE_SWITCH_HINT, cut)] : [])]
@@ -724,6 +729,9 @@ async function stopTurnForSwitch(sessionId: string): Promise<void> {
     if (!rec || !LIVE.has(rec.process_status)) return;
     await new Promise((r) => setTimeout(r, 250));
   }
+  // Never read and start over a turn that may still be changing files: the switch fails and the
+  // task stays on this session (the caller restores it).
+  throw new EngineSwitchError('The running turn could not be stopped, so the task stays on this session. Stop it, then pick the engine again', 409, 'turn_not_stopped');
 }
 
 /** A switch that did not start: the old session is the task's session again, with its rows. */

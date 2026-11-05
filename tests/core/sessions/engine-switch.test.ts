@@ -20,6 +20,8 @@ const edges = vi.hoisted(() => ({
   nextSid: 0,
   /** Each history read, and whether that session was stopped by then. */
   reads: [] as Array<{ sid: string; stopped: boolean }>,
+  /** Sessions whose process a stop cannot end. */
+  stuck: new Set<string>(),
   history: {} as Record<string, Array<Record<string, unknown>>>,
   gate: undefined as Promise<void> | undefined,
   /** Sessions whose finished turn left a background command running. */
@@ -62,6 +64,7 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
   },
   terminateSession: async (sid: string) => {
     edges.stops.push(sid);
+    if (edges.stuck.has(sid)) return;
     const { updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     await updateSessionRecord(sid, { process_status: 'stopped' } as never);
   },
@@ -110,7 +113,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.reads.length = 0; edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
+  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
 });
@@ -567,6 +570,19 @@ describe('engine switch inside a task', () => {
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.every((r) => r.stopped)).toBe(true);
     expect(String((await getSessionByClaudeId(res.sessionId!))?.switchContext?.text)).toContain('turn was stopped');
+  }, 40_000);
+
+  it('a turn its process cannot be stopped under: the switch fails and the task stays on its session', async () => {
+    // Review round 4: a timed-out stop counted as stopped, and the read and the new start went ahead.
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    edges.stuck.add(sid);
+    await expect(requestEngineSwitch({ taskId, engine: 'codex', source: 'test' })).rejects.toMatchObject({ code: 'turn_not_stopped' });
+    expect(edges.starts).toHaveLength(0);
+    expect(edges.reads.filter((r) => r.sid === sid)).toHaveLength(0);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+    const old = await getSessionByClaudeId(sid);
+    expect(old?.archived).toBeFalsy();
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed' });
   }, 40_000);
 
   /** The CLI ends its turn on the Stop a switch sends. */

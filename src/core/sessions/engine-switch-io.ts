@@ -120,11 +120,20 @@ export function switchContextIn(message: string): string | null {
  * round 3): the context goes to the next queued message (`moveTo`, done by the caller in the same
  * store write), else back onto the record for the next send. Never lost, never sent twice.
  */
-export async function keepSwitchContext(sessionId: string, text: string): Promise<void> {
+export async function keepSwitchContext(sessionId: string, text: string): Promise<boolean> {
   const { updateSessionRecordConditionally } = await import('../session-tracker.js');
-  await updateSessionRecordConditionally(sessionId, { switchContext: { text, switchId: 'kept', at: new Date().toISOString() } } as Partial<SessionRecord>,
-    (current) => !current.switchContext, { preserveLastActiveAt: true }).catch(() => {});
+  const r = await updateSessionRecordConditionally(sessionId, { switchContext: { text, switchId: KEPT_SWITCH_ID, at: new Date().toISOString() } } as Partial<SessionRecord>,
+    (current) => !current.switchContext, { preserveLastActiveAt: true }).catch(() => null);
+  return !!r;
 }
+
+/** Take back a kept context the row it came from still carries (deleteMessage did not remove it). */
+export async function dropKeptSwitchContext(sessionId: string): Promise<void> {
+  const { updateSessionRecordConditionally } = await import('../session-tracker.js');
+  await updateSessionRecordConditionally(sessionId, { switchContext: undefined } as Partial<SessionRecord>,
+    (current) => current.switchContext?.switchId === KEPT_SWITCH_ID, { preserveLastActiveAt: true }).catch(() => {});
+}
+const KEPT_SWITCH_ID = 'kept';
 
 /** The carried context the session's next message takes along (session-message-queue.ts), once. */
 export async function pendingSwitchContext(sessionId: string): Promise<{ text: string; markTold: () => Promise<void> } | null> {

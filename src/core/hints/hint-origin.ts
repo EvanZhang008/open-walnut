@@ -17,7 +17,7 @@ import { REPLY_LANGUAGE_LINES } from './reply-language-lines.js';
 export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'] as const;
 
 /** Walnut text that rides a message outside the registry (no switch in Settings). */
-export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images'] as const;
+export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images', 'status-question-cut'] as const;
 
 /** Walnut's own clause after the user's reply-language sentence. */
 export const REPLY_LANGUAGE_SCOPE = 'This covers every line the user reads, the short progress lines between your tool calls included.';

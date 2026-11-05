@@ -590,7 +590,15 @@ export async function editMessage(
  * deleting it would race the delivery points' own scoped removal).
  */
 export async function deleteMessage(sessionId: string, messageId: string): Promise<boolean> {
-  const { switchContextIn, keepSwitchContext } = await import('./sessions/engine-switch-io.js');
+  const { switchContextIn, keepSwitchContext, dropKeptSwitchContext } = await import('./sessions/engine-switch-io.js');
+  // The engine switch's carried context on this row, with no other queued row to take it: kept on
+  // the session record BEFORE the row goes, so a send in between still carries it (a copy twice is
+  // better than none); taken back if the row stays.
+  const before = (await getStore()).queues[sessionId] ?? [];
+  const target = before.find((m) => m.id === messageId);
+  const early = target && target.status !== 'processing' ? switchContextIn(target.message) : null;
+  const keptEarly = early && !before.some((m) => m.id !== messageId && m.status === 'pending' && !m.message.trimStart().startsWith('/'))
+    ? await keepSwitchContext(sessionId, early) : false;
   let keep: string | null = null;
   const deleted = await mutateStore((s) => {
     const queue = s.queues[sessionId];
@@ -618,7 +626,8 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (fateOf(s, messageId) || isPhoneMessageId(messageId)) setFate(s, messageId, 'removed');
     return true;
   }, false, true);
-  if (deleted && keep) await keepSwitchContext(sessionId, keep);
+  if (deleted && keep && !keptEarly) await keepSwitchContext(sessionId, keep);
+  if (keptEarly && (!deleted || !keep)) await dropKeptSwitchContext(sessionId);
   return deleted;
 }
 

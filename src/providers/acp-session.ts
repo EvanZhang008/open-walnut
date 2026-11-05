@@ -32,7 +32,7 @@ import { WALNUT_HOME } from '../constants.js'
 import { bus, EventNames } from '../core/event-bus.js'
 import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js'
 import { renderHintBlock } from '../core/hints/hint-format.js'
-import type { SessionEngine, SessionMode } from '../core/types.js'
+import type { SessionEngine, SessionMode, SessionRecord } from '../core/types.js'
 import {
   engineCaps,
   isAcpEngine,
@@ -413,6 +413,11 @@ export function acpEventDestinations(eventName: string): string[] {
   return [...(ACP_EVENT_DESTINATIONS[eventName] ?? ['main-ai'])]
 }
 
+/** Hint kind of the note a user prompt carries after a status question was cut (noteControlCut). */
+export const CONTROL_CUT_HINT_KIND = 'status-question-cut'
+export const CONTROL_CUT_NOTE = 'An earlier "[Walnut status question]" in this conversation was cut off before you answered it. '
+  + 'Do not answer it now and do not write FOR_USER_ lines: answer only the message below.'
+
 export function sessionMcpServerToAcp(
   name: string,
   server: { command: string; args?: string[]; env?: Record<string, string> },
@@ -705,6 +710,8 @@ export class AcpSession {
    *  context yet. Only engines with no instructions channel owe it (every ACP
    *  engine but Codex): their first prompt carries it (sessionContextPrefix). */
   private _contextOwed = false
+  /** A status question ended before its answer: the next user prompt says so (noteControlCut). */
+  private _controlCut = false
   private _mode: SessionMode
   private _active = false
   private _turnActive = false
@@ -1665,11 +1672,13 @@ export class AcpSession {
     const commandId = `acp-prompt:${walnutMessageId}`
     const owed = this._contextOwed
     const prefix = owed ? await this.sessionContextPrefix() : ''
+    const cut = this._controlCut || (await getSessionByClaudeId(this.trackingId()).catch(() => undefined))?.acpControlCut === true
+    const lead = [prefix, cut ? renderHintBlock(CONTROL_CUT_HINT_KIND, CONTROL_CUT_NOTE) : ''].filter(Boolean).join('\n\n')
     const sendResp = await conn.send('acpSend', {
       sid: this.runtimeId,
       commandId,
       walnutMessageId,
-      text: prefix ? `${prefix}\n\n${message}` : message,
+      text: lead ? `${lead}\n\n${message}` : message,
       ...this.budgetTarget(),
     })
     if (!sendResp.ok) {
@@ -1685,6 +1694,10 @@ export class AcpSession {
       throw new Error('acpSend failed: ' + sendResp.error)
     }
     if (owed) this._contextOwed = false
+    if (cut) {
+      this._controlCut = false
+      void updateSessionRecord(this.trackingId(), { acpControlCut: undefined } as Partial<SessionRecord>).catch(() => {})
+    }
     // Journal delivery can beat this RPC response, including a complete fast
     // turn. Acceptance and terminal persistence share one ordered commit chain;
     // never reopen local state after a terminal fact has already arrived.
@@ -2411,8 +2424,21 @@ export class AcpSession {
     if (!pending || pending.commandId !== commandId) return
     this._selfReport = null
     clearTimeout(pending.timer)
-    if (error) pending.reject(error)
-    else pending.resolve(text)
+    if (error) {
+      this.noteControlCut()
+      pending.reject(error)
+    } else pending.resolve(text)
+  }
+
+  /**
+   * A status question that ended before its answer may stay in the provider's own thread with no
+   * answer (2026-11-05: an engine switch stopped Pi mid-question, and after a switch back Pi answered
+   * that question, FOR_USER_* lines, instead of the user's next message). The next user prompt
+   * carries CONTROL_CUT_NOTE; kept on the record, so a resume in another process says it too.
+   */
+  private noteControlCut(): void {
+    this._controlCut = true
+    void updateSessionRecord(this.trackingId(), { acpControlCut: true } as Partial<SessionRecord>).catch(() => {})
   }
 
   private async cancelSelfReport(reason: string): Promise<void> {
