@@ -1,42 +1,14 @@
 /**
- * The parts only the By project layout draws (panel-design.ts): its per-project folds.
+ * The parts only the By project layout draws (panel-design.ts): its per-project folds,
+ * which hold only waiting tasks (completed ones fold once, at the bottom of the view).
  */
 import { useMemo } from 'react';
-import type { Task } from '@open-walnut/core';
-import { LS_PROJECT_FOLDS_KEY, projectFoldKey } from './panel-design';
+import { LS_PROJECT_FOLDS_KEY, projectFoldKey, type ProjectFoldTasks } from './panel-design';
 import { NavigationChevron } from './NavigationSections';
 import { SECTION_ICONS, SectionRows, type SectionRowHandlers } from './StatusSections';
 import { FOLD_KEY_ATTR, foldIsOpen, projectFoldKind } from './section-fold-rule';
 import { useFoldStore } from './useFoldStore';
-import { statusFoldTooltip, projectRuns, sortSectionTasks, stateSectionNoNeeds, isWatched } from './status-sections';
-
-export interface ProjectFoldTasks { waiting: Task[]; done: Task[] }
-
-/** A region's waiting and completed tasks by project (watched ones stay under Watching). */
-export function foldTasksByProject(
-  scope: readonly Task[],
-  passes: (t: Task) => boolean,
-  snoozed?: (t: Task) => boolean,
-): Map<string, ProjectFoldTasks> {
-  const out = new Map<string, ProjectFoldTasks>();
-  const seen = new Set<string>();
-  for (const t of scope) {
-    if (seen.has(t.id) || isWatched(t) || !passes(t)) continue;
-    seen.add(t.id);
-    // Needs you stays in the list in this design: only a parked or snoozed one folds.
-    const s = stateSectionNoNeeds(t, snoozed);
-    if (s !== 'waiting' && s !== 'done') continue;
-    const key = t.project || '';
-    let f = out.get(key);
-    if (!f) { f = { waiting: [], done: [] }; out.set(key, f); }
-    f[s].push(t);
-  }
-  for (const f of out.values()) {
-    f.waiting = sortSectionTasks('waiting', f.waiting);
-    f.done = sortSectionTasks('done', f.done);
-  }
-  return out;
-}
+import { statusFoldTooltip } from './status-sections';
 
 /** The open folds, by the one fold rule (section-fold-rule.ts): folded by default, folded again 15 minutes after opening. */
 export function useProjectFolds(): [Set<string>, (key: string) => void] {
@@ -45,11 +17,9 @@ export function useProjectFolds(): [Set<string>, (key: string) => void] {
   return [open, toggle];
 }
 
-const FOLD_LABEL = { waiting: 'Waiting / snoozed', done: 'Completed' } as const;
-
 /**
- * The By project design's row at the end of a project: its waiting and completed
- * tasks, each a folded line ("⧗ 3 Waiting / snoozed") that opens in place.
+ * The By project design's row at the end of a project: its waiting tasks, a folded
+ * line ("⧗ 3 Waiting / snoozed") that opens in place.
  * `label` draws a project heading too, for a project with no open row in the region.
  */
 export function ProjectStatusFolds({ region, project, tasks, open, onToggle, handlers, label }: {
@@ -61,10 +31,11 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
   handlers: SectionRowHandlers;
   label?: boolean;
 }) {
-  if (!tasks || (tasks.waiting.length === 0 && tasks.done.length === 0)) return null;
-  const kinds = (['waiting', 'done'] as const).filter((k) => tasks[k].length > 0);
+  if (!tasks || tasks.waiting.length === 0) return null;
   // Inside a tier the cards are that tier's: no tier glyph on them.
   const rowHandlers = region === 'list' ? handlers : { ...handlers, viewSection: region };
+  const key = projectFoldKey(region, project, 'waiting');
+  const isOpen = open.has(key);
   return (
     <div className="project-status-folds" data-testid="project-status-folds" data-project={project}>
       {label && (
@@ -73,39 +44,25 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
         </div>
       )}
       <div className="project-status-fold-row">
-        {kinds.map((k) => {
-          const key = projectFoldKey(region, project, k);
-          const isOpen = open.has(key);
-          return (
-            <button
-              key={k}
-              type="button"
-              className={`project-status-fold project-status-fold-${k}${isOpen ? ' open' : ''}`}
-              aria-expanded={isOpen}
-              data-testid={`project-status-fold-${k}`}
-              {...{ [FOLD_KEY_ATTR]: key }}
-              title={statusFoldTooltip(k, isOpen)}
-              onClick={(e) => { e.stopPropagation(); onToggle(key); }}
-            >
-              <span className="project-status-count-icon" aria-hidden="true">{SECTION_ICONS[k]}</span>
-              {tasks[k].length} {FOLD_LABEL[k]}
-              <NavigationChevron collapsed={!isOpen} />
-            </button>
-          );
-        })}
+        <button
+          type="button"
+          className={`project-status-fold project-status-fold-waiting${isOpen ? ' open' : ''}`}
+          aria-expanded={isOpen}
+          data-testid="project-status-fold-waiting"
+          {...{ [FOLD_KEY_ATTR]: key }}
+          title={statusFoldTooltip('waiting', isOpen)}
+          onClick={(e) => { e.stopPropagation(); onToggle(key); }}
+        >
+          <span className="project-status-count-icon" aria-hidden="true">{SECTION_ICONS.waiting}</span>
+          {tasks.waiting.length} Waiting / snoozed
+          <NavigationChevron collapsed={!isOpen} />
+        </button>
       </div>
-      {kinds.map((k) => open.has(projectFoldKey(region, project, k)) && (
-        <div key={k} className="project-status-fold-rows" {...{ [FOLD_KEY_ATTR]: projectFoldKey(region, project, k) }}>
-          <SectionRows sectionKey={k} tasks={tasks[k]} total={tasks[k].length} handlers={rowHandlers} inProject />
+      {isOpen && (
+        <div className="project-status-fold-rows" {...{ [FOLD_KEY_ATTR]: key }}>
+          <SectionRows sectionKey="waiting" tasks={tasks.waiting} total={tasks.waiting.length} handlers={rowHandlers} inProject />
         </div>
-      ))}
+      )}
     </div>
   );
-}
-
-/** Projects of a region whose only tasks here are waiting or completed: drawn at its end. */
-export function leftoverFoldProjects(folds: Map<string, ProjectFoldTasks>, drawn: ReadonlySet<string>): string[] {
-  return projectRuns([...folds.entries()].flatMap(([, f]) => [...f.waiting, ...f.done]))
-    .map((r) => r.project)
-    .filter((p) => !drawn.has(p));
 }

@@ -125,8 +125,8 @@ import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips } from 
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
-import { ProjectStatusFolds, foldTasksByProject, leftoverFoldProjects, useProjectFolds, type ProjectFoldTasks } from './PanelDesignParts';
-import { projectFoldKey, usePanelDesign } from './panel-design';
+import { ProjectStatusFolds, useProjectFolds } from './PanelDesignParts';
+import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, projectFoldKey, usePanelDesign, type ProjectFoldTasks } from './panel-design';
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
 import { useFoldStore } from './useFoldStore';
 import {
@@ -7380,8 +7380,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (sepMode === 'project' && !runAddShown && runAddSignal?.tier === tier && runAddSignal.project === lastScope && !runHidden(lastScope)) {
       out.push(runAddRow(tier, lastScope));
     }
-    // By project design: the last run's folds, then the projects with only waiting or
-    // completed tasks in this tier, each under its own name. In one list (no runs) every
+    // By project design: the last run's folds, then the projects with only waiting
+    // tasks in this tier, each under its own name. In one list (no runs) every
     // project's folds go at the end.
     const region = projectFoldsOn ? foldRegions.get(tier) : undefined;
     if (region) {
@@ -7593,10 +7593,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [overrideId, overrideSection]);
   // Flat draws every section itself, Working too; elsewhere the list is Working.
   const sectionsTop: readonly StatusSectionKey[] = flatSections ? ['watching', 'needs', 'working'] : needsSection ? ['watching', 'needs'] : ['watching'];
-  // Waiting / snoozed and Completed fold at the bottom, except By project, which folds
-  // them inside each project (Recent has no projects to fold into, so it keeps them here).
-  const sectionsBottom: readonly StatusSectionKey[] = !sectionsActive ? []
-    : panelDesign !== 'project' || effectiveSection === 'recent' ? ['waiting', 'done'] : [];
+  // Waiting / snoozed and Completed fold at the bottom (By project: Completed only).
+  const sectionsBottom: readonly StatusSectionKey[] = !sectionsActive ? [] : bottomStatusSections(panelDesign, effectiveSection);
+  // Out of its project's run, a By project Completed row names its project, as Flat's do.
+  const bottomRowHandlers = useMemo(
+    () => (projectFoldsOn && effectiveSection !== 'recent' ? { ...sectionRowHandlers, twoLine: true } : sectionRowHandlers),
+    [projectFoldsOn, effectiveSection, sectionRowHandlers],
+  );
   // Publish where each task is drawn, after the commit that drew it.
   useLayoutEffect(() => {
     const drawn = new Set<StatusSectionKey>([...sectionsTop, ...sectionsBottom]);
@@ -7618,12 +7621,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (locate) openStatusSection(key);
         return true;
       }
-      // By project: a waiting or completed task sits in its project's fold.
+      // By project: a waiting task sits in its project's fold.
       if (projectFoldsOn && !isWatched(t)) {
-        const kind = stateSectionNoNeeds(t, regionRules.snoozed);
         const region = pinnedTaskIds?.has(t.id) && effectiveSection !== 'tasks' ? (getTier(t.id) ?? 'satellite') : 'list';
-        if ((kind === 'waiting' || kind === 'done') && foldRegions.get(region)?.get(t.project || '')?.[kind].some((x) => x.id === t.id)) {
-          const fold = projectFoldKey(region, t.project || '', kind);
+        if (stateSectionNoNeeds(t, regionRules.snoozed) === 'waiting' && foldRegions.get(region)?.get(t.project || '')?.waiting.some((x) => x.id === t.id)) {
+          const fold = projectFoldKey(region, t.project || '', 'waiting');
           if (locate && !openProjectFolds.has(fold)) toggleProjectFold(fold);
           return true;
         }
@@ -7701,7 +7703,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // add row. Every tier mounts while a pinned card is dragged, so an empty one can still
   // take the drop; a single-tier view always draws its tier.
   // F25: under an active chip an empty custom tier steps aside too (no heading over nothing).
-  // By project: a tier whose only tasks here are waiting or completed still draws, for their folds.
+  // By project: a tier whose only tasks here are waiting still draws, for their folds.
   const tierHiddenWhenEmpty = (tier: FocusTier, model: { display: unknown[] }) =>
     isStacked && !isPinnedDragActive && (isBuiltinTier(tier) || homeFilters.chips.length > 0) && model.display.length === 0
     && !(projectFoldsOn && (foldRegions.get(tier)?.size ?? 0) > 0);
@@ -8552,7 +8554,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 </SortableGroupItem>
               ))}
             </SortableContext>
-            {/* By project design: projects with only waiting or completed tasks here. */}
+            {/* By project design: projects with only waiting tasks here. */}
             {projectFoldsOn && leftoverFoldProjects(foldRegions.get('list') ?? new Map(), new Set(grouped.map((g) => g.project)))
               .map((p) => projectFoldsFor('list', p, true))}
 
@@ -8593,7 +8595,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </NavigationSections>
       )}
       {sectionsBottom.length > 0 && !phoneFirstLoad && (
-        <StatusSectionGroup keys={sectionsBottom} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} />
+        <StatusSectionGroup keys={sectionsBottom} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={bottomRowHandlers} />
       )}
       {/* Flat draws no list, so its empty states are here. */}
       {flatSections && loading && (
