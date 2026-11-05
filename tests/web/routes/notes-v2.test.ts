@@ -327,6 +327,21 @@ describe('GET /api/notes-v2/attachment', () => {
     expect(resolveAttachmentInIndex('x%20y.png', 'A/Note.md', ['A/x y.png'], { exact: true, asWritten: true })).toBeNull();
   });
 
+  it('a markdown image keeps a | in its file name; an embed reads it as a size', async () => {
+    // 2026-11-05 review: ![](map.png%7Cbackup.png) drew A/map.png.
+    await fs.mkdir(path.join(NOTES_DIR, 'A'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, 'A', 'map.png'), 'PLAIN');
+    await fs.writeFile(path.join(NOTES_DIR, 'A', 'map.png|backup.png'), 'PIPED');
+    const app = createApp();
+    const get = (q: Record<string, string>) => request(app).get('/api/notes-v2/attachment').query({ note: 'A/Note.md', ...q });
+    expect((await get({ path: 'map.png|backup.png', exact: 'note', decode: '0' })).body.toString()).toBe('PIPED');
+    expect((await get({ path: 'map.png|300' })).body.toString()).toBe('PLAIN');
+    const { resolveAttachmentInIndex } = await import('../../../src/web/routes/notes-attachment.js');
+    const index = ['A/map.png', 'A/map.png|backup.png'];
+    expect(resolveAttachmentInIndex('map.png|backup.png', 'A/Note.md', index, { exact: true, only: 'note', asWritten: true })).toBe('A/map.png|backup.png');
+    expect(resolveAttachmentInIndex('map.png|300', 'A/Note.md', index)).toBe('A/map.png');
+  });
+
   it('keeps a literal % in a filename', async () => {
     await fs.writeFile(path.join(NOTES_DIR, '100%25 done.png'), 'LITERAL');
     const res = await request(createApp()).get('/api/notes-v2/attachment').query({ path: '100%25 done.png', note: 'n.md' });

@@ -109,11 +109,13 @@ export function invalidateAttachmentIndex(): void {
  * strip an Obsidian size suffix (`|300`), and strip the legacy `Notion/` vault
  * root. Returns null for anything containing a `..` traversal segment.
  */
-function cleanRawPath(raw: string, legacyRoot = true): string | null {
+function cleanRawPath(raw: string, { legacyRoot = true, size = true } = {}): string | null {
+  // `size`: an embed carries a display size after a `|`; a markdown image
+  // (exact) names a file, and a `|` in it is part of the name.
   // An embed may carry a display size (`![[x.png|300]]`); callers usually strip
   // it, but a raw `![[...]]` inner string reaching here must not be treated as
   // part of the filename.
-  let cleaned = raw.split('|')[0].trim().replace(/\\/g, '/').replace(/^\/+/, '')
+  let cleaned = (size ? raw.split('|')[0] : raw).trim().replace(/\\/g, '/').replace(/^\/+/, '')
   if (!cleaned || cleaned === '.' || cleaned === '..') return null
   // The legacy `Notion/` root is an embed's old spelling only: a markdown image
   // (exact) naming `Notion/x.png` means that folder (2026-11-05 review).
@@ -215,9 +217,10 @@ function spellingsOf(raw: string, asWritten = false): string[] {
  * below only reach by guessing. Joined segment-wise; null when there is no note,
  * the reference is vault-rooted (`/...`), or the join climbs out of the vault.
  */
-function noteRelativePath(raw: string, notePath: string | undefined): string | null {
+function noteRelativePath(raw: string, notePath: string | undefined, exact = false): string | null {
   if (!notePath) return null
-  const ref = raw.split('|')[0].trim().replace(/\\/g, '/')
+  // A markdown image (exact) names a file, `|` included; an embed's `|` starts its size.
+  const ref = (exact ? raw : raw.split('|')[0]).trim().replace(/\\/g, '/')
   if (!ref || ref.startsWith('/')) return null
   const noteDir = path.posix.dirname(notePath.replace(/\\/g, '/').replace(/^\/+/, ''))
   const segments: string[] = []
@@ -265,7 +268,7 @@ export function resolveAttachmentInIndex(
 ): string | null {
   const relativeHit = (): string | null => {
     for (const spelling of spellingsOf(raw, opts.asWritten)) {
-      const relative = noteRelativePath(spelling, notePath)
+      const relative = noteRelativePath(spelling, notePath, opts.exact)
       if (relative && index.includes(relative)) return relative
     }
     return null
@@ -278,7 +281,7 @@ export function resolveAttachmentInIndex(
   } else {
     for (const spelling of spellingsOf(raw, opts.asWritten)) {
       // The path as named, then without a legacy `Notion/` root.
-      for (const cleaned of [cleanRawPath(spelling, false), cleanRawPath(spelling)]) {
+      for (const cleaned of [cleanRawPath(spelling, { legacyRoot: false }), cleanRawPath(spelling)]) {
         if (cleaned && index.includes(cleaned)) return cleaned
       }
     }
@@ -286,7 +289,7 @@ export function resolveAttachmentInIndex(
     if (hit) return hit
   }
   for (const spelling of spellingsOf(raw, opts.asWritten)) {
-    const cleaned = cleanRawPath(spelling, !opts.exact)
+    const cleaned = cleanRawPath(spelling, { legacyRoot: !opts.exact, size: !opts.exact })
     if (!cleaned) continue
     if (index.includes(cleaned)) return cleaned
     if (opts.exact) continue
@@ -316,7 +319,7 @@ export async function resolveAttachmentPath(
 ): Promise<string | null> {
   const relativeHit = async (): Promise<string | null> => {
     for (const spelling of spellingsOf(raw, opts.asWritten)) {
-      const relative = noteRelativePath(spelling, notePath)
+      const relative = noteRelativePath(spelling, notePath, opts.exact)
       const hit = relative ? await statFile(relative) : null
       if (hit) return hit
     }
@@ -332,7 +335,7 @@ export async function resolveAttachmentPath(
   } else {
     for (const spelling of spellingsOf(raw, opts.asWritten)) {
       // The path as named, then without a legacy `Notion/` root.
-      for (const cleaned of new Set([cleanRawPath(spelling, false), cleanRawPath(spelling)])) {
+      for (const cleaned of new Set([cleanRawPath(spelling, { legacyRoot: false }), cleanRawPath(spelling)])) {
         const hit = cleaned ? await statFile(cleaned) : null
         if (hit) return hit
       }
@@ -342,7 +345,7 @@ export async function resolveAttachmentPath(
   }
   for (const spelling of spellingsOf(raw, opts.asWritten)) {
     const hit = opts.exact
-      ? await (async () => { const c = cleanRawPath(spelling, false); return c ? statFile(c) : null })()
+      ? await (async () => { const c = cleanRawPath(spelling, { legacyRoot: false, size: false }); return c ? statFile(c) : null })()
       : await resolveVaultPath(spelling, notePath)
     if (hit) return hit
   }

@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
 import { browserCanInlinePdf } from '@/utils/pdf-support';
 import { NOTE_IMAGE_EXTS } from './notes-image-types';
-import { failureOf, knownUndrawable } from './image-load';
+import { failureOf, knownUndrawable, noteMissing, onPageReturn, retryDue } from './image-load';
 import './notes-attachment.css';
 // The picture card's styles (shared with the editor's inline pictures).
 import './notes-editor.css';
@@ -26,9 +26,17 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
 
   // A picture this browser cannot draw (HEIC, TIFF outside Safari) or that is
   // gone: the same card the note shows inline, with a download for the former.
-  const [failed, setFailed] = useState<{ url: string; kind: 'missing' | 'undrawable' } | null>(() =>
-    knownUndrawable(url) ? { url, kind: 'undrawable' } : null);
+  const [failed, setFailed] = useState<{ url: string; kind: 'missing' | 'undrawable'; at: number } | null>(() =>
+    knownUndrawable(url) ? { url, kind: 'undrawable', at: Date.now() } : null);
   const failure = failed?.url === url ? failed.kind : null;
+  // A missing one is asked again when the user comes back to the page a few
+  // seconds later (a file put back, a connection back), as inline pictures are.
+  const [retry, bump] = useReducer((n: number) => n + 1, 0);
+  const missingAt = failure === 'missing' ? failed!.at : 0;
+  useEffect(() => {
+    if (!missingAt) return;
+    return onPageReturn(() => { if (retryDue(missingAt)) { setFailed(null); bump(); } });
+  }, [missingAt]);
   const isImage = NOTE_IMAGE_EXTS.has(ext) && !failure;
   // Same guard as WikiEmbedView: with the browser's PDF viewer disabled an
   // <iframe> is a silent download, so route those users to the open card
@@ -59,10 +67,16 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
       <div className="notes-attachment-preview">
         {isImage ? (
           <img
+            key={retry}
             className="notes-attachment-image"
             src={url}
             alt={name}
-            onError={() => { void failureOf(url).then((kind) => setFailed({ url, kind })); }}
+            onError={() => {
+              void failureOf(url).then((kind) => {
+                if (kind === 'missing') noteMissing(url);
+                setFailed({ url, kind, at: Date.now() });
+              });
+            }}
           />
         ) : failure ? (
           <div className="notes-image-missing notes-attachment-failed">

@@ -529,6 +529,8 @@ export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageSto
         if (knownUndrawable(url)) {
           img.removeAttribute('src');
           showCard('undrawable', url);
+          const note = liveSrcContext({ editor, options }).notePath?.trim();
+          if (note && src) noteDrawn(note, src, url);
           return;
         }
         // A retry keeps the card up until the picture really comes back.
@@ -571,13 +573,19 @@ export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageSto
         if (!url) return;
         const owned = loading === url;
         if (owned) loading = '';
+        // A failed picture keeps no src: macOS WebKit asks a failed <img> again
+        // when ProseMirror moves its element (2026-11-05: one 404 asked twice).
+        img.removeAttribute('src');
         void failureOf(url).then((kind) => {
           if (kind === 'missing') noteMissing(url);
           if (owned) settleLoad(url, 'failed');
-          if (destroyed || url !== candidates[at] || img.getAttribute('src') !== url) return;
-          img.removeAttribute('src');
-          if (kind === 'undrawable') showCard('undrawable', url);
-          else tryFrom(at + 1);
+          if (destroyed || url !== candidates[at] || img.hasAttribute('src')) return;
+          if (kind === 'undrawable') {
+            showCard('undrawable', url);
+            // Its file is there (the HEAD answered): a copy or cut names it too.
+            const note = liveSrcContext({ editor, options }).notePath?.trim();
+            if (note && src) noteDrawn(note, src, url);
+          } else tryFrom(at + 1);
         });
       });
       img.addEventListener('load', () => {

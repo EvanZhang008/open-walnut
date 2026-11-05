@@ -376,7 +376,9 @@ export async function readNoteAttachment(raw: unknown, notePath?: unknown, exact
   // Reject a disallowed extension up-front (before any fs touch). No SVG.
   // An Obsidian size suffix (`![[x.png|300]]`) is part of the embed, not the
   // filename — strip it before reading the extension or every sized embed 400s.
-  const reqExt = path.extname(raw.split('|')[0]).slice(1).toLowerCase()
+  // A markdown image (exact) may hold a `|` in its file name; only an embed's starts a size.
+  const exactRef = exactParam === '1' || exactParam === true || exactParam === 'note' || exactParam === 'vault'
+  const reqExt = path.extname(exactRef ? raw : raw.split('|')[0]).slice(1).toLowerCase()
   if (!ATTACHMENT_MIME[reqExt]) throw new NotesOpError('File type not allowed', 400)
 
   // A replica reads its copy of the Mac's files once that copy is held: the cloud companion

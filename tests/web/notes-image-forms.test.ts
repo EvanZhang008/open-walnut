@@ -197,7 +197,11 @@ describe('every notes surface paints images through ResolvedImage', () => {
       'components/notes/WikiEmbedView.tsx',
       'components/notes/extensions/resolved-image.ts',
     ]);
-    for (const f of drawers) expect(fs.readFileSync(f, 'utf8'), rel(f)).toMatch(/\bfailureOf\(/);
+    for (const f of drawers) {
+      expect(fs.readFileSync(f, 'utf8'), rel(f)).toMatch(/\bfailureOf\(/);
+      // And asks a missing one again when the user comes back (round 6 review).
+      expect(fs.readFileSync(f, 'utf8'), rel(f)).toMatch(/\bonPageReturn\(/);
+    }
   });
 
   it('the vault editor hands ResolvedImage the note it edits', () => {
