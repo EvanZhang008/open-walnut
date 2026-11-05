@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { vaultSession as openVaultSession } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -384,12 +385,7 @@ const tasksView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-tas
 const pwView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-passwords')
 
 async function vaultSession(): Promise<string> {
-  const st = await (await doc.request.get(`${base}/api/v1/vault/status`)).json()
-  const r = st.setUp
-    ? await doc.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
-    : await doc.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
-  expect(r.ok(), await r.text()).toBe(true)
-  return (await r.json()).session.token
+  return openVaultSession(doc, base, { password: MASTER })
 }
 
 test('Tasks tab: what needs the person with its status, a reply into its session, the page saved as a task', async () => {
@@ -406,9 +402,11 @@ test('Tasks tab: what needs the person with its status, a reply into its session
   await expect(panel.locator('iframe.panel-frame')).toBeHidden()
   const row = tasksView().locator(`[data-testid="ext-task"][data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
-  await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
+  // An ask's task is born in Focus: Focus lists it (once), with what it needs on its row.
+  await expect(tasksView().getByTestId('ext-tasks-focus').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
+  await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(0)
   await expect(row).toHaveAttribute('data-state', /needs|read/)
-  // Under Needs you a row does not say "Needs you" again (a To read row says so).
+  // The row leads with what to do (Take a look, Decide...), never a bare "Needs you" again.
   await expect(row.locator('.ext-task-line')).not.toContainText(/^Needs you/)
 
   await row.locator('.ext-task-head').click()

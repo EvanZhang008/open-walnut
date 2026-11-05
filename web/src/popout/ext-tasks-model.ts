@@ -1,21 +1,40 @@
 /**
  * The side panel's Tasks view (PopoutExtTasks): which of the person's tasks it lists and what
  * each row says, kept apart from React so it is tested on its own. The lists are Home's: what
- * needs them (To read drawn with it, as everywhere), then their Focus tasks; each task once.
+ * is in their Focus (the board's Focus tier, whatever it needs), then what else needs them (To
+ * read drawn with it, as everywhere); each task once.
  */
 import type { Task } from '@open-walnut/core';
-import { needsLineText, shownState, stateWord } from '@open-walnut/user-status';
+import { MARKED_ASK, NEEDS_CATEGORY_LABELS, needsLineOf, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
 import { taskUserState } from '@/utils/session-status';
 
 export const EXT_TASKS_MAX = 30;
 
 export interface ExtTaskRow { task: Task; state: ReturnType<typeof shownState>; label: string; line: string }
 
+const oneLine = (t: string | null | undefined) => (t ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * A Needs you row's line: its category, then what tells it apart from the rows around it. That is
+ * the task's own ask; else the words its last turn ended with (task.last_words); else the category
+ * alone. Walnut's stock sentences ("Its turn ended without asking you anything", "It was set to
+ * need you by hand") say the same on every row, so they are never the words here.
+ */
+export function needsRowLine(task: Task): string {
+  const s = task.user_status;
+  if (!s) return '';
+  const line = needsLineOf(s);
+  if (!line) return '';
+  const own = storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
+  const words = own || oneLine(task.last_words?.text);
+  return [NEEDS_CATEGORY_LABELS[line.category], words].filter(Boolean).join(': ');
+}
+
 function rowOf(task: Task): ExtTaskRow {
   const state = shownState(taskUserState(task));
   const s = task.user_status;
-  const line = s ? (state === 'needs' ? needsLineText(s) : (s.waitingOn ?? s.ask ?? '')) : '';
-  return { task, state, label: stateWord(state, !!s?.snoozed), line: line.replace(/\s+/g, ' ').trim() };
+  const line = s ? (state === 'needs' ? needsRowLine(task) : (s.waitingOn ?? s.ask ?? '')) : '';
+  return { task, state, label: stateWord(state, !!s?.snoozed), line: oneLine(line) };
 }
 
 const newest = (a: Task, b: Task) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? ''));
@@ -26,21 +45,31 @@ const newest = (a: Task, b: Task) => String(b.updated_at ?? '').localeCompare(St
  * answer does not make it vanish from under them.
  */
 export function extTaskLists(tasks: readonly Task[], kept: ReadonlySet<string> = new Set()): { needs: ExtTaskRow[]; focus: ExtTaskRow[] } {
-  const open = tasks.filter((t) => taskUserState(t) !== 'done' && !t.plugin_only);
-  const needs = open.filter((t) => shownState(taskUserState(t)) === 'needs' || kept.has(t.id)).sort(newest);
-  const seen = new Set(needs.map((t) => t.id));
-  const focus = open.filter((t) => !seen.has(t.id) && t.pinned && t.focus_tier === 'focus').sort(newest);
+  // Open, and not parked out of sight: Home hides a WAITING task unless its own work goes on or it
+  // has something to read (TodoPanel's hiddenAsWaiting), so the panel does too.
+  const open = tasks.filter((t) => {
+    const state = taskUserState(t);
+    const parked = t.phase === 'WAITING' && state !== 'working' && state !== 'read' && !kept.has(t.id);
+    return state !== 'done' && !t.plugin_only && !parked;
+  });
+  // Focus is the board's Focus tier, as Home counts it: every open task in it, whatever it needs
+  // (its row says so). Needs you is the rest that needs the person, so each task shows once.
+  const focus = open.filter(inFocus).sort(newest);
+  const needs = open.filter((t) => !inFocus(t) && (shownState(taskUserState(t)) === 'needs' || kept.has(t.id))).sort(newest);
   return { needs: needs.slice(0, EXT_TASKS_MAX).map(rowOf), focus: focus.slice(0, EXT_TASKS_MAX).map(rowOf) };
 }
 
-/** The row's status line under a section: the section already says "Needs you", so a row there leaves it out. */
+/**
+ * The row's status line under a section. "Needs you" is left out under Needs you (the section says
+ * it) and wherever the line leads with what to do (Take a look, Decide...), which says it already.
+ */
 export function rowLine(row: Pick<ExtTaskRow, 'label' | 'line'>, section: 'focus' | 'needs'): string {
-  const label = section === 'needs' && row.label === 'Needs you' ? '' : row.label;
+  const label = row.label === 'Needs you' && (section === 'needs' || !!row.line) ? '' : row.label;
   return [label, row.line].filter(Boolean).join(' · ');
 }
 
 /** In the person's Focus already (the board's Focus tier). */
-export const inFocus = (t: Task): boolean => !!t.pinned && t.focus_tier === 'focus';
+export function inFocus(t: Task): boolean { return !!t.pinned && t.focus_tier === 'focus'; }
 
 /** A task for later, made from the page the person is on: its title, and the address to come back to. */
 export function pageTaskInput(page: { url: string; title?: string }): { title: string; description: string } {

@@ -95,13 +95,22 @@ test('Tasks: Add to Focus from the row; a reply leaves the row in place with wha
   await expect(other).toBeVisible({ timeout: 30_000 })
   await other.locator('.ext-task-head').hover()
   await other.getByTestId('ext-task-focus-row').click()
-  await expect(other.getByTestId('ext-task-infocus')).toBeVisible({ timeout: 15_000 })
+  // Added, it moves to Focus: the list, its count and the row agree (round 3: a row wore the
+  // Focus mark under Needs you while the header said Focus 0).
+  const focus = t.getByTestId('ext-tasks-focus')
+  await expect(focus.locator(`[data-testid="ext-task"][data-task-id="${otherId}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(other).toHaveCount(0)
+  await expect(t.getByTestId('ext-tasks-needs').getByTestId('ext-task-infocus')).toHaveCount(0)
+  const focusRows = await focus.getByTestId('ext-task').count()
+  await expect(focus.locator('.ext-tasks-count')).toHaveText(String(focusRows))
+  await expect(focus.locator('.ext-tasks-empty')).toHaveCount(0)
   const task = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${otherId}`)).json() as Record<string, any>
   const tk = (task.task ?? task) as { pinned?: boolean; focus_tier?: string }
   expect(tk.pinned).toBe(true)
   expect(tk.focus_tier).toBe('focus')
 
-  const row = t.locator(`[data-testid="ext-tasks-needs"] [data-testid="ext-task"][data-task-id="${taskId}"]`)
+  // The ask's task is born in Focus, so it is listed there.
+  const row = t.locator(`[data-testid="ext-tasks-focus"] [data-testid="ext-task"][data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
 
   await row.locator('.ext-task-head').click()

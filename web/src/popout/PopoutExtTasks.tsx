@@ -16,8 +16,10 @@ import { buildImageRefsPayload } from '@/api/image-upload';
 import { fetchSessionHistory } from '@/api/sessions';
 import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
-import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
-import { applyApprovalEvent, refreshApprovals } from '@/components/approvals/approvals-store';
+import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
+import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
+import { applyApprovalEvent, refreshApprovals, useApprovals } from '@/components/approvals/approvals-store';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
@@ -137,7 +139,7 @@ function ExtTasks() {
         <Section section="focus" title="Focus" testid="ext-tasks-focus" rows={lists.focus} empty={fresh ? 'No Focus tasks. Open a task below and add it to Focus.' : ''} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies} />
         {/* Approvals first: a script or an agent's step in this browser is blocked on each. */}
         <Section section="needs" title="Needs you" testid="ext-tasks-needs" rows={lists.needs} extra={approvals.length} empty={fresh && approvals.length === 0 ? 'Nothing needs you.' : ''} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies}>
-          {approvals.length > 0 && <ApprovalRows list={approvals} variant="home" />}
+          {approvals.map((a) => <PanelApproval key={a.id} a={a} />)}
         </Section>
       </div>
     )}
@@ -146,6 +148,20 @@ function ExtTasks() {
 
 type ReplyState = { state: '' | 'sending' | 'sent' | 'error'; words?: string };
 type Replies = { replies: Record<string, ReplyState>; setReplies: Dispatch<SetStateAction<Record<string, ReplyState>>> };
+
+/**
+ * One approval, answered here. Home lists approvals as one line and answers them on its corner
+ * card; the panel has no corner, so each request shows what it is, who asks, and its buttons.
+ */
+function PanelApproval({ a }: { a: Approval }) {
+  const s = useApprovals();
+  const host = useHostDisplayLabel(a.requester.host);
+  return <div className="ext-approval" data-testid="approval-row" data-approval-id={a.id}>
+    <span className="ext-approval-what">{a.what}</span>
+    <span className="ext-approval-who">{requesterText(a, host)}</span>
+    <ApprovalButtons a={a} s={s} />
+  </div>;
+}
 
 function Section(p: { section: 'focus' | 'needs'; title: string; testid: string; rows: ExtTaskRow[]; extra?: number; empty: string; open: string; onOpen: (id: string) => void; children?: ReactNode } & Replies) {
   return <section className="ext-tasks-section" data-testid={p.testid}>
@@ -187,7 +203,8 @@ function TaskRow({ section, row, open, onToggle, replies, setReplies }: { sectio
           {reply?.state === 'sent' && reply.words && <span className="ext-task-replied" data-testid="ext-task-replied">You replied: {reply.words}</span>}
         </span>
       </button>
-      <FocusButton task={task} inRow />
+      {/* Under Focus the section says it; elsewhere the row offers Add to Focus. */}
+      {section !== 'focus' && <FocusButton task={task} inRow />}
     </div>
     {open && <TaskReply task={task} line={row.line} reply={reply ?? { state: '' }} onChange={(r) => setReplies((all) => ({ ...all, [task.id]: { ...(all[task.id] ?? { state: '' }), ...r } }))} />}
   </div>;
@@ -218,7 +235,8 @@ function TaskReply({ task, line, reply, onChange }: { task: Task; line: string; 
   const sessionId = resolveTaskSessionId(task);
   const { state } = reply;
   const asked = askedOf(task, line);
-  const lastMessage = useLastMessage(sessionId, asked.length > 1);
+  // Its last words are known already when the status line or the list carries them.
+  const lastMessage = useLastMessage(sessionId, asked.length > 1 || !!task.last_words?.text?.trim());
   const said = lastMessage && !asked.some((a) => a.includes(lastMessage.slice(0, 60))) ? [...asked, lastMessage] : asked;
   // The words wait in the draft store and pictures go with them, as in the chat.
   const draft = useDraft(sessionId ? draftKey('ext-task-reply', task.id) : null);
