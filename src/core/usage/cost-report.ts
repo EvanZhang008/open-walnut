@@ -23,6 +23,7 @@ import { priceBucket } from './session-cost-pricing.js';
 import type { SessionCostBucket } from '../../providers/session-cost-core.js';
 import { originKey, type CostRollup, type RunOrigin } from './cost-rollup.js';
 import { codexAccount, directoryLabel } from './codex-account.js';
+import { engineCaps } from '../agents/engine-registry.js';
 import { addPriced, emptyLine, GroupAcc, partsOf, REPORTED_KIND, sorted, TokenAcc, WORK_KINDS, workKindOf,
   type Priced, type Sums, type WorkKind } from './cost-report-parts.js';
 import type { Database as DatabaseType } from '../../lib/sqlite.js';
@@ -335,7 +336,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       // task or record is not taken for one: Walnut removes the records of deleted tasks, not their usage.
       const outside = !!origin?.outside;
       const into: [GroupAcc, string, string][] = [[byEngine, r.engine, engineLabel(r.engine)], [byModel, mk, ml], [byHost, r.host, r.host]];
-      if (r.engine === 'codex') {
+      if (engineCaps(r.engine).rolloutUsage) {
         const a = codexAccount(origin?.provider);
         into.push([group('account', 'Codex by account'), a.key, a.label]);
         if (originFilter === 'all' || originFilter === (outside ? 'outside' : 'walnut')) {

@@ -113,7 +113,12 @@ async function collect(since: string | undefined, until: string) {
   if (!rollup.isReady()) await rollup.backfill();
   const engines = await collectEngineSessions(sessions, sinceFor);
   // Every host Walnut knows, whatever engine its sessions use: a host with only terminal Codex runs counts too.
-  const outside = await collectOutside(sessions, outsideHosts(hosts.keys(), sessions.map(s => s.host ?? '__local__'), Object.keys(config.hosts ?? {}))).catch((error) => {
+  // One machine once: a Mac reached two ways (found over ssh, joined over the host network) is two rows in config.hosts.
+  const { joinedAliasOf, pickableHosts } = await import('../hosts/joined-twins.js');
+  const asJoined = joinedAliasOf(config.hosts ?? {}, config.net);
+  const outsideList = outsideHosts(hosts.keys(), sessions.map(s => s.host ?? '__local__'), pickableHosts(config.hosts ?? {}, config.net).map(([alias]) => alias))
+    .map(host => asJoined(host));
+  const outside = await collectOutside(sessions, [...new Set(outsideList)]).catch((error) => {
     log.usage.warn('outside codex collection failed', { error: String(error) });
     return undefined;
   });
@@ -126,7 +131,7 @@ async function collectOutside(sessions: Awaited<ReturnType<typeof listSessions>>
   const { collectOutsideCodex } = await import('./outside-codex.js');
   const usage = responseUsageStore();
   return collectOutsideCodex({ rollup: usage.rollup, hosts, timeZone: usage.timezone, reader: host => new DaemonFileReader(host),
-    knownIds: host => sessions.filter(s => s.engine === 'codex' && (s.host ?? '__local__') === host).map(s => s.claudeSessionId) });
+    knownIds: host => sessions.filter(s => engineCaps(s.engine).rolloutUsage && (s.host ?? '__local__') === host).map(s => s.claudeSessionId) });
 }
 
 /** Engines whose own session records session-cost-core can read (Claude comes from usage.scan). */

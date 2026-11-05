@@ -105,6 +105,12 @@ export interface EngineCapabilities {
   /** Whether external (walnut-unaware) sessions of this engine are importable. */
   readonly externalImport: boolean;
   /**
+   * Whether the engine writes one rollout file per run (first line: who started it, where, and the
+   * model provider the requests went through), which the Usage page reads for runs Walnut did not start
+   * and groups by account. Codex only today.
+   */
+  readonly rolloutUsage: boolean;
+  /**
    * Where the model list comes from: a walnut-configured static catalog
    * (claude) vs runtime discovery from the provider's advertised
    * capabilities (ACP engines). Gates the per-session model catalog route.
@@ -155,6 +161,7 @@ const CLAUDE: EngineCapabilities = {
   sidLivenessProbe: true,
   skillSync: true,
   externalImport: true,
+  rolloutUsage: false,
   modelCatalog: 'static',
   cacheWriteLifetime: '1h',
   settings: CLAUDE_SETTINGS,
@@ -177,6 +184,7 @@ const ACP_BASE: Omit<EngineCapabilities, 'id' | 'displayName'> = {
   sidLivenessProbe: false,
   skillSync: true,
   externalImport: true,
+  rolloutUsage: false,
   modelCatalog: 'provider-advertised',
   cacheWriteLifetime: '5m',
   acpAdapter: { source: 'bundled', binary: 'codex', args: null, versionArgs: ['--version'] },
@@ -186,6 +194,7 @@ const CODEX: EngineCapabilities = {
   ...ACP_BASE,
   id: 'codex',
   displayName: 'Codex',
+  rolloutUsage: true,
   settings: CODEX_SETTINGS,
 };
 
