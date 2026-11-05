@@ -21,7 +21,7 @@
   flex-direction: column;
   gap: 8px;
 }
-.idle-compact-why { color: var(--fg); }
+.idle-compact-why { color: var(--fg-muted); font-weight: 400; }
 .idle-compact-setting { display: flex; flex-direction: column; gap: 4px; }
 .idle-compact-setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .idle-compact-setting-row label { font-weight: 500; cursor: pointer; }

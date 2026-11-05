@@ -74,6 +74,8 @@ export interface UseCompactContextArgs {
   acp: boolean;
   /** A turn runs (the stream is live). */
   running: boolean;
+  /** Walnut's own idle compaction runs (its turn is quiet: no turn of the user's shows). */
+  idleCompacting?: boolean;
   /** Sends a message the way the composer does. */
   send: (message: string) => Promise<unknown> | unknown;
   /** Facts read from the loaded history, for a session whose record has none yet. */
@@ -85,7 +87,7 @@ export interface CompactContextParts {
   plusAction?: PlusMenuAction;
 }
 
-export function useCompactContext({ sessionId, session, acp, running, send, historyFacts }: UseCompactContextArgs): CompactContextParts {
+export function useCompactContext({ sessionId, session, acp, running, idleCompacting = false, send, historyFacts }: UseCompactContextArgs): CompactContextParts {
   const live = useLivePromptCache(sessionId ?? null);
   // The newer of the two: a compaction brings no live usage after it, so the live facts can still be the
   // ones from before it while the record already says compacted (2026-11-04 review: a second click went out).
@@ -116,18 +118,18 @@ export function useCompactContext({ sessionId, session, acp, running, send, hist
   const plusAction = useMemo<PlusMenuAction | undefined>(() => (acp || lane ? undefined : {
     id: 'compact-context',
     label: 'Compact context',
-    title: requested
-      ? 'Compacting\u2026'
+    title: requested || idleCompacting
+      ? (idleCompacting ? 'Walnut is compacting this idle session' : 'Compacting\u2026')
       : running
       ? 'Available when the current turn ends'
       : compacted
         ? 'Already compacted; available again after the next message'
         : `Summarize the conversation so far into a short context (sends ${COMPACT_COMMAND})${tokensLine ? `. ${tokensLine}` : ''}`,
-    disabled: requested || running || compacted,
-    disabledHint: requested ? 'Compacting' : running ? 'After this turn' : compacted ? 'Just compacted' : undefined,
+    disabled: requested || idleCompacting || running || compacted,
+    disabledHint: requested || idleCompacting ? 'Compacting' : running ? 'After this turn' : compacted ? 'Already compacted' : undefined,
     icon: COMPACT_ICON,
     onSelect: compact,
-  }), [acp, lane, requested, running, compacted, tokensLine, compact]);
+  }), [acp, lane, requested, idleCompacting, running, compacted, tokensLine, compact]);
 
   return { plusAction };
 }

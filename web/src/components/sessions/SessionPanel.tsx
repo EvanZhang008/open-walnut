@@ -2069,6 +2069,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     session,
     acp: engineIsAcp,
     running: isStreaming || session?.process_status === 'running',
+    idleCompacting,
     send: handleSend,
     historyFacts: compactHistoryFacts,
   });

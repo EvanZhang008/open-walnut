@@ -13,7 +13,9 @@ import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
 import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
-import { taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
+import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
+import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
 import { NEEDS_CATEGORY_LABELS, needsLineOf } from '@open-walnut/user-status';
 import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -344,6 +346,13 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     setKebabOpen(!kebabOpen);
   };
 
+  // The live status, as the task lists read it: the task's own snapshot can still say running from
+  // when its session started (2026-11-05 review: a new task's header circle pulsed while idle).
+  // Hooks, so before the return below.
+  const circleSessionId = task ? resolveTaskSessionId(task) : null;
+  const circleStatus = useSessionStatus(circleSessionId);
+  useIdleCompactingSession(circleSessionId);
+
   // A task-less session still shows the kebab when it carries a Session section.
   if (!task && !(slot !== 'phase' && extraSection)) return null;
 
@@ -355,7 +364,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       {slot !== 'kebab' && task && (
       <div className="task-quick-phase">
         <button
-          className={`task-quick-phase-btn ${taskCircleClass(task)}`}
+          className={`task-quick-phase-btn ${taskCircleClass(task, circleStatus)}`}
           onClick={(e) => {
             e.stopPropagation();
             handlePhaseChange(isDone ? 'TODO' : 'COMPLETE');

@@ -125,10 +125,12 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await expect(compactRows(panel)).toHaveCount(1)
   // Done, the row stays off (the live usage from before the compaction does not turn it back on).
   await expect(panel.locator('.session-working-label')).toHaveCount(0, { timeout: 15_000 })
+  // The context share reads the compacted size at once, not the size before it until a reload.
+  await expect(panel.locator('.session-detail-context-pct').first()).toHaveText(/^\s*\d%$/, { timeout: 10_000 })
   await panel.locator('.session-panel-input .chat-plus-btn').click()
   await expect(row).toHaveAttribute('aria-disabled', 'true')
   await expect(row).toHaveAttribute('title', /Already compacted/)
-  await expect(row.locator('.chat-plus-menu-hint')).toHaveText('Just compacted')
+  await expect(row.locator('.chat-plus-menu-hint')).toHaveText('Already compacted')
   await row.dispatchEvent('click')
   await page.keyboard.press('Escape')
   await page.waitForTimeout(2500)
@@ -193,6 +195,9 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(null)
   await page.locator('#idle-compaction').click()
   await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(false)
+  // Off, its threshold row reads as off too (dimmed, the field disabled), as the Permissions child row does.
+  await expect(pct).toBeDisabled()
+  await expect(page.locator('#idle-compaction-percent-row')).toHaveAttribute('aria-disabled', 'true')
   await row.locator('xpath=ancestor::*[contains(@class,"settings-group")][1]').screenshot({ path: `${SHOTS}/${info.project.name}-settings.png` }).catch(() => {})
   // Back to the defaults for the specs after this one.
   await page.locator('#idle-compaction').click()
@@ -207,7 +212,9 @@ test('the idle compaction row says why it ran and changes its setting in place',
     'needs WALNUT_IDLE_COMPACT_LEAD_MS and MOCK_CONTEXT_WINDOW on the test server')
   test.setTimeout(120_000)
   const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  // A reload or a navigation cancels the requests in flight; WebKit reports each ("... due to access
+  // control checks"). Those are the browser's, not the page's.
+  page.on('pageerror', (e) => { if (!/due to access control checks/.test(e.message)) errors.push(e.message) })
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/')
   const { taskId, sid } = await bigSession(page, request, `Idle row ${info.project.name}`)
@@ -243,12 +250,24 @@ test('the idle compaction row says why it ran and changes its setting in place',
   // Out of range: said so, nothing saved.
   await pct.fill('120')
   await pct.press('Enter')
-  await expect(line.locator('.idle-compact-error')).toContainText('50% to 99%')
+  await expect(line.locator('.idle-compact-error')).toContainText('50% to 99%; it stays at 85%')
+  await expect(pct).toHaveValue('85')
   expect((await idleCompactionConfig(request))?.limit_percent ?? null).toBe(null)
   await pct.fill('90')
   await pct.press('Enter')
   await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(90)
   await line.screenshot({ path: `${SHOTS}/${info.project.name}-idle-row.png` }).catch(() => {})
+  // Closed by the reader, the run stays closed across a reload.
+  await fold.click()
+  await expect(history.getByTestId('idle-compact-line')).toHaveCount(0)
+  await page.reload()
+  // The reload brings the panel back by itself; open it only when it did not.
+  let panelAgain = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
+  const restored = await panelAgain.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
+  if (!restored) panelAgain = await openTask(page, taskId, sid)
+  await expect(page.getByText('Something went wrong loading this session')).toHaveCount(0)
+  await expect(panelAgain.locator('.session-history').getByText(/^Compacted by Walnut while idle/).last()).toBeVisible({ timeout: 30_000 })
+  await expect(panelAgain.getByTestId('idle-compact-line')).toHaveCount(0)
   // The same value Settings shows.
   await page.goto('/settings')
   await page.getByTestId('settings-nav-sessions').click()

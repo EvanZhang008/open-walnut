@@ -6703,6 +6703,20 @@ export class ClaudeCodeSession {
             // A place note given before this boundary may be gone with the old context.
             if (firstBoundary && this._isReplayedByOffset() !== true) {
               this._promptCache = noteCompaction(this._promptCache, meta?.post_tokens, Date.now())
+              // The boundary's own size, at once: the CLI read below can fail (a CLI without it, a busy one),
+              // and the badge would keep the size from before until the next reply (2026-11-04 review).
+              const post = meta?.post_tokens
+              if (typeof post === 'number' && post > 0 && this.claudeSessionId) {
+                const { window: windowSize, autoCompactAt } = this.contextLimits(post)
+                bus.emit(EventNames.SESSION_USAGE_UPDATE, {
+                  sessionId: this.claudeSessionId,
+                  model: this._model,
+                  ...(windowSize != null ? { contextPercent: Math.round(post / windowSize * 100), contextWindow: windowSize } : {}),
+                  inputTokens: post,
+                  ...(autoCompactAt != null ? { autoCompactAt } : {}),
+                  promptCache: this._promptCache,
+                }, ['main-ai'], { source: 'session-runner' })
+              }
             }
             if (firstBoundary && sid && typeof sys.uuid === 'string' && sys.uuid) {
               const boundary = sys.uuid

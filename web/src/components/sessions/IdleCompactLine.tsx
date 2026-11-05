@@ -86,7 +86,12 @@ export function IdleCompactSetting() {
     const n = Number(draft.trim());
     const { min, max } = IDLE_COMPACT_LIMIT_PERCENT_RANGE;
     if (draft.trim() === '') { setDraft(String(setting.percent)); return; }
-    if (!Number.isFinite(n) || n < min || n > max) { setError(`Use a share from ${min}% to ${max}%.`); return; }
+    // Out of range: said so, and the box shows the share in force again (what it shows is what runs).
+    if (!Number.isFinite(n) || n < min || n > max) {
+      setError(`Use a share from ${min}% to ${max}%; it stays at ${setting.percent}%.`);
+      setDraft(String(setting.percent));
+      return;
+    }
     const percent = Math.round(n);
     setDraft(String(percent));
     if (percent !== setting.percent) void save({ limit_percent: percent });
@@ -117,9 +122,8 @@ export function IdleCompactSetting() {
           onBlur={commitPercent}
           onKeyDown={onKey}
         />
-        <span className="idle-compact-setting-unit">%</span>
+        <span className="idle-compact-setting-unit">% of the limit</span>
         </span>
-        <span className="idle-compact-setting-unit">of the limit</span>
         {saved && <span className="idle-compact-saved" role="status">Saved</span>}
       </div>
       <div className="idle-compact-setting-help">

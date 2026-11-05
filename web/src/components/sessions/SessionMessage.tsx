@@ -22,7 +22,8 @@ import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
-import { disclosureIds, useRowDisclosure } from './row-disclosure';
+import { disclosureIds, RowDisclosureScope, useRowDisclosure } from './row-disclosure';
+import { idleRunsClosed, noteIdleRunsClosed } from './idle-run-pref';
 import { toolMergesIntoRun } from '@/stream/tool-merge';
 import { useSelectionFrozenWith } from '@/utils/selection-guard';
 import { BashToolCall } from './BashToolCall';
@@ -501,7 +502,13 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
   // Walnut's idle compaction opens to why it ran, live and after (2026-11-04 review: the run closed when
   // the compaction ended, its first line being another, and its reason was two clicks away).
   const idleRun = members.some((member) => isIdleCompactLine(member.message));
-  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, idleRun);
+  const scope = useContext(RowDisclosureScope);
+  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, idleRun && !idleRunsClosed(scope));
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (idleRun) noteIdleRunsClosed(scope, !next);
+  };
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error' || member.variant === CLI_ERROR_VARIANT);
   // A compaction's run says so (its explanation and numbers are inside).
   const label = allErrors ? `${members.length} errors` : systemRunLabel(members);
@@ -510,7 +517,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
   const shown = systemRunShows(members);
   return (
     <div className="tool-run-row">
-      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+      <button className="tool-run-toggle" onClick={toggle}>
         <span className={`tool-run-label${allErrors ? ' tool-run-label--error' : ''}`}>{label}</span>
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
       </button>

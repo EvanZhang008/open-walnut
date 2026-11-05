@@ -217,7 +217,7 @@ export function idleCompactReasonText(r: IdleCompactReason): string {
 }
 
 /** The history row that stands for the idle compaction's command line. */
-export const IDLE_COMPACT_HISTORY_TEXT = 'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.';
+export const IDLE_COMPACT_HISTORY_TEXT = 'Walnut sent /compact while the session was idle, before its prompt cache would expire, so the next message reads a summary instead of the whole conversation.';
 /** Walnut's own lines about an idle compaction: the live note (idle-compaction.ts) and the history row. */
 export function isIdleCompactLine(text: string | undefined): boolean {
   // The first wording too: history cached by the first release still holds it.
