@@ -127,9 +127,9 @@ struct OrgThreadsView: View {
             busy: store.busyThreadId == t.id, canFollowUp: sessionId != nil,
             startsOpen: t.id == focusThreadId, compact: compact, followUpSentAt: store.followUpSentAt[t.id],
             onEdit: { edit in Task { await store.edit(t.id, edit) } },
-            onFollowUp: { text in
+            onFollowUp: { text, images in
                 guard let sessionId else { return false }
-                return await store.followUp(t.id, sessionId: sessionId, text: text)
+                return await store.followUp(t.id, sessionId: sessionId, text: text, images: images)
             }
         )
     }
@@ -237,7 +237,7 @@ struct OrgThreadCard: View {
     /// His last Follow up on it from this phone, shown on the card for a few minutes.
     var followUpSentAt: Date? = nil
     let onEdit: (OrgThreadEdit) -> Void
-    let onFollowUp: (String) async -> Bool
+    let onFollowUp: (String, [SelectedImage]) async -> Bool
 
     @Environment(TasksStore.self) private var tasks
     @State private var conversation = false
@@ -633,12 +633,15 @@ struct OrgThreadConversation: View {
     }
 }
 
-/// Follow up on a thread: his words go into the node's chat, filed under this thread.
+/// Follow up on a thread: his words (and pictures, as the chat takes) go into the node's
+/// chat, filed under this thread.
 struct OrgThreadFollowUpSheet: View {
     let title: String
-    let send: (String) async -> Bool
+    let send: (String, [SelectedImage]) async -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
+    @State private var images: [SelectedImage] = []
+    @State private var pictureNotice: String?
     @State private var sending = false
     @State private var failed = false
     @FocusState private var focused: Bool
@@ -657,6 +660,11 @@ struct OrgThreadFollowUpSheet: View {
                     .padding(8)
                     .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                     .accessibilityIdentifier("org.thread.followUp.input")
+                ReplyPictureStrip(images: $images, notice: $pictureNotice, idPrefix: "org.thread.followUp")
+                ReplyPictureButton(
+                    images: $images, notice: $pictureNotice, idPrefix: "org.thread.followUp",
+                    disabled: sending, onWillPresent: { focused = false }
+                )
                 if failed {
                     Text("Not sent. Your words are still here.")
                         .font(.footnote)
@@ -675,12 +683,12 @@ struct OrgThreadFollowUpSheet: View {
                         sending = true
                         failed = false
                         Task {
-                            let ok = await send(text)
+                            let ok = await send(text, images)
                             sending = false
                             if ok { dismiss() } else { failed = true }
                         }
                     }
-                    .disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(sending || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty))
                     .accessibilityIdentifier("org.thread.followUp.send")
                 }
             }

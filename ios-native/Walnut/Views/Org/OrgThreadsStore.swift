@@ -68,14 +68,16 @@ final class OrgThreadsStore {
     }
 
     /// A Follow up into the node's chat, filed under the thread. True when the server took it.
-    func followUp(_ threadId: String, sessionId: String, text: String) async -> Bool {
+    func followUp(_ threadId: String, sessionId: String, text: String, images: [SelectedImage] = []) async -> Bool {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !words.isEmpty else { return false }
+        guard !words.isEmpty || !images.isEmpty else { return false }
         busyThreadId = threadId
         defer { busyThreadId = nil }
         do {
+            let payloads = await SelectedImage.buildPayloads(images.map(\.jpegData))
             _ = try await WalnutAPI().sendThreadFollowUp(
-                sessionId: sessionId, threadId: threadId, text: words, messageId: SendRetryPolicy.newMessageId())
+                sessionId: sessionId, threadId: threadId, text: words, images: payloads,
+                messageId: SendRetryPolicy.newMessageId())
         } catch {
             AppLog.warn("org", "thread follow-up failed", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
             return false

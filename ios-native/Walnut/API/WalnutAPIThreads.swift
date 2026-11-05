@@ -131,12 +131,14 @@ extension WalnutAPI {
 
     /// A Follow up: the words go into the node's chat, filed under `threadId` (an older server
     /// ignores the field and files them as it would any message).
-    func sendThreadFollowUp(sessionId: String, threadId: String, text: String, messageId: String) async throws -> SessionSendReceipt {
-        struct Body: Encodable { let text: String; let messageId: String; let threadId: String }
+    /// Pictures ride the same send the chat composer uses.
+    func sendThreadFollowUp(sessionId: String, threadId: String, text: String, images: [ImagePayload] = [], messageId: String) async throws -> SessionSendReceipt {
+        struct Body: Encodable { let text: String; let images: [ImagePayload]?; let messageId: String; let threadId: String }
         struct Accepted: Decodable { let messageId: String; let queued: Bool? }
         let accepted: Accepted = try await send(
             "POST", "/sessions/\(escape(sessionId))/messages",
-            body: Body(text: text, messageId: messageId, threadId: threadId),
+            body: Body(text: text, images: images.isEmpty ? nil : images, messageId: messageId, threadId: threadId),
+            timeout: images.isEmpty ? nil : 180,
             retrySafe: true
         )
         return SessionSendReceipt(messageId: accepted.messageId, queued: accepted.queued == true)

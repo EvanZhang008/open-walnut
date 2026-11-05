@@ -58,11 +58,19 @@ describe('Inbox native item parity and execution boundaries', () => {
   })
   it('task preview and existing-work details use only exact-ID reads', () => {
     const preview = swift('Walnut/Views/Inbox/InboxItemTaskPreview.swift')
-    expect(preview).toContain('InboxItemReadOnlyTaskSheet')
-    expect(preview).toContain('guard value.id == destination.id')
-    expect(preview).not.toContain('updateTask')
-    expect(preview).not.toContain('task_start')
-    expect(swift('Walnut/Views/Inbox/InboxItemTaskSelector.swift')).toContain('InboxItemReadOnlyTaskSheet')
+    const selector = swift('Walnut/Views/Inbox/InboxItemTaskSelector.swift')
+    expect(preview).toContain('guard value.id == candidate.id')
+    // Open task opens that exact task's conversation through the one opener every task tap
+    // uses (TaskSessionSheet reads the task by id and starts nothing), never a second sheet.
+    for (const source of [preview, selector]) {
+      expect(source).toContain('TaskSessionSheet(target: destination)')
+      expect(source).not.toContain('InboxItemReadOnlyTaskSheet')
+      expect(source).not.toContain('updateTask')
+      expect(source).not.toContain('task_start')
+    }
+    const opener = swift('Walnut/Views/Tasks/TaskSessionSheet.swift')
+    expect(opener).not.toContain('updateTask')
+    expect(opener).not.toContain('startTask')
   })
   it('confirmation discovery is read-only, closing does not cancel and create entry locks after binding', () => {
     const confirmation = swift('Walnut/Views/Inbox/InboxItemConfirmation.swift')
@@ -80,7 +88,8 @@ describe('Inbox native item parity and execution boundaries', () => {
       expect(source).toContain('.barPage(Color(uiColor: .systemBackground))')
       expect(source).toContain('.toolbarColorScheme(colorScheme, for: .navigationBar)')
     }
-    expect(preview.match(/\.barPage\(Color\(uiColor: \.systemBackground\)\)/g)).toHaveLength(2)
+    // One page here: the task it opens is TaskSessionSheet, which draws its own.
+    expect(preview.match(/\.barPage\(Color\(uiColor: \.systemBackground\)\)/g)).toHaveLength(1)
   })
   it('primary item actions use adaptive enabled ink and readable disabled system ink', () => {
     const confirmation = swift('Walnut/Views/Inbox/InboxItemConfirmation.swift')

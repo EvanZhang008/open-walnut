@@ -110,6 +110,13 @@ describe('every iOS box that writes to an AI takes pictures', () => {
     expect(read('API/WalnutAPILetterReply.swift')).toMatch(/let images: \[ImagePayload\]\?/)
     expect(read('API/WalnutAPIInbox.swift')).toMatch(/"\/human-inbox\/\\\(escape\(id\)\)\/answer"[\s\S]{0,200}images: images\.isEmpty \? nil : images/)
     expect(read('Stores/LetterReplyStore.swift')).toMatch(/SelectedImage\.buildPayloads\(pendingImages\[clientId\]/)
+    // An Org thread's Follow up (the user, 2026-11-03: "the follow up in org thread ... should be
+    // able to copy pictures") sends them with its words into the node's chat.
+    const followUp = read('Views/Org/OrgThreadsView.swift')
+    expect(followUp).toMatch(/ReplyPictureButton\(\s*images: \$images/)
+    expect(followUp).toMatch(/await send\(text, images\)/)
+    expect(read('Views/Org/OrgThreadsStore.swift')).toMatch(/SelectedImage\.buildPayloads\(images\.map/)
+    expect(read('API/WalnutAPIThreads.swift')).toMatch(/images: images\.isEmpty \? nil : images, messageId: messageId, threadId: threadId/)
   })
 
   it('one rule set: the reply pictures take the chat composer limits', () => {
