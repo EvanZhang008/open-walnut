@@ -24,11 +24,15 @@ is the per-task override.
 
 ## How it picks
 
-Each entry's share is its weight. The start takes the entry with the fewest picks in the last
-14 days per unit of weight (ties go to the earlier entry), so weights 1 and 1 alternate and
-2 and 1 give the first two of every three. Only entries that can run where the start goes
-are offered: an ACP engine the launch host has not reported installed is skipped (Claude
-Code always can). A model on an ACP entry is ignored; set `engines.<id>.model` instead.
+Each entry's share is its weight. The picks of the last 14 days are replayed in order: each
+pick hands every entry its share of one turn and takes one turn from the entry picked, and
+the start takes the entry owed the most (ties go to the earlier entry). Weights 1 and 1
+alternate; 2 and 1 give the first two of every three. No entry runs more than two turns
+behind or ahead, so an entry added later, or one a host could not run for a while, catches
+up with a short run of a few starts and then takes turns. Only entries that can run where
+the start goes are offered: an ACP engine the launch host has not reported installed is
+skipped (Claude Code always can). Reviewer subtasks (a subtask whose title starts with
+"Review" or names a reviewer) take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
 
 The pick is kept on the task (`engine_pick`) and in `WALNUT_HOME/cache/engine-split.json`,
 and the start's outcome names it with the shares it saw. A start that waited (the queue, a
@@ -43,7 +47,12 @@ per engine and model family, the tasks finished in the period, still open, assig
 split, median time to done, median and total cost, median tokens, review subtasks per task
 (subtasks with "review" in the title; a top-level task so named is work of its own), the
 user's messages per task, reopens after completion, and tasks whose session had an error. A
-task counts under the engine and model that carried most of its cost.
+task counts under the engine and model family that carried most of its cost (dollars first,
+tokens only for a tie); counting only the split's tasks, it counts under the engine the split
+assigned it, and "Moved to another engine" counts those whose cost mostly ran elsewhere. A
+task with no usage recorded (or only requests with no token counts) has an unknown cost and
+tokens, never a zero, and a start that failed counts as an error even after a later start
+succeeded.
 
 `split=1` counts only the tasks the split assigned, the fair test (a lead may have picked an
 engine by hand for the rest). `split=auto`, the card's default, does so while the split is on

@@ -120,13 +120,15 @@
 .usage-ec-table td:first-child { color: var(--fg-muted); }
 .usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); }
 .usage-ec-few { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); }
-.usage-ec-tasks { table-layout: auto; }
+/* Fixed layout: a long title is cut with an ellipsis instead of pushing the cost column out of the card. */
+.usage-ec-tasks { table-layout: fixed; width: 100%; }
+.usage-ec-tasks td.num { width: 96px; }
 .usage-ec-tasks tr:hover td { background: var(--bg-secondary); }
 .usage-ec-open { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--fg); font: inherit; text-align: left;
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-ec-open:hover { text-decoration: underline; }
 .usage-ec-open:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; border-radius: 3px; }
-.usage-ec-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted); }
+.usage-ec-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted); overflow-wrap: anywhere; }
 .usage-ec-partial { margin-left: 3px; font-size: 10px; color: var(--fg-muted); font-weight: 500; }
 .usage-ec-which { display: inline-flex; }
 .usage-ec-defs { margin: 6px 0 0; display: grid; gap: 6px; font-size: 12px; }

@@ -40,7 +40,7 @@ function engines(project: string | null) {
     row('opencode|Other', 'OpenCode · Other', 7, { medianCostUsd: null, medianTokens: null, partialCost: 7, noUsage: 7, medianHours: 2.5, reviewsPerTask: 2.9, erroredShare: 0.1 }),
   ]
   const tasks = Array.from({ length: 60 }, (_, i) => ({
-    taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : `Task number ${i}`,
+    taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : i === 1 ? `A very long task title ${'that keeps going '.repeat(12)}` : `Task number ${i}`,
     project: i % 3 ? 'Walnut' : 'Walnut Idea', key: rows[i % 3].key, done: i % 7 !== 0, hours: i % 7 ? 1 + i / 4 : null,
     costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0,
   }))
@@ -102,7 +102,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await openUsage(page)
   const card = page.getByTestId('usage-engines')
   await card.scrollIntoViewIfNeeded()
-  await expect(card.getByTestId('usage-engines-split')).toContainText('New tasks are shared: Claude Code · Claude 1 : Codex · GPT 1')
+  await expect(card.getByTestId('usage-engines-split')).toContainText('New tasks take turns between Claude Code · Claude and Codex · GPT.')
   // The split assigned 11 tasks here (two columns' worth): the card counts only those, a fair test.
   await expect.poll(() => splitAsked.at(-1)).toBe('auto')
   await expect(card.getByTestId('usage-engines-split-only')).toHaveAttribute('aria-checked', 'true')
@@ -151,6 +151,10 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await tasks.locator('summary').click()
   await expect(tasks.locator('tr')).toHaveCount(60)
   await expect(tasks.locator('tr').first()).toContainText('Settings: share new tasks')
+  // A long title is cut inside the card: the cost column stays within it.
+  const cardBox = (await card.boundingBox())!
+  const costBox = (await tasks.locator('tr').nth(1).locator('td.num').boundingBox())!
+  expect(costBox.x + costBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
   await expect(tasks.locator('tr').first()).toContainText('Claude Code · Claude')
   // A task row opens its task from the keyboard too.
   await tasks.locator('tr').first().getByRole('button').focus()

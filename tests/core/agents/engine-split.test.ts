@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
-  _resetSplitReservations, builderLabel, chooseBuilder, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders,
+  _resetSplitReservations, builderLabel, chooseBuilder, isReviewerTask, MAX_BEHIND, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders, splitCredits,
 } from '../../../src/core/agents/engine-split.js';
 
 const picksFile = path.join(WALNUT_HOME, 'cache', 'engine-split.json');
@@ -30,21 +30,38 @@ describe('splitBuilders', () => {
 
 describe('chooseBuilder', () => {
   const two = splitBuilders({ defaults: { engine_split: ['claude', 'codex'] } });
+  const run = (builders: ReturnType<typeof splitBuilders>, n: number, start: string[] = []) => {
+    const seq = [...start];
+    for (let i = 0; i < n; i++) seq.push(chooseBuilder(builders, splitCredits(builders, seq))!.key);
+    return seq.slice(start.length);
+  };
   it('alternates on equal weights and favors the earlier entry on a tie', () => {
-    expect(chooseBuilder(two, new Map())?.key).toBe('claude');
-    expect(chooseBuilder(two, new Map([['claude', 1]]))?.key).toBe('codex');
-    expect(chooseBuilder(two, new Map([['claude', 3], ['codex', 3]]))?.key).toBe('claude');
+    expect(chooseBuilder(two, splitCredits(two, []))?.key).toBe('claude');
+    expect(run(two, 6)).toEqual(['claude', 'codex', 'claude', 'codex', 'claude', 'codex']);
   });
 
   it('follows the weights over many picks', () => {
     const weighted = splitBuilders({ defaults: { engine_split: [{ engine: 'claude', weight: 2 }, 'codex'] } });
-    const counts = new Map<string, number>();
-    for (let i = 0; i < 30; i++) {
-      const k = chooseBuilder(weighted, counts)!.key;
-      counts.set(k, (counts.get(k) ?? 0) + 1);
-    }
-    expect(counts.get('claude')).toBe(20);
-    expect(counts.get('codex')).toBe(10);
+    const seq = run(weighted, 30);
+    expect(seq.filter((k) => k === 'claude')).toHaveLength(20);
+    expect(seq.filter((k) => k === 'codex')).toHaveLength(10);
+  });
+
+  it(`an entry added later, or one a host could not run, catches up by at most ${MAX_BEHIND} extra turns, then takes turns`, () => {
+    const history = Array.from({ length: 80 }, (_, i) => (i % 2 ? 'codex' : 'claude'));
+    const three = splitBuilders({ defaults: { engine_split: ['claude', 'codex', 'gemini'] } });
+    const next = run(three, 12, history);
+    // A burst of a few, never 40 in a row; then each entry about a third.
+    let streak = 0;
+    for (const k of next) { if (k !== 'gemini') break; streak++; }
+    expect(streak).toBeLessThanOrEqual(MAX_BEHIND + 2);
+    expect(next.slice(4)).toEqual(['claude', 'codex', 'gemini', 'claude', 'codex', 'gemini', 'claude', 'codex']);
+    // Codex left out on one host for 30 starts, then offered again: a short catch-up, not 30 in a row.
+    const away = Array.from({ length: 30 }, () => 'claude');
+    const back = run(two, 8, away);
+    expect(back.slice(0, 4)).toEqual(['codex', 'codex', 'codex', 'codex']);
+    expect(back.slice(4)).toEqual(['claude', 'codex', 'claude', 'codex']);
+    expect(back).toContain('claude');
   });
 });
 
@@ -65,6 +82,10 @@ describe('splitApplies', () => {
     expect(splitApplies({ ...plain, walnut_agent: true }, {})).toBe(false);
     expect(splitApplies({ ...plain, routine_start: {} }, {})).toBe(false);
     expect(splitApplies({ ...plain, plugin_only: 'x' }, {})).toBe(false);
+    // A reviewer subtask takes no turn; a top-level task titled "Review ..." is work and does.
+    expect(splitApplies({ ...plain, parent_task_id: 'p', title: 'Review round 2: settings (GPT)' }, {})).toBe(false)
+    expect(splitApplies({ ...plain, title: 'Review the onboarding flow' }, {})).toBe(true)
+    expect(isReviewerTask({ parent_task_id: 'p', title: 'Fix review comments' })).toBe(false)
     for (const source of ['engine-switch', 'transfer', 'auto-recover', 'restart', 'folder-gone', 'start-queue']) {
       expect(splitApplies(plain, { source })).toBe(false);
     }

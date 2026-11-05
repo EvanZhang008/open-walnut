@@ -52,6 +52,8 @@ interface Metric {
 const ownPartial = (r: EngineCompareRow) => r.partialCost;
 const reviewPartial = (r: EngineCompareRow) => r.reviewPartialCost ?? 0;
 const noUsage = (r: EngineCompareRow) => r.noUsage ?? 0;
+/** None of a column's tasks has usage recorded: its cost is unknown, not $0. */
+const allUnknown = (r: EngineCompareRow) => r.done + r.open > 0 && noUsage(r) >= r.done + r.open;
 /** Tasks whose tokens leave something out (an older server sends only noUsage). */
 const tokensPartial = (r: EngineCompareRow) => r.partialTokens ?? noUsage(r);
 const tasksWord = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
@@ -77,14 +79,14 @@ const METRICS: Metric[] = [
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
   { id: 'time', label: 'Median time to done', help: 'From its first session starting to its first completion.', value: (r) => r.medianHours, show: hours, lower: true },
   { id: 'cost', label: 'Median cost per task', value: (r) => r.medianCostUsd, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: ownPartial },
-  { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => r.costUsd, show: (n) => money(n ?? 0), partial: ownPartial },
+  { id: 'total', label: 'Total cost', help: 'Every task counted here, open ones included; reviewer tasks are not in it.', value: (r) => (allUnknown(r) ? null : r.costUsd), show: (n) => (n === null ? '-' : money(n)), partial: ownPartial },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: tokensPartial },
   { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a title starting with "Review" or naming a reviewer): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.', value: (r) => r.reviewCostPerTask, show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of its finished tasks that were reopened.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
-  { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counted in the column the split assigned; counting only the split\'s tasks, the task itself stays there too.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
+  { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counted in the column the split assigned; counting only the split\'s tasks, the task itself stays there too. A Claude Code task whose subagents ran mostly on another model counts as moved as well.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
 ];
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
@@ -122,8 +124,12 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
   const label = (key: string) => data?.rows.find((r) => r.key === key)?.label ?? key;
 
   const split = data?.split;
+  const sameWeights = !!split && split.entries.every((e) => e.weight === split.entries[0]?.weight);
+  const names = split?.entries.map((e) => e.label) ?? [];
   const splitLine = !split ? null : split.on
-    ? `New tasks are shared: ${split.entries.map((e) => `${e.label} ${e.weight}`).join(' : ')}. A task that names its own engine keeps it.`
+    ? sameWeights
+      ? `New tasks take turns between ${names.slice(0, -1).join(', ')} and ${names.at(-1)}. A task that names its own engine keeps it.`
+      : `New tasks are shared ${split.entries.map((e) => `${e.label} ${e.weight}`).join(' : ')}. A task that names its own engine keeps it.`
     : 'New tasks all run on the default engine. Turn on "Share new tasks" in Settings, Sessions to spread them.';
 
   return (

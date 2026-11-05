@@ -815,6 +815,8 @@ export interface Task {
   engine_fallback?: EngineFallbackNote | null;
   /** The engine split's pick for this task's first start (core/agents/engine-split.ts). */
   engine_pick?: { key: string; engine: SessionEngine; model?: string; at: string };
+  /** Starts of this task that failed (last_start keeps only the latest attempt). */
+  start_failures?: number;
   /** How many times the task was reopened after it was completed (more work sent to it). */
   reopens?: number;
   /** When the task was first completed; completed_at is cleared by a reopen and set again by the next completion. */

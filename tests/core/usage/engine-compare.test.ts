@@ -259,6 +259,14 @@ describe('aggregateEngineCompare', () => {
   });
 });
 
+describe('errors that a later start hides', () => {
+  it('a start that failed before a session counts as an error even after a later start succeeded', () => {
+    const at = '2026-11-02T00:00:00.000Z';
+    const t = done('retried', 1, { start_failures: 1, last_start: { id: 'ok', at, state: 'started', engine: 'codex' } });
+    expect(aggregateEngineCompare(input([t], {})).tasks[0].errored).toBe(true);
+  });
+});
+
 describe('taskSpend', () => {
   it('gives a task to the engine and model family that carried most of it, models of one family summed', async () => {
     const { taskSpend } = await import('../../../src/core/usage/engine-compare.js');
@@ -273,5 +281,27 @@ describe('taskSpend', () => {
     expect(spend.engine).toBe('claude');
     expect(modelFamily(spend.model)).toBe('Claude');
     expect(spend).toMatchObject({ tokens: 1000, unknown: 3 });
+  });
+
+  it('dollars decide before tokens: a cheaper model with many tokens loses to a dearer one with few', async () => {
+    const { taskSpend } = await import('../../../src/core/usage/engine-compare.js');
+    const row = (engine: string, model: string, input: number) => ({
+      date: '2026-11-02', host: '', source: 'session', engine, sessionId: 's1', taskId: 't1', model, agent: '', band: '',
+      calls: 1, input, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, unknown: 0,
+    });
+    const priced = async (rows: ReturnType<typeof row>[]) => {
+      const rollup = { setThresholds: () => {}, query: () => rows } as unknown as Parameters<typeof taskSpend>[0];
+      return (await taskSpend(rollup, undefined, () => undefined)).get('t1')!;
+    };
+    // A cheap model with many tokens against a dear one with a hair more dollars and far fewer tokens
+    // (the old cost * 1e9 + tokens weight gave it to the cheap one).
+    const cheap = await priced([row('codex', 'claude-haiku-4-5', 2_000_000)]);
+    const perToken = (await priced([row('claude', 'claude-opus-4-1', 1_000_000)])).costUsd / 1_000_000;
+    expect(cheap.costUsd).toBeGreaterThan(0);
+    expect(perToken).toBeGreaterThan(0);
+    const dearTokens = Math.ceil((cheap.costUsd + 0.0005) / perToken);
+    expect(dearTokens).toBeLessThan(1_000_000);
+    const spend = await priced([row('codex', 'claude-haiku-4-5', 2_000_000), row('claude', 'claude-opus-4-1', dearTokens)]);
+    expect(spend.engine).toBe('claude');
   });
 });

@@ -13,7 +13,7 @@
  * "review"); a task's review count is how many it had.
  */
 import type { SessionEngine, Task } from '../types.js';
-import { builderLabel, splitBuilders } from '../agents/engine-split.js';
+import { builderLabel, REVIEW_RE, splitBuilders } from '../agents/engine-split.js';
 import { resolveEngine } from '../agents/engine-registry.js';
 import type { CostRollup } from './cost-rollup.js';
 import { CostPricer } from './cost-report.js';
@@ -133,8 +133,6 @@ export interface EngineCompare {
 export const AUTO_SPLIT_MIN = 10;
 
 export const TASKS_MAX = 60;
-/** A reviewer subtask: its title starts with "review" (after a bracketed tag) or names a reviewer. */
-const REVIEW_RE = /^\s*(?:\[[^\]]*\]\s*)?(?:code |ui |ux |design |final |second |independent )?review\b|\breviewer\b/i;
 
 /** The model family an engine runs when nothing says otherwise. */
 const ENGINE_FAMILY: Record<string, ModelFamily> = { claude: 'Claude', codex: 'GPT', gemini: 'Gemini' };
@@ -246,7 +244,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const errored = sessionsOf(t).some((id) => {
       const s = input.sessions.get(id);
       return s?.process_status === 'error' || (s?.errorCount ?? 0) > 0 || !!s?.status_history?.some((h) => h.process_status === 'error');
-    }) || t.last_start?.state === 'failed';
+    }) || t.last_start?.state === 'failed' || (t.start_failures ?? 0) > 0;
     candidates.push({
       byCost, byPick, taskId: t.id, title: t.title, project: t.project ?? '', key: byCost.key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
@@ -332,23 +330,33 @@ export async function taskSpend(rollup: CostRollup, overrides: Record<string, Us
   const thresholds = priceThresholds(overrides);
   rollup.setThresholds(thresholds);
   const pricer = new CostPricer(thresholds, overrides);
-  const out = new Map<string, TaskSpend & { top: number }>();
-  const weightOf = new Map<string, number>();
+  const out = new Map<string, TaskSpend>();
+  // Per task, what each engine + model family carried (the columns: Opus and Sonnet are one Claude column).
+  const groups = new Map<string, Map<string, { engine: string; model: string; cost: number; tokens: number }>>();
   for (const r of rollup.query({ sources: ['session'], by: ['engine', 'session', 'task'] })) {
     const taskId = (r.taskId as string | null) ?? sessionTask(r.sessionId as string);
     if (!taskId) continue;
     const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
     const tokens = p.input + p.output + p.cacheRead + p.cacheWrite5m + p.cacheWrite1h;
-    const acc = out.get(taskId) ?? { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, unknown: 0, engine: r.engine, model: r.model, top: -1 };
+    const acc = out.get(taskId) ?? { costUsd: 0, tokens: 0, outputTokens: 0, unpriced: 0, unknown: 0, engine: r.engine, model: r.model };
     acc.costUsd += p.costUsd; acc.tokens += tokens; acc.outputTokens += p.output; acc.unpriced += p.unpriced;
     acc.unknown += Number(r.unknown) || 0;
-    // The engine and model family that carried most of it, summed the way the columns are (Opus and
-    // Sonnet are one Claude column): cost first, tokens break the tie for unpriced rows.
-    const wk = `${taskId}\u0000${r.engine}\u0000${modelFamily(r.model) ?? 'Other'}`;
-    const w = (weightOf.get(wk) ?? 0) + p.costUsd * 1e9 + tokens;
-    weightOf.set(wk, w);
-    if (w > acc.top) { acc.top = w; acc.engine = r.engine; acc.model = r.model; }
     out.set(taskId, acc);
+    const byGroup = groups.get(taskId) ?? new Map();
+    const gk = `${r.engine}\u0000${modelFamily(r.model) ?? 'Other'}`;
+    const g = byGroup.get(gk) ?? { engine: r.engine, model: r.model, cost: 0, tokens: 0 };
+    g.cost += p.costUsd; g.tokens += tokens;
+    byGroup.set(gk, g);
+    groups.set(taskId, byGroup);
   }
-  return new Map([...out].map(([id, { top: _top, ...s }]) => [id, s]));
+  // Dollars first; tokens only break a tie (unpriced work, or equal cost).
+  for (const [taskId, byGroup] of groups) {
+    let top: { engine: string; model: string; cost: number; tokens: number } | null = null;
+    for (const g of byGroup.values()) {
+      if (!top || g.cost > top.cost + 1e-12 || (Math.abs(g.cost - top.cost) <= 1e-12 && g.tokens > top.tokens)) top = g;
+    }
+    const acc = out.get(taskId)!;
+    acc.engine = top!.engine; acc.model = top!.model;
+  }
+  return out;
 }

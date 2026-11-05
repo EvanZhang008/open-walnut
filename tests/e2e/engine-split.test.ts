@@ -94,6 +94,15 @@ describe('the engine split', () => {
     expect(next.enginePick?.key).toBe('claude')
   }, 60_000)
 
+  it("a reviewer subtask takes no turn of the split, so work tasks still alternate", async () => {
+    const work = await op('task_create', { title: 'Work before review', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
+    const review = await api('POST', '/api/tasks', { title: 'Review the change', priority: 'none', project: 'Marina', parent_task_id: work.id })
+    const started = await startSessionForTask({ taskIdPrefix: review.body.task.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
+    expect(started.enginePick).toBeUndefined()
+    const next = await op('task_create', { title: 'Work after review', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
+    expect(next.enginePick?.key).not.toBe(work.enginePick?.key)
+  }, 60_000)
+
   it('a start that waited (the queue, a workspace) runs on the pick its first try made', async () => {
     const placeholder = await op('task_create', { title: 'Queued start', project: 'Marina', record_only: true })
     // Its first try picked Claude Code on another model, then waited in the running-subtask queue.
@@ -105,13 +114,18 @@ describe('the engine split', () => {
 
   it('a start that failed before a turn is retried on the engine the split gave it', async () => {
     const placeholder = await op('task_create', { title: 'Failed first start', project: 'Marina', record_only: true })
-    // The failure names the split's pick and the way to choose another engine.
-    await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: path.join(WALNUT_HOME, 'missing'), message: 'Ready', expectReply: false }))
-      .rejects.toThrow(/the engine split's pick for this task.*retry with engine/)
+    // The engine fails to start: the failure names the split's pick and the way to choose another engine.
+    daemon.injectStartFault('mkfifo failed: injected')
+    try {
+      await expect(startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false }))
+        .rejects.toThrow(/the engine split's pick for this task.*retry with engine/)
+    } finally { daemon.injectStartFault(null) }
     const first = (await task(placeholder.id)).engine_pick
     expect(first?.key).toBeTruthy()
     const retried = await startSessionForTask({ taskIdPrefix: placeholder.id, cwd: WALNUT_HOME, message: 'Ready', expectReply: false })
     expect(retried.enginePick).toMatchObject({ key: first!.key, reused: true })
+    // The failure is kept after the retry replaced last_start, so the comparison still counts it.
+    expect((await task(placeholder.id)).start_failures ?? 0).toBeGreaterThanOrEqual(1)
     await expect.poll(async () => (await getSessionsForTask(placeholder.id)).at(-1)?.cliModel ?? '', { timeout: 20_000 })
       .toSatisfy((m: string) => /sonnet/i.test(m) === (first!.key === 'claude:sonnet'))
   }, 60_000)
@@ -133,6 +147,8 @@ describe('the engine split', () => {
     ])
     const started = both.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof startSessionForTask>>>[]
     expect(started.length).toBeGreaterThanOrEqual(1)
+    // A start refused for another reason (here: the task is already starting) does not name the split's pick.
+    for (const r of both) if (r.status === 'rejected') expect(String(r.reason)).not.toContain("engine split's pick")
     const kept = (await task(placeholder.id)).engine_pick
     expect(kept?.key).toBe(started[0].value.enginePick?.key)
     await expect.poll(async () => (await getSessionsForTask(placeholder.id)).length, { timeout: 20_000 }).toBeGreaterThan(0)
@@ -157,11 +173,11 @@ describe('the engine split', () => {
     expect(finished).toMatchObject({ done: true, reopens: 1, reviews: 1, split: true })
     const row = r.body.rows.find((x: { key: string }) => x.key === finished.key)
     expect(row).toMatchObject({ engine: 'claude', done: 1, reopens: 1, reviewsPerTask: 1 })
-    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(10)
-    expect(r.body.taskCount).toBe(10)
+    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(12)
+    expect(r.body.taskCount).toBe(12)
     // Only the split's own picks: the starts that named an engine or a model drop out.
     const fair = await api('GET', '/api/usage/engines?project=Marina&split=1')
-    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 8 })
+    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 10 })
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
     expect(r.body.projects).toEqual([{ project: 'Marina', tasks: expect.any(Number) }])
   }, 60_000)

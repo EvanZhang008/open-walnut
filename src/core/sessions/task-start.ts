@@ -286,8 +286,9 @@ async function splitPick(task: Task, params: SessionStartParams) {
  */
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
   let result: SessionStartResult;
+  const picked: { split?: { key: string; engine: SessionEngine; model?: string } } = {};
   try {
-    result = await startSessionForTaskNow(params);
+    result = await startSessionForTaskNow(params, picked);
   } catch (err) {
     const { HostsFullError } = await import('./host-admission.js');
     if (err instanceof HostsFullError) {
@@ -300,7 +301,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       throw new HostsFullError(`Task ${d.taskId} did not start: ${why}.${where} Retry task_start with this id once one of your running `
         + `tasks ends; when the user asked for it now, pass user_request with their words, which starts it at once.`, d);
     }
-    await nameSplitPickInFailure(err, params);
+    if (picked.split) await nameSplitPickInFailure(err, picked.split);
     throw err;
   }
   const { clearStartQueue } = await import('./start-queue.js');
@@ -309,15 +310,14 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
 }
 
 /**
- * A failed start that ran on the split's pick says so, and how to pick another: a retry reuses the
- * pick, so an engine that keeps failing would otherwise be retried forever.
+ * A start that the split put on an engine and that failed says so, and how to pick another: a
+ * retry reuses the pick, so an engine that keeps failing would otherwise be retried forever.
+ * Only a start whose engine this call took from the split (never a refusal before that).
  */
-async function nameSplitPickInFailure(err: unknown, params: SessionStartParams): Promise<void> {
-  if (!(err instanceof Error) || params.engine !== undefined || !params.taskIdPrefix) return;
-  const pick = await getTask(params.taskIdPrefix).then((t) => t.engine_pick, () => undefined);
-  if (!pick || err.message.includes('engine split')) return;
+async function nameSplitPickInFailure(err: unknown, pick: { engine: SessionEngine; model?: string }): Promise<void> {
+  if (!(err instanceof Error) || err.message.includes('engine split')) return;
   const { builderLabel } = await import('../agents/engine-split.js');
-  try { err.message += ` (It was to run on ${builderLabel(pick)}, the engine split's pick for this task; a retry uses it again, so if that engine keeps failing, retry with engine, for example "claude", to choose another.)`; } catch { /* a read-only message */ }
+  try { err.message += ` (This start ran on ${builderLabel(pick)}, the engine split's pick for this task, and a retry uses it again: if that engine is what failed, retry with engine, for example "claude", to choose another.)`; } catch { /* a read-only message */ }
 }
 
 /** A start no host had room for, as the task's last start (unless another start is under way). */
@@ -327,7 +327,7 @@ async function recordStartRefused(taskId: string, error: string, host: string): 
   }), { source: 'task-start' }).catch(() => null);
 }
 
-async function startSessionForTaskNow(params: SessionStartParams): Promise<SessionStartResult> {
+async function startSessionForTaskNow(params: SessionStartParams, picked: { split?: { key: string; engine: SessionEngine; model?: string } } = {}): Promise<SessionStartResult> {
   const answerBy = params.answerWithinMs !== undefined ? Date.now() + params.answerWithinMs : undefined;
   // `host: "@ios"` asks for what a host has (host-select.ts): resolved to one host before anything else reads it.
   params = await resolveHostSelector(params);
@@ -543,7 +543,10 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     }
     const settle = async (updates: Partial<NonNullable<Task['last_start']>>) => {
       try {
-        await updateTaskRaw(task.id, { last_start: { ...attempt, ...updates } },
+        // A failed start is counted for good: a later start replaces last_start, and the comparison
+        // (engine-compare.ts) must still see that this task's engine once failed to start.
+        await updateTaskRaw(task.id, (current) => ({ last_start: { ...attempt, ...updates },
+          ...(updates.state === 'failed' ? { start_failures: (current.start_failures ?? 0) + 1 } : {}) }),
           { source: 'task-start', shouldUpdate: (current) => current.last_start?.id === attempt.id });
       } catch (error) {
         log.session.error('Failed to persist task start outcome', { taskId: task.id, attemptId: attempt.id, error: String(error) });
@@ -556,6 +559,8 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       applied: appliedLaunchFields(task, params, launch), ...(placement ? { placement } : {}),
       ...(fallback ? { fallback: fallback.note } : {}),
     ...(split ? { enginePick: split } : {}) };
+    // From here the start is the engine's to make: a failure from now on may be the engine's own.
+    if (split) picked.split = split;
     const work = (async (): Promise<SessionStartResult> => {
       try {
         if (recovery && previous) {

@@ -73,13 +73,37 @@ export function splitBuilders(config: { defaults?: { engine_split?: unknown } } 
   return out.length >= 2 ? out : [];
 }
 
-/** The entry furthest below its share (fewest picks per unit of weight); ties go to the earlier entry. */
-export function chooseBuilder(builders: readonly SplitBuilder[], counts: ReadonlyMap<string, number>): SplitBuilder | null {
+/** How many turns an entry may run ahead of or behind its share. */
+export const MAX_BEHIND = 2;
+
+/**
+ * Each entry's turns owed, from the recent picks in the order they were made: every pick of a
+ * listed entry hands each entry its share of one turn and takes one turn from the entry picked.
+ * No entry is ever more than MAX_BEHIND turns behind or ahead, so an entry added later, or one
+ * a host could not run for a while, catches up by at most that much and then takes turns
+ * (2026-11-05 review: a new entry took every task until its 14-day count caught up).
+ */
+export function splitCredits(builders: readonly SplitBuilder[], sequence: readonly string[]): Map<string, number> {
+  const total = builders.reduce((a, b) => a + b.weight, 0);
+  const credit = new Map(builders.map((b) => [b.key, 0]));
+  for (const key of sequence) {
+    if (!credit.has(key)) continue;
+    for (const b of builders) {
+      let c = credit.get(b.key)! + b.weight / total - (b.key === key ? 1 : 0);
+      c = Math.max(-MAX_BEHIND, Math.min(MAX_BEHIND, c));
+      credit.set(b.key, c);
+    }
+  }
+  return credit;
+}
+
+/** The entry owed the most turns (splitCredits); ties go to the earlier entry. */
+export function chooseBuilder(builders: readonly SplitBuilder[], credits: ReadonlyMap<string, number>): SplitBuilder | null {
   let best: SplitBuilder | null = null;
-  let bestScore = Infinity;
+  let bestScore = -Infinity;
   for (const b of builders) {
-    const score = (counts.get(b.key) ?? 0) / b.weight;
-    if (score < bestScore) { best = b; bestScore = score; }
+    const score = credits.get(b.key) ?? 0;
+    if (score > bestScore + 1e-9) { best = b; bestScore = score; }
   }
   return best;
 }
@@ -90,14 +114,24 @@ export function builderLabel(b: Pick<SplitBuilder, 'engine' | 'model'>): string 
   return b.model ? `${name} · ${b.model}` : name;
 }
 
+/** A reviewer subtask: its title starts with "review" (after a bracketed tag) or names a reviewer. */
+export const REVIEW_RE = /^\s*(?:\[[^\]]*\]\s*)?(?:code |ui |ux |design |final |second |independent )?review\b|\breviewer\b/i;
+
+/** A reviewer subtask counts toward its parent's work (engine-compare.ts), so it takes no turn of the split. */
+export function isReviewerTask(task: { parent_task_id?: string; title?: string }): boolean {
+  return !!task.parent_task_id && REVIEW_RE.test(task.title ?? '');
+}
+
 /** Does this task's start take part in the split at all? */
 export function splitApplies(
-  task: { org_role?: string; walnut_agent?: boolean; project?: string; routine_start?: unknown; plugin_only?: string },
+  task: { org_role?: string; walnut_agent?: boolean; project?: string; routine_start?: unknown; plugin_only?: string; parent_task_id?: string; title?: string },
   params: { engine?: string; model?: string; effort?: string; source?: string },
 ): boolean {
   if (params.engine !== undefined || params.effort) return false;
   if (params.model && params.model !== 'default') return false;
   if (task.org_role || task.walnut_agent || task.routine_start || task.plugin_only) return false;
+  // A lead's reviewers alternate with its work tasks: given turns, they would put all the work on one engine.
+  if (isReviewerTask(task)) return false;
   // A Personal AI ask (caller-placement.ts isAskTask): its agent's persona picks its engine.
   if (/^ask /i.test((task.project ?? '').trim())) return false;
   // Starts that continue, replace or recover a session keep the engine they had.
@@ -128,29 +162,36 @@ const RESERVE_MS = 120_000;
 /** Tests only. */
 export function _resetSplitReservations(): void { reserved.length = 0; }
 
+type Recent = { counts: Map<string, number>; tasks: Set<string>; sequence: string[] };
+
 /** Adds this process's picks the file does not hold yet. Synchronous on purpose (see pickSplitEngine). */
-function withReserved(file: { counts: Map<string, number>; tasks: Set<string> }, nowMs: number): Map<string, number> {
+function withReserved(file: Recent, nowMs: number): Recent {
   for (let i = reserved.length - 1; i >= 0; i--) if (nowMs - reserved[i].at > RESERVE_MS) reserved.splice(i, 1);
   const counts = new Map(file.counts);
-  for (const r of reserved) if (!file.tasks.has(r.taskId)) counts.set(r.key, (counts.get(r.key) ?? 0) + 1);
-  return counts;
+  const sequence = [...file.sequence];
+  for (const r of reserved) {
+    if (file.tasks.has(r.taskId)) continue;
+    counts.set(r.key, (counts.get(r.key) ?? 0) + 1);
+    sequence.push(r.key);
+  }
+  return { counts, tasks: file.tasks, sequence };
 }
 
 /** Picks per entry key within the window, this process's unrecorded picks included. */
 export async function recentPickCounts(nowMs = Date.now()): Promise<Map<string, number>> {
-  return withReserved(await filePicks(nowMs), nowMs);
+  return withReserved(await filePicks(nowMs), nowMs).counts;
 }
 
-async function filePicks(nowMs: number): Promise<{ counts: Map<string, number>; tasks: Set<string> }> {
+async function filePicks(nowMs: number): Promise<Recent> {
   const file = normalizePicks(await readJsonFile<unknown>(picksFile(), null));
   const counts = new Map<string, number>();
   const tasks = new Set<string>();
-  for (const p of file.picks) {
-    if (nowMs - Date.parse(p.at) > SPLIT_WINDOW_MS) continue;
+  const recent = file.picks.filter((p) => nowMs - Date.parse(p.at) <= SPLIT_WINDOW_MS).sort((a, b) => a.at.localeCompare(b.at));
+  for (const p of recent) {
     counts.set(p.key, (counts.get(p.key) ?? 0) + 1);
     tasks.add(p.taskId);
   }
-  return { counts, tasks };
+  return { counts, tasks, sequence: recent.map((p) => p.key) };
 }
 
 /** Keep one pick (one per task: a task picked again replaces its earlier pick). */
@@ -186,8 +227,8 @@ export async function pickSplitEngine(
   }
   // Reading the reservations, choosing and reserving happen with no await in between,
   // so a start running at the same time always sees this one.
-  const counts = withReserved(await filePicks(nowMs), nowMs);
-  const chosen = chooseBuilder(usable, counts);
+  const { counts, sequence } = withReserved(await filePicks(nowMs), nowMs);
+  const chosen = chooseBuilder(usable, splitCredits(builders, sequence));
   if (!chosen) return null;
   reserved.push({ key: chosen.key, taskId, at: nowMs });
   return {
