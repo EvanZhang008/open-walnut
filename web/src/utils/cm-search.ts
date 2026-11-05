@@ -21,7 +21,7 @@ interface SearchVal {
   active: number;
 }
 
-const setSearchEffect = StateEffect.define<{ query: string; caseSensitive: boolean } | null>();
+const setSearchEffect = StateEffect.define<{ query: string; caseSensitive: boolean; pick?: boolean } | null>();
 const setActiveEffect = StateEffect.define<number>();
 
 function computeRanges(doc: Text, query: string, caseSensitive: boolean): { from: number; to: number }[] {
@@ -49,14 +49,16 @@ const searchField = StateField.define<SearchVal | null>({
       if (e.is(setSearchEffect)) {
         if (!e.value?.query) return null;
         const ranges = computeRanges(tr.newDoc, e.value.query, e.value.caseSensitive);
-        return { ...e.value, ranges, active: ranges.length ? 0 : -1 };
+        const pick = e.value.pick !== false;
+        return { query: e.value.query, caseSensitive: e.value.caseSensitive, ranges, active: ranges.length && pick ? 0 : -1 };
       }
       if (e.is(setActiveEffect) && value) return { ...value, active: e.value };
     }
     // Live edits while the bar is open: recompute so highlights track the doc.
     if (value && tr.docChanged) {
       const ranges = computeRanges(tr.newDoc, value.query, value.caseSensitive);
-      return { ...value, ranges, active: ranges.length ? Math.max(0, Math.min(value.active, ranges.length - 1)) : -1 };
+      const active = value.active < 0 ? -1 : Math.max(0, Math.min(value.active, ranges.length - 1));
+      return { ...value, ranges, active: ranges.length ? active : -1 };
     }
     return value;
   },
@@ -72,11 +74,14 @@ function statusOf(v: SearchVal | null): CmSearchStatus {
   return { count: v.ranges.length, index: v.active + 1 };
 }
 
-/** Set/replace the query. Scrolls the first match into view.
+/** Set/replace the query. Scrolls the first match into view, or with
+ *  `pick: false` (the page find's rule) only paints and counts, none chosen.
  *  `view.state` right after `dispatch` IS the post-effect state (CodeMirror
  *  applies transactions synchronously) — do not "fix" this into an async read. */
-export function cmUpdateSearch(view: EditorView, query: string, caseSensitive: boolean): CmSearchStatus {
-  view.dispatch({ effects: setSearchEffect.of(query ? { query, caseSensitive } : null) });
+export function cmUpdateSearch(
+  view: EditorView, query: string, caseSensitive: boolean, opts: { pick?: boolean } = {},
+): CmSearchStatus {
+  view.dispatch({ effects: setSearchEffect.of(query ? { query, caseSensitive, pick: opts.pick } : null) });
   const v = view.state.field(searchField);
   if (v && v.active >= 0) {
     view.dispatch({ effects: EditorView.scrollIntoView(v.ranges[v.active]!.from, { y: 'center' }) });
@@ -88,11 +93,49 @@ export function cmUpdateSearch(view: EditorView, query: string, caseSensitive: b
 export function cmNavSearch(view: EditorView, dir: 1 | -1): CmSearchStatus {
   const v = view.state.field(searchField);
   if (!v || !v.ranges.length) return { count: 0, index: 0 };
-  const next = (v.active + dir + v.ranges.length) % v.ranges.length;
+  const n = v.ranges.length;
+  let next = (v.active + dir + n) % n;
+  if (v.active < 0) {
+    // None chosen yet: the first press picks from where the reader is looking.
+    const top = view.lineBlockAtHeight(view.scrollDOM.scrollTop).from;
+    const bottom = view.lineBlockAtHeight(view.scrollDOM.scrollTop + view.scrollDOM.clientHeight).to;
+    if (dir === 1) { next = v.ranges.findIndex((r) => r.from >= top); if (next < 0) next = 0; }
+    else { next = n - 1; for (let i = n - 1; i >= 0; i--) if (v.ranges[i]!.to <= bottom) { next = i; break; } }
+  }
   view.dispatch({
     effects: [setActiveEffect.of(next), EditorView.scrollIntoView(v.ranges[next]!.from, { y: 'center' })],
   });
   return { count: v.ranges.length, index: next + 1 };
+}
+
+/** The live count (the field recounts on every edit). */
+export function cmSearchStatus(view: EditorView): CmSearchStatus {
+  return statusOf(view.state.field(searchField, false) ?? null);
+}
+
+/** Choose match `i` (0-based, clamped) and scroll to it. */
+export function cmSelectSearchIndex(view: EditorView, i: number): CmSearchStatus {
+  const v = view.state.field(searchField, false);
+  if (!v || !v.ranges.length || i < 0) return statusOf(v ?? null);
+  const k = Math.min(i, v.ranges.length - 1);
+  view.dispatch({ effects: [setActiveEffect.of(k), EditorView.scrollIntoView(v.ranges[k]!.from, { y: 'center' })] });
+  return { count: v.ranges.length, index: k + 1 };
+}
+
+/** Where the chosen match starts (0 when none). */
+export function cmActiveFrom(view: EditorView): number {
+  const v = view.state.field(searchField, false);
+  return v && v.active >= 0 ? v.ranges[v.active]!.from : 0;
+}
+
+/** Choose the first match at or after `pos` (else the last) and scroll to it. */
+export function cmSelectSearchAt(view: EditorView, pos: number): CmSearchStatus {
+  const v = view.state.field(searchField, false);
+  if (!v || !v.ranges.length) return { count: 0, index: 0 };
+  let i = v.ranges.findIndex((r) => r.to > pos);
+  if (i < 0) i = v.ranges.length - 1;
+  view.dispatch({ effects: [setActiveEffect.of(i), EditorView.scrollIntoView(v.ranges[i]!.from, { y: 'center' })] });
+  return { count: v.ranges.length, index: i + 1 };
 }
 
 export function cmCloseSearch(view: EditorView): void {

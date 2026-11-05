@@ -141,6 +141,9 @@ export interface MarkdownEditorPanelProps {
 
   /** Fallback shown when content === null (loading / failed). */
   loadingFallback?: React.ReactNode;
+  /** This document is the page's own: Cmd+F searches it from anywhere on the
+   *  page but a chat (the Notes page; utils/find-doc.ts). */
+  findPrimary?: boolean;
 }
 
 export function MarkdownEditorPanel({
@@ -167,6 +170,7 @@ export function MarkdownEditorPanel({
   showBreadcrumb = false,
   showBacklinks = false,
   showLocate = false,
+  findPrimary = false,
   breadcrumbPath,
   onNavigate,
   onLocate,
@@ -383,12 +387,36 @@ export function MarkdownEditorPanel({
     rawSaveTimerRef.current = setTimeout(() => { void flushRaw(key); }, RAW_SAVE_DEBOUNCE_MS);
   }, [key, flushRaw]);
 
+  // Toggled while the caret was in the note: it lands in the view that shows
+  // next, never on the page body (the raw view's editor is removed under it).
+  const refocusAfterToggleRef = useRef(false);
   const toggleRawMode = useCallback(() => {
+    refocusAfterToggleRef.current = !!contentElRef.current?.contains(document.activeElement);
     setRawMode((on) => {
       if (on) { if (rawDirtyRef.current) void flushRaw(key); }
       return !on;
     });
   }, [key, flushRaw]);
+
+  useEffect(() => {
+    if (!refocusAfterToggleRef.current) return;
+    refocusAfterToggleRef.current = false;
+    let tries = 0;
+    let timer = 0;
+    const place = () => {
+      const root = contentElRef.current;
+      const active = document.activeElement;
+      // Someone else took focus meanwhile (the find bar, a click): leave it.
+      if (!root || (active && active !== document.body && !root.contains(active))) return;
+      if (active && root.contains(active) && (active as HTMLElement).getClientRects().length) return;
+      const target = Array.from(root.querySelectorAll<HTMLElement>('[contenteditable="true"], .cm-content'))
+        .find((el) => el.getClientRects().length > 0);
+      if (target) { target.focus({ preventScroll: true }); return; }
+      if (++tries < 20) timer = window.setTimeout(place, 50);
+    };
+    timer = window.setTimeout(place, 0);
+    return () => window.clearTimeout(timer);
+  }, [rawMode]);
 
   // Cmd/Ctrl+E toggles raw ↔ rendered (Obsidian parity). Only when raw is enabled.
   useEffect(() => {
@@ -517,7 +545,14 @@ export function MarkdownEditorPanel({
           onDismiss={onDismissExternal}
         />
       )}
-      <div className="notes-editor-content" ref={contentElRef}>
+      {/* The document the page find searches, rendered or raw (utils/find-doc.ts);
+          "primary" when it is the page's own (the Notes page). */}
+      <div
+        className="notes-editor-content"
+        ref={contentElRef}
+        data-find-doc={findPrimary ? 'primary' : ''}
+        data-find-label={findPrimary ? 'Find in note' : 'Find in document'}
+      >
         {/* Both surfaces stay mounted; raw mode hides the rendered editor so the
             TipTap instance survives a flush. */}
         <div style={rawMode ? { display: 'none' } : undefined} className="notes-rendered-wrap">

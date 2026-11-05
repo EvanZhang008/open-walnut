@@ -70,6 +70,8 @@ interface NotesEditorProps {
   className?: string;
   /** Auto-focus when mounted */
   autoFocus?: boolean;
+  /** What the page find's bar calls this text (utils/find-doc.ts). */
+  findLabel?: string;
   /** Tasks for slash command /task search */
   tasks?: Task[];
   /** Currently focused task ID — pinned at top of search results */
@@ -206,7 +208,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -707,10 +709,13 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         editor={editor}
         // note-body: the note's own text (its inline links are prose, not controls).
         className={`notes-editor note-body ${className ?? ''}`}
+        // The page find searches a note's words, editable as they are (utils/find-doc.ts).
+        data-find-doc=""
+        data-find-label={findLabel}
       />
       {zoomed && <NoteZoom src={zoomed.src} alt={zoomed.alt} caption={zoomed.alt} onClose={closeZoom} />}
       {editor && dictation && !readOnly && (
-        <div className="editor-mic-dock">
+        <div className="editor-mic-dock" data-find-skip="">
           <EditorMic editor={editor} />
         </div>
       )}

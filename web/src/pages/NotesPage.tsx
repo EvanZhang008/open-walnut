@@ -23,6 +23,7 @@ import { quickStartSession, fetchSession } from '@/api/sessions';
 import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
 import { usePhoneNoteLayer, replaceUrlKeepingState } from '@/components/notes/usePhoneNoteLayer';
+import { primaryDoc, requestPageFind } from '@/utils/find-doc';
 
 const LS_WIDTH_KEY = 'open-walnut-notes-tree-width';
 const LS_TABS_KEY = 'open-walnut-notes-tabs';
@@ -406,7 +407,7 @@ export function NotesPage() {
   // Jump-to-match request state: {path, needles} of the search hit to scroll
   // to (set by handleSelect below); the nonce re-fires the effect when the
   // target note is ALREADY open (content/path unchanged → effect wouldn't rerun).
-  const pendingJumpRef = useRef<{ path: string; needles: string[] } | null>(null);
+  const pendingJumpRef = useRef<{ path: string; needles: string[]; findQueries: string[] } | null>(null);
   const [jumpNonce, setJumpNonce] = useState(0);
 
   // ── Jump-to-match: after a search-result open renders, scroll to the hit. ──
@@ -437,21 +438,64 @@ export function NotesPage() {
       el.classList.add(JUMP_FLASH_CLASS);
       setTimeout(() => el.classList.remove(JUMP_FLASH_CLASS), 1600);
     };
+    // The find bar opens on the searched word with every match painted and the
+    // one in the hit's paragraph chosen (2026-11-04, the user: clicking a hit
+    // showed "?/5", nothing highlighted in the note; the five were the sidebar's).
+    // The find's own reveal then brings the chosen match into view (and keeps
+    // it there through the editor's autofocus), so the block is not scrolled.
+    const finds = pending.findQueries.length > 0;
+    // The reader moved on (clicked or typed) while the note loaded: never open
+    // the bar over them then, it would take their keys.
+    let acted = false;
+    const onAct = () => { acted = true; };
+    // Focus moving into another field (the search box, by any means) counts too;
+    // the note's own editor taking focus as it loads does not.
+    const onFocusIn = (e: FocusEvent) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement) || primaryDoc()?.contains(t)) return;
+      if (t.matches('input, textarea, [contenteditable="true"]') && !t.closest('.page-find')) acted = true;
+    };
+    document.addEventListener('keydown', onAct, true);
+    document.addEventListener('pointerdown', onAct, true);
+    document.addEventListener('focusin', onFocusIn, true);
+    const openFind = (doc: Element | null, near: HTMLElement | null) => {
+      if (!finds || acted) return;
+      requestPageFind({ queries: pending.findQueries, near, doc, context: pending.needles[0] });
+    };
     const tryJump = () => {
       if (cancelled) return;
-      const root = document.querySelector('.notes-editor .tiptap') as HTMLElement | null;
+      // This page's note only: Home's Scratchpad editor stays mounted, hidden,
+      // earlier in the document, and a page-wide query found it first.
+      const doc = primaryDoc();
+      const tiptap = doc?.querySelector<HTMLElement>('.notes-editor .tiptap') ?? null;
+      const root = tiptap && tiptap.getClientRects().length ? tiptap : null;
+      // The raw view shows instead: the find picks the hit's text in its source.
+      if (!root && doc?.querySelector('.notes-raw-view .cm-editor')) { openFind(doc, null); return; }
       const el = root && findTextInDom(root, pending.needles);
       if (el) {
+        if (finds) {
+          openFind(doc, el);
+          el.classList.add(JUMP_FLASH_CLASS);
+          setTimeout(() => el.classList.remove(JUMP_FLASH_CLASS), 1600);
+          return;
+        }
         el.scrollIntoView({ block: 'center' });
         setTimeout(() => settle(el), 250);
         return;
       }
       // ~3s of retries: tiptap mounts after the loading spinner clears, and on
       // a loaded machine that can take well over the old 1.2s budget.
+      // Not located (the word is only in the title, a link's URL or the
+      // frontmatter): no bar, the note shows nothing to step through.
       if (++attempts < 25) setTimeout(tryJump, 120);
     };
     setTimeout(tryJump, 80);
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      document.removeEventListener('keydown', onAct, true);
+      document.removeEventListener('pointerdown', onAct, true);
+      document.removeEventListener('focusin', onFocusIn, true);
+    };
   }, [activeNotePath, content, jumpNonce]);
 
   // ── Auto-locate (#2): whenever the active tab changes, reveal it in the tree
@@ -522,14 +566,25 @@ export function NotesPage() {
 
   // Thin wrappers preserve the existing prop names consumed by tree / palette /
   // backlinks / wiki-link clicks — they all open in the ACTIVE tab by default.
-  const handleSelect = useCallback((path: string, opts?: { newTab?: boolean; scrollToText?: string | string[] }) => {
+  const handleSelect = useCallback((path: string, opts?: { newTab?: boolean; scrollToText?: string | string[]; findQueries?: string[] }) => {
     const needles = (Array.isArray(opts?.scrollToText) ? opts.scrollToText : [opts?.scrollToText])
       .filter((t): t is string => !!t && !!t.trim());
-    pendingJumpRef.current = needles.length ? { path, needles } : null;
+    pendingJumpRef.current = needles.length ? { path, needles, findQueries: opts?.findQueries ?? [] } : null;
     if (needles.length) setJumpNonce((n) => n + 1);
+    // A search hit: a bar left open from before goes now, not once the note
+    // loaded (it would search the new note for the old word meanwhile); the
+    // hit opens its own when its word is in the note.
+    if (opts?.findQueries?.length) requestPageFind({ queries: [] });
     openInTab(path, 'note', opts);
   }, [openInTab]);
-  const handlePreviewAttachment = useCallback((path: string) => openInTab(path, 'attachment'), [openInTab]);
+  // A search hit's word rides along, so a PDF opens searched for it (AttachmentPreview).
+  const [attachmentFind, setAttachmentFind] = useState<{ path: string; query: string } | null>(null);
+  const handlePreviewAttachment = useCallback((path: string, opts?: { findQueries?: string[] }) => {
+    // The word the search marked: the typed words may not be in the PDF verbatim.
+    const q = opts?.findQueries?.[opts.findQueries.length - 1] ?? '';
+    setAttachmentFind(q ? { path, query: q } : null);
+    openInTab(path, 'attachment');
+  }, [openInTab]);
 
   const handleActivateTab = useCallback((path: string) => { setActivePath(path); }, []);
 
@@ -915,7 +970,7 @@ export function NotesPage() {
         )}
         <div className="notes-editor-body">
           {activeTab?.kind === 'attachment' ? (
-            <AttachmentPreview notePath={activeTab.path} />
+            <AttachmentPreview notePath={activeTab.path} findQuery={attachmentFind?.path === activeTab.path ? attachmentFind.query : undefined} />
           ) : !activeNotePath ? (
             <NotesEmptyState onNewNote={() => handleQuickCreate('')} />
           ) : contentLoading ? (
@@ -961,7 +1016,7 @@ export function NotesPage() {
       {chatOpen && (
         <>
           <div className="notes-chat-divider" onPointerDown={chatResizePointerDown} title="Drag to resize" />
-          <div className="notes-chat-pane" style={{ flex: `0 0 ${chatWidth}px`, width: chatWidth }}>
+          <div className="notes-chat-pane" data-find-region style={{ flex: `0 0 ${chatWidth}px`, width: chatWidth }}>
             {(() => {
               // Dropdown switcher — only shown once there's something to switch
               // BETWEEN (a CC session or an agent side chat), so the plain agent

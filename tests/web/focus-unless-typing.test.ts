@@ -89,6 +89,7 @@ const KNOWN_DEFERRED_FOCUS: Array<{ file: string; call: string; why: string }> =
   { file: 'components/board/kanban/BoardKanban.tsx', call: '"kanban-add-task"]\')?.focus()', why: "the new lane's add-task button" },
   { file: 'components/board/kanban/KanbanCardMenu.tsx', call: 'items(menuRef.current)[0]?.focus()', why: 'the first menu item' },
   { file: 'components/board/kanban/KanbanCardMenu.tsx', call: 'items(flyRef.current).find(', why: 'the first enabled flyout item' },
+  { file: 'components/common/PageFind.tsx', call: 'editableIn(root)?.focus({ preventScroll: true })', why: 'only while focus sits on the page body (nobody is typing anywhere): the note view a find bar toggle just swapped in' },
   { file: 'components/common/ConfirmDialog.tsx', call: 'inputRef.current?.select(); else confirmRef.current?.focus()', why: "the prompt's one input, or the confirm button" },
   { file: 'components/notes/CommandPalette.tsx', call: 'inputRef.current?.focus()', why: "the palette's one input" },
   { file: 'components/notes/slash-commands/NoteLinkPanel.tsx', call: 'inputRef.current?.focus()', why: "the panel's one search input" },

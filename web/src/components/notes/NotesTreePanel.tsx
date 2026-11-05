@@ -6,7 +6,7 @@ import { isImeKey } from '@/hooks/usePanelKeyRouter';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
-import { jumpNeedles } from './jump-target';
+import { jumpNeedles, findQueries } from './jump-target';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { copyTextDeferred } from '@/utils/clipboard';
 
@@ -90,9 +90,9 @@ interface NotesTreePanelProps {
    * scrolls the editor to the first
    * occurrence of the matched text instead of landing at the top.
    */
-  onSelect: (path: string, opts?: { newTab?: boolean; scrollToText?: string | string[] }) => void;
+  onSelect: (path: string, opts?: { newTab?: boolean; scrollToText?: string | string[]; findQueries?: string[] }) => void;
   /** Preview an attachment (image/pdf) — distinct from onSelect, which markdown-loads. */
-  onPreviewAttachment: (path: string) => void;
+  onPreviewAttachment: (path: string, opts?: { findQueries?: string[] }) => void;
   /** Pointer resting on a note row: a hint that it is about to be opened (content prefetch). */
   onHoverNote?: (path: string) => void;
   onCreateNote: (path: string) => void;
@@ -477,12 +477,14 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   const openHit = useCallback((r: SearchResult, closeSearch: boolean) => {
     // Attachment hits (OCR/PDF text) open in the preview pane —
     // the note loader .md-suffixes the path and 404s on binaries.
-    if (r.matchType === 'attachment') onPreviewAttachment(r.path);
+    if (r.matchType === 'attachment') onPreviewAttachment(r.path, { findQueries: findQueries({ snippet: r.snippet, query: searchQuery }) });
     else {
       // Jump to the MATCH, not the top of the note: candidates are ordered
       // most-specific first (snippet context window → first mark → heading → raw query).
       onSelect(r.path, {
         scrollToText: jumpNeedles({ snippet: r.snippet, headingMatch: r.headingMatch, query: searchQuery.trim() }),
+        // ...and open the find bar on the word, that match chosen.
+        findQueries: findQueries({ snippet: r.snippet, query: searchQuery }),
       });
     }
     if (closeSearch) handleSearchChange('');

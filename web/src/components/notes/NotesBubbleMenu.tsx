@@ -65,6 +65,8 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
       pluginKey="notesBubbleMenu"
       shouldShow={shouldShow}
       className="notes-bubble-menu"
+      // Its buttons are chrome, never the note's text (utils/find-doc.ts).
+      data-find-skip=""
       options={{ placement: 'top', offset: 8 }}
     >
       <button

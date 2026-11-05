@@ -41,6 +41,9 @@ const PAINT_HALF = 600;
 
 /** Never searched: the find bar itself, form fields, anything opted out. */
 export const FIND_SKIP_SELECTOR = '.page-find, [data-find-skip]';
+/** A document the reader writes in (a note's editor): searched although it is
+ *  editable. Every other editable (a composer, a title being renamed) is not. */
+export const FIND_DOC_ATTR = 'data-find-doc';
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION', 'TEMPLATE']);
 /** Tags that end a run of text. Text in two different blocks is joined with a
@@ -63,7 +66,7 @@ export interface FindIndex {
   folded?: string;
 }
 
-interface ElInfo { skip: boolean; block: Element; pre: boolean }
+interface ElInfo { skip: boolean; block: Element; pre: boolean; doc: boolean }
 
 /** Walk `root`'s rendered text once. */
 export function buildFindIndex(root: Element, skipSelector = FIND_SKIP_SELECTOR): FindIndex {
@@ -76,11 +79,15 @@ export function buildFindIndex(root: Element, skipSelector = FIND_SKIP_SELECTOR)
     if (hit) return hit;
     const parent = el === root ? null : el.parentElement;
     const up = parent && parent !== rootParent ? resolve(parent) : null;
-    const editableRoot = el.getAttribute('contenteditable') !== null && (el as HTMLElement).isContentEditable;
+    // A document's editor is the text the reader came to search (2026-11-04: a
+    // note's own words were never found, because its editor is contenteditable).
+    // The root may sit inside one too (the find searches that note alone).
+    const doc = (up ? up.doc : !!el.closest(`[${FIND_DOC_ATTR}]`)) || el.hasAttribute(FIND_DOC_ATTR);
+    const editableRoot = !doc && el.getAttribute('contenteditable') !== null && (el as HTMLElement).isContentEditable;
     const skip = !!up?.skip || SKIP_TAGS.has(el.tagName) || editableRoot
       || (skipSelector ? el.matches(skipSelector) : false);
     const block = BLOCK_TAGS.has(el.tagName) || !up ? el : up.block;
-    const out = { skip, block, pre: !!up?.pre || el.tagName === 'PRE' };
+    const out = { skip, block, pre: !!up?.pre || el.tagName === 'PRE', doc };
     info.set(el, out);
     return out;
   };
@@ -217,34 +224,95 @@ export interface FindStatus {
   capped: boolean;
 }
 
+/** `a` starts before `b` in the document. */
+function rangeBefore(a: StaticRange, b: StaticRange): boolean {
+  if (a.startContainer === b.startContainer) return a.startOffset < b.startOffset;
+  return !!(a.startContainer.compareDocumentPosition(b.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
 export class PageFindController {
+  readonly kind = 'dom' as const;
   private index: FindIndex | null = null;
   private ranges: StaticRange[] = [];
   private capped = false;
   private active = -1;
+  /** The chosen number while the text is away (a recount found no match). */
+  private lostNum = -1;
   private query = '';
   private caseSensitive = false;
   private paintedLo = 0;
   private paintedHi = 0;
   /** What HL_FIND holds now, so an unchanged recount repaints nothing. */
   private painted: StaticRange[] = [];
+  /** What HL_FIND_ACTIVE holds now: re-registering the same match on every
+   *  recount (a class toggled anywhere in the root) left WebKit painting it
+   *  in the plain match colour, the chosen one no longer told apart. */
+  private paintedActive: StaticRange | null = null;
 
+  /**
+   * `view` = the box the reader sees the root through, when the root is not its
+   * own scroller (a note's editor scrolls inside its pane).
+   */
   constructor(
     readonly root: Element,
     private beforeScroll?: (el: Element) => void,
+    private readonly view: Element = root,
   ) {}
+
+  /**
+   * Search `query` and choose the match a Notes search hit came from: inside
+   * `near` (the block it was found in), the one where `context` (the hit's own
+   * text, which starts at the matched word) begins; else the first at or after
+   * `near`. Then bring it into view. Used when another surface opens the bar
+   * with a query (utils/find-doc.ts requestPageFind).
+   */
+  setQueryNear(query: string, caseSensitive: boolean, near: Node | null, context?: string): FindStatus {
+    this.setQuery(query, caseSensitive);
+    const n = this.ranges.length;
+    if (!n) return this.status();
+    let pick = 0;
+    if (near?.isConnected) {
+      const i = this.ranges.findIndex((r) => near.contains(r.startContainer)
+        || !!(near.compareDocumentPosition(r.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (i >= 0) pick = i;
+      // Several in that block: the k-th, k = the copies before the context.
+      const inside = this.ranges.filter((r) => near.contains(r.startContainer)).length;
+      if (i >= 0 && inside > 1 && context) pick = i + Math.min(inside - 1, copiesBefore(near, query, context, caseSensitive));
+    }
+    this.active = pick;
+    this.paint();
+    const r = this.ranges[pick];
+    if (r) revealRange(r, this.beforeScroll);
+    return this.status();
+  }
 
   /** The DOM changed: the next run re-walks it. */
   markDirty(): void { this.index = null; }
 
   /** New query: paint and count, never scroll, no match chosen. */
   setQuery(query: string, caseSensitive: boolean): FindStatus {
-    if (query === this.query && caseSensitive === this.caseSensitive && this.index) return this.status();
+    if (query === this.query && caseSensitive === this.caseSensitive) {
+      // Same query on a changed DOM (an edit not recounted yet): recount, and
+      // keep the chosen match, so next/previous moves on from it.
+      return this.index ? this.status() : this.refresh();
+    }
+    // Only Aa flipped: the chosen match stays chosen while it still matches,
+    // else the next one after it does (what a browser's find does).
+    const keep = query === this.query && this.active >= 0 ? this.ranges[this.active] : undefined;
     this.query = query;
     this.caseSensitive = caseSensitive;
     this.active = -1;
+    this.lostNum = -1;
     this.recompute();
+    if (keep && this.ranges.length) {
+      const after = this.ranges.findIndex((r) => !rangeBefore(r, keep));
+      this.active = after >= 0 ? after : this.ranges.length - 1;
+    }
     this.paint();
+    // Another match took its place (the chosen one stopped matching): show it,
+    // as next/previous do (a no-op for a match already in view).
+    const shown = keep && this.active >= 0 ? this.ranges[this.active] : undefined;
+    if (shown) revealRange(shown, this.beforeScroll);
     return this.status();
   }
 
@@ -266,7 +334,13 @@ export class PageFindController {
       }
       if (found < 0 && prevCount) found = Math.min(prevNum, this.ranges.length - 1);
       this.active = found;
+    } else if (this.ranges.length && this.lostNum >= 0) {
+      // The text was away for a moment (an editor re-rendering its whole
+      // document, a view toggling): the same number comes back chosen.
+      this.active = Math.min(this.lostNum, this.ranges.length - 1);
+      this.lostNum = -1;
     } else {
+      if (prev) this.lostNum = prevNum;
       this.active = -1;
     }
     this.paint();
@@ -278,6 +352,7 @@ export class PageFindController {
     if (!this.index) this.refresh();
     const n = this.ranges.length;
     if (!n) return this.status();
+    this.lostNum = -1;
     if (this.active < 0) this.active = this.pickFromView(dir);
     else this.active = (this.active + dir + n) % n;
     this.paint();
@@ -286,13 +361,31 @@ export class PageFindController {
     return this.status();
   }
 
+  /** Choose the n-th match (1-based) and bring it into view. */
+  selectIndex(n: number): FindStatus {
+    if (!this.index) this.refresh();
+    if (n < 1 || !this.ranges.length) return this.status();
+    this.active = Math.min(n, this.ranges.length) - 1;
+    this.paint();
+    revealRange(this.ranges[this.active]!, this.beforeScroll);
+    return this.status();
+  }
+
+  /** Bring the chosen match back into view if something scrolled it away. */
+  revealActive(): void {
+    const r = this.active >= 0 ? this.ranges[this.active] : undefined;
+    if (r && rangeViewPosition(r) !== 0) revealRange(r, this.beforeScroll);
+  }
+
   close(): void {
     unpaint(HL_FIND);
     unpaint(HL_FIND_ACTIVE);
     this.painted = [];
+    this.paintedActive = null;
     this.ranges = [];
     this.capped = false;
     this.active = -1;
+    this.lostNum = -1;
     this.query = '';
     this.index = null;
   }
@@ -329,7 +422,7 @@ export class PageFindController {
 
   /** Position against the scope's own viewport (ordered scopes only). */
   private rootPos(i: number, cache: OverflowCache): -1 | 0 | 1 {
-    return rangeViewPosition(this.ranges[i]!, cache, this.root);
+    return rangeViewPosition(this.ranges[i]!, cache, this.view);
   }
 
   private pickFromView(dir: 1 | -1): number {
@@ -406,8 +499,11 @@ export class PageFindController {
       paintRanges(HL_FIND, slice, FIND_PRIORITY);
       this.painted = slice;
     }
-    const a = this.active >= 0 ? this.ranges[this.active] : undefined;
-    paintRanges(HL_FIND_ACTIVE, a ? [a] : [], FIND_PRIORITY + 1);
+    const a = this.active >= 0 ? this.ranges[this.active]! : null;
+    if (!a || !this.paintedActive || !sameRanges([a], [this.paintedActive])) {
+      paintRanges(HL_FIND_ACTIVE, a ? [a] : [], FIND_PRIORITY + 1);
+    }
+    this.paintedActive = a;
   }
 
   /** The reader scrolled (debounced by the owner): move the painted window. */
@@ -423,6 +519,29 @@ export class PageFindController {
     const nearHi = hi + margin > this.paintedHi && this.paintedHi < n;
     if (nearLo || nearHi) this.paint({ lo, hi });
   }
+}
+
+/** Copies of `query` in `block`'s text before where `context` starts there
+ *  (both whitespace-collapsed; context shrunk from the right until it fits). */
+function copiesBefore(block: Node, query: string, context: string, caseSensitive: boolean): number {
+  const norm = (s: string) => {
+    const t = s.replace(/\s+/g, ' ');
+    return caseSensitive ? t : foldOnce(t);
+  };
+  const text = norm(block.textContent ?? '');
+  const q = norm(query);
+  let words = norm(context).trim().split(' ');
+  let at = -1;
+  while (words.length && at < 0) {
+    const needle = words.join(' ');
+    if (needle.length < q.length) break;
+    at = text.indexOf(needle);
+    words = words.slice(0, -1);
+  }
+  if (at < 0 || !q) return 0;
+  let k = 0;
+  for (let i = text.indexOf(q); i !== -1 && i < at; i = text.indexOf(q, i + q.length)) k++;
+  return k;
 }
 
 function sameRanges(a: readonly AbstractRange[], b: readonly AbstractRange[]): boolean {
@@ -475,10 +594,15 @@ export function makeRepaintScheduler(fn: () => void): { kick(): void; cancel(): 
 // ── Selection matches ───────────────────────────────────────────────────────
 
 /** The selected text worth echoing, or '' (too short, multi-line, in a field). */
-export function selectionNeedle(sel: Selection | null): string {
+export function selectionNeedle(sel: Selection | null, opts: { inDocs?: boolean } = {}): string {
   if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
   const anchor = sel.anchorNode;
   const el = anchor instanceof Element ? anchor : anchor?.parentElement;
+  // The find's seed: a selection in a note's editor is the reader's word too.
+  if (opts.inDocs && el?.closest(`[${FIND_DOC_ATTR}]`) && !el.closest('input, textarea, .page-find')) {
+    const t = sel.toString().trim();
+    return t.length >= 2 && t.length <= 200 && !/[\r\n]/.test(t) ? t : '';
+  }
   // Fields and editors handle their own selection; a file view and the Changed
   // tab paint their own matches, so echoing them here would double the tint.
   if (!el || el.closest('input, textarea, [contenteditable=""], [contenteditable="true"], .file-content-view, .session-diff-view, .page-find')) return '';

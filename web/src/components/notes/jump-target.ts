@@ -38,3 +38,18 @@ export function jumpNeedles(opts: {
   if (q) out.push(q);
   return [...new Set(out)];
 }
+
+/**
+ * What the page find searches when a hit opens its note: the words the user
+ * typed, else the word the search marked in the snippet (a fuzzy or stemmed
+ * hit whose typed form is not in the text). PageFind takes the first one the
+ * note holds (utils/find-doc.ts requestPageFind).
+ */
+export function findQueries(opts: { snippet?: string; query: string }): string[] {
+  const out: string[] = [];
+  const q = opts.query.trim();
+  if (q) out.push(q);
+  const markText = /<mark>([^<]{1,80})<\/mark>/.exec(opts.snippet ?? '')?.[1]?.trim();
+  if (markText) out.push(markText);
+  return [...new Set(out)];
+}

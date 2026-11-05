@@ -96,6 +96,7 @@ export function NotesEditorPanel({
       onApplyExternal={onApplyExternal}
       onDismissExternal={onDismissExternal}
       rawFlushIO={VAULT_RAW_IO}
+      findPrimary
       loadingFallback={
         <div className="notes-editor-empty">
           <div className="notes-editor-empty-content"><p>Failed to load note</p></div>

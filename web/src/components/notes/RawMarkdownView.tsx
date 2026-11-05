@@ -19,12 +19,13 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { EditorState } from '@codemirror/state';
+import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView, lineNumbers, highlightActiveLine, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
+import { cmSearchExtension } from '@/utils/cm-search';
 
 interface RawMarkdownViewProps {
   /** The note's current markdown body (frontmatter stripped) — the seed value. */
@@ -92,6 +93,9 @@ export function RawMarkdownView({ value, onChange }: RawMarkdownViewProps) {
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         EditorView.lineWrapping,
         rawViewTheme,
+        // The page find searches this view through CodeMirror (utils/find-doc.ts):
+        // its off-screen lines are not in the DOM.
+        cmSearchExtension(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) onChangeRef.current(u.state.doc.toString());
         }),
@@ -119,6 +123,9 @@ export function RawMarkdownView({ value, onChange }: RawMarkdownViewProps) {
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
       selection: { anchor: head },
+      // Not the reader's edit: the view mounts before the note's text arrives, and
+      // an undoable load made one Ctrl+Z empty the note (and save it empty).
+      annotations: Transaction.addToHistory.of(false),
     });
   }, [value]);
 

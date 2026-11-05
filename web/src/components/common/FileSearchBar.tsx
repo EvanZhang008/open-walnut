@@ -31,7 +31,25 @@ export function FileSearchBar({
   useEffect(() => { inputRef.current?.select(); }, []);
 
   return (
-    <div className="fv-search-bar" role="search">
+    <div
+      className="fv-search-bar"
+      role="search"
+      // A click on Aa or an arrow leaves the keys in the field (VS Code): WebKit
+      // gives a clicked button no focus, so focus fell to the page body and
+      // Escape or Enter after an arrow reached nothing.
+      onMouseDown={(e) => {
+        if (!(e.target instanceof Element && e.target.closest('button'))) return;
+        e.preventDefault();
+        inputRef.current?.focus({ preventScroll: true });
+      }}
+      // Escape from Aa or an arrow closes it too, not only from the field.
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }}
+    >
       <input
         ref={inputRef}
         className="fv-search-input"

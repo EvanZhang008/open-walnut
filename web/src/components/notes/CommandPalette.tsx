@@ -26,7 +26,7 @@ import { fetchNotesList, searchNotesHybrid } from '@/api/notes-v2';
 import type { NoteListItem, SearchResult, MatchType } from '@/api/notes-v2';
 import { renderNoteSnippet } from './notes-markdown';
 import { HighlightedTitle } from './HighlightedText';
-import { jumpNeedles } from './jump-target';
+import { jumpNeedles, findQueries } from './jump-target';
 import { noteHitLabel, type NoteHitLabel } from '../../../../src/core/note-hit-label';
 import { log } from '@/utils/log';
 
@@ -35,7 +35,7 @@ interface CommandPaletteProps {
    * Navigate to a note path (SPA — never page.goto). `opts.scrollToText` is set
    * for search hits so the editor jumps to the matched span, not the note top.
    */
-  onNavigate: (path: string, opts?: { scrollToText?: string | string[] }) => void;
+  onNavigate: (path: string, opts?: { scrollToText?: string | string[]; findQueries?: string[] }) => void;
   /**
    * Create (and open) a new note. `title` empty = a blank/untitled note with 0
    * required decisions (⌘↵ quick-capture). Returns the created path so the
@@ -46,7 +46,7 @@ interface CommandPaletteProps {
    * Preview a binary attachment hit (matchType 'attachment'). Attachments must
    * NOT go through onNavigate — the note loader force-appends .md and 404s.
    */
-  onPreviewAttachment?: (path: string) => void;
+  onPreviewAttachment?: (path: string, opts?: { findQueries?: string[] }) => void;
 }
 
 /** A unified palette row — either a jump-to-note target or a hybrid search hit. */
@@ -279,7 +279,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
       // Attachment hits (OCR/PDF text) open in the PREVIEW pane, never the note
       // loader (which .md-suffixes the path → 404 tab), and never enter recents.
       if (row.matchType === 'attachment' && onPreviewAttachment) {
-        onPreviewAttachment(row.path);
+        onPreviewAttachment(row.path, { findQueries: findQueries({ snippet: row.snippetRaw, query }) });
       } else {
         pushRecent(row.path);
         // Search hits jump to the matched region (ordered candidates: snippet
@@ -287,7 +287,9 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
         const scrollToText = row.kind === 'search'
           ? jumpNeedles({ snippet: row.snippetRaw, headingMatch: row.headingMatch, query })
           : [];
-        onNavigate(row.path, scrollToText.length ? { scrollToText } : undefined);
+        onNavigate(row.path, scrollToText.length
+          ? { scrollToText, findQueries: findQueries({ snippet: row.snippetRaw, query }) }
+          : undefined);
       }
     }
     setOpen(false);

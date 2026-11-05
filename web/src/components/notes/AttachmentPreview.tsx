@@ -18,7 +18,7 @@ import './notes-editor.css';
  *   - Office docs (docx/xlsx/pptx/…) → open card: local app (Word/Excel) via
  *     /reveal, plus a browser download fallback. Never rendered inline.
  */
-export function AttachmentPreview({ notePath }: { notePath: string }) {
+export function AttachmentPreview({ notePath, findQuery }: { notePath: string; findQuery?: string }) {
   const name = notePath.split('/').pop() || notePath;
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
   const url = attachmentUrl(notePath);
@@ -88,7 +88,9 @@ export function AttachmentPreview({ notePath }: { notePath: string }) {
             )}
           </div>
         ) : isPdf ? (
-          <iframe className="notes-attachment-pdf" src={url} title={name} />
+          // Opened from a search hit: the PDF viewer searches the word itself
+          // (Chromium's viewer reads #search=; WebKit's ignores it).
+          <iframe className="notes-attachment-pdf" src={findQuery ? `${url}#search=${encodeURIComponent(findQuery)}` : url} title={name} />
         ) : (
           // Office & other non-renderable files: open with the local default
           // app (Word/Excel/…). On failure (cloud mode, disallowed type, app
