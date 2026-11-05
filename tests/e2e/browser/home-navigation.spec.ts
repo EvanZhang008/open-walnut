@@ -1430,14 +1430,29 @@ test('a fold keeps the clicked row where it was, and a tier folds only its own p
   const atEnd = await topOf(juniper);
   const box = await scroller.boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  // A wheel's scroll lands over several frames (WebKit applies one in steps), so the room
+  // can be gone while the wheel is still moving the list: each read waits for the wheel's
+  // whole scroll to land and the scroller to rest.
+  const scrollTop = () => scroller.evaluate(el => el.scrollTop);
+  const resting = async () => { const was = await scrollTop(); await frames(); return (await scrollTop()) - was; };
+  const atEndScroll = await scrollTop();
   await page.mouse.wheel(0, -150);
   await expect.poll(() => topOf(juniper)).toBeGreaterThan(atEnd + 100);
+  await expect.poll(async () => atEndScroll - await scrollTop()).toBeGreaterThanOrEqual(149.5);
+  await expect.poll(resting).toBe(0);
+  const beforeWheel = { top: await topOf(juniper), scroll: await scrollTop() };
+  expect(beforeWheel.scroll).toBeGreaterThan(400);
   await page.mouse.wheel(0, -400);
   await expect.poll(() => scroller.evaluate(el => el.style.paddingBottom)).toBe('');
-  // The rows ride the wheel, nothing else: no jump when the room goes.
+  await expect.poll(async () => beforeWheel.scroll - await scrollTop()).toBeGreaterThanOrEqual(399.5);
+  await expect.poll(resting).toBe(0);
+  // The rows ride the wheel, nothing else: the scroller moved by the wheel alone (a clamp
+  // when the room went would add to it), the row moved with it, and nothing moves after.
   const settled = await topOf(juniper);
+  expect(Math.round(beforeWheel.scroll - await scrollTop())).toBe(400);
+  expect(Math.round(settled - beforeWheel.top)).toBe(400);
   await frames();
-  expect(Math.round(await topOf(juniper) - settled)).toBe(0);
+  expect(Math.abs(await topOf(juniper) - settled)).toBeLessThan(1);
 
   // 5. The folds are saved per place, and the old shared record is left for older builds.
   await page.reload();

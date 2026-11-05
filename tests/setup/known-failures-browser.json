@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 231,
+  "count": 230,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -79,7 +79,6 @@
     "home-navigation-invariants.spec.ts :: menu sorting keeps completed pins in their original slots",
     "home-navigation-invariants.spec.ts :: navigation undo reports storage failure without silently reverting the order",
     "home-navigation.spec.ts :: Locate never moves or opens a session column, in an unlocked column or the Ask Walnut slot",
-    "home-navigation.spec.ts :: a fold keeps the clicked row where it was, and a tier folds only its own project run",
     "home-navigation.spec.ts :: rail, toolbar, menu-only filters, trailing chevrons and responsive layouts",
     "home-navigation.spec.ts :: the Sort setting row opens by keyboard on the current option; Escape, a press outside and a re-pick change nothing",
     "home-panel-visibility-relaunch.spec.ts :: a new install opens with the chat on Main; closed with its × it stays closed across relaunches",
@@ -312,7 +311,6 @@
     "home-navigation-invariants.spec.ts :: menu sorting keeps completed pins in their original slots": "Error: expect(received).toBe(expected) // Object.is equality",
     "home-navigation-invariants.spec.ts :: navigation undo reports storage failure without silently reverting the order": "Error: expect(received).toEqual(expected) // deep equality",
     "home-navigation.spec.ts :: Locate never moves or opens a session column, in an unlocked column or the Ask Walnut slot": "Test timeout of 120000ms exceeded.",
-    "home-navigation.spec.ts :: a fold keeps the clicked row where it was, and a tier folds only its own project run": "Error: expect(received).toEqual(expected) // deep equality",
     "home-navigation.spec.ts :: rail, toolbar, menu-only filters, trailing chevrons and responsive layouts": "Error: expect(page).toHaveURL(expected) failed",
     "home-navigation.spec.ts :: the Sort setting row opens by keyboard on the current option; Escape, a press outside and a re-pick change nothing": "Error: expect(locator).toHaveClass(expected) failed",
     "home-panel-visibility-relaunch.spec.ts :: a new install opens with the chat on Main; closed with its × it stays closed across relaunches": "Error: expect(locator).toHaveAttribute(expected) failed",
