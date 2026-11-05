@@ -157,6 +157,21 @@ export function recallAutoCompactWindow(host: string | null | undefined): number
 }
 
 /**
+ * Last-seen "auto-compact is off" per exec host (the CLI's own `isAutoCompactEnabled` in its
+ * get_context_usage answer). A setting of the host, so one session's read answers for the others
+ * until their own read lands; a project file can still override it per session.
+ */
+const autoCompactOffByHost = new Map<string, boolean>()
+
+export function rememberAutoCompactOff(host: string | null | undefined, off: boolean): void {
+  autoCompactOffByHost.set(hostKey(host), off)
+}
+
+export function recallAutoCompactOff(host: string | null | undefined): boolean | undefined {
+  return autoCompactOffByHost.get(hostKey(host))
+}
+
+/**
  * Last-seen CLAUDE_CODE_MAX_CONTEXT_TOKENS per exec host. Same reasoning as the
  * clamp cache: it is a host env value, so one session's read answers for all.
  */

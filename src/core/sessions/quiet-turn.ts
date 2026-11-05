@@ -1,6 +1,7 @@
 /**
- * A quiet turn: one Walnut runs in a session for the session's own upkeep (today
- * only the idle compaction, sessions/idle-compaction.ts), which is no work of the
+ * A quiet turn: one Walnut runs in a session for the session's own upkeep (the idle
+ * compaction, sessions/idle-compaction.ts, and the compaction of a conversation that
+ * no longer fits, sessions/context-full-recovery.ts), which is no work of the
  * task's. It moves no phase, runs no turn-end hook (no status question, no
  * notice to a parent, no summary), pushes nothing to a phone and reads as no
  * running turn in the user's status. Its cost is still recorded.
@@ -20,7 +21,8 @@
  */
 import { log } from '../../logging/index.js';
 
-export type QuietTurnKind = 'idle-compact';
+/** 'idle-compact': sessions/idle-compaction.ts; 'context-compact': sessions/context-full-recovery.ts. */
+export type QuietTurnKind = 'idle-compact' | 'context-compact';
 
 interface QuietTurn {
   kind: QuietTurnKind;
@@ -68,9 +70,15 @@ function shortenGens(sessionId: string, nowMs: number): void {
 
 export interface QuietTurnEnd { sessionId: string; kind: QuietTurnKind; why: string; rowId?: string; delivered: boolean }
 let endListener: ((end: QuietTurnEnd) => void) | null = null;
+const extraListeners = new Set<(end: QuietTurnEnd) => void>();
 /** Told whenever a quiet turn ends, whichever way (idle-compaction.ts: takes back an unsent row, stores the end). */
 export function onQuietTurnEnd(listener: ((end: QuietTurnEnd) => void) | null): void {
   endListener = listener;
+}
+/** One more listener of every quiet turn's end (context-full-recovery.ts); returns its removal. */
+export function addQuietTurnEndListener(listener: (end: QuietTurnEnd) => void): () => void {
+  extraListeners.add(listener);
+  return () => { extraListeners.delete(listener); };
 }
 
 function arm(sessionId: string, ms: number): ReturnType<typeof setTimeout> {
@@ -168,10 +176,13 @@ export function endQuietTurn(sessionId: string, why: string): void {
   turns.delete(sessionId);
   shortenGens(sessionId, Date.now());
   log.session.debug('quiet turn ended', { sessionId, kind: t.kind, why, ms: Date.now() - t.begunAt });
-  try {
-    endListener?.({ sessionId, kind: t.kind, why, ...(t.rowId ? { rowId: t.rowId } : {}), delivered: !!t.delivered });
-  } catch (err) {
-    log.session.warn('quiet turn end listener failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  const end: QuietTurnEnd = { sessionId, kind: t.kind, why, ...(t.rowId ? { rowId: t.rowId } : {}), delivered: !!t.delivered };
+  for (const listener of [endListener, ...extraListeners]) {
+    try {
+      listener?.(end);
+    } catch (err) {
+      log.session.warn('quiet turn end listener failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+    }
   }
 }
 

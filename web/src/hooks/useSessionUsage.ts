@@ -16,6 +16,9 @@ export interface SessionUsage {
    *  separate line: it explains why a session compacts "early" without
    *  redefining what the percentage measures. */
   autoCompactAt?: number;
+  /** Where this session stops when Claude Code's auto-compact is off for it (every request is
+   *  refused from here). contextPercent is then measured against it: 100% is the stop. */
+  stopsAt?: number;
 }
 
 /**
@@ -32,7 +35,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
   const handler = useCallback((data: unknown) => {
     const d = data as {
       sessionId?: string; model?: string; contextPercent?: number;
-      inputTokens?: number; contextWindow?: number; autoCompactAt?: number;
+      inputTokens?: number; contextWindow?: number; autoCompactAt?: number; stopsAt?: number;
     };
     if (!sessionId || d.sessionId !== sessionId) return;
     setUsage({
@@ -41,6 +44,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
       inputTokens: d.inputTokens,
       contextWindow: d.contextWindow,
       autoCompactAt: d.autoCompactAt,
+      stopsAt: d.stopsAt,
     });
   }, [sessionId]);
 
@@ -92,6 +96,11 @@ function fmtTokens(n: number): string {
  */
 export function contextBadgeTitle(usage: SessionUsage, percent: number): string {
   const parts = [`Context: ${percent}%`];
+  if (usage.inputTokens != null && usage.stopsAt != null) {
+    // Auto-compact is off: the percentage is of the stop, and the stop is what to know.
+    parts.push(`${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.stopsAt)}, where this session stops: auto-compact is off, so from there every message gets "Prompt is too long" until it is compacted`);
+    return parts.join(' — ');
+  }
   if (usage.inputTokens != null && usage.contextWindow != null) {
     parts.push(`${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.contextWindow)} (model max)`);
   } else if (usage.inputTokens != null) {

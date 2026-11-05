@@ -697,6 +697,7 @@ let companionJournalDueHandle: { stop: () => void } | null = null
 let companionCardsHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let idleCompactionHandle: { stop: () => void } | null = null
+let contextFullRecoveryHandle: { stop: () => void } | null = null
 let endpointWaitHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
@@ -2040,6 +2041,40 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { startIdleCompaction } = await import('../core/sessions/idle-compaction.js')
       const { sessionRunner: idleRunner } = await import('../providers/claude-code-session.js')
       idleCompactionHandle = startIdleCompaction(idleRunner)
+      // A turn that ends with "Prompt is too long" gets its session compacted and its unanswered
+      // messages resent (src/core/sessions/context-full-recovery.ts).
+      const { startContextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
+      contextFullRecoveryHandle = startContextFullRecovery({
+        // Only a recovery that gave up is the user's: its card then says why (held while it works).
+        gaveUp: async (rec, words, failedAt) => {
+          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          // Only while the record still holds this failure: a click may have recovered it meanwhile.
+          const stillFailed = async () => {
+            const now = await getSessionByClaudeId(rec.claudeSessionId).catch(() => null)
+            return now?.contextRecovery?.state === 'failed' && now.contextRecovery.at === failedAt
+          }
+          const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
+          if (!(await stillFailed())) return
+          await publishSessionErrorNotification({
+            title: 'Session Error',
+            body: `${ref ? `${ref}: ` : ''}${words}`,
+            dedupScope: `session:${rec.claudeSessionId}:runtime`,
+            sessionId: rec.claudeSessionId,
+            taskId: rec.taskId,
+          })
+          // The phase the error would have set, held while the recovery worked (the session stays the
+          // task's: its banner's Compact and resend is the way on). A compaction's quiet turn keeps a
+          // short grace after its result, in which the phase ignores the session: wait it out.
+          if (rec.taskId) {
+            const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
+            for (let i = 0; i < 90 && isQuietTurn(rec.claudeSessionId); i++) await new Promise((r) => setTimeout(r, 1_000))
+            if (!(await stillFailed())) return
+            const { applySessionPhase } = await import('../core/phase.js')
+            await applySessionPhase(rec.taskId, 'session:error', 'context-full-recovery:gave-up', { sessionId: rec.claudeSessionId })
+              .catch((err) => log.web.warn('context recovery: phase not applied', { taskId: rec.taskId, error: String(err) }))
+          }
+        },
+      })
     }
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
@@ -4915,9 +4950,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:usage-update') {
-      const { sessionId, inputTokens } = eventData<'session:usage-update'>(event)
+      const { sessionId, inputTokens, liveReply } = eventData<'session:usage-update'>(event)
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
+        // A real model reply after an error card is the session working again: its cards retire
+        // now, not at the end of a turn that may run for an hour (2026-11-05: a "Prompt is too
+        // long" card stayed on Home long after the session compacted and went on working). The
+        // CLI's own refusals carry no usage, and a measurement (a seed, a settings read) or a
+        // replayed history line is no reply (`liveReply`). A Map lookup when healthy.
+        if (liveReply && (inputTokens ?? 0) > 0) recoverSessionErrors(sessionId, undefined)
         // Token-truth feed for personal-ai-lane turns. On the in-process path the
         // loop's onUsage callback records the turn's EXACT input tokens (the
         // ground-truth half of effectiveTotalTokens); a lane turn never enters
@@ -5312,6 +5353,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const willBeTriage = !isError && !!taskId
       const { endpointWaitTakes } = await import('../core/sessions/endpoint-wait.js')
       const endpointWaitHolds = !!sessionId && endpointWaitTakes(eventData<'session:result'>(event))
+      // "Prompt is too long" of a session Walnut recovers: it compacts and resends
+      // (sessions/context-full-recovery.ts), so the task keeps its session and its phase.
+      const { contextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
+      const contextRecoveryHolds = !!sessionId && isError
+        && !!contextFullRecovery()?.takes(result, await laneCheckRead(sessionId).catch(() => null))
       if (isError) {
         // A retry-exhaustion result that auto-continue is about to resume is not
         // a condition for the human: the card sat red for the whole continued
@@ -5323,6 +5369,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         )
         if (resumed) {
           log.session.info('session error card held: auto-continue resumes this turn', { sessionId, taskId })
+        } else if (contextRecoveryHolds) {
+          // "Prompt is too long": Walnut compacts and resends (sessions/context-full-recovery.ts), and
+          // raises the card itself only if it gives up.
+          log.session.info('session error card held: the context recovery compacts this session', { sessionId, taskId })
         } else if (endpointWaitHolds) {
           // The endpoint was never reached: Walnut waits for it and continues (sessions/endpoint-wait.ts),
           // and raises the card itself only if it gives up.
@@ -5370,7 +5420,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (isError || !taskId) {
         // A foreground error does not mean that background work still running has ended; the error notification is kept on its own.
         // A turn the endpoint wait holds keeps its session and phase: Walnut continues it (endpoint-wait.ts).
-        if (taskId && sessionId && !workContinues && !endpointWaitHolds) {
+        if (taskId && sessionId && !workContinues && !endpointWaitHolds && !contextRecoveryHolds) {
           try {
             const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
             const { task } = await clearSessionSlot(taskId, sessionId)
@@ -7100,6 +7150,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (idleCompactionHandle) {
     idleCompactionHandle.stop()
     idleCompactionHandle = null
+  }
+  if (contextFullRecoveryHandle) {
+    contextFullRecoveryHandle.stop()
+    contextFullRecoveryHandle = null
   }
   if (autoContinueHandle) {
     autoContinueHandle.stop()

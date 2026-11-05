@@ -3124,6 +3124,22 @@ export interface EngineSwitchState {
   resume_message?: string;
 }
 
+/** SessionRecord.contextRecovery: where Walnut's recovery from a full context stands. */
+export interface ContextRecoveryState {
+  /** compacting: the /compact is on its way or running; done: compacted and resent; failed: needs a person. */
+  state: 'compacting' | 'done' | 'failed';
+  /** When the state was set. */
+  at: string;
+  /** When the first message got "Prompt is too long" in this episode. */
+  failedSince?: string;
+  /** Every compaction Walnut started for it in the last hour (ISO times): a cap stops a loop. */
+  attempts: string[];
+  /** Messages resent after the compaction (state done). */
+  resent?: number;
+  /** Why it failed, in words the banner shows (state failed). */
+  reason?: string;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -3365,6 +3381,14 @@ export interface SessionRecord {
     /** The queue row that carries the /compact (QueuedMessage.id): a restart finds it still waiting. */
     rowId?: string;
   };
+  /** Walnut's recovery of a conversation that no longer fit its context window ("Prompt is too
+   *  long", src/core/sessions/context-full-recovery.ts): it compacts the session, then resends what
+   *  got no answer. The error banner reads it. */
+  contextRecovery?: ContextRecoveryState;
+  /** Where this session stops when Claude Code's auto-compact is off for it: the CLI refuses every
+   *  request at this many context tokens (sessions/context-full.ts hardStopTokens). Absent while
+   *  auto-compact is on or its state is unknown. The context percentage is measured against it. */
+  contextStopsAt?: number;
   /** Why each recent idle compaction ran (the last 20), by its command line's uuid: its history row shows it. */
   idleCompactionLog?: Array<{
     lineUuid: string;

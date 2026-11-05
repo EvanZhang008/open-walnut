@@ -112,9 +112,11 @@ import { sanitizeInitModel } from '../model/providers/defaults.js'
 import {
   resolveContextWindow, shortModelId,
   rememberAutoCompactWindow, recallAutoCompactWindow,
+  rememberAutoCompactOff, recallAutoCompactOff,
   rememberEnvMaxContextTokens, recallEnvMaxContextTokens,
   rememberModelWindow, recallModelWindow,
 } from './context-window.js'
+import { hardStopTokens } from '../core/sessions/context-full.js'
 import {
   openTurn,
   settleTurn,
@@ -378,6 +380,9 @@ export interface CliContextUsage {
   /** Where the window came from: 'env' | 'settings' | 'clientdata' |
    *  'model-default' — i.e. whether the user's own clamp is what's in force. */
   autocompactSource?: string | null
+  /** Whether the CLI compacts on its own, as it resolves the switch itself: its settings, the legacy
+   *  ~/.claude.json and DISABLE_AUTO_COMPACT in its environment (2.1.2xx+). */
+  autoCompactEnabled?: boolean | null
 }
 
 /** control_response: CLI's reply to a Walnut-initiated control_request (e.g.
@@ -944,19 +949,18 @@ export class ClaudeCodeSession {
     this._promptCache = noteRequestUsage(this._promptCache, usage, Date.now(), newRequest)
   }
 
-  private emitContextUsage(usage: Record<string, number | null | undefined>, model?: string): void {
+  private emitContextUsage(usage: Record<string, number | null | undefined>, model?: string, liveReply = false): void {
     const totalInput = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
       + (usage.cache_read_input_tokens ?? 0)
     // A final-only usage stream starts at zero; it is not an empty context.
     if (!this.claudeSessionId || totalInput <= 0) return
     if (model && !this._model) this._model = model
-    const { window: contextWindow, autoCompactAt } = this.contextLimits(totalInput)
     bus.emit(EventNames.SESSION_USAGE_UPDATE, {
       sessionId: this.claudeSessionId,
       model: this._model,
       inputTokens: totalInput,
-      ...(contextWindow != null ? { contextWindow, contextPercent: Math.round(totalInput / contextWindow * 100) } : {}),
-      ...(autoCompactAt != null ? { autoCompactAt } : {}),
+      ...this.contextReadout(totalInput),
+      ...(liveReply ? { liveReply: true as const } : {}),
       ...(this._promptCache ? { promptCache: this._promptCache } : {}),
     }, ['main-ai'], { source: 'session-runner' })
   }
@@ -1388,6 +1392,12 @@ export class ClaudeCodeSession {
    *  effective.env). Process-wide env, so unlike the two windows above it
    *  SURVIVES a model switch. Display only, per the note on _cliContextWindow. */
   private _autoCompactWindow: number | undefined
+  /** Claude Code's auto-compact is off for this session (the CLI's get_context_usage answer): it never
+   *  compacts by itself and refuses every request at its hard stop (sessions/context-full.ts). */
+  private _autoCompactOff: boolean | undefined
+  /** CLAUDE_CODE_MAX_OUTPUT_TOKENS from the CLI's settings env: below 20K it shrinks the summary
+   *  reserve, and so moves the hard stop up (sessions/context-full.ts hardStopTokens). */
+  private _maxOutputTokens: number | undefined
   /** CLAUDE_CODE_MAX_CONTEXT_TOKENS as the CLI resolved it (same read as the
    *  clamp). This IS an absolute-window signal, but only for a model the CLI
    *  does not recognize — see context-window.ts for the CLI's own rule. */
@@ -6450,15 +6460,11 @@ export class ClaudeCodeSession {
             if (firstBoundary) void this.getContextUsage().then((cu) => {
               if (!cu || cu.totalTokens == null || !this.claudeSessionId) return
               if (cu.maxTokens && cu.maxTokens > 0) this._cliContextWindow = cu.maxTokens
-              const { window: windowSize, autoCompactAt } = this.contextLimits(cu.totalTokens)
               bus.emit(EventNames.SESSION_USAGE_UPDATE, {
                 sessionId: this.claudeSessionId,
                 model: this._model,
-                ...(windowSize != null
-                  ? { contextPercent: Math.round(cu.totalTokens / windowSize * 100), contextWindow: windowSize }
-                  : {}),
+                ...this.contextReadout(cu.totalTokens),
                 inputTokens: cu.totalTokens,
-                ...(autoCompactAt != null ? { autoCompactAt } : {}),
                 ...(this._promptCache ? { promptCache: this._promptCache } : {}),
               }, ['main-ai'], { source: 'session-runner' })
               log.session.info('post-compact context usage re-seeded from CLI', {
@@ -7327,10 +7333,11 @@ export class ClaudeCodeSession {
         if (msg.message?.usage) {
           // A live request only: a replayed line is history, and its time is not now.
           const replayed = this._isReplayedByOffset()
-          if (replayed !== true && !(replayed === undefined && this.resultEmitted && !this._speed.active)) {
+          const live = replayed !== true && !(replayed === undefined && this.resultEmitted && !this._speed.active)
+          if (live) {
             this.notePromptCacheUsage(msg.message.id, msg.message.usage as ClaudeUsageLike)
           }
-          this.emitContextUsage(msg.message.usage, msg.message.model)
+          this.emitContextUsage(msg.message.usage, msg.message.model, live)
         }
         break
       }
@@ -8440,7 +8447,7 @@ export class ClaudeCodeSession {
               .some((field) => field in inner.usage!)) {
             this._streamInputUsage = { ...this._streamInputUsage, ...inner.usage }
             this.notePromptCacheUsage(this._currentStreamMsgId, this._streamInputUsage)
-            this.emitContextUsage(this._streamInputUsage)
+            this.emitContextUsage(this._streamInputUsage, undefined, true)
           }
           const sr = (inner?.delta as { stop_reason?: string | null } | undefined)?.stop_reason
           if (sr !== undefined) this._lastStopReason = sr
@@ -9252,6 +9259,7 @@ export class ClaudeCodeSession {
       percentage: typeof payload.percentage === 'number' ? payload.percentage : null,
       rawMaxTokens: typeof payload.rawMaxTokens === 'number' ? payload.rawMaxTokens : null,
       autocompactSource: typeof payload.autocompactSource === 'string' ? payload.autocompactSource : null,
+      autoCompactEnabled: typeof payload.isAutoCompactEnabled === 'boolean' ? payload.isAutoCompactEnabled : null,
     }
   }
 
@@ -9308,17 +9316,39 @@ export class ClaudeCodeSession {
     return { modelMax: window, autoCompactAt }
   }
 
+  /**
+   * The context readout every usage push carries. The percentage is of the model's window, except
+   * when auto-compact is off: the CLI then refuses every request at its hard stop (88.5% of a 200K
+   * window), so 100% is that stop, never a point the session cannot reach (2026-11-05: a session read
+   * 89% while every message already got "Prompt is too long").
+   */
+  private contextReadout(tokens: number): { contextPercent?: number; contextWindow?: number; autoCompactAt?: number; stopsAt?: number } {
+    const { window, autoCompactAt, stopsAt } = this.contextLimits(tokens)
+    const basis = stopsAt ?? window
+    return {
+      ...(window != null ? { contextWindow: window } : {}),
+      ...(basis ? { contextPercent: Math.round(tokens / basis * 100) } : {}),
+      ...(autoCompactAt != null ? { autoCompactAt } : {}),
+      ...(stopsAt != null ? { stopsAt } : {}),
+    }
+  }
+
   /** The two windows the UI shows together: the model's max (the denominator)
    *  and the point where this session will auto-compact. Second one is often
    *  the smaller and is exactly what made the raw percent look "wrong". */
-  private contextLimits(totalInput?: number): { window: number | null; autoCompactAt: number | null } {
+  private contextLimits(totalInput?: number): { window: number | null; autoCompactAt: number | null; stopsAt: number | null } {
     const clamp = this._autoCompactWindow ?? recallAutoCompactWindow(this._host)
     const window = this.contextWindowForPercent(totalInput)
     // The effective window the CLI reported already IS min(model, clamp); prefer
     // it over the bare env value since a session can carry its own setting.
     const effective = this._cliContextWindow ?? clamp ?? null
+    // Auto-compact off: no compaction point, and a hard stop below the window instead.
+    if (this._autoCompactOff ?? recallAutoCompactOff(this._host)) {
+      const basis = effective != null && window != null ? Math.min(effective, window) : (effective ?? window)
+      return { window, autoCompactAt: null, stopsAt: basis ? hardStopTokens(basis, this._maxOutputTokens) : null }
+    }
     const autoCompactAt = effective != null && window != null && effective >= window ? null : effective
-    return { window, autoCompactAt }
+    return { window, autoCompactAt, stopsAt: null }
   }
 
   /**
@@ -9378,6 +9408,19 @@ export class ClaudeCodeSession {
    *  Fire-and-forget safe; an unreadable CLI just leaves the badge as it was. */
   private seedCliContextWindow(reason: string): void {
     void this.getContextUsage().then((cu) => {
+      // The CLI's own answer on auto-compact (settings, legacy file and environment alike): with it
+      // off, the readout below is measured against the hard stop (2026-11-05: get_settings left the
+      // legacy switch and the environment out, and the badge read 89% at the stop).
+      if (typeof cu?.autoCompactEnabled === 'boolean') {
+        const off = !cu.autoCompactEnabled
+        if (off !== this._autoCompactOff) {
+          log.session.info('auto-compact setting read from the CLI', {
+            sessionId: this.claudeSessionId, taskId: this.taskId, reason, autoCompactOff: off, prev: this._autoCompactOff ?? null,
+          })
+        }
+        this._autoCompactOff = off
+        rememberAutoCompactOff(this._host, off)
+      }
       if (cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
         log.session.info('cli effective (auto-compact) window seeded', {
           sessionId: this.claudeSessionId, taskId: this.taskId, reason,
@@ -9387,24 +9430,23 @@ export class ClaudeCodeSession {
       }
       const sid = this.claudeSessionId
       if (!sid) return
-      const { window: windowSize, autoCompactAt } = this.contextLimits(cu?.totalTokens ?? undefined)
+      const { window: windowSize, autoCompactAt, stopsAt } = this.contextLimits(cu?.totalTokens ?? undefined)
       if (windowSize == null) return
-      // Persist both numbers: a page loaded LATER missed this event, and then
+      // Persist the numbers: a page loaded LATER missed this event, and then
       // only the record can turn history tokens into a percentage.
       void import('../core/session-tracker.js')
         .then(({ updateSessionRecord }) => updateSessionRecord(sid, {
           modelMaxWindow: windowSize,
           ...(autoCompactAt != null ? { autoCompactAt } : {}),
+          contextStopsAt: stopsAt ?? undefined,
         }))
         .catch(() => {})
       if (cu?.totalTokens == null) return
       bus.emit(EventNames.SESSION_USAGE_UPDATE, {
         sessionId: sid,
         model: this._model,
-        contextPercent: Math.round(cu.totalTokens / windowSize * 100),
         inputTokens: cu.totalTokens,
-        contextWindow: windowSize,
-        ...(autoCompactAt != null ? { autoCompactAt } : {}),
+        ...this.contextReadout(cu.totalTokens),
       }, ['main-ai'], { source: 'session-runner' })
     }).catch(() => {})
   }
@@ -9533,6 +9575,8 @@ export class ClaudeCodeSession {
       }
       rememberAutoCompactWindow(this._host, clamp)
     }
+    const outputCap = Number.parseInt(snapshot?.effective?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS ?? '', 10)
+    if (Number.isFinite(outputCap) && outputCap > 0) this._maxOutputTokens = outputCap
     const envMax = readEnvNumber('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
     if (envMax !== undefined) {
       if (envMax !== this._envMaxContextTokens) {

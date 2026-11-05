@@ -508,6 +508,10 @@ export interface SessionMessageQueuedEvent {
   /** An agent's row as stored, when it differs from `message` (a peer's note,
    *  enveloped only in the queue). The panel renders this, as on a reload. */
   queuedText?: string;
+  /** A person's row as stored, when it differs from `message` (its image references, the hints
+   *  it carried): what reached the session, read by the context recovery to resend it whole
+   *  (sessions/context-full-recovery.ts). The panel ignores it. */
+  rowText?: string;
   /** Queue row's enqueue time (server clock): the bubble's time floor for
    *  history matching, see web optimistic-dedup.ts. */
   enqueuedAt?: string;
@@ -783,6 +787,13 @@ export interface SessionUsageUpdateEvent {
    *  model, and a compaction setting is not a property of the model. Absent when
    *  the session compacts only at the model's own limit. */
   autoCompactAt?: number;
+  /** Where the session stops when Claude Code's auto-compact is off for it (the CLI refuses every
+   *  request at this many tokens, sessions/context-full.ts). When present, `contextPercent` is
+   *  measured against it, so 100% is the stop. */
+  stopsAt?: number;
+  /** The tokens come from a model reply streamed now, not a measurement (a seed, a settings read,
+   *  the post-compaction pull) or a replayed history line: the session is working again. */
+  liveReply?: true;
   /** The prompt cache facts of the last main-loop request (sessions/prompt-cache.ts). */
   promptCache?: import('./sessions/prompt-cache.js').PromptCacheFacts;
 }

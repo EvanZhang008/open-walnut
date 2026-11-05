@@ -202,10 +202,12 @@ export function ComposerModelPill({
     const totalInput = session.promptCache.tokens;
     const ctxSize = session.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
     if (totalInput > 0 && ctxSize != null) {
-      contextPercent = Math.round(totalInput / ctxSize * 100);
+      // Auto-compact off: 100% is where the session stops (the server's stopsAt, kept on the record).
+      contextPercent = Math.round(totalInput / (session.contextStopsAt ?? ctxSize) * 100);
       badgeUsage = {
         ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
         autoCompactAt: liveUsage.autoCompactAt ?? session.autoCompactAt,
+        stopsAt: liveUsage.stopsAt ?? session.contextStopsAt,
       };
     }
   }
@@ -214,10 +216,11 @@ export function ComposerModelPill({
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
     const ctxSize = session?.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
     if (totalInput > 0 && ctxSize != null) {
-      contextPercent = Math.round(totalInput / ctxSize * 100);
+      contextPercent = Math.round(totalInput / (session?.contextStopsAt ?? ctxSize) * 100);
       badgeUsage = {
         ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
         autoCompactAt: liveUsage.autoCompactAt ?? session?.autoCompactAt,
+        stopsAt: liveUsage.stopsAt ?? session?.contextStopsAt,
       };
     }
   }

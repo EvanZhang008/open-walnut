@@ -2690,7 +2690,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
             { name: 'Free space', tokens: 5479, color: 'promptBorder' },
           ],
           totalTokens: 111177, maxTokens: 200000, rawMaxTokens: 200000, percentage: 56,
-          autocompactSource: 'model-default',
+          autocompactSource: 'model-default', isAutoCompactEnabled: false,
           gridRows: [[]],
         },
       },
@@ -2707,6 +2707,9 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       // Kept so the picker can explain a clamped denominator instead of just
       // showing it (2026-08-23: "why 10% here and 25% there?").
       rawMaxTokens: 200000, autocompactSource: 'model-default',
+      // The CLI's own resolution of auto-compact (settings, legacy file, environment): with it off,
+      // the badge is measured against the hard stop.
+      autoCompactEnabled: false,
     });
   });
 
@@ -2877,7 +2880,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._autoCompactWindow = 400_000;
       expect(win(session, 200_000)).toBe(1_000_000); // 20% of the model
-      expect(limits(session, 200_000)).toEqual({ window: 1_000_000, autoCompactAt: 400_000 });
+      expect(limits(session, 200_000)).toEqual({ window: 1_000_000, autoCompactAt: 400_000, stopsAt: null });
     });
 
     it('reports no compaction point when the session compacts at the model limit', () => {
@@ -2886,7 +2889,27 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       ;(session as any)._initModel = 'claude-sonnet-4-6';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._cliContextWindow = 200_000;
-      expect(limits(session, 50_000)).toEqual({ window: 200_000, autoCompactAt: null });
+      expect(limits(session, 50_000)).toEqual({ window: 200_000, autoCompactAt: null, stopsAt: null });
+    });
+
+    it('with auto-compact off, reports the hard stop and measures the percent against it', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-sonnet-4-6';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliContextWindow = 200_000;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._autoCompactOff = true;
+      // 200K less the 20K summary reserve less the 3K blocking buffer (sessions/context-full.ts).
+      expect(limits(session, 176_000)).toEqual({ window: 200_000, autoCompactAt: null, stopsAt: 177_000 });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const readout = (session as any).contextReadout(176_000);
+      expect(readout.stopsAt).toBe(177_000);
+      expect(readout.contextPercent).toBe(99);
+      // An output cap under 20K shrinks the reserve.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._maxOutputTokens = 8_192;
+      expect(limits(session, 176_000).stopsAt).toBe(188_808);
     });
 
     it('CLI answer outranks the string guess (custom >200K window)', () => {

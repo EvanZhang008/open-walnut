@@ -19,6 +19,7 @@ import { SessionControlError } from './session-controls.js';
 import { normalizeThreadMeta, writeThreadFieldsAsClient } from './thread-meta.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
+import { needsContextRecovery } from './context-full.js';
 import type { SessionRecord, SessionMode, SessionOutputMode } from '../types.js';
 import { SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS } from '../types.js';
 import type { SessionHistoryMessage } from '../session-history.js';
@@ -921,6 +922,8 @@ export type RetryResult =
    *  `--resume`. Retry deliberately runs NO turn on this path. */
   | { status: 'resumable'; sessionId: string }
   | { status: 'resuming'; sessionId: string; restoredMessages?: number }
+  /** The session ran out of context ("Prompt is too long"): Walnut compacts it and resends what got no answer. */
+  | { status: 'compacting'; sessionId: string }
   | { status: 'pending'; taskId: string; oldSessionId: string }
   /** Its folder is gone: nothing was spawned. The panel offers to continue it in a new
    *  folder (POST /api/sessions/:id/continue-in-new-folder, folder-gone.ts). */
@@ -1025,6 +1028,16 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
   }
   if (!record.taskId) {
     throw new SessionControlError('Session has no associated task', 400);
+  }
+
+  // "Prompt is too long": a reconnect cannot help, a compaction can. Retry from any surface (the
+  // banner's Compact and resend, the phone, an agent) compacts and resends (context-full-recovery.ts).
+  if (needsContextRecovery(record)) {
+    const { contextFullRecovery } = await import('./context-full-recovery.js');
+    if (await contextFullRecovery()?.recoverNow(sessionId)) {
+      log.session.info('session retry: compacting a full context', { sessionId, taskId: record.taskId });
+      return { status: 'compacting', sessionId };
+    }
   }
 
   await connectSessionHostForRetry(record);

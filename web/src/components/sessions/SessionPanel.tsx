@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
+import { ContextFullBanner } from './ContextFullBanner';
+import { needsContextRecovery } from '@/utils/context-full';
 import { useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
@@ -2912,7 +2914,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         {session?.cwdGone && !session.archived && (
           <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} />
         )}
-        {ps === 'error' && !session?.cwdGone && (() => {
+        {(ps === 'error' || ps === 'stopped') && !session?.cwdGone && session && needsContextRecovery({ ...session, process_status: ps }) && (
+          <ContextFullBanner sessionId={sessionId} session={session} onResuming={handleResuming} />
+        )}
+        {ps === 'error' && !session?.cwdGone && !(session && needsContextRecovery({ ...session, process_status: ps })) && (() => {
           // Render even with NO errorMessage. An error the backend couldn't label
           // used to render nothing at all \u2014 the user got a red "Error" pill and
           // zero explanation, with the Retry button (which lives in this banner)

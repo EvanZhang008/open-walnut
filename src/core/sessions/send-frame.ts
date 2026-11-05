@@ -48,6 +48,8 @@ export function frameAsWalnut(text: string, source: string | undefined): string 
   if (text.trimStart().startsWith('/') && /^(hook:|routine)/.test(source ?? '')) return text;
   // Walnut's idle compaction (sessions/idle-compaction.ts) sends the bare command, no arguments.
   if (source === 'idle-compact' && text.trim() === '/compact') return text;
+  // So does the recovery of a conversation that no longer fits (sessions/context-full-recovery.ts).
+  if (source === 'context-compact' && text.trim() === '/compact') return text;
   return buildWalnutMessage({
     kind: 'peer-note',
     attrs: { from: `Walnut (${sourceLabel(source)})`, note: NOTE_WALNUT_SEND },

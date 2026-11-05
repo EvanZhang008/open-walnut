@@ -28,11 +28,13 @@ interface SessionRetryButtonProps {
   onFolderGone?: () => void;
   /** The execution host. Absent/empty = this machine, which changes the wording. */
   host?: string | null;
+  /** Words for an error the same Retry fixes another way (a full context compacts): label, busy label, tooltip. */
+  words?: { label: string; busy: string; title: string };
 }
 
-export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderGone, host }: SessionRetryButtonProps) {
+export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderGone, host, words }: SessionRetryButtonProps) {
   const remote = !!host;
-  const verb = remote ? 'Reconnect' : 'Recheck';
+  const verb = words?.label ?? (remote ? 'Reconnect' : 'Recheck');
   const [state, setState] = useState<'idle' | 'retrying' | 'error'>('idle');
   /** Why the last attempt failed (the server says which host and what to do), shown as the tooltip. */
   const [failure, setFailure] = useState<string | null>(null);
@@ -67,7 +69,7 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderG
     return (
       <button className="session-retry-btn" disabled>
         <span className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5, display: 'inline-block', verticalAlign: 'middle', marginRight: 4 }} />
-        {remote ? 'Reconnecting\u2026' : 'Rechecking\u2026'}
+        {words?.busy ?? (remote ? 'Reconnecting\u2026' : 'Rechecking\u2026')}
       </button>
     );
   }
@@ -76,7 +78,7 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderG
     <button
       className="session-retry-btn"
       onClick={handleRetry}
-      title={failure ?? (remote
+      title={failure ?? words?.title ?? (remote
         ? 'Re-check the host and clear this error. The conversation is kept: send a message to resume the work.'
         : 'Re-check this session and clear the error. The conversation is kept: send a message to resume the work.')}
     >

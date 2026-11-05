@@ -190,6 +190,18 @@ export interface SessionRecord {
   modelMaxWindow?: number;
   /** Where this session auto-compacts, when below modelMaxWindow. */
   autoCompactAt?: number;
+  /** Where this session stops when Claude Code's auto-compact is off for it (the CLI refuses
+   *  every request at this many tokens); the context percentage is measured against it. */
+  contextStopsAt?: number;
+  /** Walnut's recovery of a conversation that no longer fit ("Prompt is too long"). */
+  contextRecovery?: {
+    state: 'compacting' | 'done' | 'failed';
+    at: string;
+    failedSince?: string;
+    attempts: string[];
+    resent?: number;
+    reason?: string;
+  };
   /** Tokens in context at the last model call (ACP engines' usage_update). */
   contextTokens?: number;
   /** The prompt cache facts of the last main-loop request, stored at each turn end. */

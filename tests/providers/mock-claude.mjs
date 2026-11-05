@@ -1226,6 +1226,28 @@ if (outputFormat === 'stream-json') {
     //          compacting status, then (after MOCK_COMPACT_MS, default 1500) a
     //          status reset and an init, the compact_boundary with its pre/post
     //          tokens, a result, idle (the real CLI's order).
+    // 2a.-1.55. MOCK_CONTEXT_FULL_AT=<tokens>: once the context a big-context-turn read is at or
+    //          above it, every line but "/compact" is refused the way Claude Code 2.1.312 refuses
+    //          at its blocking limit with auto-compact off (2026-11-05 transcript): a synthetic
+    //          assistant "Prompt is too long" (isApiErrorMessage, error invalid_request) and an
+    //          is_error result, before any model call. Then STAY ALIVE, as the real CLI does.
+    if (Number(process.env.MOCK_CONTEXT_FULL_AT) > 0 && mockContextTokens >= Number(process.env.MOCK_CONTEXT_FULL_AT)
+      && effectiveMessage.trim() !== '/compact') {
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+      setTimeout(() => {
+        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, isApiErrorMessage: true, error: 'invalid_request',
+          message: { id: `msg_ptl_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence',
+            content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+        emit({ type: 'result', subtype: 'success', is_error: true, duration_ms: 60, num_turns: 1, result: 'Prompt is too long', session_id: sid,
+          total_cost_usd: nextSnapshotCost(0.0001), usage: { input_tokens: 0, output_tokens: 0 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn({ announce: true });
+      }, 60);
+      return;
+    }
     if (effectiveMessage.startsWith('big-context-turn:')) {
       const [tokArg, ttlArg] = effectiveMessage.split('\n')[0].slice('big-context-turn:'.length).trim().split(':');
       const tokens = Math.max(10_000, Number(tokArg) || 400_000);

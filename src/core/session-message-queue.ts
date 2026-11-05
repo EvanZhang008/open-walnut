@@ -374,6 +374,7 @@ export async function sendMessageToSession(
     // An agent's row as stored: a peer's note is enveloped only here (`message`
     // is its bare text), and the panel shows and folds the card it will become.
     ...(msg.sentBy === 'agent' && msg.message !== message ? { queuedText: msg.message } : {}),
+    ...(msg.sentBy !== 'agent' && msg.message !== message ? { rowText: msg.message } : {}),
     enqueuedAt: msg.enqueuedAt,
   }, ['main-ai'], { source });
 
@@ -569,7 +570,8 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
 export async function editMessage(
   sessionId: string, messageId: string, newText: string, opts?: { onlyUnsent?: boolean },
 ): Promise<boolean> {
-  return mutateStore((s) => {
+  let stored: string | undefined;
+  const ok = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
 
@@ -580,8 +582,15 @@ export async function editMessage(
     // Its hint blocks stay (their state is already recorded); the new words are escaped.
     // A slash command stays byte-exact (the CLI reads a command only at the start).
     msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, newText);
+    stored = msg.message;
     return true;
   });
+  // The "Prompt is too long" recovery resends a row as it reaches the session: the edited words.
+  if (ok && stored !== undefined) {
+    const text = stored;
+    void import('./sessions/context-full-recovery.js').then((m) => m.contextFullRecovery()?.noteEdited(sessionId, messageId, text)).catch(() => {});
+  }
+  return ok;
 }
 
 /**
