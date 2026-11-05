@@ -2716,6 +2716,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const focusHandledRef = useRef(false);
   // Track previous focusNonce to detect re-focus on same task
   const prevNonceRef = useRef(focusNonce ?? 0);
+  // The off-view note's button asks for the locate again on the tab it opened (its folds too).
+  const [relocateTick, setRelocateTick] = useState(0);
+  const prevRelocateRef = useRef(0);
   // True while a user-initiated locate (nonce bump) is waiting to be handled —
   // survives the task-not-loaded-yet retry. Page-load restores never set it.
   const pendingLocateRef = useRef(false);
@@ -2884,8 +2887,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return;
     }
     const isNewFocus = focusedTaskId !== prevFocusedRef.current;
-    const nonceChanged = (focusNonce ?? 0) !== prevNonceRef.current;
+    const nonceChanged = (focusNonce ?? 0) !== prevNonceRef.current || relocateTick !== prevRelocateRef.current;
     prevNonceRef.current = focusNonce ?? 0;
+    prevRelocateRef.current = relocateTick;
     // The held task moved (the place watcher below): show it again where it is drawn now.
     const holdMoved = holdMoveTick !== prevHoldMoveTickRef.current;
     prevHoldMoveTickRef.current = holdMoveTick;
@@ -3037,7 +3041,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // query simply finds nothing). Keeps the PIN row in sync with the list below.
     scrollToPinnedTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedTaskId, focusNonce, tasks, favorites, holdMoveTick]);
+  }, [focusedTaskId, focusNonce, tasks, favorites, holdMoveTick, relocateTick]);
 
   // Auto-expand parent when a child task is created (via WS event)
   // Persist to localStorage so expansion survives page refresh (fork subtask bug fix)
@@ -7500,7 +7504,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         log.info('todo-panel', 'off-view show', { taskId, target });
         setOffView(null);
         handleSectionChange(target);
-        requestAnimationFrame(() => { scrollToTask(taskId); scrollToPinnedTask(taskId); });
+        // The full locate again on that tab: it opens the fold holding the task and scrolls to it.
+        // In a transition like the tab change, so it renders with the new tab, never before it.
+        startTransition(() => setRelocateTick((n) => n + 1));
       }}
       onDismiss={() => setOffView(null)}
     />

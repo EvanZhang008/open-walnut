@@ -108,3 +108,46 @@ test.describe('entity references in chat', () => {
       .toBe('/')
   })
 })
+
+test.describe('a task reference opened from chat keeps the task panel on its tab', () => {
+  // 2026-11-04, the user: "we don't auto go to all". A tab that does not show the task stays,
+  // and a note says where it is; only its button changes the tab.
+  test('the note names the tab, and its button shows the task', async ({ page }) => {
+    const stamp = Date.now()
+    const made = await page.request.post('/api/focus/tiers', { data: { label: `Quiet ${stamp}` } })
+    expect(made.ok(), await made.text()).toBe(true)
+    const tier = ((await made.json()) as { tier: { id: string } }).tier.id
+    try {
+      await page.addInitScript((id) => {
+        if (sessionStorage.getItem('ref-tab-seeded')) return
+        sessionStorage.setItem('ref-tab-seeded', '1')
+        localStorage.setItem('walnut-todo-quick-views-visible', 'true')
+        localStorage.setItem('walnut-todo-tab-bar-hidden-tabs', '[]')
+        localStorage.setItem('walnut-todo-active-section', id)
+      }, tier)
+      const chat = await openChatContent(page)
+      const nav = page.locator('#home-task-navigation')
+      const selected = nav.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')
+      await expect(selected).toContainText(`Quiet ${stamp}`, { timeout: 20_000 })
+      // The reply naming the task is the first one: scroll the chat back so it sits clear of the
+      // panel's header, then click it as a user would.
+      const pill = chat.locator('a.task-link[data-task-id="pw-task-001"]').first()
+      const hist = (await chat.locator('.session-history').boundingBox())!
+      await page.mouse.move(hist.x + hist.width / 2, hist.y + hist.height / 2)
+      for (let i = 0; i < 10; i++) await page.mouse.wheel(0, -1500)
+      await expect(pill).toBeVisible()
+      await pill.click()
+      const note = nav.getByTestId('todo-offview-note')
+      await expect(note).toBeVisible()
+      await expect(note).toContainText(`is not in Quiet ${stamp}.`)
+      await expect(selected).toContainText(`Quiet ${stamp}`)
+      await note.getByTestId('todo-offview-show').click()
+      await expect(note).toHaveCount(0)
+      await expect(selected).not.toContainText(`Quiet ${stamp}`)
+      // Shown there: the group holding it opens, and the panel scrolls it into view.
+      await expect(nav.locator('[data-task-id="pw-task-001"]').first()).toBeInViewport()
+    } finally {
+      await page.request.delete(`/api/focus/tiers/${tier}`).catch(() => {})
+    }
+  })
+})
