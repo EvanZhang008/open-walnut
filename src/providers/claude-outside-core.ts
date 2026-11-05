@@ -105,7 +105,7 @@ export async function claudeSessionMetas(projectsDir: string, indexDir?: string)
       const sessionId = name.slice(0, -'.jsonl'.length);
       const key = `${project}/${name}`;
       const file = path.join(projectsDir, project, name);
-      let hit = cache[key];
+      let hit: Cache[string] | undefined = cache[key];
       // A file once read to the limit with no entrypoint is looked at again only when it has grown.
       if (hit && hit.length === 3) {
         const size = await fs.stat(file).then(st => st.size, () => hit![2] as number);
