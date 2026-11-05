@@ -297,6 +297,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/path-ref-parse.ts',
   'src/providers/host-runtime-types.ts',
   'src/providers/codex-outside-core.ts',
+  'src/providers/claude-outside-core.ts',
 ] as const
 
 /**
