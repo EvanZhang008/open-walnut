@@ -154,8 +154,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('tokens', 4)).toHaveAttribute('title', '7 finished tasks had requests with no token counts recorded: the median leaves those out')
   await expect(cell('tokens', 4)).not.toHaveAttribute('data-best', 'true')
   await expect(cell('switched', 2)).toHaveText('2')
-  // "Claude Code · GPT" has 3 finished (few): it is never ranked, though its 0 reviews is lowest.
-  await expect(cell('reviews', 1)).toHaveAttribute('data-best', 'true')
+  // "Claude Code · GPT" has 3 finished (few): it is never ranked on any row.
   await expect(table.locator('tr td:nth-child(4)[data-best]')).toHaveCount(0)
   await expect(cell('followups', 2)).toHaveAttribute('data-best', 'true')
   await expect(cell('errored', 2)).toHaveText('38%')
@@ -178,7 +177,10 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   // One line on who is ahead where, from the same marks.
   const verdict = card.getByTestId('usage-engines-verdict')
   await expect(verdict).toContainText('Fastest: Codex · GPT')
-  await expect(verdict).toContainText('Fewest review rounds: Claude Code · Claude')
+  // How many reviews and what they cost are counts, never a win: fewer reviews is not better work.
+  await expect(verdict).not.toContainText('review rounds')
+  await expect(verdict).not.toContainText('Cheapest reviews')
+  await expect(table.locator('tr[data-metric="reviews"] td[data-best], tr[data-metric="reviewcost"] td[data-best]')).toHaveCount(0)
   await expect(verdict).toContainText('Fewest errors: Claude Code · Claude')
   await expect(verdict).toContainText('Best reviewed: Codex · GPT')
   await expect(verdict).not.toContainText('too few scored')

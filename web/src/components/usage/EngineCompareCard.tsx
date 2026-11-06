@@ -110,12 +110,12 @@ const METRICS: Metric[] = [
     partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
     partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian, samples: knownDone },
-  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review", "Reviewer", "Verify" or "Verifier"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
-  { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.',
+  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review", "Reviewer", "Verifier", "Verify:" or "Verification:"). A count, never a contest: more rounds can mean more fixes, and it can mean more care.', value: (r) => r.reviewsPerTask, show: ratio },
+  { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself. Not ranked: a cheaper review is often just a review that was not done.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
     // No reviews: nothing to show, as a cost with no usage recorded reads.
     value: (r) => (r.reviewsPerTask === 0 || (r.reviewCostPerTask === 0 && r.done > 0 && reviewPartial(r) >= r.done) ? null : r.reviewCostPerTask),
-    show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial,
+    show: (n) => (n === null ? '-' : money(n)), partial: reviewPartial,
     partialNote: (n) => `${finishedWord(n)} had reviewers whose cost leaves out ${LEFT_OUT}` },
   { id: 'crossreview', label: 'Checked by another company', help: 'Share of the tasks it finished that a reviewer subtask on another company\'s model checked (Claude work reviewed by a GPT model, or the other way round).',
     // No reviews: nothing to show, as Review cost reads.
@@ -136,7 +136,7 @@ const shownMetrics = (rows: EngineCompareRow[]) => METRICS.filter((m) => !m.only
 
 /** How the one-line verdict names the best of a row. */
 const VERDICT: Record<string, string> = {
-  time: 'Fastest', cost: 'Cheapest', tokens: 'Fewest tokens', reviews: 'Fewest review rounds', reviewcost: 'Cheapest reviews',
+  time: 'Fastest', cost: 'Cheapest', tokens: 'Fewest tokens',
   followups: 'Fewest of your messages', score: 'Best reviewed', reopens: 'Reopened least', errored: 'Fewest errors',
 };
 

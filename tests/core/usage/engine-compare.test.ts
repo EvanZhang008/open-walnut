@@ -633,6 +633,22 @@ describe('final round', () => {
     expect(out.rows[0].crossReviewedShare).toBeCloseTo(1 / 3);
     expect(Object.fromEntries(out.tasks.map((t) => [t.taskId, t.crossReviewed]))).toEqual({ w1: true, w2: false, w3: false });
   });
+
+  it('a reviewer of another company whose start failed before any turn checked nothing', () => {
+    const tasks = [
+      done('w1', 1),
+      // A Codex reviewer: the start was recorded, the session erred, no turn, no usage, no verdict; then closed.
+      task({ id: 'r1', title: 'Review: w1', parent_task_id: 'w1', session_id: 's-r1', phase: 'COMPLETE', completed_at: at,
+        last_start: { engine: 'codex', state: 'failed', at } as Task['last_start'] }),
+    ];
+    const inp = input(tasks, { w1: { costUsd: 1 } });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks.find((t) => t.taskId === 'w1')?.crossReviewed).toBe(false);
+    expect(out.rows[0].crossReviewedShare).toBe(0);
+    // Once it gives a verdict (here a score), it checked.
+    const scored = input([tasks[0], { ...tasks[1], review_score: { function: 9, ux: 9, ui: 9, at, via: 'reply' } }], { w1: { costUsd: 1 } });
+    expect(aggregateEngineCompare(scored).tasks.find((t) => t.taskId === 'w1')?.crossReviewed).toBe(true);
+  });
 });
 
 describe('reviewer scores', () => {
@@ -676,6 +692,17 @@ describe('reviewer scores', () => {
     const w1 = out.tasks.find((t) => t.taskId === 'w1')!;
     // Merged, the later one would have replaced the first; apart, the lower function score stands.
     expect(w1).toMatchObject({ score: { function: 4, ux: 9, ui: 9 }, scoredBy: 2, scoredFamilies: ['unknown', 'unknown'] });
+  });
+
+  it('an engine\'s medians rest only on tasks scored on all three: one full score among five partial ones is one sample', () => {
+    const rs = [1, 2, 3, 4, 5].map((i) => reviewer(`p${i}`, `w${i}`, { function: 9 }, i, 'claude-opus-5-5'));
+    rs.push(reviewer('f6', 'w6', { function: 6, ux: 6, ui: 6 }, 6, 'claude-opus-5-5'));
+    const tasks = [1, 2, 3, 4, 5, 6].map((i) => done(`w${i}`, 1)).concat(rs.map((r) => r.t));
+    const spend = Object.assign({}, ...[1, 2, 3, 4, 5, 6].map((i) => ({ [`w${i}`]: { costUsd: 1 } })), ...rs.map((r) => r.spend));
+    const out = aggregateEngineCompare(input(tasks, spend));
+    expect(out.rows[0]).toMatchObject({ scoredDone: 1, reviewScore: { function: 6, ux: 6, ui: 6 } });
+    // Each task still shows its own, partial or not.
+    expect(out.tasks.find((t) => t.taskId === 'w1')?.score).toEqual({ function: 9 });
   });
 
   it('no reviewer score anywhere reads none, never a zero', () => {

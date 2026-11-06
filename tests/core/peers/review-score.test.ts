@@ -3,7 +3,7 @@
  * object or "f/ux/ui" text, each 0..10, and shown to the asker as one Score line.
  */
 import { describe, expect, it } from 'vitest';
-import { composeReplyText, hasStructuredFields, readScore, readStructuredReply } from '../../../src/core/peers/structured-reply.js';
+import { composeReplyText, hasStructuredFields, readScore, readStructuredReply, scoreProblem } from '../../../src/core/peers/structured-reply.js';
 
 describe('review score', () => {
   it('reads an object (any key case, numbers or "n/10" text) and the three-part text', () => {
@@ -26,5 +26,15 @@ describe('review score', () => {
     expect(hasStructuredFields({ score: {} })).toBe(true);
     expect(composeReplyText('Looks good.', r)).toBe('Looks good.\n\nScore: function 10/10, UX 9/10, UI 9/10');
     expect(readStructuredReply({ score: { function: 'high' } })).toBeNull();
+  });
+
+  it('refuses a score with any part out of range, in text as in an object, and accepts a good one', () => {
+    expect(scoreProblem('10/9/11')).toContain('not 0..10: ui');
+    expect(scoreProblem('10/9')).toContain('score must be');
+    expect(scoreProblem({ function: 10, ui: 11 })).toContain('not 0..10: ui');
+    expect(scoreProblem({ fun: 9 })).toContain('unknown: fun');
+    expect(scoreProblem('10/9/9')).toBeNull();
+    expect(scoreProblem({ ux: 9 })).toBeNull();
+    expect(scoreProblem(undefined)).toBeNull();
   });
 });

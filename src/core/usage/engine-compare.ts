@@ -283,7 +283,8 @@ function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { s
 
 /** The median of each dimension over the finished tasks that carry a score. */
 function scoreMedians(done: readonly EngineCompareTask[]): { reviewScore: ReviewScore | null; scoredDone: number } {
-  const scored = done.filter((p) => p.score);
+  // Only tasks scored on all three: a UI median from one task of six would read as six.
+  const scored = done.filter((p) => p.score && SCORE_DIMENSIONS.every((d) => typeof p.score![d] === 'number'));
   if (!scored.length) return { reviewScore: null, scoredDone: 0 };
   const out: ReviewScore = {};
   for (const d of SCORE_DIMENSIONS) {
@@ -315,7 +316,11 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const rEngine = spend?.engine ?? rs?.engine ?? t.last_start?.engine;
     const rfam = [spend?.model, rs?.acpModel ?? rs?.cliModel ?? rs?.model].map(modelFamily).find((f) => !!f && f !== 'Other')
       ?? (rEngine ? ENGINE_FAMILY[resolveEngine(rEngine)] : undefined);
-    if (rfam) {
+    // Checked means a verdict came back: a score, a result, or a finished review that ran a turn.
+    // A reviewer whose start failed before any turn tried; it checked nothing.
+    const ranTurn = !!spend || sessionsOf(t).some((id) => sessionRanTurn(input.sessions.get(id)));
+    const verdict = !!t.review_score || !!t.result_report || (t.phase === 'COMPLETE' && ranTurn);
+    if (rfam && verdict) {
       if (!reviewFamiliesOf.has(t.parent_task_id)) reviewFamiliesOf.set(t.parent_task_id, new Set());
       reviewFamiliesOf.get(t.parent_task_id)!.add(rfam);
     }

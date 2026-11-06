@@ -141,7 +141,13 @@ export function readScore(v: unknown): ReviewScore | undefined {
 export function scoreProblem(v: unknown): string | null {
   if (v === undefined || v === null) return null;
   const why = 'score must be {"function": n, "ux": n, "ui": n} (any of them, each 0..10) or "n/n/n"';
-  if (typeof v === 'string') return readScore(v) ? null : why;
+  if (typeof v === 'string') {
+    // All three, each valid: "10/9/11" is refused, never read as function 10 and UX 9.
+    const parts = v.split(/\s*[/,|]\s*/).filter(Boolean);
+    const bad = parts.length === 3 ? SCORE_DIMENSIONS.filter((_, i) => scoreValue(parts[i]) === undefined) : [];
+    if (parts.length !== 3) return why;
+    return bad.length ? `${why}; not 0..10: ${bad.join(', ')}` : null;
+  }
   if (typeof v !== 'object' || Array.isArray(v)) return why;
   const raw = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.toLowerCase(), x]));
   const unknown = Object.keys(raw).filter((k) => !(SCORE_DIMENSIONS as readonly string[]).includes(k));

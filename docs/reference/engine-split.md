@@ -36,7 +36,7 @@ the start goes are offered: an ACP engine the launch host has not reported insta
 skipped (Claude Code always can). Settings offers a model only on an engine that takes one per
 entry (Claude Code), with the models Claude Code lists as suggestions; a model outside that list (one
 your proxy serves) is kept as typed, with a note to check the name. Reviewer subtasks (a subtask whose title starts with
-"Review", "Reviewer", "Verify" or "Verifier") take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
+"Review", "Reviewer", "Verifier", "Verify:" or "Verification:") take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
 
 The pick is kept on the task (`engine_pick`) and in `WALNUT_HOME/cache/engine-split.json`,
 and the start's outcome names it with the shares it saw. A start that waited (the queue, a
@@ -49,7 +49,7 @@ start refused after it (a host that went away) still took its turn.
 Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&project&split`):
 per engine and model line (Claude Code on Opus and on Sonnet apart; a task whose usage names no
 line joins its engine's one line when there is only one), the tasks finished in the period, still open, assigned by the
-split, median time to done, median and total cost, median tokens, review subtasks per task
+split, median time to done, median and total cost, median tokens, review subtasks per task and their cost (counts, never ranked: fewer reviews is not better work)
 (subtasks whose title starts with "Review", "Reviewer", "Verifier", "Verify:" or "Verification:"; a top-level task so named is work of its own),
 the share of finished tasks a reviewer on another company's model checked (Claude work reviewed by a
 GPT model or the other way round: its usage's model, else its session's), the reviewer score
@@ -57,8 +57,8 @@ GPT model or the other way round: its usage's model, else its session's), the re
 kept on its task as `review_score`, also when the host answered it while the server was away (the
 host journals it with the reply); a score out of 0 to 10 is refused with 400, never dropped; per task,
 each company's latest score, the lower on each, a reviewer of no known company counting on its own;
-per column, the median of each with how many finished tasks were scored under it, ranked by the lowest
-of the three and only when all three are there; the verdict says when too few are scored to rank;
+per column, the median of each over the finished tasks scored on all three, with how many those are,
+ranked by the lowest of the three; the verdict says when too few are scored to rank;
 each task in the list shows its own and which companies gave it), the
 user's messages per task, reopens after completion, and tasks whose session had an error. A
 task counts under the engine and model that carried most of its cost (dollars first,
