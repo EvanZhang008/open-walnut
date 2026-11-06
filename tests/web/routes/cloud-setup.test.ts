@@ -403,8 +403,14 @@ describe('pairing-code containment (deep scan of every response)', () => {
     await request(app).post('/api/cloud-setup/start')
       .send({ provider: 'manual', domainMode: 'own-domain', domain: 'wn.example.com' })
     const code = await currentPairingCode()
-    // On disk (it must survive a restart) …
-    const onDisk = await fs.readFile(path.join(WALNUT_HOME, 'cloud-setup-job.json'), 'utf-8')
+    // On disk (it must survive a restart) … persist() sets the cache at once and writes behind it,
+    // so the file may lag the job read above by a write under load: wait for that write.
+    const file = path.join(WALNUT_HOME, 'cloud-setup-job.json')
+    let onDisk = ''
+    for (let i = 0; i < 200 && !onDisk.includes(code); i++) {
+      onDisk = await fs.readFile(file, 'utf-8').catch(() => '')
+      if (!onDisk.includes(code)) await new Promise((r) => setTimeout(r, 10))
+    }
     expect(onDisk).toContain(code)
     // … but not over the wire.
     const res = await request(app).get('/api/cloud-setup/job')
