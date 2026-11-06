@@ -6,7 +6,7 @@ import { setImmediate } from 'node:timers/promises';
 import { priceReconciledUsage, PRICING_VERSION } from './pricing.js';
 import type { UsageFilter } from './types.js';
 import type { scanHostUsage } from '../../providers/usage-host-core.js';
-import { CostRollup } from './cost-rollup.js';
+import { CostRollup, BILLED_DAY_RESPONSE_CLAUSE } from './cost-rollup.js';
 
 type HostEvidence = Awaited<ReturnType<typeof scanHostUsage>>;
 export type UsageEvidence = HostEvidence & {
@@ -206,7 +206,8 @@ export class ResponseUsageStore {
       ['date', filter.startDate, '>='], ['date', filter.endDate, '<='], ['source', filter.source, '='],
       ['model', filter.model, '='], ['agent_id', filter.agentId, '='],
     ]) if (value) { clauses.push(`${field} ${op} ?`); args.push(value); }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    clauses.push(BILLED_DAY_RESPONSE_CLAUSE); // a day an imported bill covers is already in the bill
+    const where = `WHERE ${clauses.join(' AND ')}`;
     const verified = `verification='verified' AND pricing_version='${PRICING_VERSION}'`;
     const total = this.db.prepare(`SELECT COUNT(*) calls, SUM(CASE WHEN ${verified} THEN 1 ELSE 0 END) verified,
       SUM(CASE WHEN ${verified} THEN estimate_usd ELSE 0 END) cost,

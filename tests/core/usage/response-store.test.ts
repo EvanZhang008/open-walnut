@@ -42,6 +42,14 @@ describe('response-level usage storage', () => {
     expect(result.summary.session_cost).toBeCloseTo(3.71454, 8);
     expect(result.sessions[0]).toMatchObject({ title: 'Review the change', taskId: 'task-one' });
   });
+  it('the older overview leaves out a day an imported bill covers, the way the rollup does', async () => {
+    const s = store(); await s.importHost('local', evidence([record()]), owners);
+    expect(s.getOverview({}).summary.total_cost).toBeCloseTo(3.71454, 8);
+    await s.rollup.replaceImport('bill', [{ date: '2026-10-13', model: 'claude-opus-5-5', input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }]);
+    const after = s.getOverview({});
+    expect(after.summary.total_cost).toBe(0);
+    expect(after.daily.reduce((n: number, d: { cost_usd?: number; cost?: number }) => n + (d.cost_usd ?? d.cost ?? 0), 0)).toBe(0);
+  });
   it('reports token matches separately from price verification', async () => {
     const s = store(); const imported = await s.importHost('local', evidence([{ ...record(), pricing_context_complete: false }]), owners);
     s.finishHost('local', '2026-10-14T00:00:00Z', imported.checks);

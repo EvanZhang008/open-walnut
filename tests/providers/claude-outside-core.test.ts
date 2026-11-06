@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { claudeSessionMetas, outsideSessionIds } from '../../src/providers/claude-outside-core.js';
@@ -67,7 +67,7 @@ describe('claudeSessionMetas', () => {
   it('finds the entrypoint inside one huge first line, after an inline image', async () => {
     const target = path.join(root, 'p1/image.jsonl');
     await mkdir(path.dirname(target), { recursive: true });
-    const first = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'image', data: 'A'.repeat(600_000) }] }, cwd: '/work/marina', entrypoint: 'sdk-cli' });
+    const first = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'image', data: 'A'.repeat(4_500_000) }] }, cwd: '/work/marina', entrypoint: 'sdk-cli' }); // a 3 MiB picture, past the old 4 MB limit
     await writeFile(target, first + '\n');
     expect((await claudeSessionMetas(root, index)).get('image')).toMatchObject({ entrypoint: 'sdk-cli', cwd: '/work/marina' });
   });
@@ -87,10 +87,24 @@ describe('claudeSessionMetas', () => {
   it('a transcript read up to the limit with no entrypoint is remembered, and read again only when it has grown', async () => {
     const target = path.join(root, 'p1/huge.jsonl');
     await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, JSON.stringify({ type: 'attachment', blob: 'x'.repeat(4_500_000) }) + '\n');
+    await writeFile(target, JSON.stringify({ type: 'attachment', blob: 'x'.repeat(34_000_000) }) + '\n');
     expect((await claudeSessionMetas(root, index)).get('huge')!.entrypoint).toBe('');
     const cache = JSON.parse(await readFile(path.join(index, 'claude-session-meta.json'), 'utf8'));
-    expect(cache['p1/huge.jsonl'][2]).toBeGreaterThan(4_000_000);
+    expect(cache['p1/huge.jsonl'][2]).toBeGreaterThan(32_000_000);
+  });
+
+  it('an old transcript with no entrypoint is remembered too, while a fresh one is read again next time', async () => {
+    const oldFile = path.join(root, 'p1/old.jsonl');
+    const fresh = path.join(root, 'p1/fresh.jsonl');
+    await mkdir(path.dirname(oldFile), { recursive: true });
+    await writeFile(oldFile, JSON.stringify({ type: 'user', cwd: '/work/marina' }) + '\n');
+    await writeFile(fresh, JSON.stringify({ type: 'user', cwd: '/work/marina' }) + '\n');
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60_000);
+    await utimes(oldFile, past, past);
+    await claudeSessionMetas(root, index);
+    const cache = JSON.parse(await readFile(path.join(index, 'claude-session-meta.json'), 'utf8'));
+    expect(cache['p1/old.jsonl']).toEqual(['', '/work/marina', expect.any(Number)]);
+    expect(cache['p1/fresh.jsonl']).toBeUndefined();
   });
 
   it('counts a transcript whose head cannot be read, and the scan reports it as an unreadable file', async () => {

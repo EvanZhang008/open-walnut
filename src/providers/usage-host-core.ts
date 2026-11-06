@@ -5,7 +5,7 @@ import { scanCanonicalUsageIndexed, usageIndexPath } from './usage-scan-index.js
 import { scanProxyUsage, reconcileUsageAsync } from './usage-reconcile-core.js';
 import { setImmediate } from 'node:timers/promises';
 import { priceUsage } from '../core/usage/pricing.js';
-import { claudeSessionMetas, outsideSessionIds, WALNUT_SESSION_ENTRYPOINT, type ClaudeSessionMeta } from './claude-outside-core.js';
+import { claudeSessionMetas, outsideSessionIds, WALNUT_SESSION_ENTRYPOINTS, type ClaudeSessionMeta } from './claude-outside-core.js';
 
 export interface UsageScanRequest {
   projectsDir: string;
@@ -88,7 +88,7 @@ export async function scanHostUsage(request: UsageScanRequest) {
     const asked = new Set(request.sessionIds ?? []);
     for (const [index, record] of scoped.records.entries()) {
       const meta = outsideMeta.has(record.sessionId) ? undefined : metas.get(record.sessionId);
-      if (meta && (!asked.has(meta.sessionId) || meta.entrypoint !== WALNUT_SESSION_ENTRYPOINT)) outsideMeta.set(meta.sessionId, meta);
+      if (meta && (!asked.has(meta.sessionId) || !WALNUT_SESSION_ENTRYPOINTS.has(meta.entrypoint))) outsideMeta.set(meta.sessionId, meta);
       if (index % 1000 === 999) await setImmediate();
     }
   }
@@ -125,7 +125,7 @@ export function createUsagePages() {
     return key;
   }
   // A scan can run longer than a link to the host stays up (the first full read of a big host takes ten minutes). It goes on without
-  // its requester, and the same request asked again within the hour its pages are kept takes up the same scan instead of starting over.
+  // its requester, and the same request asked again within 15 minutes of its start (the time its pages are kept) takes up the same scan instead of starting over.
   const asked = new Map<string, Promise<string>>();
   async function scan(request: UsageScanRequest, run: () => Promise<Awaited<ReturnType<typeof scanHostUsage>>>) {
     const { until: _until, ...same } = request;

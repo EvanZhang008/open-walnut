@@ -140,6 +140,26 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     expect(responseUsageStore().hasSession('walnut-run')).toBe(true);
   });
 
+  it('a Walnut session begun after the pass listed its sessions is Walnut\'s, not outside', async () => {
+    // First listing: only walnut-run. The new session appears in the second listing, read when its transcript shows up in a page.
+    mocks.sessions.mockReset();
+    const mine = { claudeSessionId: 'walnut-run', host: '__local__', engine: 'claude', taskId: 'example-task' };
+    mocks.sessions.mockResolvedValueOnce([mine]);
+    mocks.sessions.mockResolvedValue([mine, { claudeSessionId: 'late-walnut-run', host: '__local__', engine: 'claude', taskId: 'late-task' }]);
+    const metas = [{ sessionId: 'late-walnut-run', entrypoint: 'sdk-cli', cwd: '/home/u/tasks/late-task' }, { sessionId: 'terminal-p', entrypoint: 'sdk-cli', cwd: '/home/u/repo' }];
+    mocks.send.mockResolvedValueOnce(page([record('m30', 'late-walnut-run'), record('m31', 'terminal-p')], metas, '2026-11-06T09:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T09:00:00.000Z');
+    const rollup = responseUsageStore().rollup;
+    expect(rollup.originOf('__local__', 'late-walnut-run')?.outside).toBeFalsy();
+    expect(rollup.originOf('__local__', 'terminal-p')?.outside).toBe(true); // a session nobody listed stays outside
+  });
+
+  it('a session of the SDK session server (sdk-ts) that Walnut has a record of is Walnut\'s', async () => {
+    mocks.send.mockResolvedValueOnce(page([record('m32', 'walnut-run')], [{ sessionId: 'walnut-run', entrypoint: 'sdk-ts', cwd: '/home/u/tasks/example-task' }], '2026-11-06T09:30:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T09:30:00.000Z');
+    expect(responseUsageStore().rollup.originOf('__local__', 'walnut-run')?.outside).toBeFalsy();
+  });
+
   it('a host that failed does not count as read in full', async () => {
     responseUsageStore().rollup.setThresholds([]);
     mocks.sessions.mockResolvedValue([{ claudeSessionId: 'walnut-run', host: 'devbox', engine: 'claude', taskId: 'example-task' }]);

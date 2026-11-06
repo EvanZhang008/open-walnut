@@ -31,6 +31,10 @@ export interface RollupRow {
 const BILLED_DAY_CLAUSE = `NOT (source != 'import' AND date IN (SELECT date FROM usage_rollup WHERE source = 'import')
   AND NOT EXISTS (SELECT 1 FROM usage_rollup_origin o WHERE o.host = usage_rollup.host AND o.session_id = usage_rollup.session_id AND o.provider LIKE 'openai%'))`;
 
+/** The same rule for a row of `response_usage` (the older overview reads), which holds no imported rows itself. */
+export const BILLED_DAY_RESPONSE_CLAUSE = `NOT (date IN (SELECT date FROM usage_rollup WHERE source = 'import')
+  AND NOT EXISTS (SELECT 1 FROM usage_rollup_origin o WHERE o.host = response_usage.host AND o.session_id = response_usage.session_id AND o.provider LIKE 'openai%'))`;
+
 export interface ImportRow {
   date: string; model: string; band?: number;
   input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number;

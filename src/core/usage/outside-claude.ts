@@ -11,7 +11,7 @@
  * Walnut's own helper calls (entrypoint `walnut-utility`) are never read here.
  */
 import type { ClaudeSessionMeta } from '../../providers/claude-outside-core.js';
-import { WALNUT_SESSION_ENTRYPOINT } from '../../providers/claude-outside-core.js';
+import { WALNUT_SESSION_ENTRYPOINTS } from '../../providers/claude-outside-core.js';
 import type { CostRollup, RunOrigin } from './cost-rollup.js';
 import type { UsageOwner } from './response-store.js';
 import { taskIdOfCwd } from './codex-account.js';
@@ -31,7 +31,7 @@ export function classifyClaudeOutside(opts: {
     // Rows this pass stored stay its own whatever Walnut learns later (an import of the session included).
     const keptStored = !!before?.stored;
     let outside: boolean;
-    if (known) outside = keptStored || (!!meta.entrypoint && meta.entrypoint !== WALNUT_SESSION_ENTRYPOINT);
+    if (known) outside = keptStored || (!!meta.entrypoint && !WALNUT_SESSION_ENTRYPOINTS.has(meta.entrypoint));
     else {
       // The first look decides and is kept: rows stored later for the session must not turn it into Walnut's.
       if (before) { owners.push({ sessionId: meta.sessionId, taskId: taskIdOfCwd(meta.cwd) }); continue; }

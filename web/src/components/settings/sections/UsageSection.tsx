@@ -115,7 +115,7 @@ export function UsageSection() {
 
       {(shown?.started?.imported?.costUsd ?? 0) > 0 && (
         <p className="settings-addons-muted usage-headline-note" data-testid="usage-imported-note">
-          {`All also counts ${money(shown!.started!.imported!.costUsd)} imported from the usage bill (the whole account, no sessions); it is in neither Walnut nor Outside Walnut.`}
+          {`All also counts ${money(shown!.started!.imported!.costUsd)} imported from the usage bill. A bill covers whole days of the account, so Walnut and Outside Walnut leave those days out: the bill already includes them.`}
         </p>
       )}
 
@@ -173,7 +173,7 @@ function Headline({ report, days }: { report: CostReport; days: string[] }) {
       <div className="settings-addons-stats" data-count={direct > 0 ? 4 : 3}>
         <Stat value={money(t.costUsd)} label="Estimated cost" testId="usage-total-cost" />
         <Stat value={money(t.costUsd / dayCount)} label="Average day" testId="usage-average-day" />
-        {direct > 0 && <Stat value={money(direct)} label="Billed directly" testId="usage-direct-cost" highlight />}
+        {direct > 0 && <Stat value={money(direct)} label="Billed directly" testId="usage-direct-cost" />}
         <Stat value={busiest && busiest.costUsd > 0 ? money(busiest.costUsd) : '-'} label={busiest && busiest.costUsd > 0 ? `Busiest day, ${dayLabel(busiest.date)}` : 'Busiest day'} />
       </div>
       {direct > 0 && (

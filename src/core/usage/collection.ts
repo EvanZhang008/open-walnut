@@ -10,7 +10,7 @@ import { engineCaps } from '../agents/engine-registry.js';
 import type { DayBucket } from './cost-rollup.js';
 import { outsideHosts } from './outside-codex.js';
 import { classifyClaudeOutside } from './outside-claude.js';
-import type { ClaudeSessionMeta } from '../../providers/claude-outside-core.js';
+import { WALNUT_SESSION_ENTRYPOINTS, type ClaudeSessionMeta } from '../../providers/claude-outside-core.js';
 import type { SessionCostScan } from '../../providers/session-cost-core.js';
 
 let store: ResponseUsageStore | undefined;
@@ -129,6 +129,7 @@ async function collect(since: string | undefined, until: string) {
       let outsideNow = outsideScan && !(cooling && !rollup.claudeOutsideBuilt(host));
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
+      let relisted = 0;
       let logged = false;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -141,6 +142,18 @@ async function collect(since: string | undefined, until: string) {
             unreadable += (evidence.canonical?.diagnostics as { unreadable_files?: number } | undefined)?.unreadable_files ?? 0;
             // A session another name of this machine owns is stored by that name's own read.
             if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
+            // A Walnut session begun after this pass listed the sessions is not in `known` yet: its record is read again before
+            // the first look, because that look is kept for good and would otherwise call it outside.
+            if (Date.now() - relisted > 5_000 && evidence.outsideSessions?.some(m => !known.has(m.sessionId) && WALNUT_SESSION_ENTRYPOINTS.has(m.entrypoint))) {
+              relisted = Date.now();
+              for (const s of await listSessions()) {
+                if (engineCaps(s.engine).historySource !== 'provider-jsonl' || known.has(s.claudeSessionId)) continue;
+                const named = s.host ?? '__local__';
+                if (asJoined(named) !== machine) continue;
+                known.set(s.claudeSessionId, named);
+                if (named === host) owners.push({ sessionId: s.claudeSessionId, taskId: s.taskId || undefined, title: s.title, project: s.project, lane: s.lane });
+              }
+            }
             // Who started each outside session is noted before its responses are stored.
             const extra = evidence.outsideSessions?.length
               ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];
@@ -157,7 +170,7 @@ async function collect(since: string | undefined, until: string) {
           // now, and the full read of the rest is tried again after a wait. What it stored already is kept (a response has one row).
           log.usage.warn('claude outside full read failed; collecting without it', { host, error: String(error) });
           rollup.setClaudeOutsideFailedAt(host, Date.now());
-          fullOutside = false; outsideNow = false; requestSince = sinceFor(host); unreadable = 0;
+          fullOutside = false; outsideNow = false; requestSince = sinceFor(host); unreadable = 0; responses = 0; verified = 0; unverified = 0;
         }
       }
       responseUsageStore().finishHost(host, until, checks);

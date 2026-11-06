@@ -19,13 +19,13 @@ export const CLAUDE_OUTSIDE = true;
 /** Entrypoints of Walnut's own helper calls: counted from Walnut's call records, never as outside work. */
 export const WALNUT_ENTRYPOINTS: ReadonlySet<string> = new Set(['walnut-utility']);
 
-/** The entrypoint a Walnut session (`claude -p --input-format stream-json`) writes. */
-export const WALNUT_SESSION_ENTRYPOINT = 'sdk-cli';
+/** The entrypoints a Walnut session writes: `claude -p --input-format stream-json` (sdk-cli), and the SDK session server's (sdk-ts). */
+export const WALNUT_SESSION_ENTRYPOINTS: ReadonlySet<string> = new Set(['sdk-cli', 'sdk-ts']);
 
 export interface ClaudeSessionMeta { sessionId: string; entrypoint: string; cwd: string }
 
-/** The entrypoint is within the first dozen KB of a transcript unless the first message is huge (an inline image); stop looking at this much. */
-const HEAD_MAX_BYTES = 4 * 1024 * 1024;
+/** The entrypoint is within the first dozen KB of a transcript unless the first message is huge (inline images, up to 5 MiB each); stop looking at this much. */
+const HEAD_MAX_BYTES = 32 * 1024 * 1024;
 /** What is kept from one chunk to the next, so a field cut by a chunk boundary is still found. */
 const OVERLAP_CHARS = 8 * 1024;
 const CACHE_FILE = 'claude-session-meta.json';
@@ -114,7 +114,11 @@ export async function claudeSessionMetas(projectsDir: string, indexDir?: string)
       if (!hit) {
         try {
           const head = await readHead(file);
-          if (head && (head.complete || head.size >= HEAD_MAX_BYTES)) { hit = head.entrypoint ? [head.entrypoint, head.cwd] : ['', head.cwd, head.size]; dirty = true; }
+          // A file that ended with no entrypoint is a session just begun, unless it has not been written for a day: an old
+          // transcript from a CLI that wrote none is remembered like one read to the limit, so a pass does not read it whole again.
+          const settled = head && !head.complete && head.size < HEAD_MAX_BYTES
+            && Date.now() - (await fs.stat(file)).mtimeMs > 24 * 60 * 60_000;
+          if (head && (head.complete || head.size >= HEAD_MAX_BYTES || settled)) { hit = head.entrypoint ? [head.entrypoint, head.cwd] : ['', head.cwd, head.size]; dirty = true; }
         } catch { out.unreadable++; /* unreadable now: listed without an entrypoint, read again next time, and the pass says so */ }
       }
       if (hit) next[key] = hit;
