@@ -246,7 +246,8 @@ describe('durable voice cloud copies', () => {
   it('resumes an expired copy budget on daemon activity without a reconnect or phone request', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.alloc(VOICE_CHUNK_BYTES * 3, 1), format: 'caf' })
     await startVoiceArchiveReplication()
-    await vi.waitFor(async () => { expect((await voiceArchive.get(record.id)).primarySaved).toBe(true) })
+    await waitForDeferredCopy(record.id)
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
     await new Promise<void>((resolve) => setImmediate(resolve))
     await voiceArchive.resetPrimaryChunks(record.id)
     let now = 1000
@@ -262,8 +263,10 @@ describe('durable voice cloud copies', () => {
     expect((await voiceArchive.replicationSnapshot(record.id)).nextPrimaryChunk).toBe(1)
     bridge.mockImplementation(real)
     expect((await voiceArchive.get(record.id)).primarySaved).toBe(false)
+    copies.delete(record.id)
     for (const handler of activity) handler()
-    await vi.waitFor(async () => { expect((await voiceArchive.get(record.id)).primarySaved).toBe(true) })
+    await waitForDeferredCopy(record.id)
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
     expect((await primary.readAudio(record.id)).audio.equals((await voiceArchive.readAudio(record.id)).audio)).toBe(true)
     stopVoiceArchiveReplication()
     expect(activity.size).toBe(0)
@@ -271,7 +274,8 @@ describe('durable voice cloud copies', () => {
   it('a later daemon pulse copies text saved during the final audio acknowledgement', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'caf' })
     await startVoiceArchiveReplication()
-    await vi.waitFor(async () => { expect((await voiceArchive.get(record.id)).primarySaved).toBe(true) })
+    await waitForDeferredCopy(record.id)
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
     await voiceArchive.resetPrimaryChunks(record.id)
     const realMark = voiceArchive.markPrimarySaved.bind(voiceArchive)
     const mark = vi.spyOn(voiceArchive, 'markPrimarySaved').mockImplementationOnce(async (id, text) => {
@@ -281,11 +285,11 @@ describe('durable voice cloud copies', () => {
     try {
       expect(await replicateVoiceRecording(record.id)).toBe(false)
       expect((await primary.get(record.id)).text).toBeUndefined()
+      copies.delete(record.id)
       for (const handler of activity) handler()
-      await vi.waitFor(async () => {
-        expect((await primary.get(record.id)).text).toBe('Text arriving during copy')
-        expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
-      })
+      await waitForDeferredCopy(record.id)
+      expect((await primary.get(record.id)).text).toBe('Text arriving during copy')
+      expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
     } finally { mark.mockRestore(); stopVoiceArchiveReplication() }
   })
   it('transcribes using only the committed ID and stores text on both boxes before returning', async () => {
