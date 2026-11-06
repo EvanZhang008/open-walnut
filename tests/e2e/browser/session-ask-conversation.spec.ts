@@ -75,6 +75,19 @@ async function openInTree(page: Page): Promise<Locator> {
 }
 
 const pill = (page: Page) => page.locator('[data-testid="quote-pin-pill"]')
+
+/** The words the chat's question marks paint (CSS highlights named thread-mark*). */
+async function markedTexts(panel: Locator): Promise<string[]> {
+  return history(panel).evaluate((root) => {
+    const reg = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights
+    const out: string[] = []
+    reg.forEach((h, name) => {
+      if (!String(name).startsWith('thread-mark')) return
+      h.forEach((r) => { if (root.contains(r.commonAncestorContainer)) out.push(r.toString()) })
+    })
+    return out
+  })
+}
 const stackDepth = (panel: Locator) => mainPage(panel).locator('.thread-stack')
 const composer = (panel: Locator) => mainComposer(panel)
 
@@ -115,6 +128,9 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(900)
     await expect(card(panel)).toHaveAttribute('data-draft', 'true')
     await expect(card(panel).locator('.thread-card-input')).toBeFocused()
+    // The selection is gone once the card opens: a mark says which words it is about.
+    await expect.poll(async () => (await markedTexts(panel)).join(' ').replace(/\s+/g, ' '), { message: 'the asked words are marked while the draft is open' })
+      .toContain(PHRASE)
     await expect(panel.locator('.thread-stack')).toHaveCount(0)
     // The passage stays where it was selected, also once the new view settles.
     for (const wait of [0, 300, 900]) {

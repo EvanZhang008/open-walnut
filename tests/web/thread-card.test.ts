@@ -170,4 +170,14 @@ describe('allPassageMarks', () => {
     const key = tree.byRow.get('q1')!.key;
     expect(allPassageMarks(tree, new Set([key]), new Map())).toEqual([]);
   });
+  it('marks a draft Ask on a reply, never one about a file or one already sent', () => {
+    const tree = buildThreadTree(rows, []);
+    const quote = { exact: 'reader skips', prefix: '', suffix: '' };
+    const marks = allPassageMarks(tree, new Set(), new Map(), [
+      { pageKey: 'pending:a1:x', parentMsgId: 'a1', quote, title: 'Draft' },
+      { pageKey: 'pending:file:x', parentMsgId: 'file:src/a.ts', quote, title: 'File draft' },
+      { pageKey: 'pending:a1:noquote', parentMsgId: 'a1', title: 'No words' },
+    ]);
+    expect(marks).toEqual([expect.objectContaining({ key: 'pending:a1:x', parentMsgId: 'a1', draft: true, neutral: true })]);
+  });
 });

@@ -4165,11 +4165,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // mark states); Conversation Mode paints every asked passage by its question's
   // state (waiting, answering, unread, ...), and a click opens its card.
   const markStates = threadsApi.markStates;
+  const unsentAsks = useMemo(() => (stack.pending ? [stack.pending, ...stack.draftPages] : stack.draftPages), [stack.pending, stack.draftPages]);
   const markSpecs = useMemo(() => (stackMode
     ? markSpecsFor({ tree: threadTree, currentKey, hiddenKeys: threadsApi.hiddenKeys, index: threadsApi.metaIndex })
-    : convMode ? allPassageMarks(threadTree, threadsApi.hiddenKeys, threadsApi.metaIndex)
-      .map((m) => (markStates.has(m.key) ? { ...m, state: markStates.get(m.key) } : m))
-      : NO_MARKS), [stackMode, convMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex, markStates]);
+    : convMode ? allPassageMarks(threadTree, threadsApi.hiddenKeys, threadsApi.metaIndex, unsentAsks)
+      .map((m) => (m.draft ? { ...m, state: 'waiting' as const } : markStates.has(m.key) ? { ...m, state: markStates.get(m.key) } : m))
+      : NO_MARKS), [stackMode, convMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex, markStates, unsentAsks]);
   // A question being answered: its mark's line scans until the answer ends.
   const liveMarkKeys = useAnsweringKeys(threadDerived.live);
   const liveLayerRef = useRef<HTMLDivElement | null>(null);
@@ -4259,7 +4260,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       else if (!review.takeMarkClick(key)) openCard(key, 'mark');
     },
     ...(convMode ? { onMenu: review.onMarkMenu } : {}),
-    onDerived: review.onMarks,
+    // The review sidebar lists sent questions: a draft's mark has no card there.
+    onDerived: (marks) => review.onMarks(marks.filter((m) => !m.draft)),
     live: { keys: liveMarkKeys, layerRef: liveLayerRef },
   });
   useThreadLanding({

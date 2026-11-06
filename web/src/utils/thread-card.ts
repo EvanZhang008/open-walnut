@@ -9,7 +9,7 @@ import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
-import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY, isTurnHead } from '@/utils/thread-tree';
+import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY, fileOfParent, isTurnHead } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 
@@ -202,14 +202,28 @@ export interface PassageMarkSpec {
   neutral: true;
   /** What the mark says (thread-mark-state.ts), set by the caller. */
   state?: ThreadMarkState;
-  /** An Ask not sent yet (file marks). */
+  /** An Ask not sent yet. */
   draft?: true;
 }
 
+/** An Ask not sent yet (ThreadPendingPage's fields the mark needs). */
+export interface UnsentAsk { pageKey: string; parentMsgId: string; quote?: SessionPinnedQuote; title: string }
+
 /** Every question with a passage, whichever reply it is about (Conversation
- *  Mode shows the whole transcript, so every asked passage wears its mark). */
-export function allPassageMarks(tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex): PassageMarkSpec[] {
+ *  Mode shows the whole transcript, so every asked passage wears its mark).
+ *  The draft being written is included, as in the Files tab: its selection is
+ *  gone once its card opens, so the mark is what says which words it is about. */
+export function allPassageMarks(
+  tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, unsent: ReadonlyArray<UnsentAsk> = [],
+): PassageMarkSpec[] {
   const out: PassageMarkSpec[] = [];
+  for (const p of unsent) {
+    if (!p.quote?.exact || fileOfParent(p.parentMsgId) !== null || tree.byKey.has(p.pageKey)) continue;
+    out.push({
+      key: p.pageKey, headId: p.pageKey, parentMsgId: p.parentMsgId,
+      quote: p.quote, hue: 0, resolved: false, title: p.title, neutral: true, draft: true,
+    });
+  }
   for (const node of tree.threads) {
     if (node.key === ROOT_THREAD_KEY || hiddenKeys.has(node.key)) continue;
     if (!node.parent || !node.quote?.exact) continue;

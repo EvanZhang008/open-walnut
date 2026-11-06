@@ -32567,8 +32567,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* The bar is one row of buttons, never a scrolling strip (its placement is never
    capped below that row). */
 .quote-pin-pill { overflow: hidden; }
-/* A timeline narrower than the bar: Pin, Ask here and Comment show icons only. */
+/* A timeline narrower than the bar: every button shows its icon only (Quote and
+   Copy have an icon just for this), so one bar never mixes icons and words. */
 .quote-pin-pill.is-compact .quote-pin-pill-btn > svg + span { display: none; }
+.quote-pin-pill:not(.is-compact) .quote-pin-compact-icon { display: none; }
 
 .quote-pin-pill-btn {
   display: flex;
@@ -32642,7 +32644,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: min(340px, calc(100vw - 32px), calc(var(--quote-menu-room, 100vw) - 10px));
+  width: var(--quote-comment-w, min(340px, calc(100vw - 32px), calc(var(--quote-menu-room, 100vw) - 10px)));
   padding: 2px;
   /* The hint drops its second half in a narrow box. */
   container-type: inline-size;

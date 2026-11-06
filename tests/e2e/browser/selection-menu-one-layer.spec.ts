@@ -238,6 +238,10 @@ async function checkAllStates(page: Page, scope: Locator, phrase: string, where:
   const menu = page.locator('[data-testid="quote-pin-menu"]')
   await select()
   await expectBar(page, scope, phrase, where)
+  // One bar, one style: all buttons worded, or (a column too narrow) all icons.
+  const styles = await pill(page).locator('.quote-pin-pill-btn:not(.quote-ask-mode-btn)').evaluateAll((bs) =>
+    bs.map((b) => ([...b.children].some((c) => c.tagName === 'SPAN' && getComputedStyle(c).display !== 'none') ? 'words' : 'icon')))
+  expect(new Set(styles).size, `the bar never mixes icon-only and worded buttons (${where}: ${styles.join(', ')})`).toBe(1)
   const before = await layout(scope)
   // Ask: a menu under Ask here's caret; Up and Down move; Esc closes it and keeps the bar.
   const caret = pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' })
@@ -255,7 +259,34 @@ async function checkAllStates(page: Page, scope: Locator, phrase: string, where:
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect(pill(page)).toBeVisible()
+  // Focus goes back to the caret, so the next Tab carries on from the bar.
+  await expect(caret).toBeFocused()
   expect(await layout(scope), `the conversation is where it was (${where})`).toEqual(before)
+  // A scroll and a narrower window with the menu open (after the checks above,
+  // which need the conversation where it was).
+  await caret.click()
+  await expect(page.getByTestId('quote-ask-modes')).toBeVisible()
+  // The bar stays on the words and the menu on its caret, never frozen over other text.
+  const nearWords = async () => {
+    const words = await passageRects(scope, phrase, ANSWER)
+    const bar = (await pill(page).boundingBox())!
+    const box = (await page.locator('[data-testid="quote-pin-menu"]').boundingBox())!
+    const grp = (await pill(page).locator('.quote-pin-ask-group').boundingBox())!
+    const top = Math.min(...words.map((r) => r.top))
+    const bottom = Math.max(...words.map((r) => r.top + r.height))
+    const barNear = (bar.y >= bottom - 0.5 && bar.y - bottom <= 24) || (bar.y + bar.height <= top + 0.5 && top - (bar.y + bar.height) <= 24)
+    const menuNear = Math.abs(box.y - (grp.y + grp.height)) <= 12 || Math.abs(grp.y - (box.y + box.height)) <= 12
+    return barNear && menuNear
+  }
+  await scope.locator('.session-history').first().evaluate((el) => { el.scrollTop -= 50 })
+  await expect.poll(nearWords, { message: `the bar and the Ask menu follow the words through a scroll (${where})`, timeout: 3_000 }).toBe(true)
+  const vpAsk = page.viewportSize()!
+  await page.setViewportSize({ width: vpAsk.width - 120, height: vpAsk.height })
+  await expect.poll(nearWords, { message: `the bar and the Ask menu follow the words through a resize (${where})`, timeout: 3_000 }).toBe(true)
+  await page.setViewportSize(vpAsk)
+  await scope.locator('.session-history').first().evaluate((el) => { el.scrollTop += 50 })
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-testid="quote-pin-menu"]')).toHaveCount(0)
   // The caret again closes it too.
   await caret.click()
   await expect(menu).toHaveCount(1)

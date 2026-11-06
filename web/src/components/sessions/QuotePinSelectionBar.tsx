@@ -105,6 +105,19 @@ const ICON_TREE = (
 );
 
 /** A speech bubble with lines: Comment writes a note under the quote. */
+/** Quote and Copy carry words only; these icons stand in for them in the compact bar. */
+const ICON_QUOTE = (
+  <svg className="quote-pin-compact-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M3 9.5h3v3H3zM3 9.5c0-2.5 1-4.5 3-5.5M9.5 9.5h3v3h-3zM9.5 9.5c0-2.5 1-4.5 3-5.5" />
+  </svg>
+);
+const ICON_COPY = (
+  <svg className="quote-pin-compact-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+    <path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
+  </svg>
+);
+
 const ICON_COMMENT = (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
     <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
@@ -249,6 +262,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
   /** What each menu hangs under: Ask here with its caret, and Comment. */
   const askGroupRef = useRef<HTMLSpanElement | null>(null);
   const commentBtnRef = useRef<HTMLButtonElement | null>(null);
+  const askCaretRef = useRef<HTMLButtonElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
   /** The press or the focus is on the bar or on its open menu. */
   const inPill = useCallback((n: Node | null) => !!n && (!!pillRef.current?.contains(n) || !!menuRef.current?.contains(n)), []);
@@ -491,7 +505,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
         // An Esc that cancelled an IME composition is the input method's, not ours.
         if (escComposing.current) { escComposing.current = false; return; }
         // The Ask choice is a layer of its own: Esc goes back to the buttons.
-        if (askPickRef.current) { setAskPick(false); return; }
+        // Focus goes back to the caret that opened it, as any dropdown's does.
+        if (askPickRef.current) { setAskPick(false); askCaretRef.current?.focus(); return; }
         cancelAnimationFrame(raf); dismiss(); return;
       }
       schedule();
@@ -528,10 +543,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
         // Measured on this machine the clamp lands ~700ms AFTER mouseup, so no
         // press observed here actually raced it; this is a one-line floor for the
         // slower machine (or the longer press) where it would.
-        // The Comment box keeps the pill up after a press on it, so it still follows.
-        if (pressedPill.current && commentRef.current === null) return;
         // A held passage has no selection to read: its own Range says where it is.
+        // First: a press that held it (Comment, Ask here's caret) keeps the bar and
+        // its menu on the words through a scroll, never frozen over other text.
         if (held.heldRef.current) { held.repair(); return; }
+        if (pressedPill.current && commentRef.current === null) return;
         // An open Comment box whose passage was lost stays where it is.
         if (commentRef.current !== null) return;
         const selection = typeof window !== 'undefined' ? window.getSelection() : null;
@@ -594,7 +610,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     document.addEventListener(SELECTION_HOLD_EVENT, onHold);
     document.addEventListener(SELECTION_RELEASE_EVENT, onRelease);
     window.addEventListener('scroll', onScroll, true);
+    // A resize reflows the column under the passage: re-anchor as a scroll does.
+    const onResize = () => onScroll({ target: document } as unknown as Event);
+    window.addEventListener('resize', onResize);
     return () => {
+      window.removeEventListener('resize', onResize);
       cancelAnimationFrame(raf);
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('pointerup', endSelecting, true);
@@ -759,7 +779,15 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     <div
       ref={menuRef}
       className="quote-pin-menu"
-      style={{ ...menuPlacementStyle(menuPlacement), ...(menuRoom ? { '--quote-menu-room': `${menuRoom - 12}px` } : {}) } as React.CSSProperties}
+      style={{
+        ...menuPlacementStyle(menuPlacement),
+        ...(menuRoom ? { '--quote-menu-room': `${menuRoom - 12}px` } : {}),
+        // The Comment box is as wide as the bar it lines up with (no wider than the
+        // column, no narrower than its field needs).
+        ...(commentOpen && pillRef.current && menuRoom
+          ? { '--quote-comment-w': `${Math.min(Math.max(pillRef.current.offsetWidth, 300), menuRoom - 12) - 10}px` }
+          : {}),
+      } as React.CSSProperties}
       data-testid="quote-pin-menu"
       {...stopPress}
     >
@@ -868,6 +896,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
             <span>Ask here</span>
           </button>
           <button
+            ref={askCaretRef}
             type="button"
             className="quote-pin-pill-btn quote-ask-mode-btn"
             data-testid="quote-ask-mode-btn"
@@ -893,7 +922,9 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
           onMouseDown={(e) => e.preventDefault()}
           onClick={quoteInChat}
           title="Quote this passage: it is listed above the message box and sent with your next message"
+          aria-label="Quote"
         >
+          {ICON_QUOTE}
           <span>Quote</span>
         </button>
       )}
@@ -924,8 +955,10 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
         onMouseDown={(e) => e.preventDefault()}
         onClick={copy}
         title="Copy the selected text"
+        aria-label="Copy"
       >
-        Copy
+        {ICON_COPY}
+        <span>Copy</span>
       </button>
     </div>
     {menu}
