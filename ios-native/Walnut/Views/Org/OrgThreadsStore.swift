@@ -11,6 +11,11 @@ final class OrgThreadsStore {
     /// nil until the first read answers.
     private(set) var threads: [OrgThread]?
     private(set) var error: String?
+    /// How many threads his view shows by the server's count in the last read (nil: an older
+    /// server that sends none).
+    private(set) var shownCount: Int?
+    /// All the node's closed threads by the server's count (the read brings the newest only).
+    private(set) var closedCount: Int?
     /// The thread an action is running on (its buttons wait).
     private(set) var busyThreadId: String?
     private(set) var loading = false
@@ -32,9 +37,11 @@ final class OrgThreadsStore {
         loading = true
         defer { if gen == generation { loading = false } }
         do {
-            let list = try await WalnutAPI().orgThreads(taskId: taskId)
+            let read = try await WalnutAPI().orgThreads(taskId: taskId)
             guard gen == generation else { return }
-            threads = list
+            threads = read.threads
+            shownCount = read.shownCount
+            closedCount = read.closedCount
             error = nil
         } catch {
             guard gen == generation else { return }
@@ -42,6 +49,19 @@ final class OrgThreadsStore {
             self.error = threads == nil ? "Couldn't load the threads. Pull to try again." : "Couldn't refresh the threads."
             AppLog.warn("org", "threads load failed", ["taskId": taskId, "error": error.localizedDescription])
         }
+    }
+
+    /// One thread read whole in place of its cut copy (a Conversation opened). An older server
+    /// without the route, or a failed read, leaves the cut copy, which says where the rest is.
+    func loadWhole(_ threadId: String) async {
+        let gen = generation
+        guard let whole = try? await WalnutAPI().orgThread(taskId: taskId, threadId: threadId),
+              // A list read that started meanwhile is newer than this copy: keep it.
+              gen == generation,
+              var list = threads, let i = list.firstIndex(where: { $0.id == threadId }),
+              whole.updatedAt >= list[i].updatedAt else { return }
+        list[i] = whole
+        threads = list
     }
 
     /// One action on a thread. A failure leaves the thread as it was and says so.

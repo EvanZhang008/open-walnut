@@ -97,6 +97,9 @@ enum OrgThreadModel {
         }
         var out = Set<String>()
         for g in byReply.values where g.threads.count > 1 { out.formUnion(g.messages) }
+        // The server judged it over every thread (`shared`): a read of part of the list, or with
+        // cut answers, cannot tell two copies of one reply apart by itself.
+        for t in threads { for m in t.messages where m.shared == true { out.insert(m.id) } }
         return out
     }
 
@@ -124,15 +127,44 @@ enum OrgThreadModel {
         return !unread(t, shared: shared).isEmpty
     }
 
+    /// In his view: the server's judgement when it sent one (`shown`, made over every thread of
+    /// the node, the rule the header counts by), else this phone's port of that rule.
+    static func inView(_ t: OrgThread, shared: Set<String>, now: Date) -> Bool {
+        if t.closed != nil { return false }
+        // A snooze that ran out since the read: the server judged it while it was put aside.
+        if let s = t.snoozed, let until = WalnutTask.parseISO(s.until), until <= now {
+            return shownToHim(t, shared: shared, now: now)
+        }
+        return t.shown ?? shownToHim(t, shared: shared, now: now)
+    }
+
+    /// Some answer in it came cut by the list read.
+    static func hasCutAnswer(_ t: OrgThread) -> Bool {
+        t.messages.contains { $0.answer?.clipped == true }
+    }
+
+    /// An answer as the card draws it: one the server cut for the read (`clipped`) says where the rest is.
+    static func answerText(_ a: OrgThreadMessage.Answer) -> String {
+        a.clipped == true ? a.text + "\n\n*Shortened here; the whole answer is in the chat.*" : a.text
+    }
+
+    /// How many threads for him a read failed to bring, or nil when it brought them all: the
+    /// server's count from the same read wins, then the node's own status (`user_status.threads`).
+    static func unreadCount(serverCount: Int?, nodeCount: Int?, read: Int) -> Int? {
+        let expected = serverCount ?? nodeCount ?? 0
+        return read == 0 && expected > 0 ? expected : nil
+    }
+
     static func sections(_ threads: [OrgThread], now: Date) -> Sections {
         let shared = sharedAnswers(threads)
         var s = Sections()
-        let shown = threads.filter { shownToHim($0, shared: shared, now: now) }
+        let shown = threads.filter { inView($0, shared: shared, now: now) }
             .sorted { $0.updatedAt > $1.updatedAt }
         let pinned = shown.filter(pinnedNow).sorted { ($0.pinned?.at ?? "") > ($1.pinned?.at ?? "") }
         s.open = pinned + shown.filter { !pinnedNow($0) }
-        s.snoozed = threads.filter { snoozedNow($0, now: now) }.sorted { ($0.snoozed?.until ?? "") < ($1.snoozed?.until ?? "") }
-        s.inProgress = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !shownToHim($0, shared: shared, now: now) }
+        s.snoozed = threads.filter { !inView($0, shared: shared, now: now) && snoozedNow($0, now: now) }
+            .sorted { ($0.snoozed?.until ?? "") < ($1.snoozed?.until ?? "") }
+        s.inProgress = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
         // Newest close first, and a closed row's time is its close (`shownAt`), so the list reads in order.
         s.closed = threads.filter { $0.closed != nil }.sorted { shownAt($0) > shownAt($1) }
         return s

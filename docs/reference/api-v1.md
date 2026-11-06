@@ -1599,6 +1599,26 @@ team is talked to through that task; the Inbox never gets a lead.
   in every answer carries `org_instructions` (additive).
 - Every POST and PUT answers `501` on a replica.
 
+### An Org node's Threads (additive, 2026-11): `/tasks/:id/threads`
+
+- `GET /api/v1/tasks/:id/threads[?open=1|closed=1][&limit=N][&answer_max=N]` →
+  `200 { task_id, title, threads, closed_count, shown_count }`: Main's or a lead's Threads,
+  open first (newest change first, pinned on top), then the closed ones (newest close first).
+  `open=1` keeps the open ones, `closed=1` the closed ones; `limit` keeps the first N.
+  `answer_max` cuts each answer the user already reacted to to N characters (`clipped: true` on
+  that answer); an answer his card shows (not reacted to yet) stays whole. Each thread carries
+  `shown` (additive, 2026-11-06): his view shows it, judged over ALL the node's threads, and
+  `shown_count` is that count (`user_status.threads.shown` counts the same), so a client that
+  reads part of the list still draws the number its header shows. A client reads the open ones
+  and a page of the closed ones with `answer_max`: the whole list (over 1 MB for a busy VP) is
+  past what the companion carries back from the Mac (256 KB).
+- `GET /api/v1/tasks/:id/threads/:thread` → `200 { task_id, thread }`: one thread whole (a
+  Conversation opened after a cut read); `404 no_thread`.
+- On the companion, which keeps no Threads, both answer `503 primary_only` (the Mac out of reach,
+  or its answer too large to carry back), never an empty list. An older companion answered an
+  empty list there: a client that sees none while the node's `user_status.threads.shown` counts
+  some says it could not read them.
+
 ### Quick input (additive, 2026-10-31): `/quick/ask`, `/quick/warm`, `/quick/main`, `/quick/task-message`, `/quick/tasks`
 
 What a launcher on the Mac calls (the Alfred workflow and Raycast extension in

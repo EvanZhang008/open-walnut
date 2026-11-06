@@ -202,4 +202,67 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertTrue(OrgThreadModel.isBareListMarker("  3) "))
         XCTAssertFalse(OrgThreadModel.isBareListMarker("- words"))
     }
+
+    // MARK: - The list and the header count agree (2026-11-06: "Threads 4" over an empty page)
+
+    func testTheServersShownDecidesTheListWhenSent() throws {
+        // The port alone would show an answered thread and hide a working one with nothing new;
+        // the server judged over every thread (an answer shared with a closed one) says otherwise.
+        let answered = try t("th-000001", state: "answered", extra: #","shown":false"#)
+        let working = try t("th-000002", state: "working", extra: #","shown":true"#)
+        let older = try t("th-000003", state: "needs")
+        let s = OrgThreadModel.sections([answered, working, older], now: Self.now)
+        XCTAssertEqual(Set(s.open.map(\.id)), ["th-000002", "th-000003"])
+        XCTAssertEqual(s.inProgress.map(\.id), ["th-000001"])
+        XCTAssertTrue(s.snoozed.isEmpty)
+    }
+
+    func testAReplyCarriesTheServersCountAndCutAnswers() throws {
+        let json = #"""
+        {"threads":[{"id":"th-1a2b3c","title":"T","state":"answered","shown":true,
+          "messages":[{"id":"tm-1","at":"2026-11-04T09:00:00Z","text":"q","answer":{"text":"long\u2026","at":"2026-11-04T09:01:00Z","clipped":true}}],
+          "createdAt":"2026-11-04T09:00:00Z","updatedAt":"2026-11-04T09:01:00Z"}],
+         "closed_count":151,"shown_count":4}
+        """#
+        let reply = try JSONDecoder().decode(OrgThreadsReply.self, from: Data(json.utf8))
+        XCTAssertEqual(reply.shown_count, 4)
+        XCTAssertEqual(reply.closed_count, 151)
+        XCTAssertEqual(reply.threads.first?.shown, true)
+        let answer = try XCTUnwrap(reply.threads.first?.messages.first?.answer)
+        XCTAssertTrue(OrgThreadModel.answerText(answer).contains("the whole answer is in the chat"))
+        let whole = OrgThreadMessage.Answer(text: "short", at: "x")
+        XCTAssertEqual(OrgThreadModel.answerText(whole), "short")
+        // A cut answer in it: opening its Conversation reads the thread whole.
+        XCTAssertTrue(OrgThreadModel.hasCutAnswer(try XCTUnwrap(reply.threads.first)))
+        XCTAssertFalse(OrgThreadModel.hasCutAnswer(try t("th-000009", messages: answeredOnce)))
+    }
+
+    func testAReadThatBroughtNoneOfTheCountedThreadsIsNotEmpty() {
+        // The companion answered an empty list while the node's status counted four.
+        XCTAssertEqual(OrgThreadModel.unreadCount(serverCount: nil, nodeCount: 4, read: 0), 4)
+        // The server's own count of the same read wins: the last one was just acknowledged.
+        XCTAssertNil(OrgThreadModel.unreadCount(serverCount: 0, nodeCount: 1, read: 0))
+        XCTAssertEqual(OrgThreadModel.unreadCount(serverCount: 2, nodeCount: 0, read: 0), 2)
+        XCTAssertNil(OrgThreadModel.unreadCount(serverCount: nil, nodeCount: 4, read: 3))
+        XCTAssertNil(OrgThreadModel.unreadCount(serverCount: nil, nodeCount: nil, read: 0))
+    }
+    func testTheServersSharedMarkHoldsWhenTheOtherThreadIsNotInTheRead() throws {
+        // The thread its reply is shared with is closed and not in this read: only the server can tell.
+        let msg = #"[{"id":"m1","at":"2026-11-04T09:00:00Z","text":"q","shared":true,"answer":{"text":"One reply","at":"2026-11-04T09:05:00Z"}}]"#
+        let alone = try t("th-000011", state: "working", messages: msg)
+        XCTAssertTrue(OrgThreadModel.sharedAnswers([alone]).contains("m1"))
+        let plain = try t("th-000012", state: "working", messages: answeredOnce)
+        XCTAssertTrue(OrgThreadModel.sharedAnswers([plain]).isEmpty)
+    }
+
+    func testASnoozeThatRanOutSinceTheReadIsJudgedNow() throws {
+        // The server said hidden while it was put aside; its date has passed since, so it shows.
+        let woke = try t("th-000013", state: "answered",
+                         extra: #","shown":false,"snoozed":{"until":"2026-11-04T11:00:00Z","at":"2026-11-04T08:00:00Z"}"#)
+        XCTAssertTrue(OrgThreadModel.inView(woke, shared: [], now: Self.now))
+        let still = try t("th-000014", state: "answered",
+                          extra: #","shown":false,"snoozed":{"until":"2026-11-04T13:00:00Z","at":"2026-11-04T08:00:00Z"}"#)
+        XCTAssertFalse(OrgThreadModel.inView(still, shared: [], now: Self.now))
+        XCTAssertEqual(OrgThreadModel.sections([still], now: Self.now).snoozed.map(\.id), ["th-000014"])
+    }
 }

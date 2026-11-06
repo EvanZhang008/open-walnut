@@ -63,7 +63,8 @@ struct OrgNodePage: View {
             Group {
                 switch tab {
                 case .threads:
-                    OrgThreadsView(store: threads, name: route.name, sessionId: route.sessionId, focusThreadId: route.threadId)
+                    OrgThreadsView(store: threads, name: route.name, sessionId: route.sessionId, focusThreadId: route.threadId,
+                                   nodeShown: node?.userStatus?.threads?.shown)
                 case .tasks:
                     OrgNodeTasksView(nodeId: route.nodeId, isMain: route.isMain)
                 case .brief:
@@ -83,7 +84,10 @@ struct OrgNodePage: View {
 
     private func label(_ t: OrgNodeTab) -> String {
         guard t == .threads else { return t.label }
-        let shown = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.count }
+        let read = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.count }
+        // A read that brought none of the threads the counts name shows those counts, as its page says.
+        let shown = read.map { OrgThreadModel.unreadCount(serverCount: threads.shownCount,
+                                                          nodeCount: node?.userStatus?.threads?.shown, read: $0) ?? $0 }
             ?? node?.userStatus?.threads?.shown ?? 0
         // "Threads 0" too, as the bar under the chat reads (the owner: "even if no thread, show 0").
         return "Threads \(shown)"

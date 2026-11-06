@@ -11,6 +11,8 @@ struct OrgThreadsView: View {
     let sessionId: String?
     /// The thread a push or a link asked for: shown open and scrolled to.
     var focusThreadId: String? = nil
+    /// How many threads the node's own status counts for him (`user_status.threads.shown`).
+    var nodeShown: Int? = nil
 
     // Snoozed and In progress stay as he left them, per node (the web keeps a view per node);
     // Closed is history, so every visit starts with it folded.
@@ -66,6 +68,8 @@ struct OrgThreadsView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, 40)
                         }
+                    } else if sections.open.isEmpty, let expected = OrgThreadModel.unreadCount(serverCount: store.shownCount, nodeCount: nodeShown, read: sections.open.count) {
+                        unreadable(expected)
                     } else if sections.open.isEmpty {
                         emptyText(sections)
                     }
@@ -80,7 +84,9 @@ struct OrgThreadsView: View {
                     if showInProgress {
                         ForEach(sections.inProgress) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                     }
-                    fold("\(sections.closed.count) closed this week", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
+                    // The count of them all; the fold lists the newest the read brought.
+                    let closedCount = max(store.closedCount ?? 0, sections.closed.count)
+                    fold("\(closedCount) closed this week", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
                     if showClosed {
                         ForEach(sections.closed) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                     }
@@ -143,7 +149,8 @@ struct OrgThreadsView: View {
             onFollowUp: { text, images in
                 guard let sessionId else { return false }
                 return await store.followUp(t.id, sessionId: sessionId, text: text, images: images)
-            }
+            },
+            onWhole: { await store.loadWhole(t.id) }
         )
     }
 
@@ -221,6 +228,25 @@ struct OrgThreadsView: View {
         }
     }
 
+    /// The node's own status counts threads for him that this read did not bring: never "No open
+    /// threads" then (2026-11-06: a header counting four over an empty page), but that they could
+    /// not be read, with a retry.
+    private func unreadable(_ expected: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Couldn't read the threads")
+                .font(.headline)
+            Text("\(name) has \(expected) \(expected == 1 ? "thread" : "threads") for you, but this read brought none. Try again in a moment.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Try Again") { Task { await store.load() } }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("org.threads.retry")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 24)
+        .accessibilityIdentifier("org.threads.unreadable")
+    }
+
     private func emptyText(_ s: OrgThreadModel.Sections) -> some View {
         let quiet = !s.inProgress.isEmpty || !s.snoozed.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
@@ -256,6 +282,8 @@ struct OrgThreadCard: View {
     var followUpSentAt: Date? = nil
     let onEdit: (OrgThreadEdit) -> Void
     let onFollowUp: (String, [SelectedImage]) async -> Bool
+    /// Read this thread whole: its list read cut answers he already reacted to (`clipped`).
+    var onWhole: () async -> Void = {}
 
     @Environment(TasksStore.self) private var tasks
     @State private var conversation = false
@@ -363,6 +391,11 @@ struct OrgThreadCard: View {
         }
         .opacity(closed ? 0.75 : 1)
         .onAppear { if startsOpen, OrgThreadModel.unread(t, shared: shared).isEmpty { conversation = true } }
+        // Opened (its Conversation, or a folded row) with a cut answer in it: the whole thread.
+        // Keyed by the cut too: a refresh that brings the cut copy back while it is open reads it whole again.
+        .task(id: "\(conversation || expanded)-\(OrgThreadModel.hasCutAnswer(t))") {
+            if conversation || expanded, OrgThreadModel.hasCutAnswer(t) { await onWhole() }
+        }
         .sheet(isPresented: $following) {
             OrgThreadFollowUpSheet(title: t.title, send: onFollowUp)
                 .presentationDetents([.large])
@@ -580,7 +613,7 @@ struct OrgThreadAnswer: View {
         if let o = exchange.opener {
             text = o.text; at = o.at; by = "\(name) opened this · \(OrgThreadModel.fromLabel(o))"
         } else {
-            text = exchange.answer?.text ?? ""; at = exchange.answer?.at ?? ""; by = name
+            text = exchange.answer.map(OrgThreadModel.answerText) ?? ""; at = exchange.answer?.at ?? ""; by = name
         }
         let shown = TimelineTurnMarker.strip(MessageAboutTag.strip(text))
         return VStack(alignment: .leading, spacing: 4) {
