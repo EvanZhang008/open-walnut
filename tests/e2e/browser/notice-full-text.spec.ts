@@ -9,6 +9,7 @@ import { expect, test, type Locator, type Page, type WebSocketRoute } from '@pla
 import { holdApprovalsLock } from './approvals-lock'
 import { pausePageClock } from './page-clock'
 import { PHONE } from './phone-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SHOTS = '/tmp/notice-full-text'
 const COMMAND = 'walnut daemon install --yes --executable <daemon binary>'
@@ -225,6 +226,12 @@ test('the corner sits next to the sidebar, over the page left column, never out 
       const ok = Math.round(t.x) === Math.round(s.x + s.width) + 16 && t.x + t.width <= c.x + c.width - 15 && t.x + t.width <= p.x + 1
       return ok ? 'inside' : `toast x${Math.round(t.x)} w${Math.round(t.width)}; sidebar r${Math.round(s.x + s.width)}; column r${Math.round(c.x + c.width)}; pane x${Math.round(p.x)}`
     }).toBe('inside')
+    // The column's foot row (Home's System attention, when there is something to show) stays in sight above nothing: the corner stands on it.
+    await expect.poll(() => page.evaluate(() => {
+      const foot = [...document.querySelectorAll('.main-content .ab-mount')].map((el) => el.getBoundingClientRect()).find((r) => r.height > 0 && r.bottom > window.innerHeight - 80)
+      const stack = document.querySelector('.corner-stack')!.getBoundingClientRect()
+      return !foot || stack.right <= foot.left || stack.bottom <= foot.top + 1 ? 'clear' : `stack bottom ${Math.round(stack.bottom)} over the foot row at ${Math.round(foot.top)}`
+    })).toBe('clear')
     await expectInside(toast)
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-left-${shot}.png` })
     await toast.locator('.notification-toast-close').click()
@@ -238,4 +245,134 @@ test('the corner sits next to the sidebar, over the page left column, never out 
   await expect(list).toBeVisible({ timeout: 30_000 })
   // The Org page: its list on the left, the node's page beside it.
   await check(list, page.locator('.org-list + *').first(), 'org')
+})
+
+/** The fixture's session, opened in a column and then full screen from its menu, as the user does. */
+async function openFullScreen(page: Page): Promise<Locator> {
+  await page.locator('.todo-search-input').fill('pw-vscode-session')
+  await page.locator('.todo-panel-item[data-task-id="pw-task-vscode"] .todo-item-title').click()
+  const panel = page.locator('.main-page-session-column .session-panel[data-session-id="pw-vscode-session"]')
+  await expect(panel).toBeVisible()
+  await page.locator('.todo-search-input').fill('')
+  await panel.locator('.session-panel-header .task-kebab-btn').click()
+  const menu = page.locator('.task-kebab-menu')
+  await (await openKebabGroup(menu, 'session-kebab-window')).getByTestId('session-menu-fullscreen').click()
+  await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+  return panel
+}
+
+// 2026-11-06, the user (a full-screen session, the approval card crossed out over its composer, an
+// arrow at the window's bottom left beside System attention): "I said no matter if its full screen
+// or this, fix just here at left". The corner keeps its place over the sheet's backdrop and above
+// the sheet, never over the sheet's composer.
+for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]) {
+  test(`a full-screen session keeps the corner at the bottom left beside the sidebar (${size.width}px)`, async ({ page, request }, info) => {
+    await page.setViewportSize(size)
+    const sock = await routeSocket(page)
+    await boot(page, sock)
+    await openFullScreen(page)
+    const res = await request.post('/api/v1/approvals', { data: { what: '[notice-full-text] Push the prompt to the shared store', cwd: '/work/site', command: 'release.sh' } })
+    expect(res.ok()).toBe(true)
+    const card = page.locator('.corner-stack [data-testid="approval-card"]')
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    sock()!.send(noticeEvent(`sheet-${size.width}`, { body: BODY }))
+    const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' }).last()
+    await expect(toast).toBeVisible()
+    await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
+    // Measured in one evaluate, polled, so a failure says where everything really was.
+    await expect.poll(() => page.evaluate(() => {
+      const side = document.querySelector('.app-shell > .sidebar')!.getBoundingClientRect().right
+      const stack = document.querySelector('.corner-stack')!.getBoundingClientRect()
+      const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect()
+      // What one types in and clicks on the sheet's composer stays clear of the corner.
+      const controls = [...document.querySelectorAll('.open-walnut-fullscreen .chat-input-container :is(textarea, button, [contenteditable="true"])')]
+        .filter((el) => el.getBoundingClientRect().width > 0)
+      const cardEl = document.querySelector('.corner-stack [data-testid="approval-card"]')!
+      const c = cardEl.getBoundingClientRect()
+      const hit = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2)
+      const fails: string[] = []
+      if (Math.round(stack.left) !== Math.round(side) + 16) fails.push(`stack x${Math.round(stack.left)} not sidebar r${Math.round(side)} + 16`)
+      if (Math.abs(window.innerHeight - stack.bottom - 16) > 1) fails.push(`stack bottom ${Math.round(window.innerHeight - stack.bottom)} from the window bottom`)
+      if (!hit || !cardEl.contains(hit)) fails.push(`card covered by ${hit?.className}`)
+      for (const el of controls) {
+        const r = el.getBoundingClientRect()
+        const over = r.left < stack.right && r.right > stack.left && r.top < stack.bottom && r.bottom > stack.top
+        if (over) fails.push(`stack r${Math.round(stack.right)} over the composer's ${el.tagName.toLowerCase()} at x${Math.round(r.left)}`)
+      }
+      if (stack.right - sheet.left > 16 && sheet.left - side - 32 >= 220) fails.push(`stack r${Math.round(stack.right)} past the sheet x${Math.round(sheet.left)} with room beside it`)
+      // The sheet's chat makes room too: its lines start past the corner.
+      const chat = document.querySelector('.open-walnut-fullscreen .session-history')?.getBoundingClientRect()
+      if (chat && chat.left < stack.right && chat.bottom > stack.top) fails.push(`the sheet's chat at x${Math.round(chat.left)} under the stack r${Math.round(stack.right)}`)
+      if (stack.width < 219) fails.push(`stack only ${Math.round(stack.width)}px wide`)
+      return fails.join('; ') || 'beside the sidebar'
+    })).toBe('beside the sidebar')
+    // The card's buttons take a click 700ms after it shows (ARM_MS): moved on, as the person sees it.
+    await page.clock.runFor(1_000)
+    await page.screenshot({ path: `${SHOTS}/${info.project.name}-sheet-${size.width}.png` })
+  })
+}
+
+// 2026-11-06, the user: "Love the approval pop up, however, It doesn't make me able to click and jump
+// to that task". The asking task's name, a link on the card and in its dialog, opens that task on
+// Home, its row in sight and its session column on top, from a full-screen sheet and from another
+// page. The title still opens the whole request, so it is read before it is approved.
+test('the approval card opens the task that asked, from a full-screen sheet and from another page', async ({ page, request }, info) => {
+  await page.setViewportSize({ width: 1600, height: 900 })
+  const sock = await routeSocket(page)
+  await boot(page, sock)
+  // Real time here: the task panel's scroll to the task runs on timers and frames.
+  await page.clock.resume()
+  await openFullScreen(page)
+  const res = await request.post('/api/v1/approvals', {
+    headers: { 'x-walnut-caller-sid': 'pw-provenance-session' },
+    data: { what: '[notice-full-text] Push the prompt from its task', cwd: '/work/site', command: 'release.sh' },
+  })
+  expect(res.ok()).toBe(true)
+  const made = await res.json() as { approval: { id: string; requester: { taskId?: string; taskTitle?: string } } }
+  expect(made.approval.requester.taskId).toBe('pw-task-provenance')
+  const card = page.locator(`.corner-stack [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  const link = card.getByTestId('approval-task-link')
+  await expect(link).toContainText(made.approval.requester.taskTitle!)
+  await page.waitForTimeout(1_000) // its buttons take a click 700ms after it shows
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-jump-before.png` })
+  const asker = page.locator('.main-page-session-column .session-panel[data-session-id="pw-provenance-session"]')
+  const row = page.locator('.todo-panel-item[data-task-id="pw-task-provenance"]')
+  const landed = async () => {
+    await expect(asker).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => asker.evaluate((n) => {
+      const b = n.getBoundingClientRect()
+      const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+      return !!hit && n.contains(hit)
+    }), { timeout: 10_000 }).toBe(true)
+    await expect(row).toHaveClass(/task-focused/)
+    // Its row is in sight in the task panel, not only marked somewhere off screen.
+    await expect.poll(() => row.evaluate((n) => {
+      const r = n.getBoundingClientRect()
+      const list = n.closest('.main-page-todo')!.getBoundingClientRect()
+      return r.height > 0 && r.top >= list.top && r.bottom <= list.bottom
+    }), { timeout: 10_000 }).toBe(true)
+  }
+  // The title opens the whole request; its task name there is a link too.
+  await card.getByTestId('approval-what').click()
+  const dialog = page.getByTestId('approval-dialog')
+  await expect(dialog).toBeVisible()
+  await dialog.locator('.approval-dialog-close').click()
+  // The task name on the card, over the full-screen sheet: the asking task's column opens on top.
+  await link.click()
+  await landed()
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-jump-from-sheet.png` })
+  // From the Org page, the task's name on the card goes back to it.
+  await page.getByTestId('sidebar-org').click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/org')
+  await expect(card).toBeVisible()
+  await card.getByTestId('approval-task-link').click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await landed()
+  // From the request's dialog: the link closes it on the way.
+  await card.getByTestId('approval-what').click()
+  await expect(dialog).toBeVisible()
+  await dialog.getByTestId('approval-task-link').click()
+  await expect(dialog).toHaveCount(0)
+  await landed()
 })

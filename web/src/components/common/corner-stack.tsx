@@ -84,12 +84,16 @@ const MIN_BESIDE_PX = 280;
 const FULL_WIDTH_PX = 380;
 /** The narrowest the stack keeps to inside the page's left column; a narrower one it reaches past. */
 const MIN_INSIDE_PX = 160;
+/** Beside a full-screen sheet the corner is never narrower than this, its composer making room. */
+const MIN_BESIDE_SHEET_PX = 220;
 /** The most of a page's left columns the corner keeps inside: past it the columns are page content. */
 const MAX_COLUMNS_PX = 440;
 /** A window this short keeps the corner to its short forms as soon as two kinds show. */
 const SHORT_WINDOW_PX = 720;
 /** What the stack never lies over at the bottom of a chat: the composer and the controls on it. */
 const COMPOSER_CONTROLS = '.chat-input-container, .scroll-to-bottom-btn, .draft-composer-bar';
+/** A left column's own row at its foot (Home's System attention): the corner sits just above it. */
+const COLUMN_FOOTERS = '.main-content .ab-mount';
 /** Where a page's own content lives: the app's main area, or a full-screen sheet over it. */
 const PAGE_AREA = '.main-content, .open-walnut-fullscreen';
 
@@ -104,15 +108,12 @@ function syncAround(sidebarRight: number, columnRight: number): void {
   // "the notification should be here not on the big right").
   let left = sidebarRight + 16;
   let floor = 0;
-  let right = window.innerWidth;
-  // A full-screen sheet (a session or board opened full screen) is the page now: its bottom left.
+  const right = window.innerWidth;
+  // A full-screen sheet (a session or board opened full screen) does not move it: the corner stays
+  // in that same place, over the sheet's backdrop and above the sheet (corner-stack.css), never
+  // over its composer (2026-11-06, the user: "no matter if its full screen or this, fix just here
+  // at left").
   const sheet = [...document.querySelectorAll('.open-walnut-fullscreen')].find(shown);
-  if (sheet) {
-    const b = sheet.getBoundingClientRect();
-    left = Math.round(b.left) + 16;
-    floor = Math.max(0, Math.round(window.innerHeight - b.bottom));
-    right = Math.round(b.right);
-  }
   const center = document.querySelector('.notification-panel');
   const centerOpen = !!center && shown(center);
   // The notification center is the list of every notice: open, it lists the approvals too and opens
@@ -127,12 +128,26 @@ function syncAround(sidebarRight: number, columnRight: number): void {
   // Kept inside that column while it leaves a readable width; a narrow nav it reaches past.
   const inside = columnRight - left - 16;
   if (!sheet && !centerOpen && columnRight > sidebarRight && inside >= MIN_INSIDE_PX) width = Math.min(width, inside);
+  // Beside a sheet: kept in the strip of backdrop left of it, a narrow strip reached past only as
+  // far as a readable width, over the sheet's edge rather than up over its chat.
+  if (sheet && !centerOpen) {
+    const strip = Math.round(sheet.getBoundingClientRect().left) - left - 16;
+    width = Math.min(width, Math.max(MIN_BESIDE_SHEET_PX, strip));
+  }
+  // The left column's foot row stays in sight and clickable: the corner stands on it, still its
+  // whole self there (a foot is no chat it would be lifted over).
+  for (const el of document.querySelectorAll(COLUMN_FOOTERS)) {
+    if (!shown(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.right <= left || r.left >= left + width || r.bottom < window.innerHeight - 80) continue;
+    floor = Math.max(floor, Math.round(window.innerHeight - r.top));
+  }
   let bottom = floor + 16;
   // A chat's composer, and the controls that sit just above one (its jump to the newest line, a
   // new session's folder and project row).
   for (const el of document.querySelectorAll(COMPOSER_CONTROLS)) {
-    // A composer under a full-screen sheet is not on the page now.
-    if (!shown(el) || (sheet && !sheet.contains(el))) continue;
+    // Beside a full-screen sheet the corner keeps its place whatever composer is near it.
+    if (sheet || !shown(el)) continue;
     // The box itself: a note above it (a cache notice) is chat the stack may lie over.
     const r = el.getBoundingClientRect();
     // Only one that really sits under the stack's column, near the bottom of the window.
@@ -298,12 +313,40 @@ function syncRoom(): void {
   }
 }
 
+/**
+ * Beside a full-screen sheet the corner keeps its place, and a narrow strip left of the sheet can
+ * leave it reaching over the sheet's edge: the sheet's content (its chat and composer) then starts
+ * just past the corner (`--corner-sheet-inset`, corner-stack.css), the way a list makes room at its
+ * end (syncRoom). It only grows while the stack holds something, and goes when the stack is empty
+ * or the sheet closes.
+ */
+let insetSheet: HTMLElement | null = null;
+function releaseInset(): void {
+  insetSheet?.style.removeProperty('--corner-sheet-inset');
+  insetSheet = null;
+}
+function syncSheetInset(): void {
+  if (!stack) return;
+  const sheet = [...document.querySelectorAll<HTMLElement>('.open-walnut-fullscreen')].find(shown) ?? null;
+  const parts = [...stack.querySelectorAll('.corner-slot > *')].map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
+  if (!sheet || parts.length === 0 || stack.classList.contains('is-tucked')) { releaseInset(); return; }
+  if (insetSheet !== sheet) releaseInset();
+  const held = parseFloat(sheet.style.getPropertyValue('--corner-sheet-inset')) || 0;
+  // The sheet's box does not move with the inset (it is padding), so this never undoes itself.
+  const reach = Math.ceil(Math.max(...parts.map((p) => p.right)) + 12 - sheet.getBoundingClientRect().left);
+  const inset = Math.max(held, reach);
+  if (inset <= 0) { releaseInset(); return; }
+  insetSheet = sheet;
+  if (held !== inset) sheet.style.setProperty('--corner-sheet-inset', `${inset}px`);
+}
+
 function syncLeft(): void {
   if (!stack) return;
   const sidebar = inFlowSidebar();
   const sidebarRight = sidebar ? Math.max(0, Math.round(sidebar.getBoundingClientRect().right)) : 0;
   syncAround(sidebarRight, leftColumnRight(sidebarRight));
   syncRoom();
+  syncSheetInset();
   if (sidebar !== watched) {
     observer?.disconnect();
     watched = sidebar;
@@ -344,6 +387,7 @@ export function cornerStackElement(): HTMLDivElement {
         // Empty: the next notice looks at the page afresh.
         workPage = null;
         if (reserved) syncRoom();
+        if (insetSheet) releaseInset();
       }
     }, 500);
   }

@@ -188,6 +188,20 @@ describe('one corner for every notice', () => {
     expect(src).toMatch(/if \(x < columnRight\) continue;/);
     expect(src).toMatch(/const MAX_COLUMNS_PX = 440;/);
     expect(src).toMatch(/if \(r\.right > sidebarRight \+ MAX_COLUMNS_PX\) continue;/);
+    // 2026-11-06, the user: "no matter if its full screen or this, fix just here at left". A
+    // full-screen sheet never moves the corner into it, never lifts it over the sheet's composer,
+    // and the stack draws above the sheet.
+    expect(src).not.toMatch(/left = Math\.round\(b\.left\) \+ 16/);
+    expect(src).not.toMatch(/sheet\.contains\(el\)/);
+    expect(src).toMatch(/if \(sheet \|\| !shown\(el\)\) continue;/);
+    expect(src).toMatch(/let floor = 0;/);
+    expect(src).not.toMatch(/floor = Math\.max\(0, Math\.round\(window\.innerHeight - b\.bottom\)\)/);
+    // A narrow strip beside the sheet: the sheet's content makes room, the corner keeps a readable width.
+    expect(src).toMatch(/width = Math\.min\(width, Math\.max\(MIN_BESIDE_SHEET_PX, strip\)\)/);
+    expect(read('web/src/styles/corner-stack.css')).toMatch(/\.open-walnut-fullscreen \{ padding-left: var\(--corner-sheet-inset, 0px\); \}/);
+    const layer = (file: string, sel: string) => Number(/z-index:\s*(\d+)/.exec(cssRules(file).find((r) => r.selector === sel)!.body)![1]);
+    expect(layer('web/src/styles/corner-stack.css', '.corner-stack')).toBeGreaterThan(layer('web/src/styles/globals.css', '.open-walnut-fullscreen'));
+    expect(layer('web/src/styles/corner-stack.css', '.corner-stack')).toBeGreaterThan(layer('web/src/styles/globals.css', '.open-walnut-fullscreen-backdrop'));
     // "N more" rides the top toast's title row instead of standing as a card of its own.
     const toaster = read('web/src/components/common/NotificationToaster.tsx');
     expect(toaster).toMatch(/className="notification-toast-more"/);

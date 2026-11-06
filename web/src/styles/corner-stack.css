@@ -122,7 +122,8 @@
   .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-header { flex: 0 0 100%; min-width: 0; }
   .corner-stack:is(.is-compact, .has-approval) .notification-toast:not(.nfc-perm-toast) .notification-toast-body {
     flex: 1 1 0;
-    min-width: 0;
+    /* A readable start of why it is there; in a narrow corner the buttons go to the next row instead. */
+    min-width: min(100%, 12ch);
     margin: 0;
     display: block;
     white-space: nowrap;
@@ -194,7 +195,8 @@
 :is(.notice-details-toggle, .notice-cmd-copy-words)::after { content: attr(data-other); height: 0; overflow: hidden; visibility: hidden; }
 .notice-details-toggle:last-child { margin-bottom: 0; }
 /* Details and the command's Copy, one row under the words. */
-.notice-tools { display: flex; align-items: center; gap: 12px; margin: 0 0 6px; }
+/* A narrow corner (beside a full-screen sheet) wraps Copy command under Details instead of past the card. */
+.notice-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 6px; }
 .notice-tools:last-child { margin-bottom: 0; }
 .notice-tools .notice-details-toggle { margin: 0; }
 .notice-cmd-copy--label {
@@ -301,3 +303,7 @@
   .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) > :is(.notification-toast-header, .notification-toast-body, .notice-tools) { order: -1; }
   .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) > .notice-tools { margin: 0 0 6px; }
 }
+
+/* A full-screen sheet's content (its chat and composer) starts past the corner when a narrow strip
+   leaves the corner reaching over the sheet (corner-stack.tsx syncSheetInset); 0 otherwise. */
+html .open-walnut-fullscreen { padding-left: var(--corner-sheet-inset, 0px); }

@@ -84,7 +84,9 @@ const KINDS: Record<string, { file: string; how: string; check: (src: string, cs
     file: 'web/src/components/approvals/ApprovalPrompts.tsx',
     how: 'the card is a summary; a click opens the request\'s dialog with its whole words',
     check: (src) => {
-      expect(src).toMatch(/approval-what-open" title="Open the request" onClick=\{onOpen\}/);
+      // The title opens the whole request; the asking task's name is the way to the task (2026-11-06).
+      expect(src).toMatch(/approval-what-open" title="Open the request" data-testid="approval-what" onClick=\{onOpen\}/);
+      expect(src).toMatch(/data-testid="approval-task-link"/);
       expect(src).toContain('data-testid="approval-dialog"');
     },
   },

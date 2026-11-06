@@ -7,7 +7,8 @@
  *    the one stack every notice shares (common/corner-stack.tsx); it holds the request's buttons;
  *  - the dialog that the Needs you line (ApprovalRow: Home, the Org page, the notification
  *    center), the card's title or its "N waiting" or a click on the system notification (approval-notify.ts)
- *    opens, in the order the requests came;
+ *    opens, in the order the requests came, so the whole request is read before it is approved; the
+ *    asking task's name, a link on the card and in the dialog, opens that task;
  *  - the system notification itself, raised by the store when a new approval arrives.
  *
  *  - tap: Approve / Deny;
@@ -21,10 +22,12 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { openTaskOnHome } from '@/utils/open-session';
 import type { Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
@@ -73,6 +76,33 @@ function shortRequester(a: Approval): string {
   return cmd ? cmd.split('/').pop()! : 'A script';
 }
 
+/**
+ * The task that asked, opened the way a task link opens it: on Home, selected, its session column
+ * open, from any page or a full-screen sheet (2026-11-06, the user: "It doesn't make me able to
+ * click and jump to that task"). An open dialog closes first.
+ */
+function useOpenAsker(): (a: Approval) => void {
+  const navigate = useNavigate();
+  return (a: Approval) => {
+    if (!a.requester.taskId) { openApproval(a.id); return; }
+    closeApproval();
+    openTaskOnHome(a.requester.taskId, navigate);
+  };
+}
+
+/** The asking task's name as a task link (a modifier click opens it in a new tab). */
+function AskerLink({ a, label }: { a: Approval; label: string }) {
+  const openAsker = useOpenAsker();
+  const id = a.requester.taskId!;
+  return (
+    <a className="task-link approval-task-link" data-task-id={id} data-testid="approval-task-link" href={`/tasks/${id}`} title="Open the task that asked"
+      onClick={(e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault(); e.stopPropagation(); openAsker(a);
+      }}>{label}<span className="approval-task-link-go" aria-hidden="true"> ↗</span></a>
+  );
+}
+
 export function settledWord(a: Approval): string {
   return a.status === 'approved' ? 'Approved' : a.status === 'denied' ? 'Denied' : a.status === 'expired' ? 'Expired' : 'Withdrawn';
 }
@@ -101,6 +131,7 @@ export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
 function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; detailOpen?: boolean; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
   const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
+  const asker = a.requester.taskId;
   return (
     <>
       <div className="approval-head">
@@ -120,9 +151,12 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
         </span>
       </div>
       {onOpen
-        ? <button type="button" className="approval-what approval-what-open" title="Open the request" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
+        ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
         : <div className="approval-what">{a.what}</div>}
-      <div className="approval-who">{requesterText(a, hostName)}{a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}</div>
+      <div className="approval-who">
+        <span className="approval-who-text">{asker ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} /> on {hostName}</> : requesterText(a, hostName)}</span>
+        {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
+      </div>
       {a.detail ? (
         <details className="approval-detail" open={detailOpen}>
           <summary>Detail</summary>
@@ -227,6 +261,7 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
                   <button type="button" aria-current={x.id === id ? 'true' : undefined} onClick={() => openApproval(x.id)}>
                     <span className="approval-dialog-list-n">{i + 1}</span>
                     <span className="approval-dialog-list-what">{x.what}</span>
+                    {x.requester.taskTitle && <span className="approval-dialog-list-task">{x.requester.taskTitle}</span>}
                     <Clock a={x} now={now} />
                   </button>
                 </li>
@@ -362,7 +397,7 @@ export function ApprovalPrompts() {
                 // On a phone the whole line is one tap target (it has no buttons of its own).
                 <div key={card.id} className={`approval-card approval-card-line${phone ? ' approval-card-tap' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card"
                   onClick={phone ? () => openApproval(card.id) : undefined}>
-                  <button type="button" className="approval-line-open" onClick={() => openApproval(card.id)}
+                  <button type="button" className="approval-line-open" data-testid="approval-what" onClick={() => openApproval(card.id)}
                     title={waiting.length > 1 ? waitingWords(waiting.length) : 'Open the request'}>
                     <span className="approval-kicker">Approve?</span>
                     <span className="approval-line-what">{card.what}</span>
@@ -382,9 +417,13 @@ export function ApprovalPrompts() {
                   )}
                   <span className="approval-line-break" aria-hidden="true" />
                   <span className="approval-line-meta">
-                    {waiting.length > 1 && <span className="approval-line-more">{waiting.length} waiting</span>}
+                    {waiting.length > 1 && (phone
+                      ? <span className="approval-line-more">{waiting.length} waiting</span>
+                      : <button type="button" className="approval-line-more" data-testid="approval-count" title={`See all ${waiting.length} approvals waiting`} onClick={() => openApproval(card.id)}>{waiting.length} waiting</button>)}
                     {/* Who asks stays in sight beside the buttons: nothing is approved on a title alone. */}
-                    <span className="approval-line-who" title={requesterText(card, cardHost)}>{shortRequester(card)}</span>
+                    <span className="approval-line-who" title={requesterText(card, cardHost)}>
+                      {card.requester.taskId && !phone ? <AskerLink a={card} label={shortRequester(card)} /> : shortRequester(card)}
+                    </span>
                     <Clock a={card} now={now} />
                   </span>
                   {!phone && <ApprovalButtons a={card} s={s} />}
