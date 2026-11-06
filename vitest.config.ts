@@ -25,6 +25,7 @@ export default defineConfig({
       '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
       '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
       '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
+      '@open-walnut/board-summary-text': path.resolve(import.meta.dirname, 'src/core/boards/board-summary-text.ts'),
       '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),
       '@open-walnut/thread-view': path.resolve(import.meta.dirname, 'src/core/org/thread-view.ts'),
       '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),

@@ -58,7 +58,7 @@ import {
 } from '@/components/inbox/session-inbox-link';
 import { buildPassagePrefill, buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -341,6 +341,9 @@ interface SessionPanelProps {
   locked?: boolean;
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
   onToggleLock?: (sessionId: string) => void;
+  /** Minimize to Home's taskbar: the column leaves the strip and waits there as a chip.
+   *  Only Home's columns pass it; every other host draws no Minimize button. */
+  onMinimize?: (sessionId: string) => void;
   /** The person completed this panel's task from its header (the ring or the status menu). The
    *  home page's column answers by closing itself. Not called while the panel is fullscreen. */
   onTaskCompleted?: (sessionId: string, info: { taskId: string; from: TaskPhase }) => void;
@@ -406,7 +409,7 @@ export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps)
   return <SessionPanelBody {...props} sessionId={shown} onSessionReplaced={replaced} />;
 });
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -2758,6 +2761,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   aria-label="Open session in new tab"
                 >
                   {ICON_NEW_TAB}
+                </button>
+              )}
+              {onMinimize && !isFullscreen && (
+                <button
+                  className="task-action-btn session-panel-minimize"
+                  data-header-id="minimize"
+                  data-hidden={hid('minimize')}
+                  onClick={() => onMinimize(sessionId)}
+                  title="Minimize to the taskbar (it keeps running)"
+                  aria-label="Minimize session to the taskbar"
+                >
+                  {ICON_MINIMIZE}
                 </button>
               )}
               {/* Lock shows wherever the host keeps a strip to pin within (Home's

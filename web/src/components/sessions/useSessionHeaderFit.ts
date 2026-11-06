@@ -51,6 +51,9 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // of the two movable window buttons to leave.
   locate: { kind: 'window', priority: 9, name: 'Locate task' },
   popout: { kind: 'window', priority: 11, name: 'Open in new tab' },
+  // Minimize (Home's columns only) puts the panel on the taskbar: the last window
+  // button to fold, after Open in new tab and Locate.
+  minimize: { kind: 'window', priority: 8, name: 'Minimize to taskbar' },
   // Lock, Expand and Close stay at every width: a cramped column is the moment to
   // go full screen (the user: "at the very least keep close and expand",
   // 2026-10-03), and Lock is the one that keeps the panel there (2026-10-04).

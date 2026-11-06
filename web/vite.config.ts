@@ -45,6 +45,7 @@ export default defineConfig({
       // The org (who reports to whom): the same function GET /api/v1/org builds from.
       '@open-walnut/org-tree': path.resolve(__dirname, '../src/core/org/org-tree.ts'),
       '@open-walnut/user-status': path.resolve(__dirname, '../src/core/user-status.ts'),
+      '@open-walnut/board-summary-text': path.resolve(__dirname, '../src/core/boards/board-summary-text.ts'),
       '@open-walnut/message-about': path.resolve(__dirname, '../src/core/org/message-about.ts'),
       '@open-walnut/thread-view': path.resolve(__dirname, '../src/core/org/thread-view.ts'),
       '@open-walnut/live-activity': path.resolve(__dirname, '../src/core/live-activity.ts'),

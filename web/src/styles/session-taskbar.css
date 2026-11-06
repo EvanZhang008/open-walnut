@@ -1,0 +1,149 @@
+/* Home's taskbar (components/sessions/SessionTaskbar.tsx): a bar along the bottom of
+   Home holding the minimized sessions as chips, and the small card a chip opens. */
+
+.session-taskbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary, var(--bg));
+  color: var(--fg);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.session-taskbar-chip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  max-width: 240px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.session-taskbar-chip:hover { border-color: var(--fg-muted); }
+.session-taskbar-chip.is-dragging { opacity: 0.45; }
+.session-taskbar-chip[data-state='needs'] { border-color: var(--error, #ff3b30); }
+
+.session-taskbar-open,
+.session-taskbar-peek,
+.session-taskbar-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.session-taskbar-open {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 9px;
+  font-size: 12px;
+}
+.session-taskbar-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-taskbar-peek,
+.session-taskbar-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 2px;
+  border-radius: 5px;
+  color: var(--fg-muted);
+}
+.session-taskbar-peek:hover,
+.session-taskbar-close:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+  color: var(--fg);
+}
+.session-taskbar-close svg { width: 11px; height: 11px; }
+
+/* The state dot: the same reading as a task row's (red needs you, pulse working). */
+.session-taskbar-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  opacity: 0.6;
+}
+[data-state='needs'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='needs'] .session-taskbar-dot { background: var(--error, #ff3b30); opacity: 1; }
+[data-state='error'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='error'] .session-taskbar-dot { background: var(--warning, #ff9500); opacity: 1; }
+[data-state='done'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='done'] .session-taskbar-dot { background: var(--success, #34c759); opacity: 1; }
+[data-state='running'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='running'] .session-taskbar-dot {
+  background: var(--accent);
+  opacity: 1;
+  animation: session-taskbar-pulse 1.4s ease-in-out infinite;
+}
+@keyframes session-taskbar-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .session-taskbar-dot { animation: none !important; }
+}
+
+/* The card: solid, never glass, so the strip behind never shows through. */
+.session-taskbar-card {
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  overflow: hidden;
+}
+.session-taskbar-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.session-taskbar-card-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-taskbar-card-open {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary, var(--bg));
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.session-taskbar-card-line { color: var(--fg); }
+.session-taskbar-card[data-state='needs'] .session-taskbar-card-line { color: var(--error, #ff3b30); }
+.session-taskbar-card-reply {
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.session-taskbar-card-muted { color: var(--fg-muted); }
+.session-taskbar-card-error { color: var(--error, #ff3b30); }

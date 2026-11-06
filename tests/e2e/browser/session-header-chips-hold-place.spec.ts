@@ -803,7 +803,7 @@ test('a plan session in a narrow column: the late Plan chip joins the "..." menu
       reading = `${width}px: shown ${Object.keys(after).join(',')} | moved ${JSON.stringify(diff)} | appeared ${JSON.stringify(appeared)}`
       expect(diff, `${width}px: nothing on the row moves when Plan arrives`).toEqual([])
       expect(appeared, `${width}px: nothing but the time and Plan joins the row late`).toEqual([])
-      if (planShown) expect(after.plan!.x, `${width}px: Plan sits after the host chips`).toBeGreaterThan(Math.max(...Object.entries(after).filter(([id]) => !['plan', 'more', 'time', 'locate', 'popout', 'lock', 'expand', 'close'].includes(id)).map(([, b]) => b.x)))
+      if (planShown) expect(after.plan!.x, `${width}px: Plan sits after the host chips`).toBeGreaterThan(Math.max(...Object.entries(after).filter(([id]) => !['plan', 'more', 'time', 'locate', 'popout', 'minimize', 'lock', 'expand', 'close'].includes(id)).map(([, b]) => b.x)))
       else {
         // Folded: the "..." menu lists it, and it opens the plan from there.
         await panel.getByTestId('session-header-more-btn').click()
