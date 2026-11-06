@@ -336,32 +336,43 @@ test('completed totals stay stable when the archive contains hidden organization
     expect((await request.patch(`/api/tasks/${id}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true);
     expect((await (await request.get(`/api/tasks/${id}`)).json()).task.org_role).toBe(org_role);
   }
-  let unloaded = -1;
-  // The board shows the list this route answers; another worker's task frames would move its
-  // counts away from that answer mid-test, so only frames about tasks it held pass.
-  const ours = new Set<string>();
-  await keepTaskFramesTo(page, ours);
+  // The fixture server is shared, and the other workers create, complete and delete tasks all
+  // the time: a list read now and the board's own load (or its Show more load) a moment later
+  // differ by their work (CI 2026-11-06: 118 against 117, 243 tasks against 244). So the test
+  // takes one picture of the server that holds still (two archive reads that agree, with the
+  // full list read between them) and the board's list requests are answered from it.
+  type Row = { id: string; phase: string; status: string; org_role?: string; plugin_only?: string };
+  type Page_ = { tasks: Row[]; completedHidden?: number };
+  const read = async (archive: boolean): Promise<Page_> =>
+    (await request.get(`/api/tasks?fields=list${archive ? '&completedWithinDays=0' : ''}`)).json();
+  const shape = (p: Page_) => JSON.stringify([p.completedHidden, p.tasks.map(t => [t.id, t.phase, t.status, t.org_role ?? '', t.plugin_only ?? ''])]);
+  let archivePage: Page_ | null = null;
+  let fullPage: Page_ | null = null;
+  for (let i = 0; i < 20 && !archivePage; i++) {
+    const a = await read(true);
+    const full = await read(false);
+    if (shape(a) === shape(await read(true))) { archivePage = a; fullPage = full; }
+  }
+  expect(archivePage, 'the shared server never held still for one archive read and the next').not.toBeNull();
+  expect(archivePage!.completedHidden).toBeGreaterThanOrEqual(32);
+  // The board shows the lists this route answers and nothing else: every task of this test exists
+  // before the board loads, so no task frame passes (a frame about a task in the picture, another
+  // worker deleting its own say, would move the counts away from it mid-test).
+  await keepTaskFramesTo(page, new Set());
   await page.route('**/api/tasks?*', async route => {
     const url = new URL(route.request().url());
-    if (url.pathname !== '/api/tasks') return route.continue();
-    const archive = url.searchParams.has('completedWithinDays');
-    if (archive) url.searchParams.set('completedWithinDays', '0');
-    const response = await route.fetch({ url: url.toString() });
-    const json = await response.json();
-    for (const task of json.tasks ?? []) ours.add(task.id);
-    if (archive) unloaded = json.completedHidden;
-    await route.fulfill({ response, json });
+    if (url.pathname !== '/api/tasks' || url.searchParams.get('fields') !== 'list') return route.continue();
+    await route.fulfill({ json: url.searchParams.has('completedWithinDays') ? archivePage : fullPage });
   });
   await open(page);
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('');
   await page.getByRole('button', { name: 'By status', exact: true }).click();
   const doneCount = column(page, 'done').locator('.home-board-column-head > span');
-  await expect.poll(() => unloaded).toBeGreaterThanOrEqual(32);
+  const expected = fullPage!.tasks.filter(t => !['main', 'lead'].includes(t.org_role ?? '') && !t.plugin_only && (t.phase === 'COMPLETE' || t.status === 'done')).length;
+  // The server's hidden count, which leaves the organization nodes out, matches the full list.
+  await expect(doneCount).toHaveText(String(expected));
   const before = await doneCount.textContent();
   const total = await page.locator('.home-board-count').textContent();
-  const all = (await (await request.get('/api/tasks?fields=list')).json()).tasks as Array<{ phase: string; status: string; org_role?: string; plugin_only?: string }>;
-  const expected = all.filter(t => !['main', 'lead'].includes(t.org_role ?? '') && !t.plugin_only && (t.phase === 'COMPLETE' || t.status === 'done')).length;
-  await expect(doneCount).toHaveText(String(expected));
   await column(page, 'done').getByRole('button', { name: 'Show more completed tasks', exact: true }).click();
   await expect(column(page, 'done').locator('[data-board-task]')).toHaveCount(Math.min(60, expected));
   await expect(doneCount).toHaveText(before!);
