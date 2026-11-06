@@ -12,12 +12,14 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { askView, openPanel, openView, selectText, startPanelLab, tasksView, type PanelLab } from './extension-panel-harness'
+import { askView, backToAsk, openPanel, openView, selectText, startPanelLab, tasksView, type PanelLab } from './extension-panel-harness'
 import { holdApprovalsLock } from './approvals-lock'
 
 test.describe.configure({ mode: 'serial' })
 // It makes and answers an approval on the shared fixture server, where another file clears them.
-holdApprovalsLock('file')
+// Each test starts and ends with none waiting: the Ask view shows the oldest two, so ones another
+// file left waiting (an agent's asks time out after 10 minutes) hid this test's own (2026-11-06).
+holdApprovalsLock('file', { clear: true })
 
 let lab: PanelLab
 let panel: Page
@@ -60,6 +62,84 @@ test('Ask: the brand colour, no bare actions under a bubble, the page quote on t
   const rec = await (await lab.doc.request.get(`${lab.base}/api/v1/sessions/${sid}`)).json() as Record<string, any>
   taskId = String(rec.taskId ?? rec.session?.taskId ?? '')
   expect(taskId).not.toBe('')
+})
+
+test('Ask: an approval waiting shows over the conversation with its buttons, and counts on the drawer\'s Tasks row (R2-5)', async () => {
+  test.setTimeout(120_000)
+  // A side panel's width (the harness's window opens at the browser's).
+  await panel.setViewportSize({ width: 400, height: 760 })
+  const v = askView(panel)
+  await expect(v.getByTestId('ask-object-session')).toBeVisible({ timeout: 30_000 })
+  // It arrives while the person is in Ask: the view shows it at once, no other view opened.
+  const order = `Buy the dock ${Date.now().toString(36)}`
+  const made = await lab.doc.request.post(`${lab.base}/api/v1/approvals`, { data: { what: `Click "${order}" on shop.example.test`, timeout_ms: 300_000 } })
+  expect(made.ok(), await made.text()).toBe(true)
+  const approvalId = String(((await made.json()) as { approval: { id: string } }).approval.id)
+  const row = v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${approvalId}"]`)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  await expect(row).toContainText(order)
+  await expect(row.getByRole('button', { name: 'Deny' })).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Approve' })).toBeVisible()
+  // Over the conversation, under the header, never over the composer.
+  const head = (await v.getByTestId('ext-ask-head').boundingBox())!
+  const box = (await row.boundingBox())!
+  const composer = (await v.locator('.session-panel.is-plain-chat textarea').boundingBox())!
+  expect(box.y).toBeGreaterThanOrEqual(head.y + head.height - 1)
+  expect(box.y + box.height).toBeLessThan(composer.y)
+  // Its buttons fit the panel: the row is never wider than the view.
+  const view = (await v.getByTestId('ext-panel').boundingBox())!
+  expect(box.x + box.width).toBeLessThanOrEqual(view.x + view.width + 0.5)
+  await shot(panel, 'r2-ask-approval')
+  // The drawer's Tasks row counts it with what needs the person.
+  await v.getByTestId('ask-walnut-menu').click()
+  await expect(v.getByTestId('ext-drawer-tasks-count')).toBeVisible()
+  expect(Number(await v.getByTestId('ext-drawer-tasks-count').textContent())).toBeGreaterThanOrEqual(1)
+  await panel.keyboard.press('Escape')
+  await row.getByRole('button', { name: 'Approve' }).click()
+  await expect(row).toHaveCount(0, { timeout: 15_000 })
+  const back = await (await lab.doc.request.get(`${lab.base}/api/v1/approvals/${approvalId}`)).json() as { approval: { status: string } }
+  expect(back.approval.status).toBe('approved')
+})
+
+test('Ask: an answer that fails says why in the strip, and the card\'s notes show as on Home (review round 2, finding 3)', async () => {
+  test.setTimeout(120_000)
+  const v = askView(panel)
+  // A Face ID ask on a server with no signing device is answered by tap, and the card says so.
+  const what = `Publish build ${Date.now().toString(36)}`
+  const made = await lab.doc.request.post(`${lab.base}/api/v1/approvals`, { data: { what, mode: 'biometric', timeout_ms: 300_000 } })
+  expect(made.ok(), await made.text()).toBe(true)
+  const a = ((await made.json()) as { approval: { id: string; downgraded?: string } }).approval
+  const row = v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${a.id}"]`)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  if (a.downgraded) await expect(row.locator('.approval-note').first()).toHaveText(a.downgraded)
+  // The server refuses the answer: the strip says why, under buttons that came back.
+  const answer = new RegExp(`/api/v1/approvals/${a.id}/answer`)
+  const refusal = 'This request was already answered on another device.'
+  await lab.ctx.route(answer, (route) => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: refusal }) }))
+  try {
+    await row.getByRole('button', { name: 'Deny' }).click()
+    await expect(row.getByTestId('ext-approval-error')).toHaveText(refusal, { timeout: 15_000 })
+    await expect(row.getByTestId('ext-approval-error')).toHaveAttribute('role', 'alert')
+    await expect(row.getByRole('button', { name: 'Deny' })).toBeEnabled()
+    // The words stay inside the row, within the panel's width.
+    const box = (await row.boundingBox())!
+    const err = (await row.getByTestId('ext-approval-error').boundingBox())!
+    expect(err.y + err.height).toBeLessThanOrEqual(box.y + box.height + 0.5)
+    expect(err.x + err.width).toBeLessThanOrEqual(box.x + box.width + 0.5)
+    await shot(panel, 'r2-ask-approval-error')
+    // The Tasks view (a frame of its own) says it the same way when its answer fails.
+    await openView(panel, 'tasks')
+    const trow = tasksView(panel).locator(`[data-testid="approval-row"][data-approval-id="${a.id}"]`)
+    await expect(trow).toBeVisible({ timeout: 20_000 })
+    await trow.getByRole('button', { name: 'Deny' }).click()
+    await expect(trow.getByTestId('ext-approval-error')).toHaveText(refusal, { timeout: 15_000 })
+    await backToAsk(panel)
+  } finally {
+    await lab.ctx.unroute(answer)
+  }
+  // Answered for real, the error goes with it.
+  await row.getByRole('button', { name: 'Deny' }).click()
+  await expect(row).toHaveCount(0, { timeout: 15_000 })
 })
 
 test('Tasks: an approval leads Needs you and is answered here; rows say no section twice', async () => {
@@ -122,8 +202,20 @@ test('Tasks: Add to Focus from the row; a reply leaves the row in place with wha
   await expect(row).toBeVisible({ timeout: 30_000 })
   await expect(focus.locator(`[data-task-id="${taskId}"]`)).toHaveCount(0)
 
+  // The hover band is the whole row, its Add to Focus included (R2-8).
+  const needsRow = t.locator('[data-testid="ext-tasks-needs"] [data-testid="ext-task"]').filter({ has: t.getByTestId('ext-task-focus-row') }).first()
+  await needsRow.locator('.ext-task-head').hover()
+  const band = await needsRow.locator('.ext-task-headrow').evaluate((e) => ({ bg: getComputedStyle(e).backgroundColor, w: e.getBoundingClientRect().width, row: e.parentElement!.getBoundingClientRect().width }))
+  expect(band.bg).not.toBe('rgba(0, 0, 0, 0)')
+  expect(Math.abs(band.w - band.row)).toBeLessThan(1)
+  const btn = (await needsRow.getByTestId('ext-task-focus-row').boundingBox())!
+  const bandBox = (await needsRow.locator('.ext-task-headrow').boundingBox())!
+  expect(btn.x + btn.width).toBeLessThanOrEqual(bandBox.x + bandBox.width + 0.5)
+
   await row.locator('.ext-task-head').click()
   const input = row.getByTestId('ext-task-input')
+  // One frame around the reply: the answer box's, none on the field inside it (R2-8).
+  expect(await input.evaluate((e) => getComputedStyle(e).borderTopStyle)).toBe('none')
   await input.fill('Go with the first one')
   await row.getByTestId('ext-task-send').click()
   await expect(row.getByTestId('ext-task-replied')).toContainText('Go with the first one', { timeout: 20_000 })
@@ -131,6 +223,13 @@ test('Tasks: Add to Focus from the row; a reply leaves the row in place with wha
   await panel.waitForTimeout(3000)
   await expect(row).toBeVisible()
   await shot(panel, 'r2-tasks-replied')
+  // Dark: the warm grey of Ask and of the extension's bar over it, never the app's pure black (R2-8).
+  await panel.emulateMedia({ colorScheme: 'dark' })
+  await expect.poll(() => t.getByTestId('ext-tasks').evaluate((e) => getComputedStyle(e).backgroundColor)).toBe('rgb(31, 29, 27)')
+  // Its buttons on the warm raised grey once their colour transition ends.
+  await expect.poll(() => t.getByTestId('ext-tasks-save-page').evaluate((e) => getComputedStyle(e).backgroundColor)).toBe('rgb(42, 39, 36)')
+  await shot(panel, 'r2-tasks-replied-dark')
+  await panel.emulateMedia({ colorScheme: 'light' })
 })
 
 test('Tasks: on a Walnut tab the save button is plainly off and says why', async () => {

@@ -60,7 +60,7 @@ const ask = vi.fn(async (msg: { type: string }) => {
 const SRC = '../../../packages/browser-extension/src'
 vi.mock('../../../packages/browser-extension/src/ext', () => ({ ask, ext: { windows: { getCurrent: async () => ({ id: 1 }) }, storage: { onChanged: { addListener() {} } } } }))
 vi.mock('../../../packages/browser-extension/src/dom', () => ({ h, icon: () => h('icon'), avatar: () => h('avatar'), totpView: () => h('totp') }))
-vi.mock('../../../packages/browser-extension/src/popup-ui', () => ({ errLine: () => h('error'), iconButton: () => h('button'), popupIcon: () => h('icon'), toast() {}, topBar: () => h('top'), copyPlain() {}, copySecret() {} }))
+vi.mock('../../../packages/browser-extension/src/popup-ui', () => ({ errLine: () => h('error'), hintLine: () => ({ el: h('hint'), show() {} }), iconButton: () => h('button'), popupIcon: () => h('icon'), toast() {}, topBar: () => h('top'), copyPlain() {}, copySecret() {} }))
 vi.mock('../../../packages/browser-extension/src/popup-generator', () => ({ generatorView() {} }))
 vi.mock('../../../packages/browser-extension/src/popup-settings', () => ({ settingsView() {} }))
 vi.mock('../../../packages/browser-extension/src/popup-connect', () => ({ findWalnut: async () => null, rememberServer() {} }))

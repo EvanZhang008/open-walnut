@@ -177,6 +177,46 @@ export function sentPageOf(taskId: string, s: HandedStore | null = store()): str
   } catch { return ''; }
 }
 
+const FIRST_QUESTION_KEY = 'walnut.ext-panel.first-question';
+const FIRST_QUESTION_MAX = 120;
+const FIRST_QUESTION_KEEP = 200;
+
+/**
+ * The question an ask started with, by its task, as the person typed it here. Walnut titles an ask
+ * from its first message within seconds (quick-start's launch auto-title); until it does, the task
+ * wears its agent's placeholder ("Ask Walnut") and every new ask read the same in the header, the
+ * drawer and Continue (review R2-7). The question tells them apart meanwhile.
+ */
+export function rememberFirstQuestion(taskId: string, question: string, s: HandedStore | null = store(), now = Date.now()): void {
+  const q = question.replace(/\s+/g, ' ').trim();
+  if (!taskId || !q) return;
+  let all: Record<string, { q: string; at: number }> = {};
+  try { const v = JSON.parse(s?.getItem(FIRST_QUESTION_KEY) ?? '{}'); if (v && typeof v === 'object') all = v; } catch { /* unreadable: start over */ }
+  if (all[taskId]?.q) return;
+  all[taskId] = { q: q.length > FIRST_QUESTION_MAX ? `${q.slice(0, FIRST_QUESTION_MAX - 1)}…` : q, at: now };
+  const kept = Object.entries(all).filter(([, v]) => v && typeof v.at === 'number').sort((a, b) => b[1].at - a[1].at).slice(0, FIRST_QUESTION_KEEP);
+  try { s?.setItem(FIRST_QUESTION_KEY, JSON.stringify(Object.fromEntries(kept))); } catch { /* full or blocked: the placeholder shows */ }
+}
+
+export function firstQuestionOf(taskId: string, s: HandedStore | null = store()): string {
+  if (!taskId) return '';
+  try {
+    const v = (JSON.parse(s?.getItem(FIRST_QUESTION_KEY) ?? '{}') as Record<string, { q?: unknown }>)[taskId];
+    return typeof v?.q === 'string' ? v.q : '';
+  } catch { return ''; }
+}
+
+/**
+ * What the panel calls an ask: its title; while it still wears its agent's placeholder (the
+ * project's name, askTitle's fallback too), the question it started with when this browser asked
+ * it; else the placeholder. `untitled` says the words are not the ask's own title.
+ */
+export function panelAskTitle(task: { id: string; title?: string }, agent: { project: string }, question = firstQuestionOf(task.id)): { title: string; untitled: boolean } {
+  const own = task.title?.trim() ?? '';
+  if (own && own.toLowerCase() !== agent.project.toLowerCase()) return { title: own, untitled: false };
+  return question ? { title: question, untitled: false } : { title: agent.project, untitled: true };
+}
+
 const MAX_SELECTION = 4000;
 const MAX_TEXT = 200_000;
 /** The page's text said in the message itself (an ask on another machine cannot read this one's file). */

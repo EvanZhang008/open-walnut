@@ -15,6 +15,7 @@
  * counts, and only one runs at a time (beginAttempt).
  */
 import crypto from 'node:crypto'
+import { bus, EventNames } from '../event-bus.js'
 
 export const SESSION_HEADER = 'x-walnut-vault-session'
 export const DEFAULT_IDLE_MINUTES = 15
@@ -41,7 +42,29 @@ export function setSessionStoreHook(h: StoreHook | null): void {
   hook = h
 }
 
-const changed = (kind: 'change' | 'use' = 'change') => hook?.changed(kind)
+/**
+ * Every change of who holds an unlock (an unlock, a share, a Lock, an expiry, a self-lock, a new
+ * master password), never a mere use, is announced to every open Walnut window as `vault:changed`
+ * (envelope only): each reads its own status again, so a Lock anywhere locks them at once and an
+ * unlock anywhere on this computer is shared at once (docs/reference/passwords.md, "One unlock on
+ * this computer"; web/src/api/vault-live.ts). A burst (a Lock ending ten windows) is one event.
+ */
+const ANNOUNCE_MS = 120
+let announceTimer: ReturnType<typeof setTimeout> | null = null
+
+function announce(): void {
+  if (announceTimer) return
+  announceTimer = setTimeout(() => {
+    announceTimer = null
+    bus.emit(EventNames.VAULT_CHANGED, { at: Date.now() }, ['web-ui'], { source: 'vault' })
+  }, ANNOUNCE_MS)
+  announceTimer.unref?.()
+}
+
+function changed(kind: 'change' | 'use' = 'change'): void {
+  hook?.changed(kind)
+  if (kind === 'change') announce()
+}
 
 // When the last session runs out by itself (nobody pressed Lock), the vault closes too: the
 // route layer registers what closing means (closeIfNobody), and one timer waits for the
@@ -380,6 +403,7 @@ export function resetSessionsForTest(): void {
   sessions.clear()
   selfLocked.clear()
   if (timer) { clearTimeout(timer); timer = null }
+  if (announceTimer) { clearTimeout(announceTimer); announceTimer = null }
   failures = 0
   blockedUntil = 0
 }

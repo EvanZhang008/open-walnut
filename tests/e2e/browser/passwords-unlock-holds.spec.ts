@@ -7,8 +7,12 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { ensureVaultSetUp } from './vault-session-helper'
+import { holdVaultLock, vaultExclusively } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+// Its Lock ends every unlock: that step runs alone (vaultExclusively).
+holdVaultLock('shared', 'file')
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/passwords-unlock-holds'
@@ -49,8 +53,11 @@ test('an unlock in one tab is every tab\'s, and a Lock in one locks the others',
   await expect(second.getByTestId('pw-unlock')).toHaveCount(0)
 
   // Lock in the second: the first shows the lock screen without a reload.
-  await second.getByTestId('pw-lock').click()
-  await expect(second.getByTestId('pw-unlock')).toBeVisible()
+  // A Lock ends every unlock: alone on the vault until it has landed.
+  await vaultExclusively(async () => {
+    await second.getByTestId('pw-lock').click()
+    await expect(second.getByTestId('pw-unlock')).toBeVisible()
+  })
   await expect(page.getByTestId('pw-unlock')).toBeVisible({ timeout: 10_000 })
 
   // Unlock in the first: the second follows.

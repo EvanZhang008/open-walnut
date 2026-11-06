@@ -10,6 +10,7 @@ import { passwordStrength, type StrengthLevel } from '../../../../src/core/vault
 import { KeyIcon, LockIcon, CopyIcon, CheckIcon } from './pw-icons'
 import { log } from '@/utils/log'
 import { unlockFootText } from './unlock-words'
+import { unlockRefusalText } from '../../../../src/core/vault/unlock-retry'
 import { HintInput, ShowHint, hintError } from './HintField'
 
 const LEVEL_TEXT: Record<StrengthLevel, string> = {
@@ -187,6 +188,8 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
   const [secretKey, setSecretKey] = useState('')
   const [needKey, setNeedKey] = useState(!status.hasSecretKey)
   const [busy, setBusy] = useState(false)
+  // Another unlock is being checked: this one waits its turn (vaultApi.unlock sends it again).
+  const [checking, setChecking] = useState(false)
   const [error, setError] = useState('')
   // A wrong password shows the hint at once.
   const [wrong, setWrong] = useState(false)
@@ -196,18 +199,19 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
     if (!pw || busy) return
     setBusy(true); setError('')
     try {
-      await vaultApi.unlock(pw, status.kdf, needKey ? secretKey : undefined)
+      await vaultApi.unlock(pw, status.kdf, needKey ? secretKey : undefined, { onWait: () => setChecking(true) })
       setPw(''); setSecretKey('')
       onUnlocked()
     } catch (err) {
       if (err instanceof VaultApiError && err.code === 'secret_key_needed') setNeedKey(true)
       if (err instanceof VaultApiError && err.code === 'unlock_slowed' && err.waitMs) slowFor(err.waitMs)
       if (err instanceof VaultApiError && err.code === 'wrong_password') setWrong(true)
-      setError(errorText(err))
+      setError(err instanceof VaultApiError ? unlockRefusalText(err) : errorText(err))
       setPw('')
       input.current?.focus()
     } finally {
       setBusy(false)
+      setChecking(false)
     }
   }
 
@@ -229,7 +233,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
           </>
         )}
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
-        <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? 'Unlocking…' : 'Unlock'}</button>
+        <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? (checking ? 'Checking…' : 'Unlocking…') : 'Unlock'}</button>
         <button type="button" className="pw-link-btn" onClick={() => { setError(''); setMode('recover') }}>Forgot master password?</button>
         <p className="pw-gate-foot">{unlockFootText(status)}</p>
       </form>

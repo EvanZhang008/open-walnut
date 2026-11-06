@@ -18,8 +18,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { vaultSession } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+holdVaultLock('shared', 'file')
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const stamp = Date.now().toString(36)
@@ -53,6 +56,11 @@ const SITES: Record<string, Record<string, string>> = {
       <label>Card number <input name="cardnumber" autocomplete="cc-number" inputmode="numeric"></label><label>Expiry <input name="exp" autocomplete="cc-exp" placeholder="MM/YY"></label>
       <label>Security code <input name="cvc" autocomplete="cc-csc"></label><button>Place order</button></form>
       <script>document.querySelector('form').addEventListener('submit',e=>e.preventDefault())</script>`),
+    // A change-password page that names its account only in a hidden field, as the review lab's does.
+    '/change': page('Change your password', `<form onsubmit="return false"><input type="hidden" name="username" autocomplete="username" value="alex@a2lab.test">
+      <label>Current password <input name="current" type="password" autocomplete="current-password"></label>
+      <label>New password <input name="new1" type="password" autocomplete="new-password"></label>
+      <label>Confirm new password <input name="new2" type="password" autocomplete="new-password"></label><button>Change password</button></form>`),
     '/frame': page('Sign in (framed)', `<p>The sign-in form below is inside a frame from the same site.</p><iframe id="fr" src="/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
   },
   // A site with no login saved anywhere on it, and another part of a2lab.test with none of its own.
@@ -301,6 +309,28 @@ test('the menu open, ArrowDown twice and Enter at normal speed: the second login
   await p.keyboard.press('ArrowDown')
   await p.keyboard.press('Enter')
   await expect(p.getByLabel('Email')).toHaveValue(want.includes('work') ? 'alex.work@a2lab.test' : 'alex@a2lab.test', { timeout: 5000 })
+  await p.close()
+})
+
+test('a change-password page lists the account it names first, before the login used last (R2-12)', async () => {
+  const p = await ctx.newPage()
+  // The work login filled on this tab moments ago: the most recently used, and step one's hint.
+  await p.goto(site('shop.a2lab.test', '/signin'))
+  await p.getByLabel('Email').click()
+  await (await menuOf(p)).getByTestId('menu-item').filter({ hasText: `Shop work ${stamp}` }).click()
+  await expect(p.getByLabel('Email')).toHaveValue('alex.work@a2lab.test')
+  // The change page names alex@ in a hidden field: that login comes first, the work one under Other logins.
+  await p.goto(site('shop.a2lab.test', '/change'))
+  await p.getByLabel('Current password').click()
+  const menu = await menuOf(p)
+  const rows = menu.locator('[data-testid=menu-item]:not([data-tier="2"])')
+  await expect(rows.first()).toContainText(`Shop ${stamp}`)
+  await expect(rows.first()).toContainText('alex@a2lab.test')
+  await expect(menu.getByText('Other logins')).toBeVisible()
+  await expect(rows.nth(1)).toContainText(`Shop work ${stamp}`)
+  await shot(p, 'change-page-menu')
+  await rows.first().click()
+  await expect(p.getByLabel('Current password')).toHaveValue('Shop-Pass-4821!')
   await p.close()
 })
 

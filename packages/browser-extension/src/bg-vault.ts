@@ -151,6 +151,8 @@ export interface MenuOwner {
   tabId: number; frameId: number; url: string; role: string; kind: string; nonce: string
   /** What the new-password field accepts, and the strong password the menu shows for it. */
   rules?: FieldRules; suggestion?: string
+  /** The account the page names for this form (its username field, or a change form's hidden one): that login first. */
+  account?: string
 }
 
 /** A saved login a sent one could update instead. */

@@ -15,6 +15,8 @@ import { SettingsButton } from '../inputs/SettingsButton'
 import { PasswordSourcesGroup } from './PasswordSourcesGroup'
 import { SegmentedControl } from '../inputs/SegmentedControl'
 import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type RecoveryKit, type UnlockFor, type VaultStatus } from '@/api/vault'
+// An unlock or a Lock elsewhere on this computer (the extension, another window) reaches this page live.
+import '@/api/vault-live'
 import { CopyButton, downloadRecoveryKit, RecoveryKitCard } from '@/components/passwords/LockScreens'
 import { hintError } from '@/components/passwords/HintField'
 import { HintSettings } from '@/components/passwords/HintSettings'

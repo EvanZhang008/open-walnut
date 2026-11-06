@@ -380,9 +380,18 @@ change reseals it), and forgets a browser unseen for 90 days, and all but the ne
 only while an unlock made here is live, and `POST /vault/join` (with the window's Origin) gives the
 window a session of its own on that unlock's clocks, held by its token as a window's own unlock is
 (`joinSession(..., 'window')`). So each browser on this computer types the master password once;
-after that, one unlock anywhere here opens it. `vaultApi.status()` joins by itself, and a locked
-Passwords page and an open "Unlock to approve" form look every 3 s, so an open page follows an
-extension unlock within seconds, with no reload. A window that locked only itself (its own idle
+after that, one unlock anywhere here opens it. `vaultApi.status()` joins by itself, and every
+window follows the vault live: each change of who holds an unlock (an unlock, a share, a Lock, an
+expiry, a self-lock, a new master password; never a mere use) is announced to every open Walnut
+window as `vault:changed` (`sessions.ts`, one event per burst, carrying nothing of the vault), and
+each window then reads its own status quietly (`web/src/api/vault-live.ts`; a reconnect reads it
+once too). So a Lock in the extension or another window locks an open Passwords page within about
+a second, its items gone at once, and an unlock there opens a locked Passwords page, Settings →
+Passwords and a guarded approval card with no reload. An approval card that needs an unlock reads
+the vault the moment it arrives, so it says Approve while it can share one and "Unlock to approve"
+(which asks for the master password) only when there is none. Every web file that reads the vault
+state imports the follower (`tests/web/vault-live-guard.test.ts`); a locked Passwords page and an
+open "Unlock to approve" form still look every 3 s behind it, in case the socket is down. A window that locked only itself (its own idle
 lock, `POST /vault/lock` with no body) is recorded under its key's id (`window:<id>`) and shares
 nothing until the person unlocks again; a person's Lock ends every shared window with the rest.
 A new master password or a recovery ends every browser key (the window making the change gets a

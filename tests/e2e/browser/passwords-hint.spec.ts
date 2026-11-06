@@ -9,8 +9,11 @@
  */
 import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It sets the vault up through the UI, changes the vault's one hint and locks every window: alone on the vault.
+holdVaultLock('exclusive', 'file')
 
 let setUpHere = false
 

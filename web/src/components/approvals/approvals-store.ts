@@ -11,6 +11,7 @@
 import { useSyncExternalStore } from 'react';
 import { answerApproval, enrollApprovalKey, listApprovals, type Approval, type ApprovalKey } from '@/api/approvals';
 import { onVaultSessionChange, vaultSession } from '@/api/vault';
+import { checkVault, vaultLive } from '@/api/vault-live';
 import { howToApprove, signerKinds } from '../../../../src/core/approvals/signer-words';
 import { hasTouchIdBridge, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
@@ -32,9 +33,15 @@ export interface ApprovalsState {
   openId: string | null;
   /** The approval whose card shows its "Unlock to approve" form (ApprovalUnlock.tsx), or null. */
   unlockId: string | null;
+  /**
+   * This window is reading whether Passwords is unlocked for it (it may share an unlock made on
+   * this computer): a guarded card shows a waiting Approve meanwhile, never "Unlock to approve"
+   * for an unlock it is about to share.
+   */
+  vaultLooking: boolean;
 }
 
-const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null };
+const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null, vaultLooking: false };
 let state: ApprovalsState = EMPTY;
 const subs = new Set<() => void>();
 /** Approvals this page has raised a system notification for, so a re-read never repeats one. */
@@ -51,7 +58,29 @@ function set(next: Partial<ApprovalsState>): void {
 }
 
 // This window unlocked or locked Passwords: what each card offers changes (Approve, or Unlock to approve).
+// An unlock or a Lock elsewhere on this computer reaches it too (api/vault-live.ts, `vault:changed`).
 if (typeof window !== 'undefined') onVaultSessionChange(() => set(state.unlockId && vaultSession() ? { unlockId: null } : {}));
+
+/** A guarded ask this window approves only with Passwords unlocked here (not one Face ID or Touch ID signs). */
+function wantsUnlock(a: Approval): boolean {
+  return !!a.guard && a.status === 'pending' && !(a.guard === 'vault-sensitive' && a.mode === 'biometric');
+}
+
+/**
+ * A guarded ask is waiting and this window holds no unlock it knows is live: read the vault now
+ * (api/vault-live.ts checkVault). That shares an unlock made on this computer (the extension's,
+ * another window's) when there is one, so the card reads Approve at once instead of "Unlock to
+ * approve" (review 2026-11-06: it said "Unlock to approve" while Passwords was unlocked, and a click
+ * just turned it into Approve); and it drops a token left in storage whose unlock ended while no
+ * page was open, so the card never offers an Approve the server refuses. The read answers within
+ * two reads of at most READ_TIMEOUT_MS each; no answer leaves "Unlock to approve". Returns the patch
+ * that marks the look, to go out with the items it is for.
+ */
+function lookForUnlock(items: ReadonlyMap<string, Approval>): Partial<ApprovalsState> {
+  if (state.vaultLooking || vaultLive() || ![...items.values()].some(wantsUnlock)) return {};
+  void checkVault().finally(() => set({ vaultLooking: false }));
+  return { vaultLooking: true };
+}
 
 /** Show the unlock form on an approval's card or row (null: close it). */
 export function openUnlock(id: string | null): void {
@@ -102,7 +131,8 @@ export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' 
     // A vault ask: signed here when this Mac signs, else a tap only with Passwords unlocked here.
     if (canSignHere(s)) return 'touch-id';
     const sensitiveSigned = a.guard === 'vault-sensitive' && a.mode === 'biometric';
-    return !sensitiveSigned && vaultSession() ? 'tap' : null;
+    // A token only left in storage is no unlock until read live (lookForUnlock).
+    return !sensitiveSigned && vaultLive() ? 'tap' : null;
   }
   if (a.mode !== 'biometric') return 'tap';
   const ownEnrollment = !!a.enrollsKey && a.enrollsKey === s.touchId?.keyId;
@@ -131,6 +161,11 @@ export function noApproveReason(s: ApprovalsState, a: Approval): string {
 export function unlockApproves(s: ApprovalsState, a: Approval): boolean {
   if (!a.guard || approveKind(s, a)) return false;
   return !(a.guard === 'vault-sensitive' && a.mode === 'biometric');
+}
+
+/** Still reading whether this window may approve it (lookForUnlock): neither Approve nor "Unlock to approve" yet. */
+export function unlockUndecided(s: ApprovalsState, a: Approval): boolean {
+  return s.vaultLooking && unlockApproves(s, a);
 }
 
 function notice(a: Approval): void {
@@ -168,7 +203,7 @@ export async function refreshApprovals(): Promise<void> {
     const items = new Map(fresh.map((a) => [a.id, a]));
     // One that left the list while this window was away was answered elsewhere: its notice goes too.
     for (const id of state.items.keys()) if (!items.has(id)) clearApprovalNotice(id);
-    set({ items, keys: r.keys });
+    set({ items, keys: r.keys, ...lookForUnlock(items) });
     // The Mac app also takes back notices from before it started whose approval is gone now.
     keepApprovalNotices([...items.keys()]);
     for (const a of fresh) notice(a);
@@ -191,7 +226,7 @@ export function applyApprovalEvent(a: Approval): void {
     if (settledAt.has(a.id)) return;
     const items = new Map(state.items);
     items.set(a.id, a);
-    set({ items });
+    set({ items, ...lookForUnlock(items) });
     notice(a);
   } else if (state.items.has(a.id) || state.openId === a.id) {
     settle(a);
@@ -219,6 +254,12 @@ export async function startTouchId(): Promise<void> {
   }
 }
 
+/** The answer route refused an unsigned Approve for want of a live Passwords unlock here. */
+function proofRefused(err: unknown): boolean {
+  const e = err as { status?: unknown; body?: { code?: unknown } };
+  return e?.status === 403 && (e.body?.code === 'proof_needed' || e.body?.code === 'vault_unlock_needed');
+}
+
 /** Answer one: a tap, or Touch ID first when `signed`. */
 export async function decideApproval(a: Approval, decision: 'approve' | 'deny', signed: boolean): Promise<void> {
   if (state.busy[a.id]) return;
@@ -236,6 +277,12 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny', 
     settle(r.approval);
   } catch (err) {
     set({ errors: { ...state.errors, [a.id]: err instanceof Error ? err.message : String(err) } });
+    // Walnut wanted proof this window could not give (its unlock ended meanwhile): read the vault,
+    // which drops the dead token, and offer the unlock form in place of an Approve that fails again.
+    if (a.guard && decision === 'approve' && !signed && proofRefused(err)) {
+      await checkVault();
+      if (!vaultLive() && unlockApproves(state, a)) set({ unlockId: a.id });
+    }
   } finally {
     const { [a.id]: _done, ...busy } = state.busy;
     set({ busy });

@@ -21,8 +21,11 @@ import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { holdApprovalsLock } from './approvals-lock'
 import { vaultSession as openVaultSession } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// Its agent reads the shared fixture vault; the vault lock comes before the approvals lock.
+holdVaultLock('shared', 'file')
 // It makes and answers approvals on the shared fixture server, where another file clears them.
 holdApprovalsLock('file')
 

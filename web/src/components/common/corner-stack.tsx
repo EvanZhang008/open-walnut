@@ -270,8 +270,20 @@ function leftColumnRight(sidebarRight: number): number {
  * spacer, corner-stack.css, so no inline style another hook writes is touched), and its last line
  * scrolls clear above the stack. Only at the end, so the page never jumps under the reader's
  * finger when a notice comes or goes (on the phone too).
+ *
+ * Over a page's own left column (leftColumnRight: Home's task panel, the Settings nav, the
+ * Passwords rail, the Org list, ...) room at the end is not enough: the stack sits there for as
+ * long as it holds anything, so the rows it lies over would stay under it until scrolled to the
+ * end (2026-11-06: the approval card covered Settings' Inbox Triage .. Phones & Cloud). There what
+ * the column shows ends above the stack: a column that scrolls itself is cut to end above it
+ * (`data-corner-fit`, a max-height; its rows scroll in what is left); a flex column takes the
+ * spacer itself, which shrinks the list growing inside it or moves its foot rows up; any other
+ * column's scroller under the stack is cut like the first. The stack says it lies over a column (`data-over="column"`),
+ * which tests/e2e/browser/approvals.spec.ts reads on every page of the sidebar.
  */
 let reserved: HTMLElement | null = null;
+/** What `reserved` holds: room at its end, or its height cut to end above the stack. */
+let reservedMode: 'room' | 'fit' = 'room';
 
 /** A scroller whose end can take the spacer: a column of blocks with no ::after of its own. */
 function takesSpacer(el: HTMLElement): boolean {
@@ -280,27 +292,36 @@ function takesSpacer(el: HTMLElement): boolean {
   return column && (el === reserved || getComputedStyle(el, '::after').content === 'none');
 }
 
-/**
- * The page's left column under the point when what the stack covers there is that column's own
- * rows rather than a list scrolling inside it: a column that does not scroll (the Passwords rail,
- * its Import and Lock at its foot) takes the room at its end, so those rows move up clear of the
- * stack instead of lying under it (2026-11-06: the approval card covered the rail's Lock). The
- * innermost such column, so a column inside another takes it.
- */
-function columnUnder(x: number, y: number, scroller: HTMLElement | null): HTMLElement | null {
-  let best: HTMLElement | null = null;
-  for (const col of columns) {
-    if (!col.isConnected) continue;
+/** Laid out as a flex column: a spacer at its end takes its height from the children that grow. */
+function flexColumn(el: HTMLElement): boolean {
+  const cs = getComputedStyle(el);
+  return cs.display.endsWith('flex') && cs.flexDirection === 'column';
+}
+
+/** The page's left columns (leftColumnRight) under the point, outermost first. */
+function columnsAt(x: number, y: number): HTMLElement[] {
+  const at = columns.filter((col) => {
+    if (!col.isConnected) return false;
     const r = col.getBoundingClientRect();
-    if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
-    // A list scrolling inside the column already gets the room at its own end. Not once the
-    // column holds the room: its list scrolls only because of that room, and handing the room to
-    // the list would undo it on the next look, back and forth.
-    if (scroller && col.contains(scroller) && col !== reserved) continue;
-    if (best && !best.contains(col)) continue;
-    if (takesSpacer(col)) best = col;
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  });
+  // Nested ones in document order: an ancestor comes before what it contains.
+  return at.sort((p, q) => (p === q ? 0 : p.contains(q) ? -1 : q.contains(p) ? 1 : 0));
+}
+
+const scrollsItself = (el: HTMLElement) => { const oy = getComputedStyle(el).overflowY; return oy === 'auto' || oy === 'scroll'; };
+
+/** The scroller (anything that scrolls, spacer or not) of the hit under the point, inside `within`. */
+function scrollingIn(x: number, y: number, within: HTMLElement): HTMLElement | null {
+  for (const hit of document.elementsFromPoint(x, y)) {
+    if (stack?.contains(hit) || !within.contains(hit)) continue;
+    for (let el: HTMLElement | null = hit as HTMLElement; el && el !== within.parentElement; el = el.parentElement) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) return el;
+    }
+    return null;
   }
-  return best;
+  return null;
 }
 
 /** A scroller that grows to fill its flex column, so a bottom margin shortens it rather than the page. */
@@ -335,18 +356,65 @@ function release(): void {
   if (!reserved) return;
   delete reserved.dataset.cornerRoom;
   delete reserved.dataset.cornerRoomShrink;
+  delete reserved.dataset.cornerFit;
   reserved.style.removeProperty('--corner-room');
+  reserved.style.removeProperty('--corner-fit');
   reserved = null;
+}
+
+/** What takes the room under the stack's top left, and how; null: nothing there takes any. */
+function roomTaker(x: number, y: number): { el: HTMLElement; mode: 'room' | 'fit'; overColumn: boolean } | null {
+  const cols = columnsAt(x, y);
+  if (!cols.length) {
+    const under = scrollerUnder(x, y);
+    return under ? { el: under, mode: 'room', overColumn: false } : null;
+  }
+  const outer = cols[0];
+  const inner = cols[cols.length - 1];
+  // A scroller already cut to end above the stack keeps it: the point now lies below it, where
+  // nothing scrolls, and handing the room to a column would undo the cut on the next look.
+  if (reserved && reservedMode === 'fit' && reserved.isConnected && outer.contains(reserved)) return { el: reserved, mode: 'fit', overColumn: true };
+  // The outermost flex column that does not scroll and sits in none that does (the Settings nav,
+  // the Tasks rail, Home's task panel, the Passwords rail): the spacer at its end shrinks the list
+  // growing inside it, whose rows then scroll in what is left, and lifts its foot rows (New
+  // Project, Import and Lock) above the stack, pinned or following the list.
+  for (const col of cols) {
+    if (scrollsItself(col)) break;
+    if (flexColumn(col) && takesSpacer(col)) return { el: col, mode: 'room', overColumn: true };
+  }
+  // Otherwise what scrolls there is cut to end above the stack: room at its end would only make
+  // it scroll, its rows still under the stack until scrolled to the end.
+  const list = scrollingIn(x, y, inner);
+  if (list) return { el: list, mode: 'fit', overColumn: true };
+  if (scrollsItself(inner)) return { el: inner, mode: 'fit', overColumn: true };
+  return takesSpacer(inner) ? { el: inner, mode: 'room', overColumn: true } : { el: inner, mode: 'fit', overColumn: true };
 }
 
 function syncRoom(): void {
   if (!stack) return;
   const r = stack.getBoundingClientRect();
   const visible = stack.childElementCount > 0 && !stack.classList.contains('is-tucked') && !stack.classList.contains('under-drawer') && r.height > 0;
-  const under = visible ? (shrunkUnder(r.left + 24, r.top + 4) ?? scrollerUnder(r.left + 24, r.top + 4)) : null;
-  const scroller = visible ? (columnUnder(r.left + 24, r.top + 4, under) ?? under) : null;
-  if (!scroller) { release(); return; }
-  if (reserved !== scroller) release();
+  const taker = visible ? (shrunkUnder(r.left + 24, r.top + 4) ?? roomTaker(r.left + 24, r.top + 4)) : null;
+  if (!!taker?.overColumn !== (stack.dataset.over === 'column')) { if (taker?.overColumn) stack.dataset.over = 'column'; else delete stack.dataset.over; }
+  if (!taker) { release(); return; }
+  const { el: scroller, mode } = taker;
+  if (reserved !== scroller || reservedMode !== mode) release();
+  const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
+  if (mode === 'fit') {
+    // Its height cut so it ends above the stack; while the stack holds something it only gets shorter.
+    const top = scroller.getBoundingClientRect().top;
+    const held = reserved === scroller ? parseFloat(scroller.style.getPropertyValue('--corner-fit')) || Infinity : Infinity;
+    const fit = Math.min(held, Math.floor(r.top - 8 - top));
+    if (fit <= 40) { release(); return; }
+    reserved = scroller;
+    reservedMode = 'fit';
+    scroller.dataset.cornerFit = '';
+    if (scroller.style.getPropertyValue('--corner-fit') !== `${fit}px`) {
+      scroller.style.setProperty('--corner-fit', `${fit}px`);
+      if (atEnd) scroller.scrollTop = scroller.scrollHeight;
+    }
+    return;
+  }
   // While the stack holds something the room only grows: a notice leaving (a toast's own time
   // running out) never moves the chat back down under the reader. It goes when the stack is empty.
   const held = reserved === scroller ? parseFloat(scroller.style.getPropertyValue('--corner-room')) || 0 : 0;
@@ -358,12 +426,12 @@ function syncRoom(): void {
   const room = Math.max(held, Math.round(bottom - r.top + 8));
   if (room <= 0) { release(); return; }
   reserved = scroller;
+  reservedMode = 'room';
   scroller.dataset.cornerRoom = '';
   if (shrink) scroller.dataset.cornerRoomShrink = '';
   else delete scroller.dataset.cornerRoomShrink;
   if (scroller.style.getPropertyValue('--corner-room') !== `${room}px`) {
     // A chat read at its end stays at its end: the newest line moves up clear of the stack.
-    const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
     scroller.style.setProperty('--corner-room', `${room}px`);
     if (atEnd) scroller.scrollTop = scroller.scrollHeight;
   }

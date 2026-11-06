@@ -29,7 +29,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
-  openUnlock, startTouchId, unlockApproves, useApprovals, type ApprovalsState,
+  openUnlock, startTouchId, unlockApproves, unlockUndecided, useApprovals, type ApprovalsState,
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
@@ -93,7 +93,13 @@ export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
         onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny', false); }}>
         {working === 'deny' ? 'Denying…' : 'Deny'}
       </button>
-      {!kind && unlockApproves(s, a) && (
+      {!kind && unlockUndecided(s, a) && (
+        <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-approve-checking" disabled aria-busy="true"
+          title="Checking whether Passwords is unlocked on this computer">
+          Approve
+        </button>
+      )}
+      {!kind && unlockApproves(s, a) && !unlockUndecided(s, a) && (
         <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-unlock-to-approve" disabled={!!working}
           onClick={(e) => { e.stopPropagation(); openUnlock(a.id); }}>
           Unlock to approve
@@ -154,7 +160,9 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
       ) : null}
       {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
-      {(biometric || a.guard) && !approveKind(s, a) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
+      {/* The unlock form open on it says "Unlock Passwords in this window" in its own label. */}
+      {(biometric || a.guard) && !approveKind(s, a) && !unlockUndecided(s, a)
+        && !(s.unlockId === a.id && noApproveReason(s, a).startsWith('Unlock Passwords in this window')) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
       <ApprovalButtons a={a} s={s} />
     </>
   );

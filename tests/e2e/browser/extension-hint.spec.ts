@@ -7,10 +7,13 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
-import { openPanel, startPanelLab, type PanelLab } from './extension-panel-harness'
+import { askView, openPanel, startPanelLab, type PanelLab } from './extension-panel-harness'
 import { vaultCheckedRequest, vaultSession } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+holdVaultLock('shared', 'file')
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const HINT = 'the stable by the river'
@@ -87,6 +90,29 @@ test('the unlock window and the side panel\'s Passwords view show it too', async
   await view.getByTestId('popup-show-hint').click({ timeout: 20_000 })
   await expect(view.getByTestId('popup-hint-shown')).toHaveText(`Hint: ${HINT}`)
   await shot(panel, 'ext-sidepanel-hint-shown')
+  await panel.close()
+})
+
+test('the key popover, where people unlock most, has the hint too (R2-11)', async () => {
+  const { panel } = await openPanel(lab)
+  await panel.setViewportSize({ width: 400, height: 760 })
+  const v = askView(panel)
+  await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  await v.getByTestId('ext-ask-key').click()
+  const pop = panel.getByTestId('key-pop')
+  await expect(pop).toHaveAttribute('data-shows', 'locked', { timeout: 20_000 })
+  await expect(pop.getByTestId('key-pop-hint-shown')).toHaveCount(0)
+  await pop.getByTestId('key-pop-show-hint').click()
+  await expect(pop.getByTestId('key-pop-hint-shown')).toHaveText(`Hint: ${HINT}`)
+  await shot(panel, 'ext-key-pop-hint-shown')
+  // Closed and opened again: behind its link, and shown at once after a wrong password.
+  await panel.keyboard.press('Escape')
+  await expect(pop).toHaveCount(0)
+  await v.getByTestId('ext-ask-key').click()
+  await expect(pop.getByTestId('key-pop-show-hint')).toBeVisible({ timeout: 20_000 })
+  await pop.getByLabel('Master password').fill('not my password')
+  await pop.getByTestId('key-pop-unlock').click()
+  await expect(pop.getByTestId('key-pop-hint-shown')).toHaveText(`Hint: ${HINT}`, { timeout: 30_000 })
   await panel.close()
 })
 

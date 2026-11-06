@@ -20,8 +20,17 @@ export interface ContinueSnap { title: string; line: string; time: string; needs
  * suggestion chips, whether the page chip is on). The view's fields are left out when not shown.
  */
 export interface AskSnap {
-  title: string; host: string; messages: Array<{ role: 'user' | 'assistant'; text: string }>;
-  askTitle?: string; agent?: string; placeholder?: string; continue?: ContinueSnap[]; suggestions?: string[]; pageOn?: boolean;
+  /**
+   * `page` and `quote`: what a person's message took from the page, drawn in their bubble ("Release
+   * notes 4.2 · example.test", and the text quoted from it), so the bubble does not grow when the
+   * real view replaces the drawing (review R2-6).
+   */
+  title: string; host: string; messages: Array<{ role: 'user' | 'assistant'; text: string; page?: string; quote?: string }>;
+  /**
+   * `suggestionIcons[i]` names the icon of `suggestions[i]` ('search', 'calendar', 'clock'; '' for
+   * none): the drawing draws the chips as the view does, icon and label (review R2-6).
+   */
+  askTitle?: string; agent?: string; placeholder?: string; continue?: ContinueSnap[]; suggestions?: string[]; suggestionIcons?: string[]; pageOn?: boolean;
 }
 export interface TasksSnap { sections: Array<{ title: string; rows: Array<{ title: string; line: string; state: string }> }> }
 
@@ -35,6 +44,8 @@ export const SNAP_SUGGESTIONS = 3;
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+const textOf = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
 /** The conversation's last few messages as the chat draws them (its rows' own text). */
 export function askSnapOf(root: ParentNode, page: { url: string; title?: string }, host: string): AskSnap {
   const rows = Array.from(root.querySelectorAll<HTMLElement>('.session-msg.session-msg-user, .session-msg.session-msg-assistant'));
@@ -43,7 +54,10 @@ export function askSnapOf(root: ParentNode, page: { url: string; title?: string 
     const body = row.querySelector<HTMLElement>('.session-msg-content .markdown-body');
     const text = (body?.innerText ?? '').replace(/\n{3,}/g, '\n\n').trim();
     if (!text) continue;
-    messages.push({ role: row.classList.contains('session-msg-user') ? 'user' : 'assistant', text: cut(text, SNAP_TEXT_MAX) });
+    const user = row.classList.contains('session-msg-user');
+    const page = user ? textOf(row.querySelector('[data-testid="ext-panel-attached-page"] .ext-panel-attached-page-text')) : '';
+    const quote = user ? textOf(row.querySelector('[data-testid="ext-panel-attached"] blockquote')) : '';
+    messages.push({ role: user ? 'user' : 'assistant', text: cut(text, SNAP_TEXT_MAX), ...(page ? { page: cut(page, 200) } : {}), ...(quote ? { quote: cut(quote, 300) } : {}) });
   }
   return { title: cut(page.title ?? host, 200), host, messages: messages.slice(-SNAP_MESSAGES) };
 }
@@ -52,7 +66,6 @@ export function snapKeyOf(url: string): string {
   return pageKey(url);
 }
 
-const textOf = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
 /** The view around the conversation as it is drawn now (the fields of AskSnap past `messages`). */
 export function askViewSnapOf(root: ParentNode): Omit<AskSnap, 'title' | 'host' | 'messages'> {
@@ -67,15 +80,17 @@ export function askViewSnapOf(root: ParentNode): Omit<AskSnap, 'title' | 'host' 
     needs: row.getAttribute('data-needs') === 'true',
   })).filter((r) => r.title);
   // A stem chip names its blank in its label ("Which task is …"): the words the person reads.
-  const suggestions = Array.from(root.querySelectorAll('.draft-walnut-suggests .session-action-chip')).slice(0, SNAP_SUGGESTIONS)
-    .map((c) => cut(c.getAttribute('aria-label') ?? textOf(c), 60)).filter(Boolean);
+  const chips = Array.from(root.querySelectorAll('.draft-walnut-suggests .session-action-chip')).slice(0, SNAP_SUGGESTIONS)
+    .map((c) => ({ label: cut(c.getAttribute('aria-label') ?? textOf(c), 60), icon: c.getAttribute('data-icon') ?? '' })).filter((c) => c.label);
+  const suggestions = chips.map((c) => c.label);
+  const suggestionIcons = chips.map((c) => c.icon);
   const chip = root.querySelector('[data-testid="ext-panel-include"]');
   return {
     ...(askTitle ? { askTitle } : {}),
     ...(agent ? { agent } : {}),
     ...(placeholder ? { placeholder } : {}),
     ...(cont.length ? { continue: cont } : {}),
-    ...(suggestions.length ? { suggestions } : {}),
+    ...(suggestions.length ? { suggestions, ...(suggestionIcons.some(Boolean) ? { suggestionIcons } : {}) } : {}),
     ...(chip ? { pageOn: chip.getAttribute('aria-checked') === 'true' } : {}),
   };
 }
@@ -94,6 +109,9 @@ export function askSnapKey(surface: 'panel' | 'popup', pageUrl: string): string 
   if (surface === 'popup') return POPUP_SNAP_KEY;
   return pageUrl ? snapKeyOf(pageUrl) : NO_PAGE_SNAP_KEY;
 }
+
+/** `shown` waits for the view's paint (two animation frames), at most this long. */
+export const SHOWN_AFTER_PAINT_MAX_MS = 100;
 
 /** Quiet time after the last change before the view's words are sent again. */
 export const SNAP_QUIET_MS = 400;

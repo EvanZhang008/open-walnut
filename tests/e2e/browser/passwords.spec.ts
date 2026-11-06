@@ -12,9 +12,12 @@
  * Run on the Mac app's engine: PW_WEBKIT=1 bun x playwright test passwords --project webkit
  */
 import { expect, test, type Page } from '@playwright/test'
+import { holdVaultLock } from './vault-lock'
 
 test.use({ video: process.env.PW_DEMO_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
+// It locks every window, Lock all, and resets the master password with the recovery code: alone on the vault.
+holdVaultLock('exclusive', 'file')
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const stamp = Date.now().toString(36)

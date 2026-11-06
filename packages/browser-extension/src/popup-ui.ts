@@ -71,10 +71,16 @@ export function switchRow(id: string, title: string, sub: string, checked: boole
     h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, title), h('span', { class: 'row-sub' }, sub)), box)
 }
 
-/** A view's head: a Back button (its icon and the word), the title, and any buttons on the right. */
+/**
+ * A view's head: a Back button (its icon and the word), the title, and any buttons on the right.
+ * Inside the side panel's Passwords view (popup.ts `in-view`) a view opened from the list (an
+ * item, the generator, Settings) wears that view's own bar, the same height, and its Back names
+ * where it goes, "Passwords", as the list's Back names "Ask" (review R2-13).
+ */
 export function topBar(title: string, back: () => void, ...end: Array<Node | null>): HTMLElement {
-  return h('div', { class: 'top top-sub' },
-    h('button', { class: 'back-btn', type: 'button', 'data-testid': 'popup-back', onclick: back }, popupIcon('back'), h('span', {}, 'Back')),
+  const inView = document.documentElement.classList.contains('in-view')
+  return h('div', { class: inView ? 'top top-sub view-bar' : 'top top-sub' },
+    h('button', { class: 'back-btn', type: 'button', 'data-testid': 'popup-back', onclick: back }, popupIcon('back'), h('span', {}, inView ? 'Passwords' : 'Back')),
     h('h1', {}, title), ...end)
 }
 
@@ -82,4 +88,17 @@ export function topBar(title: string, back: () => void, ...end: Array<Node | nul
 export async function copyPlain(value: string, what: string): Promise<void> {
   try { await navigator.clipboard.writeText(value) } catch { toast('Could not copy.'); return }
   toast(`${what} copied`)
+}
+
+/**
+ * "Show hint" under a master password field once the vault has a hint; a wrong password shows it
+ * at once (`show`). The lock screen and the key popover both have it (review R2-11), each with its
+ * own test ids (`<prefix>-show-hint`, `<prefix>-hint-shown`).
+ */
+export function hintLine(text: string | undefined, prefix: 'popup' | 'key-pop'): { el: HTMLElement; show: () => void } {
+  const el = h('div', { class: 'hint-line' }) as HTMLElement
+  if (!text) return { el, show: () => undefined }
+  const show = () => el.replaceChildren(h('p', { class: 'hint-shown', 'data-testid': `${prefix}-hint-shown` }, h('span', { class: 'muted' }, 'Hint: '), text))
+  el.append(h('button', { class: 'link-btn', type: 'button', 'data-testid': `${prefix}-show-hint`, onclick: show }, 'Show hint'))
+  return { el, show }
 }

@@ -80,7 +80,15 @@ export default defineConfig({
     // The desktop app is a WKWebView, so a desktop-only scroll/paint bug needs a
     // WebKit run to count as verified. Opt in: PW_WEBKIT=1 … --project webkit
     // The replica smoke is one chromium spec (its WebKit runs are replica.config.ts's).
-    ...(process.env.PW_WEBKIT ? [{ name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: [...sideSpecs, '**/replica-smoke.spec.ts'] }] : []),
+    // The host fixture specs run one at a time there too, as on chromium-host-fixture
+    // (2026-11-06: with 2 workers, BP-C58's fixture hosts reached BP-C49's page and
+    // BP-C68's fixture was swapped under it, on every commit). Both projects are named
+    // `webkit`, so `--project webkit` keeps selecting every WebKit spec (Playwright
+    // matches projects by name and gives each its own id and worker limit).
+    ...(process.env.PW_WEBKIT ? [
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: [...sideSpecs, ...hostFixtureSpecs, '**/replica-smoke.spec.ts'] },
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testMatch: hostFixtureSpecs, testIgnore: sideSpecs, workers: 1 },
+    ] : []),
   ],
 
   webServer: {

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { parseHTML } from 'linkedom'
-import { NO_PAGE_SNAP_KEY, SNAP_CONTINUE, askViewSnapOf } from '../../web/src/popout/ext-snapshot'
+import { NO_PAGE_SNAP_KEY, SNAP_CONTINUE, askSnapOf, askViewSnapOf } from '../../web/src/popout/ext-snapshot'
 import { frameThemeOf } from '../../web/src/popout/ext-theme'
 
 function root(html: string): ParentNode {
@@ -56,6 +56,30 @@ describe('the Ask view as the placeholder draws it', () => {
     const s = askViewSnapOf(root(head(long, 'Ask Walnut') + composer(long, true)))
     expect(s.askTitle!.length).toBeLessThanOrEqual(200)
     expect(s.placeholder!.length).toBeLessThanOrEqual(120)
+  })
+
+  it('the chips name their icons, so the placeholder draws icon and label as the view does (R2-6)', () => {
+    const iconChips = chips
+      .replace('aria-label="Which task is …"', 'aria-label="Which task is …" data-icon="search"')
+      .replace('<button class="session-action-chip"><span class="session-action-chip-ic"></span>Schedule', '<button class="session-action-chip" data-icon="calendar"><span class="session-action-chip-ic"></span>Schedule')
+      .replace('<button class="session-action-chip"><span class="session-action-chip-ic"></span>What', '<button class="session-action-chip" data-icon="clock"><span class="session-action-chip-ic"></span>What')
+    const s = askViewSnapOf(root(head('New chat', 'Ask Walnut') + iconChips + composer('Ask Walnut…', true)))
+    expect(s.suggestions).toEqual(['Which task is …', 'Schedule my day', 'What ran today'])
+    expect(s.suggestionIcons).toEqual(['search', 'calendar', 'clock'])
+  })
+
+  it("a person's message carries what it took from the page, so the drawn bubble is the real one's size (R2-6)", () => {
+    const user = (text: string, extra: string) => `<div class="session-msg session-msg-user"><div class="session-msg-content"><div class="markdown-body">${text}</div></div>${extra}</div>`
+    const page = '<span class="ext-panel-attached-page" data-testid="ext-panel-attached-page"><span class="ext-panel-attached-page-ic" aria-hidden="true"><svg></svg></span><span class="ext-panel-attached-page-text">Sign in to Lab Shop · shop.example.test</span></span>'
+    const quote = '<figure class="ext-panel-attached" data-testid="ext-panel-attached"><figcaption>From the page</figcaption><blockquote>Free returns for 30 days</blockquote></figure>'
+    const el = root(user('Summarize this page', page) + user('What about returns?', quote)
+      + '<div class="session-msg session-msg-assistant"><div class="session-msg-content"><div class="markdown-body">Done.</div></div></div>')
+    const s = askSnapOf(el, { url: 'http://shop.example.test/', title: 'Sign in' }, 'shop.example.test')
+    expect(s.messages).toEqual([
+      { role: 'user', text: 'Summarize this page', page: 'Sign in to Lab Shop · shop.example.test' },
+      { role: 'user', text: 'What about returns?', quote: 'Free returns for 30 days' },
+      { role: 'assistant', text: 'Done.' },
+    ])
   })
 
   it('a tab with no web page has a key of its own', () => {

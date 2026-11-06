@@ -84,7 +84,10 @@ async function neverSection(): Promise<HTMLElement> {
   return wrap
 }
 
-/** `backLabel`: where Back goes, when it is not the view this one was opened from ("Ask"). */
+/**
+ * `backLabel`: where Back goes, when it is not the view this one was opened from ("Ask"): the page
+ * was opened on Settings (popup.ts `openSettings`), so Settings is its home view and stays so.
+ */
 export async function settingsView(root: HTMLElement, st: { serverUrl?: string; device?: string }, back: () => void, backLabel?: string): Promise<void> {
   const g = nextView()
   const settings = await getSettings()
@@ -124,7 +127,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
       h('div', { class: 'section-label' }, 'This browser'),
       h('div', { class: 'group', 'data-testid': 'popup-connection' }, h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
         h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ? `Connected to ${hostOf(st.serverUrl)}` : 'Connected'), h('span', { class: 'row-sub' }, st.device ?? '')))),
-      h('div', { style: 'height:10px' }), off)), g, 'neutral')
+      h('div', { style: 'height:10px' }), off)), g, 'neutral', backLabel ? 'home' : 'sub')
 }
 
 /** Walnut's "Keep Passwords unlocked" (src/core/vault/unlock-length.ts), as its own Settings words it. */

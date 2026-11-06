@@ -5,7 +5,7 @@
  * the key popover's unlock line (packages/browser-extension/src/key-pop.ts).
  */
 import { describe, expect, it } from 'vitest'
-import { pageChipOn, pageOfContext, panelOptions, readInbound, rememberSentPage, sentPageOf, pageContextBlock } from '../../web/src/popout/ext-panel-model'
+import { firstQuestionOf, pageChipOn, pageOfContext, panelAskTitle, panelOptions, readInbound, rememberFirstQuestion, rememberSentPage, sentPageOf, pageContextBlock } from '../../web/src/popout/ext-panel-model'
 import { mainLineOf } from '../../web/src/popout/useExtAsks'
 import { askRowDetail } from '../../web/src/popout/ext-tasks-model'
 import { lastWordsOfStatus, turnToReadLine } from '../../src/core/user-status'
@@ -82,6 +82,33 @@ describe('the page an ask last had', () => {
     expect(sentPageOf('t1', s)).toBe('https://a.example/z')
     data.set('walnut.ext-panel.page-sent', '{not json')
     expect(sentPageOf('t1', s)).toBe('')
+  })
+})
+
+describe("an ask's name before Walnut titles it (R2-7)", () => {
+  const mem = () => {
+    const data = new Map<string, string>()
+    return { data, s: { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v) } } }
+  }
+  const agent = { project: 'Ask Walnut' }
+
+  it('the first question is kept by task, once, in one line, cut short', () => {
+    const { data, s } = mem()
+    rememberFirstQuestion('t1', '  What changed\n for uploads?  ', s, 1)
+    rememberFirstQuestion('t1', 'A later question', s, 2)
+    expect(firstQuestionOf('t1', s)).toBe('What changed for uploads?')
+    rememberFirstQuestion('t2', 'x'.repeat(500), s, 3)
+    expect(firstQuestionOf('t2', s).length).toBeLessThanOrEqual(120)
+    expect(firstQuestionOf('t3', s)).toBe('')
+    data.set('walnut.ext-panel.first-question', '{not json')
+    expect(firstQuestionOf('t1', s)).toBe('')
+  })
+
+  it("the ask's own title wins; the placeholder gives way to the question; else the placeholder, marked untitled", () => {
+    expect(panelAskTitle({ id: 't', title: 'Upload retries in 4.2' }, agent, 'What changed?')).toEqual({ title: 'Upload retries in 4.2', untitled: false })
+    expect(panelAskTitle({ id: 't', title: 'Ask Walnut' }, agent, 'What changed?')).toEqual({ title: 'What changed?', untitled: false })
+    expect(panelAskTitle({ id: 't', title: 'ask walnut' }, agent, '')).toEqual({ title: 'Ask Walnut', untitled: true })
+    expect(panelAskTitle({ id: 't' }, { project: 'Ask Mentor' }, '')).toEqual({ title: 'Ask Mentor', untitled: true })
   })
 })
 

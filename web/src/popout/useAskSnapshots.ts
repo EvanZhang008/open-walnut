@@ -12,7 +12,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { flushHistoryWrites } from '@/cache/history-idb';
 import { toParent } from './ext-frame';
 import { hostOf, type PanelPage } from './ext-panel-model';
-import { askSnapKey, askSnapOf, askViewSnapOf, snapSchedule } from './ext-snapshot';
+import { SHOWN_AFTER_PAINT_MAX_MS, askSnapKey, askSnapOf, askViewSnapOf, snapSchedule } from './ext-snapshot';
 
 /**
  * `rootRef` is the whole view (header, Continue list, conversation, composer); `key` the
@@ -25,20 +25,38 @@ export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page:
   useEffect(() => {
     const el = rootRef.current;
     if (!el || !key) return;
-    const tellShown = () => { if (!shownTold.current) { shownTold.current = true; toParent({ type: 'shown' }); } };
+    // After the view's own content has PAINTED: the word on the commit let the extension page take
+    // its drawing away while the frame still showed its last painted frame (the boot splash).
+    // A frame the browser does not draw (a window behind another) runs no animation frames: the
+    // timer says it then, by when a drawn frame has painted anyway.
+    const tellShown = () => {
+      if (shownTold.current) return;
+      shownTold.current = true;
+      let sent = false;
+      const send = () => { if (!sent) { sent = true; toParent({ type: 'shown' }); } };
+      requestAnimationFrame(() => requestAnimationFrame(send));
+      setTimeout(send, SHOWN_AFTER_PAINT_MAX_MS);
+    };
     // The popup's body is its composer (the conversation goes on in the side panel).
     const viewOf = () => (surface === 'popup'
       ? (el.querySelector('.ext-popup-body textarea') ? 'compose' : undefined)
       : el.querySelector('[data-testid="ask-object-drawer"]')?.getAttribute('data-view'));
+    // A new chat is up once its Continue list is what it will stay: the asks have loaded (the root's
+    // `data-asks`). Before that the view would replace the drawing's rows with "Loading your
+    // asks…" and then put them back (review R2-6), so the drawing stays until the rows are real.
     const check = () => {
       const v = viewOf();
-      if (v === 'compose' || (v === 'session' && el.querySelector('.session-msg'))) tellShown();
+      const asksReady = el.getAttribute('data-asks') !== 'loading';
+      if ((v === 'compose' && asksReady) || (v === 'session' && el.querySelector('.session-msg'))) tellShown();
     };
     const snapKey = askSnapKey(surface, pageUrl);
     let lastSent = '';
     const snap = () => {
       const v = viewOf();
       if (v !== 'compose' && v !== 'session') return;
+      // A new chat whose asks are still loading has no Continue rows to tell yet: the drawing of
+      // last time keeps its own.
+      if (v === 'compose' && el.getAttribute('data-asks') === 'loading') return;
       const host = pageUrl ? hostOf(pageUrl) : '';
       const s = { ...askSnapOf(el, { url: pageUrl, ...(pageTitle ? { title: pageTitle } : {}) }, host), ...askViewSnapOf(el) };
       // A conversation whose messages have not loaded yet says nothing new: it must not replace
@@ -51,7 +69,7 @@ export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page:
     };
     const schedule = snapSchedule(snap);
     const obs = new MutationObserver(() => { check(); schedule.poke(); });
-    obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-view', 'placeholder', 'aria-checked', 'data-needs'] });
+    obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-view', 'placeholder', 'aria-checked', 'data-needs', 'data-asks'] });
     check();
     schedule.poke();
     // A view that never draws a message (a conversation still starting) lets the drawing go anyway.

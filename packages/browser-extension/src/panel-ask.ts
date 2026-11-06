@@ -25,6 +25,10 @@ import { keyPopover } from './key-pop'
 import { keepTheme } from './panel-theme'
 
 type FullView = 'tasks' | 'passwords' | 'settings'
+/** The vault state this page last told its frame (storage.session: gone with the browser), for the next open's first word. */
+const KEPT_VAULT = 'panelVault'
+/** How long the look takes to fade into the view (ui.css `.panel-snap.is-look.is-going`). */
+const LOOK_FADE_MS = 120
 /** What the frame's URL says this page draws: `3` adds the Settings view (`open-view` `settings`). */
 const EXT_LEVEL = 3
 
@@ -44,7 +48,19 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
   const lookEl = drawAskLook(look)
   body.append(lookEl)
   const drawLook = () => { if (lookShown) drawAskLook(look, lookEl) }
-  const unLook = () => { if (!lookShown) return; lookShown = false; lookEl.remove() }
+  /**
+   * The view said its own is up: the look goes once the frame has painted it, fading out. Gone at
+   * once, the frame's last painted picture (Walnut's launch splash) showed for a frame or two
+   * (the second D02 review: the centred brand mark on a warm open).
+   */
+  const unLook = () => {
+    if (!lookShown) return
+    lookShown = false
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      lookEl.classList.add('is-going')
+      setTimeout(() => lookEl.remove(), LOOK_FADE_MS + 40)
+    }))
+  }
   // A view that never says so (a Walnut whose view sends no `shown`) still gets its frame back.
   setTimeout(unLook, 15_000)
   /** The page in this window and its conversation of last time, for the drawing. */
@@ -122,6 +138,32 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
   // ── the key popover and the vault it shows ──
   let told = ''
   let locked = true
+  /** Moves each time the live state is told: the last known state never goes after it. */
+  let liveTold = 0
+  /**
+   * The vault as this browser last knew it, told the moment the frame is ready (review R2-9: the
+   * key wore its padlock for half a second on an unlocked vault while the live answer, a round
+   * trip to Walnut, was on its way): the unlock this browser holds (its mark in storage.session,
+   * as the look reads it), and this site's count when the last state told was for this site.
+   */
+  const lastKnown = async () => {
+    const [kept, [tab]] = await Promise.all([
+      ext.storage.session.get(['vaultSession', KEPT_VAULT]).catch(() => ({} as Record<string, unknown>)),
+      ext.tabs.query({ active: true, windowId: win.id }).catch(() => [] as Array<{ url?: string }>),
+    ])
+    let host = ''
+    try { host = tab?.url && /^https?:/.test(tab.url) ? new URL(tab.url).host : '' } catch { /* no page */ }
+    const nowLocked = !kept.vaultSession
+    const prev = kept[KEPT_VAULT] as { host?: unknown; siteCount?: unknown } | undefined
+    const siteCount = !nowLocked && prev?.host === host && typeof prev.siteCount === 'number' ? prev.siteCount : null
+    return { type: 'vault-state', locked: nowLocked, siteCount, host }
+  }
+  const tellKnown = async () => {
+    const at = liveTold
+    const m = await lastKnown()
+    if (gone() || at !== liveTold || told) return
+    page.postAsk(m)
+  }
   const tellVault = async () => {
     if (gone()) return
     const st = await ask<{ connected: boolean; unlocked: boolean }>({ type: 'vault-watch' })
@@ -138,9 +180,11 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     if (flipped) key.refresh()
     if (look.locked !== nowLocked) { look.locked = nowLocked; drawLook() }
     const s = JSON.stringify(m)
+    liveTold++
     if (s === told) return
     told = s
     page.postAsk(m)
+    void ext.storage.session.set({ [KEPT_VAULT]: { host: m.host, siteCount: m.siteCount } }).catch(() => undefined)
   }
   const key = keyPopover({
     host: body,
@@ -197,6 +241,7 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
       // build) gets its own view back soon after, not at the 15 s backstop.
       setTimeout(unLook, 2500)
       told = ''
+      void tellKnown()
       void tellVault()
       void takeHand()
     },

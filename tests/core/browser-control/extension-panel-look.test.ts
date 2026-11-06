@@ -98,6 +98,47 @@ describe('drawn: the view as it will look', () => {
     expect(el.querySelector('.look-chip')).toBeNull()
   })
 
+  it('the suggestion chips as the view draws them: each with its icon, a stem with its blank; an unknown icon draws none (R2-6)', async () => {
+    await keepSnap('ask', {
+      title: 'Release notes', host: 'docs.example.test', messages: [],
+      suggestions: ['Which task is …', 'Schedule my day', 'What is due'], suggestionIcons: ['search', 'calendar', '<svg onload=x>'],
+    }, { key: snapKeyOf('https://docs.example.test/notes') }, 1000)
+    const snap = await snapOf('ask', 'https://docs.example.test/notes', 2000) as any
+    expect(snap.suggestionIcons).toEqual(['search', 'calendar', ''])
+    const el = drawAskLook({ surface: 'panel', snap, shell: null, page, locked: false })
+    const chips = [...el.querySelectorAll('.look-sugg-chip')]
+    expect(chips.map((c) => c.textContent)).toEqual(['Which task is', 'Schedule my day', 'What is due'])
+    expect(chips.map((c) => !!c.querySelector('.look-sugg-ic svg'))).toEqual([true, true, false])
+    expect(chips.map((c) => !!c.querySelector('.look-sugg-blank'))).toEqual([true, false, false])
+    // The shell keeps them for a page seen the first time.
+    const fresh = drawAskLook({ surface: 'panel', snap: null, shell: await shellOf(2000), page, locked: false })
+    expect(fresh.querySelectorAll('.look-sugg-ic svg')).toHaveLength(2)
+  })
+
+  it("a person's message carries what it took from the page, in its bubble, as text (R2-6)", async () => {
+    await keepSnap('ask', {
+      title: 'Release notes', host: 'docs.example.test', askTitle: 'Uploads in 4.2',
+      messages: [{ role: 'user', text: 'What changed?', page: 'Release notes 4.2 · docs.example.test', quote: '<b>retries</b> three times' }, { role: 'assistant', text: 'Uploads retry.', page: 'never on a reply' }],
+    }, { key: snapKeyOf('https://docs.example.test/notes') }, 1000)
+    const snap = await snapOf('ask', 'https://docs.example.test/notes', 2000) as any
+    expect(snap.messages[1].page).toBeUndefined()
+    const el = drawAskLook({ surface: 'panel', snap, shell: null, page, locked: false })
+    const user = el.querySelector('.panel-snap-msg.is-user')!
+    expect(text(user, '.look-msg-page-text')).toBe('Release notes 4.2 · docs.example.test')
+    expect(text(user, '.look-msg-quote-cap')).toBe('From the page')
+    expect(text(user, '.look-msg-quote-text')).toBe('<b>retries</b> three times')
+    expect(user.querySelector('b')).toBeNull()
+    expect(el.querySelector('.panel-snap-msg.is-assistant .look-msg-page')).toBeNull()
+  })
+
+  it('a conversation whose ask has no title yet names the agent once, as its title line, as the view does', () => {
+    const snap = { at: 1, title: 'Release notes 4.2', host: 'docs.example.test', agent: 'Ask Walnut', messages: [{ role: 'user' as const, text: 'What changed?' }] }
+    const el = drawAskLook({ surface: 'panel', snap, shell: null, page, locked: false })
+    expect(el.querySelector('[data-testid="panel-snap-title"]')).toBeNull()
+    expect(text(el, '[data-testid="panel-snap-agent-title"]')).toBe('Ask Walnut')
+    expect(el.querySelectorAll('.look-agent')).toHaveLength(1)
+  })
+
   it('drawn again in the same element when more is known; words stay words', () => {
     const el = drawAskLook({ surface: 'panel', snap: null, shell: null, page: null, locked: true })
     expect(el.querySelector('.look-cont')).toBeNull()

@@ -20,8 +20,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { vaultSession as openVaultSession } from './vault-session-helper'
+import { holdVaultLock, vaultExclusively } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+// Its popup's Lock ends every unlock: that step runs alone (vaultExclusively).
+holdVaultLock('shared', 'file')
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const stamp = Date.now().toString(36)
@@ -474,8 +478,11 @@ test('a password typed while shown as text is still offered', async () => {
 
 test('locked: the menu says so and opens the unlock; Remove in Settings disconnects it', async () => {
   const p = await popup()
-  await p.getByTestId('popup-lock').click()
-  await expect(p.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible()
+  // The popup's Lock ends every unlock (every window too): alone on the vault until it has landed.
+  await vaultExclusively(async () => {
+    await p.getByTestId('popup-lock').click()
+    await expect(p.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible()
+  })
   await p.close()
 
   const page = await ctx.newPage()

@@ -244,6 +244,11 @@
 [data-corner-room]:not([data-corner-room-shrink]) { scroll-padding-bottom: var(--corner-room, 0px); }
 /* A scroller that fills its column ends above the stack: no row sits under it (syncRoom). */
 [data-corner-room][data-corner-room-shrink] { margin-bottom: var(--corner-room, 0px); }
+/* A scroller in a page's left column under the stack, cut to end above it (corner-stack.tsx syncRoom). */
+[data-corner-fit] {
+  max-height: var(--corner-fit, none) !important;
+}
+
 /* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
 [data-corner-room]:not([data-corner-room-shrink])::after {
   content: '';

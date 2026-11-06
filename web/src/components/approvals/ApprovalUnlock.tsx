@@ -8,20 +8,25 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { vaultApi, VaultApiError } from '@/api/vault';
+import { checkVault } from '@/api/vault-live';
+import { unlockRefusalText } from '../../../../src/core/vault/unlock-retry';
 
 export function ApprovalUnlock({ onCancel }: { onCancel: () => void }) {
   const [pw, setPw] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [needKey, setNeedKey] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Another unlock is being checked: this one waits its turn (vaultApi.unlock sends it again).
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
   const input = useRef<HTMLInputElement>(null);
   // The Secret Key field shows only when Walnut asks for it (`secret_key_needed`): most unlocks need the password alone.
   useEffect(() => { input.current?.focus(); }, []);
   // Passwords unlocked elsewhere on this computer (the extension, another window): this window
-  // shares it with no password (vaultApi.status joins), and the store then draws Approve.
+  // shares it with no password (`vault:changed`, api/vault-live.ts), and the store then draws
+  // Approve. Behind the event, in case its socket is down, a look every few seconds.
   useEffect(() => {
-    const look = () => { if (document.visibilityState === 'visible') void vaultApi.status({ quiet: true }).catch(() => {}); };
+    const look = () => { if (document.visibilityState === 'visible') void checkVault(); };
     look();
     const t = window.setInterval(look, 3_000);
     return () => window.clearInterval(t);
@@ -30,15 +35,16 @@ export function ApprovalUnlock({ onCancel }: { onCancel: () => void }) {
     if (!pw || busy) return;
     setBusy(true); setError('');
     try {
-      await vaultApi.unlock(pw, undefined, needKey ? secretKey : undefined);
+      await vaultApi.unlock(pw, undefined, needKey ? secretKey : undefined, { onWait: () => setChecking(true) });
       setPw(''); setSecretKey('');
     } catch (err) {
       if (err instanceof VaultApiError && err.code === 'secret_key_needed') setNeedKey(true);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(err instanceof VaultApiError ? unlockRefusalText(err) : err instanceof Error ? err.message : String(err));
       setPw('');
       input.current?.focus();
     } finally {
       setBusy(false);
+      setChecking(false);
     }
   };
   return (
@@ -55,7 +61,7 @@ export function ApprovalUnlock({ onCancel }: { onCancel: () => void }) {
       <div className="approval-actions">
         <button type="button" className="approval-btn approval-btn-deny" onClick={onCancel}>Cancel</button>
         <button type="submit" className="approval-btn approval-btn-approve" disabled={!pw || busy || (needKey && !secretKey)}>
-          {busy ? 'Unlocking…' : 'Unlock'}
+          {busy ? (checking ? 'Checking…' : 'Unlocking…') : 'Unlock'}
         </button>
       </div>
     </form>

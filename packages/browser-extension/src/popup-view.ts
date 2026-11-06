@@ -24,10 +24,20 @@ export function isCurrent(g: number): boolean {
   return g === gen
 }
 
+/**
+ * `home`: the view the page opened on (the list, its lock screen, the connect screen, or Settings
+ * when the page was opened on it); `sub`: one the person went into from there (an item, the
+ * generator, Settings from the list's gear). A sub-view is the person's until they leave it: what
+ * follows the page in the window (another tab, another address) redraws only a home view
+ * (review R2-14: Settings turned into the Passwords list on a tab switch).
+ */
+export type ViewKind = 'home' | 'sub'
+
 /** Draws `el` as the view of generation `g`; false (nothing drawn) when a newer view took over. */
-export function paint(root: HTMLElement, el: HTMLElement, g: number, shows: Shows): boolean {
+export function paint(root: HTMLElement, el: HTMLElement, g: number, shows: Shows, kind: ViewKind = 'sub'): boolean {
   if (g !== gen) return false
   root.replaceChildren(el)
   root.dataset.shows = shows
+  root.dataset.view = kind
   return true
 }

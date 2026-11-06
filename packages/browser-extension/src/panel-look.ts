@@ -39,6 +39,31 @@ export const LOOK_ICONS = {
   mic: sv(18, `<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>`),
   send: sv(18, `<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>`),
 }
+/** The suggestion chips' and the bubble's icons, as the view draws them (web/src/components/common/Icons.tsx). */
+const LINE = (box: number, stroke: number, body: string) =>
+  `<svg width="12" height="12" viewBox="0 0 ${box} ${box}" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
+const CHIP_ICONS: Record<string, string> = {
+  search: LINE(16, 1.5, `<circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/>`),
+  calendar: LINE(16, 1.4, `<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/>`),
+  clock: LINE(24, 2.2, `<circle cx="12" cy="12" r="9"/><path d="M12 7v5.4l3.6 2.4"/>`),
+}
+const FILE_ICON = LINE(16, 1.4, `<path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/>`)
+
+/** A suggestion chip as the view draws it: its icon, its label, and a blank for a stem ("Which task is …"). */
+function suggChip(label: string, icon: string): HTMLElement {
+  const stem = label.endsWith(' …')
+  return h('span', { class: 'look-sugg-chip' },
+    CHIP_ICONS[icon] ? h('span', { class: 'look-sugg-ic' }, svg(CHIP_ICONS[icon])) : null,
+    h('span', {}, stem ? label.slice(0, -2) : label),
+    stem ? h('span', { class: 'look-sugg-blank' }) : null)
+}
+
+/** A message of the conversation; a person's carries what it took from the page, as the view's bubble does. */
+function lookMsg(m: AskSnap['messages'][number]): HTMLElement {
+  return h('div', { class: `panel-snap-msg is-${m.role}` }, m.text,
+    m.role === 'user' && m.page ? h('div', { class: 'look-msg-page' }, h('span', { class: 'look-msg-page-ic' }, svg(FILE_ICON)), h('span', { class: 'look-msg-page-text' }, m.page)) : null,
+    m.role === 'user' && m.quote ? h('div', { class: 'look-msg-quote' }, h('div', { class: 'look-msg-quote-cap' }, 'From the page'), h('div', { class: 'look-msg-quote-text' }, m.quote)) : null)
+}
 const ico = (k: keyof typeof LOOK_ICONS, cls = '') => h('span', { class: `look-ico ${cls}`.trim(), 'aria-hidden': 'true' }, svg(LOOK_ICONS[k]))
 
 export const NEW_CHAT_PLACEHOLDER = 'Ask Walnut, or ask it to do something here…'
@@ -60,19 +85,23 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
   const s = o.snap
   const talking = o.surface === 'panel' && !!s && s.messages.length > 0
   const agent = s?.agent || o.shell?.agent || 'Ask Walnut'
-  const title = s?.askTitle || (talking ? s!.title || s!.host || agent : 'New chat')
+  const title = s?.askTitle || 'New chat'
+  // A conversation whose ask has no title yet: the view's header names the agent once, as its title line.
+  const agentOnly = o.surface === 'popup' || (talking && !s?.askTitle)
   const head = h('div', { class: `look-head is-${o.surface}` },
     h('span', { class: 'look-btn look-menu', 'data-testid': 'panel-snap-menu' }, ico('menu')),
-    o.surface === 'panel'
+    !agentOnly
       ? h('span', { class: 'look-titles' }, h('span', { class: 'look-title', 'data-testid': 'panel-snap-title' }, title), h('span', { class: 'look-agent' }, agent, ico('caret')))
-      : h('span', { class: 'look-titles is-popup' }, h('span', { class: 'look-agent' }, agent, ico('caret'))),
+      : h('span', { class: 'look-titles is-popup' }, h('span', { class: 'look-agent', 'data-testid': 'panel-snap-agent-title' }, agent, ico('caret'))),
     h('span', { class: 'look-btn look-key', 'data-testid': 'panel-snap-key' }, h('span', { class: 'look-key-glyph' }, ico('key'), o.locked ? h('span', { class: 'look-key-badge', 'data-testid': 'panel-snap-locked' }, ico('lock')) : null)),
     h('span', { class: 'look-btn' }, ico(o.surface === 'panel' ? 'compose' : 'side')))
   const cont = o.surface === 'popup' || !talking ? (s?.cont ?? o.shell?.cont ?? []) : []
   const body = talking
-    ? h('div', { class: 'look-chat' }, ...s!.messages.map((m) => h('div', { class: `panel-snap-msg is-${m.role}` }, m.text)))
+    ? h('div', { class: 'look-chat' }, ...s!.messages.map(lookMsg))
     : h('div', { class: `look-body is-${o.surface}` }, cont.length ? contList(cont, o.surface) : null)
+  const fromSnap = !!s?.suggestions
   const sugg = o.surface === 'panel' && !talking ? (s?.suggestions ?? o.shell?.suggestions ?? []) : []
+  const suggIcons = (fromSnap ? s?.suggestionIcons : o.shell?.suggestionIcons) ?? []
   const pageOn = s?.pageOn ?? !talking
   const site = o.page?.host ?? ''
   const letter = (site.replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()
@@ -86,7 +115,7 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
     h('div', { class: 'look-placeholder', 'data-testid': 'panel-snap-placeholder' }, s?.placeholder || (talking ? FOLLOW_UP_PLACEHOLDER : NEW_CHAT_PLACEHOLDER)),
     h('div', { class: 'look-bar' }, ico('plus', 'look-plus'), chips, h('span', { class: 'look-end' }, ico('mic', 'look-mic'), h('span', { class: 'look-send' }, ico('send')))))
   box.replaceChildren(head, body,
-    ...(sugg.length ? [h('div', { class: 'look-sugg' }, ...sugg.map((t) => h('span', { class: 'look-sugg-chip' }, t)))] : []),
+    ...(sugg.length ? [h('div', { class: 'look-sugg' }, ...sugg.map((t, i) => suggChip(t, suggIcons[i] ?? '')))] : []),
     h('div', { class: 'look-foot' }, composer))
   box.dataset.talking = talking ? '1' : '0'
   return box

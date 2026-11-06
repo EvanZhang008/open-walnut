@@ -5,6 +5,7 @@
  * back from the context the message carried (pageContextBlock).
  */
 import type { ReactNode } from 'react';
+import { ICON_FILE } from '@/components/common/Icons';
 import { OBJECT_CONTEXT_HINT } from '@/components/chat/ask-object-session';
 import type { UserRowHints } from '@/components/sessions/user-row-attachments';
 import { pageOfContext, selectionOfContext } from './ext-panel-model';
@@ -25,7 +26,7 @@ export function attachedView(row: UserRowHints, byId: ReadonlyMap<string, Attach
   if (!sel && !pg) return null;
   const site = pg?.host; // the page's web address, never a Walnut host
   return <>
-    {pg && <span className="ext-panel-attached-page" data-testid="ext-panel-attached-page"><span aria-hidden="true">▤</span> {pg.title} · {site}</span>}
+    {pg && <span className="ext-panel-attached-page" data-testid="ext-panel-attached-page"><span className="ext-panel-attached-page-ic" aria-hidden="true">{ICON_FILE}</span><span className="ext-panel-attached-page-text">{pg.title} · {site}</span></span>}
     {sel && <figure className="ext-panel-attached" data-testid="ext-panel-attached">
       <figcaption>{!pg && from ? `From ${from}` : 'From the page'}</figcaption>
       <blockquote>{sel}</blockquote>

@@ -6,7 +6,7 @@
  */
 import { ask, ext } from './ext'
 import { h, icon } from './dom'
-import { errLine, iconButton, popupIcon } from './popup-ui'
+import { errLine, hintLine, iconButton, popupIcon } from './popup-ui'
 import { generatorView } from './popup-generator'
 import { settingsView } from './popup-settings'
 import { itemRow, type Item, type PopupCtx } from './popup-item'
@@ -14,6 +14,8 @@ import { findWalnut, rememberServer } from './popup-connect'
 import { startClipboardPage } from './clipboard-page'
 import { pageFillOn } from './settings'
 import { currentView, isCurrent, nextView, paint } from './popup-view'
+import { siteForUnlock, unlockWords } from './unlock-words'
+import { sendUnlock, unlockRefusal } from './unlock-send'
 import { followTheme } from './panel-theme'
 
 interface State { connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }
@@ -159,7 +161,9 @@ async function unlockView(st: State): Promise<HTMLElement> {
   const skWrap = h('div', { style: 'display:none;text-align:left' },
     h('label', { class: 'field-label', for: 'sk' }, 'The computer Walnut runs on does not hold your Secret Key: type it from your recovery kit.'), sk)
   const err = errLine(!status.ok ? status.error : undefined)
-  const hint = hintLine(status.ok ? status.status.hint : undefined)
+  const hint = hintLine(status.ok ? status.status.hint : undefined, 'popup')
+  // The site the person is on, never the Walnut server (review R2-13).
+  const words = unlockWords(await siteForUnlock(panelWindow, st.serverUrl))
   const go = h('button', { class: 'btn btn-primary btn-block', type: 'submit', 'data-testid': 'popup-unlock', style: 'margin-top:10px' }, 'Unlock')
   const form = h('form', { style: 'text-align:left' }, pw, hint.el, skWrap, go, err)
   form.onsubmit = async (e) => {
@@ -167,16 +171,15 @@ async function unlockView(st: State): Promise<HTMLElement> {
     if (!pw.value) { pw.focus(); return }
     busy(go, true, 'Unlocking…')
     err.textContent = ''
-    const r = await ask({ type: 'unlock', password: pw.value, secretKey: sk.value.trim() })
+    // Walnut checking another unlock: this one waits its turn, never an error meanwhile.
+    const r = await sendUnlock(pw.value, sk.value.trim(), { onWait: () => busy(go, true, 'Checking…') })
     busy(go, false, 'Unlock')
     if (r.ok) { if (inWindow) window.close(); else void render(); return }
     if (r.code && DISCONNECTED.has(r.code)) { void render(); return }
     if (r.code === 'secret_key_needed') { skWrap.style.display = ''; sk.focus() }
     else { pw.select() }
     if (r.code === 'wrong_password') hint.show()
-    err.textContent = r.code === 'too_many_attempts' && typeof r.waitMs === 'number'
-      ? `Too many tries. Wait ${Math.ceil(Number(r.waitMs) / 1000)} s.`
-      : r.error ?? 'That did not unlock.'
+    err.textContent = unlockRefusal(r)
   }
   setTimeout(() => pw.focus(), 30)
   return h('div', {},
@@ -184,19 +187,10 @@ async function unlockView(st: State): Promise<HTMLElement> {
     h('div', { class: 'center', style: 'padding-bottom:6px' },
       h('span', { class: 'big-icon' }, icon('lockBig')),
       h('h2', {}, 'Walnut is locked'),
-      h('p', {}, `Unlock to fill passwords${st.serverUrl ? ` from ${new URL(st.serverUrl).host}` : ''}.`)),
+      h('p', { 'data-testid': 'popup-unlock-words' }, words)),
     h('div', { class: 'pane', style: 'padding-top:0' }, form,
       h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'),
       h('div', { style: 'margin-top:6px;text-align:center' }, askButton())))
-}
-
-/** "Show hint" under the password field once the vault has a hint; a wrong password shows it at once. */
-function hintLine(text: string | undefined): { el: HTMLElement; show: () => void } {
-  const el = h('div', { class: 'hint-line' }) as HTMLElement
-  if (!text) return { el, show: () => undefined }
-  const show = () => el.replaceChildren(h('p', { class: 'hint-shown', 'data-testid': 'popup-hint-shown' }, h('span', { class: 'muted' }, 'Hint: '), text))
-  el.append(h('button', { class: 'link-btn', type: 'button', 'data-testid': 'popup-show-hint', onclick: show }, 'Show hint'))
-  return { el, show }
 }
 
 // ── unlocked ──
@@ -283,16 +277,17 @@ function showSettings(st: State): Promise<void> {
 
 // ── start ──
 
-let settingsFirst = openSettings
-
 async function render(): Promise<void> {
   const g = nextView()
   const st = await ask<State>({ type: 'state' })
-  // Opened on Settings: that view, once, with Back to Ask (its Back leaves this page).
-  if (settingsFirst && st.ok && st.connected) {
-    settingsFirst = false
+  if (!isCurrent(g)) return
+  // Opened on Settings (the key popover's Settings, the drawer's Settings row): Settings is this
+  // page's home, every time it draws, with Back to Ask (its Back leaves this page). Drawn once
+  // only, the watch on the vault or the page redrew it as the Passwords list (review R2-10).
+  if (openSettings && st.ok && st.connected) {
     const toAsk = inView ? () => window.parent.postMessage({ walnut: 'panel-view', type: 'back' }, location.origin) : () => { location.href = 'popup-ask.html' }
     await settingsView(root, st, toAsk, 'Ask')
+    root.dataset.connected = '1'
     return
   }
   let view: HTMLElement
@@ -303,7 +298,7 @@ async function render(): Promise<void> {
   if (inView && !view.querySelector('[data-testid="panel-view-back"]')) view = h('div', {}, viewBar(), view)
   // What it holds, read from the view itself (an unlocked render may have drawn the lock screen).
   const shows = view.querySelector('#pw') ? 'locked' : st.ok && st.connected && st.unlocked && !view.querySelector('#server') ? 'unlocked' : 'neutral'
-  if (paint(root, view, g, shows) && st.ok) root.dataset.connected = st.connected ? '1' : '0'
+  if (paint(root, view, g, shows, 'home') && st.ok) root.dataset.connected = st.connected ? '1' : '0'
 }
 
 /**
@@ -359,13 +354,16 @@ if ((inView || fromAsk) && !params.has('clipboard')) {
   })
 }
 
-// In the side panel the view stays open while the person moves on: it follows the page in its
-// window (another tab, another address), unless they are typing in it.
+// In the side panel the view stays open while the person moves on: the list follows the page in
+// its window (another tab, another address), unless they are typing in it. A view they went into
+// (Settings, the generator, an item) stays theirs until they leave it, and Settings opened as the
+// page's home has nothing of the page to follow (review R2-14).
 if (embedded && panelWindow && !params.has('clipboard')) {
   let timer: ReturnType<typeof setTimeout> | undefined
   const follow = () => {
     clearTimeout(timer)
     timer = setTimeout(() => {
+      if (openSettings || root.dataset.view !== 'home') return
       const typing = document.activeElement instanceof HTMLInputElement && document.activeElement.value !== ''
       if (!typing && document.visibilityState === 'visible') void render()
     }, 300)

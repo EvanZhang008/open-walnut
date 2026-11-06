@@ -22,8 +22,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { askView, backToAsk, openPanel, openView, pageChip, passwordsView, selectText, startPanelLab, sw, tasksView, type PanelLab } from './extension-panel-harness'
 import { ensureVaultSetUp, vaultSession, VAULT_MASTER } from './vault-session-helper'
+import { holdVaultLock, vaultExclusively } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+// Its cleanup's Lock of every window runs alone (vaultExclusively).
+holdVaultLock('shared', 'file')
 
 const SHOTS = process.env.D02_SHOTS ?? 'test-results/extension-ask-panel'
 let lab: PanelLab
@@ -136,7 +140,7 @@ test.beforeAll(async ({}, info) => {
 })
 test.afterAll(async () => {
   // The unlocks this file made end with it: a later spec's extension must not find one to share.
-  if (lab) await lab.doc.request.post(`${lab.base}/api/v1/vault/lock`, { data: { everywhere: true } }).catch(() => undefined)
+  if (lab) await vaultExclusively(() => lab.doc.request.post(`${lab.base}/api/v1/vault/lock`, { data: { everywhere: true } }).catch(() => undefined))
   for (const id of [...seeded, askTask].filter(Boolean)) await lab?.doc.request.delete(`${lab.base}/api/v1/tasks/${id}`).catch(() => undefined)
   await lab?.close()
 })
@@ -785,6 +789,39 @@ test('opened, it looks like the view at once: the same header and composer in th
   near(drawn.composer, real.composer)
   expect(drawn.title).toBe(real.title)
   expect(drawn.placeholder).toBe(real.placeholder)
+  await p.close()
+})
+
+test('a new ask reads its question until Walnut titles it, then Walnut\'s title, from the same launch Home uses (R2-7)', async () => {
+  test.setTimeout(150_000)
+  const p = await openAskPanel()
+  const v = askView(p)
+  await v.getByTestId('ext-panel-new').click()
+  await expect(v.getByTestId('ext-ask-title')).toHaveText('New chat', { timeout: 15_000 })
+  // `title-test:` keeps the fixture's mock CLI alive to answer the titler's side question, as the
+  // real CLI does: the title comes from quick-start's launch auto-title, the path every ask takes.
+  const question = `title-test:Which laptop lasts longest ${Date.now().toString(36)}`
+  const composer = v.locator('[data-testid="ask-object-compose"] textarea')
+  await composer.fill(question)
+  await composer.press('Enter')
+  const session = v.getByTestId('ask-object-session')
+  await expect(session).toBeVisible({ timeout: 60_000 })
+  const sid = (await session.getAttribute('data-session-id')) ?? ''
+  const task = await taskOfSession(sid)
+  seeded.push(task)
+  // Never the agent's placeholder twice ("Ask Walnut" over "Ask Walnut ⌄"): its question, then its title.
+  const title = v.getByTestId('ext-ask-title')
+  await expect(title).toBeVisible({ timeout: 15_000 })
+  await expect(title).not.toHaveText('Ask Walnut')
+  const aiTitle = `Side title: ${question.split(/\s+/).slice(0, 5).join(' ')}`
+  await expect(title).toHaveText(aiTitle, { timeout: 60_000 })
+  const j = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${task}`)).json() as Record<string, any>
+  expect(((j.task ?? j) as { title?: string }).title).toBe(aiTitle)
+  // The drawer tells it apart by the same title.
+  await v.getByTestId('ask-walnut-menu').click()
+  await expect(v.locator('.ask-walnut-drawer').getByText(aiTitle)).toBeVisible({ timeout: 15_000 })
+  await shot(p, 'panel-ask-titled')
+  await p.keyboard.press('Escape')
   await p.close()
 })
 

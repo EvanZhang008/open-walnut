@@ -19,6 +19,7 @@
 import { getDeviceToken } from './device-token'
 import { derivePasswordKey, randomBytes, toB64, PBKDF2_ITERATIONS, type KdfParams } from '../../../src/core/vault/crypto'
 import type { VaultItem, VaultItemInput, VaultItemSummary } from '../../../src/core/vault/types'
+import { busyWaitOf, throwingWhileUnlockBusy, type RetryOptions } from '../../../src/core/vault/unlock-retry'
 
 export type { VaultItem, VaultItemInput, VaultItemSummary }
 
@@ -209,6 +210,24 @@ async function proof(password: string, kdf: KdfParams | undefined, field: 'passw
   return { [field]: password }
 }
 
+/** One unlock: the KDF read fresh, and once more when the master password changed meanwhile (`kdf_changed`). */
+async function unlockOnce(password: string, secretKey?: string): Promise<void> {
+  for (let tries = 0; ; tries++) {
+    const kdf = (await call<VaultStatus>('GET', '/vault/status')).kdf
+    try {
+      const r = await call<{ session: { token: string }; browserKey?: string }>('POST', '/vault/unlock', {
+        ...(await proof(password, kdf)), ...(kdf ? { kdfSalt: kdf.salt } : {}), ...(secretKey ? { secretKey } : {}), client: CLIENT,
+      }, 60_000)
+      keepBrowserKey(r)
+      setSession(r.session.token)
+      return
+    } catch (err) {
+      if (tries === 0 && err instanceof VaultApiError && err.code === 'kdf_changed') continue
+      throw err
+    }
+  }
+}
+
 function newKdf(): KdfParams | undefined {
   if (!canDerive()) return undefined // the server picks the salt and derives
   return { name: 'PBKDF2-SHA256', iterations: PBKDF2_ITERATIONS, salt: toB64(randomBytes(16)) }
@@ -263,22 +282,12 @@ export const vaultApi = {
    * Unlock with the master password. The KDF is read fresh first (another window may have
    * changed the master password since this page loaded), and its salt rides along so the
    * server can say "changed" instead of counting a wrong password; then it tries once more.
+   * While another unlock is being checked (`429 unlock_busy`) it waits and sends it again, a few
+   * times (core/vault/unlock-retry.ts); `opts.onWait` is where the form shows "Checking…". A wrong
+   * password is never sent again.
    */
-  async unlock(password: string, _kdf: KdfParams | undefined, secretKey?: string): Promise<void> {
-    for (let tries = 0; ; tries++) {
-      const kdf = (await call<VaultStatus>('GET', '/vault/status')).kdf
-      try {
-        const r = await call<{ session: { token: string }; browserKey?: string }>('POST', '/vault/unlock', {
-          ...(await proof(password, kdf)), ...(kdf ? { kdfSalt: kdf.salt } : {}), ...(secretKey ? { secretKey } : {}), client: CLIENT,
-        }, 60_000)
-        keepBrowserKey(r)
-        setSession(r.session.token)
-        return
-      } catch (err) {
-        if (tries === 0 && err instanceof VaultApiError && err.code === 'kdf_changed') continue
-        throw err
-      }
-    }
+  async unlock(password: string, _kdf: KdfParams | undefined, secretKey?: string, opts: RetryOptions = {}): Promise<void> {
+    return throwingWhileUnlockBusy(() => unlockOnce(password, secretKey), (err) => (err instanceof VaultApiError ? busyWaitOf(err) : null), opts)
   },
 
   /** The person's Lock: every window and the browser extension lock (`all`: and every agent grant ends). */

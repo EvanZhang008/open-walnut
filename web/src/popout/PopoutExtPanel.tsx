@@ -14,7 +14,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiPost } from '@/api/client';
-import { askTitle } from '@open-walnut/ask-list';
 import { AskObjectDrawer, escapeBelongsToAnOverlay, type AskObjectQuote } from '@/components/chat/AskObjectDrawer';
 import type { AskSessionLaunch } from '@/components/chat/ask-object-session';
 import { ensureMainTask } from '@/api/org';
@@ -34,7 +33,7 @@ import { taskPath } from '@/utils/task-path';
 import { log } from '@/utils/log';
 import {
   ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, conversationKey, handedOf, hostOf, otherOwnerOf, pageChipOn, pageContextBlock, panelOptions,
-  rememberHanded, rememberSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
+  firstQuestionOf, panelAskTitle, rememberFirstQuestion, rememberHanded, rememberSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
   MAIN_OPEN, type HandedAsk, type PanelContext, type VaultState,
 } from './ext-panel-model';
 import { fromParent, toParent } from './ext-frame';
@@ -44,6 +43,8 @@ import { attachedView, type Attached } from './ext-attached';
 import { ExtAskHeader, ExtAsksDrawer, ExtComposerChips } from './ExtAskChrome';
 import { ContinueList, ExtPopupBody } from './ExtPopupBody';
 import { sessionOfTask, useExtAsks } from './useExtAsks';
+import { ExtAskApprovals, useExtApprovals } from './ExtApprovals';
+import { keepAsks, keptAsks } from './ext-continue-kept';
 import './ext-panel.css';
 import '@/styles/walnut-agent.css';
 
@@ -80,7 +81,13 @@ function ExtPanel() {
   const [ctx, setCtx] = useState<PanelContext | null>(null);
   const [orphan, setOrphan] = useState(false);
   const [agentId, setAgentId] = usePageView('ext-panel', 'agent', GENERAL_AGENT_ID, isAgentId);
-  const asks = useExtAsks(agentId);
+  /** Moves when an ask's first question is noted, so its rows read it (panelAskTitle). */
+  const [questionsRev, setQuestionsRev] = useState(0);
+  const asks = useExtAsks(agentId, questionsRev);
+  const approvals = useExtApprovals();
+  // The Continue rows of the last open, shown while the board loads (ext-continue-kept.ts).
+  const keptRows = useMemo(() => keptAsks(agentId), [agentId]);
+  useEffect(() => { if (asks.rowsReady) keepAsks(agentId, asks.rows); }, [asks.rowsReady, asks.rows, agentId]);
   const agent = asks.agent;
   const [vault, setVault] = useState<VaultState | null>(null);
   const [keyPressed, setKeyPressed] = useState(false);
@@ -137,6 +144,8 @@ function ExtPanel() {
   const attachedByWords = useRef(new Map<string, Attached>());
   /** The page a first question took, noted for the ask once its task is known. */
   const firstPage = useRef('');
+  /** The first question's words, noted for the ask once its task is known (its name until Walnut titles it). */
+  const firstQuestion = useRef('');
 
   const page = ctx?.page ?? null;
   const tab = ctx?.tab;
@@ -160,6 +169,11 @@ function ExtPanel() {
   // A record the task got its id for: the page its first question took is that ask's now.
   useEffect(() => {
     if (record?.taskId && firstPage.current) { rememberSentPage(record.taskId, firstPage.current); firstPage.current = ''; }
+    if (record?.taskId && firstQuestion.current) {
+      rememberFirstQuestion(record.taskId, firstQuestion.current);
+      firstQuestion.current = '';
+      setQuestionsRev((n) => n + 1);
+    }
   }, [record?.taskId]);
 
   const mainIdRef = useRef(asks.mainTask?.id);
@@ -438,6 +452,8 @@ function ExtPanel() {
   const prepareContext = useCallback(async (draft: { walnut?: boolean; host?: string | null }, question: string): Promise<string> => {
     const now = ctxRef.current;
     const p = now?.page;
+    // Main's composer goes to Main's own task, which has its name.
+    firstQuestion.current = forMainRef.current ? '' : question;
     // A handed question carries the popup's choices: this launch runs before this view's effects do.
     const held = handChoice.current;
     const hand = held && held.chat === chatNo.current && held.key === keyRef.current ? held : null;
@@ -516,14 +532,20 @@ function ExtPanel() {
       keyed={opts.keyed}
       settings={opts.settings}
       vault={vault}
+      approvals={approvals.length}
       onView={(view) => (opts.surface === 'popup' && view === 'tasks' ? toParent({ type: 'open-side-panel', view }) : toParent({ type: 'open-view', view }))}
     />
   );
   const shownTask = shownTaskId ? asks.tasks.find((t) => t.id === shownTaskId) : undefined;
+  // An ask with no title of its own yet shows the agent's name once (its switch), never twice.
+  const named = shownTask ? panelAskTitle(shownTask, agent) : null;
+  const headTitle = named
+    ? (named.untitled ? '' : named.title)
+    : shownTaskId ? (firstQuestionOf(shownTaskId) || page?.title || (page ? hostOf(page.url) : '')) : forMain ? 'CEO' : 'New chat';
   const header = (
     <ExtAskHeader
       surface={opts.surface}
-      title={shownTask ? askTitle(shownTask, agent) : shownTaskId ? (page?.title ?? (page ? hostOf(page.url) : agent.project)) : forMain ? 'CEO' : 'New chat'}
+      title={headTitle}
       agent={agent}
       canSwitch={asks.agents.length > 1}
       menuRef={menuRef}
@@ -546,10 +568,15 @@ function ExtPanel() {
   }
 
   const canAct = !!page && tab !== undefined && !otherOwner;
+  const approvalsStrip = (
+    <ExtAskApprovals list={approvals} taskId={shownTaskId}
+      onMore={() => (opts.surface === 'popup' ? toParent({ type: 'open-side-panel', view: 'tasks' }) : toParent({ type: 'open-view', view: 'tasks' }))} />
+  );
   if (opts.surface === 'popup') {
-    return <div ref={rootRef} className="ext-panel ext-ask is-popup" data-testid="ext-panel" data-surface="popup">
+    return <div ref={rootRef} className="ext-panel ext-ask is-popup" data-testid="ext-panel" data-surface="popup" data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
       {header}
-      <ExtPopupBody rows={asks.rows} page={page} canAct={canAct && !owner} loading={asks.loading} />
+      {approvalsStrip}
+      <ExtPopupBody rows={asks.rows} kept={keptRows} page={page} canAct={canAct && !owner} loading={!asks.rowsReady} />
       {drawer}
     </div>;
   }
@@ -565,8 +592,9 @@ function ExtPanel() {
   };
   const askPreset = preset && preset.chat === chat && preset.key === key ? preset.text : '';
 
-  return <div ref={rootRef} className="ext-panel ext-ask" data-testid="ext-panel" data-page-key={key}>
+  return <div ref={rootRef} className="ext-panel ext-ask" data-testid="ext-panel" data-page-key={key} data-asks={asks.rowsReady || keptRows.length > 0 ? 'ready' : 'loading'}>
     {header}
+    {approvalsStrip}
     {otherOwner && (
       <p className="ext-panel-note" data-testid="ext-panel-other-owner">
         Another Walnut conversation or task is acting in this tab.{' '}
@@ -575,7 +603,7 @@ function ExtPanel() {
     )}
     {actError && <p className="ext-panel-note ext-panel-error" role="alert">{actError}</p>}
     {/* A new chat opens as the popup does: the asks to continue over the composer. */}
-    {!shownTaskId && !forMain && <ContinueList className="is-panel" rows={asks.rows} max={4} loading={asks.loading} onPick={(row) => pickAsk(row.id, sessionOfTask(row.task) ?? undefined)} />}
+    {!shownTaskId && !forMain && <ContinueList className="is-panel" rows={asks.rows} kept={keptRows} max={4} loading={!asks.rowsReady} onPick={(id, sid) => pickAsk(id, sid)} />}
     <div className="ext-panel-chat">
       <UserRowAttachmentsContext.Provider value={attachmentsOf}>
       <AskObjectDrawer

@@ -36,7 +36,11 @@ export function KeyGlyph({ locked }: { locked: boolean }) {
 
 interface HeaderProps {
   surface: 'panel' | 'popup';
-  /** The ask on show ("New chat" before the first question). The popup shows the agent alone. */
+  /**
+   * The ask on show ("New chat" before the first question). '' for an ask with no title of its own
+   * yet: the agent's name shows once, as the title line (review R2-7: "Ask Walnut" over "Ask
+   * Walnut ⌄"). The popup shows the agent alone.
+   */
   title: string;
   agent: AskAgent;
   canSwitch: boolean;
@@ -62,7 +66,7 @@ export function ExtAskHeader(p: HeaderProps) {
   return (
     <header className={`ext-ask-head is-${p.surface}`} data-testid="ext-ask-head">
       <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label={p.agent.project} />
-      {p.surface === 'panel' ? (
+      {p.surface === 'panel' && p.title ? (
         <div className="ext-ask-titles">
           <span className="ext-ask-title" data-testid="ext-ask-title" title={p.title}>{p.title}</span>
           {agentSwitch}
@@ -161,6 +165,8 @@ interface DrawerProps {
   /** The extension opens its own Settings as a view (`ext=3`), where "Let Walnut agents use this browser" is. */
   settings: boolean;
   vault: VaultState | null;
+  /** Approvals waiting for the person: the Tasks view lists them with what needs them. */
+  approvals: number;
   onView: (view: 'tasks' | 'passwords' | 'settings') => void;
 }
 
@@ -168,12 +174,13 @@ interface DrawerProps {
 export function ExtAsksDrawer(p: DrawerProps) {
   const locked = p.vault?.locked !== false;
   const count = p.vault?.siteCount;
+  const needs = p.asks.needs + p.approvals;
   const pwMeta = locked ? 'Locked' : typeof count === 'number' ? (count === 0 ? 'No logins here' : count === 1 ? '1 login here' : `${count} logins here`) : '';
   const foot = (
     <>
       {p.keyed && (
         <FootRow testid="ext-drawer-tasks" icon={ICON_TASKS} label="Tasks" onClick={() => { p.onClose(); p.onView('tasks'); }}
-          end={p.asks.needs > 0 ? <span className="ext-drawer-count" data-testid="ext-drawer-tasks-count">{p.asks.needs}</span> : null} />
+          end={needs > 0 ? <span className="ext-drawer-count" data-testid="ext-drawer-tasks-count" title={p.approvals > 0 ? `${p.approvals === 1 ? '1 approval' : `${p.approvals} approvals`} and ${p.asks.needs} ${p.asks.needs === 1 ? 'task needs' : 'tasks need'} you` : undefined}>{needs}</span> : null} />
       )}
       {p.keyed && (
         <FootRow testid="ext-drawer-passwords" icon={<KeyGlyph locked={locked} />} label="Passwords" onClick={() => { p.onClose(); p.onView('passwords'); }}
@@ -217,10 +224,13 @@ const FootRow = forwardRef<HTMLButtonElement, { testid: string; icon: ReactNode;
   },
 );
 
-/** One ask in the popup's Continue list: the drawer's two-line row. */
-export function ContinueRow({ row, onPick }: { row: DrawerRow; onPick: () => void }) {
-  const d = row.task ? askRowDetail(row.task) : { line: '', needs: false };
-  const at = row.task ? askActivityAt(row.task as Task) : undefined;
+/**
+ * One ask in the popup's Continue list: the drawer's two-line row. `kept`: the row as the last open
+ * drew it (ext-continue-kept.ts), shown while the board loads.
+ */
+export function ContinueRow({ row, kept, onPick }: { row: DrawerRow; kept?: { line: string; needs: boolean; at?: string }; onPick: () => void }) {
+  const d = kept ?? (row.task ? askRowDetail(row.task) : { line: '', needs: false });
+  const at = kept ? kept.at : row.task ? askActivityAt(row.task as Task) : undefined;
   return (
     <button type="button" className="ext-continue-row" data-testid="ext-continue-row" data-task-id={row.id} data-needs={d.needs ? 'true' : 'false'} onClick={onPick} title={row.title}>
       <span className={`ask-walnut-drawer-needs${d.needs ? ' is-on' : ''}`} aria-label={d.needs ? 'Needs you' : undefined} />

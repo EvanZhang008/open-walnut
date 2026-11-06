@@ -16,8 +16,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { vaultSession } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+holdVaultLock('shared', 'file')
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const stamp = Date.now().toString(36)

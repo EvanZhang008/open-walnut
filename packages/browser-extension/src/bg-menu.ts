@@ -15,7 +15,7 @@ import { clearLater } from './bg-clipboard'
 import { walletValues } from './bg-wallet'
 import { COVERED, afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock, stillShown } from './bg-fill'
 import { CODE_PAGE_MS, PENDING_MS, insecureFor, isLockedError, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
-import { domainOf, stepOneFirst } from './login-pick'
+import { cleanAccount, domainOf, namedFirst, stepOneFirst } from './login-pick'
 
 const WALLET = new Set(['card', 'identity'])
 
@@ -85,7 +85,8 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }
       const n = nonce()
       const rules = cleanRules(msg.rules)
-      await stores.menus.set(tabId, { tabId, frameId: sender.frameId, url: String(sender.url ?? ''), role: String(msg.role), kind: String(msg.kind), nonce: n, ...(rules ? { rules } : {}) })
+      const account = cleanAccount(msg.account)
+      await stores.menus.set(tabId, { tabId, frameId: sender.frameId, url: String(sender.url ?? ''), role: String(msg.role), kind: String(msg.kind), nonce: n, ...(rules ? { rules } : {}), ...(account ? { account } : {}) })
       return { ok: true, nonce: n }
     }
     case 'menu-focus': {
@@ -112,12 +113,14 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
         const insecure = first.length || others.length ? 0 : await insecureFor(owner.url)
         // Logins saved for other parts of this site: listed apart, under their own heading.
         const apart = others.length ? { others, othersDomain: domainOf(owner.url) } : {}
+        // The login the page names first (its account), else step one's on step two.
+        const named = namedFirst(first, owner.account)
         if (owner.role === 'new-password') {
           owner.suggestion ??= await suggest(owner.rules)
           await stores.menus.set(owner.tabId, owner)
-          return { ...base, state: 'unlocked', items: first, suggestion: owner.suggestion }
+          return { ...base, state: 'unlocked', items: named ? [...named.items, ...named.more] : first, suggestion: owner.suggestion }
         }
-        const { items, more } = stepOneFirst(first, await stepOneHint(owner))
+        const { items, more } = named ?? stepOneFirst(first, await stepOneHint(owner))
         return { ...base, state: 'unlocked', items, ...(more.length ? { more } : {}), ...apart, insecure }
       } catch (err) {
         if (isLockedError(err)) return { ...base, state: 'locked' }

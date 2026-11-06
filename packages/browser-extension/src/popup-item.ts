@@ -102,7 +102,7 @@ function revealer(id: string, field: string, target: HTMLElement, button: HTMLBu
 export function itemRow(it: Item, fillable: boolean, ctx: PopupCtx): HTMLElement {
   const card = it.type === 'card'
   const actions = h('div', { class: 'item-actions' },
-    it.username ? iconButton(icon('user'), 'Copy username', () => void copy(it.id, 'username', 'Username')) : null,
+    it.username ? iconButton(icon('user'), 'Copy username', () => void copy(it.id, 'username', 'Username'), { class: 'icon-btn act-user' }) : null,
     isLogin(it) || it.type === 'api_key' ? iconButton(icon('copy'), 'Copy password', () => void copy(it.id, 'password', 'Password'), { 'data-testid': 'copy-password' }) : null,
     card ? iconButton(icon('copy'), 'Copy card number', () => void copy(it.id, 'number', 'Card number'), { 'data-testid': 'copy-number' }) : null,
     card ? iconButton(popupIcon('hash'), 'Copy security code', () => void copy(it.id, 'code', 'Security code')) : null,
@@ -112,7 +112,7 @@ export function itemRow(it: Item, fillable: boolean, ctx: PopupCtx): HTMLElement
   const sub = h('span', { class: 'row-sub' }, subText)
   // In the side panel there is room to show a password; it hides again on the next click.
   if (ctx.embedded && isLogin(it)) {
-    const eye = iconButton(icon('eye'), 'Show password', () => void show(), { 'data-testid': 'reveal-password' })
+    const eye = iconButton(icon('eye'), 'Show password', () => void show(), { class: 'icon-btn act-reveal', 'data-testid': 'reveal-password' })
     const show = revealer(it.id, 'password', sub, eye, () => { sub.textContent = subText })
     actions.prepend(eye)
   }
@@ -121,7 +121,8 @@ export function itemRow(it: Item, fillable: boolean, ctx: PopupCtx): HTMLElement
   const open = () => void detailView(it, fills, ctx)
   const row = h('div', { class: 'row item', tabindex: '0', role: 'button', 'data-testid': 'popup-item', 'aria-label': `${it.title}: ${fills ? 'fill on this page' : 'show details'}` },
     card ? h('span', { class: 'avatar', style: 'background:#5b4fa8' }, icon('card')) : it.type === 'identity' ? h('span', { class: 'avatar', style: 'background:#2f7f7a' }, icon('person')) : avatar(it.site ?? it.title),
-    h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, it.title), sub),
+    // Whole on hover when the row has to cut it.
+    h('span', { class: 'row-text', title: [it.title, subText].filter(Boolean).join('\n') }, h('span', { class: 'row-title' }, it.title), sub),
     actions,
     it.hasTotp && isLogin(it) ? codeChip(it) : null,
     fills ? h('button', { class: 'fill-pill', type: 'button', 'data-testid': 'popup-fill', onclick: (e: Event) => { e.stopPropagation(); void fillTab(it, ctx) } }, 'Fill') : null,

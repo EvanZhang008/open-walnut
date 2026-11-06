@@ -104,7 +104,10 @@
 .ext-tasks-save .btn:disabled { opacity: 0.45; cursor: not-allowed; background: var(--bg-secondary); }
 .ext-tasks-save-why { flex-basis: 100%; }
 /* The row's head with its Add to Focus, which shows on hover or keyboard focus. */
-.ext-task-headrow { display: flex; align-items: center; gap: 4px; }
+/* The hover band is the whole row, Add to Focus included (review R2-8: it was the head's alone,
+   narrower than the row, with the button floating outside it). */
+.ext-task-headrow { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
+.ext-task:not(.is-open) .ext-task-headrow:hover { background: var(--hover-bg, var(--bg-secondary)); }
 .ext-task-headrow > .ext-task-head { flex: 1; min-width: 0; }
 .ext-task-focus.is-row { flex: none; margin-right: 6px; opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
 .ext-task-headrow:hover .ext-task-focus.is-row, .ext-task-focus.is-row:focus-visible, .ext-task.is-open .ext-task-focus.is-row { opacity: 1; pointer-events: auto; }
@@ -124,7 +127,6 @@
 .ext-task { border-radius: 8px; margin: 0 6px; }
 .ext-task.is-open { background: var(--bg-secondary); }
 .ext-task-head { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
-.ext-task-head:hover { background: var(--bg-secondary); }
 .ext-task-dot { flex: 0 0 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
 .ext-task-dot.state-needs { background: var(--danger, #d64545); }
 .ext-task-dot.state-working { background: var(--accent, #3b82f6); }
@@ -132,7 +134,9 @@
 .ext-task-title { font-size: 13px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ext-task-line { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-task-reply { padding: 0 8px 8px 24px; display: flex; flex-direction: column; gap: 6px; }
-.ext-task-input { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+/* The reply's field draws no frame of its own: AnswerBox's box is the one frame (review R2-8: a
+   second border inside it). */
+.ext-task-input { font-size: 13px; }
 .ext-task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ext-tasks-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: 13px; color: var(--fg-muted); }
 .ext-tasks-updating { margin: 4px 12px 0; font-size: 12px; color: var(--fg-muted); }
@@ -165,26 +169,30 @@
    padding around them (the pop-out root keeps it for its other views). */
 .popout-root:has(> .ext-panel) { padding: 0; overflow: hidden; }
 /* The extension's warm surfaces (packages/browser-extension/src/ui.css), so the frame and the key
-   popover the extension draws over it read as one page. */
-.ext-ask {
+   popover the extension draws over it read as one page. Every view the side panel frames wears
+   them: Ask and Tasks (review R2-8: the dark Tasks view was the app's pure black beside Ask's warm
+   grey and the extension's own bar over it). */
+.ext-ask, .ext-tasks {
   --walnut-accent: #8a5a2b;
   --walnut-accent-strong: #74481f;
   --border: #e8e3dc;
   --border-strong: #ddd5cb;
   --bg-secondary: #f8f5f1;
   --hover-bg: #f4ece3;
-  position: relative;
-  overflow: hidden;
 }
-:root[data-theme="dark"] .ext-ask {
+:root[data-theme="dark"] :is(.ext-ask, .ext-tasks) {
   --walnut-accent: #d8a26a; --walnut-accent-strong: #e8b47e;
   --bg: #1f1d1b; --card-bg: #1f1d1b; --bg-secondary: #2a2724; --border: #3a3530; --border-strong: #4a443e; --hover-bg: #3a2f24;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .ext-ask {
+  :root:not([data-theme]) :is(.ext-ask, .ext-tasks) {
     --walnut-accent: #d8a26a; --walnut-accent-strong: #e8b47e;
     --bg: #1f1d1b; --card-bg: #1f1d1b; --bg-secondary: #2a2724; --border: #3a3530; --border-strong: #4a443e; --hover-bg: #3a2f24;
   }
+}
+.ext-ask {
+  position: relative;
+  overflow: hidden;
 }
 .ext-ask-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 52px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--border); }
 .ext-ask-head .ask-walnut-menu-btn { width: 30px; height: 30px; border-radius: 8px; color: var(--fg-secondary); }
@@ -217,7 +225,10 @@
 .ext-chip:focus-visible, .ext-chip-body:focus-visible, .ext-chip-x:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 
 /* What a message took from the page, in the person's bubble. */
-.ext-panel-attached-page { display: flex; align-items: center; gap: 5px; margin-top: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); font-size: 11.5px; line-height: 1.35; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ext-panel-attached-page { display: flex; align-items: center; gap: 5px; margin-top: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); font-size: 11.5px; line-height: 1.35; overflow: hidden; white-space: nowrap; }
+.ext-panel-attached-page-ic { flex: none; display: inline-flex; }
+.ext-panel-attached-page-ic svg { width: 12px; height: 12px; }
+.ext-panel-attached-page-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* The drawer's foot rows (Tasks, Passwords, Open Walnut). */
 .ext-drawer-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 14px; border: 0; background: none; color: var(--fg); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
@@ -240,3 +251,24 @@
 .ext-popup-composer { flex: none; display: flex; flex-direction: column; }
 .ext-popup-composer .draft-session-panel { flex: none; min-height: 0; }
 .ext-popup-composer .draft-session-body { display: none; }
+
+/* Approvals waiting for the person, over the Ask view (ExtApprovals.tsx): one compact row each,
+   what and who on the left, Deny / Approve on the right; the one this conversation waits on wears
+   the accent. */
+.ext-ask-approvals { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 0; }
+.ext-ask-approval { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 10px; border: 1px solid var(--border-strong); border-left: 3px solid var(--walnut-accent); border-radius: 10px; background: var(--bg-secondary); }
+.ext-ask-approval.is-mine { background: var(--hover-bg); }
+.ext-ask-approval-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ext-ask-approval-what { font-size: 12.5px; font-weight: 600; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.ext-ask-approval-who { font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-ask-approval .approval-actions { flex: none; margin-top: 0; gap: 6px; flex-wrap: nowrap; }
+.ext-ask-approval .approval-actions .approval-btn { padding: 4px 10px; font-size: 12px; }
+/* Unlocking in place (ApprovalUnlock) takes the row's whole width under its words. */
+.ext-ask-approval:has(.approval-unlock) { flex-wrap: wrap; }
+.ext-ask-approval > .approval-unlock { flex-basis: 100%; }
+/* The card's notes and a failed answer, under the row's words and buttons. */
+.ext-ask-approval:has(.ext-approval-lines) { flex-wrap: wrap; }
+.ext-approval-lines { flex-basis: 100%; min-width: 0; }
+.ext-approval-lines > :first-child { margin-top: 2px; }
+.ext-approval-lines .approval-note, .ext-approval-lines .approval-error { font-size: 11.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.ext-ask-approvals-more { align-self: flex-start; padding: 0 2px; border: 0; background: none; font: inherit; font-size: 12px; color: var(--walnut-accent); cursor: pointer; text-decoration: underline; }

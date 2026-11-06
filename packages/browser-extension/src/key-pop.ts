@@ -13,9 +13,10 @@
 import { ask, ext } from './ext'
 import { displayHost } from '../../../src/core/vault/url-match'
 import { avatar, h, icon } from './dom'
-import { errLine } from './popup-ui'
+import { errLine, hintLine } from './popup-ui'
 import { fillTab, type Item, type PopupCtx } from './popup-item'
 import { currentView, isCurrent, nextView } from './popup-view'
+import { sendUnlock, unlockRefusal } from './unlock-send'
 
 export interface KeyPop {
   /** Open under `rect` (this page's coordinates), or close when it is open. */
@@ -118,7 +119,7 @@ export function keyPopover(o: {
   async function lockedBody(host: string, err?: string): Promise<HTMLElement[]> {
     const g = currentView()
     const [status, length] = await Promise.all([
-      ask<{ status: { setUp: boolean; hasSecretKey: boolean } }>({ type: 'vault-status' }),
+      ask<{ status: { setUp: boolean; hasSecretKey: boolean; hint?: string } }>({ type: 'vault-status' }),
       ask<{ autoLock?: string; unlockFor?: string }>({ type: 'unlock-for' }),
     ])
     if (!isCurrent(g)) return []
@@ -130,6 +131,8 @@ export function keyPopover(o: {
     const skWrap = h('div', { class: 'key-pop-sk', hidden: true }, h('label', { class: 'field-label', for: 'key-sk' }, 'The computer Walnut runs on does not hold your Secret Key: type it from your recovery kit.'), sk)
     const go = h('button', { class: 'btn btn-primary', type: 'submit', 'data-testid': 'key-pop-unlock' }, 'Unlock') as HTMLButtonElement
     const line = errLine(err ?? (!status.ok ? status.error : undefined))
+    // The master password hint, as the full unlock has it (review R2-11): behind "Show hint", at once after a wrong password.
+    const hint = hintLine(status.ok ? status.status.hint : undefined, 'key-pop')
     const form = h('form', { class: 'key-pop-unlock', 'data-testid': 'key-pop-unlock-row' },
       h('span', { class: 'key-pop-locked' }, icon('lock'), h('span', {}, 'Locked')), pw, go)
     form.onsubmit = async (e) => {
@@ -138,19 +141,19 @@ export function keyPopover(o: {
       go.disabled = true
       go.textContent = 'Unlocking…'
       line.textContent = ''
-      const r = await ask<{ waitMs?: number }>({ type: 'unlock', password: pw.value, secretKey: sk.value.trim() })
+      // Walnut checking another unlock: this one waits its turn, never an error meanwhile.
+      const r = await sendUnlock(pw.value, sk.value.trim(), { onWait: () => { go.textContent = 'Checking…' } })
       go.disabled = false
       go.textContent = 'Unlock'
       if (r.ok) { o.onVault(); void render(); return }
       if (r.code && DISCONNECTED.has(r.code)) { line.textContent = 'This browser is no longer connected to Walnut.'; return }
       if (r.code === 'secret_key_needed') { skWrap.hidden = false; sk.focus() } else pw.select()
-      line.textContent = r.code === 'too_many_attempts' && typeof r.waitMs === 'number'
-        ? `Too many tries. Wait ${Math.ceil(Number(r.waitMs) / 1000)} s.`
-        : r.error ?? 'That did not unlock.'
+      if (r.code === 'wrong_password') hint.show()
+      line.textContent = unlockRefusal(r)
     }
     setTimeout(() => pw.focus(), 20)
     const note = unlockLine(length.ok ? length : {})
-    return [form, skWrap, line, note ? h('p', { class: 'key-pop-note' }, note) : null,
+    return [form, hint.el, skWrap, line, note ? h('p', { class: 'key-pop-note' }, note) : null,
       h('p', { class: 'key-pop-empty', 'data-testid': 'key-pop-locked-empty' }, host ? "Unlock to see this site's logins." : 'Open a site to see its logins here.')].filter((x): x is HTMLElement => !!x)
   }
 

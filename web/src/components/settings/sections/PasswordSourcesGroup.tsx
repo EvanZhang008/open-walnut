@@ -10,6 +10,8 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch'
 import { SettingsGroup, SettingsRow } from '../SettingsSection'
 import { SettingsButton } from '../inputs/SettingsButton'
 import { onVaultSessionChange, vaultApi, VaultApiError, type BitwardenSyncStatus } from '@/api/vault'
+// An unlock or a Lock elsewhere on this computer reaches this group live.
+import '@/api/vault-live'
 
 interface Props {
   config: Config

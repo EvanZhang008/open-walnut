@@ -14,7 +14,8 @@ import { h } from './dom'
 import { PANEL_SERVER_KEY, PANEL_SNAPS_KEY } from './panel-data'
 
 export type SnapView = 'ask' | 'tasks'
-type Msg = { role: 'user' | 'assistant'; text: string }
+/** `page` and `quote`: what a person's message took from the page, drawn in its bubble as the view draws them. */
+type Msg = { role: 'user' | 'assistant'; text: string; page?: string; quote?: string }
 /** An ask to continue, as the view's Continue list showed it. */
 export type ContRow = { title: string; line: string; time: string; needs: boolean }
 /**
@@ -25,11 +26,16 @@ export type ContRow = { title: string; line: string; time: string; needs: boolea
 export interface AskSnap {
   at: number; title: string; host: string; messages: Msg[]
   askTitle?: string; agent?: string; placeholder?: string; cont?: ContRow[]; suggestions?: string[]; pageOn?: boolean
+  /** `suggestionIcons[i]`: the icon of `suggestions[i]` (SUGGESTION_ICONS), '' for none. */
+  suggestionIcons?: string[]
 }
 type Row = { title: string; line: string; state: string }
 export interface TasksSnap { at: number; sections: Array<{ title: string; count: number; rows: Row[] }> }
 /** The last Continue list and suggestions any page showed: a page seen for the first time, and the popup, draw these. */
-export interface AskShell { at: number; agent?: string; cont?: ContRow[]; suggestions?: string[] }
+export interface AskShell { at: number; agent?: string; cont?: ContRow[]; suggestions?: string[]; suggestionIcons?: string[] }
+
+/** The suggestion icons a view names (web/src/components/common/Icons.tsx); any other name draws none. */
+export const SUGGESTION_ICONS = ['search', 'calendar', 'clock'] as const
 interface Snaps { ask?: Record<string, AskSnap>; tasks?: TasksSnap; shell?: AskShell }
 
 const STORE = PANEL_SNAPS_KEY
@@ -55,14 +61,23 @@ function cleanAsk(raw: unknown, now: number): AskSnap | null {
   const messages = (Array.isArray(r.messages) ? r.messages : []).slice(-6).flatMap((m): Msg[] => {
     const o = m as Record<string, unknown> | null
     const text = str(o?.text, 800)
-    return text ? [{ role: o?.role === 'user' ? 'user' : 'assistant', text }] : []
+    if (!text) return []
+    const user = o?.role === 'user'
+    const page = user ? str(o?.page, 200) : ''
+    const quote = user ? str(o?.quote, 300) : ''
+    return [{ role: user ? 'user' : 'assistant', text, ...(page ? { page } : {}), ...(quote ? { quote } : {}) }]
   })
   const cont = Array.isArray(r.continue) ? r.continue.slice(0, 6).flatMap((x): ContRow[] => {
     const o = x as Record<string, unknown> | null
     const title = str(o?.title, 200)
     return title ? [{ title, line: str(o?.line, 200), time: str(o?.time, 30), needs: o?.needs === true }] : []
   }) : undefined
-  const suggestions = Array.isArray(r.suggestions) ? r.suggestions.slice(0, 3).map((x) => str(x, 60)).filter(Boolean) : undefined
+  const pairs = Array.isArray(r.suggestions) ? r.suggestions.slice(0, 3).map((x, i) => ({
+    label: str(x, 60),
+    icon: Array.isArray(r.suggestionIcons) && (SUGGESTION_ICONS as readonly string[]).includes(String(r.suggestionIcons[i])) ? String(r.suggestionIcons[i]) : '',
+  })).filter((p) => p.label) : undefined
+  const suggestions = pairs?.map((p) => p.label)
+  const suggestionIcons = pairs?.some((p) => p.icon) ? pairs.map((p) => p.icon) : undefined
   return {
     at: now, title: str(r.title, 300), host: str(r.host, 200), messages,
     ...(str(r.askTitle, 200) ? { askTitle: str(r.askTitle, 200) } : {}),
@@ -70,6 +85,7 @@ function cleanAsk(raw: unknown, now: number): AskSnap | null {
     ...(str(r.placeholder, 120) ? { placeholder: str(r.placeholder, 120) } : {}),
     ...(cont ? { cont } : {}),
     ...(suggestions ? { suggestions } : {}),
+    ...(suggestionIcons ? { suggestionIcons } : {}),
     ...(typeof r.pageOn === 'boolean' ? { pageOn: r.pageOn } : {}),
   }
 }
@@ -118,7 +134,7 @@ async function write(view: SnapView, snap: unknown, opts: { key?: unknown; count
     const kept = Object.entries(ask).sort((a, b) => b[1].at - a[1].at).slice(0, ASK_KEEP)
     all.ask = Object.fromEntries(kept)
     if (clean.cont || clean.suggestions || clean.agent) {
-      all.shell = { at: now, ...(all.shell ?? {}), ...(clean.agent ? { agent: clean.agent } : {}), ...(clean.cont ? { cont: clean.cont } : {}), ...(clean.suggestions ? { suggestions: clean.suggestions } : {}) }
+      all.shell = { at: now, ...(all.shell ?? {}), ...(clean.agent ? { agent: clean.agent } : {}), ...(clean.cont ? { cont: clean.cont } : {}), ...(clean.suggestions ? { suggestions: clean.suggestions, suggestionIcons: clean.suggestionIcons } : {}) }
       all.shell.at = now
     }
   } else {

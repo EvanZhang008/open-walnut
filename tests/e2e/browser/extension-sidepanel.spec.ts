@@ -19,8 +19,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { vaultSession as openVaultSession } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+holdVaultLock('shared', 'file')
 
 let ctx: BrowserContext
 let extId = ''

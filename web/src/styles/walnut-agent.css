@@ -430,10 +430,13 @@
 .ask-walnut-drawer-search:focus-within {
   border-color: var(--walnut-accent);
 }
+/* The icon set's magnifier, never a text glyph (a glyph sits on a different
+   baseline in each engine and font). */
 .ask-walnut-drawer-search-ic {
-  font-size: 15px;
-  line-height: 1;
+  flex: none;
+  display: inline-flex;
 }
+.ask-walnut-drawer-search-ic svg { width: 13px; height: 13px; }
 /* The WRAPPER is the frame; the input inside must draw none of its own. The
    global `input` / `input:focus` rules (globals.css) give every input padding,
    a border and a 3px focus ring — the ring in particular outranks a bare class

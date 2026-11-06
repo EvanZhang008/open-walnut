@@ -31,6 +31,8 @@ vi.mock('@/api/approvals', () => ({
   enrollApprovalKey: vi.fn(),
 }));
 vi.mock('@/api/test-run', () => ({ testRunLabel: () => api.label }));
+// The live vault follower (its event socket) is covered by tests/web/approvals-vault-look.test.ts.
+vi.mock('@/api/vault-live', () => ({ checkVault: vi.fn(async () => null), vaultLive: () => false }));
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/contexts/notifications/quiet', () => ({ currentQuiet: () => api.quiet }));
 vi.mock('@/contexts/notifications/quiet-model', () => ({ quietAllowsToast: api.allows }));

@@ -98,7 +98,19 @@ export class Hosts {
           super(url, protocols)
           const u = new URL(String(url), window.location.href)
           const w = window as unknown as { __hpWs?: WebSocket }
-          if (u.pathname === '/ws' && !w.__hpWs) w.__hpWs = this
+          if (u.pathname !== '/ws') return
+          if (!w.__hpWs) w.__hpWs = this
+          // Registered before the app's own listener: a host:status frame from the fixture
+          // server never reaches the page, only push()'s. The server's host fixture is one
+          // for every worker, and another spec's hosts landed on this routed page
+          // (2026-11-06: BP-C58's failed netbox in BP-C49's bell, on WebKit with 2 workers).
+          this.addEventListener('message', (e: MessageEvent) => {
+            if (typeof e.data !== 'string' || !e.data.includes('"host:status"')) return
+            try {
+              const msg = JSON.parse(e.data) as { name?: string; __hp?: boolean }
+              if (msg.name === 'host:status' && !msg.__hp) e.stopImmediatePropagation()
+            } catch { /* not JSON: leave it */ }
+          })
         }
       } as typeof WebSocket
     })
@@ -133,7 +145,7 @@ export class Hosts {
     await this.page.evaluate((data) => {
       const ws = (window as unknown as { __hpWs?: WebSocket }).__hpWs
       if (!ws) throw new Error('the app socket was never captured')
-      ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'host:status', data, seq: Date.now() }) }))
+      ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'host:status', data, seq: Date.now(), __hp: true }) }))
     }, frame)
   }
 }

@@ -119,9 +119,13 @@ export async function openMenu(field: HTMLInputElement, focus?: 'first' | 'last'
   cs.active = { ...(hit ? { group: hit.group } : { wallet: walletGroupOf(cs.wallets, field) ?? undefined }), role: what.role, field }
   // A new-password field says what it accepts: the strong password Walnut makes fits it.
   const rules = what.role === 'new-password' ? readRules(hit?.group.newPasswords[0] ?? field) : undefined
+  // The account the page names for this form (a change form's hidden username, a username it
+  // filled in): the menu lists that login first. One the person typed in this field filters the menu instead.
+  const g = hit?.group
+  const named = g && !(g.username === field && cs.typed.has(field)) ? (g.username?.value.trim() || g.hiddenUsername?.value.trim() || '') : ''
   let r: { ok: boolean; nonce?: string }
   try {
-    r = await ask<{ nonce: string }>({ type: 'open-menu', role: what.role, kind: what.kind, ...(rules ? { rules } : {}) })
+    r = await ask<{ nonce: string }>({ type: 'open-menu', role: what.role, kind: what.kind, ...(rules ? { rules } : {}), ...(named ? { account: named } : {}) })
   } finally {
     if (opening === mine) opening = null
   }

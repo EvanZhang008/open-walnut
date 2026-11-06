@@ -112,10 +112,12 @@ const REPAIR_PLACEHOLDER =
  *  ellipsis, which read as a label cut off (review 2026-11-06, a 400 px side
  *  panel); the other two are complete asks. Line icons, not emoji, like every
  *  other control. */
-const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; text: string; stem?: true }[] = [
-  { label: 'Which task is', icon: ICONS.ICON_SEARCH, text: 'Which task is ', stem: true },
-  { label: 'Schedule my day', icon: ICONS.ICON_CALENDAR, text: 'Schedule my day' },
-  { label: 'What ran today', icon: ICONS.ICON_SECTION_RECENT, text: 'What ran today?' },
+/** `iconName` names the icon in words, for a drawing of this composer elsewhere (the browser
+ *  extension's placeholder, web/src/popout/ext-snapshot.ts), which carries text only. */
+const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; iconName: string; text: string; stem?: true }[] = [
+  { label: 'Which task is', icon: ICONS.ICON_SEARCH, iconName: 'search', text: 'Which task is ', stem: true },
+  { label: 'Schedule my day', icon: ICONS.ICON_CALENDAR, iconName: 'calendar', text: 'Schedule my day' },
+  { label: 'What ran today', icon: ICONS.ICON_SECTION_RECENT, iconName: 'clock', text: 'What ran today?' },
 ];
 
 /** Trailing debounce after the user pauses. Shorter than QuickTaskComposer's
@@ -803,6 +805,7 @@ export function DraftSessionPanel({
                     key={s.label}
                     type="button"
                     className="session-action-chip"
+                    data-icon={s.iconName}
                     onClick={() => setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }))}
                     {...(s.stem ? { 'aria-label': `${s.label} …` } : {})}
                   >

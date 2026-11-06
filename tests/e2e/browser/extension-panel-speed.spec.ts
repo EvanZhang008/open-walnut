@@ -148,11 +148,43 @@ async function openPopupAsk(): Promise<{ pop: Page; t0: number }> {
   return { pop: await opened, t0 }
 }
 
+/**
+ * Until the drawing is gone and the view is what it will stay (`settled`), what the person sees
+ * is sampled: a "Loading your asks…" in the view with no drawing over it is the jump of review
+ * R2-6 (drawing, then a spinner, then the list again), counted in `uncovered`.
+ */
+async function settleWatch(p: Page, view: string, t0: number): Promise<{ settled: number; uncovered: number }> {
+  let uncovered = 0
+  const deadline = Date.now() + 20_000
+  for (;;) {
+    const f = p.frames().find((x) => x.url().includes(`view=${view}`))
+    const lookUp = await p.locator('[data-testid="panel-snap"]').isVisible().catch(() => false)
+    const state = f ? await f.evaluate(() => {
+      const root = document.querySelector('[data-testid="ext-panel"]')
+      const spin = document.querySelector('.ext-continue-empty')
+      const spinner = !!spin && (spin as HTMLElement).offsetParent !== null
+      // A conversation's messages are on screen; or a new chat's Continue rows, with nothing
+      // loading. A build before `data-asks` (an A/B baseline) is judged by what shows alone.
+      const ready = !!document.querySelector('.session-msg')
+        || (root?.getAttribute('data-asks') !== 'loading' && !spinner && !!document.querySelector('[data-testid="ext-continue-row"]'))
+      return { ready, spinner }
+    }).catch(() => null) : null
+    if (state?.spinner && !lookUp) uncovered++
+    if (state && !lookUp && state.ready) return { settled: Date.now() - t0, uncovered }
+    if (Date.now() > deadline) return { settled: Date.now() - t0, uncovered }
+    await p.waitForTimeout(25)
+  }
+}
+
 async function lookAndReal(p: Page, view: string, t0: number, name: string, realSel: string): Promise<void> {
   const look = firstShown(p, view, REAL_HEAD, LOOK_PANEL, t0)
   const real = (async () => { await until(p, view, REAL_HEAD, t0); return until(p, view, realSel, t0) })()
+  const settle = settleWatch(p, view, t0)
   record(`${name}:look`, await look)
   record(`${name}:real`, await real)
+  const { settled, uncovered } = await settle
+  record(`${name}:settled`, settled)
+  record(`${name}:spinner-uncovered`, uncovered)
 }
 
 test('open time, as seen: the side panel and the popup, cold and warm', async () => {
@@ -170,4 +202,35 @@ test('open time, as seen: the side panel and the popup, cold and warm', async ()
     await pop.waitForTimeout(1200)
     await pop.close()
   }
+  // No open shows the view's own loading state without the drawing over it (R2-6).
+  for (const k of Object.keys(results).filter((n) => n.endsWith(':spinner-uncovered'))) expect.soft(Math.max(...results[k]), k).toBe(0)
+})
+
+/**
+ * A board slower than the frame's own start (a person's real board, a busy machine: the review of
+ * R2-6 saw the drawing, then "Loading your asks…", then the list): the drawing stays until the
+ * rows are real, and the view never shows its loading state uncovered.
+ */
+test('a slow board: the drawing stays until the asks are real (R2-6)', async () => {
+  test.setTimeout(240_000)
+  // A page with no conversation: a new chat, its Continue list over the composer, as the review saw.
+  await lab.doc.goto(lab.site('docs.example.test', '/other'))
+  const slow = /\/api\/tasks(\?|$)/
+  await lab.ctx.route(slow, async (route) => { await new Promise((r) => setTimeout(r, 1500)); await route.continue() })
+  try {
+    // The first open of this page makes the drawing the next ones show.
+    { const { panel } = await openPanel(lab, 'ask'); await settleWatch(panel, 'ext-panel', Date.now()); await panel.waitForTimeout(1500); await panel.close() }
+    for (let i = 0; i < 3; i++) {
+      const { panel, t0 } = await openPanel(lab, 'ask')
+      const { settled, uncovered } = await settleWatch(panel, 'ext-panel', t0)
+      record('slow-board:settled', settled)
+      record('slow-board:spinner-uncovered', uncovered)
+      await panel.waitForTimeout(800)
+      await panel.close()
+    }
+  } finally {
+    await lab.ctx.unroute(slow)
+    await lab.doc.goto(lab.site('docs.example.test', '/notes'))
+  }
+  expect.soft(Math.max(...results['slow-board:spinner-uncovered'])).toBe(0)
 })

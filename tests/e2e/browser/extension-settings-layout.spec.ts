@@ -12,8 +12,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { VAULT_MASTER, vaultSession } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
+holdVaultLock('shared', 'file')
 
 const POPUP = { width: 360, height: 600 }
 const SHOTS = process.env.LOOK_SHOTS

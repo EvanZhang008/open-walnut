@@ -20,9 +20,12 @@ import { expect, test, type APIRequestContext, type Page, type WebSocketRoute } 
 import crypto from 'node:crypto'
 import { holdApprovalsLock } from './approvals-lock'
 import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.use({ video: process.env.APR_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
+// Its cards unlock the shared fixture vault; the vault lock comes before the approvals lock.
+holdVaultLock('shared', 'file')
 
 function stamp(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -497,14 +500,18 @@ test('a narrow corner (a page\'s left column): the card reads the whole action a
 
 /**
  * The controls of the page under the corner it can reach: a button, link or field whose middle
- * the corner stack covers, outside a list that scrolls (that one scrolls its end clear above
- * the stack: corner-stack.tsx syncRoom).
+ * the corner stack covers. Over a page's left column (the stack's `data-over="column"`) none at
+ * all: what the column shows ends above the stack, its scrolling list included (2026-11-06: the
+ * card covered Settings' nav rows Inbox Triage .. Phones & Cloud, which this helper used to skip
+ * as rows of a list that scrolls). Elsewhere a row of a list that scrolls is left out: that list
+ * scrolls its end clear above the stack (corner-stack.tsx syncRoom).
  */
 async function coveredByCorner(page: Page): Promise<string[]> {
   return await page.evaluate(() => {
-    const stack = document.querySelector('[data-testid="corner-stack"]')
+    const stack = document.querySelector<HTMLElement>('[data-testid="corner-stack"]')
     const main = document.querySelector('.main-content')
     if (!stack || !main) return []
+    const strict = stack.dataset.over === 'column'
     const scrolls = (el: Element) => {
       for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
         const oy = getComputedStyle(p).overflowY
@@ -512,10 +519,21 @@ async function coveredByCorner(page: Page): Promise<string[]> {
       }
       return false
     }
+    // Scrolled out of its list's view (above or below what the list shows): not on screen, so not covered.
+    const clipped = (el: Element, x: number, y: number) => {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        if (getComputedStyle(p).overflowY === 'visible') continue
+        const b = p.getBoundingClientRect()
+        if (x < b.left || x > b.right || y < b.top || y > b.bottom) return true
+      }
+      return false
+    }
     const out: string[] = []
     for (const el of main.querySelectorAll('button, a[href], input, textarea, select, [role="button"]')) {
       const r = el.getBoundingClientRect()
-      if (r.width === 0 || r.height === 0 || scrolls(el)) continue
+      // Home stays mounted under visibility: hidden off its route: its rows are on no page now.
+      if (r.width === 0 || r.height === 0 || !el.checkVisibility({ visibilityProperty: true }) || (!strict && scrolls(el))) continue
+      if (clipped(el, r.left + r.width / 2, r.top + r.height / 2)) continue
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
       if (hit && stack.contains(hit)) out.push((el.textContent || el.getAttribute('aria-label') || el.tagName).trim().slice(0, 40))
     }
@@ -526,7 +544,7 @@ async function coveredByCorner(page: Page): Promise<string[]> {
 test('the corner never lies over a page\'s own controls: the Passwords rail\'s Import and Lock move up clear of a tall card', async ({ page, request }) => {
   // 2026-11-06: in the rail's narrow corner the card wraps to its whole action (three lines,
   // who asks, the buttons on their own row) and lay over the rail's foot, its Import… and Lock.
-  // The rail does not scroll, so it takes the room at its end instead (corner-stack.tsx columnUnder).
+  // The rail does not scroll, so it takes the room at its end instead (corner-stack.tsx roomTaker).
   test.setTimeout(120_000)
   await page.setViewportSize({ width: 1280, height: 720 })
   await page.goto('/')
@@ -535,9 +553,10 @@ test('the corner never lies over a page\'s own controls: the Passwords rail\'s I
   const made = await ask(request, { what: `Let a Walnut agent press Enter in the feedback box on shop.example.test (${stamp()})` })
   const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
 
-  // Settings first: its nav is a left column too.
+  // Settings first: its nav is a left column too, and its rows scroll (the strict check).
   await offHome(page)
   await expect(card).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => page.getByTestId('corner-stack').getAttribute('data-over'), { timeout: 5_000 }).toBe('column')
   await expect.poll(() => coveredByCorner(page), { timeout: 5_000 }).toEqual([])
 
   if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
@@ -573,4 +592,38 @@ test('the corner never lies over a page\'s own controls: the Passwords rail\'s I
     const lock = (await page.getByTestId('pw-lock').boundingBox())!
     return Math.round(side.y + side.height - (lock.y + lock.height))
   }, { timeout: 10_000 }).toBeLessThan(40)
+})
+
+test('the corner never covers a page\'s left column on any page of the sidebar, its scrolling rows included', async ({ page, request }) => {
+  // 2026-11-06 round 2: the card covered Walnut Settings' own nav rows (Inbox Triage .. Phones &
+  // Cloud): room at the end of a list that scrolls leaves its rows under the stack until scrolled.
+  // Every page the sidebar opens is visited, so a new page's column is checked with no listing here.
+  test.setTimeout(300_000)
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('/')
+  await expect(page.locator('.app-shell > .sidebar')).toBeVisible({ timeout: 20_000 })
+  if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
+  const made = await ask(request, { what: `Let a Walnut agent click button "Place order" on shop.example.test (${stamp()})` })
+  const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+  const stack = page.getByTestId('corner-stack')
+  const pages = [...new Set(await page.locator('.sidebar-nav a[href^="/"]').evaluateAll((els) => els.map((a) => a.getAttribute('href')!)))]
+  expect(pages.length).toBeGreaterThan(3)
+  const seen: string[] = []
+  for (const href of [...pages, 'settings']) {
+    if (href === 'settings') await offHome(page)
+    else await page.locator(`.sidebar-nav a[href="${href}"]`).first().click()
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    // Two looks of the corner (it looks twice a second), so a page that is still laying out settles.
+    await page.waitForTimeout(1_100)
+    const over = await stack.getAttribute('data-over')
+    seen.push(`${href}: ${over ?? 'page'}`)
+    if (over !== 'column') continue
+    await expect.poll(() => coveredByCorner(page), { timeout: 5_000, message: `${href}: controls under the corner` }).toEqual([])
+    if (process.env.APR_SHOTS) await page.screenshot({ path: `${process.env.APR_SHOTS}/corner-column-${href.replace(/\W+/g, '_') || 'home'}.png` })
+  }
+  console.log(`corner over each page: ${seen.join(', ')}`)
+  // The Settings nav is a left column on every window this size: the strict check ran there at least.
+  expect(seen).toContain('settings: column')
+  const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
+  expect(res.ok()).toBe(true)
 })

@@ -13,8 +13,11 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test'
 import { openPanel, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
 import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
+import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
+// It names its extension and window for sharing an unlock and ends every unlock: alone on the vault.
+holdVaultLock('exclusive', 'file')
 
 const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/extension-one-unlock'
 let lab: PanelLab

@@ -230,6 +230,44 @@ describe('specs with their own config', () => {
   })
 })
 
+describe('specs that swap the server host fixture', () => {
+  // The fixture server has one host fixture for every worker: two of these specs at once
+  // read each other's hosts. chromium-host-fixture ran them one at a time, the webkit
+  // project did not (2026-11-06: banner-placement-bell BP-C49 and BP-C68 failed on every
+  // commit on WebKit with 2 workers, and passed alone). Every project of every browser
+  // either leaves them out or runs them with one worker, and each browser runs them.
+  const FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
+  const fixtureSpecs = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && FIXTURE_CALL.test(text)).map(({ file }) => `**/${file}`)
+  const globs = (v: unknown): string[] => (Array.isArray(v) ? v : v === undefined ? [] : [v]).map(String)
+
+  it('no project runs them beside other tests', async () => {
+    expect(fixtureSpecs.length).toBeGreaterThan(5)
+    const before = process.env.PW_WEBKIT
+    process.env.PW_WEBKIT = '1'
+    let projects: Array<{ name?: string; testMatch?: unknown; testIgnore?: unknown; workers?: number | string }>
+    try {
+      projects = (await import('../../playwright.config')).default.projects ?? []
+    } finally {
+      if (before === undefined) delete process.env.PW_WEBKIT
+      else process.env.PW_WEBKIT = before
+    }
+    const browsers = new Set(projects.map((p) => p.name!.replace(/-host-fixture$/, '')))
+    expect([...browsers].sort()).toEqual(['chromium', 'webkit'])
+    for (const p of projects) {
+      const ignored = globs(p.testIgnore)
+      const runsThem = fixtureSpecs.filter((s) => !ignored.includes(s))
+      if (runsThem.length) {
+        expect(p.workers, `${p.name} runs ${runsThem[0]} with more than one worker`).toBe(1)
+        expect(globs(p.testMatch).sort(), `${p.name} runs other specs beside them`).toEqual([...fixtureSpecs].sort())
+      }
+    }
+    for (const b of browsers) {
+      const serial = projects.filter((p) => p.name!.startsWith(b) && p.workers === 1 && globs(p.testMatch).length)
+      expect(serial.length, `${b}: no project runs the host fixture specs`).toBe(1)
+    }
+  })
+})
+
 describe('dictation setup rows', () => {
   // The rows plan from the server's own scan (Homebrew, ffmpeg, whisper-server, uv):
   // a spec that reads them against the real scan judges the machine it runs on, and

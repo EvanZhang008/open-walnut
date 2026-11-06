@@ -31,7 +31,7 @@ import { forwardRef, useEffect, useMemo, useRef, useState, type ReactNode, type 
 import type { Task } from '@open-walnut/core';
 import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder } from '@open-walnut/ask-list';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
-import { ICON_SLIDERS } from '@/components/common/Icons';
+import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
 import type { AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 
@@ -330,7 +330,7 @@ export function AskWalnutDrawer({
         )}
 
         <div className="ask-walnut-drawer-search">
-          <span className="ask-walnut-drawer-search-ic" aria-hidden="true">{'⌕'}</span>
+          <span className="ask-walnut-drawer-search-ic" aria-hidden="true">{ICON_SEARCH}</span>
           <input data-no-draft="search"
             ref={searchRef}
             type="search"

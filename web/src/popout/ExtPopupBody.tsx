@@ -13,6 +13,7 @@ import { toParent } from './ext-frame';
 import { log } from '@/utils/log';
 import type { PanelPage } from './ext-panel-model';
 import { sessionOfTask } from './useExtAsks';
+import type { KeptAsk } from './ext-continue-kept';
 
 /** As many as fit over the composer in the popup's 560 px. */
 const CONTINUE_MAX = 5;
@@ -22,21 +23,25 @@ const known = () => true;
 
 /**
  * The recent asks to continue, newest first: the popup's body, and the side panel's New chat over
- * its composer, so both open the same way.
+ * its composer, so both open the same way. While the board loads, the rows of the last open
+ * (`kept`) show in their places, and the real ones replace them; the loading line shows only with
+ * none kept.
  */
-export function ContinueList({ rows, max, loading, onPick, className = '' }: { rows: DrawerRow[]; max: number; loading: boolean; onPick: (row: DrawerRow) => void; className?: string }) {
+export function ContinueList({ rows, kept, max, loading, onPick, className = '' }: { rows: DrawerRow[]; kept: readonly KeptAsk[]; max: number; loading: boolean; onPick: (id: string, sessionId?: string) => void; className?: string }) {
   const shown = rows.slice(0, max);
-  if (!shown.length && !loading) return null;
+  const old = loading && shown.length === 0 ? kept.slice(0, max) : [];
+  if (!shown.length && !old.length && !loading) return null;
   return (
-    <div className={`ext-continue ${className}`.trim()} data-testid="ext-continue">
+    <div className={`ext-continue ${className}`.trim()} data-testid="ext-continue" data-rows={old.length ? 'kept' : loading ? 'loading' : 'fresh'}>
       <div className="ext-continue-label">Continue</div>
-      {shown.map((row) => <ContinueRow key={row.id} row={row} onPick={() => onPick(row)} />)}
-      {loading && shown.length === 0 && <p className="ext-continue-empty"><span className="spinner" /> Loading your asks…</p>}
+      {shown.map((row) => <ContinueRow key={row.id} row={row} onPick={() => onPick(row.id, sessionOfTask(row.task) ?? undefined)} />)}
+      {old.map((k) => <ContinueRow key={k.id} row={{ id: k.id, title: k.title }} kept={k} onPick={() => onPick(k.id, k.sessionId)} />)}
+      {loading && shown.length === 0 && old.length === 0 && <p className="ext-continue-empty"><span className="spinner" /> Loading your asks…</p>}
     </div>
   );
 }
 
-export function ExtPopupBody({ rows, page, canAct, loading }: { rows: DrawerRow[]; page: PanelPage | null; canAct: boolean; loading: boolean }) {
+export function ExtPopupBody({ rows, kept, page, canAct, loading }: { rows: DrawerRow[]; kept: readonly KeptAsk[]; page: PanelPage | null; canAct: boolean; loading: boolean }) {
   const draft = useAskObjectDraft('ext-popup');
   const [pageOn, setPageOn] = useState(true);
   const [actOn, setActOn] = useState(false);
@@ -63,9 +68,8 @@ export function ExtPopupBody({ rows, page, canAct, loading }: { rows: DrawerRow[
 
   return (
     <div className="ext-popup-body" data-testid="ext-popup-body">
-      <ContinueList rows={rows} max={CONTINUE_MAX} loading={loading} onPick={(row) => {
-        const sessionId = sessionOfTask(row.task);
-        toParent({ type: 'open-side-panel', open: { taskId: row.id, ...(sessionId ? { sessionId } : {}) } });
+      <ContinueList rows={rows} kept={kept} max={CONTINUE_MAX} loading={loading} onPick={(taskId, sessionId) => {
+        toParent({ type: 'open-side-panel', open: { taskId, ...(sessionId ? { sessionId } : {}) } });
       }} />
       <div className="ext-popup-composer">
         <DraftSessionPanel

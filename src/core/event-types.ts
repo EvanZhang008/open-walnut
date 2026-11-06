@@ -1346,6 +1346,15 @@ export interface HealthSleepReadyEvent {
  * version after the change (thread and mark changes leave it as it was; 0 once
  * the board is deleted). `taskId` is top-level so lightweight WS clients filter on it.
  */
+/**
+ * Who holds a Passwords unlock changed (core/vault/sessions.ts onSessionsChanged: an unlock, a
+ * share, a Lock, an expiry). Carries nothing of the vault: every Walnut window reads its own
+ * GET /api/v1/vault/status again (web/src/api/vault-live.ts), which locks it or shares the unlock.
+ */
+export interface VaultChangedEvent {
+  at: number;
+}
+
 /** An Org node's Threads changed (core/org/threads-store.ts): re-read them. */
 export interface OrgThreadsChangedEvent {
   taskId: string;
@@ -1480,6 +1489,7 @@ export interface EventPayloadMap {
 
   'board:changed': BoardChangedEvent;
   'org-threads:changed': OrgThreadsChangedEvent;
+  'vault:changed': VaultChangedEvent;
 
   'plugin:lifecycle-changed': PluginLifecycleChangedEvent;
   'plugin:status-items': PluginStatusItemsEvent;

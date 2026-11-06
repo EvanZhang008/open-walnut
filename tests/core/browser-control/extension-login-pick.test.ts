@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import type { VaultItemSummary } from '../../../src/core/vault/types'
 import {
-  defaultLoginName, neverCovers, neverEntry, pickUpdate, siteNameFromTitle, stepOneFirst, tiersFor, view, type MenuItem,
+  cleanAccount, defaultLoginName, namedFirst, neverCovers, neverEntry, pickUpdate, siteNameFromTitle, stepOneFirst, tiersFor, view, type MenuItem,
 } from '../../../packages/browser-extension/src/login-pick'
 
 const at = '2026-11-01T00:00:00.000Z'
@@ -66,6 +66,30 @@ describe('step two of a two-step sign in', () => {
   it('no hint, or one that names none of them: the list as it is', () => {
     expect(stepOneFirst(items).items).toEqual(items)
     expect(stepOneFirst(items, { username: 'nobody@lab.test' })).toEqual({ items, more: [] })
+  })
+})
+
+describe('the account the page names (a change form, a username it filled in)', () => {
+  // The shop's own logins, the most recently used first: alex@ ('shop') then the work account.
+  const items = tiersFor(VAULT, 'http://shop.lab.test:3650/account/password').first
+  it('that login first and alone, the others under Other logins, however recently they were used (R2-12)', () => {
+    const r = namedFirst(items, 'alex.work@lab.test')!
+    expect(ids(r.items)).toEqual(['work'])
+    expect(ids(r.more)).toEqual(['shop', 'parent'])
+    expect(ids(namedFirst(items, '  ALEX@LAB.TEST ')!.items)).toEqual(['shop'])
+  })
+  it('no account, or one that names none of the logins: null, the menu as it was', () => {
+    expect(namedFirst(items, undefined)).toBeNull()
+    expect(namedFirst(items, '   ')).toBeNull()
+    expect(namedFirst(items, 'nobody@lab.test')).toBeNull()
+    expect(namedFirst(items.slice(0, 1), 'alex@lab.test')).toBeNull()
+  })
+  it('a page sends one short line, nothing else', () => {
+    expect(cleanAccount(' alex@lab.test ')).toBe('alex@lab.test')
+    expect(cleanAccount(42)).toBeUndefined()
+    expect(cleanAccount('')).toBeUndefined()
+    expect(cleanAccount('a\nb')).toBeUndefined()
+    expect(cleanAccount('x'.repeat(321))).toBeUndefined()
   })
 })
 

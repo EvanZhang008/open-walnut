@@ -63,6 +63,26 @@ export function stepOneFirst(items: MenuItem[], hint?: { itemId?: string; userna
   return { items: hit, more: items.filter((i) => !hit.includes(i)) }
 }
 
+/**
+ * The account the page itself names for its form (a change-password page's hidden username, a
+ * username field it filled in): that login first and alone, the site's others under "Other
+ * logins", as on step two (review R2-12: a change page for alex@ listed the work account first,
+ * the one used last). It wins over the step-one hint and over the most recently used. No account,
+ * or one that names none of them: null, and the menu orders as before.
+ */
+export function namedFirst(items: MenuItem[], account?: string): { items: MenuItem[]; more: MenuItem[] } | null {
+  if (!account?.trim()) return null
+  const r = stepOneFirst(items, { username: account })
+  return r.more.length ? r : null
+}
+
+/** What a page sends as the account it names: trimmed, one line, not a whole document. */
+export function cleanAccount(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const t = v.trim()
+  return t && t.length <= 320 && !/[\r\n]/.test(t) ? t : undefined
+}
+
 export interface UpdateCandidate { id: string; username?: string; password?: string; exact: boolean; usedAt?: string }
 
 /**

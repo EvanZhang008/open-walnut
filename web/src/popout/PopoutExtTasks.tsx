@@ -16,25 +16,24 @@ import { buildImageRefsPayload } from '@/api/image-upload';
 import { fetchSessionHistory } from '@/api/sessions';
 import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
-import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
-import { applyApprovalEvent, refreshApprovals, useApprovals } from '@/components/approvals/approvals-store';
+import { useApprovals } from '@/components/approvals/approvals-store';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
 import { NotificationProvider } from '@/contexts/notifications';
 import { useDraft } from '@/hooks/useDraft';
-import { useEvent } from '@/hooks/useWebSocket';
 import { draftKey } from '@/utils/drafts';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { taskPath } from '@/utils/task-path';
 import { fromParent, toParent } from './ext-frame';
+import { ApprovalLines, useExtApprovals } from './ExtApprovals';
 import { useFrameTheme } from './ext-theme';
-import { hostOf, type PanelPage } from './ext-panel-model';
+import { hostOf, panelAskTitle, type PanelPage } from './ext-panel-model';
 import { askedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
-import { SNAP_ROWS, type TasksSnap } from './ext-snapshot';
+import { SHOWN_AFTER_PAINT_MAX_MS, SNAP_ROWS, type TasksSnap } from './ext-snapshot';
 import './ext-panel.css';
 
 export function PopoutExtTasks() {
@@ -46,23 +45,6 @@ const openTask = (id: string) => window.open(`${window.location.origin}${taskPat
 /** Put a task in the person's Focus (the board's Focus tier; one store write for pin and tier). */
 const addToFocus = (id: string) => apiPatch(`/api/tasks/${id}`, { pinned: true, focus_tier: 'focus' });
 
-/**
- * The approvals waiting for the person (an agent's step in this browser, a script's command), read
- * and kept current here as Home does: the person is in the browser, so they answer here too.
- * Approve and Deny are Home's own buttons (ApprovalRow). A system notice from here carries the
- * same tag as the main window's, so the person gets one, not two (approval-notify.ts).
- */
-function useApprovalsHere(): Approval[] {
-  useEffect(() => { void refreshApprovals(); }, []);
-  useEvent('_ws:reconnected', () => { void refreshApprovals(); });
-  useEvent('approval-keys:changed', () => { void refreshApprovals(); });
-  useEvent('approval:changed', (data) => {
-    const a = (data as { approval?: Approval }).approval;
-    if (a) applyApprovalEvent(a);
-  });
-  return usePendingApprovals();
-}
-
 function ExtTasks() {
   const { tasks, loading } = useTasksContext();
   useFrameTheme();
@@ -72,7 +54,7 @@ function ExtTasks() {
   const [open, setOpen] = useState('');
   /** Each reply's send, by task: a row moving between sections keeps it (the words are a draft). */
   const [replies, setReplies] = useState<Record<string, ReplyState>>({});
-  const approvals = useApprovalsHere();
+  const approvals = useExtApprovals();
   /** Tasks answered from this panel: their rows stay put, with their new state (ext-tasks-model.ts). */
   const answered = useMemo(() => new Set(Object.entries(replies).filter(([, r]) => r.state === 'sent').map(([id]) => id)), [replies]);
   const fresh = useMemo(() => (loading ? null : extTaskLists(tasks, answered)), [tasks, loading, answered]);
@@ -83,10 +65,19 @@ function ExtTasks() {
   // The panel page draws the lists of last time while this view starts (ext-snapshot.ts); once
   // this view shows its own, that drawing goes.
   const shown = !!lists;
-  useEffect(() => { if (shown) toParent({ type: 'shown' }); }, [shown]);
+  // Said once the lists have painted, not on the commit: the extension page takes its drawing away
+  // on this word, and before the paint the frame still shows its last painted frame.
+  useEffect(() => {
+    if (!shown) return;
+    let sent = false;
+    const send = () => { if (!sent) { sent = true; toParent({ type: 'shown' }); } };
+    requestAnimationFrame(() => requestAnimationFrame(send));
+    // A frame the browser does not draw runs no animation frames.
+    setTimeout(send, SHOWN_AFTER_PAINT_MAX_MS);
+  }, [shown]);
   useEffect(() => {
     if (!fresh) return;
-    const rowsOf = (rs: ExtTaskRow[], section: 'focus' | 'needs') => rs.slice(0, SNAP_ROWS).map((r) => ({ title: r.task.title, line: rowLine(r, section), state: r.state }));
+    const rowsOf = (rs: ExtTaskRow[], section: 'focus' | 'needs') => rs.slice(0, SNAP_ROWS).map((r) => ({ title: taskTitleOf(r.task), line: rowLine(r, section), state: r.state }));
     const snap: TasksSnap = { sections: [{ title: 'Focus', rows: rowsOf(fresh.focus, 'focus') }, { title: 'Needs you', rows: rowsOf(fresh.needs, 'needs') }] };
     toParent({ type: 'snapshot', view: 'tasks', snap, counts: [fresh.focus.length, fresh.needs.length] });
   }, [fresh]);
@@ -148,6 +139,14 @@ function ExtTasks() {
   </div>;
 }
 
+/**
+ * A row's title: an ask Walnut has not titled yet wears its agent's placeholder ("Ask Walnut"), so
+ * it reads the question this browser asked it with, as the Ask view's rows do (review R2-7).
+ */
+function taskTitleOf(task: Task): string {
+  return task.walnut_agent && task.project ? panelAskTitle(task, { project: task.project }).title : task.title;
+}
+
 type ReplyState = { state: '' | 'sending' | 'sent' | 'error'; words?: string };
 type Replies = { replies: Record<string, ReplyState>; setReplies: Dispatch<SetStateAction<Record<string, ReplyState>>> };
 
@@ -162,6 +161,7 @@ function PanelApproval({ a }: { a: Approval }) {
     <span className="ext-approval-what">{a.what}</span>
     <span className="ext-approval-who">{requesterText(a, host)}</span>
     <ApprovalButtons a={a} s={s} />
+    <ApprovalLines a={a} s={s} />
   </div>;
 }
 
@@ -200,7 +200,7 @@ function TaskRow({ section, row, open, onToggle, replies, setReplies }: { sectio
       <button type="button" className="ext-task-head" onClick={onToggle} aria-expanded={open}>
         <span className={`ext-task-dot state-${row.state}`} aria-hidden="true" />
         <span className="ext-task-text">
-          <span className="ext-task-title">{task.title}</span>
+          <span className="ext-task-title">{taskTitleOf(task)}</span>
           {line && <span className="ext-task-line" data-testid="ext-task-line">{line}</span>}
           {reply?.state === 'sent' && reply.words && <span className="ext-task-replied" data-testid="ext-task-replied">You replied: {reply.words}</span>}
         </span>
@@ -269,7 +269,7 @@ function TaskReply({ task, line, reply, onChange }: { task: Task; line: string; 
         {/* Walnut's answer box (common/AnswerBox.tsx): the mic inside, pictures, Enter sends (an input method's Enter does not). */}
         <AnswerBox value={draft.text} onChange={(t) => { draft.setText(t); if (state === 'sent' || state === 'error') onChange({ state: '' }); }}
           onSubmit={(t) => void send(t)} sendLabel="Send" sending={state === 'sending'} draftKey={draft.key}
-          placeholder={`Reply to ${task.title.slice(0, 40)}`} minRows={2} testId="ext-task-input" sendTestId="ext-task-send"
+          placeholder={`Reply to ${taskTitleOf(task).slice(0, 40)}`} minRows={2} testId="ext-task-input" sendTestId="ext-task-send"
           inputClassName="ext-task-input" pictures={pictures} />
         <div className="ext-task-actions">
           <button type="button" className="btn btn-sm" onClick={() => openTask(task.id)}>Open in Walnut</button>
