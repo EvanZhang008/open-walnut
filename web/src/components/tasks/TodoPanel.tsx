@@ -54,7 +54,6 @@ import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
-import { GitGlancePill } from '@/components/sessions/GitGlance';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
@@ -1220,7 +1219,6 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
           <WorkspacePill task={task} />
-          {!isDone && <GitGlancePill sessionId={resolveTaskSessionId(task)} />}
           <TaskTagPills task={task} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />
@@ -2399,13 +2397,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [expandProject]);
   // Consume-once acknowledgment from the target InlineAdd (see its effect).
   const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
-  // First visit (nothing stored) starts Parked folded: all three tiers are
-  // permanent rows now, and the "someday" one is the one a first look does not
-  // need open. Every other region stays expanded, and the first chevron click
-  // persists whatever the user actually wants.
+  // Stored choices win; a first visit keeps every region folded.
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
     try {
-      if (localStorage.getItem(LS_COLLAPSED_SECTIONS_KEY) === null) return new Set(['wait']);
+      if (localStorage.getItem(LS_COLLAPSED_SECTIONS_KEY) === null) return new Set(['pinned', 'focus', 'wait', 'tasks']);
     } catch { /* storage disabled */ }
     return readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY);
   });

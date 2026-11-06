@@ -2,9 +2,6 @@
  * A session's git state at a glance (session-git-store.ts): the branch, how many
  * files are not committed, their +/- lines, and the commits not pushed.
  *
- *  - GitGlancePill: a task row's pill. Shown only when there is something to
- *    act on (uncommitted files or unpushed commits): a clean, pushed task
- *    stays quiet in a list of thirty.
  *  - GitGlanceLine: a session row's line and the Changed tab's strip. Always
  *    names the branch, words its numbers ("2 uncommitted", "↑1 unpushed": the
  *    Changed chip beside it counts something else, the session's own edits),
@@ -15,7 +12,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } fr
 import { timeAgo } from '@/utils/time';
 import { useSessionGitGlance } from '@/stores/session-git-store';
 import type { SessionGitGlance } from '@/api/session-git-status';
-import { branchLabel, compactCount, gitGlanceTitle, pillBranchText, summarizeGitGlance, type GitGlanceSummary } from '@/utils/git-glance-text';
+import { branchLabel, compactCount, gitGlanceTitle, summarizeGitGlance, type GitGlanceSummary } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
 
 export function BranchIcon() {
@@ -164,37 +161,6 @@ function ariaOf(s: GitGlanceSummary): string {
   if (s.ahead) parts.push(`${s.ahead} unpushed commit${s.ahead === 1 ? '' : 's'}`);
   if (s.behind) parts.push(`${s.behind} commit${s.behind === 1 ? '' : 's'} to pull`);
   return parts.join(', ');
-}
-
-/** A task row's pill, for the task's session. Nothing when clean or unknown. */
-export const GitGlancePill = memo(function GitGlancePill({ sessionId }: { sessionId: string | null | undefined }) {
-  const glance = useSessionGitGlance(sessionId);
-  const s = summarizeGitGlance(glance);
-  // Only what waits on the user's work: uncommitted files or unpushed commits.
-  // (Commits to pull are in the tooltip and on the session's own line.)
-  if (!glance || !s || (s.files === 0 && !s.ahead)) return null;
-  return <PillView glance={glance} s={s} />;
-});
-
-function PillView({ glance, s }: { glance: SessionGitGlance; s: GitGlanceSummary }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const text = pillBranchText(s);
-  const fit = usePillFit(ref, `${text}|${s.files}|${s.insertions}|${s.deletions}|${s.conflicted}|${s.ahead}`);
-  return (
-    <span
-      ref={ref}
-      className={`todo-item-due-pill git-glance git-glance-pill${s.stale ? ' is-stale' : ''}${fit ? ` git-glance-fit-${fit}` : ''}`}
-      title={gitGlanceTitle(glance, s)}
-      aria-label={ariaOf(s)}
-      role="img"
-      data-testid="git-glance-pill"
-      data-fit={fit}
-    >
-      {s.branch ? <BranchIcon /> : <CommitIcon />}
-      <BranchName text={text} split={!!s.branch} fit={fit} />
-      <Counts s={s} words="icon" pull={false} />
-    </span>
-  );
 }
 
 /** The line form, from a glance already read (the Changed tab passes its own). */

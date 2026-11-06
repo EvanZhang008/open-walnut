@@ -18,8 +18,6 @@ import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { log } from '@/utils/log';
 import { useHomeTasksById } from './phone-row-behavior';
-import { GitGlancePill } from '@/components/sessions/GitGlance';
-import { resolveTaskSessionId } from '@/utils/session-status';
 
 const DEBOUNCE_MS = 250;
 const TIMEOUT_MS = 10_000;
@@ -212,14 +210,14 @@ export function PhoneSearchLayer({ open, onClose, onOpenTask }: PhoneSearchLayer
         {phase === 'done' && groups.tasks.length > 0 && (
           <SearchGroup label="Tasks">
             {groups.tasks.map((r) => (
-              <ResultRow key={r.taskId} title={r.title} snippet={r.snippet} gitSessionId={taskGitSession(tasksById.get(r.taskId))} onOpen={() => openTask(r.taskId)} />
+              <ResultRow key={r.taskId} title={r.title} snippet={r.snippet} onOpen={() => openTask(r.taskId)} />
             ))}
           </SearchGroup>
         )}
         {phase === 'done' && groups.sessions.length > 0 && (
           <SearchGroup label="Sessions">
             {groups.sessions.map((r) => (
-              <ResultRow key={r.sessionId} title={r.title} snippet={r.snippet} gitSessionId={r.sessionId} onOpen={() => openSession(r.sessionId)} />
+              <ResultRow key={r.sessionId} title={r.title} snippet={r.snippet} onOpen={() => openSession(r.sessionId)} />
             ))}
           </SearchGroup>
         )}
@@ -245,19 +243,12 @@ function SearchGroup({ label, children }: { label: string; children: React.React
   );
 }
 
-/** The session whose git state a task result shows: an open task's own (a done one says nothing). */
-function taskGitSession(task: Task | undefined): string | undefined {
-  if (!task || task.phase === 'COMPLETE') return undefined;
-  return resolveTaskSessionId(task) ?? undefined;
-}
-
-function ResultRow({ title, meta, snippet, gitSessionId, onOpen }: { title: string; meta?: string; snippet?: string; gitSessionId?: string; onOpen: () => void }) {
+function ResultRow({ title, meta, snippet, onOpen }: { title: string; meta?: string; snippet?: string; onOpen: () => void }) {
   const words = plainSnippet(snippet);
   return (
     <button type="button" className="phone-search-row" onClick={onOpen}>
       <span className="phone-search-row-title">{plainSnippet(title) || 'Untitled'}</span>
       {meta ? <span className="phone-search-row-meta">{meta}</span> : null}
-      {gitSessionId ? <GitGlancePill sessionId={gitSessionId} /> : null}
       {words ? <span className="phone-search-row-snippet">{words}</span> : null}
     </button>
   );

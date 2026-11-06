@@ -1,8 +1,7 @@
 /**
  * A session's git state at a glance, read from a REAL repository by the
  * server's own git code (git-glance-fixture.ts):
- *   - the task row's pill names the branch, the uncommitted files, their +/-
- *     lines and the commit not pushed;
+ *   - task rows stay free of git status, even with uncommitted or unpushed work;
  *   - the session's Changed chip counts the files its tab lists, and the tab's
  *     strip repeats the git state;
  *   - while the tab is open, an edit the session makes shows up by itself
@@ -45,33 +44,17 @@ test.beforeEach(async ({ page }) => {
   await page.waitForLoadState('networkidle')
 })
 
-test('the task row shows the branch, uncommitted files, +/- lines and the unpushed commit', async ({ page }) => {
+test('a task with uncommitted files and an unpushed commit has no inline git pill', async ({ page }) => {
   const row = await taskRow(page)
-  const pill = row.getByTestId('git-glance-pill')
-  await expect(pill).toBeVisible({ timeout: 15_000 })
-  // The row is narrow: the branch may be cut in the middle (its start and end kept); its full name is in the label.
-  await expect(pill.locator('.git-glance-branch')).toHaveText(/^feature.*lance$/)
-  expect(await pill.getAttribute('aria-label')).toContain(`Branch ${GIT_GLANCE_BRANCH}`)
-  await expect(pill.getByTestId('git-glance-files')).toHaveText('2')
-  // src/app.ts +3 -1, src/feature.ts (new) +3.
-  await expect(pill.locator('.git-glance-add')).toHaveText('+6')
-  await expect(pill.locator('.git-glance-del')).toHaveText('−1')
-  await expect(pill.getByTestId('git-glance-ahead')).toHaveText('↑1')
-  const title = await pill.getAttribute('title')
-  expect(title).toContain(`branch ${GIT_GLANCE_BRANCH}, tracking origin/${GIT_GLANCE_BRANCH}`)
-  expect(title).toContain('2 changed files not committed, 1 new')
-  expect(title).toContain('1 commit not pushed')
-  // A pill that gave anything up (a cut branch, hidden lines) has used the row's room first:
-  // no wide gap is left beside the project name.
-  const room = await row.evaluate((el) => {
-    const pill = el.querySelector<HTMLElement>('.git-glance-pill')!
-    const meta = el.querySelector<HTMLElement>('.todo-search-meta-row')
-    const range = document.createRange()
-    if (meta) range.selectNodeContents(meta)
-    const textRight = meta ? range.getBoundingClientRect().right : pill.getBoundingClientRect().left
-    return { gaveWay: Number(pill.dataset.fit) > 0 || !!pill.querySelector('.is-cut'), gap: pill.getBoundingClientRect().left - textRight }
-  })
-  if (room.gaveWay) expect(room.gap, 'room left unused beside the project name').toBeLessThan(24)
+  await expect(row.getByTestId('git-glance-pill')).toHaveCount(0)
+  const panel = await openPanel(page)
+  const chip = panel.getByTestId('session-changed-chip')
+  await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 20_000 })
+  await expect(row.locator('.git-glance')).toHaveCount(0)
+  await chip.click()
+  await expect(panel.getByTestId('session-diff-gitstrip').locator('.git-glance-branch')).toHaveText(GIT_GLANCE_BRANCH)
+  await chip.click()
+  await expect(row.locator('.git-glance')).toHaveCount(0)
 })
 
 test('the Changed chip counts what its tab lists, and the tab shows the git strip', async ({ page }) => {
