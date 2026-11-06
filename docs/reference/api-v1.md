@@ -2236,7 +2236,9 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   no `saved`. Only `saved: true` says the state carries. `gone`, the kept directory that no
   longer exists (the run started in the default cwd); `notEntered`, one the shell could not start
   in (nothing ran); `shellCd: true` when the shell entered it itself. Limits: a trace sent to a
-  descriptor of 10 or more (`BASH_XTRACEFD`) is not silenced in the save; an alias named `{`
+  descriptor of 10 or more (`BASH_XTRACEFD`) is not silenced in the save, nor is a trace when the
+  line's own DEBUG trap under `extdebug` fails on some commands only (the line's exported values
+  can then show in its own output and run log, as a trace of the line itself would); an alias named `{`
   breaks the save's first line; a readonly function over a builtin the save removes (`builtin`,
   `command`, `exec`, `shopt`, `printf`, `declare`, `compgen`, `umask`, `pwd`, `cd`) skips the
   save, with the mark; a readonly `POSIXLY_CORRECT` skips it with no mark on bash 3.2 and 4.2 and
