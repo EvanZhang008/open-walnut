@@ -29,8 +29,8 @@
  * per build, and the update runs on request (`host_daemon_update`, this file's
  * `request`). WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off.
  */
-import { execRunsHold } from './exec-runs-hold.js'
-import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS, SERVICE_UPDATE_FORCE_CAP } from './daemon-update-behind.js'
+import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
+import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -381,8 +381,10 @@ export class NetDaemonUpdater {
         host: c.host, running: c.daemonVersion, expected, behindMs: behind.behindMs,
       })
     }
+    // Overdue: the CLI goes over the daemon's own work, in at most a minute (daemon-over-busy.ts).
+    const goesOver = behind.overdue
     const holds = async (): Promise<string | null> => {
-      if (!behind.overdue) return this.d.hold() ?? await this.hostBusy()
+      if (!goesOver) return this.d.hold() ?? await this.hostBusy()
       // Overdue: the writes in flight get a moment to end (as on the SSH path), then go over the rest.
       const until = Date.now() + OVERDUE_GATE_WAIT_MS
       while (this.d.hold() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 1_000))
@@ -415,12 +417,20 @@ export class NetDaemonUpdater {
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
     try {
-      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, { overBusy: behind.overdue && c.hasCapability(SERVICE_UPDATE_FORCE_CAP) })
+      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, { overBusy: goesOver })
     } catch (err) {
       if (err instanceof NetUpdateHeldError) {
         // The upload was paid for: the next try waits a cooldown, it is not a failure.
         this.lastAttempt = null
         return this.postpone(err.message, this.d.cooldownMs)
+      }
+      // The daemon refused before it changed anything (busy, or its drain ran out): asked again,
+      // not a failure that gives the build up after a few. Overdue, in a minute; otherwise after
+      // the cooldown, since each try uploads the file again.
+      if (daemonBusyRefusal(err)) {
+        this.lastAttempt = null
+        return this.postpone(`the host's daemon is busy (${(err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200)})`,
+          goesOver ? (this.d.recheckMs ?? 60_000) : this.d.cooldownMs)
       }
       const count = this.failed?.expected === expected ? this.failed.count + 1 : 1
       this.failed = { expected, count }

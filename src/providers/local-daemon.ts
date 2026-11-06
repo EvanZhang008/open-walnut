@@ -31,7 +31,7 @@ import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { daemonBusyRefusal, execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
-import { daemonUpdateOverdue, SERVICE_UPDATE_FORCE_CAP } from './daemon-update-behind.js'
+import { daemonUpdateOverdue } from './daemon-update-behind.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
 import { DAEMON_BINARIES_DIR, WALNUT_HOME } from '../constants.js'
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
@@ -433,12 +433,13 @@ export class LocalDaemon {
   /** How long this Mac has run another daemon build, when that is past the bound (daemon-update-behind.ts); 0 otherwise. */
   private _overdueMs = 0
   private _overdueNoted: string | null = null
-  /** Overdue, and the running daemon takes `force` on service.update. */
+  /** Overdue on a managed daemon: its update passes `--over-busy`. */
   private _forceable = false
 
   private noteOverdue(running: string | undefined, expected: string | null | undefined, capabilities?: string[]): void {
     const verdict = daemonUpdateOverdue('__local__', running ?? '', !!running && !!expected && running !== expected)
-    this._forceable = verdict.overdue && !!capabilities?.includes(SERVICE_UPDATE_FORCE_CAP)
+    // A managed daemon is replaced with `--over-busy` (daemon-over-busy.ts); an unmanaged one is stopped from here.
+    this._forceable = verdict.overdue && !!capabilities?.includes('cron-supervision-v1')
     this._overdueMs = verdict.overdue ? Math.max(1, verdict.behindMs) : 0
     if (!verdict.overdue) { this._overdueNoted = null; return }
     if (this._overdueNoted === expected) return
@@ -650,7 +651,7 @@ export class LocalDaemon {
     if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < 600_000) return null
     this._lastManagedUpdate = { expected, at: Date.now() }
     const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
-    // Overdue (daemon-update-behind.ts): a daemon that can is asked to go over its own work.
+    // Overdue (daemon-update-behind.ts): the CLI goes over the daemon's own work, in at most a minute.
     const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath, ...(this._forceable ? [OVER_BUSY_FLAG] : [])])
     if (result.code !== 0 && daemonBusyRefusal(`${result.stdout}\n${result.stderr}`)) {
       // Refused before anything changed: asked again on the upgrade clock, not held off 10 minutes.

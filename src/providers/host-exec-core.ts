@@ -428,6 +428,23 @@ export function createHostExec(deps: HostExecDeps) {
     return [...jobs.values()].filter((j) => task === null || j.taskId === task).sort((a, b) => b.startedAt - a.startedAt).map(view)
   }
 
+  /**
+   * A forced daemon update (daemon-update-behind.ts) is about to end the runs: each run's log
+   * and the audit say so, and the run is stopped, so a later read of the log tells its task
+   * why it ended instead of stopping mid-line. Returns how many it stopped.
+   */
+  function endForUpdate(note: string): number {
+    let n = 0
+    for (const j of jobs.values()) {
+      if (j.endedAt !== null) continue
+      try { fs.appendFileSync(j.logFile, `\n[walnut] ${note}\n`) } catch { /* the log is gone */ }
+      audit({ event: 'ended-by-update', jobId: j.id, taskId: j.taskId })
+      stop(j, 'asked')
+      n++
+    }
+    return n
+  }
+
   /** Running jobs (the server's per-host cap reads the host's own count after a restart). */
   function running(): number {
     let n = 0
@@ -455,6 +472,7 @@ export function createHostExec(deps: HostExecDeps) {
     /** The running jobs' task and folder, read at once (task directory cleanup keeps what they work in). */
     active: (): Array<{ taskId: string | null; cwd: string }> =>
       [...jobs.values()].filter((j) => j.endedAt === null).map((j) => ({ taskId: j.taskId ?? null, cwd: j.cwd })),
+    endForUpdate,
   }
 }
 

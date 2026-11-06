@@ -344,7 +344,7 @@ describe('NetDaemonUpdater', () => {
     try {
       const now = Date.now()
       for (let t = now - DAEMON_UPDATE_BEHIND_MAX_MS - 60_000; t < now; t += 30 * 60_000) daemonUpdateOverdue('studio-mac', OLD, true, t)
-      for (const [caps, overBusy] of [[[...ALL_CAPS, 'service-update-force-v1'], true], [[...ALL_CAPS], false]] as const) {
+      for (const [caps, overBusy] of [[[...ALL_CAPS, 'service-update-force-v1'], true], [[...ALL_CAPS], true]] as const) {
         const base = link({ hasCapability: (c) => (caps as readonly string[]).includes(c) })
         const conn = link({
           hasCapability: base.hasCapability,

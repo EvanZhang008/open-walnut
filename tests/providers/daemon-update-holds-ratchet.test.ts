@@ -27,9 +27,12 @@ const SITES: Record<string, RegExp> = {
   'src/providers/daemon-net-update.ts': /this\.postpone\(/,
 }
 
+/** Code only: an overdue check written in a comment bounds nothing. */
+const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1')
+
 const METHOD = /^ {2}(?:(?:private|public|protected|static|async|override)\s+)*(\w+)\s*(?:<[^>]*>)?\(/
 
-interface Site { file: string; line: number; method: string; window: string; above: string }
+interface Site { file: string; line: number; method: string; own: string; window: string; above: string }
 
 function methodsOf(lines: string[]): Array<{ name: string; start: number; end: number }> {
   const starts: Array<{ name: string; start: number }> = []
@@ -51,9 +54,11 @@ function sites(): Site[] {
       const start = methods.find((m) => m.start <= i && i < m.end)?.start ?? 0
       out.push({
         file, line: i + 1, method,
-        window: lines.slice(Math.max(0, i - 14), i + 2).join('\n'),
-        // The method's own lines above the call (at most 25): where a hold's overdue check must sit.
-        above: lines.slice(Math.max(start, i - 25), i + 2).join('\n'),
+        // The call itself (its statement may run over three lines), then the lines leading to it.
+        own: lines.slice(i, i + 3).join('\n'),
+        window: lines.slice(Math.max(0, i - 14), i + 3).join('\n'),
+        // The method's own lines above the call (at most 25) and the call: where a hold's overdue check must sit.
+        above: lines.slice(Math.max(start, i - 25), i + 3).join('\n'),
       })
     })
   }
@@ -67,7 +72,15 @@ describe('daemon update holds', () => {
     for (const file of Object.keys(SITES)) expect(found.some((s) => s.file === file), `no update deferral found in ${file}`).toBe(true)
   })
 
-  const matches = (h: (typeof DAEMON_UPDATE_HOLDS)[number], s: Site) => h.file === s.file && h.method === s.method && s.window.includes(h.near)
+  type Hold = (typeof DAEMON_UPDATE_HOLDS)[number]
+  // An entry names its call by words in the call itself; only a call none names that way is
+  // matched by words in the lines leading to it (two calls a few lines apart stay apart).
+  const named = (s: Site): Hold[] => {
+    const mine = DAEMON_UPDATE_HOLDS.filter((h) => h.file === s.file && h.method === s.method)
+    const own = mine.filter((h) => s.own.includes(h.near))
+    return own.length ? own : mine.filter((h) => s.window.includes(h.near))
+  }
+  const matches = (h: Hold, s: Site) => named(s).includes(h)
 
   it('every place an update is put off is listed once, and every listed one is exactly one call', () => {
     for (const s of found) {
@@ -82,7 +95,7 @@ describe('daemon update holds', () => {
   it('a hold reads the overdue verdict right above its call, so it gives way once the update is overdue', () => {
     for (const h of DAEMON_UPDATE_HOLDS.filter((x) => x.kind === 'hold')) {
       const site = found.find((s) => matches(h, s))!
-      expect(/_overdueMs|forceable\(\)|_forceable|behind\.overdue/.test(site.above), `${h.file}:${site.line} ${h.method} holds a daemon update ("${h.near}") with no upper bound: read the overdue verdict (daemon-update-behind.ts) where it decides to wait`).toBe(true)
+      expect(/_overdueMs|forceable\(\)|_forceable|behind\.overdue|goesOver/.test(stripComments(site.above)), `${h.file}:${site.line} ${h.method} holds a daemon update ("${h.near}") with no upper bound: read the overdue verdict (daemon-update-behind.ts) where it decides to wait`).toBe(true)
     }
   })
 

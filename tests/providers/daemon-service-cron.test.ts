@@ -46,7 +46,7 @@ interface HarnessOptions {
   files?: Record<string, { text: string; owned: boolean }>
   ready?: boolean[]
   daemonStuck?: boolean
-  prepareUpdate?: () => Promise<void>
+  prepareUpdate?: () => Promise<void | 'prepared' | 'unprepared'>
   handover?: () => Promise<boolean>
 }
 
@@ -349,6 +349,22 @@ describe('cron boot update', () => {
     expect(h.procs.supervisor).toBe(supervisor)
     expect(h.timeline.some((event) => event.startsWith('spawn:'))).toBe(false)
     expect(h.tabWrites).toEqual([])
+    expectUnprivileged(h)
+  })
+
+  it('an overdue update the busy daemon would not prepare for restarts it through its supervisor onto the new executable', async () => {
+    // daemon-over-busy.ts step 3: the daemon's own shutdown (SIGTERM) does the preparing.
+    const h = harness({ installed: { executable: OLD_EXE }, running: true, prepareUpdate: async () => 'unprepared' })
+    const old = h.procs.daemon!.pid
+    const supervisor = h.procs.supervisor
+    const status = expectOk(await h.manager.update())
+
+    expect(status.active).toBe(true)
+    expect(h.timeline).toContain(`signal:${old}:SIGTERM`)
+    expect(h.procs.daemon!.pid).not.toBe(old)
+    expect(h.procs.daemon!.executable).toBe(NEW_EXE)
+    expect(h.procs.supervisor).toBe(supervisor)
+    expect(h.readyCalls.at(-1)?.expected).toBe(NEW_EXE)
     expectUnprivileged(h)
   })
 

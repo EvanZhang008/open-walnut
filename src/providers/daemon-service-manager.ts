@@ -70,7 +70,8 @@ export interface DaemonServiceDeps {
   readConfig(configPath: string): Promise<string | null>
   ready(status: DaemonServiceStatus, expectedExecutable?: string): Promise<boolean>
   handover?(): Promise<boolean>
-  prepareUpdate?(): Promise<void>
+  /** 'unprepared': the daemon stayed busy; the restart that follows replaces it without its help (daemon-over-busy.ts). */
+  prepareUpdate?(): Promise<void | 'prepared' | 'unprepared'>
 }
 
 export interface DaemonServiceStatus {
@@ -657,6 +658,9 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     if (updateOnly) {
       try {
         if (!deps.prepareUpdate) throw new DaemonServiceUpdateRefusedError('Service update preparation is unavailable')
+        // 'unprepared' (an overdue update the busy daemon would not prepare for) needs nothing
+        // else here: the restart below sends it SIGTERM, and its own shutdown does the preparing
+        // (daemon-over-busy.ts); KillMode=process keeps the CLI sessions running.
         await deps.prepareUpdate()
         undo.updateStarted = true
       } catch (error) {

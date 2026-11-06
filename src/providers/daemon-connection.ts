@@ -46,7 +46,7 @@ import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-se
 import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
-import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS, SERVICE_UPDATE_FORCE_CAP } from './daemon-update-behind.js'
+import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
@@ -4015,11 +4015,16 @@ export class DaemonConnection {
   private _overdueMs = 0
   private _overdueNoted: string | null = null
 
-  /** Overdue, and the running daemon takes `force` on service.update. */
+  /** Overdue: the update goes over the daemon's own work (`--over-busy`). */
   private forceable(): boolean {
-    return this._overdueMs > 0 && this.hasCapability(SERVICE_UPDATE_FORCE_CAP)
+    return this._overdueMs > 0
   }
 
+  /**
+   * Overdue, every hold gives way. A managed daemon is replaced by the new build's CLI with
+   * `--over-busy` (daemon-over-busy.ts), which gets past an older daemon too: one that will not
+   * prepare in a minute is restarted by its service, its sessions kept.
+   */
   private noteOverdue(expected: string, remoteVersion: string, verdict: { overdue: boolean; behindMs: number }): void {
     this._overdueMs = verdict.overdue ? Math.max(1, verdict.behindMs) : 0
     if (!verdict.overdue) { this._overdueNoted = null; return }
@@ -4287,8 +4292,7 @@ export class DaemonConnection {
         run: (command, timeout) => this.sshExec(command, timeout),
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
       }, scope, {
-        // Overdue (daemon-update-behind.ts): a daemon that can is asked to go over its own work;
-        // an older one would only make the CLI wait longer for the refusal it gives anyway.
+        // Overdue (daemon-update-behind.ts): the CLI goes over the daemon's own work, in at most a minute.
         overBusy: this.forceable(),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
@@ -4315,11 +4319,11 @@ export class DaemonConnection {
         // busy every time (an idle ACP worker lives up to 2 h) is asked less and less often.
         const n = this._busyRefusals?.expected === expected ? this._busyRefusals.n + 1 : 1
         this._busyRefusals = { expected, n }
-        // Overdue, a daemon that can go over its work did not (a session command it drains, a
-        // relay that outlived its grace): asked again in a minute. An older daemon backs off as
-        // before: each try uploads the file again.
+        // Overdue, the over-busy update should not be refused; if it is (its restart could not
+        // be confirmed), it is asked again every few minutes at most, not backed off for good.
         this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion,
-          n <= DaemonConnection.BUSY_STEADY_TRIES || this.forceable() ? { steady: true } : { attempt: n - DaemonConnection.BUSY_STEADY_TRIES })
+          n <= DaemonConnection.BUSY_STEADY_TRIES ? { steady: true }
+            : { attempt: this.forceable() ? Math.min(n - DaemonConnection.BUSY_STEADY_TRIES, 2) : n - DaemonConnection.BUSY_STEADY_TRIES })
         return 'held'
       }
       // A double without the hook never asked: the attempt still counts against the cooldown.

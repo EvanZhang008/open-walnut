@@ -656,6 +656,17 @@ a marker out of the daemon's scan window proves nothing either. Ratchets:
 
 **Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `bun run build && bash scripts/build-daemon.sh && bun run dev:prod`: the next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
+**Every hold on that update has an end** (`src/providers/daemon-update-behind.ts`; 2026-11-05: a host
+whose sessions always run stayed on an old daemon for about 17.6 hours, the reasons taking turns).
+One clock per host and running build, kept on disk: once a host has run another build for 3 hours,
+every hold gives way (host_exec runs, open ACP turns, the update gap; writes in flight get 30 s), and
+the swap passes `walnut daemon update --over-busy` (`daemon-over-busy.ts`): plain asks for 30 s, then
+`force` (a daemon with `service-update-force-v1` goes over its requests, relays, ACP workers and
+host_exec runs, each run's log saying why), then at a minute a restart by its service, whose
+shutdown finishes the session commands and file writes in flight and keeps the CLI sessions. The 3
+hours is when the waiting stops, not when the update is done. `DAEMON_UPDATE_HOLDS` lists every place
+an update is put off; `tests/providers/daemon-update-holds-ratchet.test.ts` fails on one not listed.
+
 **Never scp manually** — some corporate SSH proxies kills large transfers. That's exactly what the chunked auto-deploy solves.
 
 ### CLI scheduled tasks (crons) are DIRECTORY-scoped, not session-scoped

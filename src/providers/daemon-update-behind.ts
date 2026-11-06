@@ -14,9 +14,10 @@
  * build clears it. It is kept on disk beside the other hold clocks (acp-upgrade-hold.ts),
  * because every deploy is a new server. Past DAEMON_UPDATE_BEHIND_MAX_MS the update is overdue:
  * every hold in DAEMON_UPDATE_HOLDS gives way (logged), and the swap asks the daemon to go over
- * its own work (daemon-over-busy.ts: `force` on service.update), which then ends
- * the requests and host_exec runs still open, as a plain daemon restart always did. Live CLI
- * sessions survive a swap either way.
+ * its own work (daemon-over-busy.ts): `force` on service.update for a daemon that knows it,
+ * else a restart by its service; either ends the requests, ACP workers and host_exec runs still
+ * open (each run's log says why), as a plain daemon restart always did. Session commands and file
+ * writes in flight finish first, and the CLI sessions keep running across the swap.
  */
 import { dropHoldClocks, upgradeHoldClock } from './acp-upgrade-hold.js'
 
@@ -41,13 +42,15 @@ export const OVERDUE_GATE_WAIT_MS = 30_000
  * `behindMs`: how long it has been behind on this build (0 when it is not).
  */
 export function daemonUpdateOverdue(host: string, running: string, behind: boolean, now: number = Date.now()): { overdue: boolean; behindMs: number } {
+  // A version that could not be read (or no daemon at all) says nothing: the clock is left as it is.
+  if (!running) return { overdue: false, behindMs: 0 }
   const key = `behind:${host}:${running}`
   dropHoldClocks(`behind:${host}:`, key)
   const { holds, heldMs } = upgradeHoldClock(key, behind, DAEMON_UPDATE_BEHIND_MAX_MS, now, DAEMON_UPDATE_BEHIND_STALE_MS)
   return { overdue: behind && !holds, behindMs: heldMs }
 }
 
-/** The daemon capability that takes `force` on service.update (both twins advertise it). */
+/** The daemon capability that takes `force` on service.update (both twins advertise it; informational for servers). */
 export const SERVICE_UPDATE_FORCE_CAP = 'service-update-force-v1'
 
 export type DaemonUpdateHoldKind =
@@ -94,9 +97,10 @@ export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
   { file: DC, method: 'runUpgradeRecheck', near: 'the check failed', kind: 'retry', why: 'the decision threw' },
   { file: DC, method: 'updateManagedDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
   { file: DC, method: 'updateManagedDaemon', near: "the host's daemon is busy", kind: 'hold', why: 'the daemon refused before it changed anything; overdue, the swap asks it to go over its work' },
-  { file: LD, method: 'ensureRunningInner', near: "updatedPort === 'busy'", kind: 'hold', why: 'the managed local daemon refused as busy; overdue, the update asks it to go over its work' },
+  { file: LD, method: 'ensureRunningInner', near: "updatedPort === 'busy'", kind: 'bounded', bound: 'OVER_BUSY_WAIT_MS', boundFile: 'src/providers/daemon-over-busy.ts', why: 'the managed local daemon refused as busy; overdue, the next try (a minute later) forces after OVER_BUSY_PLAIN_MS and has the service restart it by OVER_BUSY_WAIT_MS' },
   { file: LD, method: 'ensureRunningInner', near: 'ACP turns open', kind: 'hold', why: 'open ACP turns on this Mac' },
   { file: LD, method: 'deferForExecRuns', near: 'host_exec runs', kind: 'hold', why: 'host_exec runs on this Mac' },
   { file: NU, method: 'attempt', near: 'postpone(held)', kind: 'hold', why: 'writes in flight or host_exec runs on a host network machine' },
-  { file: NU, method: 'attempt', near: 'NetUpdateHeldError', kind: 'retry', why: 'held right before the launch, after the upload; overdue, only a dropped link or a refused grant gets here (holds() answers null)' },
+  { file: NU, method: 'attempt', near: "the host's daemon is busy", kind: 'hold', why: 'the daemon refused before it changed anything; overdue, the next swap goes over its work (--over-busy)' },
+  { file: NU, method: 'attempt', near: 'postpone(err.message', kind: 'retry', why: 'held right before the launch, after the upload; overdue, only a dropped link or a refused grant gets here (holds() answers null)' },
 ]

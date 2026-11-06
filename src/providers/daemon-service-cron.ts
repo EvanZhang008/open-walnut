@@ -319,13 +319,21 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
 
     if (updateOnly) {
       // The daemon prepares, exits non-zero, and the supervisor reads the new script 5 s later, as systemd restarts a unit.
+      let prepared_: void | 'prepared' | 'unprepared'
       try {
         if (!deps.prepareUpdate) throw new DaemonServiceUpdateRefusedError('Service update preparation is unavailable')
-        await deps.prepareUpdate()
+        prepared_ = await deps.prepareUpdate()
         undo.updateStarted = true
       } catch (error) {
         undo.updateStarted = !(error instanceof DaemonServiceUpdateRefusedError)
         throw error
+      }
+      // An overdue update the busy daemon would not prepare for: its own shutdown (SIGTERM) does
+      // it, and the supervisor starts the new script, as `walnut daemon restart` (daemon-over-busy.ts).
+      if (prepared_ === 'unprepared') {
+        const stuck = await startFromScript()
+        if (stuck) return fail('verifyFailed', `the running daemon could not be replaced: ${stuck}`)
+        return confirm('update', prepared.executable)
       }
       if (!(await deps.supervisor())) await deps.spawnDetached('/bin/sh', [script])
       return confirm('update', prepared.executable)

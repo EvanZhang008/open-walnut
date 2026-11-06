@@ -4505,6 +4505,8 @@ async function cmdServiceHandover(ws, id, cmd) {
     hostExec && hostExec.running() ? hostExec.running() + ' host_exec run(s)' : '',
   ].filter(Boolean);
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith: busyWith });
+  // Each run's log says why it ended (twin of daemon-standalone.ts; an older sidecar has no endForUpdate).
+  if (force && hostExec && hostExec.running() && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host was replaced by an update that had waited 3 hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
   if (!force && ((acp && acp.workers.size) || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }

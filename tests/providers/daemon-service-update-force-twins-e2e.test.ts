@@ -5,7 +5,7 @@
  * 2026-11-05: clouddev's daemon refused every update as busy for hours ("Daemon has active
  * operations; retry after they finish"): a request of some client was always open. Pinned here:
  * while a host_exec run (an admitted request) goes on, a plain service.update is refused, and a
- * forced one goes ahead at once and the daemon exits, without waiting for the run.
+ * forced one goes ahead at once and the daemon exits, without waiting for the run, whose log says why it ended.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the command it runs is
  * `sleep`; the only signals are signal 0 to the daemon this file started, and SIGKILL to it after
@@ -128,6 +128,13 @@ describe.each(TWINS)('$name', (twin) => {
     expect(proc!.exitCode).toBeNull()
 
     expect(hello.capabilities).toContain('service-update-force-v1')
+    // Never forced within its window (an older daemon ignores force the same way): the CLI says
+    // 'unprepared', so its service restarts the daemon, and nothing was changed here yet.
+    const said: string[] = []
+    expect(await requestDaemonServiceUpdate(daemonDir, stateDir, { force: true, plainMs: 60_000, pauseMs: 200, busyMs: 1_000, note: (text) => said.push(text) })).toBe('unprepared')
+    expect(said.at(-1)).toContain('restarting it instead')
+    expect(proc!.exitCode).toBeNull()
+    expect(await rpc({ cmd: 'hello' })).toMatchObject({ ok: true, instanceId })
     // The CLI's way (daemon-over-busy.ts): plain asks first, force once they were refused for plainMs.
     const notes: string[] = []
     const asked = Date.now()
@@ -139,5 +146,16 @@ describe.each(TWINS)('$name', (twin) => {
       || await new Promise<boolean>((r) => { const t = setTimeout(() => r(false), 5_000); proc!.once('exit', () => { clearTimeout(t); r(true) }) })
     expect(exited).toBe(true)
     expect(Date.now() - asked).toBeLessThan(15_000)
+    // The run it ended says why in its own log (host-exec-core.ts endForUpdate).
+    const find = (d: string): string | null => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) { const hit = find(p); if (hit) return hit } else if (e.name === 'hx-update-force.log') return p
+      }
+      return null
+    }
+    const logFile = find(dir)
+    expect(logFile, 'the run log').not.toBeNull()
+    expect(fs.readFileSync(logFile!, 'utf8')).toContain('[walnut] the daemon on this host was replaced by an update')
   }, 90_000)
 })

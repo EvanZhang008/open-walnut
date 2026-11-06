@@ -156,21 +156,31 @@ export async function requestDaemonServiceHandover(
 export async function requestDaemonServiceUpdate(
   runtimeDir: string, stateDir: string,
   wait: { busyMs?: number; pauseMs?: number; note?: (text: string) => void; force?: boolean; plainMs?: number } = {},
-): Promise<void> {
+): Promise<'prepared' | 'unprepared'> {
   const started = Date.now()
   const deadline = started + (wait.busyMs ?? UPDATE_BUSY_WAIT_MS)
+  const say = wait.note ?? ((text: string) => process.stderr.write(`walnut daemon: ${text}\n`))
   let noted = false
   for (;;) {
     try {
       // An overdue update forces only after asking plainly for a while (daemon-over-busy.ts).
       const force = wait.force === true && Date.now() - started >= (wait.plainMs ?? OVER_BUSY_PLAIN_MS)
       await requestRunningDaemonHandover(runtimeDir, stateDir, false, true, force)
-      return
+      return 'prepared'
     } catch (error) {
-      if (!(error instanceof DaemonServiceUpdateRefusedError) || !handoverBusy(error) || Date.now() >= deadline) throw error
+      // Overdue, a drain that ran out (it resumed and changed nothing) is asked again too.
+      const busy = error instanceof DaemonServiceUpdateRefusedError
+        && (handoverBusy(error) || (wait.force === true && /Service preparation timed out/.test(error.message)))
+      if (!busy) throw error
+      if (Date.now() >= deadline) {
+        if (wait.force !== true) throw error
+        // Bounded: the service is restarted without the daemon's preparation (daemon-over-busy.ts step 3).
+        say(`the running daemon is still busy (${error.message}); restarting it instead: its shutdown finishes its session commands and writes, and the CLI sessions keep running`)
+        return 'unprepared'
+      }
       if (!noted) {
         noted = true
-        ;(wait.note ?? ((text) => process.stderr.write(`walnut daemon: ${text}\n`)))(`the running daemon is busy (${error.message}); asking again`)
+        say(`the running daemon is busy (${error.message}); asking again`)
       }
       await delay(wait.pauseMs ?? 2000)
     }

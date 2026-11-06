@@ -326,12 +326,12 @@ describe('the background update of a service-managed daemon', () => {
         expect(String((postponed?.[1] as { reason?: string }).reason)).toContain("the host's daemon is busy")
         return (postponed?.[1] as { retryInMs?: number }).retryInMs
       }
-      expect(await busyTry(['host-exec-v1', 'service-update-force-v1'])).toBe(60_000)
-      expect(over).toBe(true)
-      // An older daemon cannot force: not asked to (the CLI would only wait longer), and it backs
-      // off as before, since every try uploads the file again.
-      expect(await busyTry(['host-exec-v1'])).toBeGreaterThan(60_000)
-      expect(over).toBe(false)
+      // Overdue, an older daemon too is updated with --over-busy (the CLI restarts it through its
+      // service when it will not prepare); a refusal still is asked again within 5 min, never backed off further.
+      for (const caps of [['host-exec-v1', 'service-update-force-v1'], ['host-exec-v1']]) {
+        expect(await busyTry(caps)).toBe(5 * 60_000)
+        expect(over).toBe(true)
+      }
     } finally {
       DaemonConnection.OVERDUE_GATE_POLL_MS = gate.poll
       DaemonConnection.OVERDUE_GATE_WAIT_MS = gate.wait
