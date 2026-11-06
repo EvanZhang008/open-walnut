@@ -434,6 +434,8 @@ export function shortModel(model: string): string {
 export function originatorLabel(originator: string): string {
   if (originator === 'codex_exec') return 'Codex exec';
   if (originator === 'codex-tui' || originator === 'codex_cli_rs') return 'Codex terminal';
+  if (originator === 'codex_vscode') return 'Codex VS Code';
+  if (originator === 'walnut-utility') return 'Walnut helper';
   // Claude Code sessions: the entrypoint the transcript names.
   if (originator === 'cli') return 'Claude Code terminal';
   if (originator === 'sdk-cli') return 'Claude Code (claude -p)';

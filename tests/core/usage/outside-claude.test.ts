@@ -45,6 +45,21 @@ const classify = (metas: { sessionId: string; entrypoint: string; cwd: string }[
   classifyClaudeOutside({ rollup: store.rollup, host: '__local__', metas, known: new Map(known.map(id => [id, '__local__'])), hasRows: id => store.hasSession(id) });
 
 describe('Claude Code sessions outside Walnut', () => {
+  it('a known session on a Walnut entrypoint (a helper call turned into a task, an SDK server run) is Walnut\'s, also over an older build\'s outside look', async () => {
+    store.rollup.recordOrigins([{ host: '__local__', sessionId: 'kept-bad', originator: 'sdk-cli', provider: '', cwd: '/w', outside: true, stored: true, firstAt: '', lastAt: '' }]);
+    classify([
+      { sessionId: 'helper-task', entrypoint: 'walnut-utility', cwd: '/tmp/x' },
+      { sessionId: 'sdk-server', entrypoint: 'sdk-ts', cwd: '/w' },
+      { sessionId: 'kept-bad', entrypoint: 'sdk-cli', cwd: '/w' },
+      { sessionId: 'terminal', entrypoint: 'cli', cwd: '/w' },
+    ], ['helper-task', 'sdk-server', 'kept-bad', 'terminal']);
+    const out = (id: string) => store.rollup.originOf('__local__', id);
+    expect(out('helper-task')?.outside).toBeFalsy();
+    expect(out('sdk-server')?.outside).toBeFalsy();
+    expect(out('kept-bad')).toMatchObject({ outside: false, stored: false });
+    expect(out('terminal')?.outside).toBe(true);
+  });
+
   it('a session Walnut has no record of is outside; a record-less one with usage already stored stays Walnut\'s; a known claude -p session is Walnut\'s', async () => {
     response('old-deleted', '2026-10-20');
     classify([

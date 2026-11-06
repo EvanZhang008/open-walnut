@@ -151,6 +151,7 @@ async function collect(since: string | undefined, until: string) {
                 const named = s.host ?? '__local__';
                 if (asJoined(named) !== machine) continue;
                 known.set(s.claudeSessionId, named);
+                if (named !== host) foreign.add(s.claudeSessionId);
                 if (named === host) owners.push({ sessionId: s.claudeSessionId, taskId: s.taskId || undefined, title: s.title, project: s.project, lane: s.lane });
               }
             }

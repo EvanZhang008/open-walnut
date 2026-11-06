@@ -19,8 +19,8 @@ export const CLAUDE_OUTSIDE = true;
 /** Entrypoints of Walnut's own helper calls: counted from Walnut's call records, never as outside work. */
 export const WALNUT_ENTRYPOINTS: ReadonlySet<string> = new Set(['walnut-utility']);
 
-/** The entrypoints a Walnut session writes: `claude -p --input-format stream-json` (sdk-cli), and the SDK session server's (sdk-ts). */
-export const WALNUT_SESSION_ENTRYPOINTS: ReadonlySet<string> = new Set(['sdk-cli', 'sdk-ts']);
+/** The entrypoints a Walnut session writes: `claude -p --input-format stream-json` (sdk-cli), the SDK session server's (sdk-ts), and Walnut's helper calls (walnut-utility, which AI search can turn into a task). */
+export const WALNUT_SESSION_ENTRYPOINTS: ReadonlySet<string> = new Set(['sdk-cli', 'sdk-ts', 'walnut-utility']);
 
 export interface ClaudeSessionMeta { sessionId: string; entrypoint: string; cwd: string }
 

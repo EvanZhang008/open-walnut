@@ -30,8 +30,10 @@ export function classifyClaudeOutside(opts: {
     const before = rollup.originOf(home, meta.sessionId);
     // Rows this pass stored stay its own whatever Walnut learns later (an import of the session included).
     const keptStored = !!before?.stored;
+    // Walnut's own entrypoint settles a session it has a record of, even over a look an older build kept as outside.
+    const ownEntry = WALNUT_SESSION_ENTRYPOINTS.has(meta.entrypoint);
     let outside: boolean;
-    if (known) outside = keptStored || (!!meta.entrypoint && !WALNUT_SESSION_ENTRYPOINTS.has(meta.entrypoint));
+    if (known) outside = ownEntry ? false : keptStored || !!meta.entrypoint;
     else {
       // The first look decides and is kept: rows stored later for the session must not turn it into Walnut's.
       if (before) { owners.push({ sessionId: meta.sessionId, taskId: taskIdOfCwd(meta.cwd) }); continue; }
@@ -39,7 +41,7 @@ export function classifyClaudeOutside(opts: {
       owners.push({ sessionId: meta.sessionId, taskId: taskIdOfCwd(meta.cwd) });
     }
     // `stored`: the rows came from this pass, not from a Walnut session's record (an import's day cutoff ignores them).
-    origins.push({ host: home, sessionId: meta.sessionId, originator: meta.entrypoint, provider: '', cwd: meta.cwd, outside, stored: keptStored || (outside && !known), firstAt: '', lastAt: '' });
+    origins.push({ host: home, sessionId: meta.sessionId, originator: meta.entrypoint, provider: '', cwd: meta.cwd, outside, stored: (keptStored && !(known && ownEntry)) || (outside && !known), firstAt: '', lastAt: '' });
   }
   rollup.recordOrigins(origins);
   return owners;
