@@ -33,26 +33,40 @@ const MEANING: RegExp[] = [
   /\u91cd\u65b0\u767b\u5f55|\u91cd\u65b0\u767b\u5165|\u767b\u5f55(?:\u5df2)?(?:\u8fc7\u671f|\u5931\u6548)|\u7eed\u671f(?:\u767b\u5f55|\u51ed\u636e|\u8bc1\u4e66)/u,
 ];
 
+/**
+ * What makes a sign-in this machine's: a host, a box, SSH, a certificate, a dev or build machine
+ * (a sign-in to a bank or a website is the user's own, never folded with it). Chinese: host,
+ * machine, server, certificate.
+ */
+const MACHINE = /\b(?:hosts?|box(?:es)?|machines?|servers?|ssh|certificates?|certs?|mac|laptop|dev|devbox|build|cloud|vm|terminal|daemon)\b|\u4e3b\u673a|\u673a\u5668|\u670d\u52a1\u5668|\u8bc1\u4e66/iu;
+
 /** Words of a login hint that are not the command itself. */
 const HINT_FRAME = new Set([
   'run', 'the', 'your', 'my', 'on', 'this', 'that', 'mac', 'machine', 'host', 'box', 'laptop', 'computer', 'in', 'a', 'an',
   'terminal', 'shell', 'then', 'and', 'again', 'to', 'renew', 'refresh', 'login', 'log', 'sign', 'credentials', 'credential',
-  'command', 'please', 'with', 'from', 'here', 'there', 'it', 'or',
+  'command', 'please', 'with', 'from', 'here', 'there', 'it', 'or', 'type', 'enter', 'open', 'use',
 ]);
 
-/** The command words of the user's login hint ("run <command> -o on this Mac" gives its command). */
+/**
+ * The command of the user's login hint: its first word that names one ("run <command> -o on this
+ * Mac" gives <command>; an argument after it, "--profile work", is never taken for it).
+ */
 export function loginCommandWords(hint: string | undefined | null): string[] {
-  const words = (hint ?? '').toLowerCase().split(/[^a-z0-9_.-]+/).filter((w) => /^[a-z][a-z0-9_.-]{2,}$/.test(w) && !HINT_FRAME.has(w));
-  return [...new Set(words)].slice(0, 4);
+  const words = (hint ?? '').toLowerCase().replace(/`/g, ' ').split(/\s+/).filter(Boolean);
+  const first = words.find((w) => /^[a-z][a-z0-9_.-]{2,}$/.test(w) && !HINT_FRAME.has(w));
+  return first ? [first] : [];
 }
 
-/** Whether `text` asks the user to sign in again. `loginWords`: loginCommandWords of the user's hint. */
+/**
+ * Whether `text` asks the user to sign this machine in again: it names the user's login command
+ * (`loginWords`, loginCommandWords of the hint), or it means a sign-in and names a machine.
+ */
 export function isSignInAsk(text: string | undefined | null, loginWords: readonly string[] = []): boolean {
   const t = (text ?? '').trim();
   if (!t) return false;
-  if (MEANING.some((re) => re.test(t))) return true;
   const lower = t.toLowerCase();
-  return loginWords.some((w) => new RegExp(`(^|[^a-z0-9_.-])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9_-])`).test(lower));
+  if (loginWords.some((w) => new RegExp(`(^|[^a-z0-9_.-])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9_-])`).test(lower))) return true;
+  return MEANING.some((re) => re.test(t)) && MACHINE.test(t);
 }
 
 /** What Walnut knows of the user's sign-in now. */
@@ -67,19 +81,40 @@ async function readJson(file: string): Promise<unknown> {
   try { return JSON.parse(await fs.readFile(file, 'utf-8')); } catch { return null; }
 }
 
-/** The live sign-in state: Walnut's own open sign-in letters first, then an outside checker's word. */
-export async function readSignInState(nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local')): Promise<SignInState> {
-  const auth = await readJson(path.join(dir, 'host-auth-alert.json')) as { episodes?: Array<{ key?: string; letterId?: string; joined?: boolean }> } | null;
+/** Whether a letter is still before the user (not archived); a letter that cannot be read counts as open. */
+async function letterOpen(id: string): Promise<boolean> {
+  try {
+    const { getLetter } = await import('./human-inbox/store.js');
+    const letter = await getLetter(id, { deferBodies: true });
+    return !!letter && !letter.archived;
+  } catch { return true; }
+}
+
+/**
+ * The live sign-in state: Walnut's own sign-in letters still before the user, and an outside
+ * checker's word; when both speak, the newer one does (a check that works after the letter went out
+ * says the user signed in).
+ */
+export async function readSignInState(
+  nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local'), isOpen: (letterId: string) => Promise<boolean> = letterOpen,
+): Promise<SignInState> {
+  let broken: { letterId?: string; by: string; since: number } | null = null;
+  const auth = await readJson(path.join(dir, 'host-auth-alert.json')) as { episodes?: Array<{ key?: string; letterId?: string; openedAt?: number }> } | null;
   const login = auth?.episodes?.find((e) => e.key === 'login' && e.letterId);
-  if (login?.letterId) return { broken: { letterId: login.letterId, by: 'the sign-in letter' } };
-  const cert = await readJson(path.join(dir, 'ssh-cert-expiry-alert.json')) as { episode?: { letterId?: string; expiredTold?: boolean } | null } | null;
-  if (cert?.episode?.letterId && cert.episode.expiredTold) return { broken: { letterId: cert.episode.letterId, by: 'the certificate letter' } };
+  if (login?.letterId && await isOpen(login.letterId)) broken = { letterId: login.letterId, by: 'the sign-in letter', since: Number(login.openedAt) || 0 };
+  if (!broken) {
+    const cert = await readJson(path.join(dir, 'ssh-cert-expiry-alert.json')) as { episode?: { letterId?: string; expiredTold?: boolean; expiresAt?: number } | null } | null;
+    if (cert?.episode?.letterId && cert.episode.expiredTold && await isOpen(cert.episode.letterId)) {
+      broken = { letterId: cert.episode.letterId, by: 'the certificate letter', since: Number(cert.episode.expiresAt) || 0 };
+    }
+  }
   const said = await readJson(path.join(dir, SIGN_IN_STATE_FILE)) as { ok?: unknown; checkedAt?: unknown; by?: unknown; letterId?: unknown } | null;
   const at = typeof said?.checkedAt === 'string' ? Date.parse(said.checkedAt) : NaN;
-  if (!said || !Number.isFinite(at)) return {};
-  const by = typeof said.by === 'string' ? said.by.slice(0, 80) : undefined;
-  if (said.ok === false) return { broken: { ...(typeof said.letterId === 'string' ? { letterId: said.letterId } : {}), by: by ?? 'the sign-in check' } };
-  if (said.ok === true && nowMs - at <= SIGN_IN_OK_FRESH_MS && at <= nowMs + 60_000) return { ok: { at: new Date(at).toISOString(), ...(by ? { by } : {}) } };
+  const by = typeof said?.by === 'string' ? said.by.slice(0, 80) : undefined;
+  const fresh = said && Number.isFinite(at) && nowMs - at <= SIGN_IN_OK_FRESH_MS && at <= nowMs + 60_000;
+  if (fresh && said.ok === true && (!broken || at > broken.since)) return { ok: { at: new Date(at).toISOString(), ...(by ? { by } : {}) } };
+  if (broken) return { broken: { ...(broken.letterId ? { letterId: broken.letterId } : {}), by: broken.by } };
+  if (said && Number.isFinite(at) && said.ok === false) return { broken: { ...(typeof said.letterId === 'string' ? { letterId: said.letterId } : {}), by: by ?? 'the sign-in check' } };
   return {};
 }
 

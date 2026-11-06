@@ -681,8 +681,18 @@ export function statusOf(
 function relativesWithSignIn(task: Task, facts: StatusFacts, derived: UserStatus): RelativeAsk[] {
   const team = facts.relativeAsks?.(task) ?? [];
   if (derived.state !== 'needs' || derived.source !== 'session' || !isSignInAsk(derived.ask, facts.loginWords ?? [])) return team;
+  // Never one above or below it: those fold by depth (rollUpAsks), and a holder chosen across the
+  // tree as well would let a parent and its subtask wait on each other.
+  const byId = facts.tasksById;
+  const chain = (id: string): Set<string> => {
+    const out = new Set<string>();
+    let cur = byId?.get(id)?.parent_task_id;
+    for (let hops = 0; cur && hops < 12 && !out.has(cur); hops++) { out.add(cur); cur = byId?.get(cur)?.parent_task_id; }
+    return out;
+  };
+  const above = chain(task.id);
   const seen = new Set([task.id, ...team.map((r) => r.id)]);
-  return [...team, ...(facts.signInAsks ?? []).filter((r) => !seen.has(r.id))];
+  return [...team, ...(facts.signInAsks ?? []).filter((r) => !seen.has(r.id) && !above.has(r.id) && !chain(r.id).has(task.id))];
 }
 
 /**

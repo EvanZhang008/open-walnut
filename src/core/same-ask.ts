@@ -164,6 +164,17 @@ function directionLinks(text: string | undefined | null, token: (w: string) => s
  * staging environment" agree; "from the old staging database" and "from the old production
  * database" do not).
  */
+/** Whether every direction target of `part` agrees with one of `whole`'s for that direction word. */
+function pointsWithin(part: readonly string[], whole: readonly string[]): boolean {
+  const split = (l: string) => { const [dir = '', to = ''] = l.split('>'); return { dir, to: new Set(to.split('+').filter(Boolean)) }; };
+  const within = (x: Set<string>, y: Set<string>) => [...x].every((v) => y.has(v));
+  const ws = whole.map(split);
+  return part.map(split).every((p) => {
+    const same = ws.filter((w) => w.dir === p.dir);
+    return same.length === 0 || same.some((w) => within(p.to, w.to) || within(w.to, p.to));
+  });
+}
+
 function sameDirections(a: readonly string[], b: readonly string[]): boolean {
   const targets = (links: readonly string[]) => {
     const by = new Map<string, Array<Set<string>>>();
@@ -434,8 +445,19 @@ export function askIsPartOf(part: string, whole: string): boolean {
   const p = askShape(part);
   const w = askShape(whole);
   if (p.neg !== w.neg || p.words.length < SAME_ASK_MIN_WORDS) return false;
-  const inWhole = new Set(w.words);
-  return p.words.every((x) => inWhole.has(x));
+  const at = new Map(w.words.map((x, i) => [x, i] as const));
+  // Every word in it; with a number, in the same order too, since a number belongs to the words
+  // before it ("production database 1" is no part of "staging database 1 and production database
+  // 2"); and pointing the same way ("from production to staging" is no part of "from staging to
+  // production").
+  const ordered = p.words.some((x) => x.startsWith('#'));
+  let last = -1;
+  for (const x of p.words) {
+    const i = at.get(x);
+    if (i === undefined || (ordered && i < last)) return false;
+    last = i;
+  }
+  return !p.links || !w.links || pointsWithin(p.links, w.links);
 }
 
 /** The answer of `answers` that still answers `ask` now, or null. Pure. */

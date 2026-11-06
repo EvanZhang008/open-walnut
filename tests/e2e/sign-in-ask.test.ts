@@ -119,12 +119,34 @@ describe('one sign-in is one ask, whatever its words or team', () => {
     expect(other.status, await other.clone().text()).toBe(200)
   })
 
-  it('an open sign-in letter is the one place: every sign-in ask waits on it', async () => {
-    await writeLocal('host-auth-alert.json', { version: 1, episodes: [{ key: 'login', opKey: 'op-1', letterId: 'lt-signin-1', openedAt: Date.now(), hosts: ['devbox'] }] })
+  it('an open sign-in letter is the one place: every sign-in ask waits on it; archived, it is not', async () => {
+    const sent = await call('POST', '/api/v1/human-inbox', { type: 'review', subject: 'SSH sign-in to Dev box failed', markdown: 'Sign in on this Mac.' })
+    expect(sent.status, await sent.clone().text()).toBe(201)
+    const sentBody = (await sent.json()) as { id?: string; letter?: { id: string } }
+    const letterId = sentBody.letter?.id ?? sentBody.id!
+    await writeLocal('host-auth-alert.json', { version: 1, episodes: [{ key: 'login', opKey: 'op-1', letterId, openedAt: Date.now(), hosts: ['devbox'] }] })
     await settle()
     for (const t of tasks) expect((await statusOfId(t.id))?.state).not.toBe('needs')
-    expect((await statusOfId(tasks[0]!.id))?.waitingOn).toContain('lt-signin-1')
+    expect((await statusOfId(tasks[0]!.id))?.waitingOn).toContain(letterId)
+    const { setArchived } = await import('../../src/core/human-inbox/store.js')
+    await setArchived(letterId, true)
+    await settle()
+    expect((await statusOfId(tasks[0]!.id))?.state).toBe('needs')
     await fs.rm(path.join(LOCAL(), 'host-auth-alert.json'))
+  })
+
+  it('a parent and its subtask both asking a sign-in never wait on each other', async () => {
+    const parent = await asking('Relay platform', 'Run acmelogin -o so the relay can deploy', 'Relay')
+    const kid = await asking('Relay deploy', 'Please run acmelogin on the build host', 'Relay', parent.id)
+    await settle()
+    const p = await statusOfId(parent.id)
+    const k = await statusOfId(kid.id)
+    // The subtask waits on the sign-in asked first, in another team, never on its own parent; the
+    // parent on its subtask or that same first one: one sign-in, one Needs you, and no circle.
+    expect([kid.id, tasks[0]!.id]).toContain(p?.sameAsk?.id)
+    expect(k?.sameAsk?.id).toBe(tasks[0]!.id)
+    const all = (await listTasks()).filter((t) => [...ids(), parent.id, kid.id].includes(t.id))
+    expect(all.filter((t) => t.user_status?.state === 'needs').map((t) => t.id)).toEqual([tasks[0]!.id])
   })
 
   it("a checker's word that sign-in works takes them off the user, and refuses a new one", async () => {

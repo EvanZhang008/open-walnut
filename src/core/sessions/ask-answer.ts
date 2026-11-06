@@ -98,9 +98,12 @@ export async function prepareAskAnswer(
   return {
     line: askAnswerLine(ask, byTitle),
     commit: async () => {
-      // Kept beside the ones before it: one answer never takes another's place.
-      const kept = [...(target.asks_answered ?? (target.ask_answered ? [target.ask_answered] : [])).filter((a) => a.key !== answer.key), answer].slice(-ASKS_ANSWERED_MAX);
-      await updateTaskRaw(target.id, { ask_answered: answer, asks_answered: kept } as Partial<Task>, { emitEvent: true, source: 'ask-answer' })
+      // Kept beside the ones before it, read under the row's lock: one answer never takes another's
+      // place, even one recorded while this message was on its way.
+      await updateTaskRaw(target.id, (cur) => ({
+        ask_answered: answer,
+        asks_answered: [...(cur.asks_answered ?? (cur.ask_answered ? [cur.ask_answered] : [])).filter((a) => a.key !== answer.key), answer].slice(-ASKS_ANSWERED_MAX),
+      }) as Partial<Task>, { emitEvent: true, source: 'ask-answer' })
         .catch((err) => log.task.warn('ask-answer: not recorded', { taskId: target.id, error: err instanceof Error ? err.message : String(err) }));
       log.task.info('ask-answer: answered for the user', { taskId: target.id, by: answer.by });
     },

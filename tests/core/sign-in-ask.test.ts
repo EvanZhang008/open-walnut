@@ -15,6 +15,8 @@ describe('isSignInAsk', () => {
     expect(WORDS).toEqual(['acmelogin'])
     expect(loginCommandWords('renew your login credentials')).toEqual([])
     expect(loginCommandWords(undefined)).toEqual([])
+    // An argument after the command is never taken for it.
+    expect(loginCommandWords('run cloudctl login --profile work on this Mac')).toEqual(['cloudctl'])
   })
 
   it('names a sign-in ask by its meaning or by the login command, in any words', () => {
@@ -22,7 +24,7 @@ describe('isSignInAsk', () => {
       'Please run `acmelogin -s` on the dev box',
       'Run acmelogin -o --refresh, then tell me',
       'Your login expired on the build host',
-      'Please sign in again so the tests can run',
+      'Please sign in again on the dev box so the tests can run',
       'Re-authenticate on the cloud box',
       'Renew your SSH certificate before 16:00',
       // "Please sign in again on the Mac".
@@ -36,6 +38,10 @@ describe('isSignInAsk', () => {
       'Review the login page copy before it ships',
       'Pick the launch month for the plugin',
       'Rename acmeloginx to the new name?',
+      // Someone else's account, not this machine's sign-in.
+      'Please sign in again to your bank account',
+      'Renew your payment API token',
+      'Please sign in again so the tests can run',
       '',
     ]) expect(isSignInAsk(ask, WORDS), ask).toBe(false)
   })
@@ -47,23 +53,50 @@ describe('readSignInState', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sign-in-')) })
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
+  const open = async () => true
+
   it('nothing known is nothing', async () => {
-    expect(await readSignInState(Date.now(), dir)).toEqual({})
+    expect(await readSignInState(Date.now(), dir, open)).toEqual({})
   })
 
   it("an open sign-in letter, then an expired certificate's letter, are what is broken", async () => {
     write('ssh-cert-expiry-alert.json', { episode: { letterId: 'lt-cert', expiredTold: true } })
-    expect(await readSignInState(Date.now(), dir)).toEqual({ broken: { letterId: 'lt-cert', by: 'the certificate letter' } })
+    expect(await readSignInState(Date.now(), dir, open)).toEqual({ broken: { letterId: 'lt-cert', by: 'the certificate letter' } })
     write('host-auth-alert.json', { episodes: [{ key: 'host:devbox', letterId: 'lt-key' }, { key: 'login', letterId: 'lt-login' }] })
-    expect(await readSignInState(Date.now(), dir)).toEqual({ broken: { letterId: 'lt-login', by: 'the sign-in letter' } })
+    expect(await readSignInState(Date.now(), dir, open)).toEqual({ broken: { letterId: 'lt-login', by: 'the sign-in letter' } })
+    // The user archived both: nothing is asked there any more.
+    expect(await readSignInState(Date.now(), dir, async () => false)).toEqual({})
+  })
+
+  it('a check that works after the letter went out wins; one before it does not', async () => {
+    const now = Date.now()
+    write('host-auth-alert.json', { episodes: [{ key: 'login', letterId: 'lt-login', openedAt: now - 10 * 60_000 }] })
+    write('sign-in-state.json', { ok: true, checkedAt: new Date(now - 60_000).toISOString() })
+    expect((await readSignInState(now, dir, open)).ok).toBeDefined()
+    write('sign-in-state.json', { ok: true, checkedAt: new Date(now - 20 * 60_000).toISOString() })
+    expect((await readSignInState(now, dir, open)).broken?.letterId).toBe('lt-login')
   })
 
   it("a checker's word counts while it is fresh", async () => {
     const now = Date.now()
     write('sign-in-state.json', { ok: true, checkedAt: new Date(now - 60_000).toISOString(), by: 'a plugin' })
-    expect((await readSignInState(now, dir)).ok?.by).toBe('a plugin')
-    expect(await readSignInState(now + SIGN_IN_OK_FRESH_MS, dir)).toEqual({})
+    expect((await readSignInState(now, dir, open)).ok?.by).toBe('a plugin')
+    expect(await readSignInState(now + SIGN_IN_OK_FRESH_MS, dir, open)).toEqual({})
     write('sign-in-state.json', { ok: false, checkedAt: new Date(now).toISOString(), letterId: 'lt-p' })
-    expect(await readSignInState(now, dir)).toEqual({ broken: { letterId: 'lt-p', by: 'the sign-in check' } })
+    expect(await readSignInState(now, dir, open)).toEqual({ broken: { letterId: 'lt-p', by: 'the sign-in check' } })
+  })
+})
+
+describe('askIsPartOf: one part of an answered ask, never a new decision', () => {
+  it('a part in its own words and order is a part; another direction, target or order is not', async () => {
+    const { askIsPartOf, answerHolds } = await import('../../src/core/same-ask.js')
+    const SIX = 'Decide for the review: the launch month, the owner team, the budget line and the rollback owner'
+    expect(askIsPartOf('Decide the launch month for the review', SIX)).toBe(true)
+    expect(askIsPartOf('Decide the launch month and the pricing', SIX)).toBe(false)
+    expect(askIsPartOf('Approve migrating account records from production to staging', 'Approve migrating account records from staging to production')).toBe(false)
+    expect(askIsPartOf('Approve deleting production database 1', 'Approve deleting staging database 1 and production database 2')).toBe(false)
+    const answer = { key: 'k', ask: 'Approve migrating account records from staging to production', text: 'Yes', by: 'lead', byTitle: 'Lead', at: new Date().toISOString() }
+    expect(answerHolds(answer, 'Approve migrating account records from production to staging')).toBe(false)
+    expect(answerHolds(answer, 'Please approve migrating the account records from staging to production now')).toBe(true)
   })
 })
