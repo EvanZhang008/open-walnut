@@ -85,6 +85,7 @@ import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue
 import { FolderGoneBanner } from './FolderGoneBanner';
 import { SessionBrowserCard } from './SessionBrowserCard';
 import { UsageLimitBanner, UsageLimitContinuedNote } from './UsageLimitBanner';
+import { EngineFallbackBanner, showsEngineFallback } from './EngineFallbackBanner';
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
@@ -697,6 +698,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const taskTitle = sessionTask ? orgDisplayTitle(sessionTask) : null;
   // Another engine picked in the model picker: the next message switches the task to it.
   const engineSwitch = useEngineSwitchPick({ sessionId, session, task: sessionTask, catalog: engineCatalog, onSessionReplaced });
+  // The fallback-engine note this panel closed (its `at`), hidden before the task's update arrives.
+  const [fallbackGone, setFallbackGone] = useState<string | null>(null);
 
   // Pin state — read from the shared Focus Bar store (single source of truth,
   // same data every other surface renders). Mutations go through the shared
@@ -3185,6 +3188,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         {!inset && !plainChat && session?.taskId && <SessionBrowserCard taskId={session.taskId} />}
         {session?.cwdGone && !session.archived && (
           <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} />
+        )}
+        {sessionTask?.engine_fallback && fallbackGone !== sessionTask.engine_fallback.at && session?.taskId === sessionTask.id
+          && !session.lane && !session.archive_reason?.startsWith('engine_switched:')
+          && showsEngineFallback(sessionTask.engine_fallback, session.engine, session.archived) && (
+          <EngineFallbackBanner taskId={sessionTask.id} sessionId={sessionId} note={sessionTask.engine_fallback}
+            onGone={() => setFallbackGone(sessionTask.engine_fallback?.at ?? null)} />
         )}
         {(ps === 'error' || ps === 'stopped') && !session?.cwdGone && session && needsContextRecovery({ ...session, process_status: ps }) && (
           <ContextFullBanner sessionId={sessionId} session={session} onResuming={handleResuming} />

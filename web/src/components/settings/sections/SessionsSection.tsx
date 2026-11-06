@@ -9,6 +9,7 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { DefaultEngineRow } from './DefaultEngineRow';
+import { FallbackEngineRow } from './FallbackEngineRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
 import { MessageHintsGroup } from './MessageHintsGroup';
 import { DEFAULT_IDLE_COMPACT_LIMIT_PERCENT, IDLE_COMPACT_LIMIT_PERCENT_RANGE } from '../../../../../src/core/sessions/prompt-cache';
@@ -131,6 +132,7 @@ export function SessionsSection({ config, onSave }: Props) {
           keeps no config-time default model, so there is no picker here. */}
       <SettingsGroup>
         <DefaultEngineRow config={config} save={save} />
+        <FallbackEngineRow config={config} save={save} />
       </SettingsGroup>
       <ClaudeCodeImportGroups />
       <SettingsGroup>

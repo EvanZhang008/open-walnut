@@ -34,6 +34,7 @@ import { endpointGaveUpWords, endpointWaitingWords } from './sessions/endpoint-u
 import type { SessionEndpointWait, SessionUsageLimit } from './types.js';
 import { limitAskWords, limitTimeWords, limitWaitingWords } from './sessions/usage-limit-model.js';
 export { limitName, limitTimeWords } from './sessions/usage-limit-model.js';
+export { claudeFamilyOf, fallbackBannerWords, fallbackEngineName, fallbackLimitReset, fallbackModelName } from './agents/fallback-engine-words.js';
 import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';

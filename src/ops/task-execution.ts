@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js'
 import { engineCaps } from '../core/agents/engine-registry.js'
+import { fallbackStartWords } from '../core/agents/fallback-engine-words.js'
+import type { EngineFallbackNote } from '../core/types.js'
 import type { WalnutOp } from './registry.js'
 import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withOutcome } from './outcome.js'
 import { summaryAt } from '../core/user-status.js'
@@ -102,6 +104,12 @@ function launchSettingsNote(body: Record<string, unknown>, started: Record<strin
   return missed.length ? ` Not applied: ${missed.join(', ')} (the session does not run with it; task_get shows where it runs).` : ''
 }
 
+/** It started on the fallback engine: which, and why (core/agents/fallback-engine.ts). */
+function fallbackNote(started: Record<string, unknown>): string {
+  const note = started.fallback as EngineFallbackNote | undefined
+  return note && typeof note.to === 'string' ? ` ${fallbackStartWords(note, Date.now())}` : ''
+}
+
 /** Where placement by load put a first start (core/sessions/start-placement.ts), in its own words. */
 function placementNote(started: Record<string, unknown>): string {
   const p = started.placement as { host?: string; moved?: boolean; reason?: string; cwd?: string } | undefined
@@ -146,7 +154,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
       : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.`
       : state === 'running' ? `Task ${started.taskId} started.`
       : started.starting === true ? `Task ${started.taskId}'s session is still starting (its engine takes longer than this answer waits); it has not failed so far, and task_get shows it running once it is up.`
-      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started),
+      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started) + fallbackNote(started),
     typeof started.requestId === 'string'
       ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,

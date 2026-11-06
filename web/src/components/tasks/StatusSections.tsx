@@ -45,7 +45,9 @@ import { useTaskStatusLines } from './useTaskStatusLines';
 import { limitedLine, limitTimeWords } from '@open-walnut/user-status';
 import { LimitTag, TaskLimitPill, useLimitNow } from './limit-row';
 import { LIMIT_HEAD, limitOwnWords, limitRowWords, type LimitRowLine } from './limit-row-words';
+import { fallbackBannerWords } from '@open-walnut/user-status';
 import '@/styles/status-sections.css';
+import '@/styles/engine-fallback.css';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
@@ -211,8 +213,17 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       onClick={edit.isEditing ? (e) => e.stopPropagation() : undefined}
     >{task.title}</span>
   );
+  // A task that started on the fallback engine says so on its row (the banner's
+  // words on hover); the note goes when it is switched back or closed.
+  const fallbackWords = task.engine_fallback && !isDone ? fallbackBannerWords(task.engine_fallback, Date.now()) : null;
   const pills = (
     <>
+      {fallbackWords ? (
+        // The meta line's dot goes on the outer span, outside the tag's fill.
+        <span className="status-card-fallback" data-testid="task-row-fallback" title={`${fallbackWords.head} · ${fallbackWords.why}`}>
+          <span className="status-card-fallback-tag">Fallback</span>
+        </span>
+      ) : null}
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <AwaySyncMark item={task} />

@@ -168,6 +168,8 @@ export async function resumeEngineSwitches(): Promise<number> {
         const { putQueuedRows } = await import('./engine-switch-io.js');
         if (sw.held_rows?.length) await putQueuedRows(to, sw.held_rows as never[]).catch(() => {});
         await updateTaskRaw(task.id, {
+          // The task is on the engine its user picked now: a fallback start's note is done.
+          engine_fallback: null,
           engine_switch: {
             ...sw, state: 'done', message: undefined, display_text: undefined, held_rows: undefined,
             resume_session_id: undefined, resume_message: undefined, session_id: to, ...(sw.resume_session_id === to ? { resumed: true } : {}),

@@ -9,13 +9,14 @@
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { addTask, getTask, updateTask, getCustomTiers, ensureFolderProject, resolveProjectForWrite, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
+import { addTask, getTask, updateTask, updateTaskRaw, getCustomTiers, ensureFolderProject, resolveProjectForWrite, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import { migrateFocusTier, type Task, type SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
 import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
+import type { FallbackDecision } from '../agents/fallback-engine.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { isPersonSource } from './send-sent-by.js';
 import { heuristicShortTitle } from './task-title-brake.js';
@@ -112,6 +113,14 @@ export interface QuickStartParams {
    * the HTTP route and the mobile launch pass the resolved value explicitly.
    */
   engine?: SessionEngine;
+  /**
+   * The fallback engine a caller already chose for this launch (agents/fallback-engine.ts): the
+   * route that mints its own session id decides before minting and hands the decision on, so
+   * both read the limit once. It runs the launch on that engine and model and notes it on the task.
+   */
+  fallback?: FallbackDecision;
+  /** The caller ran the fallback decision itself (none came of it when `fallback` is absent). */
+  fallbackDecided?: boolean;
   /**
    * Caller-minted session id, forwarded to the CLI as `--session-id`. Lets the
    * HTTP route return the session id in its response instead of making the UI
@@ -235,12 +244,13 @@ export function continuedSessionOf(task: Task): string | undefined {
 
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
-    message, messagePrefix, host, model, mode, existingTaskId, taskMeta,
+    message, messagePrefix, host, mode, existingTaskId, taskMeta,
     source, requestTs = Date.now(), preassignedSessionId, walnutAgent,
   } = params;
   let { cwd } = params;
   // The task's own directory is known only once the task has its id (below).
   const inOwnTaskDir = params.ownTaskDir === true && !cwd && !host && !existingTaskId && !walnutAgent;
+  let model = params.model;
 
   // Host gate FIRST, before any write (existing task, project metadata, addTask,
   // TASK_CREATED): a refused Start leaves nothing on the board to roll back.
@@ -262,7 +272,30 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // stays ABSENT ('claude' is never written out), so a config with no
   // `defaults.engine` produces a byte-identical payload to before.
   let engine = params.engine;
-  if (engine === undefined) {
+  // The default engine out of usage: a launch that named neither an engine nor a model starts on
+  // the fallback (agents/fallback-engine.ts), unless the caller already decided it.
+  let fallback = params.fallback;
+  const { selfDecidesFallback } = await import('../agents/fallback-engine.js');
+  const selfDecides = !params.fallbackDecided && !fallback && selfDecidesFallback(source, walnutAgent);
+  // Only a launch whose engine was decided here (or by its caller) writes or clears the note: a
+  // workspace's replay, the phone or a repair leaves the task's note as it is.
+  const decides = !!fallback || !!params.fallbackDecided || selfDecides;
+  if (fallback) {
+    engine = normalizeEngine(fallback.engine);
+    model = fallback.model;
+  } else if (selfDecides && engine === undefined && (!model || model === 'default')) {
+    const { getConfig } = await import('../config-manager.js');
+    const config = await getConfig();
+    const { resolveFallbackLaunch } = await import('../agents/fallback-engine.js');
+    const decided = await resolveFallbackLaunch(config, resolveDefaultEngine(config, { host }), host).catch(() => null);
+    // A minted id is a promise only the native engine keeps (see below): such a launch stays.
+    if (decided && !(preassignedSessionId && engineCaps(decided.engine).idProvisioning === 'provider-issued')) {
+      fallback = decided;
+      engine = normalizeEngine(decided.engine);
+      model = decided.model;
+    }
+  }
+  if (engine === undefined && !fallback) {
     const { getConfig } = await import('../config-manager.js');
     const inherited = normalizeEngine(resolveDefaultEngine(await getConfig(), { host }));
     // A caller that minted its own session id has already PROMISED it: it rides
@@ -598,6 +631,18 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   if (host) {
     const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js');
     clearDaemonFailureCache(host);
+  }
+
+  // Why this task runs on another engine (the session panel's banner, task_get); a retry that
+  // starts on the default engine again takes an older note off. Written before a deferred start
+  // returns: its replay runs on the engine decided here.
+  if (fallback || (decides && updatedTask.engine_fallback)) {
+    try {
+      const written = await updateTaskRaw(updatedTask.id, { engine_fallback: fallback?.note ?? null }, { source, emitEvent: true });
+      if (written.task) updatedTask = written.task;
+    } catch (err) {
+      log.web.warn(`${source}: fallback engine note not written`, { taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   if (params.deferStart) return updatedTask;

@@ -514,6 +514,10 @@ textarea.settings-input {
   font-size: 13px;
 }
 
+/* Default engine, "When it is out of usage" and its Model (DefaultEngineRow, FallbackEngineRow):
+   one width, so the right column lines up whatever the longest engine or model name is. */
+.settings-select.engine-row-control { width: 15rem; }
+
 .settings-select:focus {
   outline: none;
   border-color: var(--accent);

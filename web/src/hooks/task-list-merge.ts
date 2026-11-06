@@ -92,9 +92,10 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   // settle) and a team stop (Stop / Resume the team, core/sessions/team-stop.ts).
   if (JSON.stringify(a.result_report ?? null) !== JSON.stringify(b.result_report ?? null)) return false;
   if ((a.team_stop?.at ?? null) !== (b.team_stop?.at ?? null)) return false;
-  // Drawn (the transfer links, a watched section, a link's name, the old sessions' list) and some
-  // written raw (a transfer's far end): compared whole, they are small.
-  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'link_names', 'legacy_session_ids'] as const) {
+  // Drawn (the transfer links, a watched section, a link's name, the old sessions' list, the session
+  // panel's fallback-engine banner) and some written raw (a transfer's far end, the fallback note):
+  // compared whole, they are small.
+  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'link_names', 'legacy_session_ids', 'engine_fallback'] as const) {
     if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
   }
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];

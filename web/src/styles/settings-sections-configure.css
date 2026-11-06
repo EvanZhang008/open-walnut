@@ -92,6 +92,15 @@
   color: var(--priority-important-text);
 }
 
+/* The same line when all is well (the fallback takes new tasks): news, not a warning. */
+.settings-help-now {
+  display: block;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg);
+}
+
 /* ── Hooks: one compact row per hook, details disclosed under it ── */
 .settings-section .hook-banner {
   display: block;

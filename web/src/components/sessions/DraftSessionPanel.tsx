@@ -54,15 +54,18 @@ import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostG
 import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { nextSessionMode } from './session-mode-cycle';
-import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionMode } from '@open-walnut/core';
+import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import {
   engineEntry,
   hostEngineLockReason,
+  launchEngineForHost,
   normalizeEngine,
+  resolveEngine,
   resolveEngineForHost,
 } from '@/utils/engines';
+import { DraftFallbackNotice, draftFallbackPill, useDraftFallback } from './DraftFallbackNotice';
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { fetchEngineModelCatalog } from '@/api/sessions';
 import {
@@ -152,7 +155,7 @@ const prefetchedEngineCatalogs = new Set<string>();
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
@@ -162,8 +165,18 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
    *  claude engine can carry it — other providers render locked with that reason. */
   walnut?: boolean;
   fork?: boolean;
+  /** "Codex (fallback)": the launch starts on the fallback engine (DraftFallbackNotice). */
+  fallbackLabel?: string | null;
+  /** The engine that fallback runs on: the picker opens on its models. */
+  fallbackEngine?: SessionEngine | null;
+  /** The model the fallback runs (the setting's), ticked on its tab; none = its default row. */
+  fallbackModel?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // The provider tab the picker shows while the launch is on the fallback: it opens on the
+  // fallback's models (what runs), and a click on the draft's own tab only looks, it changes
+  // nothing. null = the draft's own engine, as always.
+  const [fallbackView, setFallbackView] = useState<SessionEngine | null>(null);
   // The clicked pill — anchor for the popout picker (portalled, clip-proof).
   const pillRef = useRef<HTMLElement | null>(null);
   const { options, autoResolved } = useModelOptions(host);
@@ -210,6 +223,9 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
     ? options.find((o) => o.value === meta.model)?.label ?? formatModelName(meta.model)
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
   const acpPillLabel = meta.model ? shortAcpModelName(meta.model) : entry.displayName;
+  const viewing = fallbackView && fallbackLabel ? fallbackView : null;
+  const pickerEngine = viewing ?? engine;
+  const pickerAcp = engineEntry(catalog, pickerEngine).capabilities.modelCatalog === 'provider-advertised';
   // A pick or Escape hands the caret back to the draft's composer, so the next key types the prompt
   // (it stayed on the pill). A close that put focus somewhere else (a click on another field) keeps it.
   // It runs in the event that closes the menu, never a frame later: on a busy main thread a frame
@@ -224,20 +240,26 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
       <button
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill draft-model-select"
-        title={acpModels
+        title={fallbackLabel
+          ? `${fallbackLabel}: the default engine is out of usage here, so this task starts on the fallback. Pick a model or provider to choose for yourself.`
+          : acpModels
           ? `${entry.displayName} (via ACP) — session model: ${meta.model ? acpPillLabel : `${entry.displayName} default`}. Click to switch model / provider.`
           : `Session model: ${selectedLabel} — click to switch model / provider`}
         data-model={meta.model ?? ''}
-        onClick={(e) => { pillRef.current = e.currentTarget; setOpen((v) => !v); }}
+        onClick={(e) => {
+          pillRef.current = e.currentTarget;
+          setFallbackView(fallbackLabel && fallbackEngine && fallbackEngine !== engine ? fallbackEngine : null);
+          setOpen((v) => !v);
+        }}
       >
-        {acpModels ? acpPillLabel : selectedLabel}
+        {fallbackLabel ?? (acpModels ? acpPillLabel : selectedLabel)}
       </button>
       {open && (
         <ModelPicker
           currentModel={isAuto ? undefined : meta.model}
           host={host ?? undefined}
           cwd={cwd}
-          engine={engine}
+          engine={pickerEngine}
           onSwitch={(model) => {
             setOpen(false);
             backToComposer();
@@ -251,6 +273,10 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
           // A draft can still change provider — flipping clears the model: the
           // catalogs don't overlap, and an ACP engine has no pre-start rows.
           onProviderSwitch={(provider) => {
+            // On the fallback's tab: the draft's own tab is only a look (the launch stays Auto).
+            if (viewing && resolveEngine(provider) === engine) { setFallbackView(null); return; }
+            if (viewing && resolveEngine(provider) === viewing) return;
+            setFallbackView(null);
             onMetaChange((m) => ({ ...m, engine: normalizeEngine(provider), model: undefined }));
           }}
           providerLockReason={(provider) => (fork && provider !== engine
@@ -258,12 +284,20 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
             : walnut && provider !== 'claude'
               ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
               : hostEngineLockReason(engineEntry(catalog, provider), host, hostEngines))}
-          autoRow={{ resolvedLabel: autoResolved, active: isAuto }}
+          // While Auto starts on the fallback, its row says so ("Auto (Codex, fallback)").
+          autoRow={{ resolvedLabel: fallbackLabel ? fallbackLabel.replace(/ \(fallback\)$/, ', fallback') : autoResolved, active: isAuto }}
           // ACP draft: selection lands in meta.model (same field the claude
           // pane uses — the launch payload already carries it) and rides the
           // spawn as acpConfig. '' = back to the engine's default.
-          acpCurrentModelId={acpModels ? meta.model : undefined}
+          acpCurrentModelId={viewing ? fallbackModel : pickerAcp ? meta.model : undefined}
+          {...(viewing ? { acpCurrentNote: 'fallback' } : {})}
           onAcpSwitch={(modelId) => {
+            // A model picked on the fallback's tab is the user's own launch on that engine; its
+            // default row is what Auto already runs.
+            if (viewing) {
+              if (modelId && modelId !== fallbackModel) onMetaChange((m) => ({ ...m, engine: normalizeEngine(viewing), model: modelId }));
+              return;
+            }
             onMetaChange((m) => ({ ...m, model: modelId || undefined }));
           }}
           anchorRef={pillRef}
@@ -468,8 +502,21 @@ export function DraftSessionPanel({
   // session of that engine draws none. A fork has none either: the fork route
   // takes no mode, the sibling inherits the source session's.
   const engineCatalog = useEngineCatalog();
+  // The default engine is out of usage on the draft's host: where a launch that names no engine
+  // and no model starts instead (the line above the composer, the model pill). A draft that
+  // names the default engine's model (picked here, or the folder's last launch) waits for the
+  // reset, and the line says so with the way to the fallback.
+  const fallbackNow = useDraftFallback(draft.host,
+    !isFork && !isBound && !launchEngineForHost(draft.meta.engine, draft.host, engineCatalog));
+  // A model the folder remembered (the draft's meta untouched here) gives way to the fallback,
+  // as Auto does: only a pick made in this draft keeps the default engine (MainPage's launch drops
+  // the remembered model the same way).
+  const remembered = !draft.metaTouched && !!fallbackNow?.fallback;
+  const fallbackNamed = !remembered && draft.meta.model && draft.meta.model !== 'default' ? formatModelName(draft.meta.model) || draft.meta.model : null;
+  // The launch starts on the fallback engine: the pill and the mode follow it.
+  const onFallback = !fallbackNamed && fallbackNow?.fallback ? fallbackNow.fallback : null;
   const launchEngine = isWalnut ? 'claude' : resolveEngineForHost(draft.meta.engine, draft.host, engineCatalog);
-  const claudeModes = engineEntry(engineCatalog, launchEngine).capabilities.modeControl === 'claude-modes';
+  const claudeModes = engineEntry(engineCatalog, onFallback?.engine ?? launchEngine).capabilities.modeControl === 'claude-modes';
   const showModePill = !!onModeChange && !isFork && claudeModes;
   const enabledModes = useEnabledModes();
   const draftMode: SessionMode = draft.meta.mode ?? DEFAULT_SESSION_MODE;
@@ -892,6 +939,9 @@ export function DraftSessionPanel({
           getComposer={getComposer}
           openMenuNonce={openMenuNonce}
         />}
+        {/* The default engine is out of usage here: where this task starts instead. */}
+        <DraftFallbackNotice now={fallbackNow} named={fallbackNamed}
+          onUseFallback={() => onMetaChange(draft.id, (m) => ({ ...m, model: undefined, engine: undefined }))} />
         <ChatInput
           onSend={(body, images) => startWith(body, images)}
           // No session yet: files land on this machine and go to the session's host with its first message.
@@ -979,6 +1029,9 @@ export function DraftSessionPanel({
                 cwd={draft.cwd || undefined}
                 walnut={isWalnut}
                 fork={isFork}
+                fallbackLabel={onFallback ? draftFallbackPill(fallbackNow) : null}
+                fallbackEngine={onFallback?.engine ?? null}
+                fallbackModel={onFallback?.model}
               />
               {/* No "Start ↵" here: the composer's send arrow (and Enter) already
                   starts the session, and two buttons for one action read as two

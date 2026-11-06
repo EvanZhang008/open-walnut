@@ -1,0 +1,75 @@
+/* A new task started on the fallback engine (EngineFallbackBanner.tsx): the default engine's usage
+   limit seen from a new task, in the neutral of a choice already made. It carries
+   session-error-banner too (placement under the glass header); these rules, one class more
+   specific, replace that banner's red and lay it out as a row (the base banner stacks its
+   children for a narrow column's error text). Its × sits top right, beside the words, never on
+   the button line. */
+.session-error-banner.engine-fallback-banner {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 12px 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  line-height: 1.45;
+  color: var(--fg);
+}
+.engine-fallback-icon { display: flex; flex-shrink: 0; align-self: flex-start; margin-top: 1px; color: var(--fg-secondary, var(--fg-muted)); }
+/* The words take the row; the button goes on the line below them. */
+.engine-fallback-body { flex: 1 1 0; min-width: 0; }
+.engine-fallback-head { font-weight: 600; }
+.engine-fallback-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  vertical-align: 1px;
+  color: var(--fg-secondary, var(--fg-muted));
+  background: color-mix(in srgb, var(--fg, #000) 8%, transparent);
+}
+.engine-fallback-why { color: var(--fg); font-weight: 500; }
+/* The dot between what happened and why: the weight of neither. */
+.engine-fallback-sep { font-weight: 400; color: var(--fg-secondary, var(--fg-muted)); }
+.engine-fallback-detail { margin-top: 2px; color: var(--fg-secondary, var(--fg-muted)); }
+.engine-fallback-failure { margin-top: 4px; color: var(--danger, #ff3b30); }
+/* On their own line under the words, lined up with them (icon 16px + gap 10px). */
+.engine-fallback-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 0 100%; padding-left: 26px; }
+.engine-fallback-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* A border on hover, never a fill: the button under the pointer after a click must not read as pressed. */
+.engine-fallback-btn:hover:not(:disabled) { border-color: var(--accent, #0a84ff); }
+.engine-fallback-btn:disabled { opacity: 0.6; cursor: default; }
+.engine-fallback-btn:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 1px; }
+.engine-fallback-close {
+  display: flex; align-items: center; justify-content: center; flex: none; align-self: flex-start;
+  width: 22px; height: 22px; margin-top: -2px; margin-left: auto; border: 0; border-radius: 5px;
+  background: transparent; color: var(--fg-muted, var(--fg-secondary)); cursor: pointer;
+}
+.engine-fallback-close:hover { background: color-mix(in srgb, var(--fg, #000) 8%, transparent); color: var(--fg); }
+.engine-fallback-close:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 1px; }
+
+/* A task row's tag (StatusSections.tsx): the banner's tag, at the row's size. */
+.status-card-fallback-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  color: var(--fg-secondary, var(--fg-muted));
+  background: color-mix(in srgb, var(--fg, #000) 8%, transparent);
+}

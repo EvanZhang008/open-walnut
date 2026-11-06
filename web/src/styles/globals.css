@@ -22664,6 +22664,40 @@ a.tag-chip:focus-visible,
    needsFolder). Warning-toned, not an error: nothing failed and nothing was
    lost, the launch is one click from proceeding. flex-shrink so it can never
    compete with the composer for height in a short column. */
+/* Where a new task starts while the default engine is out of usage (DraftFallbackNotice.tsx):
+   information, not a problem to fix, so neutral. */
+.draft-fallback-notice {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 6px 2px 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.draft-fallback-notice strong { font-weight: 600; }
+/* The launch waits for the reset: the warning tint of the needs-folder line. */
+.draft-fallback-notice.is-wait {
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg-secondary));
+}
+.draft-fallback-use {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.draft-fallback-use:hover { background: var(--bg-hover, var(--bg-secondary)); }
 .draft-needs-folder {
   flex-shrink: 0;
   margin: 0 2px 4px;

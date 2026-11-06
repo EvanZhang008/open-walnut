@@ -36,7 +36,9 @@ const ALLOW: Record<string, AllowSpec> = {
   user: { name: true },
   // The org's name and the user's role on the chart: a replica's Org page shows the same names.
   org: { name: true, founder_title: true },
-  defaults: { priority: true, platform: true, project: true, engine: true },
+  // The fallback engine: a new task the companion starts while the default engine is out of
+  // usage falls back by the same rule as on the Mac (core/agents/fallback-engine.ts).
+  defaults: { priority: true, platform: true, project: true, engine: true, fallback_engine: { engine: true, model: true, model_label: true } },
   provider: { type: true, model: true, bedrock_region: true },
   // Where each engine sends its requests, and its default model: a Codex session the
   // companion starts must use the Mac's provider (providers/codex-engine-source.ts).

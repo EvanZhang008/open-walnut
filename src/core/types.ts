@@ -704,6 +704,35 @@ export function resolveModelSwitchValue(raw: string): string | null {
   return trimmed;
 }
 
+/** Settings > Sessions, "When it is out of usage": the engine (and model) a new task starts on. */
+export interface FallbackEngineSetting {
+  engine: SessionEngine;
+  /** That engine's model id; absent = the engine's own default. */
+  model?: string;
+  /** The model's name as Settings listed it ("Sonnet", "GPT-5.5"), for the words. */
+  model_label?: string;
+}
+
+/** Why a task's session runs on the fallback engine (Task.engine_fallback). */
+export interface EngineFallbackNote {
+  /** The default engine that was out of usage. */
+  from: SessionEngine;
+  /** The engine the task started on instead, and its model when the setting names one. */
+  to: SessionEngine;
+  model?: string;
+  /** The model's display name, from the setting. */
+  model_label?: string;
+  /** The limit that stopped the default ('five_hour', 'seven_day', ...), when known. */
+  window?: string;
+  /** When that limit resets (ISO), when known. */
+  resets_at?: string;
+  /** Where resets_at came from: a session's limit event, its words, or the host's last reading. */
+  resets_from?: 'event' | 'text' | 'host';
+  /** The host it was limited on; absent = this machine. */
+  host?: string;
+  at: string;
+}
+
 /** A queued start (Task.start_queue, src/core/sessions/start-queue.ts). */
 export interface StartQueueEntry {
   at: string;
@@ -781,6 +810,9 @@ export interface Task {
   /** The latest engine switch inside this task (sessions/engine-switch.ts): pending until the
    *  running turn ends, then switching, then done (or failed, with the old session restored). */
   engine_switch?: EngineSwitchState;
+  /** This task's session started on the fallback engine because the default engine was out of
+   *  usage (core/agents/fallback-engine.ts); cleared by a switch of its engine or the user. */
+  engine_fallback?: EngineFallbackNote | null;
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;
@@ -1374,6 +1406,12 @@ export interface Config {
      * picks its own engine still wins.
      */
     engine?: SessionEngine;
+    /**
+     * Where a new task starts while the default engine is out of usage on its host
+     * (core/agents/fallback-engine.ts). Absent = off: it starts on the default engine,
+     * which waits for the reset. Only launches that name neither an engine nor a model use it.
+     */
+    fallback_engine?: FallbackEngineSetting;
   };
   provider: {
     type: string;

@@ -73,7 +73,7 @@ export const SWITCH_RETRY_DELAYS_MS = [1000, 2000, 3000, 5000];
  * or the switch still running (`switch_in_progress`).
  */
 export async function switchTaskEngine(
-  taskId: string, pick: { engine: string; model?: string; effort?: string }, opts: { withdraw?: boolean } = {},
+  taskId: string, pick: { engine: string; model?: string; effort?: string; /** The new session's first message. */ text?: string }, opts: { withdraw?: boolean } = {},
 ): Promise<SwitchEngineAnswer> {
   const deadline = Date.now() + SWITCH_RETRY_TOTAL_MS;
   const opId = mintOpId();
@@ -87,6 +87,7 @@ export async function switchTaskEngine(
     try {
       return await apiPost<SwitchEngineAnswer>(`/api/v1/tasks/${encodeURIComponent(taskId)}/switch-engine`, {
         engine: pick.engine, ...(pick.model ? { model: pick.model } : {}), ...(pick.effort ? { effort: pick.effort } : {}),
+        ...(pick.text ? { text: pick.text } : {}),
         when: 'now', detach: true, wait_ms: 15_000,
       }, { timeoutMs: Math.max(1000, Math.min(30_000, left)), opId });
     } catch (err) {

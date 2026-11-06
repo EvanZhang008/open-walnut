@@ -128,6 +128,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/ChatEarlierBlock.tsx#expanded': 'earlier rows unfolded in one look',
   'components/sessions/CronJobsCard.tsx#promptOpen': 'a job\'s prompt, a popover',
   'components/sessions/DraftSessionPanel.tsx#openMenuNonce': 'a request counter, not a choice',
+  'components/sessions/DraftSessionPanel.tsx#fallbackView': 'the provider tab of the model picker, a popover, while the launch is on the fallback',
   'components/sessions/EngineSettingsPopover.tsx#aboutOpen': 'an about note inside a popover',
   'components/sessions/EngineSettingsPopoverBody.tsx#expanded': 'a row unfolded inside a popover',
   'components/sessions/ModelPicker.tsx#detailsOpen': 'details inside the model picker, a popover',

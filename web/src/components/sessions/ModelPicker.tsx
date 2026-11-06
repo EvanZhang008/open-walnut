@@ -304,6 +304,8 @@ interface ModelPickerProps {
    *  '' back to undefined. Also hides the catalog's own 'default' row, which
    *  would duplicate it. */
   autoRow?: { resolvedLabel: string; active: boolean };
+  /** DRAFT on the fallback engine: said after the ACP pane's current model ("· fallback"). */
+  acpCurrentNote?: string;
   /** POP OUT of the host column: portal to <body>, placed by useMenuPlacement
    *  against this anchor (the clicked pill). Without it the picker renders
    *  in place (position:absolute above the mode bar) and a narrow session
@@ -336,7 +338,7 @@ const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
   currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, switchNote, speedReadout,
-  engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
+  engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow, acpCurrentNote,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
   // ── LIVE pull: the moment the picker opens, ask the CLI what it's ACTUALLY
@@ -763,7 +765,7 @@ export function ModelPicker({
             ? (acpActiveFamily
               ? `${acpActiveFamily.label}${acpActive?.effort ? ` · ${acpEffortLabel(acpActive.effort)}` : ''}`
               : shortAcpModelName(acpCurrent))
-            : acpDefaultLabel}
+            : acpDefaultLabel}{acpCurrentNote ? ` · ${acpCurrentNote}` : ''}
         </span>
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
       </div>

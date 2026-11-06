@@ -20,6 +20,7 @@ import { patchSessionMentionTitle } from '@/stores/session-mention-index';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineEntry, type LaunchEngine } from '@/utils/engines';
 import { wsClient } from './ws';
+import { knownFallbackEngine } from './engine-fallback';
 import {
   clearEngineModelCatalogCache,
   getEngineModelCacheGeneration,
@@ -1221,7 +1222,11 @@ export async function quickStartSession(opts: {
   // instead of being stuck on a placeholder. This is the root fix for the
   // false-"Failed"-then-duplicate-on-Retry incident (2026-08-03: server 200 in
   // 2.7s, browser AbortSignal fired at 15s under main-thread jam).
-  const preassignsId = engineEntry(getEngineCatalog(), opts.engine)
+  // A launch that names no engine and no model may start on the fallback engine (the server
+  // decides; the draft's line read the same answer): no id for one whose provider issues its own,
+  // or the server would drop it and a lost answer could not be found by it.
+  const fallbackEngine = !opts.engine && !opts.model ? knownFallbackEngine(opts.host) : undefined;
+  const preassignsId = engineEntry(getEngineCatalog(), opts.engine ?? fallbackEngine)
     .capabilities.idProvisioning === 'preassigned';
   const clientSessionId = preassignsId && typeof crypto?.randomUUID === 'function'
     ? crypto.randomUUID() : undefined;

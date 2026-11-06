@@ -323,6 +323,23 @@ export function makeTierKnown(
   };
 }
 
+/**
+ * The meta a launch sends while the default engine is out of usage and a fallback would take a
+ * launch that names no model (`fallbackEngine`, the draft's last read): a model the folder only
+ * remembered (the draft's meta untouched here) gives way, so the launch falls back. A model picked
+ * in this draft, or a draft that names its engine, stays. Same object when nothing changes.
+ */
+export function fallbackLaunchMeta(
+  draft: Pick<DraftColumn, 'metaTouched' | 'taskId'>,
+  meta: QuickStartTaskMeta,
+  fallbackEngine: string | undefined,
+  namesEngine: boolean,
+): QuickStartTaskMeta {
+  // A bound draft (a task's ▶) shows no fallback line, so it keeps what its pill says.
+  if (!fallbackEngine || draft.metaTouched || draft.taskId || namesEngine || !meta.model) return meta;
+  return { ...meta, model: undefined };
+}
+
 /** The meta a launch sends: a tier the app knows is gone (a deleted custom tier)
  *  goes out as the default instead. Same object when nothing is replaced. */
 export function launchMetaFor(

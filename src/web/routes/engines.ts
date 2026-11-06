@@ -352,3 +352,49 @@ enginesRouter.post('/:id/claude-code-import', async (req: Request, res: Response
     answerImportError(res, err, { ...target, op: 'apply' }, mod.ClaudeCodeImportError)
   }
 })
+
+// GET /api/engines/fallback?host=<key>[&limit=1] — would a new task that names no engine start on the
+// fallback engine right now (core/agents/fallback-engine.ts)? The draft says so above its composer.
+// `limit` is the default engine's limit in force on that host, `fallback` the decision, `skip` why
+// a fallback that is set does not take new tasks now.
+enginesRouter.get('/fallback', async (req: Request, res: Response) => {
+  const raw = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
+  const host = raw && raw !== '__local__' && raw !== 'local' ? raw : undefined
+  try {
+    const config = await getConfig()
+    const { resolveDefaultEngine } = await import('../../core/agents/default-engine.js')
+    const { engineLimitNow, explainFallbackLaunch, fallbackDeps, fallbackSetting } = await import('../../core/agents/fallback-engine.js')
+    const defaultEngine = resolveDefaultEngine(config, { host })
+    const setting = fallbackSetting(config)
+    // Nothing set and no one asked for the limit itself (only Settings does, ?limit=1): no reads.
+    if (!setting && req.query.limit !== '1') { res.json({ host: host ?? '__local__', defaultEngine, setting: null, fallback: null }); return }
+    const explained = setting ? await explainFallbackLaunch(config, defaultEngine, host, { quiet: true }) : null
+    const decision = explained?.decision ?? null
+    const limit = decision ? null : explained ? explained.limit : await engineLimitNow(defaultEngine, host, fallbackDeps())
+    res.json({
+      host: host ?? '__local__', defaultEngine, setting,
+      fallback: decision ? { engine: decision.engine, ...(decision.model ? { model: decision.model } : {}), note: decision.note } : null,
+      ...(limit ? { limit: { ...limit, ...(limit.resetsAt ? { resetsAt: new Date(limit.resetsAt).toISOString() } : {}) } } : {}),
+      // Why a fallback that is set does not take new tasks now (Settings says so under the row).
+      ...(explained?.skip ? { skip: explained.skip } : {}),
+    })
+  } catch (err) {
+    log.web.warn('fallback engine read failed', { host, error: err instanceof Error ? err.message : String(err) })
+    res.json({ host: host ?? '__local__', fallback: null })
+  }
+})
+
+// POST /api/engines/fallback/dismiss {taskId} — the user closed a task's "started on the fallback
+// engine" note (the session panel's banner): it is taken off the task.
+enginesRouter.post('/fallback/dismiss', async (req: Request, res: Response) => {
+  const taskId = typeof (req.body as { taskId?: unknown } | undefined)?.taskId === 'string' ? (req.body as { taskId: string }).taskId : ''
+  if (!taskId) { res.status(400).json({ error: 'taskId is required' }); return }
+  try {
+    const { updateTaskRaw } = await import('../../core/task-manager.js')
+    const out = await updateTaskRaw(taskId, (t) => (t.engine_fallback ? { engine_fallback: null } : null), { source: 'engine-fallback-dismiss', emitEvent: true })
+    res.json({ ok: true, changed: out.changed })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    res.status(/No task|not found/i.test(message) ? 404 : 500).json({ error: message })
+  }
+})

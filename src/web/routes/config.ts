@@ -611,6 +611,31 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         res.status(400).json({ error: `defaults.priority must be one of: ${VALID_PRIORITIES.join(', ')}` })
         return
       }
+      // Settings > Sessions, "When it is out of usage" (core/agents/fallback-engine.ts).
+      const fb = (body.defaults as { fallback_engine?: unknown }).fallback_engine as { engine?: unknown; model?: unknown; model_label?: unknown } | null | undefined
+      if (fb !== undefined && fb !== null) {
+        const { isKnownEngine } = await import('../../core/agents/engine-registry.js')
+        const { resolveModelSwitchValue } = await import('../../core/types.js')
+        if (typeof fb !== 'object' || !isKnownEngine(fb.engine)) {
+          res.status(400).json({ error: 'defaults.fallback_engine.engine must be a known engine' })
+          return
+        }
+        const { isAcpEngine } = await import('../../core/agents/engine-registry.js')
+        const { splitAcpModelId } = await import('../../providers/acp-session.js')
+        // The shape the launch takes for that engine: a provider id for an ACP engine (its base
+        // before an effort suffix), a Claude Code alias or catalog id otherwise.
+        // Every start takes a model of the shape task_start validates (task-launch-plan.ts), so the
+        // setting does too: one the starts would refuse is refused here.
+        const badModel = (m: string) => !resolveModelSwitchValue(m.trim()) || (isAcpEngine(fb.engine) && !splitAcpModelId(m.trim()).base)
+        if (fb.model !== undefined && (typeof fb.model !== 'string' || (fb.model !== '' && badModel(fb.model)))) {
+          res.status(400).json({ error: 'defaults.fallback_engine.model must be a model id of that engine' })
+          return
+        }
+        if (fb.model_label !== undefined && (typeof fb.model_label !== 'string' || fb.model_label.length > 80 || /[\x00-\x1f]/.test(fb.model_label))) {
+          res.status(400).json({ error: 'defaults.fallback_engine.model_label must be a short name' })
+          return
+        }
+      }
     }
 
     if (body.external_session_import !== undefined) {

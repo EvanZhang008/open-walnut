@@ -68,7 +68,7 @@ export function DefaultEngineRow({ config, save }: { config: Config; save: Seria
     <select
       id="default-engine-select"
       data-testid="default-engine-select"
-      className="settings-select"
+      className="settings-select engine-row-control"
       value={value}
       disabled={!ready}
       onChange={(e) => pick.set(e.target.value as SessionEngine)}

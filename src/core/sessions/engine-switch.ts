@@ -651,6 +651,8 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   if (prepared.context) held = await stashSwitchContext(sessionId, prepared.context, state.id, held);
   await putQueuedRows(sessionId, held);
   await tm.updateTaskRaw(taskId, {
+    // The task is on the engine its user picked now: a fallback start's note is done.
+    engine_fallback: null,
     engine_switch: {
       ...state, state: 'done', message: undefined, display_text: undefined, held_rows: undefined, session_id: sessionId,
       carried_turns: prepared.carried.carriedTurns, trimmed_turns: prepared.carried.trimmedTurns,

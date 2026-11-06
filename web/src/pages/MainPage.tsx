@@ -4,6 +4,7 @@ import type { NavigateFunction } from 'react-router-dom';
 import type { SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
+import { knownFallbackEngine } from '@/api/engine-fallback';
 import { stripEntityRefsToText } from '@/utils/markdown';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -42,7 +43,7 @@ import {
   type ProjectDefaultLookup,
 } from '@/components/sessions/draft-column';
 import {
-  applyDraftPathPick, applyDraftTaskFieldEdit, applyTierSeed, enterWalnutDraft, launchMetaFor, leaveWalnutDraft,
+  applyDraftPathPick, applyDraftTaskFieldEdit, applyTierSeed, enterWalnutDraft, fallbackLaunchMeta, launchMetaFor, leaveWalnutDraft,
   makeTierKnown, rederiveDraftParse, returnFieldToWalnut, revertAiTaskFields,
 } from '@/components/sessions/draft-ownership';
 import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
@@ -2969,7 +2970,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       },
       // A tier the app knows is gone (deleted custom tier) launches as Focus,
       // the same value the ledger records as chosen.
-      launchMetaFor(draft, knownTier),
+      // A model the folder only remembered gives way to the fallback engine (the draft said so).
+      fallbackLaunchMeta(draft, launchMetaFor(draft, knownTier), knownFallbackEngine(draft.host),
+        !!launchEngineForHost(draft.meta.engine, draft.host, getEngineCatalog())),
       message,
       images,
       draft.project || undefined,

@@ -198,6 +198,8 @@ export async function resumeEarlier(
     movedRequests = await retargetRequestsToSession(old.claudeSessionId, prev.claudeSessionId).catch(() => 0);
     await putQueuedRows(prev.claudeSessionId, held);
     await tm.updateTaskRaw(taskId, {
+      // The task is on the engine its user picked now: a fallback start's note is done.
+      engine_fallback: null,
       engine_switch: {
         ...state, state: 'done', resumed: true, message: undefined, display_text: undefined, held_rows: undefined,
         resume_session_id: undefined, resume_message: undefined,

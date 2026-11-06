@@ -6,7 +6,8 @@ import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '..
 import { QuickStartError } from './quick-start.js';
 import { continueTaskConversation, detachTaskSession, taskConversation } from './task-session-claim.js';
 import { stableJson } from '../task-create-idempotency.js';
-import type { Task, SessionEffort, SessionEngine, SessionMode } from '../types.js';
+import type { Task, EngineFallbackNote, SessionEffort, SessionEngine, SessionMode } from '../types.js';
+import type { FallbackDecision } from '../agents/fallback-engine.js';
 import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
@@ -88,6 +89,8 @@ export interface SessionStartResult {
   preparing?: boolean;
   /** The task already had its one session: the message continued it (one-session-per-task.ts). */
   continued?: boolean;
+  /** It started on the fallback engine: the default engine was out of usage (agents/fallback-engine.ts). */
+  fallback?: EngineFallbackNote;
   /**
    * The launch settings this start honoured, by request field name (effort,
    * create_cwd, workspace, ...). Absent on a server older than the field, which
@@ -188,16 +191,33 @@ export async function refuseOrgStartWhileOff(task: Pick<Task, 'org_role'>, sourc
  * the default is not Claude; a place that does not resolve leaves the default
  * engine and prepareLaunch reports the real error.
  */
-async function inheritedEngine(task: Task, params: SessionStartParams): Promise<SessionEngine | undefined> {
+async function inheritedEngine(task: Task, params: SessionStartParams): Promise<{ engine: SessionEngine | undefined; fallback?: FallbackDecision }> {
   const { getConfig } = await import('../config-manager.js');
   const { resolveDefaultEngine } = await import('../agents/default-engine.js');
   // Effort and a model are Claude choices (validateLaunchChoices takes only Claude
   // model ids): a start that names either asked for Claude.
-  if (params.effort || (params.model && params.model !== 'default')) return undefined;
+  if (params.effort || (params.model && params.model !== 'default')) return { engine: undefined };
   const config = await getConfig();
-  if (normalizeEngine(resolveDefaultEngine(config)) === undefined) return undefined;
+  const { fallbackSetting, resolveFallbackLaunch } = await import('../agents/fallback-engine.js');
+  // The place is read only when it can change the answer: a default that is not Claude, or a
+  // fallback whose use depends on the host's limit.
+  if (normalizeEngine(resolveDefaultEngine(config)) === undefined && !fallbackSetting(config)) return { engine: undefined };
   const host = await resolveTaskLaunchReadOnly(task, params).then((l) => l.host, () => undefined);
-  return normalizeEngine(resolveDefaultEngine(config, { host }));
+  const engine = resolveDefaultEngine(config, { host });
+  // A task that already has its conversation continues it on its own engine: nothing falls back.
+  const fallback = await taskConversation(task.id).then((c) => c ? null : resolveFallbackLaunch(config, engine, host || undefined), () => null);
+  return fallback ? { engine: normalizeEngine(fallback.engine), fallback } : { engine: normalizeEngine(engine) };
+}
+
+/** The task's note of why its session runs on the fallback engine: written at the start, and an
+ *  older one taken off when this start runs on the default engine. */
+async function noteEngineFallback(task: Task, note: EngineFallbackNote | undefined): Promise<void> {
+  if (!note && !task.engine_fallback) return;
+  try {
+    await updateTaskRaw(task.id, { engine_fallback: note ?? null }, { source: 'task-start', emitEvent: true });
+  } catch (error) {
+    log.session.warn('fallback engine: the task note was not written', { taskId: task.id, error: String(error) });
+  }
 }
 
 /**
@@ -274,7 +294,11 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
   }
   // Resolved before the duplicate check: on the normal path nothing awaits between
   // that check and taking the slot below, or two concurrent starts both get through.
-  const engine = params.engine !== undefined ? normalizeEngine(params.engine) : await inheritedEngine(task, params);
+  const inherited = params.engine !== undefined ? undefined : await inheritedEngine(task, params);
+  const engine = params.engine !== undefined ? normalizeEngine(params.engine) : inherited?.engine;
+  // The fallback's model rides only this launch (prepareLaunch below): a start that waits for its
+  // workspace or a slot replays the start as asked, and decides again then.
+  const fallback = inherited?.fallback;
   const pending = pendingStarts.get(task.id);
   if (pending !== undefined) throw alreadyStarted(task, pending);
   // A frozen human plan cannot authorize a later workspace launch with different settings.
@@ -373,8 +397,11 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         }
       }
     }
-    const launch = await prepareLaunch(task, { ...params, engine });
-    // A first start that names no host goes where there is room (start-placement.ts).
+    const launch = await prepareLaunch(task, { ...params, engine, ...(fallback?.model ? { model: fallback.model } : {}) });
+    // An engine switch's own start leaves the note to the switch: it clears it once it is done.
+    if (params.source !== 'engine-switch') await noteEngineFallback(task, fallback?.note);
+    // A first start that names no host goes where there is room (start-placement.ts). One that
+    // runs on the fallback stays where the default engine is out of usage: the decision was its.
     // A slot on the host it runs on; an automatic start fails when that host is full (its caller
     // reads why). A move takes its slot on the target before anything is set up there (review
     // round 3: a refused start left a new clone behind on every try). Nothing waits here, so
@@ -384,7 +411,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     const slotOpts = { automatic };
     let moveSlot: ((holdMs?: number) => void) | undefined;
     const { placeStartByLoad } = await import('./start-placement.js');
-    const placement = await placeStartByLoad(task, params, launch, engine, {
+    const placement = fallback ? undefined : await placeStartByLoad(task, params, launch, engine, {
       admit: async (host) => (moveSlot = await admitHostStart(task.id, host, slotOpts)),
     });
     if (placement?.moved && moveSlot) releaseAdmission = moveSlot;
@@ -436,7 +463,8 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     // Until the session starts on the message, no edge of the task speaks for its request.
     let delivered: (() => void) | undefined;
     const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false,
-      applied: appliedLaunchFields(task, params, launch), ...(placement ? { placement } : {}) };
+      applied: appliedLaunchFields(task, params, launch), ...(placement ? { placement } : {}),
+      ...(fallback ? { fallback: fallback.note } : {}) };
     const work = (async (): Promise<SessionStartResult> => {
       try {
         if (recovery && previous) {

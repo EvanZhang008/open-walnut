@@ -14,7 +14,8 @@ export interface RunStartDeps {
   now(): number;
   sleep(ms: number): Promise<void>;
   /** A session id for the launch, or undefined for an engine that issues its own. */
-  mintSessionId(host: string | undefined): Promise<string | undefined>;
+  /** `model`: a run that names one never falls back (quickStartSession). */
+  mintSessionId(host: string | undefined, model?: string): Promise<string | undefined>;
   /** `continued`: the task already held a conversation, and the message continued it there. */
   launch(launch: RoutineLaunch, opts: { preassignedSessionId?: string; existingTaskId?: string }): Promise<{ task: Task; continued?: string }>;
   getSession(sessionId: string): Promise<SessionRecord | null>;
@@ -51,14 +52,20 @@ export function defaultRunStartDeps(): RunStartDeps {
   return {
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
-    async mintSessionId(host) {
+    async mintSessionId(host, model) {
       const { getConfig } = await import('../config-manager.js');
       const { resolveDefaultEngine } = await import('../agents/default-engine.js');
       const { isAcpEngine, normalizeEngine } = await import('../agents/engine-registry.js');
       const h = host && host !== LOCAL ? host : undefined;
       // The same resolution quickStartSession makes for an omitted engine: an id
       // is minted only for an engine that accepts one.
-      const engine = normalizeEngine(resolveDefaultEngine(await getConfig(), { host: h }));
+      const config = await getConfig();
+      const inherited = resolveDefaultEngine(config, { host: h });
+      // A run whose default engine is out of usage starts on the fallback (quickStartSession), which
+      // may be an engine that issues its own ids: decided the same way here, before minting.
+      const { resolveFallbackLaunch } = await import('../agents/fallback-engine.js');
+      const fallback = model && model !== 'default' ? null : await resolveFallbackLaunch(config, inherited, h, { quiet: true }).catch(() => null);
+      const engine = normalizeEngine(fallback?.engine ?? inherited);
       return isAcpEngine(engine) ? undefined : randomUUID();
     },
     async launch(launch, opts) {

@@ -161,7 +161,7 @@ export class RoutineRunStarter {
    * which reports it as the run's error the way it always did.
    */
   async start(input: RoutineRunInput): Promise<RoutineRunStarted> {
-    const sid = await this.deps.mintSessionId(input.launch.host);
+    const sid = await this.deps.mintSessionId(input.launch.host, input.launch.model);
     const attemptAt = this.deps.now();
     // Listening before the launch: a spawn can fail before the launch returns.
     const tap = this.tap(sid);
@@ -300,7 +300,7 @@ export class RoutineRunStarter {
 
   private async retry(taskId: string, prev: RoutineStart): Promise<{ record: RoutineStart; tap: ErrorTap } | { continued: string } | { error: string }> {
     const launch = prev.launch!;
-    const sid = await this.deps.mintSessionId(launch.host);
+    const sid = await this.deps.mintSessionId(launch.host, launch.model);
     const next: RoutineStart = {
       ...prev,
       attempt: 2,

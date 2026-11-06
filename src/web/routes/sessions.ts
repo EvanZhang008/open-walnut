@@ -74,6 +74,7 @@ import { CLOUD_MODE, LOG_DIR, QUICK_START_MESSAGE_HARD_LIMIT } from '../../const
 import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
 import { resolveDefaultEngine } from '../../core/agents/default-engine.js'
+import { resolveFallbackLaunch, type FallbackDecision } from '../../core/agents/fallback-engine.js'
 import { splitAcpModelId } from '../../providers/acp-session.js'
 import { SESSION_ENGINE_IDS } from '../../core/types.js'
 
@@ -470,9 +471,23 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // preassigned (an ACP engine issues its own, so minting one would hand the
     // client an id that never exists and park its panel on "Untitled session").
     // Storage shape as always: the default engine stays absent.
-    const effectiveEngine = engine !== undefined
-      ? normalizeEngine(engine)
-      : normalizeEngine(resolveDefaultEngine(await getConfig(), { host }))
+    //
+    // The default engine out of usage on this host: a launch that names neither an engine nor a
+    // model starts on the fallback engine (core/agents/fallback-engine.ts). Decided here, before
+    // an id is minted, and handed to quickStartSession so both read the limit once.
+    const namesModel = typeof rawModel === 'string' && rawModel !== '' && rawModel !== 'default'
+    let fallback: FallbackDecision | null = null
+    // Ask Walnut runs the Personal AI profile, which only Claude Code carries: never on the fallback.
+    const decidesFallback = engine === undefined && !namesModel && !isWalnutAgent
+    if (decidesFallback) {
+      const config = await getConfig()
+      fallback = await resolveFallbackLaunch(config, resolveDefaultEngine(config, { host }), host).catch(() => null)
+    }
+    const effectiveEngine = fallback
+      ? normalizeEngine(fallback.engine)
+      : engine !== undefined
+        ? normalizeEngine(engine)
+        : normalizeEngine(resolveDefaultEngine(await getConfig(), { host }))
 
     // Normalize model through the shared switch validator (same ruleset as
     // POST /:sessionId/model): legacy alias ids map to their CLI form, catalog
@@ -481,7 +496,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // VALID_SESSION_MODEL_IDS check silently downgraded unknown strings to
     // Auto, which read as "my model choice was ignored".
     let model: string | undefined
-    if (typeof rawModel === 'string' && rawModel && rawModel !== 'default') {
+    if (fallback) {
+      // The setting's own model (checked when it was saved), or that engine's default.
+      model = fallback.model
+    } else if (typeof rawModel === 'string' && rawModel && rawModel !== 'default') {
       if (isAcpEngine(effectiveEngine)) {
         // ACP engines: the id belongs to the PROVIDER's catalog (probed at
         // draft time — GET /api/engines/:id/models), not the claude switch
@@ -718,6 +736,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         // A session that makes this request is not a person: its first line is framed (sessions/send-frame.ts).
         source: routeSource('quick-start', req.headers), requestTs,
         engine: effectiveEngine,
+        ...(fallback ? { fallback } : {}),
+        ...(decidesFallback ? { fallbackDecided: true } : {}),
         preassignedSessionId,
         ...(wsPlan?.defer ? { deferStart: true, preassignedSessionId: undefined } : {}),
         ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
@@ -743,8 +763,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // key is "whatever is remembered" (applied above), 'default' is the
       // explicit reset that clears it.
       const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
-      // A task's own directory is no folder the person picked: nothing to remember for it.
-      if (!existingTaskId && !isFixWalnut && !isWalnutAgent && !inOwnTaskDir) {
+      // A task's own directory is no folder the person picked: nothing to remember for it. A
+      // launch the fallback engine took was not the user's pick either: the folder keeps what it
+      // remembered (a remembered model gave way only while the limit holds).
+      if (!existingTaskId && !isFixWalnut && !isWalnutAgent && !inOwnTaskDir && !fallback) {
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
           // LaunchPrefs stores the persisted shape (explicit non-default engine
