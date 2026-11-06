@@ -25,6 +25,7 @@
  */
 import { useCallback, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 
 /** Bounding rect of the current non-collapsed selection in `doc`, or null. */
 export function selectionClientRect(doc: Document = document): DOMRect | null {
@@ -139,7 +140,13 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onCo
   // tree, portal or not) to the container's own mouseup handler, which
   // recomputes the now-collapsing selection and unmounts THIS pill before
   // click fires (so onCommit never runs).
+  // The attribute: the document's capture-phase mousedown (main.tsx) clears a
+  // selection before this pill's own handler runs, and a pill placed from the
+  // live selection then dismissed itself between press and release, so a press
+  // of human length (about 90ms) clicked nothing (2026-11-06, the Changed tab's
+  // Ask here in the Mac app: "I press Ask here and nothing happens at all").
   const keepSelection = {
+    [KEEP_SELECTION_ATTR]: '',
     onMouseDown: (e: ReactMouseEvent) => { e.preventDefault(); },
     onMouseUp: (e: ReactMouseEvent) => { e.stopPropagation(); },
   };

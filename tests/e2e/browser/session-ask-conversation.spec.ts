@@ -28,6 +28,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   askInline, centreInHistory, mainComposer, mainPage, openThreadsSession, resetThreadsFixture, selectPassage, sessionPanel, switchView, test,
+  humanPress,
 } from './threads-helpers'
 import { buildTaggedSession, filler, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TITLES } from './threads-fixture'
 
@@ -103,7 +104,7 @@ async function askInlineFromTree(page: Page, panel: Locator): Promise<number> {
 
 /** A plain Ask here in Tree Mode: a new pending page at `depth`, no card, still Tree Mode. */
 async function expectTreeAsk(page: Page, panel: Locator, depth: number, phrase: string): Promise<void> {
-  await pill(page).locator('[data-testid="quote-ask-btn"]').click()
+  await humanPress(page, pill(page).locator('[data-testid="quote-ask-btn"]'))
   await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
   await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
   await expect(card(panel)).toHaveCount(0)
@@ -286,7 +287,7 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
     // A plain Ask asks in the view on screen: the card.
     await selectPassage(page, mainPage(panel), PHRASE)
-    await pill(page).locator('[data-testid="quote-ask-btn"]').click()
+    await humanPress(page, pill(page).locator('[data-testid="quote-ask-btn"]'))
     await expect(card(panel)).toBeVisible()
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
     await expect(stackDepth(panel)).toHaveCount(0)

@@ -38,7 +38,7 @@
  */
 import { expect, type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { mainComposer, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
+import { humanPress, mainComposer, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 
 type Rect = { left: number; right: number; top: number; height: number }
@@ -410,7 +410,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await expect(chip, 'the inline Ask shows on the hovered block').toBeVisible({ timeout: 5_000 })
     const askHere = page.locator('[data-testid="bubble-ask-here"]')
     await selectUntil(page, () => textRects(editor, MD_PASSAGE), askHere)
-    await askHere.click()
+    await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-md-wysiwyg', () => textRects(editor, MD_PASSAGE, 0, false), async () => {
       // While this file's card is open the chip stays away: it covered a word.
       await hoverPassage()
@@ -427,7 +427,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await expect(cm).toContainText(MD_SOURCE_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(cm, MD_SOURCE_LINE), askHere)
-    await askHere.click()
+    await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-md-source', () => textRects(cm, MD_SOURCE_LINE, 0, false))
     // Back to the preview for the next test (the tab is remembered per file).
     await view.getByRole('button', { name: 'Preview', exact: true }).click()
@@ -440,7 +440,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await expect(cm).toContainText(GO_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(cm, GO_LINE), askHere)
-    await askHere.click()
+    await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-code-source', () => textRects(cm, GO_LINE, 0, false))
   })
 
@@ -451,7 +451,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(preview, MDX_LINE), askHere)
-    await askHere.click()
+    await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-md-readonly', () => textRects(preview, MDX_LINE, 0, false))
   })
 
@@ -497,7 +497,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await expect(pre).toContainText(RO_LINE, { timeout: 10_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(pre, RO_LINE), askHere)
-    await askHere.click()
+    await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-code-readonly', () => textRects(pre, RO_LINE, 0, false), async (card) => {
       await expectCardRightOfGutter(card, pre.locator('.fv-line-text'), 'files-code-readonly')
     })
@@ -509,7 +509,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     await expect(view.frameLocator('.fv-html-preview').locator('body')).toContainText(HTML_PASSAGE, { timeout: 15_000 })
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => frameTextRects(view, HTML_PASSAGE), askHere)
-    await askHere.click()
+    await humanPress(page, askHere)
     await expectCardLanded(page, view, 'files-html', () => frameTextRects(view, HTML_PASSAGE))
   })
 
@@ -538,14 +538,14 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     async function askHereInDiff(page: Page, diff: Locator, phrase: string, name: string): Promise<Locator> {
       await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), phrase), askHereBtn(page))
       await expect(quoteBtn(page)).toBeVisible()
-      await askHereBtn(page).click()
+      await humanPress(page, askHereBtn(page))
       return expectCardShown(page, diff, name, () => textRects(diff.locator('.session-diff-main'), phrase, 0, false))
     }
 
     /** Select `phrase` in the diff and press Quote in chat. */
     async function quoteInDiff(page: Page, diff: Locator, phrase: string): Promise<void> {
       await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), phrase), quoteBtn(page))
-      await quoteBtn(page).click()
+      await humanPress(page, quoteBtn(page))
     }
 
     test('Changed: a unified diff (an added file): Ask here records a file question; another file closes an unwritten one', async ({ page, request }) => {
@@ -597,7 +597,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       await selectUntil(page, async () => [
         (await textRects(main, 'package marina', 1))[0], ...(await textRects(main, GO_NEW)).slice(-1),
       ], askHereBtn(page))
-      await askHereBtn(page).click()
+      await humanPress(page, askHereBtn(page))
       card = await expectCardShown(page, diff, 'changed-split-multiline', async () => [
         ...(await textRects(main, 'package marina', 1, false)), ...(await textRects(main, GO_NEW, 0, false)),
       ])
@@ -631,7 +631,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), GO_REMOVED), quoteBtn(page))
       await expect(askHereBtn(page)).toHaveCount(0)
       await expect(quoteBtn(page)).toHaveAttribute('title', /Removed lines are not in the file/)
-      await quoteBtn(page).click()
+      await humanPress(page, quoteBtn(page))
       await expectComposerQuoted(page, panel, GO_REMOVED, 'changed-split-removed-quote')
       await diff.getByRole('button', { name: 'Auto', exact: true }).click().catch(() => undefined)
     })
@@ -647,7 +647,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       // Every frame from the press on: the card must show on ONE side, never
       // drawn on one and moved to the other (its side waits for its height).
       await startCardSampler(page, 1_500, MD_PASSAGE)
-      await askHereBtn(page).click()
+      await humanPress(page, askHereBtn(page))
       const card = await expectCardShown(page, diff, 'changed-rendered-md', () => textRects(main, MD_PASSAGE, 0, false))
       const samples = await cardSamples(page)
       const shown = samples.filter((x) => x.opacity === '1')

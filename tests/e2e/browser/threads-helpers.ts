@@ -388,8 +388,8 @@ export async function askHereThenTree(page: Page, panel: Locator, pill: Locator 
 /** Ask here inline (the card beside the passage, in Conversation Mode) from any
  *  view: the pill's caret, then "Ask inline" in the menu it opens under itself. */
 export async function askInline(page: Page, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
-  await pill.locator('[data-testid="quote-ask-mode-btn"]').click()
-  await page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-inline"]').click()
+  await humanPress(page, pill.locator('[data-testid="quote-ask-mode-btn"]'))
+  await humanPress(page, page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-inline"]'))
 }
 
 /** Every scrollTop the timeline takes, one sample per frame, from now until
@@ -471,4 +471,17 @@ export async function installHighlightRules(page: Page, names: readonly string[]
     if (!reg || !api.Highlight) return
     for (const name of list) if (!reg.has(name)) reg.set(name, new api.Highlight())
   }, [...names])
+}
+
+/** A press the way a hand makes one: down, about 110ms, up. Playwright's click
+ *  releases at once, which hid a pill that dismissed itself while held
+ *  (2026-11-06: "I press Ask here and nothing happens at all" in the Changed tab,
+ *  where the document's mousedown cleared the selection the pill was placed from). */
+export async function humanPress(page: Page, target: Locator): Promise<void> {
+  await expect(target).toBeVisible()
+  const b = (await target.boundingBox())!
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
+  await page.mouse.down()
+  await page.waitForTimeout(110)
+  await page.mouse.up()
 }
