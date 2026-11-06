@@ -54,7 +54,12 @@ type Box = { x: number; y: number; width: number; height: number } | null
 async function record(page: Page, name: string, status: Locator, container: Locator, others: Record<string, Locator>): Promise<{ w: number; h: number }> {
   const spinner = status.locator('.spinner')
   await expect(spinner).toBeVisible()
-  const size = await spinner.evaluate((el) => ({ w: (el as HTMLElement).offsetWidth, h: (el as HTMLElement).offsetHeight }))
+  // The slot can redraw its loading view while the board loads, replacing the ring between
+  // the locator's find and the read: measure a ring still on the page, not the one removed.
+  const read = () => spinner.evaluate((el) => (el.isConnected ? { w: (el as HTMLElement).offsetWidth, h: (el as HTMLElement).offsetHeight } : null))
+  let size = await read()
+  await expect.poll(async () => (size = await read())).not.toBeNull()
+  if (!size) throw new Error('the spinner never stayed on the page long enough to measure')
   const text = await status.evaluate((p) => {
     const node = [...p.childNodes].find((n) => n.nodeType === 3 && n.textContent?.trim())
     if (!node) return null
