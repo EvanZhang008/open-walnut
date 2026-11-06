@@ -2194,16 +2194,17 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   are kept for the next keep call there. The server shapes the line (any daemon runs it); it
   needs bash (under sh it does nothing) and the task's directory on that host. Each save is one
   snapshot there, `$WALNUT_TASK_DIR/host-exec/keep.d/<gen>.sh` (the directory and the variables,
-  written once), then the pointer `keep.current`, put in place by one rename: two lines, the
-  generation and the directory. All are 0600; with two runs at once the last to move the pointer
+  written once; `<gen>` is the save's time and the run's seal), then the pointer `keep.current`,
+  put in place by one rename: two lines, the generation and the directory. All are 0600; with two runs at once the last to move the pointer
   wins, and the pointer always names one run's directory and variables. A save removes the old
   snapshots except its own, the newest 4 others and any younger than 10 minutes. No value ever
   comes back in an answer. Not kept: shell functions, aliases, unexported variables, shell
   options, traps, and `PWD OLDPWD SHLVL _`, `POSIXLY_CORRECT`, `WALNUT_TASK_DIR`,
   `WALNUT_HOST_EXEC_JOB`, `walnut_*`, `BASH_*` and readonly variables. It is saved when the line
   ends, `exit N` and SIGTERM (a stop, the deadline) included; not when the line sets its own
-  EXIT trap, runs `exec`, is killed by SIGKILL, or runs with `background: true` (that run starts
-  from the state and saves nothing). The threat model: keep never adds output, changes the exit
+  EXIT trap, runs `exec`, is killed by SIGKILL, leaves a DEBUG trap that fails under `extdebug`
+  (bash then skips every command; the save sees that and does nothing more), or runs with
+  `background: true` (that run starts from the state and saves nothing). The threat model: keep never adds output, changes the exit
   code or signal, or shows a value for any line, including one that turns on tracing or defines
   aliases or functions over builtins. The save's first step looks nothing up as a function (in
   posix mode, through special builtins only) while it removes the line's tracing, DEBUG and ERR
@@ -2224,9 +2225,15 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   before anything ran) runs the same job again with no `cwd`. A daemon that cannot hand the
   pointer over (no `fs.readRange`, no task directory root) has the shell read it and enter the
   directory itself, after those checks. A snapshot that cannot be read, or is gone, is said on
-  the output's first line (`walnut: ...`) and the run goes on without it. The answer adds `keep:
-  { saves, saved?, why?, gone?, notEntered?, shellCd? }`: `saves` false for a background run;
-  `saved: false` with `why` when the run printed keep's mark; `gone`, the kept directory that no
+  the output's first line (`walnut: ...`) and the run goes on without it. Once a foreground run
+  ended the server reads `keep.current` again (one more `fs.readRange`): the run's state carries
+  only when the pointer names its snapshot. The answer adds `keep: { saves, saved?, why?, gone?,
+  notEntered?, shellCd? }`: `saves` false for a background run; for a foreground run that ended,
+  `saved` true when the pointer names this run's snapshot, `false` with `why` when it does not
+  (keep's mark gives the reason when the run could print it; else the save did not run to its end,
+  or a keep call that ran at the same time saved after it), `null` with `why` when the pointer could
+  not be read then (a daemon that cannot hand it over, a read that failed); a run still going has
+  no `saved`. Only `saved: true` says the state carries. `gone`, the kept directory that no
   longer exists (the run started in the default cwd); `notEntered`, one the shell could not start
   in (nothing ran); `shellCd: true` when the shell entered it itself. Limits: a trace sent to a
   descriptor of 10 or more (`BASH_XTRACEFD`) is not silenced in the save; an alias named `{`
@@ -2234,8 +2241,10 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   `command`, `exec`, `shopt`, `printf`, `declare`, `compgen`, `umask`, `pwd`, `cd`) skips the
   save, with the mark; a readonly `POSIXLY_CORRECT` skips it with no mark on bash 3.2 and 4.2 and
   in posix mode, and on bash 5 leaves it outside posix mode, where a function over `set`, `trap`
-  or `unset` would run in place of the builtin; a DEBUG trap that fails under `extdebug` skips it;
-  under `set -v` the output ends with the save's first line, which holds no value; on macOS's
+  or `unset` would run in place of the builtin; the line's own DEBUG trap runs before each of the
+  save's first few commands, its output on /dev/null, and one that fails under `extdebug` for only
+  some commands (a counter) can skip part of the save's first step, after which the save still ends
+  in bounded time; under `set -v` the output ends with the save's first line, which holds no value; on macOS's
   bash 3.2 an exported value of a few hundred KB makes each keep call seconds slower (about 13 s
   for 300 KB, measured); on Linux one exported value over 128 KiB (the kernel's limit for one
   string) makes every program a later keep call starts fail with `Argument list too long` until

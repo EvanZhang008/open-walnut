@@ -22,7 +22,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { KEEP_POINTER, daemonCwd, keepMarkWhy, pointerOf, shapedLine, trapFirstLine, withKeepMarkSaid } from '../../src/core/hosts/host-exec-keep.js'
+import { KEEP_POINTER, daemonCwd, keepMarkWhy, pointerOf, savedBy, shapedLine, trapFirstLine, withKeepMarkSaid } from '../../src/core/hosts/host-exec-keep.js'
 import { sealFor } from '../../src/core/hosts/host-exec-strict.js'
 import { resolveCwd } from '../../src/providers/host-exec-line.js'
 
@@ -54,6 +54,12 @@ export interface KeepStep {
     gone?: string | null
     /** Why the save did not complete, read from keep's sealed mark (null: it did, or there is no mark). */
     why?: string | null
+    /**
+     * Whether the pointer names this run's snapshot once it ended, as the server reads it (savedBy): by
+     * default true for a foreground keep step, false for a background one; 'either' where it differs by
+     * bash. Not checked for runs at once or under sh.
+     */
+    saved?: boolean | 'either'
     /** What differs in shell mode. */
     shell?: { out?: string; has?: string[]; match?: string }
   }
@@ -136,11 +142,11 @@ export const KEEP_CASES: KeepCase[] = [
     { command: 'echo "$FAILV"', expect: { out: '3\n' } },
   ] },
   { name: 'a line that sets its own EXIT trap saves nothing, and its trap still runs', steps: [
-    { command: 'export UT=1; trap \'echo user-trap-ran\' EXIT', expect: { rc: 0, out: 'user-trap-ran\n' } },
+    { command: 'export UT=1; trap \'echo user-trap-ran\' EXIT', expect: { rc: 0, out: 'user-trap-ran\n', saved: false } },
     { command: 'echo "${UT-unset}"', expect: { out: 'unset\n' } },
   ] },
   { name: 'a line that execs saves nothing', steps: [
-    { command: 'export EX=1; exec sh -c \'exit 4\'', expect: { rc: 4 } },
+    { command: 'export EX=1; exec sh -c \'exit 4\'', expect: { rc: 4, saved: false } },
     { command: 'echo "${EX-unset}"', expect: { out: 'unset\n' } },
   ] },
   { name: 'a background run starts from the kept state and saves nothing', steps: [
@@ -163,7 +169,7 @@ export const KEEP_CASES: KeepCase[] = [
   ] },
   { name: 'a snapshot gone when the run sources it: the run starts without state, with the note', steps: [
     { command: 'export GV=1', expect: { rc: 0, out: '' } },
-    { setup: `rm -f ${STATE}`, command: 'echo "${GV-unset}"', expect: { rc: 0, match: '^walnut: the kept state in \\S+/host-exec/keep\\.d/[0-9]+-[0-9]+-[0-9]+\\.sh cannot be read; this run starts without it\\nunset\\n$' } },
+    { setup: `rm -f ${STATE}`, command: 'echo "${GV-unset}"', expect: { rc: 0, match: '^walnut: the kept state in \\S+/host-exec/keep\\.d/[0-9]+-[0-9a-f]{12}\\.sh cannot be read; this run starts without it\\nunset\\n$' } },
   ] },
   { name: 'a save removes the old snapshots but its own, the newest four others and any younger than ten minutes', steps: [
     { setup: 'mkdir -p "$WALNUT_TASK_DIR/host-exec/keep.d" && for i in 1 2 3 4 5 6; do : > "$WALNUT_TASK_DIR/host-exec/keep.d/100000000$i-1-1.sh"; done', command: 'export C=1', expect: { rc: 0, out: '' } },
@@ -176,7 +182,7 @@ export const KEEP_CASES: KeepCase[] = [
   { name: 'runs at once leave one whole file, and no temp file', steps: [
     { command: 'export P0=1; sleep 0.5', parallel: [1, 2, 3, 4, 5, 6, 7].map((i) => `export P${i}=1; sleep 0.5`), expect: { rc: 0 } },
     { command: 'n=0; for i in 0 1 2 3 4 5 6 7; do eval "[ -n \\"\\${P$i-}\\" ]" && n=$((n+1)); done; [ "$n" -ge 1 ] && echo some-set'
-      + `; tail -n 1 ${STATE}; (. ${STATE}) && echo sourced; ls "$WALNUT_TASK_DIR/host-exec"; ls "$WALNUT_TASK_DIR/host-exec/keep.d" | grep -vc "^[0-9]*-[0-9]*-[0-9]*\\.sh$"`, expect: { out: 'some-set\nwalnut_kz=1\nsourced\nkeep.current\nkeep.d\n0\n' } },
+      + `; tail -n 1 ${STATE}; (. ${STATE}) && echo sourced; ls "$WALNUT_TASK_DIR/host-exec"; ls "$WALNUT_TASK_DIR/host-exec/keep.d" | grep -vc "^[0-9]*-[0-9a-f]*\\.sh$"`, expect: { out: 'some-set\nwalnut_kz=1\nsourced\nkeep.current\nkeep.d\n0\n' } },
   ] },
   { name: 'the state files are 0600 in 0700 directories, made when missing', steps: [
     { setup: 'rm -rf "$WALNUT_TASK_DIR/host-exec"', command: 'export M=1', expect: { rc: 0 } },
@@ -191,7 +197,7 @@ export const KEEP_CASES: KeepCase[] = [
     { command: 'echo "${KILLED-unset} $PWD"', expect: { out: '1 /\n' } },
   ] },
   { name: 'a run killed hard (SIGKILL) saves nothing', steps: [
-    { command: 'export KK=1; cd /; sleep 5', kill: { signal: 'SIGKILL', afterMs: 400 }, expect: { rc: null, signal: 'SIGKILL' } },
+    { command: 'export KK=1; cd /; sleep 5', kill: { signal: 'SIGKILL', afterMs: 400 }, expect: { rc: null, signal: 'SIGKILL', saved: false } },
     { command: 'echo "${KK-unset} $PWD"', expect: { out: 'unset {home}\n' } },
   ] },
   { name: 'a POSIX sh that is not bash ignores keep', steps: [
@@ -263,27 +269,28 @@ export const KEEP_CASES: KeepCase[] = [
     { command: 'printf "[%s][%s]" "$TB" "$TE"', expect: { out: '[ends=\\][=a=b=]' } },
   ] },
   { name: 'a save whose folder cannot be made says so in one line with no value, and the exit code stays', steps: [
-    { setup: 'rm -rf "$WALNUT_TASK_DIR/host-exec"; touch "$WALNUT_TASK_DIR/host-exec"', command: 'export W=new; exit 4', expect: { rc: 4, out: notSavedLine('its folder in the task directory cannot be made') } },
+    { setup: 'rm -rf "$WALNUT_TASK_DIR/host-exec"; touch "$WALNUT_TASK_DIR/host-exec"', command: 'export W=new; exit 4', expect: { rc: 4, out: notSavedLine('its folder in the task directory cannot be made'), saved: false } },
     { setup: 'rm -f "$WALNUT_TASK_DIR/host-exec"', command: 'echo "${W-unset}"', expect: { out: 'unset\n' } },
   ] },
   { name: 'a save that cannot write says so, and the next call starts from the last saved one', nonRoot: true, steps: [
     { command: 'mkdir -p old && cd old && export W=old', expect: { rc: 0, out: '' } },
-    { setup: 'chmod 500 "$WALNUT_TASK_DIR/host-exec"', command: 'export W=new; cd /', expect: { rc: 0, out: notSavedLine('it cannot be written in the task directory') } },
+    { setup: 'chmod 500 "$WALNUT_TASK_DIR/host-exec"', command: 'export W=new; cd /', expect: { rc: 0, out: notSavedLine('it cannot be written in the task directory'), saved: false } },
     { setup: 'chmod 700 "$WALNUT_TASK_DIR/host-exec"', command: 'echo "$W"; pwd; ls -A "$WALNUT_TASK_DIR/host-exec"; ls -A "$WALNUT_TASK_DIR/host-exec/keep.d" | wc -l | tr -d " "', expect: { out: 'old\n{home}/old\nkeep.current\nkeep.d\n1\n' } },
   ] },
   // The save's own stop (its subshell's `exit`) never becomes the run's end: a stop still ends it by SIGTERM.
   { name: 'the not-saved line goes to the run\'s stderr, never to an fd 4 the line opened, and nowhere with stderr closed', steps: [
-    { command: 'exec 4>"$HOME/fd4.txt"; readonly walnut_g; true', expect: { rc: 0, out: notSavedLine('the line made a walnut_ variable readonly') } },
-    { command: 'cat "$HOME/fd4.txt"; exec 4>"$HOME/fd4.txt"; exec 2>&-; readonly walnut_g; true', expect: { rc: 0, out: '' } },
+    { command: 'exec 4>"$HOME/fd4.txt"; readonly walnut_g; true', expect: { rc: 0, out: notSavedLine('the line made a walnut_ variable readonly'), saved: false } },
+    // Nothing reaches the output with stderr closed: the server still reads that it was not saved.
+    { command: 'cat "$HOME/fd4.txt"; exec 4>"$HOME/fd4.txt"; exec 2>&-; readonly walnut_g; true', expect: { rc: 0, out: '', saved: false } },
     { command: 'cat "$HOME/fd4.txt"; echo end', expect: { out: 'end\n' } },
   ] },
   { name: 'a readonly walnut_ name under a stop: the run still ends by SIGTERM, and says it was not saved', steps: [
     { command: 'export V=old', expect: { rc: 0, out: '' } },
-    { command: 'export V=new; readonly walnut_g; sleep 5', kill: { signal: 'SIGTERM', afterMs: 400 }, expect: { rc: null, signal: 'SIGTERM', out: notSavedLine('the line made a walnut_ variable readonly') } },
+    { command: 'export V=new; readonly walnut_g; sleep 5', kill: { signal: 'SIGTERM', afterMs: 400 }, expect: { rc: null, signal: 'SIGTERM', out: notSavedLine('the line made a walnut_ variable readonly'), saved: false } },
     { command: 'echo "$V"', expect: { out: 'old\n' } },
   ] },
   { name: 'a line that unsets a walnut_ name the save reads: one line says it was not saved', steps: [
-    { command: 'export V=1; unset walnut_kh; true', expect: { rc: 0, out: notSavedLine('the line changed a walnut_ variable'), why: 'the line changed a walnut_ variable' } },
+    { command: 'export V=1; unset walnut_kh; true', expect: { rc: 0, out: notSavedLine('the line changed a walnut_ variable'), why: 'the line changed a walnut_ variable', saved: false } },
     { command: 'echo "${V-unset}"', expect: { out: 'unset\n' } },
   ] },
   { name: 'a walnut_ name the line gave an attribute (integer, upper case, array) does not change what is saved', steps: [
@@ -302,8 +309,8 @@ export const KEEP_CASES: KeepCase[] = [
   ] },
   { name: 'a readonly function over a builtin: not saved, said by the mark, the exit code kept', steps: [
     { command: 'export V=old', expect: { rc: 0, out: '' } },
-    { command: 'export V=new SECRET=private-canary; builtin() { printf \'fn:%s\\n\' "$SECRET"; }; readonly -f builtin; exit 4', expect: { rc: 4, out: notSavedLine('the line made a function the save needs readonly'), why: 'the line made a function the save needs readonly' } },
-    { command: 'export V=new; exec() { echo fn; }; readonly -f exec; set -e; true', expect: { rc: 0, out: notSavedLine('the line made a function the save needs readonly') } },
+    { command: 'export V=new SECRET=private-canary; builtin() { printf \'fn:%s\\n\' "$SECRET"; }; readonly -f builtin; exit 4', expect: { rc: 4, out: notSavedLine('the line made a function the save needs readonly'), why: 'the line made a function the save needs readonly', saved: false } },
+    { command: 'export V=new; exec() { echo fn; }; readonly -f exec; set -e; true', expect: { rc: 0, out: notSavedLine('the line made a function the save needs readonly'), saved: false } },
     { command: 'echo "$V"', expect: { out: 'old\n' } },
   ] },
   { name: 'a readonly function the save never calls (set, mv) changes nothing', steps: [
@@ -311,8 +318,9 @@ export const KEEP_CASES: KeepCase[] = [
     { command: 'echo "$RV"', expect: { out: '1\n' } },
   ] },
   { name: 'a readonly POSIXLY_CORRECT keeps the exit code and prints nothing', steps: [
-    { command: 'export RP=1; readonly POSIXLY_CORRECT; exit 3', expect: { rc: 3, out: '' } },
-    { command: 'export RP=1; POSIXLY_CORRECT=1; readonly POSIXLY_CORRECT; exit 3', expect: { rc: 3, out: '' } },
+    // bash 3.2 and 4.2 end the trap at its first assignment (nothing saved); bash 5 goes on outside posix mode, and saves.
+    { command: 'export RP=1; readonly POSIXLY_CORRECT; exit 3', expect: { rc: 3, out: '', saved: 'either' } },
+    { command: 'export RP=1; POSIXLY_CORRECT=1; readonly POSIXLY_CORRECT; exit 3', expect: { rc: 3, out: '', saved: 'either' } },
   ] },
   { name: 'POSIXLY_CORRECT never carries, and posix mode does not either', steps: [
     { command: 'export POSIXLY_CORRECT=1 PV=pc', expect: { rc: 0, out: '' } },
@@ -330,12 +338,36 @@ export const KEEP_CASES: KeepCase[] = [
   ] },
   { name: 'output with no line end before the mark: the mark is still read, on its own line', steps: [
     { command: 'export V=old', expect: { rc: 0, out: '' } },
-    { command: 'export V=new; printf no-newline; readonly walnut_s; true', expect: { rc: 0, out: `no-newline\n${notSavedLine('the line made a walnut_ variable readonly')}`, why: 'the line made a walnut_ variable readonly' } },
+    { command: 'export V=new; printf no-newline; readonly walnut_s; true', expect: { rc: 0, out: `no-newline\n${notSavedLine('the line made a walnut_ variable readonly')}`, why: 'the line made a walnut_ variable readonly', saved: false } },
     { command: 'echo "$V"', expect: { out: 'old\n' } },
   ] },
   { name: 'a line the run prints that looks like the mark is never taken for it', steps: [
     { command: `export V=look; printf '%s\\n' ${quoted(notSavedLine('x').trimEnd())}; printf '\\nwalnut keep 0123456789ab: could not save (fake)\\n'`, expect: { rc: 0, out: `${notSavedLine('x')}\nwalnut keep 0123456789ab: could not save (fake)\n`, why: null } },
     { command: 'echo "$V"', expect: { out: 'look\n' } },
+  ] },
+  // Review 2026-11-05 (keep round 3).
+  { name: 'a DEBUG trap that fails under extdebug: the run ends at once as without keep, prints nothing, and nothing is saved', steps: [
+    { command: 'export V=old', expect: { rc: 0, out: '' } },
+    { command: 'export V=new; shopt -s extdebug; trap false DEBUG; true', expect: { rc: 0, out: '', saved: false } },
+    { command: 'export V=new SECRET=private-canary; exec 9>&2; BASH_XTRACEFD=9; PS4=\'$SECRET \'; set -x; shopt -s extdebug; trap false DEBUG', expect: { rc: 0, out: 'private-canary shopt -s extdebug\nprivate-canary trap false DEBUG\n', saved: false } },
+    { command: 'echo "$V"', expect: { out: 'old\n' } },
+  ] },
+  { name: 'stderr closed and a readonly walnut_ name: nothing printed, and not saved', steps: [
+    { command: 'export V=old', expect: { rc: 0, out: '' } },
+    { command: 'export V=new; exec 2>&-; readonly walnut_s; true', expect: { rc: 0, out: '', saved: false } },
+    { command: 'echo "$V"', expect: { out: 'old\n' } },
+  ] },
+  { name: 'an exported GLOBIGNORE carries, changed and unset, and its glob skips the decoy', steps: [
+    { command: 'export GLOBIGNORE=\'*.tmp\' V=kept; touch keep.txt skip.tmp; printf \'%s\\n\' *', expect: { rc: 0, out: 'keep.txt\n' } },
+    { command: 'printf \'[%s]\\n\' "${GLOBIGNORE-unset}"; printf \'%s\\n\' *; echo "$V"', expect: { out: '[*.tmp]\nkeep.txt\nkept\n' } },
+    { command: 'export GLOBIGNORE=\'*.txt\'', expect: { rc: 0, out: '' } },
+    { command: 'printf \'[%s]\\n\' "${GLOBIGNORE-unset}"; printf \'%s\\n\' *', expect: { out: '[*.txt]\nskip.tmp\n' } },
+    { command: 'unset GLOBIGNORE', expect: { rc: 0, out: '' } },
+    { command: 'printf \'[%s]\\n\' "${GLOBIGNORE-unset}"; printf \'%s\\n\' *', expect: { out: '[unset]\nkeep.txt\nskip.tmp\n' } },
+  ] },
+  { name: 'an exported GLOBIGNORE that hides the snapshots does not stop the old ones going', steps: [
+    { setup: 'mkdir -p "$WALNUT_TASK_DIR/host-exec/keep.d" && for i in 1 2 3 4 5 6; do : > "$WALNUT_TASK_DIR/host-exec/keep.d/100000000$i-1-1.sh"; done', command: 'export GLOBIGNORE=\'*.sh\'', expect: { rc: 0, out: '' } },
+    { command: 'cd "$WALNUT_TASK_DIR/host-exec/keep.d" && ls | grep -c "^100000000"', keep: false, expect: { out: '4\n' } },
   ] },
 ]
 
@@ -415,7 +447,7 @@ export function keptStart(b: Sandbox): { gen: string | null; cwd?: string; gone?
   return typeof real === 'string' ? { gen: p.gen, cwd: real } : { gen: p.gen, gone: p.dir }
 }
 
-export interface StepResult { step: number; jobId: string; rc: number | null; signal: string | null; out: string; raw: string; why: string | null; gone: string | null }
+export interface StepResult { step: number; jobId: string; rc: number | null; signal: string | null; out: string; raw: string; why: string | null; gone: string | null; saved: boolean }
 
 /** Play a case on `bash` (`sh` for a step that asks for it), in a fresh sandbox; each step's result. */
 export async function playCase(c: KeepCase, bash: string, sh: string | null, mode: KeepMode = 'server'): Promise<{ results: StepResult[]; box: Sandbox }> {
@@ -433,7 +465,9 @@ export async function playCase(c: KeepCase, bash: string, sh: string | null, mod
     })
     const [first] = await Promise.all(runs)
     const { jobId, out } = first!
-    results.push({ step: i, jobId, rc: first!.rc, signal: first!.signal, out: withKeepMarkSaid(out, jobId), raw: out, why: keepMarkWhy(out, jobId), gone: start.gone ?? null })
+    // As the server reads it once the run ended: does the pointer name this run's snapshot.
+    const after = keptStart(box).gen
+    results.push({ step: i, jobId, rc: first!.rc, signal: first!.signal, out: withKeepMarkSaid(out, jobId), raw: out, why: keepMarkWhy(out, jobId), gone: start.gone ?? null, saved: savedBy(after, jobId) })
   }
   return { results, box }
 }

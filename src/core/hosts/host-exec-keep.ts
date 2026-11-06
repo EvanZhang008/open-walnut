@@ -20,12 +20,14 @@
  * Line Tools check, every wait_for file, see the directory the line starts in) and the line the
  * generation to source, the one that directory came from. A host that cannot hand the pointer over
  * gets the shell reading it and entering the directory itself (`shellCd`), after those checks, and
- * the answer says so.
+ * the answer says so. Once a foreground run ended the server reads keep.current again: the answer says
+ * the state carries only when it names this run's snapshot (its generation ends with the run's seal).
  *
  * Saved by an EXIT trap: on a normal end, `exit N`, and SIGTERM (host_exec_stop and a deadline send
  * it first; bash runs its EXIT trap then). Not saved when the line sets its own EXIT trap (it replaces
- * Walnut's), `exec`s, is killed by SIGKILL, or runs in the background (it ends much later, and would
- * write an old state over a newer one). Restore runs before strict's prefix: no set -e, no ERR trap.
+ * Walnut's), `exec`s, is killed by SIGKILL, leaves a DEBUG trap that fails under extdebug, or runs in
+ * the background (it ends much later, and would write an old state over a newer one). Restore runs
+ * before strict's prefix: no set -e, no ERR trap.
  *
  * What the line can do to its shell is the threat model: the save never adds output, changes the exit
  * code or signal, or shows a value, whatever the line turned on (tracing, aliases, functions over
@@ -41,7 +43,7 @@ import { taskDirPath } from '../../lib/task-dir.js'
 export const KEEP_POINTER = 'host-exec/keep.current'
 /** The snapshots, one file per generation, beside it. */
 export const KEEP_GENS = 'host-exec/keep.d'
-/** A generation's name: its time, the saving shell's pid, a random number (letters, digits, - only). */
+/** A generation's name: its time, then the saving run's seal (letters, digits, - only). */
 export const GEN_RE = /^[A-Za-z0-9-]{1,64}$/
 /** The longest kept directory read (a path: PATH_MAX is 4096 on Linux, 1024 on macOS). */
 const KEEP_CWD_MAX = 4_096
@@ -63,10 +65,16 @@ const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
 const SKIP = '""|PWD|OLDPWD|SHLVL|_|POSIXLY_CORRECT|WALNUT_HOST_EXEC_JOB|WALNUT_TASK_DIR|walnut_*|BASH_*'
 /** The next name of `$walnut_r`, a newline-ended list (no `read`: IFS and here-strings stay out of it). */
 const NEXT = 'walnut_n=${walnut_r%%"$walnut_nl"*}; walnut_r=${walnut_r#*"$walnut_nl"}'
+/**
+ * A loop over the names in `$list`, one per line, that ends in bounded time whatever a DEBUG trap
+ * under extdebug skips (bash counts a skipped command as a success): `until` stops at a skipped
+ * test, and a turn goes on only after the count ran, at most as many turns as `$list` has characters.
+ */
+export const each = (list: string, body: string) => `walnut_r=$${list}$walnut_nl; walnut_j=0; until [[ -z $walnut_r ]] || (( (walnut_j += 1) > \${#${list}} )); do ${NEXT}; ${body}; done`
 /** Every name the save assigns: one the line made readonly stops it before it starts. */
 export const KEEP_SAVE_NAMES = [
   'walnut_nl', 'walnut_w', 'walnut_ke', 'walnut_kd', 'walnut_kq', 'walnut_s', 'walnut_r', 'walnut_n', 'walnut_d', 'walnut_f',
-  'walnut_t', 'walnut_g', 'walnut_a', 'walnut_i', 'walnut_c', 'walnut_p', 'walnut_x',
+  'walnut_t', 'walnut_g', 'walnut_a', 'walnut_i', 'walnut_c', 'walnut_p', 'walnut_x', 'walnut_j', 'walnut_m',
 ]
 /** The functions the first line removes: a function over builtin or exec would run in Walnut's place (the rest as the review asked). */
 export const KEEP_UNSET_FUNCTIONS = ['builtin', 'command', 'exec', 'shopt', 'printf', 'declare', 'compgen', 'umask', 'pwd', 'cd']
@@ -82,74 +90,89 @@ const NULL_FDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((fd) => `${fd}${fd === 0 ? '
  * traps, tracing, verbose, -e and -u, and the functions over builtins (the shell is ending: they cost
  * the line nothing), then leaves posix mode. A readonly function among them is not removed: the save is
  * skipped and says so with trap -p, a special builtin (keepMarkWhy reads that form too), and exits,
- * which keeps the run's exit code and signal. Then, with no function in the way, no alias expansion.
- * Backslash-quoted words are never alias-expanded. Not covered (measured 2026-11-05 on 3.2, 4.2 and
- * 5.2): an alias named `{`; a readonly POSIXLY_CORRECT (bash 3.2 and 4.2, and any bash in posix mode,
- * end the trap at the assignment: nothing saved, nothing said, the exit code kept; bash 5 outside
- * posix mode goes on there, where a function over set, trap or unset would run in place of the
- * builtin); a DEBUG trap that fails under extdebug (bash skips every command: nothing saved). Under
- * set -v this one line is echoed; it holds no value.
+ * which keeps the run's exit code and signal. Then, with no function in the way, no alias expansion
+ * (after leaving posix mode, which itself turns it off in a shell that is not interactive on 3.2, 4.2
+ * and 5.2; switched off last so that does not rest on it). Backslash-quoted words are never alias-expanded.
+ * Not covered (measured 2026-11-05 on 3.2, 4.2 and 5.2): an alias named `{`; a readonly
+ * POSIXLY_CORRECT (bash 3.2 and 4.2, and any bash in posix mode, end the trap at the assignment:
+ * nothing saved, nothing said, the exit code kept; bash 5 outside posix mode goes on there, where a
+ * function over set, trap or unset would run in place of the builtin). Under set -v this one line is
+ * echoed; it holds no value.
+ *
+ * A DEBUG trap that fails under extdebug makes bash skip every command, this line's included, and
+ * count each as a success (3.2 and 4.2 skip the trap's own commands, not those of a subshell it
+ * starts; 5 skips both). So the rest of the trap runs only when the gate after this line ran
+ * (GATE): a skipped `false` succeeds, and nothing more runs. The line's DEBUG trap still runs before
+ * each of the few commands up to the gate, with its output on /dev/null.
  */
 export function trapFirstLine(seal: string): string {
-  return `{ POSIXLY_CORRECT=y || \\:; \\trap - ERR DEBUG; \\set +xveu; \\unset -f ${KEEP_UNSET_FUNCTIONS.join(' ')} && \\set +o posix; } ${NULL_FDS}`
+  return `{ POSIXLY_CORRECT=y || \\:; \\trap - ERR DEBUG; \\set +xveu; \\unset -f ${KEEP_UNSET_FUNCTIONS.join(' ')} && \\set +o posix`
+    + ` && { \\builtin unset -v POSIXLY_CORRECT; \\builtin shopt -u expand_aliases; }; } ${NULL_FDS}`
     + ` || { \\trap -- $'\\n${markHead(seal)} (the line made a function the save needs readonly)' RETURN; { \\trap -p RETURN; } >&2; \\exit; }`
-    + '; { \\builtin unset -v POSIXLY_CORRECT; } 2>/dev/null; \\builtin shopt -u expand_aliases'
 }
 
+/** The rest of the trap runs only when this `false` ran: a DEBUG trap that skips it makes it succeed. */
+const GATE = `{ \\builtin false; } ${NULL_FDS} || {`
+
 /**
- * The EXIT trap. After its first line: no allexport (it would hand the state to mv's environment), no
- * noglob (the old generations are found by a glob), no nocasematch (the baseline test compares exact
- * text). The save runs in a subshell, so nothing in it (a readonly name, a failed write) changes the
- * run's exit code or signal; its own errors go nowhere, and one that stops it prints keep's mark, on a
- * line of its own with the run's seal and no value (`say`, on fd 4: the run's stderr). The shell waits
- * for it with its stderr on /dev/null: that wait reaps a job a signal ended, and bash would print
- * "Terminated" for it, a line the run without keep never has. The state text is made whole first;
+ * The EXIT trap. After its first line and the gate: no allexport (it would hand the state to mv's
+ * environment), no noglob (the old generations are found by a glob), no nocasematch (the baseline test
+ * compares exact text). The save runs in a subshell, so nothing in it (a readonly name, a failed write)
+ * changes the run's exit code or signal; its own errors go nowhere, and one that stops it prints keep's
+ * mark, on a line of its own with the run's seal and no value (`say`, on fd 4: the run's stderr). The
+ * shell waits for it with its stderr on /dev/null: that wait reaps a job a signal ended, and bash would
+ * print "Terminated" for it, a line the run without keep never has. The state text is made whole first;
  * then nothing is exported, so date, mkdir, mv and rm start with an empty environment (`command -p`:
- * the default PATH) whatever size the line's exports had. Names the save uses lose any attribute the
- * line gave them (integer, case, array, nameref) first.
+ * the default PATH) whatever size the line's exports had, and GLOBIGNORE is unset (the line's is in the
+ * text) for the old generations' glob. Names the save uses lose any attribute the line gave them
+ * (integer, case, array, nameref) first. Every loop ends in bounded time (`each`, and a `for`).
+ *
+ * The snapshot's generation ends with the run's seal: the server, reading the pointer once the run
+ * ended, knows whether it names this run's snapshot (keepAnswer), whatever the run could print.
  */
 function trapText(seal: string): string {
   const names = KEEP_SAVE_NAMES.join(' ')
   return [
     trapFirstLine(seal),
-    '\\builtin set +af; \\builtin shopt -u nocasematch nullglob failglob',
+    GATE,
     // Bare exec: through builtin or command its redirections end with it. fd 4 is closed first, so with
     // no stderr it is not left a file of the line's; outside posix mode a failed exec does not end the trap.
-    '\\exec 4>&-; \\exec 4>&2; {',
+    '\\exec 4>&-; \\exec 4>&2; { \\builtin set +af; \\builtin shopt -u nocasematch nullglob failglob',
     '(',
     // Its names without what the line made of them (an unset of a readonly one fails, and goes on).
-    `{ \\builtin unset -n ${names}; \\builtin unset -v ${names}; \\builtin unset -v GLOBIGNORE; } 2>/dev/null`,
+    `{ \\builtin unset -n ${names}; \\builtin unset -v ${names}; } 2>/dev/null`,
     // Read from what it prints, never its status: bash 3.2 ends a subshell on the error, inside an EXIT trap with the run's status.
     `case $({ ${KEEP_SAVE_NAMES.map((n) => `${n}=`).join(' ')} && \\builtin printf ok; } 2>/dev/null) in (ok) ;; (*) ${say(seal, '"the line made a walnut_ variable readonly"')}; \\builtin exit;; esac`,
     '{ \\builtin umask 077; walnut_nl=$\'\\n\'; walnut_w=; walnut_ke=$(\\builtin compgen -e); walnut_kd=${PWD:-$(\\builtin pwd)}; walnut_kq=$walnut_kh/keep.d',
     'walnut_s=$(\\builtin printf "%s\\n" "# Walnut host_exec keep: one saved state of this task on this host, read by a later keep call"; \\builtin declare -p walnut_kd',
     // Exported now and not as it was in the baseline (the whole declare text, as a whole line set there); never a readonly one.
     // Every case pattern opens with `(`: bash 3.2 and 4 end a `$( … )` at a pattern's lone `)`.
-    `walnut_r=$walnut_ke$walnut_nl; while [[ -n $walnut_r ]]; do ${NEXT}; case $walnut_n in (${SKIP}) \\builtin continue;; esac`
+    each('walnut_ke', `case $walnut_n in (${SKIP}) \\builtin continue;; esac`
       + '; walnut_d=$(\\builtin declare -px "$walnut_n") || \\builtin continue; walnut_f=${walnut_d#"declare -"}; case ${walnut_f%%" "*} in (*r*) \\builtin continue;; esac'
-      + '; case "$walnut_nl$walnut_kb$walnut_nl" in (*"$walnut_nl$walnut_d$walnut_nl"*) \\builtin continue;; esac; \\builtin printf "%s\\n" "$walnut_d"; done',
+      + '; case "$walnut_nl$walnut_kb$walnut_nl" in (*"$walnut_nl$walnut_d$walnut_nl"*) \\builtin continue;; esac; \\builtin printf "%s\\n" "$walnut_d"'),
     // Exported in the baseline and not now.
-    `walnut_r=$walnut_kn$walnut_nl; while [[ -n $walnut_r ]]; do ${NEXT}; case $walnut_n in (${SKIP}) \\builtin continue;; esac`
-      + '; case "$walnut_nl$walnut_ke$walnut_nl" in (*"$walnut_nl$walnut_n$walnut_nl"*) \\builtin continue;; esac; \\builtin printf "unset -v %s\\n" "$walnut_n"; done)',
+    each('walnut_kn', `case $walnut_n in (${SKIP}) \\builtin continue;; esac`
+      + '; case "$walnut_nl$walnut_ke$walnut_nl" in (*"$walnut_nl$walnut_n$walnut_nl"*) \\builtin continue;; esac; \\builtin printf "unset -v %s\\n" "$walnut_n"') + ')',
     // The text is whole: nothing exported from here (a value over the kernel's limit for one stops any program).
-    `walnut_r=$walnut_ke$walnut_nl; while [[ -n $walnut_r ]]; do ${NEXT}; \\builtin export -n "$walnut_n"; done`,
-    `walnut_r=$(\\builtin compgen -A function)$walnut_nl; while [[ -n $walnut_r ]]; do ${NEXT}; \\builtin export -fn "$walnut_n"; done`,
-    // This snapshot's generation: its time first, so the names sort oldest first; a host whose time cannot be read removes none.
-    'walnut_t=$(\\builtin command -p date +%s); case $walnut_t in (""|*[!0-9]*) walnut_t=0;; esac; walnut_g=$walnut_t-$$-$RANDOM',
+    each('walnut_ke', '\\builtin export -n "$walnut_n"'),
+    `walnut_m=$(\\builtin compgen -A function); ${each('walnut_m', '\\builtin export -fn "$walnut_n"')}; \\builtin unset -v GLOBIGNORE`,
+    // This snapshot's generation: its time first, so the names sort oldest first (a host whose time cannot be read removes none), then the seal.
+    `walnut_t=$(\\builtin command -p date +%s); case $walnut_t in (""|*[!0-9]*) walnut_t=0;; esac; walnut_g=$walnut_t-${seal}`,
     'if [[ $walnut_kh != /*/host-exec ]]; then walnut_w="the line changed a walnut_ variable"',
     'elif ! { [[ -d $walnut_kq ]] || \\builtin command -p mkdir -p -- "$walnut_kq"; }; then walnut_w="its folder in the task directory cannot be made"',
     // The snapshot's last line: a file cut short has none, and is never read. The pointer: the generation, then the directory as it is.
     'elif ! { \\builtin printf "%s\\nwalnut_kz=1\\n" "$walnut_s" >| "$walnut_kq/$walnut_g.sh" && \\builtin printf "%s\\n%s" "$walnut_g" "$walnut_kd" >| "$walnut_kh/keep.current.$walnut_g"; }; then walnut_w="it cannot be written in the task directory"',
     'elif ! \\builtin command -p mv -f -- "$walnut_kh/keep.current.$walnut_g" "$walnut_kh/keep.current"; then walnut_w="it cannot be put in place in the task directory"',
     'fi; [[ -z $walnut_w ]] || \\builtin command -p rm -f -- "$walnut_kq/$walnut_g.sh" "$walnut_kh/keep.current.$walnut_g"',
-    // The old generations, newest first: this one and the newest others stay, and any one younger than the window.
-    '[[ -n $walnut_w ]] || { walnut_a=("$walnut_kq"/[0-9]*-*.sh); walnut_i=${#walnut_a[@]}; walnut_c=0; walnut_x=()',
-    'while (( walnut_i > 0 )); do walnut_i=$((walnut_i - 1)); walnut_p=${walnut_a[walnut_i]}; walnut_n=${walnut_p##*/}; walnut_n=${walnut_n%%-*}; case $walnut_n in (""|*[!0-9]*) \\builtin continue;; esac',
-    `[[ $walnut_p == "$walnut_kq/$walnut_g.sh" ]] && \\builtin continue; if (( walnut_c < ${GENS_KEPT} )); then walnut_c=$((walnut_c + 1)); \\builtin continue; fi`,
+    // The old generations, oldest first: this one stays, and the newest others (walnut_i after it, this
+    // one among them while walnut_c is 1), and any one younger than the window.
+    '[[ -n $walnut_w ]] || { walnut_a=("$walnut_kq"/[0-9]*-*.sh); walnut_i=${#walnut_a[@]}; walnut_c=1; walnut_x=()',
+    'for walnut_p in "${walnut_a[@]}"; do walnut_i=$((walnut_i - 1)); [[ $walnut_p == "$walnut_kq/$walnut_g.sh" ]] && { walnut_c=0; \\builtin continue; }',
+    `(( walnut_i - walnut_c < ${GENS_KEPT} )) && \\builtin continue; walnut_n=\${walnut_p##*/}; walnut_n=\${walnut_n%%-*}; case $walnut_n in (""|*[!0-9]*) \\builtin continue;; esac`,
     `(( walnut_t == 0 || walnut_t - 10#$walnut_n < ${GEN_FRESH_S} )) || walnut_x[\${#walnut_x[@]}]=$walnut_p; done`,
     '(( ${#walnut_x[@]} == 0 )) || \\builtin command -p rm -f -- "${walnut_x[@]}"; }; } 2>/dev/null',
     `[[ -z $walnut_w ]] || ${say(seal, '"$walnut_w"')}`,
-    ') >/dev/null; } 2>/dev/null',
+    ') >/dev/null; } 2>/dev/null; }',
   ].join('\n')
 }
 
@@ -295,21 +318,40 @@ export function withKeepMarkSaid(output: string, jobId: string): string {
   return output.replace(markRe(seal), (_m, why: string, at: number) => `${at === 0 || output[at - 1] === '\n' ? '' : '\n'}${NOT_SAVED} (${why}); ${NOT_SAVED_TAIL}\n`)
 }
 
+/** Whether a generation is the one this run's save named (it ends with the run's seal: host-exec-keep.ts trapText). */
+export function savedBy(gen: string | null, jobId: string): boolean {
+  const seal = sealFor(jobId)
+  return !!seal && !!gen && gen.endsWith(`-${seal}`)
+}
+
+/** Why a run's end does not carry, or is not known to, when its output says nothing (keepAnswer). */
+export const KEEP_NOT_RUN = 'its save did not run to its end'
+export const KEEP_SAVED_OVER = 'a keep call that ran at the same time saved after it'
+export const KEEP_UNREAD = 'Walnut could not read the kept state on the host after the run'
+
 /**
- * What keep did, for the answer: `saves` (false for a background run), `saved: false` with `why` when
- * the run's output has keep's mark, `gone` (a kept directory the host no longer has: the run started in
- * the fresh cwd), `notEntered` (one the shell could not start in: nothing ran), `shellCd` (the shell
- * read the pointer and entered the directory itself, after the host's checks).
+ * What keep did, for the answer: `saves` (false for a background run); for a foreground run that ended,
+ * `saved`, read from the pointer once it ended (`after`): true when it names this run's snapshot, false
+ * (with `why`: keep's mark in the output says it, else the pointer did not move from `before` or moved
+ * to another run's), null when it could not be read (`why` too); `gone` (a kept directory the host no
+ * longer has: the run started in the fresh cwd), `notEntered` (one the shell could not start in:
+ * nothing ran), `shellCd` (the shell read the pointer and entered the directory itself, after the
+ * host's checks). A run still going has no `saved`: it saves when it ends.
  */
-export function keepAnswer(o: { background: boolean; out: Record<string, unknown>; output: string; jobId: string; keptDir: string | null; shellCd: boolean; gone?: string }): Record<string, unknown> {
+export function keepAnswer(o: { background: boolean; out: Record<string, unknown>; output: string; jobId: string; keptDir: string | null; shellCd: boolean; gone?: string; before?: Kept | null; after?: Kept | null }): Record<string, unknown> {
   const ended = o.out.running !== true
-  const why = !o.background && ended ? keepMarkWhy(o.output, o.jobId) : null
+  const mark = !o.background && ended ? keepMarkWhy(o.output, o.jobId) : null
   const keptDir = o.gone ? null : o.keptDir
   // A shell that never started (the host could not enter the directory) ends with neither a code nor a signal.
   const notEntered = keptDir && ended && o.out.exitCode === null && o.out.signal === null && o.out.timedOut !== true && !o.out.blocked ? keptDir : null
+  const now = o.after && 'gen' in o.after ? o.after.gen : undefined
+  const was = o.before && 'gen' in o.before ? o.before.gen : null
+  const saved = o.background || !ended || notEntered ? undefined : mark ? false : now === undefined ? null : savedBy(now, o.jobId)
+  const why = mark ?? (saved === null ? KEEP_UNREAD : saved === false ? (now !== null && now !== was ? KEEP_SAVED_OVER : KEEP_NOT_RUN) : null)
   return {
     saves: !o.background,
-    ...(why ? { saved: false, why } : {}),
+    ...(saved !== undefined ? { saved } : {}),
+    ...(saved !== undefined && saved !== true && why ? { why } : {}),
     ...(o.gone ? { gone: o.gone } : {}),
     ...(notEntered ? { notEntered } : {}),
     ...(o.shellCd ? { shellCd: true } : {}),

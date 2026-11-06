@@ -11,11 +11,13 @@
  * MACHINE SAFETY: short shell children under a 10 s timeout, each in its own temp dir; a signal goes
  * only to the process group of a child the runner started.
  */
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { failedStepOf, strictLine, withoutInnerMarks } from '../../../src/core/hosts/host-exec-strict.js'
-import { KEEP_SAVE_NAMES, KEEP_UNSET_FUNCTIONS, keepMarkWhy, shapedLine, withKeepMarkSaid } from '../../../src/core/hosts/host-exec-keep.js'
+import { KEEP_POINTER, KEEP_SAVE_NAMES, KEEP_UNSET_FUNCTIONS, each, keepMarkWhy, shapedLine, withKeepMarkSaid } from '../../../src/core/hosts/host-exec-keep.js'
+import { createHostExec } from '../../../src/providers/host-exec-core.js'
 import { KEEP_CASES, SHADOWED, bashesHere, expected, keptStart, nonBashSh, notSavedLine, playCase, runLine, sandbox, type KeepMode, type Sandbox } from '../../helpers/host-exec-keep-cases.js'
 
 const bashes = bashesHere()
@@ -59,6 +61,14 @@ const SAME_LINES = [
   "trap 'echo DBG' DEBUG; export V=1; true", "trap 'echo ERR' ERR; false", 'export POSIXLY_CORRECT=1; true', 'set -o posix; exit 3',
   'readonly POSIXLY_CORRECT; exit 3', 'POSIXLY_CORRECT=1; readonly POSIXLY_CORRECT; exit 3',
   'declare -i walnut_s walnut_d; export V=1; true',
+  // Review 2026-11-05 (keep round 3): a DEBUG trap that fails under extdebug skips every command, the save's first line too.
+  'export V=1; shopt -s extdebug; trap false DEBUG; true',
+  "export SECRET=private-canary; exec 9>&2; BASH_XTRACEFD=9; PS4='$SECRET '; set -x; shopt -s extdebug; trap false DEBUG; true",
+  "export SECRET=private-canary; builtin() { printf 'fn:%s\\n' \"$SECRET\" >&9; }; exec 9>&2; shopt -s extdebug; trap false DEBUG; true",
+  "export SECRET=private-canary; PS4='$SECRET '; set -x; shopt -s extdebug; trap 'echo DBG; false' DEBUG; true",
+  // One that skips only some commands (a counter): the save still ends at once.
+  ...[2, 3, 4, 5, 6, 7, 8, 9].map((k) => `export V=1; shopt -s extdebug; c=0; trap '(( ++c % ${k} ))' DEBUG; true`),
+  "export GLOBIGNORE='*'; export V=1; true",
 ]
 
 /**
@@ -120,6 +130,8 @@ describe.each(bashes)('keep on bash %s', (_version, bash) => {
           if (e.match !== undefined) expect(r.out, what).toMatch(new RegExp(e.match))
           if (e.gone !== undefined) expect(r.gone, what).toBe(e.gone)
           if (e.why !== undefined) expect(r.why, what).toBe(e.why)
+          // The server says the state carries only when the pointer names this run's snapshot (keepAnswer).
+          if (step.keep !== false && !step.parallel && !step.sh && e.saved !== 'either') expect(r.saved, `${what}\n(saved)`).toBe(e.saved ?? step.background !== true)
         }
       }, 30_000)
     }
@@ -134,6 +146,46 @@ describe.each(bashes)('keep on bash %s', (_version, bash) => {
       const kept = await runLine(bash, shapedLine({ command: line, keep: true }, job())!, keepBox)
       expect({ rc: kept.rc, signal: kept.signal, out: kept.out.replaceAll(keepBox.root, 'ROOT') }, line)
         .toEqual({ rc: plain.rc, signal: plain.signal, out: plain.out.replaceAll(plainBox.root, 'ROOT') })
+    }
+  }, 60_000)
+
+  // Review 2026-11-05 (keep round 3): with keep this ran until its deadline on bash 5 and ended by SIGTERM.
+  it('through the host\'s execution core with a short deadline: a DEBUG trap that fails under extdebug ends at once, exit 0, not timed out, as without keep', async () => {
+    const box = sandbox()
+    boxes.push(box)
+    const core = createHostExec({
+      spawn: (cmd, args, o) => spawn(cmd, args, o),
+      killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+      shell: '/bin/sh', bash, home: box.home, taskDirRoot: box.task, stateDir: path.join(box.root, 'state'),
+      env: { PATH: '/usr/bin:/bin', HOME: box.home }, promptProbe: null,
+    })
+    try {
+      const command = 'export V=1; shopt -s extdebug; trap false DEBUG; true'
+      for (const keep of [false, true]) {
+        const jobId = job()
+        const r = await core.run({ jobId, taskId: 'keep-deadline', command: keep ? shapedLine({ command, keep: true }, jobId)! : command, timeoutMs: 800 })
+        expect(r, `keep ${keep}`).toMatchObject({ running: false, exitCode: 0, signal: null, timedOut: false, output: '' })
+      }
+      // Nothing was saved, so no keep call ever says it carries.
+      expect(fs.existsSync(path.join(box.task, 'keep-deadline', KEEP_POINTER))).toBe(false)
+    } finally {
+      core.close()
+    }
+  }, 30_000)
+
+  // The save's loops (each) end whatever a DEBUG trap under extdebug skips: bash counts a skipped command as a
+  // success. Run at the shell's top level, where every bash runs the DEBUG trap before each command.
+  it('a loop over names ends at once under a DEBUG trap that skips every command, or after its first ones all but every Nth', async () => {
+    const loop = each('walnut_ke', '\\builtin printf "%s\\n" "$walnut_n"')
+    const setup = "walnut_nl=$'\\n'; walnut_ke=$'A\\nB\\nC'; c=0"
+    const box = sandbox()
+    boxes.push(box)
+    expect((await runLine(bash, `${setup}; ${loop}`, box)).out).toBe('A\nB\nC\n')
+    // Each lets the first s commands run (the loop's own setup), then one in p: s 2 and p 4 runs only the test of a loop with no count.
+    const traps = ['false', ...[0, 1, 2, 3].flatMap((s) => [2, 3, 4, 5, 6, 7, 8].map((p) => `(( c += 1, c <= ${s} || (c - ${s} - 1) % ${p} == 0 ))`))]
+    for (const trap of traps) {
+      const r = await runLine(bash, `${setup}; shopt -s extdebug; trap '${trap}' DEBUG; ${loop}`, box)
+      expect({ rc: r.rc, signal: r.signal }, trap).toEqual({ rc: 0, signal: null })
     }
   }, 60_000)
 

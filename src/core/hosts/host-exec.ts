@@ -616,10 +616,16 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   if (cut && out.running === true && waits.ranOut(waited?.waitedFor)) out.heldMs = Date.now() - t0
   // It waited for a slot under a cap first: the answer says how long (2026-11-05 review).
   if (slotMs >= 1_000) out.slotWaitMs = slotMs
-  // What keep did: where it started, and whether this run's end carries (host-exec-keep.ts keepAnswer).
+  // What keep did: where it started, and whether this run's end carries (host-exec-keep.ts keepAnswer):
+  // a foreground run that ended has keep.current read again, the one place its save is told; a read that
+  // fails or finds no time leaves it unconfirmed.
   if (keep) {
     const shellCd = kept !== null && 'shellCd' in kept && !keepMod.named(params.cwd)
-    out.keep = keepMod.keepAnswer({ background, out, output: typeof last.output === 'string' ? last.output : '', jobId, keptDir, shellCd, gone })
+    const readAfter = !background && out.running !== true && kept !== null && 'gen' in kept && budgetLeft(caller, t0) > 500
+    const after = readAfter
+      ? await keepMod.keptState(conn, caller.taskId, (p) => ask(conn, host, 'fs.readRange', p, Math.max(1, Math.min(DIAL_MS, budgetLeft(caller, t0) - 500)))).catch(() => null)
+      : null
+    out.keep = keepMod.keepAnswer({ background, out, output: typeof last.output === 'string' ? last.output : '', jobId, keptDir, shellCd, gone, before: kept, after })
   }
   // A deadline over the most a run of its kind may have ran with that most: the answer says so (2026-11-05 review 12).
   if (typeof params.timeout_ms === 'number' && params.timeout_ms > cap) out.timeoutCappedMs = cap

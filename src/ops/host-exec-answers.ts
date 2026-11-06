@@ -441,7 +441,10 @@ function keepLine(b: Record<string, unknown>, args: Record<string, unknown>): st
     : ''
   if (k.saves !== true) return `${from}; as a background run, its own directory and variables do not carry to the next keep call.${inShell}`
   if (k.saved === false) return `${from}; its state was not saved (${String(k.why)}), so the next keep call starts from the last saved one.${inShell}`
-  return `${from}, and its directory and exported variables ${b.running ? 'carry to the next keep call there once it ends' : 'at its end carry to the next keep call there'}.${inShell}`
+  // Carried only when Walnut read it there after the run (keep.saved true); never claimed otherwise.
+  if (k.saved === true) return `${from}, and its directory and exported variables at its end carry to the next keep call there.${inShell}`
+  if (b.running) return `${from}; it saves its directory and exported variables for the next keep call there when it ends (not confirmed while it runs).${inShell}`
+  return `${from}; whether its state was saved is not confirmed (${String(k.why ?? 'not read')}), so the next keep call starts from the last saved one, this run's or an earlier one.${inShell}`
 }
 
 const named = (cwd: unknown) => typeof cwd === 'string' && cwd.trim() !== ''

@@ -528,7 +528,7 @@ describe('host_exec', () => {
     const home = path.join(hostRoot, 'home')
     const opts = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }
     const first = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'mkdir -p keep-e2e && cd keep-e2e && export KEEP_E2E=one KEEP_E2E_SECRET=s3cr3t-keep-value', keep: true }, SID)
-    expect(first).toMatchObject({ status: 200, body: { exitCode: 0, output: '', keep: { saves: true } } })
+    expect(first).toMatchObject({ status: 200, body: { exitCode: 0, output: '', keep: { saves: true, saved: true } } })
     // The host got the line keep shaped, which names no value of its own.
     const sentLine = String(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params.command)
     expect(sentLine).toMatch(/^if \[ -n "\$\{BASH_VERSION:-\}" \]; then /)
@@ -540,14 +540,18 @@ describe('host_exec', () => {
     // The pointer the first keep call left: a generation, then its directory; no value.
     const pointer = path.join(hostRoot, 'tasks', taskId, 'host-exec', 'keep.current')
     const [gen, keptDir] = (await fs.readFile(pointer, 'utf8')).split('\n')
-    expect(gen).toMatch(/^\d+-\d+-\d+$/)
+    // Its generation: the save's time, then the run's seal.
+    expect(gen).toMatch(/^\d+-[0-9a-f]{12}$/)
+    const readsBefore = sent.filter((m) => m.cmd === 'fs.readRange').length
     expect(keptDir).toBe(`${home}/keep-e2e`)
     const second = await executeOp('host_exec', { host: 'macbox', command: 'pwd; echo "$KEEP_E2E"', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
-    expect(second.result).toMatchObject({ exitCode: 0, output: `${home}/keep-e2e\none\n`, cwd: `${home}/keep-e2e`, keep: { saves: true } })
+    expect(second.result).toMatchObject({ exitCode: 0, output: `${home}/keep-e2e\none\n`, cwd: `${home}/keep-e2e`, keep: { saves: true, saved: true } })
     expect(String(second.result.outcome)).toMatch(new RegExp(`^Exit 0 on macbox in ${home}/keep-e2e \\(bash\\) after .*It started where this task's last keep call on macbox ended .* at its end carry to the next keep call there\\.`))
     // The server read the pointer from the host (one fs.readRange) and ran the line in its directory,
-    // sourcing that generation: no cd of the shell's own.
-    expect(sent.filter((m) => m.cmd === 'fs.readRange').at(-1)!.params).toEqual({ path: pointer, start: 0, length: 64 + 1 + 4096 + 1 })
+    // sourcing that generation: no cd of the shell's own; once it ended, it read the pointer again.
+    const reads = sent.filter((m) => m.cmd === 'fs.readRange')
+    expect(reads.length - readsBefore).toBe(2)
+    for (const r of reads.slice(-2)) expect(r.params).toEqual({ path: pointer, start: 0, length: 64 + 1 + 4096 + 1 })
     const secondRun = sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params
     expect(secondRun.cwd).toBe(`${home}/keep-e2e`)
     expect(String(secondRun.command)).toContain(`walnut_kg=${gen};`)
@@ -585,10 +589,22 @@ describe('host_exec', () => {
     expect(String(merged.result.outcome)).not.toContain('carry to the next keep call')
     // A line that prints the sentence itself is not the mark: its state carries.
     const look = await executeOp('host_exec', { host: 'macbox', command: 'printf \'%s\\n\' "walnut: keep could not save this run\'s state (x); the next keep call starts from the last saved one"; export KEEP_LOOK=1', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
-    expect(look.result).toMatchObject({ exitCode: 0, keep: { saves: true } })
-    expect((look.result.keep as Record<string, unknown>).saved).toBeUndefined()
+    expect(look.result).toMatchObject({ exitCode: 0, keep: { saves: true, saved: true } })
     expect(String(look.result.outcome)).toContain('carry to the next keep call')
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo "$KEEP_E2E ${KEEP_LOOK:-unset}"', keep: true }, SID)).body.output).toBe('one 1\n')
+    // Review 2026-11-05 (keep round 3): with stderr closed the save that cannot complete has nowhere to
+    // print its mark; the server, reading the pointer once the run ended, still says it was not saved.
+    expect((await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_R3=old', keep: true }, opts) as { result: Record<string, unknown> }).result).toMatchObject({ exitCode: 0, keep: { saved: true } })
+    const closed = await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_R3=new; exec 2>&-; readonly walnut_s; true', keep: true }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(closed.result).toMatchObject({ exitCode: 0, output: '', keep: { saves: true, saved: false, why: 'its save did not run to its end' } })
+    expect(String(closed.result.outcome)).toContain('its state was not saved (its save did not run to its end), so the next keep call starts from the last saved one.')
+    expect(String(closed.result.outcome)).not.toContain('carry to the next keep call')
+    expect((await executeOp('host_exec', { host: 'macbox', command: 'echo "$KEEP_R3"', keep: true }, opts) as { result: Record<string, unknown> }).result.output).toBe('old\n')
+    // A DEBUG trap that fails under extdebug, with a short deadline: it ends at once as without keep, and is not saved.
+    const dbg = await executeOp('host_exec', { host: 'macbox', command: 'export KEEP_R3=dbg; shopt -s extdebug; trap false DEBUG; true', keep: true, timeout_ms: 800 }, opts) as { ok: boolean; result: Record<string, unknown> }
+    expect(dbg.result).toMatchObject({ exitCode: 0, signal: null, timedOut: false, output: '', keep: { saves: true, saved: false, why: 'its save did not run to its end' } })
+    expect(String(dbg.result.outcome)).not.toContain('carry to the next keep call')
+    expect((await executeOp('host_exec', { host: 'macbox', command: 'echo "$KEEP_R3"', keep: true }, opts) as { result: Record<string, unknown> }).result.output).toBe('old\n')
     // A kept directory the host no longer has: refused before anything ran there, so the same job
     // runs again in the fresh cwd, and the answer says so.
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'mkdir -p "$HOME/gone-e2e" && cd "$HOME/gone-e2e"', keep: true }, SID)).body.exitCode).toBe(0)
@@ -924,8 +940,10 @@ describe('host_exec', () => {
     // and the answer says the host's checks did not see it.
     expect((await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'export OLD_KEEP=1; cd /', keep: true }, OWN_SID)).body).toMatchObject({ exitCode: 0, keep: { saves: true, shellCd: true } })
     const oldKept = await executeOp('host_exec', { host: 'oldmac', command: 'echo "$OLD_KEEP $PWD"', keep: true }, { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID }) as { result: Record<string, unknown> }
-    expect(oldKept.result).toMatchObject({ output: '1 /\n', keep: { saves: true, shellCd: true } })
-    expect(String(oldKept.result.outcome)).toMatch(/^Exit 0 on oldmac \(bash\) after .*could not hand Walnut the kept directory, so the shell entered it itself/)
+    // Nor can it be read after the run: the answer says the save is not confirmed, never that it carries.
+    expect(oldKept.result).toMatchObject({ output: '1 /\n', keep: { saves: true, saved: null, why: 'Walnut could not read the kept state on the host after the run', shellCd: true } })
+    expect(String(oldKept.result.outcome)).toMatch(/^Exit 0 on oldmac \(bash\) after .*whether its state was saved is not confirmed .*could not hand Walnut the kept directory, so the shell entered it itself/)
+    expect(String(oldKept.result.outcome)).not.toContain('carry to the next keep call')
     expect(sent.some((m) => m.host === 'oldmac' && m.cmd === 'fs.readRange')).toBe(false)
     expect(String(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params.argv)).toContain('builtin cd -- "$walnut_kd"')
     const runs = sent.filter((m) => m.cmd === 'exec.run').length

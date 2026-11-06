@@ -7,7 +7,7 @@
  * MACHINE SAFETY: pure functions and fakes; no process, file or network.
  */
 import { describe, expect, it } from 'vitest'
-import { KEEP_POINTER, KEEP_SAVE_NAMES, KEEP_UNSET_FUNCTIONS, checkKeep, daemonCwd, keepAnswer, keepMarkWhy, keepPrefix, keepRefusal, keptDirOf, keptState, pointerOf, shapedLine, trapFirstLine, withKeepMarkSaid, withoutKeepMark } from '../../../src/core/hosts/host-exec-keep.js'
+import { KEEP_NOT_RUN, KEEP_POINTER, KEEP_SAVED_OVER, KEEP_SAVE_NAMES, KEEP_UNREAD, KEEP_UNSET_FUNCTIONS, checkKeep, daemonCwd, keepAnswer, keepMarkWhy, keepPrefix, keepRefusal, keptDirOf, keptState, pointerOf, savedBy, shapedLine, trapFirstLine, withKeepMarkSaid, withoutKeepMark } from '../../../src/core/hosts/host-exec-keep.js'
 import { failedStepOf, sealFor, strictLine } from '../../../src/core/hosts/host-exec-strict.js'
 import { HostExecError } from '../../../src/core/hosts/host-exec-target.js'
 import { strictMark } from '../../../src/providers/host-exec-line.js'
@@ -55,30 +55,42 @@ describe('the line keep builds', () => {
     for (const bad of ['a b', 'a;b', '$(x)', 'a/b', '']) expect(() => shapedLine({ command, keep: true }, J, { gen: bad })).toThrow()
   })
 
-  it('its EXIT trap: first the line that removes tracing, functions and aliases with no lookup; then the save, in a subshell, one snapshot then the pointer', () => {
+  it('its EXIT trap: first the line that removes tracing, functions and aliases with no lookup; then the gate; then the save, in a subshell, one snapshot then the pointer', () => {
     const seal = sealOf(J)
     const trap = unquote(trapOf(shapedLine({ command: 'true', keep: true }, J)!)!)
     const [first, second, ...rest] = trap.split('\n')
     expect(first).toBe(trapFirstLine(seal))
-    expect(first).toBe(`{ POSIXLY_CORRECT=y || \\:; \\trap - ERR DEBUG; \\set +xveu; \\unset -f ${KEEP_UNSET_FUNCTIONS.join(' ')} && \\set +o posix; } ${NULLS}`
-      + ` || { \\trap -- $'\\nwalnut keep ${seal}: could not save (the line made a function the save needs readonly)' RETURN; { \\trap -p RETURN; } >&2; \\exit; }`
-      + '; { \\builtin unset -v POSIXLY_CORRECT; } 2>/dev/null; \\builtin shopt -u expand_aliases')
-    // In the group and on its failure, only special builtins (found before any function in posix mode), each quoted (no alias).
-    const group = first!.slice(0, first!.indexOf(` } ${NULLS}`))
-    expect(group.split(/; | && | \|\| /).map((c) => c.replace(/^\{ /, '').split(' ')[0])).toEqual(['POSIXLY_CORRECT=y', '\\:', '\\trap', '\\set', '\\unset', '\\set'])
+    expect(first).toBe(`{ POSIXLY_CORRECT=y || \\:; \\trap - ERR DEBUG; \\set +xveu; \\unset -f ${KEEP_UNSET_FUNCTIONS.join(' ')} && \\set +o posix`
+      + ` && { \\builtin unset -v POSIXLY_CORRECT; \\builtin shopt -u expand_aliases; }; } ${NULLS}`
+      + ` || { \\trap -- $'\\nwalnut keep ${seal}: could not save (the line made a function the save needs readonly)' RETURN; { \\trap -p RETURN; } >&2; \\exit; }`)
+    // Up to leaving posix mode and on its failure, only special builtins (found before any function in posix mode), each
+    // quoted (no alias); then builtin, no function by then. Alias expansion goes off after posix mode (leaving it restores the line's).
+    const group = first!.slice(0, first!.indexOf(`; }; } ${NULLS}`))
+    expect(group.split(/; | && | \|\| /).map((c) => c.replace(/^\{ /, '').split(' ')[0])).toEqual(['POSIXLY_CORRECT=y', '\\:', '\\trap', '\\set', '\\unset', '\\set', '\\builtin', '\\builtin'])
+    expect(group.indexOf('shopt -u expand_aliases')).toBeGreaterThan(group.indexOf('\\set +o posix'))
     expect(KEEP_UNSET_FUNCTIONS).toEqual(expect.arrayContaining(['builtin', 'exec']))
     // No assignment to a walnut_ name before the save's subshell: a readonly name cannot change the run's exit code.
     expect(`${first}\n${second}`).not.toMatch(/\bwalnut_\w+=/)
-    expect(second).toBe('\\builtin set +af; \\builtin shopt -u nocasematch nullglob failglob')
+    // The gate: the rest runs only when this false ran (a DEBUG trap under extdebug skips it, and a skipped command succeeds).
+    expect(second).toBe(`{ \\builtin false; } ${NULLS} || {`)
     // The shell waits for the save with its stderr on /dev/null (a reaped job's notice goes nowhere); the save says why on fd 4.
-    expect(rest[0]).toBe('\\exec 4>&-; \\exec 4>&2; {')
+    expect(rest[0]).toBe('\\exec 4>&-; \\exec 4>&2; { \\builtin set +af; \\builtin shopt -u nocasematch nullglob failglob')
     expect(rest[1]).toBe('(')
-    expect(rest[rest.length - 1]).toBe(') >/dev/null; } 2>/dev/null')
+    expect(rest[rest.length - 1]).toBe(') >/dev/null; } 2>/dev/null; }')
     const save = rest.join('\n')
     expect(save).toContain(`\\builtin printf "\\nwalnut keep ${seal}: could not save (%s)\\n"`)
     expect(rest.slice(1).join('\n')).not.toMatch(/>&2/)
     // The names it assigns lose what the line made of them first; a readonly one then stops it.
-    expect(save).toContain(`{ \\builtin unset -n ${KEEP_SAVE_NAMES.join(' ')}; \\builtin unset -v ${KEEP_SAVE_NAMES.join(' ')}; \\builtin unset -v GLOBIGNORE; } 2>/dev/null`)
+    expect(save).toContain(`{ \\builtin unset -n ${KEEP_SAVE_NAMES.join(' ')}; \\builtin unset -v ${KEEP_SAVE_NAMES.join(' ')}; } 2>/dev/null`)
+    // GLOBIGNORE is unset for the old generations' glob only once the state text holds the line's.
+    expect(save.indexOf('\\builtin unset -v GLOBIGNORE')).toBeGreaterThan(save.indexOf('printf "unset -v %s\\n"'))
+    expect(save.indexOf('\\builtin unset -v GLOBIGNORE')).toBeLessThan(save.indexOf('walnut_a=("$walnut_kq"/[0-9]*-*.sh)'))
+    // Every loop ends in bounded time whatever a DEBUG trap skips: until with a count, and for (never while).
+    expect(save).not.toMatch(/\bwhile\b/)
+    const untils = [...save.matchAll(/until \[\[ -z \$walnut_r \]\] \|\| \(\( \(walnut_j \+= 1\) > \$\{#walnut_(ke|kn|m)\} \)\); do/g)].map((m) => m[1])
+    expect(untils).toEqual(['ke', 'kn', 'ke', 'm'])
+    expect(save.match(/\buntil\b/g)).toHaveLength(4)
+    expect(save).toContain('for walnut_p in "${walnut_a[@]}"; do')
     expect(save.indexOf('\\builtin unset -n')).toBeLessThan(save.indexOf('&& \\builtin printf ok;'))
     // One snapshot, written once; then the pointer, through a temp file and one mv; then the old snapshots.
     const snap = save.indexOf('>| "$walnut_kq/$walnut_g.sh"')
@@ -90,7 +102,8 @@ describe('the line keep builds', () => {
     expect(ptr).toBeLessThan(mv)
     expect(mv).toBeLessThan(sweep)
     expect(save).toContain('\\builtin printf "%s\\n%s" "$walnut_g" "$walnut_kd"')
-    expect(save).toContain('walnut_g=$walnut_t-$$-$RANDOM')
+    // The generation ends with the run's seal: the server reads the pointer after the run and knows its own.
+    expect(save).toContain(`walnut_g=$walnut_t-${seal}`)
     // Un-exported before the first program starts.
     for (const program of ['date', 'mkdir', 'mv', 'rm']) expect(save.indexOf('export -n'), program).toBeLessThan(save.indexOf(`command -p ${program}`))
     // Every command the save runs is a backslash-quoted builtin (no alias, no function), a program through it.
@@ -282,32 +295,54 @@ describe('what the answer says', () => {
     expect(withKeepMarkSaid(mark(WHY), 'hx-keep-unit-other')).toBe(mark(WHY))
   })
 
-  it('keep in the answer: saved false only when the run\'s mark says so; gone; not entered; entered in the shell', () => {
+  it('keep in the answer: saved only when the pointer read after the run names this run\'s snapshot; its mark gives the reason; gone; not entered; entered in the shell', () => {
     const id = 'hx-keep-unit-answer'
-    const marked = `x\nwalnut keep ${sealOf(id)}: could not save (${WHY})\n`
-    const a = (o: Partial<Parameters<typeof keepAnswer>[0]>) => keepAnswer({ background: false, out: body, output: '', jobId: id, keptDir: '/home/u/app', shellCd: false, ...o })
-    expect(a({})).toEqual({ saves: true })
-    expect(a({ output: marked })).toEqual({ saves: true, saved: false, why: WHY })
+    const seal = sealOf(id)
+    const marked = `x\nwalnut keep ${seal}: could not save (${WHY})\n`
+    const before = { gen: '1793899000-0123456789ab', dir: '/home/u/app' }
+    const mine = { gen: `1793899242-${seal}`, dir: '/home/u/app' }
+    const a = (o: Partial<Parameters<typeof keepAnswer>[0]>) => keepAnswer({ background: false, out: body, output: '', jobId: id, keptDir: '/home/u/app', shellCd: false, before, after: mine, ...o })
+    expect(savedBy(mine.gen, id)).toBe(true)
+    expect(savedBy(before.gen, id)).toBe(false)
+    expect(savedBy(`1793899242-${seal}`, 'hx-keep-unit-other')).toBe(false)
+    expect(savedBy(null, id)).toBe(false)
+    expect(a({})).toEqual({ saves: true, saved: true })
+    // Its mark says why; the pointer did not move (the line closed stderr: no mark), or none was ever saved.
+    expect(a({ output: marked, after: before })).toEqual({ saves: true, saved: false, why: WHY })
+    expect(a({ after: before })).toEqual({ saves: true, saved: false, why: KEEP_NOT_RUN })
+    expect(a({ before: { gen: null, dir: null }, after: { gen: null, dir: null } })).toEqual({ saves: true, saved: false, why: KEEP_NOT_RUN })
+    // Another run's snapshot, newer than the one this run started from: a keep call at the same time saved after it.
+    expect(a({ after: { gen: '1793899300-ba9876543210', dir: '/x' } })).toEqual({ saves: true, saved: false, why: KEEP_SAVED_OVER })
+    // Not read after the run (a failed read, a host that cannot hand it over): not confirmed, never claimed.
+    expect(a({ after: null })).toEqual({ saves: true, saved: null, why: KEEP_UNREAD })
+    expect(a({ after: { shellCd: true } })).toEqual({ saves: true, saved: null, why: KEEP_UNREAD })
     // The sentence printed by the run is not the mark.
-    expect(a({ output: sentence(WHY) })).toEqual({ saves: true })
+    expect(a({ output: sentence(WHY) })).toEqual({ saves: true, saved: true })
     // Still running, or a background run: nothing said about the save yet.
-    expect(a({ out: { ...body, running: true }, output: marked })).toEqual({ saves: true })
+    expect(a({ out: { ...body, running: true }, output: marked, after: null })).toEqual({ saves: true })
     expect(a({ background: true, output: marked })).toEqual({ saves: false })
-    expect(a({ out: { ...body, cwd: '/home/u' }, gone: '/home/u/app' })).toEqual({ saves: true, gone: '/home/u/app' })
+    expect(a({ out: { ...body, cwd: '/home/u' }, gone: '/home/u/app' })).toEqual({ saves: true, saved: true, gone: '/home/u/app' })
     expect(a({ out: { ...body, exitCode: null, signal: null } })).toEqual({ saves: true, notEntered: '/home/u/app' })
-    expect(a({ out: { ...body, exitCode: null, signal: 'SIGTERM' } })).toEqual({ saves: true })
-    expect(a({ keptDir: null, shellCd: true })).toEqual({ saves: true, shellCd: true })
+    expect(a({ out: { ...body, exitCode: null, signal: 'SIGTERM' } })).toEqual({ saves: true, saved: true })
+    expect(a({ keptDir: null, shellCd: true, before: { shellCd: true }, after: null })).toEqual({ saves: true, saved: null, why: KEEP_UNREAD, shellCd: true })
   })
 
-  it('a keep run: where it started, and that its end carries to the next keep call', () => {
-    const o = outcome({ ...body, keep: { saves: true } }, { keep: true })
+  it('a keep run: where it started, and that its end carries to the next keep call only when Walnut read it there', () => {
+    const o = outcome({ ...body, keep: { saves: true, saved: true } }, { keep: true })
     expect(o).toMatch(/^Exit 0 on macbox in \/home\/u\/app \(bash\) after 50 ms\./)
     expect(o).toContain('It started where this task\'s last keep call on macbox ended')
     expect(o).toContain('its directory and exported variables at its end carry to the next keep call there.')
-    const cwd = outcome({ ...body, keep: { saves: true } }, { keep: true, cwd: '/home/u/app' })
+    const cwd = outcome({ ...body, keep: { saves: true, saved: true } }, { keep: true, cwd: '/home/u/app' })
     expect(cwd).toMatch(/^Exit 0 on macbox in \/home\/u\/app \(bash\)/)
     expect(cwd).toContain('It started in the cwd you gave')
-    expect(outcome({ ...body, running: true, exitCode: null, keep: { saves: true } }, { keep: true })).toContain('carry to the next keep call there once it ends')
+    const running = outcome({ ...body, running: true, exitCode: null, keep: { saves: true } }, { keep: true })
+    expect(running).toContain('it saves its directory and exported variables for the next keep call there when it ends (not confirmed while it runs).')
+    expect(running).not.toContain(' carry ')
+    const unread = outcome({ ...body, keep: { saves: true, saved: null, why: KEEP_UNREAD } }, { keep: true })
+    expect(unread).toContain(`whether its state was saved is not confirmed (${KEEP_UNREAD}), so the next keep call starts from the last saved one, this run's or an earlier one.`)
+    expect(unread).not.toContain(' carry ')
+    const over = outcome({ ...body, keep: { saves: true, saved: false, why: KEEP_SAVED_OVER } }, { keep: true })
+    expect(over).toContain(`its state was not saved (${KEEP_SAVED_OVER}), so the next keep call starts from the last saved one.`)
   })
 
   it('a kept directory that is gone, a save that did not complete, a shell that could not start, a shell that entered it itself', () => {
