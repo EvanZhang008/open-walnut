@@ -5,11 +5,21 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 import { optInToVoice } from '../../helpers/voice-opt-in.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('voice-archive-cloud', { CLOUD_MODE: true }))
 const bridge = vi.hoisted(() => vi.fn())
+const hops = vi.hoisted(() => ({
+  observe: undefined as ((id: string) => void) | undefined,
+  closing: false,
+}))
 const activity = vi.hoisted(() => new Set<() => void>())
 const connected = vi.hoisted(() => new Set<() => void>())
 const link = vi.hoisted(() => ({ connected: true }))
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
-  bridgeRequest: bridge, bridgeForHost: () => ({ connected: link.connected }),
+  bridgeRequest: (...args: unknown[]) => {
+    const id = (args[2] as { params: { id: string } }).params.id
+    hops.observe?.(id)
+    if (hops.closing) return Promise.reject(new Error('Test bridge closed'))
+    return track(Promise.resolve(bridge(...args)))
+  },
+  bridgeForHost: () => ({ connected: link.connected }),
   addPrimaryBridgeConnectedHandler: (handler: () => void) => {
     connected.add(handler)
     return () => connected.delete(handler)
@@ -34,10 +44,10 @@ vi.mock('../../../src/core/stt/index.js', () => ({
   getOrCreateEngine: () => ({ isAvailable: async () => ({ available: localEngine.available }) }),
 }))
 import { voiceArchive, VoiceArchiveStore, VOICE_CHUNK_BYTES } from '../../../src/core/stt/voice-archive.js'
-import { replicateVoiceRecording, startVoiceArchiveReplication, stopVoiceArchiveReplication, _setFollowupClockForTest, _followupStateForTest } from '../../../src/core/stt/voice-archive-replication.js'
+import { isCopying, replicateVoiceRecording, startVoiceArchiveReplication, stopVoiceArchiveReplication, _setFollowupClockForTest, _followupStateForTest } from '../../../src/core/stt/voice-archive-replication.js'
 import { transcribeVoiceRecording, liveRole, probeMacForTake, _resetMacQuietForTest, MAC_SILENCE_MS } from '../../../src/core/stt/voice-archive-transcribe.js'
-import { appendLive, hasLiveTake, _resetLiveTakesForTest } from '../../../src/core/stt/live-transcript.js'
-import { hasLiveForward, _resetLiveForwardsForTest } from '../../../src/core/stt/live-forward.js'
+import { appendLive, dropLive, hasLiveTake, _resetLiveTakesForTest } from '../../../src/core/stt/live-transcript.js'
+import { dropLiveForward, hasLiveForward, _resetLiveForwardsForTest } from '../../../src/core/stt/live-forward.js'
 import { runVoiceArchiveAction, voiceArchiveV1Router } from '../../../src/web/routes/voice-archive-v1.js'
 import { createHash, randomUUID } from 'node:crypto'
 import express from 'express'
@@ -53,8 +63,46 @@ optInToVoice()
 
 let primaryHome: string
 let primary: VoiceArchiveStore
+const copies = new Map<string, Promise<boolean>>()
+const copyWaiters = new Map<string, () => void>()
+const takes = new Set<string>()
+const background = new Set<Promise<unknown>>()
+const unanswered = new Set<() => void>()
+function track<T>(work: Promise<T>): Promise<T> {
+  background.add(work)
+  void work.then(() => background.delete(work), () => background.delete(work))
+  return work
+}
+function holdBridge(): Promise<never> {
+  return new Promise((_, reject) => {
+    unanswered.add(() => reject(new Error('Test bridge closed')))
+  })
+}
+function heldGate(): { gate: Promise<void>; release: () => void } {
+  let release!: () => void
+  const gate = new Promise<void>((resolve, reject) => {
+    const close = () => reject(new Error('Test bridge closed'))
+    unanswered.add(close)
+    release = () => { unanswered.delete(close); resolve() }
+  })
+  return { gate, release }
+}
+async function waitForDeferredCopy(id: string): Promise<void> {
+  if (!copies.has(id)) await new Promise<void>((resolve) => { copyWaiters.set(id, resolve) })
+  expect(await copies.get(id)).toBe(true)
+}
 beforeEach(async () => {
   stopVoiceArchiveReplication()
+  copies.clear(); copyWaiters.clear(); takes.clear()
+  hops.closing = false
+  hops.observe = (id) => {
+    takes.add(id)
+    if (!isCopying(id)) return
+    const copy = replicateVoiceRecording(id)
+    if (copies.get(id) === copy) return
+    copies.set(id, track(copy))
+    copyWaiters.get(id)?.()
+  }
   link.connected = true
   // A beat just now: whatever an earlier test left unanswered, the Mac is heard after it.
   leaderView.lastSeenAt = Date.now()
@@ -67,22 +115,48 @@ beforeEach(async () => {
   if (primaryHome) await rm(primaryHome, { recursive: true, force: true })
   primaryHome = await mkdtemp(tmpdir() + '/voice-primary-')
   primary = new VoiceArchiveStore(primaryHome, false)
+  const target = primary
   bridge.mockReset(); engine.mockReset()
   _resetLiveTakesForTest(); _resetLiveForwardsForTest(); (await macModule())._resetLiveTakesForTest(); macHeard.length = 0
+  const all = voiceArchive.all.bind(voiceArchive)
+  vi.spyOn(voiceArchive, 'all').mockImplementation(() => track(all()))
+  const snapshot = voiceArchive.replicationSnapshot.bind(voiceArchive)
+  vi.spyOn(voiceArchive, 'replicationSnapshot').mockImplementation((id) => track(Promise.resolve().then(() => {
+    hops.observe?.(id)
+    return snapshot(id)
+  })))
   bridge.mockImplementation(async (_host, _command, params) => {
     const { operation, id, body } = params.params
     let answer
     if (operation === 'live' || operation === 'live-finish' || operation === 'live-drop') return fakeMacLive(operation, id, body)
-    if (operation === 'get') answer = await primary.get(id)
-    else if (operation === 'chunk') answer = await primary.saveChunk(id, body)
-    else if (operation === 'commit') answer = await primary.commit(id, body)
-    else if (operation === 'text') answer = await primary.saveText(id, body.text, body.via, body.asr)
+    if (operation === 'get') answer = await target.get(id)
+    else if (operation === 'chunk') answer = await target.saveChunk(id, body)
+    else if (operation === 'commit') answer = await target.commit(id, body)
+    else if (operation === 'text') answer = await target.saveText(id, body.text, body.via, body.asr)
     else if (operation === 'transcribe') {
-      const saved = await primary.saveText(id, 'primary full text', 'primary')
+      const saved = await target.saveText(id, 'primary full text', 'primary')
       answer = { text: saved.text, via: saved.via, recordingId: id, primarySaved: true }
     }
     return { ok: true, result: { status: 200, body: answer } }
   })
+})
+async function drainBackground(): Promise<void> {
+  stopVoiceArchiveReplication()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  hops.closing = true
+  for (const id of takes) { dropLiveForward(id); dropLive(id) }
+  for (const close of unanswered) close()
+  unanswered.clear()
+  while (background.size) {
+    await Promise.allSettled([...background])
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+}
+afterEach(async () => {
+  await drainBackground()
+  hops.observe = undefined
+  vi.mocked(voiceArchive.replicationSnapshot).mockRestore()
+  vi.mocked(voiceArchive.all).mockRestore()
 })
 afterAll(async () => { if (primaryHome) await rm(primaryHome, { recursive: true, force: true }) })
 
@@ -279,7 +353,7 @@ describe('durable voice cloud copies', () => {
   it('a Mac asleep behind a live bridge costs this box 2.5 s, not a hop timeout', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
     // Every hop to the Mac hangs (it sleeps; the bridge has not noticed yet).
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     engine.mockResolvedValue({ text: 'companion text', durationMs: 1 })
     const started = Date.now()
     expect(await transcribeVoiceRecording(record.id)).toMatchObject({ text: 'companion text', via: 'local' })
@@ -290,7 +364,7 @@ describe('durable voice cloud copies', () => {
   it('a take that starts while the Mac sleeps is this box\'s once two probes go unanswered, until the Mac is heard', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
     expect(await liveRole()).toEqual({ takes: true, now: false })
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     await unansweredProbe(record.id)
     // One unanswered call may have queued behind a large copy: the take stays held.
     expect(await liveRole()).toEqual({ takes: true, now: false })
@@ -307,7 +381,7 @@ describe('durable voice cloud copies', () => {
   }, 15_000)
   it('after a quiet mark clears, one slow probe does not mark the Mac quiet again', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     await unansweredProbe(record.id)
     await unansweredProbe(record.id)
     expect(await liveRole()).toEqual({ takes: true, now: true })
@@ -319,7 +393,7 @@ describe('durable voice cloud copies', () => {
   }, 15_000)
   it('a Mac whose bridge connects again is asked again before its next beat', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     await unansweredProbe(record.id)
     await unansweredProbe(record.id)
     expect(await liveRole()).toEqual({ takes: true, now: true })
@@ -330,7 +404,7 @@ describe('durable voice cloud copies', () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
     // No leader view (a box without the backup-leader capability): no beats ever clear the mark.
     leaderView.none = true
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     await unansweredProbe(record.id)
     await unansweredProbe(record.id)
     expect(await liveRole()).toEqual({ takes: true, now: true })
@@ -340,7 +414,7 @@ describe('durable voice cloud copies', () => {
   }, 15_000)
   it('a Mac that answers a probe, even with "no such recording", keeps the take and resets the count', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     await unansweredProbe(record.id)
     bridge.mockReset()
     bridge.mockResolvedValue({ ok: true, result: { status: 404, body: { error: 'not found' } } })
@@ -348,7 +422,7 @@ describe('durable voice cloud copies', () => {
     await vi.waitFor(() => expect(bridge).toHaveBeenCalledTimes(1))
     expect(bridge.mock.calls[0][2].params).toMatchObject({ operation: 'get', id: record.id })
     await new Promise((r) => setTimeout(r, 50))
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     await unansweredProbe(record.id)
     // Unanswered, answered, unanswered: never two in a row.
     expect(await liveRole()).toEqual({ takes: true, now: false })
@@ -358,11 +432,11 @@ describe('durable voice cloud copies', () => {
     const real = bridge.getMockImplementation()!
     bridge.mockImplementation(async (...args) => {
       const { operation, id } = args[2].params
-      if (operation === 'get' && id === 'other') return new Promise(() => {})
+      if (operation === 'get' && id === 'other') return holdBridge()
       if (operation === 'transcribe') await new Promise((r) => setTimeout(r, 6_500))
       return real(...args)
     })
-    const work = transcribeVoiceRecording(record.id)
+    const work = track(transcribeVoiceRecording(record.id))
     await new Promise((r) => setTimeout(r, 300))
     await unansweredProbe('other')
     await unansweredProbe('other')
@@ -390,8 +464,7 @@ describe('durable voice cloud copies', () => {
   it('a Mac that leaves while transcribing hands the take back; its late answer stays on the Mac', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.from('speech'), format: 'm4a' })
     const real = bridge.getMockImplementation()!
-    let release!: () => void
-    const late = new Promise<void>((resolve) => { release = resolve })
+    const { gate: late, release } = heldGate()
     bridge.mockImplementation(async (...args) => {
       if (args[2].params.operation !== 'transcribe') return real(...args)
       setTimeout(() => { link.connected = false }, 300)
@@ -410,10 +483,10 @@ describe('durable voice cloud copies', () => {
     const real = bridge.getMockImplementation()!
     let asleep = false
     bridge.mockImplementation(async (...args) => {
-      if (asleep) return new Promise(() => {})
+      if (asleep) return holdBridge()
       if (args[2].params.operation !== 'transcribe') return real(...args)
       asleep = true
-      return new Promise(() => {})
+      return holdBridge()
     })
     engine.mockResolvedValue({ text: 'companion text', durationMs: 1 })
     const started = Date.now()
@@ -428,7 +501,7 @@ describe('durable voice cloud copies', () => {
       const op = args[2].params.operation
       if (op === 'transcribe') await new Promise((r) => setTimeout(r, 7_000))
       // While it transcribes, its first small call goes unanswered.
-      if (op === 'get' && ++gets === 2) return new Promise(() => {})
+      if (op === 'get' && ++gets === 2) return holdBridge()
       return real(...args)
     })
     expect(await transcribeVoiceRecording(record.id)).toMatchObject({ text: 'primary full text', via: 'primary' })
@@ -727,6 +800,31 @@ describe('follow-up passes after the Mac bridge connects', () => {
 })
 
 describe('live pieces handed to the Mac while it answers', () => {
+  it('drains an unanswered automatic copy before replacing its bridge and storage', async () => {
+    const id = randomUUID()
+    await recordLive(id, 20)
+    const real = bridge.getMockImplementation()!
+    let chunkEntered!: () => void
+    const entered = new Promise<void>((resolve) => { chunkEntered = resolve })
+    bridge.mockImplementation((...args) => {
+      if (args[2].params.operation !== 'chunk') return real(...args)
+      const held = holdBridge()
+      chunkEntered()
+      return held
+    })
+    expect((await transcribeVoiceRecording(id)).text).toMatch(/^mac\[/)
+    await entered
+    const copy = copies.get(id)!
+    expect(isCopying(id)).toBe(true)
+    await drainBackground()
+    expect(await copy).toBe(false)
+    expect(isCopying(id)).toBe(false)
+    const replacement = vi.fn()
+    bridge.mockImplementation(replacement)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(replacement).not.toHaveBeenCalled()
+  })
+
   it('the Mac transcribes while the take is recorded and answers the stop from its pieces, before the copy', async () => {
     const id = randomUUID()
     await recordLive(id, 40)
@@ -750,11 +848,12 @@ describe('live pieces handed to the Mac while it answers', () => {
     expect(hasLiveForward(id)).toBe(false)
     expect(await macHas(id)).toBe(false)
     // The copy follows in the background and carries the text to the Mac.
-    await vi.waitFor(async () => { expect((await primary.get(id)).text).toBe(answer.text) })
+    await waitForDeferredCopy(id)
+    expect((await primary.get(id)).text).toBe(answer.text)
     // Both copies say how the text was made: the Mac's pieces, and the wait here.
     expect(answer.asr).toMatchObject({ engine: 'mlx', livePieces: expect.any(Number), leftSeconds: expect.any(Number), ms: expect.any(Number) })
     expect(answer.asr!.livePieces).toBeGreaterThanOrEqual(1)
-    await vi.waitFor(async () => { expect((await primary.get(id)).asr).toEqual(answer.asr) })
+    expect((await primary.get(id)).asr).toEqual(answer.asr)
   })
 
   it('a finished file with a chunk after its samples still lines up with what the Mac heard', async () => {
@@ -806,12 +905,12 @@ describe('live pieces handed to the Mac while it answers', () => {
     expect((await transcribeVoiceRecording(id)).text).toMatch(/^mac\[/)
     const seq = ops()
     expect(seq.indexOf('live-finish')).toBeLessThan(seq.indexOf('chunk') === -1 ? Infinity : seq.indexOf('chunk'))
-    await vi.waitFor(async () => { expect((await voiceArchive.get(id)).primarySaved).toBe(true) })
+    await waitForDeferredCopy(id)
+    expect((await voiceArchive.get(id)).primarySaved).toBe(true)
   })
 
   it('a cancel skips the hops still queued for the Mac and drops what it has', async () => {
-    let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
+    const { gate, release } = heldGate()
     const real = bridge.getMockImplementation()!
     bridge.mockImplementation(async (...args) => {
       if (args[2].params.operation === 'live') await gate
@@ -866,7 +965,7 @@ describe('live pieces handed to the Mac while it answers', () => {
     await recordLive(id, 20)
     await vi.waitFor(async () => expect(await macHas(id)).toBe(true))
     // Asleep behind a live bridge: nothing answers from here on.
-    bridge.mockImplementation(() => new Promise(() => {}))
+    bridge.mockImplementation(holdBridge)
     const started = Date.now()
     const answer = await transcribeVoiceRecording(id)
     expect(answer.via).toBe('local')
@@ -896,8 +995,7 @@ describe('live pieces handed to the Mac while it answers', () => {
   }, 30_000)
 
   it('a retry pass does not copy a take while its transcribe hands it over', async () => {
-    let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
+    const { gate, release } = heldGate()
     const real = bridge.getMockImplementation()!
     bridge.mockImplementation(async (...args) => {
       if (args[2].params.operation === 'live-finish') await gate
@@ -906,14 +1004,15 @@ describe('live pieces handed to the Mac while it answers', () => {
     await startVoiceArchiveReplication()
     const id = randomUUID()
     await recordLive(id, 20)
-    const answer = transcribeVoiceRecording(id)
+    const answer = track(transcribeVoiceRecording(id))
     await vi.waitFor(() => expect(ops()).toContain('live-finish'))
     for (const handler of activity) handler()
     await new Promise((r) => setTimeout(r, 100))
     expect(ops()).not.toContain('chunk')
     release()
     expect((await answer).text).toMatch(/^mac\[/)
-    await vi.waitFor(async () => { expect((await voiceArchive.get(id)).primarySaved).toBe(true) })
+    await waitForDeferredCopy(id)
+    expect((await voiceArchive.get(id)).primarySaved).toBe(true)
     stopVoiceArchiveReplication()
   })
 })
