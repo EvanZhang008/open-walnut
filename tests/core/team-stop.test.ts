@@ -182,6 +182,7 @@ describe('stopTeam / resumeTeam', () => {
     await import('../../src/core/session-tracker.js');
     await import('../../src/core/task-manager.js');
     await import('../../src/providers/claude-code-session.js');
+    await import('../../src/core/sessions/context-full-recovery.js'); // turnHold asks it (42cdfd264)
     vi.useFakeTimers({ toFake: ['setTimeout'] });
     try {
       sessions = [sess('s-a', 'a', 'running'), sess('s-a1', 'a1', 'running')];
