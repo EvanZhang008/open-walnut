@@ -12,23 +12,13 @@ import { copyPlain, copySecret, errLine, iconButton, popupIcon, toast, topBar } 
 import { currentView, isCurrent, nextView, paint } from './popup-view'
 import { webUrl, type DetailField, type ItemDetail } from './popup-item-data'
 
-export interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string; sub?: string }
-
-/** Where the popup runs: the toolbar, the side panel's Passwords tab, or a window of its own. */
-export interface PopupCtx {
-  root: HTMLElement; embedded: boolean; inWindow: boolean; panelWindow?: number; back: () => void
-  /** Where this view says a fill's error (the key popover's own line); else a toast. A success says nothing then. */
-  say?: (text: string) => void
-}
+export { fillTab, type Item, type PopupCtx } from './popup-fill'
+import { fillTab, lockedReply, type Item, type PopupCtx } from './popup-fill'
 
 /** How long a shown secret stays on show. */
 export const REVEAL_MS = 20_000
 
 const isLogin = (it: Item) => !it.type || it.type === 'login'
-
-/** Walnut ended this browser's unlock: the popup shows its lock screen (the background forgot the token). */
-const LOCKED = new Set(['vault_session_needed', 'vault_locked'])
-const lockedReply = (r: { ok: boolean; code?: string }) => !r.ok && !!r.code && LOCKED.has(r.code)
 
 async function copy(id: string, field: string, what: string): Promise<void> {
   const g = currentView()
@@ -37,19 +27,6 @@ async function copy(id: string, field: string, what: string): Promise<void> {
   if (!isCurrent(g)) return
   if (!r.ok) { toast(r.error ?? 'Could not copy.'); return }
   await copySecret(r.value, what)
-}
-
-/** Fill the page with `it`; true when it was filled. */
-export async function fillTab(it: { id: string }, ctx: PopupCtx): Promise<boolean> {
-  const g = currentView()
-  const r = await ask<{ code?: string }>({ type: 'fill-tab', id: it.id, ...(ctx.panelWindow ? { windowId: ctx.panelWindow } : {}) })
-  if (!isCurrent(g)) return false
-  if (lockedReply(r)) { ctx.back(); return false }
-  if (!r.ok) { (ctx.say ?? toast)(r.error ?? 'Could not fill.'); return false }
-  // Its one-time code goes on the clipboard (the background had no clipboard of its own here).
-  if (r.code) await copySecret(r.code, 'Code')
-  if (ctx.embedded) { if (!r.code && !ctx.say) toast('Filled') } else if (!ctx.inWindow) setTimeout(() => window.close(), r.code ? 700 : 0)
-  return true
 }
 
 /** A login's current one-time code with its countdown; a click copies it. */

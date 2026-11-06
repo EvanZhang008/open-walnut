@@ -12,7 +12,7 @@ const VIEW = { w: 1280, h: 860 }
 const W = 320
 
 describe('where the menu goes: under the field, above it only without room, never past the frame', () => {
-  it('under the field, on every page alike (whatever button is under it)', () => {
+  it('under the field, on every page alike, with no send button in the way', () => {
     const field = rect(280, 175, 360, 40)
     expect(menuSpot(field, 170, W, VIEW)).toEqual({ top: 219, left: 280, height: 170 })
   })
@@ -38,6 +38,43 @@ describe('where the menu goes: under the field, above it only without room, neve
     const s = menuSpot(rect(10, 60, 260, 30), 300, 280, { w: 300, h: 200 })
     expect(s.top).toBe(94)
     expect(s.height).toBe(200 - 90 - 8)
+  })
+})
+
+describe("never over the form's send button when there is room above the field (R3-11)", () => {
+  const covers = (s: { top: number; left: number; height: number }, r: Rect) =>
+    s.left < r.right && s.left + W > r.left && s.top < r.bottom && s.top + s.height > r.top
+
+  it('a sign-up: the button under the password field, the menu goes above the field', () => {
+    const field = rect(280, 400, 360, 40)
+    const button = rect(280, 460, 360, 44)
+    const s = menuSpot(field, 170, W, VIEW, [button])
+    expect(s).toEqual({ top: 400 - 4 - 170, left: 280, height: 170 })
+    expect(covers(s, button)).toBe(false)
+  })
+
+  it('no room above: under the field as before, never beside it (one predictable spot)', () => {
+    const field = rect(200, 120, 360, 40)
+    const button = rect(200, 180, 360, 44)
+    expect(menuSpot(field, 300, W, { w: 1280, h: 480 }, [button])).toEqual({ top: 164, left: 200, height: 300 })
+  })
+
+  it('a button above the field as well: under it', () => {
+    const field = rect(280, 400, 360, 40)
+    expect(menuSpot(field, 170, W, VIEW, [rect(280, 460, 360, 44), rect(280, 300, 120, 30)])).toEqual({ top: 444, left: 280, height: 170 })
+  })
+
+  it('a button that is not in the way changes nothing', () => {
+    const field = rect(280, 175, 360, 40)
+    expect(menuSpot(field, 170, W, VIEW, [rect(280, 600, 360, 44)])).toEqual({ top: 219, left: 280, height: 170 })
+  })
+
+  it('no room anywhere but over it: under the field as before, never past the frame', () => {
+    const v = { w: 380, h: 340 }
+    const field = rect(10, 60, 360, 30)
+    const s = menuSpot(field, 230, W, v, [rect(10, 100, 360, 40)])
+    expect(s.top).toBe(94)
+    expect(s.top + s.height).toBeLessThanOrEqual(336)
   })
 })
 

@@ -56,6 +56,8 @@ const CHANGES: Record<string, { setup?: () => unknown; change: (ctx: unknown) =>
   retimeSessions: { setup: () => unlockHere(10 * MIN), change: () => S.retimeSessions({ idleMs: 5 * MIN, maxMs: 0 }) },
   // An expiry found when read: the one that lapsed ends, and windows hear it.
   liveSessionCount: { setup: () => unlockHere(MIN), change: () => { vi.setSystemTime(Date.now() + 2 * MIN); S.liveSessionCount() } },
+  // A browser's new key takes over its old key's own Lock: that window's record changes.
+  carryJoiner: { setup: () => S.endSession(unlockHere(), 'window:old'), change: () => S.carryJoiner({ from: 'window:old', to: 'window:new' }) },
   useSession: { setup: () => unlockHere(MIN), change: (t) => { vi.setSystemTime(Date.now() + 2 * MIN); expect(S.useSession(t as string, true, undefined)).toBeNull() } },
 }
 
@@ -64,6 +66,8 @@ const NO_CHANGE = new Set([
   'SESSION_HEADER', 'DEFAULT_IDLE_MINUTES', 'MAX_SESSION_HOURS',
   'setSessionStoreHook', 'onSessionsExpired', 'live', 'joinSource', 'joinTestRouteAllowed', 'nameJoinDeviceForTest',
   'sessionList', 'selfLockList',
+  // A read: which unlock an extension's session may hand a browser key from.
+  'handingSource',
   // A restart's own records coming back before any window is served: no window is open to tell.
   'restoreSessions', 'restoreSelfLocks',
   'unlockWaitMs', 'noteUnlockFailure', 'noteUnlockSuccess', 'isAttemptRunning', 'beginAttempt', 'endAttempt',

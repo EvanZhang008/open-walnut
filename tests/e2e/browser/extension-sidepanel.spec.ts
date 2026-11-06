@@ -5,7 +5,7 @@
  * session about that page, whose first message carries the page as a folded block and its text
  * as a file; the person lets the ask act in their tab and the ask can then read it (another
  * caller cannot); a selection asked about later leads the next message; turning acting off
- * gives the tab back; another page gets a conversation of its own, and the first one comes back.
+ * gives the tab back; on another page the conversation stays, and the next message goes with that page.
  *
  * The panel page opens here as a window of its own for the person's window (`?window=`, what a
  * browser with no side panel gets): Playwright cannot open Chrome's side panel itself.
@@ -266,14 +266,28 @@ test('Stop on the page takes the tab back, and the panel\'s switch follows', asy
   await expect.poll(async () => [403, 409].includes((await act({ action: 'snapshot', tab: docTab }, askSession)).status), { timeout: 15_000 }).toBe(true)
 })
 
-test('another page has its own conversation, and the first one comes back', async () => {
-  test.setTimeout(90_000)
+test('on another page the conversation stays: the page chip moves, and the next message goes with that page', async () => {
+  test.setTimeout(120_000)
   await doc.goto(site('docs.example.test', '/other'))
+  // The chip names the new page, on: the conversation has not had it yet.
   await expect(view().getByTestId('ext-panel-include')).toContainText('Another page', { timeout: 30_000 })
-  await expect(view().getByTestId('ask-object-compose')).toBeVisible({ timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-include')).toBeChecked()
+  // The same conversation, never a new chat for the page (review 2026-11-06 round 3).
+  await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession, { timeout: 30_000 })
+  await expect(view().getByTestId('ask-object-compose')).toHaveCount(0)
+  const composer = view().locator('.ask-object-session textarea')
+  await composer.fill('And what is on this one? echo-input')
+  await composer.press('Enter')
+  const raw = await received(askSession, 'And what is on this one?')
+  expect(contextIn(raw)).toContain(`Address: ${site('docs.example.test', '/other')}`)
+  // Sent with it, the chip is off for that page.
+  await expect(view().getByTestId('ext-panel-include')).not.toBeChecked({ timeout: 15_000 })
+  // Back on the first page: still the same conversation, the chip on for it again (the ask's
+  // latest page is the other one now).
   await doc.goto(site('docs.example.test', '/notes'))
   await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
-  await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession, { timeout: 30_000 })
+  await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession)
+  await expect(view().getByTestId('ext-panel-include')).toBeChecked()
 })
 
 test('a secret field\'s selection never reaches the panel; a text box\'s does', async () => {

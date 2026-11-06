@@ -62,7 +62,7 @@ test.afterAll(async () => {
 
 test('the locked popup shows the hint behind a link, and at once after a wrong password', async () => {
   const p = await popup()
-  await expect(p.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible({ timeout: 20_000 })
+  await expect(p.getByRole('heading', { name: 'Passwords are locked' })).toBeVisible({ timeout: 20_000 })
   await expect(p.getByTestId('popup-hint-shown')).toHaveCount(0)
   await shot(p, 'ext-popup-locked-link')
   await p.getByTestId('popup-show-hint').click()
@@ -119,7 +119,7 @@ test('the key popover, where people unlock most, has the hint too (R2-11)', asyn
 test('with no hint, the locked popup has no link', async () => {
   await setHint('')
   const p = await popup()
-  await expect(p.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible({ timeout: 20_000 })
+  await expect(p.getByRole('heading', { name: 'Passwords are locked' })).toBeVisible({ timeout: 20_000 })
   await expect(p.getByTestId('popup-show-hint')).toHaveCount(0)
   await p.close()
 })

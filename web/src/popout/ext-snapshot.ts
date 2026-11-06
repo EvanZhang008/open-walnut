@@ -4,18 +4,21 @@
  * Walnut page takes about a second to start in its frame, the panel page's own drawing is there
  * at once. The view says `shown` once its own content is on screen and the drawing goes.
  *
- *   view → panel page   { walnut: 'ext-panel', type: 'snapshot', view: 'ask', key, snap: AskSnap }
+ *   view → panel page   { walnut: 'ext-panel', type: 'snapshot', view: 'ask', key, agentId, snap: AskSnap }
+ *   view → panel page   { walnut: 'ext-panel', type: 'agent', agentId }   the agent the Ask view is on
  *   view → panel page   { walnut: 'ext-panel', type: 'snapshot', view: 'tasks', snap: TasksSnap }
  *   view → panel page   { walnut: 'ext-panel', type: 'shown' }
  *
- * Text only, cut short: the panel page draws it with textContent, never as markup.
+ * Text only, cut short: the panel page draws it with textContent, never as markup. `agent` names the
+ * agent the view shows (it opens on the agent picked last, in any window), so the next open draws
+ * that agent's words and no other's.
  */
 import { pageKey } from './ext-panel-model';
 
 /** An ask in the Continue list, as the row draws it (`time` its words: "3h ago"). */
 export interface ContinueSnap { title: string; line: string; time: string; needs: boolean }
 /**
- * The page's conversation, and the view around it so the panel page draws the same thing while the
+ * The open conversation, and the view around it so the panel page draws the same thing while the
  * view loads (the header's title and agent, the composer's placeholder, the Continue rows, the
  * suggestion chips, whether the page chip is on). The view's fields are left out when not shown.
  */
@@ -31,6 +34,12 @@ export interface AskSnap {
    * none): the drawing draws the chips as the view does, icon and label (review R2-6).
    */
   askTitle?: string; agent?: string; placeholder?: string; continue?: ContinueSnap[]; suggestions?: string[]; suggestionIcons?: string[]; pageOn?: boolean;
+  /**
+   * The page the words were taken on (`snapKeyOf`), absent with no page: `pageOn` is that page's
+   * chip. The conversation stays as the person moves on, so the next open may be on another page,
+   * whose chip the drawing cannot know from these words.
+   */
+  pageKey?: string;
 }
 export interface TasksSnap { sections: Array<{ title: string; rows: Array<{ title: string; line: string; state: string }> }> }
 
@@ -38,8 +47,6 @@ export const SNAP_MESSAGES = 4;
 export const SNAP_TEXT_MAX = 600;
 export const SNAP_ROWS = 14;
 export const SNAP_CONTINUE = 6;
-/** The key of a tab that shows no web page (a new tab, the browser's own pages). */
-export const NO_PAGE_SNAP_KEY = 'web:none';
 export const SNAP_SUGGESTIONS = 3;
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -59,7 +66,7 @@ export function askSnapOf(root: ParentNode, page: { url: string; title?: string 
     const quote = user ? textOf(row.querySelector('[data-testid="ext-panel-attached"] blockquote')) : '';
     messages.push({ role: user ? 'user' : 'assistant', text: cut(text, SNAP_TEXT_MAX), ...(page ? { page: cut(page, 200) } : {}), ...(quote ? { quote: cut(quote, 300) } : {}) });
   }
-  return { title: cut(page.title ?? host, 200), host, messages: messages.slice(-SNAP_MESSAGES) };
+  return { title: cut(page.title ?? host, 200), host, messages: messages.slice(-SNAP_MESSAGES), ...(page.url ? { pageKey: snapKeyOf(page.url) } : {}) };
 }
 
 export function snapKeyOf(url: string): string {
@@ -104,10 +111,18 @@ export function askViewSnapOf(root: ParentNode): Omit<AskSnap, 'title' | 'host' 
  */
 export const POPUP_SNAP_KEY = 'popup:shell';
 
-/** Where a snapshot of the Ask view is kept: the page's conversation in the side panel, the shell alone for the popup. */
-export function askSnapKey(surface: 'panel' | 'popup', pageUrl: string): string {
-  if (surface === 'popup') return POPUP_SNAP_KEY;
-  return pageUrl ? snapKeyOf(pageUrl) : NO_PAGE_SNAP_KEY;
+/**
+ * The side panel's key: the open conversation of one agent, whatever the page (PopoutExtPanel keeps
+ * one conversation per agent as the person moves from page to page, review 2026-11-06 round 3), so
+ * the next open draws it on any page, or on none. One key per agent: a switch to another agent in
+ * the popup or another window must not leave this agent's question for that agent's next open
+ * (round 3 code review, item 3). No page's key starts this way.
+ */
+export const PANEL_SNAP_PREFIX = 'panel:agent:';
+
+/** Where a snapshot of the Ask view is kept: the agent's open conversation in the side panel, the shell alone for the popup. */
+export function askSnapKey(surface: 'panel' | 'popup', agentId: string): string {
+  return surface === 'popup' ? POPUP_SNAP_KEY : `${PANEL_SNAP_PREFIX}${agentId}`;
 }
 
 /** `shown` waits for the view's paint (two animation frames), at most this long. */

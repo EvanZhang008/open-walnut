@@ -96,9 +96,9 @@ test('Settings in the popup: the lock help runs under its select at full width, 
   await shot(p, 'settings-first-screen')
   await shot(p, 'settings-whole', true)
 
-  // The select shares one line with "Lock Walnut"; the help starts below both and spans the row.
+  // The select shares one line with "Lock passwords"; the help starts below both and spans the row.
   const box = async (l: ReturnType<Page['locator']>) => (await l.boundingBox())!
-  const title = await box(p.getByText('Lock Walnut', { exact: true }))
+  const title = await box(p.getByText('Lock passwords', { exact: true }))
   const sel = await box(lock)
   const text = await box(help)
   const row = await box(p.getByTestId('popup-lock-row'))

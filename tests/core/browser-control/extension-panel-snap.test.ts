@@ -1,7 +1,8 @@
 /**
  * The side panel's drawing of last time (packages/browser-extension/src/panel-snap.ts): what the
- * Ask and Tasks views said they show is kept (cut to words and lengths it can draw), one
- * conversation per page address without its #part, the newest few pages only; two writes at once
+ * Ask and Tasks views said they show is kept (cut to words and lengths it can draw), the Ask view's
+ * open conversation of each agent under `panel:agent:<id>` whatever the page (an older view's
+ * per-page entries go with its first write), the newest few only; two writes at once
  * keep both; and the drawing puts the words in as text, never as markup.
  * The browser API is a fake; the DOM is linkedom's.
  */
@@ -16,18 +17,38 @@ const local: Record<string, unknown> = {}
   storage: { local: { get: async (k: string) => ({ [k]: structuredClone(local[k]) }), set: async (o: Record<string, unknown>) => { Object.assign(local, structuredClone(o)) }, remove: async (ks: string | string[]) => { for (const k of [ks].flat()) delete local[k] } } },
 }
 
-const { drawSnap, keepSnap, snapKeyOf, snapOf } = await import('../../../packages/browser-extension/src/panel-snap')
+const { agentAskKey, drawSnap, keepSnap, snapKeyOf, snapOf } = await import('../../../packages/browser-extension/src/panel-snap')
+// The Ask view on Walnut's own agent said so (its `agent` word): its conversation is the one drawn.
+const CURRENT_ASK_KEY = agentAskKey('walnut')
 const { clearPanelData } = await import('../../../packages/browser-extension/src/panel-data')
 
-beforeEach(() => { for (const k of Object.keys(local)) delete local[k]; local.panelServer = 'http://walnut.example.test' })
+beforeEach(() => { for (const k of Object.keys(local)) delete local[k]; local.panelServer = 'http://walnut.example.test'; local.panelSnaps = { agent: { id: 'walnut', at: 0 } } })
 
-describe('kept per page, cut to what it draws', () => {
-  it('a conversation comes back for the same page, also with another #part, and not for another page', async () => {
-    await keepSnap('ask', { title: 'Release notes', host: 'docs.example.test', messages: [{ role: 'user', text: 'What changed?' }, { role: 'assistant', text: 'Uploads retry.' }] }, { key: snapKeyOf('https://docs.example.test/notes?v=2') }, 1000)
-    const back = await snapOf('ask', 'https://docs.example.test/notes?v=2#top', 2000) as { messages: unknown[]; title: string }
-    expect(back.title).toBe('Release notes')
-    expect(back.messages).toEqual([{ role: 'user', text: 'What changed?' }, { role: 'assistant', text: 'Uploads retry.' }])
-    expect(await snapOf('ask', 'https://docs.example.test/other', 2000)).toBeNull()
+describe('one open conversation, cut to what it draws', () => {
+  it('the open conversation comes back on any page, and with no page; its page key is kept', async () => {
+    const pageKey = snapKeyOf('https://docs.example.test/notes?v=2#top')
+    expect(pageKey).toBe('web:https://docs.example.test/notes?v=2')
+    await keepSnap('ask', { title: 'Release notes', host: 'docs.example.test', pageKey, messages: [{ role: 'user', text: 'What changed?' }, { role: 'assistant', text: 'Uploads retry.' }] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1000)
+    for (const url of ['https://docs.example.test/notes?v=2', 'https://docs.example.test/other', undefined]) {
+      const back = await snapOf('ask', url, 2000) as { messages: unknown[]; title: string; pageKey?: string }
+      expect(back.title).toBe('Release notes')
+      expect(back.pageKey).toBe(pageKey)
+      expect(back.messages).toEqual([{ role: 'user', text: 'What changed?' }, { role: 'assistant', text: 'Uploads retry.' }])
+    }
+  })
+
+  it('a write of the open conversation removes the per-page ones an older view kept, and those never draw', async () => {
+    await keepSnap('ask', { title: 'Old page chat', host: 'h', messages: [{ role: 'user', text: 'old' }] }, { key: snapKeyOf('https://a.example.test/') }, 10)
+    await keepSnap('ask', { title: 'Old other', host: 'h', messages: [] }, { key: 'web:https://b.example.test/x' }, 11)
+    expect(await snapOf('ask', 'https://a.example.test/', 20)).toBeNull()
+    await keepSnap('ask', { title: 'Now', host: 'h', messages: [] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 30)
+    expect(Object.keys((local.panelSnaps as any).ask)).toEqual([CURRENT_ASK_KEY])
+    expect(((await snapOf('ask', 'https://a.example.test/', 40)) as { title: string }).title).toBe('Now')
+  })
+
+  it('a page key longer than any address is cut', async () => {
+    await keepSnap('ask', { title: 't', host: 'h', pageKey: `web:${'x'.repeat(5000)}`, messages: [] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1)
+    expect((local.panelSnaps as any).ask[CURRENT_ASK_KEY].pageKey).toHaveLength(4100)
   })
 
   it('strange shapes are cut down: long words, a role it does not know, empty messages, too many', async () => {
@@ -55,6 +76,42 @@ describe('kept per page, cut to what it draws', () => {
   it('a drawing two weeks old is not drawn', async () => {
     await keepSnap('tasks', { sections: [] }, {}, 0)
     expect(await snapOf('tasks', undefined, 15 * 24 * 3600_000)).toBeNull()
+  })
+})
+
+describe('one conversation per agent (round 3 code review, item 3)', () => {
+  it('the view moves to another agent (the popup\'s switch): the next drawing is that agent\'s, never the last agent\'s question', async () => {
+    const { keepAgent, agentOf } = await import('../../../packages/browser-extension/src/panel-snap')
+    await keepSnap('ask', { title: 'Docs', host: 'h', agent: 'Ask Walnut', askTitle: 'Uploads', messages: [{ role: 'user', text: 'Walnut question' }] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 10)
+    await keepAgent('mentor', 20)
+    expect(await agentOf()).toBe('mentor')
+    expect(await snapOf('ask', 'https://a.example.test/', 30)).toBeNull()
+    await keepSnap('ask', { title: 'Docs', host: 'h', agent: 'Mentor', messages: [{ role: 'user', text: 'Mentor question' }] }, { key: agentAskKey('mentor'), agentId: 'mentor' }, 40)
+    expect(((await snapOf('ask', undefined, 50)) as { messages: Array<{ text: string }> }).messages[0].text).toBe('Mentor question')
+    // Back on Walnut's own: its conversation, kept apart all along.
+    await keepAgent('walnut', 60)
+    expect(((await snapOf('ask', undefined, 70)) as { messages: Array<{ text: string }> }).messages[0].text).toBe('Walnut question')
+  })
+
+  it('a view that never said its agent (a store of before): nothing is drawn', async () => {
+    delete (local.panelSnaps as any).agent
+    await keepSnap('ask', { title: 'Docs', host: 'h', messages: [{ role: 'user', text: 'whose?' }] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 10)
+    expect(await snapOf('ask', undefined, 20)).toBeNull()
+  })
+
+  it('the agent keeps the name its header shows', async () => {
+    const { keepAgent, agentNameOf } = await import('../../../packages/browser-extension/src/panel-snap')
+    await keepAgent('mentor', 5, 'Ask Mentor')
+    expect(await agentNameOf()).toBe('Ask Mentor')
+    await keepAgent('walnut', 6)
+    expect(await agentNameOf()).toBe('')
+  })
+
+  it('an agent is told only while a Walnut is connected', async () => {
+    const { keepAgent, agentOf } = await import('../../../packages/browser-extension/src/panel-snap')
+    delete local.panelServer
+    await keepAgent('mentor', 5)
+    expect(await agentOf()).toBe('walnut')
   })
 })
 

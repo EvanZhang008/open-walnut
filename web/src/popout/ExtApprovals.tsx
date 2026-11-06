@@ -11,7 +11,7 @@
 import { useEffect, useMemo } from 'react';
 import type { Approval } from '@/api/approvals';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
-import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
+import { ApprovalButtons, ApprovalDetail, requesterText } from '@/components/approvals/ApprovalPrompts';
 import { applyApprovalEvent, approveKind, noApproveReason, refreshApprovals, unlockUndecided, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
@@ -61,11 +61,15 @@ function AskApproval({ a, mine }: { a: Approval; mine: boolean }) {
   const host = useHostDisplayLabel(a.requester.host);
   return (
     <div className={`ext-ask-approval${mine ? ' is-mine' : ''}`} data-testid="ext-ask-approval" data-approval-id={a.id}>
-      <div className="ext-ask-approval-text">
-        <span className="ext-ask-approval-what" title={a.what}>{a.what}</span>
-        <span className="ext-ask-approval-who">{requesterText(a, host)}</span>
-      </div>
+      {/* Whole, on the card's full width: what, on which site, and why it waits (review round 3:
+          cut after two lines beside the buttons, it hid the site and the reason). */}
+      <span className="ext-ask-approval-what">{a.what}</span>
+      <span className="ext-ask-approval-who">{requesterText(a, host)}</span>
       <ApprovalButtons a={a} s={s} />
+      {/* The whole request, as Home's card has it: the title cuts a message after about 80
+          characters, and what it sends and where is read here before Approve (round 3 code
+          review, item 2). */}
+      <ApprovalDetail a={a} />
       <ApprovalLines a={a} s={s} />
     </div>
   );

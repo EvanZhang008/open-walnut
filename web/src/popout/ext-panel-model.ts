@@ -22,6 +22,7 @@
  *   view → panel page   { type: 'key-toggle', rect } | { type: 'key-close' } | { type: 'frame-pointer' }
  *   view → panel page   { type: 'open-view', view: 'tasks' | 'passwords' | 'settings' (ext=3) } | { type: 'open-walnut', path? }
  *   view → panel page   { type: 'open-side-panel', ask?, open?, view? }   (the popup only)
+ *   view → panel page   { type: 'vault-changed' }   (Walnut's vault:changed or a reconnect: read the vault state now)
  *
  * The page's text crosses only when a question is asked with it (`page-text`): the pages the
  * person only looks at stay in the browser. The view answers only the first extension page that
@@ -235,11 +236,10 @@ function cleanPage(raw: unknown): PanelPage | null {
 }
 
 /**
- * The tabs this panel handed to one of its conversations, and the page key that conversation is
- * remembered under. While the tab is still that conversation's, the panel stays in it whatever
- * the tab shows now: a page that changes its address as the person reads (a mail app opening a
- * message, a link followed) is the same conversation, never "another one acting in this tab"
- * (2026-11-04, the person's Gmail with one conversation in the panel).
+ * The tabs this panel handed to one of its conversations, and the conversation's key. While the tab
+ * is still that conversation's, it is this panel's own, never "another one acting in this tab",
+ * also while the conversation is still loading (`otherOwnerOf`; 2026-11-04, the person's Gmail with
+ * one conversation in the panel).
  */
 export interface HandedTab { key: string; taskId: string; at: number }
 const HANDED_KEY = 'walnut.ext-panel.handed';
@@ -268,13 +268,42 @@ export function rememberHanded(tab: number, key: string, taskId: string, s: Hand
   try { s?.setItem(HANDED_KEY, JSON.stringify(Object.fromEntries(kept))); } catch { /* full or blocked: the page's own key is used */ }
 }
 
+const CURRENT_KEY = 'walnut.ext-panel.current';
+/** Where the pointer lives when storage refuses it (a blocked or full localStorage): this view only. */
+const currentFallback = new Map<string, string>();
+
+function readCurrentAll(s: HandedStore | null): Record<string, string> {
+  try {
+    const v = JSON.parse(s?.getItem(CURRENT_KEY) ?? '{}') as Record<string, unknown>;
+    return v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string')) : {};
+  } catch { return {}; }
+}
+
+const newConversationKey = (now: number) => `ext:${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 /**
- * The conversation the panel shows for this tab: the one the tab was handed to while it still
- * acts there, else the page's own.
+ * The panel's open conversation, per agent: the key its Ask session is remembered under
+ * (ask-object-session.ts). It stays whatever page or tab the person moves to, as Home's Ask keeps
+ * the ask it shows (review 2026-11-06 round 3: the panel used to keep one conversation per page,
+ * so following a link put the open one away). Only New chat, a pick in the drawer or Continue, or a
+ * question the popup hands over starts another (`startConversation`).
  */
-export function conversationKey(url: string, tab: number | undefined, owner: string | undefined, handed: HandedTab | null): string {
-  if (handed && tab !== undefined && owner === `task:${handed.taskId}`) return handed.key;
-  return pageKey(url);
+export function currentConversation(agentId: string, s: HandedStore | null = store(), now = Date.now()): string {
+  const kept = readCurrentAll(s)[agentId] ?? currentFallback.get(agentId);
+  return kept ?? startConversation(agentId, s, now);
+}
+
+/**
+ * Another conversation for this agent, under a key of its own. A new key, not the old one emptied:
+ * a launch still out for the conversation left behind writes its ask under the old key, so it never
+ * comes back over the new chat, and the next question never joins it (review 2026-11-06 round 3,
+ * "a question typed right after New chat went into the earlier ask").
+ */
+export function startConversation(agentId: string, s: HandedStore | null = store(), now = Date.now()): string {
+  const key = newConversationKey(now);
+  currentFallback.set(agentId, key);
+  try { s?.setItem(CURRENT_KEY, JSON.stringify({ ...readCurrentAll(s), [agentId]: key })); } catch { /* blocked or full: this view keeps it */ }
+  return key;
 }
 
 /**
@@ -288,7 +317,7 @@ export function otherOwnerOf(owner: string | undefined, mine: string, handed: Ha
   return true;
 }
 
-/** One conversation per page: its address without the #part, so a jump inside the page keeps it. */
+/** A page by its address without the #part, so a jump inside the page is the same page. */
 export function pageKey(url: string): string {
   try {
     const u = new URL(url);

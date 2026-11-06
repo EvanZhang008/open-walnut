@@ -10,7 +10,11 @@
  *   and the generator opened from the Passwords list stay too, wear the list's bar (same height)
  *   and their Back says "Passwords";
  * - R2-13: the lock screen names the site, never the Walnut server;
- * - R2-15: a row's buttons leave its name and account whole.
+ * - R2-15: a row's buttons leave its name and account whole;
+ * - R3-5: an open Settings follows the storage it reads ("Never offer to save on" as the save bar adds
+ *   or removes a site), also after Back and opening it again;
+ * - R3-9: Fill in the key popover closes it, in the side panel and in the toolbar popup's window;
+ * - R3-6: a Lock made in Walnut reaches the open panel's key within about a second.
  *
  * Screenshots: PW_SHOTS_DIR (default test-results/extension-panel-views). Fake data only.
  */
@@ -260,6 +264,84 @@ test('locked, the Passwords view names the site, never the Walnut server (R2-13)
   await expect(pw.getByTestId('popup-unlock-words')).not.toContainText(new URL(lab.base).host)
   await shot(panel, 'r2-13-locked-words')
   await backToAsk(panel)
+  await panel.close()
+  await unlockExtension()
+})
+
+/** The save bar's "Never for this site" and its Undo write this list (bg-save.ts), in this browser's storage. */
+async function setNever(sites: string[]): Promise<void> {
+  await sw(lab).evaluate((list: string[]) => chrome.storage.local.set({ neverSave: list }), sites)
+}
+
+test('an open Settings shows the sites "Never for this site" adds and removes at once, also after Back and again (R3-5)', async () => {
+  test.setTimeout(150_000)
+  await setNever([])
+  const panel = await panelPage()
+  const v = askView(panel)
+  const st = panel.frameLocator('iframe.panel-frame-settings')
+  const list = st.getByTestId('never-list')
+  for (const [round, host] of [[0, `first-${stamp}.example.test`], [1, `second-${stamp}.example.test`]] as const) {
+    await v.getByTestId('ext-ask-key').click()
+    await panel.getByTestId('key-pop').getByTestId('key-pop-settings').click()
+    await expect(settingsIn(st)).toBeVisible({ timeout: 30_000 })
+    await expect(list).not.toContainText(host)
+    // The bar on a page adds the site while Settings is open: the list shows it, no reopen.
+    const t0 = Date.now()
+    await setNever(round === 0 ? [host] : [`first-${stamp}.example.test`, host])
+    await expect(list).toContainText(host, { timeout: 2000 })
+    expect(Date.now() - t0).toBeLessThan(2000)
+    if (round === 0) await shot(panel, 'r3-5-never-live')
+    // Its own remove button, and an Undo elsewhere, both take it off where it shows.
+    if (round === 0) {
+      await list.getByRole('button', { name: `Remove ${host}` }).click()
+      await expect(list).not.toContainText(host, { timeout: 2000 })
+    } else {
+      await setNever([])
+      await expect(list).not.toContainText(host, { timeout: 2000 })
+      await expect(list).toContainText('No sites yet')
+    }
+    await st.getByTestId('panel-view-back').click()
+    await expect(v.getByTestId('ext-ask-head')).toBeVisible()
+  }
+  await panel.close()
+})
+
+test('Fill in the key popover fills the page and closes the popover, in the side panel and the toolbar popup (R3-9)', async () => {
+  test.setTimeout(150_000)
+  for (const page of ['sidepanel.html', 'popup-ask.html']) {
+    await lab.doc.goto(lab.site('docs.example.test', '/login'))
+    await expect(lab.doc.locator('#user')).toHaveValue('')
+    const opened = lab.ctx.waitForEvent('page')
+    await sw(lab).evaluate(([w, u]: [number, string]) => chrome.windows.create({ url: chrome.runtime.getURL(`${u}?window=${w}`), type: 'popup', width: 420, height: 760 }), [lab.docWindow, page] as [number, string])
+    const panel = await opened
+    const v = askView(panel)
+    await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+    await v.getByTestId('ext-ask-key').click()
+    const row = panel.getByTestId('key-pop').getByTestId('key-pop-row').filter({ hasText: WORK_TITLE })
+    await expect(row).toBeVisible({ timeout: 15_000 })
+    await row.getByTestId('key-pop-fill').click()
+    await expect(lab.doc.locator('#user')).toHaveValue(WORK_USER, { timeout: 10_000 })
+    await expect(panel.getByTestId('key-pop')).toHaveCount(0, { timeout: 5000 })
+    if (page === 'sidepanel.html') await shot(panel, 'r3-9-filled-popover-closed')
+    await panel.close()
+  }
+})
+
+test('a Lock made in Walnut reaches the open panel\'s key within about a second (R3-6)', async () => {
+  test.setTimeout(150_000)
+  const panel = await panelPage()
+  const v = askView(panel)
+  await expect(v.getByTestId('ext-key-locked')).toHaveCount(0, { timeout: 20_000 })
+  await panel.waitForTimeout(1500)
+  const took = await vaultExclusively(async () => {
+    const t0 = Date.now()
+    const r = await lab.doc.request.post(`${lab.base}/api/v1/vault/lock`, { data: { everywhere: true } })
+    expect(r.ok(), await r.text()).toBe(true)
+    await expect(v.getByTestId('ext-key-locked')).toBeVisible({ timeout: 5000 })
+    return Date.now() - t0
+  })
+  // About a second: the frame hears Walnut's push at once, and the panel looks every second while open.
+  expect(took).toBeLessThan(1600)
   await panel.close()
   await unlockExtension()
 })

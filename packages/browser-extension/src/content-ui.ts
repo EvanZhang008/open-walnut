@@ -9,8 +9,9 @@
  * Enter typed right after that ArrowDown, before the menu loaded, is the menu's (`pick`), never
  * the page form's.
  *
- * Where it is drawn: under the field, above it only when there is no room under it, and always
- * inside this frame's own viewport, so a frame never cuts it (content-place.ts).
+ * Where it is drawn: under the field, above it only when there is no room under it or when, on the
+ * form's last field, it would cover the send button and the room above holds it; always inside this
+ * frame's own viewport, so a frame never cuts it (content-place.ts).
  */
 import { ask } from './ext'
 import { groupOfField } from './form-detect'
@@ -18,7 +19,7 @@ import { readRules } from './field-rules'
 import { walletGroupOf } from './wallet-detect'
 import { cs } from './content-state'
 import { dropHost, extFrame, hostStyle, makeHost, type Host } from './content-host'
-import { menuSpot } from './content-place'
+import { menuSpot, type Rect } from './content-place'
 
 const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8a5a2b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="m18 5 2 2"/><path d="m15 8 2 2"/></svg>'
 const MENU_WIDTH = 320
@@ -39,6 +40,35 @@ const px = (n: number) => `${Math.round(n)}px`
 /** The menu's width: its usual 320 px, or this frame's width when that is narrower. */
 const menuWidth = () => Math.max(200, Math.min(MENU_WIDTH, innerWidth - 8))
 
+/** The words of a button that sends its form (content.ts SEND_WORDS). */
+const SEND_WORDS = /log.?in|sign.?in|sign.?up|log on|continue|next|submit|create|register|join|save|change|update|verify/i
+
+/** A field the person types in (not a box, a button or a hidden value). */
+const TYPED = 'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]):not([type=image]):not([type=file]):not([type=reset]), textarea, select'
+
+/**
+ * The send buttons on screen the menu must not cover (content-place.ts): only for the form's last
+ * field, whose next step is the send (a sign-up's password, a step's email or code). On an earlier
+ * field the menu stays under it, as always: what it covers there is the rest of the form it fills.
+ */
+function sendButtons(field: HTMLInputElement): Rect[] {
+  const scope = field.form ?? cs.active?.group?.root ?? null
+  if (!scope) return []
+  const typed = Array.from(scope.querySelectorAll<HTMLElement>(TYPED)).filter((el) => el.getClientRects().length > 0)
+  if (typed[typed.length - 1] !== field) return []
+  const out: Rect[] = []
+  for (const b of Array.from(scope.querySelectorAll('button, input[type=submit], input[type=button], [role=button]')).slice(0, 40)) {
+    const sends = b instanceof HTMLInputElement
+      ? b.type === 'submit' || SEND_WORDS.test(b.value)
+      : (b instanceof HTMLButtonElement && !!b.form && b.type === 'submit') || SEND_WORDS.test((b.textContent ?? '').slice(0, 80))
+    if (!sends) continue
+    const r = b.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0) out.push({ top: r.top, bottom: r.bottom, left: r.left, right: r.right })
+    if (out.length >= 4) break
+  }
+  return out
+}
+
 function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height = 0): void {
   const r = field.getBoundingClientRect()
   if (where === 'icon') {
@@ -52,7 +82,7 @@ function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height 
     return
   }
   const width = menuWidth()
-  const spot = menuSpot(r, height, width, { w: innerWidth, h: innerHeight })
+  const spot = menuSpot(r, height, width, { w: innerWidth, h: innerHeight }, sendButtons(field))
   hostStyle(h, `z-index: 2147483647 !important; top: ${px(spot.top)} !important; left: ${px(spot.left)} !important;${menu?.hidden ? ' display: none !important;' : ''}`)
   if (menu && menu.host === h) {
     menu.frame.style.width = `${width}px`

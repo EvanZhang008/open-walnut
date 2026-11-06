@@ -183,9 +183,14 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
         if (!again) { await pendingSave.delete(tabId); return { ok: false } }
         p = again
       }
-      if (!st.unlocked) return { ok: true, kind: 'locked', site: displayHost(p.url), username: p.username ?? '', title: p.title ?? '' }
+      // The page the bar is drawn on now is not where the login was made (it followed the person to
+      // another part of the site, or the sign-in landed there): the bar says so (review R3-12).
+      const madeOn = displayHost(p.url)
+      const here = sender.tab?.url && /^https?:/.test(sender.tab.url) ? displayHost(sender.tab.url) : ''
+      const elsewhere = here && here !== madeOn ? { elsewhere: here } : {}
+      if (!st.unlocked) return { ok: true, kind: 'locked', site: madeOn, username: p.username ?? '', title: p.title ?? '', ...elsewhere }
       // The save bar is the extension's own page: it may show the password the person sent, to correct it.
-      return { ok: true, kind: p.kind, site: displayHost(p.url), username: p.username ?? '', password: p.password, title: p.title ?? '', itemId: p.itemId ?? '', choices: p.choices ?? [] }
+      return { ok: true, kind: p.kind, site: madeOn, username: p.username ?? '', password: p.password, title: p.title ?? '', itemId: p.itemId ?? '', choices: p.choices ?? [], ...elsewhere }
     }
     case 'savebar-action': {
       if (tabId === undefined) return { ok: false }

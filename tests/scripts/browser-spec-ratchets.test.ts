@@ -1569,6 +1569,90 @@ describe('the phone drawer on the shared fixture', () => {
   })
 })
 
+describe('the sidebar on the shared fixture', () => {
+  // The sidebar's open or shut state is a synced layout pref (open-walnut-sidebar-collapsed),
+  // so a spec that opens it leaves every later browser on the shared fixture with an open
+  // sidebar: 2026-11-06, approvals and the Passwords specs opened it to reach a page, and
+  // notice-full-text then laid its corner toast out beside an open sidebar, 46 px narrower,
+  // and read a title cut sideways. A spec that opens or shuts the sidebar keeps its prefs to
+  // itself (isolateUiPrefs, isolateUiPrefsContext, isolatePrefs, or its own ui-prefs route),
+  // directly or through a helper it imports. Specs with their own config run on their own
+  // fixture. The specs below did it before this check: the list only shrinks.
+  const own = new Set(fs.readdirSync(DIR).filter((f) => f.endsWith('.config.ts'))
+    .flatMap((f) => testMatchNames(fs.readFileSync(path.join(DIR, f), 'utf8'))))
+  // The sidebar's own button, found by its class or its name.
+  const button = /locator\(['"]\.sidebar-collapse-btn['"]\)|name: ['"](?:Expand|Collapse) sidebar['"]/
+  /** Clicks that button (on the line that finds it, or through the name it is kept in), or stores the pref. */
+  const togglesIn = (text: string): boolean => /setItem\(['"]open-walnut-sidebar-collapsed/.test(text) || text.split('\n').some((line) => {
+    if (!button.test(line)) return false
+    if (/\.click\(/.test(line)) return true
+    const kept = /const (\w+) = /.exec(line)?.[1]
+    return !!kept && new RegExp(String.raw`\b${kept}\.click\(`).test(text)
+  })
+  const toggles = { test: togglesIn }
+  const keepsPrefs = /isolateUiPrefs(Context)?\(|isolatePrefs\(|\*\*\/api\/ui-prefs/
+  const helpers = sources.filter(({ file }) => !file.endsWith('.spec.ts'))
+  const imports = (text: string, test: { test: (t: string) => boolean }) => helpers.some(({ file, text: h }) =>
+    test.test(h) && new RegExp(String.raw`from ['"]\./${file.replace(/\.ts$/, '').replace(/[.]/g, '\\.')}['"]`).test(text))
+  const offendersNow = () => sources
+    .filter(({ file }) => file.endsWith('.spec.ts') && !own.has(file))
+    .filter(({ text }) => (toggles.test(text) || imports(text, toggles)) && !keepsPrefs.test(text) && !imports(text, keepsPrefs))
+    .map(({ file }) => file)
+    .sort()
+  const BEFORE = [
+    'backup-settings.spec.ts', 'companion-keep.spec.ts', 'create-plugin-page.spec.ts',
+    'engine-settings-popover-fixes.spec.ts', 'engine-settings-popover-groups.spec.ts',
+    'engine-settings-popover-r2.spec.ts', 'engine-settings-popover-r2.webkit.spec.ts',
+    'engine-settings-popover-r3-rows.spec.ts', 'engine-settings-popover-scope.spec.ts',
+    'engine-settings-popover.webkit.spec.ts', 'engine-settings-project-scope.spec.ts',
+    'extension-hand-browser-key.spec.ts', 'extension-one-unlock.spec.ts', 'keep-awake-settings.spec.ts',
+    'mail-app-design.spec.ts', 'mail-app-filter.spec.ts', 'mail-app-folder-fetch.spec.ts', 'mail-app-gate.spec.ts',
+    'mail-app-read.spec.ts', 'mail-app-sidebar.spec.ts', 'mail-app-sidebar.webkit.spec.ts',
+    'mail-app-unified.spec.ts', 'mail-app-unified.webkit.spec.ts', 'mail-app-write.spec.ts',
+    'mail-context-fixes.spec.ts', 'mail-context-fixes.webkit.spec.ts', 'mail-context-folder.spec.ts',
+    'mail-context-folder.webkit.spec.ts', 'mail-context-geometry.spec.ts', 'mail-context-geometry.webkit.spec.ts',
+    'mail-context-independent.spec.ts', 'mail-context-round2.spec.ts', 'mail-context-round2.webkit.spec.ts',
+    'mail-context-row.spec.ts', 'mail-context-row.webkit.spec.ts', 'mail-ctx-r3.spec.ts',
+    'mail-ctx-r3.webkit.spec.ts', 'mail-ctx-v3.spec.ts', 'mail-grouping-bulk.spec.ts',
+    'mail-grouping-learn.spec.ts', 'mail-grouping-learn.webkit.spec.ts', 'mail-grouping-live.spec.ts',
+    'mail-grouping-narrow.webkit.spec.ts', 'mail-grouping-panes-filter.spec.ts',
+    'mail-grouping-rules-settings.spec.ts', 'mail-grouping-two-sections.spec.ts', 'mail-grouping-unsub.spec.ts',
+    'mail-grouping.spec.ts', 'mail-grouping.webkit.spec.ts', 'mail-invite.spec.ts', 'mail-menu-stays-open.spec.ts',
+    'mail-read-elsewhere.spec.ts', 'mail-reply-names-only.spec.ts', 'mail-sidebar-anchor.spec.ts',
+    'mail-sidebar-review.spec.ts', 'mail-sidebar-review.webkit.spec.ts', 'mail-sidebar-round2.spec.ts',
+    'mail-sidebar-round2.webkit.spec.ts', 'mail-sidebar-round3.spec.ts', 'mail-sidebar-round3.webkit.spec.ts',
+    'mail-sync-line.spec.ts', 'mail-sync-line.webkit.spec.ts', 'mail-unsubscribe.spec.ts',
+    'mail-unsubscribe.webkit.spec.ts', 'permissions-session-access.spec.ts', 'phone-mail-groups.spec.ts',
+    'phone-mail-r4.spec.ts', 'plugin-app-visibility.spec.ts', 'plugin-apps.spec.ts',
+    'plugin-config-card-layout.spec.ts', 'plugin-connection.spec.ts', 'plugin-hot-reload.spec.ts',
+    'plugin-install-link.spec.ts', 'plugin-mcp-servers.spec.ts', 'plugin-secret-form.spec.ts',
+    'plugin-store.spec.ts', 'plugin-update-layout.spec.ts', 'plugin-update-round3.spec.ts',
+    'settings-claude-code-import.spec.ts', 'settings-default-engine.spec.ts',
+    'settings-default-engine.webkit.spec.ts', 'settings-layout.spec.ts', 'settings-panes.spec.ts',
+    'settings-triage.spec.ts', 'sidebar-declutter.spec.ts', 'sidebar-status-items.spec.ts',
+  ]
+
+  it('no new spec opens or shuts it without keeping its prefs to itself', () => {
+    expect(offendersNow().filter((f) => !BEFORE.includes(f))).toEqual([])
+  })
+
+  it('a spec that keeps its prefs now leaves the list', () => {
+    const now = new Set(offendersNow())
+    expect(BEFORE.filter((f) => !now.has(f) && sources.some(({ file }) => file === f))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(toggles.test("if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()")).toBe(true)
+    expect(toggles.test("await page.getByRole('button', { name: 'Expand sidebar' }).click()")).toBe(true)
+    expect(toggles.test("await expect(page.locator('.sidebar-collapse-btn')).toBeVisible()")).toBe(false)
+    expect(keepsPrefs.test('test.beforeEach(async ({ context }) => { await isolateUiPrefsContext(context) })')).toBe(true)
+    // The specs that opened it on 2026-11-06 keep their prefs now.
+    for (const f of ['approvals.spec.ts', 'vault-live.spec.ts', 'passwords.spec.ts', 'passwords-hint.spec.ts', 'passwords-unlock-holds.spec.ts']) {
+      expect(offendersNow(), f).not.toContain(f)
+    }
+  })
+})
+
 describe('a spec deleting a task it made', () => {
   // DELETE /api/tasks/:id refuses a task that still holds a session (409), and a cleanup
   // that ignores the answer leaves the task on the ONE fixture every spec shares. On

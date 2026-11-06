@@ -18,7 +18,7 @@
 import { ask, ext } from './ext'
 import { h } from './dom'
 import { popupIcon } from './popup-ui'
-import { drawSnap, keepSnap, shellOf, snapOf, type AskSnap, type SnapView } from './panel-snap'
+import { agentNameOf, agentOf, drawSnap, keepAgent, keepSnap, shellOf, snapKeyOf, snapOf, type AskSnap, type SnapView } from './panel-snap'
 import { drawAskLook, type AskLook } from './panel-look'
 import { startPagePlumbing } from './panel-page'
 import { keyPopover } from './key-pop'
@@ -27,6 +27,8 @@ import { keepTheme } from './panel-theme'
 type FullView = 'tasks' | 'passwords' | 'settings'
 /** The vault state this page last told its frame (storage.session: gone with the browser), for the next open's first word. */
 const KEPT_VAULT = 'panelVault'
+/** How often an open panel or popup asks Walnut how the vault stands, while it is on screen. */
+export const VAULT_LOOK_MS = 1000
 /** How long the look takes to fade into the view (ui.css `.panel-snap.is-look.is-going`). */
 const LOOK_FADE_MS = 120
 /** What the frame's URL says this page draws: `3` adds the Settings view (`open-view` `settings`). */
@@ -63,18 +65,38 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
   }
   // A view that never says so (a Walnut whose view sends no `shown`) still gets its frame back.
   setTimeout(unLook, 15_000)
+  /** The agent the drawing is of: the one the Ask view was last on ('' for none known: the bare Ask). */
+  let lookAgent: string | null = null
   /** The page in this window and its conversation of last time, for the drawing. */
   const lookAtPage = async () => {
     const [tab] = await ext.tabs.query({ active: true, windowId: win.id })
     const url = tab?.url && /^https?:/.test(tab.url) && !tab.url.startsWith(`${server}/`) ? tab.url : ''
     let host = ''
     try { host = url ? new URL(url).host : '' } catch { /* no page */ }
-    look.page = url ? { title: tab?.title ?? '', host } : null
-    look.snap = url && surface === 'panel' ? await snapOf('ask', url) as AskSnap | null : null
+    look.page = url ? { title: tab?.title ?? '', host, key: snapKeyOf(url) } : null
+    drawLook()
+  }
+  /**
+   * The open conversation and the shell of the agent the view opens on, on any page (a tab with no
+   * web page too): the view keeps one conversation per agent, and opens on the agent picked last in
+   * any window. With no agent known, none: a conversation of another agent must never stand in
+   * (round 3 code review, item 3).
+   */
+  const lookAtAgent = async (agent: string, name?: string) => {
+    lookAgent = agent
+    const [snap, shell, kept] = await Promise.all([
+      surface === 'panel' && agent ? snapOf('ask', undefined, Date.now(), agent) as Promise<AskSnap | null> : Promise.resolve(null),
+      agent ? shellOf(Date.now(), agent) : Promise.resolve(null),
+      name === undefined && agent ? agentNameOf() : Promise.resolve(name ?? ''),
+    ])
+    if (lookAgent !== agent) return
+    look.snap = snap
+    look.shell = shell
+    look.agentName = kept || undefined
     drawLook()
   }
   void Promise.all([
-    shellOf().then((sh) => { look.shell = sh }),
+    agentOf().then((a) => (lookAgent === null ? lookAtAgent(a) : undefined)),
     ext.storage.session.get('vaultSession').then((v) => { look.locked = !v.vaultSession }).catch(() => undefined),
     lookAtPage(),
   ]).then(drawLook)
@@ -164,7 +186,18 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     if (gone() || at !== liveTold || told) return
     page.postAsk(m)
   }
-  const tellVault = async () => {
+  /** One look at a time: a call while one runs gets one more look after it, so none piles up behind a slow Walnut. */
+  let looking: Promise<void> | null = null
+  let again = false
+  const tellVault = (): Promise<void> => {
+    if (looking) { again = true; return looking }
+    looking = lookVault().finally(() => {
+      looking = null
+      if (again) { again = false; void tellVault() }
+    })
+    return looking
+  }
+  const lookVault = async () => {
     if (gone()) return
     const st = await ask<{ connected: boolean; unlocked: boolean }>({ type: 'vault-watch' })
     if (!st.ok) return
@@ -247,10 +280,21 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
     },
     onMessage: (d, from) => {
       if (d.type === 'theme') { keepTheme(d.theme); return }
+      // A Lock (or an unlock) anywhere: Walnut's frame heard it as it happened; the key, the popover
+      // and the drawer's row follow now, not at the next look (review R3-6).
+      if (d.type === 'vault-changed') { told = ''; void tellVault(); return }
+      if (d.type === 'agent') {
+        if (from !== frame.contentWindow) return
+        const name = typeof d.name === 'string' ? d.name.slice(0, 60) : ''
+        void keepAgent(d.agentId, Date.now(), name)
+        // Still drawing another agent's words (the pick moved meanwhile): this agent's now.
+        if (lookShown && typeof d.agentId === 'string' && d.agentId !== lookAgent) void lookAtAgent(d.agentId, name)
+        return
+      }
       if (d.type === 'shown' || d.type === 'snapshot') {
         const view: SnapView = from === frame.contentWindow ? 'ask' : 'tasks'
         if (d.type === 'shown') { if (view === 'ask') unLook(); else uncover(view) }
-        else if (d.view === view) void keepSnap(view, d.snap, { key: d.key, counts: d.counts })
+        else if (d.view === view) void keepSnap(view, d.snap, { key: d.key, agentId: d.agentId, counts: d.counts })
         return
       }
       switch (d.type) {
@@ -294,8 +338,10 @@ export async function startAsk(root: HTMLElement, server: string, win: { id?: nu
   }, true)
 
   // The vault as Walnut sees it now (popup.ts followVault): a Lock all elsewhere locks the key here
-  // within seconds, an unlock in a Walnut window unlocks it.
-  setInterval(() => { if (document.visibilityState === 'visible') void tellVault() }, 3000)
+  // within about a second, an unlock in a Walnut window unlocks it. The frame's `vault-changed` is
+  // the quick way; this look is for a Walnut whose frame does not say it (review R3-6: 1.5 to 2.5 s
+  // at a look every 3 s).
+  setInterval(() => { if (document.visibilityState === 'visible') void tellVault() }, VAULT_LOOK_MS)
   document.addEventListener('visibilitychange', () => void tellVault())
   let soon: ReturnType<typeof setTimeout> | undefined
   const later = () => { clearTimeout(soon); soon = setTimeout(() => { told = ''; void tellVault(); if (key.isOpen()) key.refresh() }, 300) }

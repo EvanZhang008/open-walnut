@@ -10,10 +10,14 @@
 import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { holdVaultLock } from './vault-lock'
+import { isolateUiPrefsContext } from './status-section-helpers'
 
 test.describe.configure({ mode: 'serial' })
 // It sets the vault up through the UI, changes the vault's one hint and locks every window: alone on the vault.
 holdVaultLock('exclusive', 'file')
+// It opens the sidebar, a synced layout pref: kept off the shared fixture, so no later spec
+// starts with it open (2026-11-06: notice-full-text measured its toast beside an open sidebar).
+test.beforeEach(async ({ context }) => { await isolateUiPrefsContext(context) })
 
 let setUpHere = false
 

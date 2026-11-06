@@ -6,6 +6,7 @@
  *   POST   /api/v1/vault/unlock                    { passwordKey | password, secretKey?, client? } → { session, browserKey? }
  *   POST   /api/v1/vault/recover                   { recoveryCode, secretKey?, newPasswordKey | newPassword, kdf, hint? } → { secretKey, recoveryCode, session }
  *   POST   /api/v1/vault/join                      → { session }  (this computer's extension or a Walnut window here, sharing an unlock made here)
+ *   POST   /api/v1/vault/browser-key               { browserKey? } → { browserKey, known }  (this computer's extension, with a live unlock made here: the key of the Walnut window beside it)
  *   POST   /api/v1/vault/lock                      { all? | everywhere? } → { ended }  (none: this window; everywhere: every window; all: and every agent grant)
  *   GET    /api/v1/vault/items                     → { items: summaries }       (session)
  *   POST   /api/v1/vault/items                     { item } → { item }          (session)
@@ -500,6 +501,56 @@ vaultV1Router.post('/vault/join', async (req, res, next) => {
     }
     if (win) void import('../../core/vault/browser-keys.js').then((b) => b.touchBrowser(win.key)).catch(() => undefined)
     return { session }
+  })
+})
+
+/**
+ * The extension hands a Walnut window in the same browser its browser key (docs/reference/passwords.md,
+ * "One unlock on this computer"): this computer's paired extension (joiningDevice, the /vault/join
+ * gate), with a live session of its own whose unlock was made here after the last new master password
+ * (sessions.handingSource), asks for the key of the Walnut page it shows, at its paired address only
+ * (packages/browser-extension/src/hand-browser-key.ts), and writes it into that page's localStorage.
+ * The page's key (`browserKey` in the body: the extension's own header set stays as it is) comes back unchanged when this vault knows it;
+ * else a new one, carrying the old one's own lock. Nothing for a window, a script with no Origin,
+ * another device, a session, or a request from elsewhere (gate, joiningDevice). The extension asks by
+ * itself (`x-walnut-vault-quiet`), so it is no use of the unlock.
+ */
+vaultV1Router.post('/vault/browser-key', async (req, res, next) => {
+  if (!gate(req, res)) return
+  await run(res, next, async () => {
+    const device = joiningDevice(req)
+    if (!device || typeof req.headers.origin !== 'string') {
+      res.status(403).json({ error: 'Only the Walnut extension on the computer Walnut runs on hands a Walnut window its browser key.', code: 'browser_key_refused' })
+      return SENT
+    }
+    if (!(await needSession(req, res))) return SENT
+    const s = await sessions()
+    const token = header(req, s.SESSION_HEADER)
+    const nothingToHand = () => {
+      res.status(409).json({ error: 'This unlock was not made on this computer since the master password last changed: unlock with the master password.', code: 'nothing_to_hand' })
+      return SENT
+    }
+    // Asked again after every wait below, and inside the write (issueBrowserKey): a new master
+    // password, a recovery or a Lock that came meanwhile hands nothing.
+    const mayHand = () => !!s.handingSource(token, device)
+    if (!mayHand() || !(await store()).isOpen()) return nothingToHand()
+    const b = await import('../../core/vault/browser-keys.js')
+    const raw = (req.body as { browserKey?: unknown } | undefined)?.browserKey
+    const presented = typeof raw === 'string' && b.browserKeyShape(raw) ? raw : undefined
+    if (await b.knownBrowser(presented)) {
+      if (!mayHand()) return nothingToHand()
+      void b.touchBrowser(presented!).catch(() => undefined)
+      return { browserKey: presented, known: true }
+    }
+    if (!mayHand()) return nothingToHand()
+    const browserKey = await b.issueBrowserKey(undefined, 'handed by the Walnut extension', Date.now(), mayHand)
+    if (!browserKey && !mayHand()) return nothingToHand()
+    if (!browserKey) {
+      res.status(503).json({ error: 'Walnut could not keep a key for this browser now: try again.', code: 'browser_key_unavailable' })
+      return SENT
+    }
+    s.carryJoiner({ from: presented ? b.windowJoiner(presented) : undefined, to: b.windowJoiner(browserKey), handedBy: device })
+    return { browserKey, known: false }
   })
 })
 

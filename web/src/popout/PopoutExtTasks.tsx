@@ -30,6 +30,7 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import { taskPath } from '@/utils/task-path';
 import { fromParent, toParent } from './ext-frame';
 import { ApprovalLines, useExtApprovals } from './ExtApprovals';
+import { useVaultChangedRelay } from './vault-changed-relay';
 import { useFrameTheme } from './ext-theme';
 import { hostOf, panelAskTitle, type PanelPage } from './ext-panel-model';
 import { askedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
@@ -55,6 +56,7 @@ function ExtTasks() {
   /** Each reply's send, by task: a row moving between sections keeps it (the words are a draft). */
   const [replies, setReplies] = useState<Record<string, ReplyState>>({});
   const approvals = useExtApprovals();
+  useVaultChangedRelay();
   /** Tasks answered from this panel: their rows stay put, with their new state (ext-tasks-model.ts). */
   const answered = useMemo(() => new Set(Object.entries(replies).filter(([, r]) => r.state === 'sent').map(([id]) => id)), [replies]);
   const fresh = useMemo(() => (loading ? null : extTaskLists(tasks, answered)), [tasks, loading, answered]);

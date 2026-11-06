@@ -56,15 +56,32 @@ async function waiting(id: string, hold: Hold): Promise<Record<string, unknown>>
 }
 
 const ACT: Record<Hold['kind'], string> = { buy: 'buy', send: 'send', delete: 'delete' }
+/** Why a step on a button waits, said once (the button is already named in the title). */
+const STEP_WHY: Record<Hold['kind'], string> = { buy: 'It buys or pays.', send: 'It sends or posts.', delete: 'It deletes something.' }
 
-/** The card's words: who asks, exactly what, where; for a send the message, for an order its total. */
+/**
+ * Why the step waits for the person, as the card's last sentence: the reason the asking agent is
+ * told (`hold.why`, from the page), without the button's name again ("Place order" buys or pays
+ * becomes "It buys or pays."). Review 2026-11-06 round 3: the card said what and where but not why.
+ */
+export function whySentence(hold: Pick<Hold, 'kind' | 'why'>): string {
+  const why = hold.why.trim()
+  if (!why || why.startsWith('"')) return STEP_WHY[hold.kind]
+  const line = why.charAt(0).toUpperCase() + why.slice(1)
+  return /[.!?]$/.test(line) ? line : `${line}.`
+}
+
+/** The card's words: who asks, exactly what, where and why; for a send the message, for an order its total. */
 export function askWords(hold: Hold, taskTitle?: string): { what: string; detail: string } {
   const who = taskTitle ? `"${taskTitle.length > 60 ? `${taskTitle.slice(0, 59)}…` : taskTitle}"` : 'a Walnut agent'
   const host = hostOf(hold.url)
   const on = hold.kind === 'send' && hold.message ? `: "${hold.message.length > 80 ? `${hold.message.slice(0, 79)}…` : hold.message}"` : hold.kind === 'buy' && hold.total ? ` (${hold.total})` : ''
-  const full = `Let ${who} ${hold.what} on ${host}${on}?`
-  // An approval's title holds 300 characters (APPROVAL_WHAT_MAX); the detail has the rest.
-  const what = full.length > 300 ? `${full.slice(0, 298)}…?` : full
+  const head = `Let ${who} ${hold.what} on ${host}${on}?`
+  const why = ` ${whySentence(hold)}`
+  // An approval's title holds 300 characters (APPROVAL_WHAT_MAX): a long message gives way, the
+  // reason stays; the detail has the rest.
+  const room = 300 - why.length
+  const what = `${head.length > room ? `${head.slice(0, room - 2)}…?` : head}${why}`
   const lines = [
     `${taskTitle ? `The task "${taskTitle}"` : 'A Walnut agent (not inside a task)'} wants to ${hold.what} in your browser, which would ${ACT[hold.kind]} something in your name (${hold.why}).`,
     `Page: ${hold.url}`,

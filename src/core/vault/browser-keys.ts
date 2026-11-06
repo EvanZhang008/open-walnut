@@ -42,6 +42,9 @@ function pruned(list: Entry[], now: number): Entry[] {
     .sort((a, b) => b.at - a.at).slice(0, MAX_BROWSERS)
 }
 
+/** How many times every key ended (forgetAllBrowsers): an issue that saw an earlier count writes nothing. */
+let forgets = 0
+
 // A status read every few seconds by a locked window must not decrypt the file each time.
 let cache: { where: string; at: number; byHash: Map<string, Entry> } | null = null
 
@@ -96,13 +99,21 @@ async function write(fn: (list: Entry[]) => Entry[], now: number): Promise<void>
  * knows it, else a new one, which the window keeps). Null when it could not be written (the window
  * then shares nothing, as before).
  */
-export async function issueBrowserKey(presented: string | undefined, client: string, now = Date.now()): Promise<string | null> {
+export async function issueBrowserKey(presented: string | undefined, client: string, now = Date.now(), stillAllowed?: () => boolean): Promise<string | null> {
   const keep = shapeOk(presented) && !!(await known(now).catch(() => null))?.has(hashOf(presented))
   const key = keep ? presented! : crypto.randomBytes(32).toString('base64url')
   const h = hashOf(key)
+  const gen = forgets
+  // `stillAllowed` is asked again inside the side file's queue, where forgetAllBrowsers runs too: a
+  // new master password that came while this waited (its epoch is set before it forgets) leaves no
+  // key written after the forget, and one written before it is forgotten with the rest.
+  let refused = false
   try {
-    await write((list) => [{ hash: h, at: now, client: client.slice(0, 80) }, ...list.filter((e) => e.hash !== h)], now)
-    return key
+    await write((list) => {
+      if (gen !== forgets || (stillAllowed && !stillAllowed())) { refused = true; return list }
+      return [{ hash: h, at: now, client: client.slice(0, 80) }, ...list.filter((e) => e.hash !== h)]
+    }, now)
+    return refused ? null : key
   } catch {
     return null
   }
@@ -113,6 +124,8 @@ export async function issueBrowserKey(presented: string | undefined, client: str
  * nothing until the person types the master password in it again. Null-safe: no vault, no file.
  */
 export async function forgetAllBrowsers(): Promise<void> {
+  // Counted before the queued write: a key issued from before it, still waiting, is never written after it.
+  forgets++
   cache = null
   try {
     await updateSide<BrowsersFile>(FILE, () => ({ version: 1, browsers: [] }))

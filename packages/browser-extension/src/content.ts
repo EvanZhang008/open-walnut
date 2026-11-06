@@ -21,7 +21,8 @@
  *   postMessage to the extension's origin, never in a URL the page can see, and a frame the page
  *   navigates (a second load) is closed.
  * On Walnut's own pages (they carry `<meta name="walnut-app">`, a mark that can only turn the
- * extension off) it does nothing but the connect handshake.
+ * extension off) it does nothing but the connect handshake and handing the page its browser key
+ * while the extension is unlocked (page-browser-key.ts).
  */
 import { ext, ask } from './ext'
 import { findLoginGroups, groupOfField, readGroup, type LoginGroup } from './form-detect'
@@ -34,6 +35,7 @@ import * as pageAgent from './page-agent'
 import { runPageOp } from './page-ops'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
+import { initPageBrowserKey } from './page-browser-key'
 
 /**
  * This copy still talks to a running extension. One left behind by an update or a reload keeps
@@ -510,6 +512,7 @@ ext.storage.onChanged.addListener((changes, area) => {
 pageAgent.notePasswords()
 addEventListener('focusin', (e) => pageAgent.notePassword(e.target), true)
 start()
+initPageBrowserKey(isWalnutApp, live)
 // Back from the back/forward cache: no script runs again, so this page registers its frame anew.
 addEventListener('pageshow', (e) => { if (e.persisted) start() })
 let pending = 0

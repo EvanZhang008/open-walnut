@@ -80,6 +80,13 @@ const onChanged = () => { void checkVault() }
 if (typeof window !== 'undefined') {
   wsClient.onEvent('vault:changed', onChanged)
   wsClient.onEvent('_ws:reconnected', onChanged)
+  // The Walnut extension in this browser, unlocked, just put this browser's key into localStorage
+  // (packages/browser-extension/src/page-browser-key.ts): read again now, so a locked window shares
+  // the extension's unlock with no master password. Anything else posting this only causes a read.
+  window.addEventListener('message', (e) => {
+    const d = e.data as { source?: unknown; type?: unknown } | null
+    if (e.source === window && e.origin === window.location.origin && d?.source === 'walnut-extension' && d.type === 'vault-browser-key') onChanged()
+  })
   // A token set while this page runs came from Walnut just now (setup, an unlock, a share, another tab's).
   onVaultSessionChange(() => { const t = vaultSession(); if (t) confirmed = t })
 }

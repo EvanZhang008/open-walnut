@@ -13,7 +13,7 @@ import { itemRow, type Item, type PopupCtx } from './popup-item'
 import { findWalnut, rememberServer } from './popup-connect'
 import { startClipboardPage } from './clipboard-page'
 import { pageFillOn } from './settings'
-import { currentView, isCurrent, nextView, paint } from './popup-view'
+import { currentView, followStorage, isCurrent, nextView, paint } from './popup-view'
 import { siteForUnlock, unlockWords } from './unlock-words'
 import { sendUnlock, unlockRefusal } from './unlock-send'
 import { followTheme } from './panel-theme'
@@ -186,7 +186,7 @@ async function unlockView(st: State): Promise<HTMLElement> {
     fromAsk ? h('div', { class: 'top' }, backToAsk()) : null,
     h('div', { class: 'center', style: 'padding-bottom:6px' },
       h('span', { class: 'big-icon' }, icon('lockBig')),
-      h('h2', {}, 'Walnut is locked'),
+      h('h2', {}, 'Passwords are locked'),
       h('p', { 'data-testid': 'popup-unlock-words' }, words)),
     h('div', { class: 'pane', style: 'padding-top:0' }, form,
       h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'),
@@ -254,7 +254,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
   showSite()
   setTimeout(() => q.focus(), 30)
 
-  const lock = iconButton(icon('lock'), 'Lock Walnut', async () => { nextView(); await ask({ type: 'lock' }); void render() }, { 'data-testid': 'popup-lock' })
+  const lock = iconButton(icon('lock'), 'Lock passwords', async () => { nextView(); await ask({ type: 'lock' }); void render() }, { 'data-testid': 'popup-lock' })
   return h('div', {},
     h('div', { class: inView ? 'top top-sub view-bar' : 'top' }, inView ? viewBack() : backToAsk() ?? h('span', { class: 'logo' }, icon('key')), h('h1', {}, inView ? 'Passwords' : 'Walnut'),
       h('div', { class: 'top-tools' },
@@ -298,7 +298,16 @@ async function render(): Promise<void> {
   if (inView && !view.querySelector('[data-testid="panel-view-back"]')) view = h('div', {}, viewBar(), view)
   // What it holds, read from the view itself (an unlocked render may have drawn the lock screen).
   const shows = view.querySelector('#pw') ? 'locked' : st.ok && st.connected && st.unlocked && !view.querySelector('#server') ? 'unlocked' : 'neutral'
-  if (paint(root, view, g, shows, 'home') && st.ok) root.dataset.connected = st.connected ? '1' : '0'
+  if (!paint(root, view, g, shows, 'home')) return
+  if (st.ok) root.dataset.connected = st.connected ? '1' : '0'
+  // The list says when filling on pages is off (Settings): it follows that switch, turned in another window too.
+  if (shows === 'unlocked') {
+    followStorage(['settings'], g, (c) => {
+      const was = (c.settings?.oldValue as { pageFill?: unknown } | undefined)?.pageFill
+      const now = (c.settings?.newValue as { pageFill?: unknown } | undefined)?.pageFill
+      if (was !== now) void render()
+    })
+  }
 }
 
 /**
@@ -324,7 +333,9 @@ function followVault(): void {
       await render()
     } finally { checking = false }
   }
-  setInterval(() => void check(), 3000)
+  // About a second in the toolbar popup or a window of its own (review R3-6); inside the side panel
+  // its page looks every second already, and a lock it finds reaches this view through storage.
+  setInterval(() => void check(), embedded ? 3000 : 1000)
   document.addEventListener('visibilitychange', () => void check())
   window.addEventListener('focus', () => void check())
   // The background dropped or took an unlock (a refusal from Walnut on any request, an unlock, a

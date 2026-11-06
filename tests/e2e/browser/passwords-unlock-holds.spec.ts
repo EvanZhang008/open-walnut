@@ -8,11 +8,15 @@
 import { expect, test, type Page } from '@playwright/test'
 import { ensureVaultSetUp } from './vault-session-helper'
 import { holdVaultLock, vaultExclusively } from './vault-lock'
+import { isolateUiPrefsContext } from './status-section-helpers'
 
 test.describe.configure({ mode: 'serial' })
 // It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
 // Its Lock ends every unlock: that step runs alone (vaultExclusively).
 holdVaultLock('shared', 'file')
+// It opens the sidebar, a synced layout pref: kept off the shared fixture, so no later spec
+// starts with it open (2026-11-06: notice-full-text measured its toast beside an open sidebar).
+test.beforeEach(async ({ context }) => { await isolateUiPrefsContext(context) })
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/passwords-unlock-holds'

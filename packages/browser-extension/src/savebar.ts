@@ -15,7 +15,10 @@ const ask = <T = Record<string, unknown>>(msg: { type: string; [k: string]: unkn
 const guard = frameGuard()
 
 interface Choice { id: string; title: string; username?: string }
-interface Data { kind: 'save' | 'update' | 'locked'; site: string; username: string; password?: string; title: string; itemId?: string; choices?: Choice[] }
+/** `elsewhere`: the host of the page the bar is on now, when the login was made on another (`site`). */
+interface Data { kind: 'save' | 'update' | 'locked'; site: string; username: string; password?: string; title: string; itemId?: string; choices?: Choice[]; elsewhere?: string }
+/** The person opened the full bar from its short form (on another page than the login's). */
+let expanded = false
 const root = document.getElementById('root')!
 const NEW = '__new__'
 
@@ -91,9 +94,30 @@ async function render(): Promise<void> {
     h('div', { class: 'row-text' }, typeof title === 'string' ? h('span', { class: 'bar-title' }, title) : title, h('span', { class: 'row-sub' }, sub)))
   const later = h('button', { class: 'btn btn-quiet', type: 'button', onclick: guard.wrap(() => void act('later')) }, 'Not now')
   let body: HTMLElement
+  // On another page than the login's (review R3-12): one short line that names where it was made,
+  // so it never reads as saving the page on screen; Save takes it as sent, Edit opens the full bar.
+  if (d.elsewhere && !expanded) {
+    const update = d.kind === 'update'
+    const save = h('button', { class: 'btn btn-primary', type: 'button', 'data-testid': update ? 'savebar-update' : 'savebar-save' }, d.kind === 'locked' ? 'Unlock' : update ? 'Update' : 'Save')
+    const edit = h('button', { class: 'btn btn-quiet', type: 'button', 'data-testid': 'savebar-expand' }, 'Edit')
+    const label = distinctName(d.title, d.username, (d.choices ?? []).map((c) => c.title))
+    save.onclick = guard.wrap(() => {
+      if (d.kind === 'locked') void act('unlock')
+      else if (update) void act('update', { username: d.username, password: d.password ?? '', itemId: d.itemId }, (d.choices ?? []).find((c) => c.id === d.itemId)?.title ?? '')
+      else void act('save', { username: d.username, password: d.password ?? '', title: label }, label || d.title)
+    })
+    edit.onclick = guard.wrap(() => { expanded = true; void render() })
+    body = h('div', { class: 'bar-in', 'data-testid': 'savebar-elsewhere' },
+      head(update ? `Update the password you changed on ${d.site}?` : `Save the login you made on ${d.site}?`),
+      d.kind === 'locked' ? h('p', { class: 'muted', style: 'margin:0' }, 'Unlock passwords first; the login waits here for a few minutes.') : null,
+      h('div', { class: 'bar-actions' }, d.kind === 'locked' ? null : edit, h('span', { class: 'spacer' }), later, save))
+    root.replaceChildren(body)
+    requestAnimationFrame(size)
+    return
+  }
   if (d.kind === 'locked') {
     body = h('div', { class: 'bar-in' }, head('Save this login to Walnut?'),
-      h('p', { class: 'muted', style: 'margin:0' }, 'Unlock Walnut first; the login waits here for a few minutes.'),
+      h('p', { class: 'muted', style: 'margin:0' }, 'Unlock passwords first; the login waits here for a few minutes.'),
       h('div', { class: 'bar-actions' }, later, h('button', { class: 'btn btn-primary', type: 'button', onclick: guard.wrap(() => void act('unlock')) }, 'Unlock')))
     root.replaceChildren(body)
     requestAnimationFrame(size)

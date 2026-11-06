@@ -379,8 +379,38 @@ change reseals it), and forgets a browser unseen for 90 days, and all but the ne
 (`src/core/vault/browser-keys.ts`). A key alone opens nothing: with it, the status says `canJoin`
 only while an unlock made here is live, and `POST /vault/join` (with the window's Origin) gives the
 window a session of its own on that unlock's clocks, held by its token as a window's own unlock is
-(`joinSession(..., 'window')`). So each browser on this computer types the master password once;
-after that, one unlock anywhere here opens it. `vaultApi.status()` joins by itself, and every
+(`joinSession(..., 'window')`).
+
+A browser with the Walnut extension never types the master password in a Walnut window for that
+key: the extension hands it over. While the extension holds an unlock, its page script on the top
+frame of a Walnut page whose origin is exactly the address the extension is paired with (never
+another site, another loopback name for it, or a frame) sends the key that page keeps, if any, to the
+background (`packages/browser-extension/src/page-browser-key.ts`, `hand-browser-key.ts`). The
+background asks `POST /vault/browser-key` with its device token and its own vault session (quiet: no
+use of the unlock) and the page's key in the body. Walnut answers only this computer's paired
+extension (the `/vault/join` gate: `extension-<hex>`, this computer's own path, an Origin, no
+session's header) holding a live session of its own whose unlock, its own or the one it shares, was
+made here after the last new master password (`sessions.handingSource`); else `403
+browser_key_refused`, `401 vault_session_needed` or `409 nothing_to_hand`. A key it knows comes back
+unchanged (`known: true`, nothing written); for none or one it forgot it issues a new one, which
+takes over the old key's own lock (`sessions.carryJoiner`, so a window that locked only itself stays
+locked until the person unlocks again). The page script writes the new key into the page's
+localStorage, unless the page got one of its own meanwhile, and posts
+`{source: 'walnut-extension', type: 'vault-browser-key'}` to the page, on which `vault-live.ts`
+reads the status at once and joins. The page asks when it loads (and back from the back/forward
+cache), and the background offers every tab of the paired Walnut open now after each unlock or
+share, so a Passwords page opened after an unlock in the extension, or one open while the person
+unlocks there, opens with no password. Why this is safe: the extension's device token and a live
+unlock made here already let it read every item, and only the person at this computer pairs it;
+the key goes only into the Walnut origin's own localStorage, which Walnut's page reads anyway, and a
+key alone opens nothing (it shares only an unlock made here that is live). A local process gets no
+key this way: it would need the extension's token and live vault session, which already open the
+vault. After a new master password, an extension unlock from before hands nothing (and the change
+ended it anyway), so a forgotten key is replaced only once the person unlocks with the new password.
+A browser without the extension still types the master password once in a Walnut window.
+
+So each browser on this computer types the master password once, in the extension or in a Walnut
+window; after that, one unlock anywhere here opens it. `vaultApi.status()` joins by itself, and every
 window follows the vault live: each change of who holds an unlock (an unlock, a share, a Lock, an
 expiry, a self-lock, a new master password; never a mere use) is announced to every open Walnut
 window as `vault:changed` (`sessions.ts`, one event per burst, carrying nothing of the vault), and

@@ -31,6 +31,7 @@ import { clearBadges, initBadge, setBadge } from './bg-badge'
 import { walletValues } from './bg-wallet'
 import { itemDetail, secretField } from './popup-item-data'
 import { getSettings, pageFillOn } from './settings'
+import { BROWSER_KEY_MESSAGE, handBrowserKey, initHandBrowserKey } from './hand-browser-key'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -126,6 +127,7 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'agent-get': 'popup', 'agent-on': 'popup', 'agent-off': 'popup', 'agent-stop': 'content',
   'page-selection': 'content',
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel', 'panel-hand': 'sidepanel',
+  [BROWSER_KEY_MESSAGE]: 'content',
 }
 
 /**
@@ -157,6 +159,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   // The chosen time passed with no use: locked before anything is answered.
   await lockIfIdle(lockNow).catch(() => false)
   if (USE.has(msg.type)) void touch()
+  if (msg.type === BROWSER_KEY_MESSAGE) return handBrowserKey(msg, sender)
   if (kind === 'menu' || msg.type === 'open-menu' || msg.type === 'menu-focus') return handleMenu(msg, sender)
   if (kind === 'savebar' || msg.type === 'seen-login' || msg.type === 'seen-username') return handleSave(msg, sender)
   const tabId = sender.tab?.id
@@ -455,6 +458,7 @@ initSelfUpdate()
 initClipboard()
 initBadge()
 initAutoLock(lockNow)
+initHandBrowserKey()
 
 // ── the side panel and the context menu ──
 

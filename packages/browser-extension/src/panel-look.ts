@@ -19,8 +19,11 @@ export interface AskLook {
   /** The Continue list and suggestions of last time. */
   shell: AskShell | null
   /** The page in this window: the composer's chip names it; null on no web page. */
-  page: { title: string; host: string } | null
+  /** `key`: the page as the view names it (panel-snap.ts snapKeyOf). */
+  page: { title: string; host: string; key?: string } | null
   locked: boolean
+  /** The agent's name as the view's header names it, before any words of it were kept. */
+  agentName?: string
 }
 
 // One width, height and stroke-width each: the markup is parsed as XML, where a repeated
@@ -84,7 +87,7 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
   const box = el ?? h('div', { class: `panel-snap panel-snap-ask is-look is-${o.surface}`, 'data-testid': 'panel-snap', 'aria-hidden': 'true' })
   const s = o.snap
   const talking = o.surface === 'panel' && !!s && s.messages.length > 0
-  const agent = s?.agent || o.shell?.agent || 'Ask Walnut'
+  const agent = s?.agent || o.shell?.agent || o.agentName || 'Ask Walnut'
   const title = s?.askTitle || 'New chat'
   // A conversation whose ask has no title yet: the view's header names the agent once, as its title line.
   const agentOnly = o.surface === 'popup' || (talking && !s?.askTitle)
@@ -102,7 +105,8 @@ export function drawAskLook(o: AskLook, el?: HTMLElement): HTMLElement {
   const fromSnap = !!s?.suggestions
   const sugg = o.surface === 'panel' && !talking ? (s?.suggestions ?? o.shell?.suggestions ?? []) : []
   const suggIcons = (fromSnap ? s?.suggestionIcons : o.shell?.suggestionIcons) ?? []
-  const pageOn = s?.pageOn ?? !talking
+  // On a page other than the one the conversation was shown on, the chip is on, as the view draws it.
+  const pageOn = s?.pageKey && o.page?.key && s.pageKey !== o.page.key ? true : (s?.pageOn ?? !talking)
   const site = o.page?.host ?? ''
   const letter = (site.replace(/^www\./, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()
   const chips = h('span', { class: 'look-chips' },

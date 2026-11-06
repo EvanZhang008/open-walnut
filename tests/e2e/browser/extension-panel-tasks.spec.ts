@@ -142,6 +142,57 @@ test('Ask: an answer that fails says why in the strip, and the card\'s notes sho
   await expect(row).toHaveCount(0, { timeout: 15_000 })
 })
 
+test('Ask: an agent\'s browser step reads whole (what, the site, why it waits), and unlocking in place has no empty band (review round 3)', async () => {
+  test.setTimeout(120_000)
+  await panel.setViewportSize({ width: 400, height: 760 })
+  const v = askView(panel)
+  const now = Date.now()
+  // What outward-asks.ts writes for a held "Place order" (a real one comes only from an agent's step).
+  const what = 'Let a Walnut agent click button "Place order" on shop.lab.test:3650 ($42.10)? It buys or pays.'
+  const approval = {
+    id: `apr-r3-${now.toString(36)}`, what, digest: 'd', mode: 'tap', guard: 'person',
+    requester: { host: '__local__', command: 'walnut browser click', local: true },
+    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 600_000).toISOString(), status: 'pending',
+  }
+  const list = /\/api\/v1\/approvals(\?.*)?$/
+  await lab.ctx.route(list, (route) => route.request().method() === 'GET' ? route.fulfill({ json: { approvals: [approval], keys: [] } }) : route.continue())
+  try {
+    // The view reads the list again on a reconnect or a key change; a reload is the plain way here.
+    await panel.frames().find((f) => f.url().includes('view=ext-panel'))!.evaluate(() => location.reload())
+    const row = v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${approval.id}"]`)
+    await expect(row).toBeVisible({ timeout: 30_000 })
+    const title = row.locator('.ext-ask-approval-what')
+    await expect(title).toHaveText(what)
+    // Whole: nothing cut, the site and the reason on screen.
+    expect(await title.evaluate((e) => e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+    expect(await title.evaluate((e) => getComputedStyle(e).webkitLineClamp)).not.toBe('2')
+    // Across the card's width, the buttons under it.
+    const tb = (await title.boundingBox())!
+    const rb = (await row.boundingBox())!
+    expect(tb.width).toBeGreaterThan(rb.width * 0.8)
+    await shot(panel, 'r3-ask-approval-whole')
+    const unlock = row.getByTestId('approval-unlock-to-approve')
+    if (await unlock.isVisible({ timeout: 10_000 }).catch(() => false)) {
+      await unlock.click()
+      const label = row.locator('.approval-unlock-label')
+      await expect(label).toBeVisible()
+      const who = (await row.locator('.ext-ask-approval-who').boundingBox())!
+      const lb = (await label.boundingBox())!
+      // Right under who asks: the row's own gap, no band (it was about 24 px of nothing).
+      expect(lb.y - (who.y + who.height)).toBeLessThanOrEqual(10)
+      await shot(panel, 'r3-ask-approval-unlock')
+      await row.getByRole('button', { name: 'Cancel' }).click()
+    } else {
+      test.info().annotations.push({ type: 'note', description: 'Passwords shared an unlock here: no unlock form to measure' })
+    }
+  } finally {
+    await lab.ctx.unroute(list)
+    // The made-up request leaves the view with the real list.
+    await panel.frames().find((f) => f.url().includes('view=ext-panel'))?.evaluate(() => location.reload())
+    await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 30_000 })
+  }
+})
+
 test('Tasks: an approval leads Needs you and is answered here; rows say no section twice', async () => {
   test.setTimeout(120_000)
   expect((await lab.doc.request.patch(`${lab.base}/api/v1/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)

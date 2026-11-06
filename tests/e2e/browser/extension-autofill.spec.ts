@@ -517,7 +517,7 @@ test('auto-lock: after the chosen time with no use, the extension locks itself, 
   // Two minutes with no use.
   await sw().evaluate(() => chrome.storage.session.set({ lastActive: Date.now() - 120_000 }))
   const again = await popup()
-  await expect(again.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible({ timeout: 15_000 })
+  await expect(again.getByRole('heading', { name: 'Passwords are locked' })).toBeVisible({ timeout: 15_000 })
   // Locked: no tab shows a count.
   await expect.poll(() => sw().evaluate((t: number) => chrome.action.getBadgeText({ tabId: t }), w.tab), { timeout: 10_000 }).toBe('')
   await w.page.close()

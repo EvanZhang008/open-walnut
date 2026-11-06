@@ -22,6 +22,7 @@ import path from 'node:path'
 import { holdApprovalsLock } from './approvals-lock'
 import { ensureVaultSetUp, vaultSession, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
+import { isolateUiPrefsContext } from './status-section-helpers'
 
 test.describe.configure({ mode: 'serial' })
 // It names its window for sharing an unlock, so another file's unlock (or Lock) would reach it:
@@ -68,7 +69,10 @@ async function lockThisBrowserBehindItsBack(p: Page): Promise<void> {
 
 /** A second browser on this computer unlocks with the master password: an unlock made here. */
 async function unlockInAnotherBrowser(browser: Browser): Promise<Page> {
-  other ??= await browser.newContext({ baseURL: base, viewport: { width: 1280, height: 800 } })
+  if (!other) {
+    other = await browser.newContext({ baseURL: base, viewport: { width: 1280, height: 800 } })
+    await isolateUiPrefsContext(other)
+  }
   const p = await other.newPage()
   await p.goto('/')
   await expect(p.locator('.app-shell > .sidebar')).toBeVisible({ timeout: 20_000 })
@@ -86,6 +90,8 @@ test.beforeAll(async ({ browser }, info) => {
   test.setTimeout(180_000)
   base = String(info.project.use.baseURL ?? 'http://localhost:3457')
   ctx = await browser.newContext({ baseURL: base, viewport: { width: 1280, height: 800 } })
+  // It opens the sidebar, a synced layout pref: kept off the shared fixture.
+  await isolateUiPrefsContext(ctx)
   page = await ctx.newPage()
   await page.goto('/')
   await expect(page.locator('.app-shell > .sidebar')).toBeVisible({ timeout: 20_000 })

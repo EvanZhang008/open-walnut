@@ -110,7 +110,7 @@ async function render(): Promise<void> {
   if (d.state === 'not-connected') {
     root.append(stateRow('key', 'Connect Walnut', 'Fill passwords from your Walnut vault.', 'Connect', 'menu-connect'))
   } else if (d.state === 'locked') {
-    root.append(stateRow('lock', 'Walnut is locked', 'Unlock to fill this login.', 'Unlock', 'menu-unlock'))
+    root.append(stateRow('lock', 'Passwords are locked', 'Unlock to fill this login.', 'Unlock', 'menu-unlock'))
   } else {
     const items = d.items ?? []
     const more = d.more ?? []

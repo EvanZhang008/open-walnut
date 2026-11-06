@@ -4,7 +4,7 @@
  * agents in this browser.
  */
 import { ask, ext } from './ext'
-import { nextView, paint } from './popup-view'
+import { followStorage, isCurrent, nextView, paint } from './popup-view'
 import { h, icon } from './dom'
 import { AUTO_LOCKS, getSettings, setSettings, type AutoLock } from './settings'
 import { errLine, iconButton, popupIcon, switchRow, topBar } from './popup-ui'
@@ -32,8 +32,7 @@ async function agentSection(): Promise<HTMLElement> {
     } else {
       await ask({ type: 'agent-off' })
     }
-    const fresh = await agentSection()
-    wrap.replaceWith(fresh)
+    // The switch's own change is stored (agentControl): Settings draws this section again from it.
   }
   const trusted = await trustedRow()
   const wrap = h('div', {},
@@ -74,8 +73,8 @@ async function neverSection(): Promise<HTMLElement> {
   for (const site of sites) {
     const remove = iconButton(icon('x'), `Offer to save on ${site} again`, async () => {
       const now = (await ext.storage.local.get('neverSave')).neverSave as string[] | undefined
+      // Stored, and Settings draws the list again from it (settingsView follows `neverSave`).
       await ext.storage.local.set({ neverSave: (now ?? []).filter((s) => s !== site) })
-      wrap.replaceWith(await neverSection())
     }, { 'data-testid': 'never-remove' })
     remove.setAttribute('aria-label', `Remove ${site}`)
     group.append(h('div', { class: 'never-row' }, icon('globe'), h('span', { class: 'row-title' }, site), remove))
@@ -92,7 +91,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
   const g = nextView()
   const settings = await getSettings()
   const off = disconnectControl(st, back)
-  const lock = h('select', { class: 'select', id: 'autolock', 'aria-label': 'Lock Walnut', 'data-testid': 'popup-autolock' },
+  const lock = h('select', { class: 'select', id: 'autolock', 'aria-label': 'Lock passwords', 'data-testid': 'popup-autolock' },
     ...AUTO_LOCKS.map((a) => h('option', { value: a.value }, a.label))) as HTMLSelectElement
   lock.value = settings.autoLock
   // How long it stays unlocked, in plain words: Walnut's own length, or the time picked here.
@@ -103,9 +102,11 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
     walnutSt = (r as { status?: WalnutLength } | undefined)?.status
     lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt)
   }).catch(() => undefined)
+  const agentsBox = h('div', { 'data-testid': 'popup-agents-section' }, await agentSection())
+  const neverBox = h('div', {}, await neverSection())
   // What a person changes comes first (lock, filling, agents), so it fits the popup's first
   // screen; the sites never offered for saving, the connection and Disconnect close the page.
-  paint(root, h('div', {},
+  const painted = paint(root, h('div', {},
     backLabel
       ? h('div', { class: 'top top-sub view-bar' }, h('button', { class: 'back-btn', type: 'button', 'data-testid': 'panel-view-back', onclick: back }, popupIcon('back'), h('span', {}, backLabel)), h('h1', {}, 'Settings'))
       : topBar('Settings', back),
@@ -113,7 +114,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
       h('div', { class: 'section-label' }, 'Lock'),
       // The choice on one line with its select, its help under both at full width.
       h('div', { class: 'group' }, h('div', { class: 'setting setting-stack', 'data-testid': 'popup-lock-row' },
-        h('label', { class: 'row-title', for: 'autolock' }, 'Lock Walnut'), lock, lockSub)),
+        h('label', { class: 'row-title', for: 'autolock' }, 'Lock passwords'), lock, lockSub)),
       h('div', { class: 'section-label' }, 'Filling'),
       h('div', { class: 'group' },
         // Off while another password manager fills this browser: no icon, menu or bar in pages (content.ts).
@@ -122,12 +123,30 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
         switchRow('copytotp', 'Copy the one-time code after filling', 'Its code is then on the clipboard for the next page.', settings.copyTotp,
           (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
       h('p', { class: 'group-note', 'data-testid': 'popup-shortcut-note' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page. In a field, the arrow keys open the menu.'),
-      await agentSection(),
-      await neverSection(),
+      agentsBox,
+      neverBox,
       h('div', { class: 'section-label' }, 'This browser'),
       h('div', { class: 'group', 'data-testid': 'popup-connection' }, h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
         h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ? `Connected to ${hostOf(st.serverUrl)}` : 'Connected'), h('span', { class: 'row-sub' }, st.device ?? '')))),
       h('div', { style: 'height:10px' }), off)), g, 'neutral', backLabel ? 'home' : 'sub')
+  if (!painted) return
+  // What it shows follows the storage it reads while it is on show (review R3-5): a site the save
+  // bar's "Never for this site" adds (in a page, while this panel is open), a setting changed in
+  // another window, agents turned on or off elsewhere.
+  const redraw = async (box: HTMLElement, make: () => Promise<HTMLElement>) => {
+    const fresh = await make()
+    if (isCurrent(g)) box.replaceChildren(fresh)
+  }
+  followStorage(['neverSave'], g, () => void redraw(neverBox, neverSection))
+  followStorage(['agentControl'], g, () => void redraw(agentsBox, agentSection))
+  followStorage(['settings'], g, () => void getSettings().then((now) => {
+    if (!isCurrent(g)) return
+    if (document.activeElement !== lock && lock.value !== now.autoLock) { lock.value = now.autoLock; lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt) }
+    for (const [id, on] of [['pagefill', now.pageFill], ['copytotp', now.copyTotp]] as const) {
+      const box = root.querySelector<HTMLInputElement>(`#${id}`)
+      if (box && box.checked !== on) box.checked = on
+    }
+  }))
 }
 
 /** Walnut's "Keep Passwords unlocked" (src/core/vault/unlock-length.ts), as its own Settings words it. */

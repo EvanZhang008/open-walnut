@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { parseHTML } from 'linkedom'
-import { NO_PAGE_SNAP_KEY, SNAP_CONTINUE, askSnapOf, askViewSnapOf } from '../../web/src/popout/ext-snapshot'
+import { SNAP_CONTINUE, askSnapOf, askViewSnapOf, snapKeyOf } from '../../web/src/popout/ext-snapshot'
 import { frameThemeOf } from '../../web/src/popout/ext-theme'
 
 function root(html: string): ParentNode {
@@ -82,8 +82,10 @@ describe('the Ask view as the placeholder draws it', () => {
     ])
   })
 
-  it('a tab with no web page has a key of its own', () => {
-    expect(NO_PAGE_SNAP_KEY).toBe('web:none')
+  it('the words name the page they were taken on (its chip is that page\'s), and none with no page', () => {
+    const url = 'https://docs.example.test/notes?v=2#top'
+    expect(askSnapOf(root(''), { url, title: 'Notes' }, 'docs.example.test').pageKey).toBe(snapKeyOf(url))
+    expect(askSnapOf(root(''), { url: '' }, '')).not.toHaveProperty('pageKey')
   })
 })
 

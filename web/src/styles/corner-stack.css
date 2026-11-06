@@ -154,8 +154,11 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 4px;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+  /* Sliced where a line breaks, never cloned: line breaking leaves out a cloned end's padding and
+     border, so at some widths a line's box ran up to 5px past the text's edge and was cut there
+     (2026-11-06: about one corner width in eight in Chromium, the open sidebar's 228px in WebKit). */
+  -webkit-box-decoration-break: slice;
+  box-decoration-break: slice;
 }
 .notice-cmd-copy {
   display: inline-flex;

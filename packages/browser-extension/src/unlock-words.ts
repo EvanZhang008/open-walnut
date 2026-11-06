@@ -4,7 +4,18 @@
  * from localhost:3640" on a shop's sign-in page).
  */
 import { ext } from './ext'
-import { displayHost } from '../../../src/core/vault/url-match'
+
+/**
+ * A web page's host as Walnut names its site (url-match.ts `displayHost` of a page address), with no
+ * public suffix list: the side panel's script carries this, and tldts was three quarters of it
+ * (review R3-7). '' for no web page.
+ */
+export function pageHost(url: string): string {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.hostname.toLowerCase() : ''
+  } catch { return '' }
+}
 
 /** The site of the active tab (of `windowId`, else the window last used), unless it is a Walnut page or none. */
 export async function siteForUnlock(windowId: number | undefined, serverUrl: string | undefined): Promise<string> {
@@ -20,7 +31,7 @@ export function siteOfPage(url: string | undefined, serverUrl: string | undefine
   try {
     if (serverUrl && new URL(url).origin === new URL(serverUrl).origin) return ''
   } catch { return '' }
-  return displayHost(url)
+  return pageHost(url)
 }
 
 export function unlockWords(site: string): string {

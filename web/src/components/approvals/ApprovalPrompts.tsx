@@ -115,12 +115,27 @@ export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
   );
 }
 
+/**
+ * The request's whole text (what it sends, where, why), folded under its title: a title is cut
+ * short (a browser step's message after about 80 characters), and the person reads the rest here
+ * before approving. Home's card and dialog, and the browser panel's Ask card (ExtApprovals.tsx).
+ */
+export function ApprovalDetail({ a, open = false }: { a: Approval; open?: boolean }) {
+  const detail = detailText(a);
+  if (!detail.text) return null;
+  return (
+    <details className="approval-detail" open={open} data-testid="approval-detail">
+      <summary>{detail.signed ? 'Detail (signed)' : 'Detail'}</summary>
+      <pre>{detail.text}</pre>
+    </details>
+  );
+}
+
 /** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
 function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; detailOpen?: boolean; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
   const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
   const asker = a.requester.taskId;
-  const detail = detailText(a);
   return (
     <>
       <div className="approval-head">
@@ -152,12 +167,7 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
           {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
         </div>
       </>) : <ApprovalContextRows a={a} hostName={hostName} />}
-      {detail.text ? (
-        <details className="approval-detail" open={detailOpen}>
-          <summary>{detail.signed ? 'Detail (signed)' : 'Detail'}</summary>
-          <pre>{detail.text}</pre>
-        </details>
-      ) : null}
+      <ApprovalDetail a={a} open={detailOpen} />
       {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
       {/* The unlock form open on it says "Unlock Passwords in this window" in its own label. */}

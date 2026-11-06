@@ -21,11 +21,15 @@ import crypto from 'node:crypto'
 import { holdApprovalsLock } from './approvals-lock'
 import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
+import { isolateUiPrefsContext } from './status-section-helpers'
 
 test.use({ video: process.env.APR_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
 // Its cards unlock the shared fixture vault; the vault lock comes before the approvals lock.
 holdVaultLock('shared', 'file')
+// It opens the sidebar, a synced layout pref: kept off the shared fixture, so no later spec
+// starts with it open (2026-11-06: notice-full-text measured its toast beside an open sidebar).
+test.beforeEach(async ({ context }) => { await isolateUiPrefsContext(context) })
 
 function stamp(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -452,7 +456,7 @@ test('the corner: a toast and an approval card share the bottom left, right of t
 
 test('a narrow corner (a page\'s left column): the card reads the whole action and who asks, the buttons on their own row', async ({ page, request }) => {
   // Review 2026-11-06: over the Passwords page's left rail (~190px) the card read "Let a Walnut
-  // agent cli…" and "A..". Where there is room it stays the one-line card.
+  // agent cli…" and "A..". Its title is whole at every width.
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/')
   await expect(page.locator('.app-layout, #root').first()).toBeVisible()
@@ -463,14 +467,16 @@ test('a narrow corner (a page\'s left column): the card reads the whole action a
   await expect(card).toBeVisible({ timeout: 15_000 })
   const text = card.locator('.approval-what-text')
   await expect(text).toHaveText(what)
-  // A corner with room (Settings keeps the corner over its own nav, so it is set here): one line.
+  // A corner with room (Settings keeps the corner over its own nav, so it is set here): the title
+  // whole there too, never cut to an ellipsis (round 3: it hid the site and why it waits).
   const width = (px: number) => page.evaluate((w) => {
     let el = document.getElementById('pw-corner-width')
     if (!el) { el = document.createElement('style'); el.id = 'pw-corner-width'; document.head.append(el) }
     el.textContent = `.corner-stack { width: ${w}px !important; }`
   }, px)
   await width(380)
-  await expect.poll(() => text.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('nowrap')
+  await expect.poll(() => text.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('normal')
+  expect(await text.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
 
   await width(190)
   await expect.poll(() => text.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('normal')
@@ -494,6 +500,34 @@ test('a narrow corner (a page\'s left column): the card reads the whole action a
   await expect(card).toHaveClass(/approval-card-line/)
   await expect.poll(async () => Math.round((await card.boundingBox())!.height)).toBeLessThanOrEqual(64)
   await expect(card.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
+  const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
+  expect(res.ok()).toBe(true)
+})
+
+test('an agent\'s browser step on the corner card reads whole, the site and why it waits, wide or narrow (review round 3)', async ({ page, request }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto('/')
+  await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+  await offHome(page)
+  // What outward-asks.ts writes for a held "Place order", with this run's stamp.
+  const what = `Let a Walnut agent click button "Place order" on shop.example.test:3650 ($42.10)? (${stamp()}) It buys or pays.`
+  const made = await ask(request, { what })
+  const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  const text = card.locator('.approval-what-text')
+  await expect(text).toHaveText(what)
+  const width = (px: number) => page.evaluate((w) => {
+    let el = document.getElementById('pw-corner-width')
+    if (!el) { el = document.createElement('style'); el.id = 'pw-corner-width'; document.head.append(el) }
+    el.textContent = `.corner-stack { width: ${w}px !important; }`
+  }, px)
+  for (const px of [380, 190]) {
+    await width(px)
+    // Nothing cut: it wraps to as many lines as it needs, the reason at its end on screen.
+    await expect.poll(() => text.evaluate((e) => e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1 && getComputedStyle(e).textOverflow !== 'ellipsis')).toBe(true)
+    expect((await text.boundingBox())!.height, `${px}px: more than one line`).toBeGreaterThan(24)
+    if (process.env.APR_SHOTS) await card.screenshot({ path: `${process.env.APR_SHOTS}/approval-whole-${px}.png` })
+  }
   const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
   expect(res.ok()).toBe(true)
 })

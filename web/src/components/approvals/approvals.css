@@ -215,8 +215,7 @@
 .approval-dialog-steps .approval-link:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
 
 /* The corner's card, one look on every page: what kind of ask and how many with its time, what
-   waits on one line, then who asks and its two buttons. The title opens the rest (the detail, the
-   full words) in the dialog. */
+   waits, then who asks and its two buttons. The title opens the rest (the detail) in the dialog. */
 .corner-stack .approval-card:not(.approval-card-settled):not(.approval-card-line) {
   display: flex;
   flex-wrap: wrap;
@@ -226,8 +225,9 @@
 }
 .corner-stack .approval-card:not(.approval-card-line) .approval-head { flex: 1 0 100%; margin: 0; align-items: center; }
 .corner-stack .approval-what-open { flex: 1 0 100%; min-width: 0; font-size: 14px; line-height: 1.35; }
-/* Two lines (on the span: WebKit does not clamp a button); the title opens the dialog with the full words. */
-.corner-stack .approval-what-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+/* Whole, wrapping as it needs: the title says what, on which site and why it waits (review
+   2026-11-06 round 3: cut to one line, or three in a narrow corner, it hid the site and the reason). */
+.corner-stack .approval-what-text { display: block; white-space: normal; overflow-wrap: anywhere; }
 .corner-stack .approval-card .approval-who {
   flex: 1 1 0;
   min-width: 0;
@@ -247,6 +247,8 @@
 .corner-stack .approval-card .approval-detail { display: none; }
 .corner-stack .approval-card .approval-note,
 .corner-stack .approval-card .approval-error { flex: 1 0 100%; margin: 0; font-size: 12px; }
+/* Unlocking in place: the card's width, right under who asks (no empty band above its label). */
+.corner-stack .approval-card .approval-unlock { flex: 1 0 100%; margin-top: 2px; }
 
 .approval-settled-line {
   display: flex;
@@ -547,18 +549,9 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 
 /* A narrow corner (a page's left column, ~190px: the Passwords rail): the whole card reads the
    action and who asks at first sight, never cut to "Let a Walnut agent cli…" and "A.." (review
-   2026-11-06). Its title wraps to three lines, who asks wraps, the buttons get their own row.
-   Where there is room it keeps its one-line form, and the two short lines the person made it
-   smaller to (approval-card-line) stay that short. */
+   2026-11-06). Its title wraps (as everywhere), who asks wraps, the buttons get their own row. The
+   two short lines the person made it smaller to (approval-card-line) stay that short. */
 @container approvals (max-width: 260px) {
-  .corner-stack .approval-card:not(.approval-card-line) .approval-what-text {
-    white-space: normal;
-    overflow-wrap: anywhere;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    overflow: hidden;
-  }
   .corner-stack .approval-card:not(.approval-card-line) .approval-who {
     flex: 1 0 100%;
     white-space: normal;

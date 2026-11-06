@@ -5,9 +5,12 @@
  *
  * - the conversation is sent again as it moves: a follow-up and its reply reach the kept words
  *   without closing the panel (the drawing of the next open is the conversation as it was left);
- * - the toolbar popup on the same page keeps only the shell (its Continue rows), never its empty
- *   composer over the side panel's conversation of that page (review 2026-11-06, F3);
- * - so the next panel open draws the follow-up at once.
+ * - the toolbar popup keeps only the shell (its Continue rows), never its empty composer over the
+ *   side panel's open conversation (review 2026-11-06, F3);
+ * - so the next panel open draws the follow-up at once, also on another page: the open
+ *   conversation is one, whatever the page (round 3), kept under one key per agent;
+ * - the popup switched to another agent: the next panel open draws that agent's (or the bare
+ *   Ask), never the first agent's question (round 3 code review, item 3).
  */
 import { expect, test, type Page } from '@playwright/test'
 import { askView, openPanel, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
@@ -21,13 +24,18 @@ test.beforeAll(async ({}, info) => {
 })
 test.afterAll(async () => { await lab?.close() })
 
-type Kept = { ask?: Record<string, { messages: Array<{ role: string; text: string }>; cont?: unknown[] }>; shell?: { at: number; cont?: unknown[] } }
+type Kept = {
+  ask?: Record<string, { messages: Array<{ role: string; text: string }>; cont?: unknown[]; agent?: string }>
+  agent?: { id: string }
+  shells?: Record<string, { at: number; agent?: string; cont?: unknown[] }>
+}
 const kept = async (): Promise<Kept> => (await sw(lab).evaluate(async () => chrome.storage.local.get('panelSnaps'))).panelSnaps ?? {}
-/** The kept words of the docs page's conversation (the only page this spec talks on). */
-const pageWords = async (): Promise<string> => {
-  const k = await kept()
-  const page = Object.entries(k.ask ?? {}).find(([key]) => key.startsWith('web:http://docs.example.test'))
-  return page ? page[1].messages.map((m) => `${m.role}: ${m.text}`).join('\n') : ''
+/** Walnut's own agent (src/core/sessions/ask-list.ts GENERAL_AGENT_ID). */
+const GENERAL = 'general'
+/** The kept words of an agent's open conversation in the side panel (web/src/popout/ext-snapshot.ts askSnapKey). */
+const pageWords = async (agent = GENERAL): Promise<string> => {
+  const c = (await kept()).ask?.[`panel:agent:${agent}`]
+  return c ? c.messages.map((m) => `${m.role}: ${m.text}`).join('\n') : ''
 }
 
 const FIRST = 'What changed for uploads?'
@@ -53,7 +61,8 @@ test('a follow-up reaches the kept words while the panel stays open; the popup k
   await panel.waitForTimeout(800)
   await panel.close()
   const before = await pageWords()
-  const shellAt = (await kept()).shell?.at ?? 0
+  expect((await kept()).agent?.id).toBe(GENERAL)
+  const shellAt = (await kept()).shells?.[GENERAL]?.at ?? 0
 
   // The toolbar popup on that page: its composer and Continue rows, held open past its send.
   const opened = lab.ctx.waitForEvent('page')
@@ -61,10 +70,10 @@ test('a follow-up reaches the kept words while the panel stays open; the popup k
   const pop: Page = await opened
   await expect(pop.frameLocator('iframe.panel-frame').locator('.ext-popup-composer textarea')).toBeVisible({ timeout: 60_000 })
   // Its words are kept (the shell, for every placeholder)...
-  await expect.poll(async () => (await kept()).shell?.at ?? 0, { timeout: 15_000 }).toBeGreaterThan(shellAt)
+  await expect.poll(async () => (await kept()).shells?.[GENERAL]?.at ?? 0, { timeout: 15_000 }).toBeGreaterThan(shellAt)
   await pop.waitForTimeout(800)
   await pop.close()
-  // ...and the panel's conversation of the page is as the panel left it.
+  // ...and the panel's open conversation is as the panel left it.
   expect(await pageWords()).toBe(before)
 
   // The next panel open draws the follow-up at once, before its frame is up.
@@ -72,4 +81,83 @@ test('a follow-up reaches the kept words while the panel stays open; the popup k
   // (waitForSelector watches every frame of the page, so the brief drawing is not missed.)
   await again.panel.waitForSelector(`[data-testid="panel-snap"] .panel-snap-msg:has-text("${SECOND}")`, { state: 'visible', timeout: 10_000 })
   await again.panel.close()
+
+  // On another page too: the same conversation is drawn, its page chip on for that page.
+  await lab.doc.goto(lab.site('docs.example.test', '/login'))
+  const other = await openPanel(lab, 'ask')
+  await other.panel.waitForSelector(`[data-testid="panel-snap"] .panel-snap-msg:has-text("${SECOND}")`, { state: 'visible', timeout: 10_000 })
+  await expect(askView(other.panel).getByTestId('ask-object-session')).toBeVisible({ timeout: 60_000 })
+  await expect(askView(other.panel).getByTestId('ask-object-compose')).toHaveCount(0)
+  await other.panel.close()
+})
+
+test('the popup switches to another agent: the next side panel draws that agent\'s, never the first agent\'s question', async () => {
+  test.setTimeout(240_000)
+  // The pick is mirrored to the fixture's ui-prefs: kept in this browser, never handed to another spec.
+  await lab.ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
+  expect(await pageWords()).toContain(SECOND)
+  const openPopup = async (): Promise<Page> => {
+    const opened = lab.ctx.waitForEvent('page')
+    await sw(lab).evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`popup-ask.html?window=${w}`), type: 'popup', width: 380, height: 560 }), lab.docWindow)
+    return opened
+  }
+  /** In the popup's drawer, the agent list: pick `id`. */
+  const pickAgent = async (pop: Page, id: string) => {
+    const v = pop.frameLocator('iframe.panel-frame')
+    await expect(v.locator('.ext-popup-composer textarea')).toBeVisible({ timeout: 60_000 })
+    await v.getByTestId('ext-ask-agent').click()
+    await v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="${id}"]`).click()
+    await expect(v.locator('.ext-ask-agent')).not.toContainText('Ask Walnut', { timeout: 15_000 })
+  }
+  const pop = await openPopup()
+  try {
+    await pickAgent(pop, 'mentor')
+    // The extension hears the agent the view is now on.
+    await expect.poll(async () => (await kept()).agent?.id, { timeout: 15_000 }).toBe('mentor')
+    await pop.waitForTimeout(800)
+  } finally {
+    await pop.close()
+  }
+
+  const { panel } = await openPanel(lab, 'ask')
+  try {
+    // Everything the drawing shows until the view takes over: never Walnut's conversation.
+    const drawn = await panel.evaluate(() => new Promise<{ seen: boolean; texts: string[]; agents: string[] }>((resolve) => {
+      const texts = new Set<string>()
+      const agents = new Set<string>()
+      let seen = false
+      const look = () => {
+        const el = document.querySelector('[data-testid="panel-snap"]')
+        if (!el) return false
+        seen = true
+        for (const m of el.querySelectorAll('.panel-snap-msg')) texts.add(m.textContent ?? '')
+        for (const a of el.querySelectorAll('.look-agent')) agents.add(a.textContent ?? '')
+        return true
+      }
+      const done = () => { obs.disconnect(); resolve({ seen, texts: [...texts], agents: [...agents] }) }
+      // Watched until the drawing goes (the view took over), from its first word on.
+      const obs = new MutationObserver(() => { if (!look() && seen) done() })
+      look()
+      obs.observe(document.body, { childList: true, subtree: true, characterData: true })
+      setTimeout(done, 12_000)
+    }))
+    expect(drawn.seen).toBe(true)
+    // Mentor has no conversation yet: the drawing has none, never Walnut's.
+    expect(drawn.texts).toEqual([])
+    // It names Mentor once it has read which agent the view opens on.
+    expect(drawn.agents.some((a) => a.includes('Mentor'))).toBe(true)
+    const v = askView(panel)
+    await expect(v.locator('.ext-ask-agent')).not.toContainText('Ask Walnut', { timeout: 60_000 })
+    await expect(v.getByText(SECOND)).toHaveCount(0)
+  } finally {
+    // Back on Walnut's own agent, as this browser started.
+    const v = askView(panel)
+    await v.getByTestId('ext-ask-agent').click().catch(() => undefined)
+    await v.locator(`[data-testid="ask-walnut-agent-item"][data-agent-id="${GENERAL}"]`).click().catch(() => undefined)
+    await expect.poll(async () => (await kept()).agent?.id, { timeout: 15_000 }).toBe(GENERAL).catch(() => undefined)
+    await panel.close()
+    await lab.ctx.unroute('**/api/ui-prefs')
+  }
+  // Walnut's own conversation was kept apart all along: the next open draws it again.
+  expect(await pageWords()).toContain(SECOND)
 })

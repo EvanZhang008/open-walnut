@@ -269,6 +269,32 @@ export function joinSession(joiner: string, client: string, kind: 'device' | 'wi
   return { token, expiresAt: Number.isFinite(end) ? new Date(end).toISOString() : null }
 }
 
+/**
+ * The unlock a paired extension's own session is part of, when that extension may hand a browser
+ * key to the Walnut page beside it (POST /vault/browser-key): the session is live and held by
+ * `device`, and its unlock (its own, or the one it shares) was made on this computer after the last
+ * new master password or recovery. Null otherwise. Reads nothing more than useSession did.
+ */
+export function handingSource(token: string | undefined, device: string, now = Date.now()): Session | null {
+  if (!token) return null
+  const s = sessions.get(hashOf(token))
+  if (!s || s.device !== device || !alive(s, now)) return null
+  const src = s.source ? sessions.get(s.source) : s
+  if (!src || !src.here || src.createdAt <= (selfLocked.get(EVERY_JOINER) ?? 0)) return null
+  return src
+}
+
+/**
+ * A browser's new key replaces one this vault no longer knows (`from`, its old joiner id): the
+ * window's own lock carries over, so a new key never shares an unlock its old one would not. In the
+ * Playwright fixture's named mode, a key handed by a named extension is that spec's too.
+ */
+export function carryJoiner(opts: { from?: string; to: string; handedBy?: string }): void {
+  const at = opts.from ? selfLocked.get(opts.from) : undefined
+  if (at && at > (selfLocked.get(opts.to) ?? 0)) { selfLocked.set(opts.to, at); changed() }
+  if (joinOnlyNamed && opts.handedBy && joinNamed.has(opts.handedBy)) joinNamed.add(opts.to)
+}
+
 /** Every session but `keep` (a new master password locks the other windows). */
 export function endOtherSessions(keep: string | undefined): number {
   const k = keep ? hashOf(keep) : ''

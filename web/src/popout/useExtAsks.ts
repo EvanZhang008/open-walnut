@@ -4,7 +4,7 @@
  * Walnut's own pinned row; every other ask of the agent on show follows, the most recently used
  * first.
  */
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { Task } from '@open-walnut/core';
 import { pickMain } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -14,6 +14,8 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import type { DrawerRow } from '@/components/chat/AskWalnutDrawer';
 import { GENERAL_AGENT_ID, GENERAL_ASK_AGENT, selectAgentTasks, slotAgents, type AskAgent } from '@/components/chat/ask-walnut-slot-model';
 import { needsCount } from './ext-tasks-model';
+import { fetchSessionHistory } from '@/api/sessions';
+import { keepWords, keptWords, wordsOfMessages, wordsStamp, wordsToRead } from './ext-ask-words';
 import { panelAskTitle } from './ext-panel-model';
 
 export interface ExtAsks {
@@ -47,13 +49,53 @@ export function useExtAsks(agentId: string, questionsRev = 0): ExtAsks {
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? agents[0] ?? GENERAL_ASK_AGENT, [agents, agentId]);
   const isGeneral = agent.id === GENERAL_AGENT_ID;
   const mainTask = useMemo(() => pickMain(tasks) ?? null, [tasks]);
+  const [wordsRev, setWordsRev] = useState(0);
+  // New row objects when an ask's words were read, so the rows draw their line again (askRowDetail).
   const rows = useMemo<DrawerRow[]>(() => {
     const own = selectAgentTasks(tasks, agent).filter((t) => !(isGeneral && t.org_role === 'main'));
     return own.map((t) => ({ id: t.id, title: panelAskTitle(t, agent).title, task: t }));
-  }, [tasks, agent, isGeneral, questionsRev]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tasks, agent, isGeneral, questionsRev, wordsRev]); // eslint-disable-line react-hooks/exhaustive-deps
   const needs = useMemo(() => (loading ? 0 : needsCount(tasks)), [tasks, loading]);
   const rowsReady = !loading && (snap.agentsLoaded || agentId === GENERAL_AGENT_ID);
+  useAskWords(rows, rowsReady, () => setWordsRev((n) => n + 1));
   return { agents, agent, isGeneral, rows, mainTask, needs, loading: loading || !snap.agentsLoaded, rowsReady, tasks };
+}
+
+/** How long after the rows are up the first conversation is read: the view's own first paint goes first. */
+const WORDS_AFTER_MS = 400;
+/** The rows read: as many as the drawer shows without scrolling, more than any Continue list. */
+const WORDS_ROWS = 8;
+
+/**
+ * Read the latest words of the first rows' conversations that moved since (ext-ask-words.ts), one
+ * at a time, each a small tail of its history; `onRead` once per row read.
+ */
+function useAskWords(rows: readonly DrawerRow[], ready: boolean, onRead: () => void): void {
+  // Which rows, as they stand: a row read meanwhile does not restart the reads under way.
+  const sig = ready ? rows.slice(0, WORDS_ROWS).map((r) => `${r.id}@${r.task ? wordsStamp(r.task) : ''}`).join('|') : '';
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const onReadRef = useRef(onRead);
+  onReadRef.current = onRead;
+  useEffect(() => {
+    if (!sig) return;
+    const jobs = wordsToRead(rowsRef.current, sessionOfTask, (id) => keptWords(id), WORDS_ROWS);
+    if (!jobs.length) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void (async () => {
+        for (const job of jobs) {
+          if (controller.signal.aborted) return;
+          try {
+            const r = await fetchSessionHistory(job.sessionId, { tail: 4, turns: 1, signal: controller.signal });
+            keepWords(job.taskId, wordsOfMessages(r.messages), job.stamp);
+            onReadRef.current();
+          } catch { /* aborted, or unreadable now: its status line shows, read again next time */ }
+        }
+      })();
+    }, WORDS_AFTER_MS);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [sig]);
 }
 
 /** The session an ask's conversation runs in, or null for a task that has none yet. */

@@ -11,10 +11,10 @@
  * vault as the popup does: a Lock all elsewhere brings the row back.
  */
 import { ask, ext } from './ext'
-import { displayHost } from '../../../src/core/vault/url-match'
+import { pageHost } from './unlock-words'
 import { avatar, h, icon } from './dom'
 import { errLine, hintLine } from './popup-ui'
-import { fillTab, type Item, type PopupCtx } from './popup-item'
+import { fillTab, type Item, type PopupCtx } from './popup-fill'
 import { currentView, isCurrent, nextView } from './popup-view'
 import { sendUnlock, unlockRefusal } from './unlock-send'
 
@@ -53,7 +53,7 @@ export function unlockLine(r: { autoLock?: string; unlockFor?: string }): string
 async function tabHost(windowId?: number): Promise<string> {
   try {
     const [t] = await ext.tabs.query(windowId !== undefined ? { active: true, windowId } : { active: true, lastFocusedWindow: true })
-    return t?.url && /^https?:/.test(t.url) ? displayHost(t.url) : ''
+    return t?.url ? pageHost(t.url) : ''
   } catch { return '' }
 }
 
@@ -108,7 +108,9 @@ export function keyPopover(o: {
       if (said) said.textContent = ''
       const ok = await fillTab(it, ctx())
       fill.disabled = false
-      if (ok && o.surface === 'panel') close()
+      // Filled: the popover closes, as Fill does everywhere else, so the page under it shows its
+      // filled form (review R3-9: in the popup's own window it stayed open with no word).
+      if (ok) { close(); o.onEscape() }
     }
     return h('div', { class: 'key-pop-row', 'data-testid': 'key-pop-row' },
       avatar(it.site ?? it.title),

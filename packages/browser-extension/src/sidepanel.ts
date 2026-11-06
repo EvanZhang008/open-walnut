@@ -73,6 +73,12 @@ function serverOf(st: PanelState): string | null {
 }
 
 async function start(): Promise<void> {
+  // Opened as a window of its own (a browser with no side panel, or a test's tab), it follows the
+  // window it was opened for. Asked at once, beside the storage read: the frame starts loading
+  // only once both are known (review R3-7).
+  const forWindow = Number(params.get('window'))
+  const ownWindow = Number.isInteger(forWindow) && forWindow > 0
+  const winP: Promise<{ id?: number }> = ownWindow ? Promise.resolve({ id: forWindow }) : ext.windows.getCurrent()
   // The background checks the connection with a round trip to Walnut; the Walnut of last time
   // starts loading meanwhile, and the answer replaces it only when it says otherwise.
   const keptAll = await ext.storage.local.get([KEPT_SERVER, KEPT_ASK])
@@ -104,10 +110,7 @@ async function start(): Promise<void> {
     void ext.storage.local.set({ [KEPT_SERVER]: now, ...(st.askPanel !== undefined ? { [KEPT_ASK]: st.askPanel } : {}) })
   }
   if (surface === 'popup' && !asks) { toVaultPopup(); return }
-  // Opened as a window of its own (a browser with no side panel, or a test's tab), it follows the window it was opened for.
-  const forWindow = Number(params.get('window'))
-  const ownWindow = Number.isInteger(forWindow) && forWindow > 0
-  const win = ownWindow ? { id: forWindow } : await ext.windows.getCurrent()
+  const win = await winP
   if (gone) return
   if (asks) await startAsk(root, server, win, surface, ownWindow, () => gone)
   else await startTabs(root, server, win, () => gone)

@@ -203,7 +203,7 @@ test('connect the extension from its popup and the connect page', async () => {
   // The popup closed itself when it opened the connect tab; opened again, it asks for the master password.
   expect(p.isClosed()).toBe(true)
   const again = await popup()
-  await expect(again.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible()
+  await expect(again.getByRole('heading', { name: 'Passwords are locked' })).toBeVisible()
   await again.close()
 })
 
@@ -477,20 +477,32 @@ test('a password typed while shown as text is still offered', async () => {
 })
 
 test('locked: the menu says so and opens the unlock; Remove in Settings disconnects it', async () => {
-  const p = await popup()
   // The popup's Lock ends every unlock (every window too): alone on the vault until it has landed.
+  // Opened inside: waiting for the vault alone lets another file's Lock all land first, and the
+  // popup (it follows the vault every second) then rightly shows the locked view, with no Lock.
   await vaultExclusively(async () => {
-    await p.getByTestId('popup-lock').click()
-    await expect(p.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible()
+    const p = await popup()
+    const lock = p.getByTestId('popup-lock')
+    const locked = p.getByRole('heading', { name: 'Passwords are locked' })
+    await expect(lock.or(locked)).toBeVisible({ timeout: 30_000 })
+    // Its first look may be the state this browser last knew; the live one follows within a second.
+    await p.waitForTimeout(1500)
+    if (await locked.isVisible()) {
+      await p.getByLabel('Master password').fill(MASTER)
+      await p.getByTestId('popup-unlock').click()
+      await expect(lock).toBeVisible({ timeout: 30_000 })
+    }
+    await lock.click()
+    await expect(locked).toBeVisible()
+    await p.close()
   })
-  await p.close()
 
   const page = await ctx.newPage()
   await page.goto(site('login.example.test', '/login'))
   await page.waitForTimeout(300)
   await clickIcon(page, '#user')
   const menu = await frameOf(page, 'menu.html')
-  await expect(menu.getByText('Walnut is locked')).toBeVisible()
+  await expect(menu.getByText('Passwords are locked')).toBeVisible()
 
   // A login sent while locked: the bar asks to unlock, and once unlocked offers to save it.
   await page.locator('#user').fill(`frank-${stamp}@example.test`)

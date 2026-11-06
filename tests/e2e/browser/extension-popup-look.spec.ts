@@ -159,7 +159,7 @@ test('every view, connected and unlocked, as screenshots', async () => {
   expect((await sw().evaluate(() => chrome.storage.local.get('agentControl'))).agentControl).not.toBe(true)
 
   const locked = await popup()
-  await expect(locked.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible({ timeout: 20_000 })
+  await expect(locked.getByRole('heading', { name: 'Passwords are locked' })).toBeVisible({ timeout: 20_000 })
   await shot(locked, '04-locked')
   await locked.getByLabel('Master password').fill(MASTER)
   await locked.getByTestId('popup-unlock').click()

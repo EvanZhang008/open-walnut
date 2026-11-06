@@ -8,6 +8,7 @@ import type { Task } from '@open-walnut/core';
 import { MARKED_ASK, NEEDS_CATEGORY_LABELS, lastWordsOfStatus, needsLineOf, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
 import { taskUserState } from '@/utils/session-status';
 import { stateSectionNoNeeds } from '@/components/tasks/status-sections';
+import { keptWords } from './ext-ask-words';
 
 export const EXT_TASKS_MAX = 30;
 
@@ -136,17 +137,24 @@ export function askedOf(task: Task, line: string): string[] {
 
 /**
  * An ask's row in the side panel's drawer and the popup's Continue list: its one-line status and
- * whether it needs the person (the red dot). The line is what tells the rows apart, as a Tasks row's
- * is (needsRowLine): the ask's own question to the person; else the words its last turn ended with
- * (task.last_words); else its status line (the category alone for one that needs the person, say
- * "Take a look"). A passing wait (its report due in seconds) gives no line.
+ * whether it needs the person (the red dot). The line says where the ask stopped, so the rows tell
+ * apart: what it asks the person when it really needs them (its own question); else the words its
+ * last turn ended with as Walnut read them (its status, task.last_words); else the latest words of
+ * its conversation as this browser read them (`words`: ext-ask-words.ts, for the asks Walnut has
+ * read nothing of, most of them); else its status line (the category alone for
+ * one that needs the person, "Take a look", only when nothing it said is known). A passing wait
+ * (its report due in seconds) gives no line. Review 2026-11-06 round 3: every finished ask read
+ * "Take a look".
  */
-export function askRowDetail(task: Task): { line: string; needs: boolean } {
+export function askRowDetail(task: Task, words: string = keptWords(task.id)?.text ?? ''): { line: string; needs: boolean } {
   const row = rowOf(task);
   const needs = row.state === 'needs';
-  const words = ownWords(task);
-  if (words) return { line: words, needs };
-  // With no words of its own, a Needs you row's line is its category alone (needsRowLine).
+  const s = task.user_status;
+  const asking = s && storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
+  if (asking) return { line: asking, needs };
+  const said = oneLine(lastWordsOfStatus(s)) || oneLine(task.last_words?.text) || oneLine(words);
+  if (said) return { line: said, needs };
+  // With nothing it said known, a Needs you row's line is its category alone (needsRowLine).
   if (needs) return { line: row.line, needs };
   return { line: row.line || (row.state === 'working' ? row.label : ''), needs };
 }

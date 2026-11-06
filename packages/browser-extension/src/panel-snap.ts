@@ -4,8 +4,11 @@
  * page draws at once). The view sends its words as it shows them (web/src/popout/ext-snapshot.ts)
  * and says `shown` once its own content is up, and the drawing goes.
  *
- * Words only, kept in storage.local, drawn with textContent (dom.ts `h`), never as markup; a
- * conversation is kept per page (its address without the #part), the Tasks lists once. They are
+ * Words only, kept in storage.local, drawn with textContent (dom.ts `h`), never as markup; the
+ * Ask view's open conversation is kept once per agent (`panel:agent:<id>`: one conversation per
+ * agent, whatever the page), with the agent the Ask view was last on (it opens on the agent picked
+ * last, in any window), so the drawing is that agent's and never another's; with no agent known it
+ * draws the bare Ask (round 3 code review, item 3). The Tasks lists are kept once. They are
  * the connected Walnut's words: kept only while a Walnut is connected (the panel's `panelServer`),
  * and removed with it on a disconnect (panel-data.ts). Passwords is never drawn from a copy.
  */
@@ -28,22 +31,36 @@ export interface AskSnap {
   askTitle?: string; agent?: string; placeholder?: string; cont?: ContRow[]; suggestions?: string[]; pageOn?: boolean
   /** `suggestionIcons[i]`: the icon of `suggestions[i]` (SUGGESTION_ICONS), '' for none. */
   suggestionIcons?: string[]
+  /** The page it was shown on (snapKeyOf): on another page the view draws the page chip on. */
+  pageKey?: string
 }
 type Row = { title: string; line: string; state: string }
 export interface TasksSnap { at: number; sections: Array<{ title: string; count: number; rows: Row[] }> }
-/** The last Continue list and suggestions any page showed: a page seen for the first time, and the popup, draw these. */
+/** An agent's last Continue list and suggestions: its new chat, and the popup, draw these. */
 export interface AskShell { at: number; agent?: string; cont?: ContRow[]; suggestions?: string[]; suggestionIcons?: string[] }
 
 /** The suggestion icons a view names (web/src/components/common/Icons.tsx); any other name draws none. */
 export const SUGGESTION_ICONS = ['search', 'calendar', 'clock'] as const
-interface Snaps { ask?: Record<string, AskSnap>; tasks?: TasksSnap; shell?: AskShell }
+/**
+ * `agent`: the agent the Ask view said it is on last (its `agent` word), `shells` each agent's
+ * shell. An older store's one `shell` (any agent's) is never drawn.
+ */
+interface Snaps { ask?: Record<string, AskSnap>; tasks?: TasksSnap; agent?: { id: string; name?: string; at: number }; shells?: Record<string, AskShell> }
 
 const STORE = PANEL_SNAPS_KEY
 const ASK_KEEP = 30
+const SHELLS_KEEP = 12
 /** Older than this, what it shows says too little of now to draw. */
 const MAX_AGE_MS = 14 * 24 * 3600_000
 
-/** One conversation per page: its address without the #part (web/src/popout/ext-panel-model.ts pageKey). */
+/** The keys the Ask view keeps an agent's open conversation under (web/src/popout/ext-snapshot.ts PANEL_SNAP_PREFIX). */
+export const ASK_AGENT_PREFIX = 'panel:agent:'
+/** An agent as the view names it (PopoutExtPanel isAgentId). */
+const AGENT_ID = /^[\w.-]{1,80}$/
+export const agentAskKey = (agentId: string): string => `${ASK_AGENT_PREFIX}${agentId}`
+const agentIdOf = (v: unknown): string => (typeof v === 'string' && AGENT_ID.test(v) ? v : '')
+
+/** A page as the view names it: its address without the #part (web/src/popout/ext-panel-model.ts pageKey). */
 export function snapKeyOf(url: string): string {
   try {
     const u = new URL(url)
@@ -87,6 +104,7 @@ function cleanAsk(raw: unknown, now: number): AskSnap | null {
     ...(suggestions ? { suggestions } : {}),
     ...(suggestionIcons ? { suggestionIcons } : {}),
     ...(typeof r.pageOn === 'boolean' ? { pageOn: r.pageOn } : {}),
+    ...(str(r.pageKey, 4100) ? { pageKey: str(r.pageKey, 4100) } : {}),
   }
 }
 
@@ -116,12 +134,28 @@ async function readAll(): Promise<Snaps> {
 let writing: Promise<void> = Promise.resolve()
 
 /** Keep what a view says it shows (a view of the connected Walnut, checked by the caller). */
-export function keepSnap(view: SnapView, snap: unknown, opts: { key?: unknown; counts?: unknown } = {}, now = Date.now()): Promise<void> {
+export function keepSnap(view: SnapView, snap: unknown, opts: { key?: unknown; agentId?: unknown; counts?: unknown } = {}, now = Date.now()): Promise<void> {
   writing = writing.then(() => write(view, snap, opts, now)).catch(() => undefined)
   return writing
 }
 
-async function write(view: SnapView, snap: unknown, opts: { key?: unknown; counts?: unknown }, now: number): Promise<void> {
+/** The Ask view said which agent it is on (`name` as its header names it): the next open draws that agent's words. */
+export function keepAgent(agentId: unknown, now = Date.now(), name?: unknown): Promise<void> {
+  const id = agentIdOf(agentId)
+  const label = str(name, 60)
+  if (!id) return writing
+  writing = writing.then(async () => {
+    const server = (await ext.storage.local.get(PANEL_SERVER_KEY))[PANEL_SERVER_KEY]
+    if (typeof server !== 'string' || !server) return
+    const all = await readAll()
+    if (all.agent?.id === id && (all.agent.name ?? '') === label) return
+    all.agent = { id, ...(label ? { name: label } : {}), at: now }
+    await ext.storage.local.set({ [STORE]: all })
+  }).catch(() => undefined)
+  return writing
+}
+
+async function write(view: SnapView, snap: unknown, opts: { key?: unknown; agentId?: unknown; counts?: unknown }, now: number): Promise<void> {
   // Disconnected meanwhile (panel-data.ts removed the server): nothing of that Walnut is kept.
   const server = (await ext.storage.local.get(PANEL_SERVER_KEY))[PANEL_SERVER_KEY]
   if (typeof server !== 'string' || !server) return
@@ -130,13 +164,24 @@ async function write(view: SnapView, snap: unknown, opts: { key?: unknown; count
     const key = str(opts.key, 4100)
     const clean = cleanAsk(snap, now)
     if (!key || !clean) return
-    const ask = { ...(all.ask ?? {}), [key]: clean }
+    // The agent the words are of: the message names it; an agent's key names it too.
+    const agent = agentIdOf(opts.agentId) || (key.startsWith(ASK_AGENT_PREFIX) ? agentIdOf(key.slice(ASK_AGENT_PREFIX.length)) : '')
+    // An agent's conversation under another agent's key is no one's.
+    if (key.startsWith(ASK_AGENT_PREFIX) && (!agent || key !== agentAskKey(agent))) return
+    const ask: Record<string, AskSnap> = { ...(all.ask ?? {}), [key]: clean }
+    // A Walnut that keeps one conversation per agent: what an older view kept (per page, or one for
+    // every agent) never draws again.
+    if (key.startsWith(ASK_AGENT_PREFIX)) for (const k of Object.keys(ask)) if (k.startsWith('web:') || k === 'panel:current') delete ask[k]
     const kept = Object.entries(ask).sort((a, b) => b[1].at - a[1].at).slice(0, ASK_KEEP)
     all.ask = Object.fromEntries(kept)
-    if (clean.cont || clean.suggestions || clean.agent) {
-      all.shell = { at: now, ...(all.shell ?? {}), ...(clean.agent ? { agent: clean.agent } : {}), ...(clean.cont ? { cont: clean.cont } : {}), ...(clean.suggestions ? { suggestions: clean.suggestions, suggestionIcons: clean.suggestionIcons } : {}) }
-      all.shell.at = now
+    // Each agent's shell apart: one agent's Continue rows are its asks, never another's.
+    if (agent && (clean.cont || clean.suggestions || clean.agent)) {
+      const was = all.shells?.[agent]
+      const shell: AskShell = { ...(was ?? {}), at: now, ...(clean.agent ? { agent: clean.agent } : {}), ...(clean.cont ? { cont: clean.cont } : {}), ...(clean.suggestions ? { suggestions: clean.suggestions, suggestionIcons: clean.suggestionIcons } : {}) }
+      const shells = Object.entries({ ...(all.shells ?? {}), [agent]: shell }).sort((a, b) => b[1].at - a[1].at).slice(0, SHELLS_KEEP)
+      all.shells = Object.fromEntries(shells)
     }
+    delete (all as { shell?: unknown }).shell
   } else {
     const clean = cleanTasks(snap, opts.counts, now)
     if (!clean) return
@@ -145,15 +190,36 @@ async function write(view: SnapView, snap: unknown, opts: { key?: unknown; count
   await ext.storage.local.set({ [STORE]: all })
 }
 
-/** The Ask view's shell of last time (its Continue list, suggestions, agent), or null. */
-export async function shellOf(now = Date.now()): Promise<AskShell | null> {
-  const s = (await readAll()).shell
+/** The agent the Ask view was last on, or '' when no view has said. */
+export async function agentOf(): Promise<string> {
+  return agentIdOf((await readAll()).agent?.id)
+}
+
+/** The name of the agent the Ask view was last on, as its header names it ('' for none). */
+export async function agentNameOf(): Promise<string> {
+  const a = (await readAll()).agent
+  return agentIdOf(a?.id) ? str(a?.name, 60) : ''
+}
+
+/** The shell of last time (Continue list, suggestions, agent name) of `agent`, by default the agent the view was last on; null for none. */
+export async function shellOf(now = Date.now(), agent?: string): Promise<AskShell | null> {
+  const all = await readAll()
+  const id = agent ?? agentIdOf(all.agent?.id)
+  const s = id ? all.shells?.[id] : undefined
   return s && now - s.at < MAX_AGE_MS ? s : null
 }
 
-export async function snapOf(view: SnapView, url?: string, now = Date.now()): Promise<AskSnap | TasksSnap | null> {
+/**
+ * What a view showed last time: Ask's open conversation of `agent` (by default the agent the view
+ * was last on), whatever the page (`url` is no longer read); none with no agent known. Or the Tasks lists.
+ */
+export async function snapOf(view: SnapView, _url?: string, now = Date.now(), agent?: string): Promise<AskSnap | TasksSnap | null> {
   const all = await readAll()
-  const s = view === 'ask' ? (url ? all.ask?.[snapKeyOf(url)] : undefined) : all.tasks
+  let s: AskSnap | TasksSnap | undefined
+  if (view === 'ask') {
+    const id = agent ?? agentIdOf(all.agent?.id)
+    s = id ? all.ask?.[agentAskKey(id)] : undefined
+  } else s = all.tasks
   return s && now - s.at < MAX_AGE_MS ? s : null
 }
 

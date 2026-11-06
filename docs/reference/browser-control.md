@@ -101,9 +101,10 @@ window beside yours). Open it from the popup's **Ask Walnut**, or right-click a 
 selection, **Ask Walnut about ...**.
 
 - **It knows the page you are on.** The panel shows the page's title and address and what you
-  selected, and follows you to another tab or page. Each page has a conversation of its own,
-  an ordinary Ask Walnut session, and it is there again when you come back to the page; **New
-  chat** starts over. A selection you ask about later leads your next message as a quote.
+  selected, and follows you to another tab or page. Its conversation is an ordinary Ask Walnut
+  session, and as on Home's Ask it stays until you pick another ask (≡ or Continue) or press
+  **New chat**: on another tab or page only the page chip moves, so your next message goes with
+  that page. A selection you ask about later leads your next message as a quote.
 - **The page's text goes to Walnut only when you ask.** The panel is told a page's address,
   title and selection (never a selection in a password or code field); its text is read from the
   tab only when you send a question. With **Include this page** on, your
@@ -132,8 +133,14 @@ selection, **Ask Walnut about ...**.
   the plugins' web modules load once the view has drawn, and the editors, the terminal and the
   Board load the first time one opens. `tests/web/popout-light-entry-guard.test.ts` fails on a
   static import that pulls the console back in. While it loads, the extension draws the view's
-  words of last time, which the view sends again whenever what it shows changes (a side panel
-  conversation per page; the toolbar popup only the Continue list, under a key of its own).
+  words of last time, which the view sends again whenever what it shows changes (the side panel's
+  open conversation under one key, whatever the page; the toolbar popup only the Continue list,
+  under a key of its own).
+- An ask's row in the drawer and the Continue lists says where it stopped: what it asks you when
+  it really needs you, else the latest words of its conversation (read from its newest messages,
+  a few rows at a time, kept in the browser for the next open), with the red dot while it needs
+  you. An agent's step waiting for your approval shows over the conversation, whole: what, on which
+  site, and why it waits.
 
 ## For agents
 

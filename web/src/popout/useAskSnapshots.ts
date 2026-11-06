@@ -10,16 +10,26 @@
  */
 import { useEffect, useRef, type RefObject } from 'react';
 import { flushHistoryWrites } from '@/cache/history-idb';
-import { toParent } from './ext-frame';
+import { onParentKnown, toParent } from './ext-frame';
 import { hostOf, type PanelPage } from './ext-panel-model';
 import { SHOWN_AFTER_PAINT_MAX_MS, askSnapKey, askSnapOf, askViewSnapOf, snapSchedule } from './ext-snapshot';
 
 /**
  * `rootRef` is the whole view (header, Continue list, conversation, composer); `key` the
- * conversation on show, which restarts the watch when it changes.
+ * conversation on show (and which drawer of it), which restarts the watch when it changes.
+ * `agent` is the agent on show (`agentLabel` its name in the header), `''` while the view cannot tell yet (its agent list loading): the
+ * words are kept under that agent, and the extension is told which agent the view is on, so its
+ * next drawing is this agent's and never another's (round 3 code review, item 3).
  */
-export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page: PanelPage | null, key: string, surface: 'panel' | 'popup'): void {
+export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page: PanelPage | null, key: string, surface: 'panel' | 'popup', agent: string, agentLabel = ''): void {
   const shownTold = useRef(false);
+  useEffect(() => {
+    if (!agent) return;
+    // Nothing reaches the extension page before its first word (ext-frame.ts): told again then.
+    const tell = () => toParent({ type: 'agent', agentId: agent, ...(agentLabel ? { name: agentLabel } : {}) });
+    tell();
+    return onParentKnown(tell);
+  }, [agent, agentLabel]);
   const pageUrl = page?.url ?? '';
   const pageTitle = page?.title;
   useEffect(() => {
@@ -49,9 +59,11 @@ export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page:
       const asksReady = el.getAttribute('data-asks') !== 'loading';
       if ((v === 'compose' && asksReady) || (v === 'session' && el.querySelector('.session-msg'))) tellShown();
     };
-    const snapKey = askSnapKey(surface, pageUrl);
+    const snapKey = askSnapKey(surface, agent);
     let lastSent = '';
     const snap = () => {
+      // Kept under no agent until the view knows its own: the next open draws the bare shell then.
+      if (!agent) return;
       const v = viewOf();
       if (v !== 'compose' && v !== 'session') return;
       // A new chat whose asks are still loading has no Continue rows to tell yet: the drawing of
@@ -65,7 +77,7 @@ export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page:
       const words = JSON.stringify(s);
       if (words === lastSent) return;
       lastSent = words;
-      toParent({ type: 'snapshot', view: 'ask', key: snapKey, snap: s });
+      toParent({ type: 'snapshot', view: 'ask', key: snapKey, agentId: agent, snap: s });
     };
     const schedule = snapSchedule(snap);
     const obs = new MutationObserver(() => { check(); schedule.poke(); });
@@ -85,5 +97,5 @@ export function useAskSnapshots(rootRef: RefObject<HTMLDivElement | null>, page:
       window.removeEventListener('pagehide', hide);
       document.removeEventListener('visibilitychange', hidden);
     };
-  }, [rootRef, pageUrl, pageTitle, key, surface]);
+  }, [rootRef, pageUrl, pageTitle, key, surface, agent]);
 }

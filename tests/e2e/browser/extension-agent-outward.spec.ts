@@ -29,7 +29,9 @@ test.describe.configure({ mode: 'serial' })
 // Its agent reads the shared fixture vault; the vault lock comes before the approvals lock.
 holdVaultLock('shared', 'file')
 // It makes and answers approvals on the shared fixture server, where another file clears them.
-holdApprovalsLock('file')
+// Each test starts and ends with none waiting: the side panel's Ask shows the oldest two, and one
+// an earlier test left (an Enter in a chat box) would hide the card a later test reads.
+holdApprovalsLock('file', { clear: true })
 
 let ctx: BrowserContext
 let extId = ''
@@ -226,7 +228,7 @@ test('Place order waits for the person, and runs only after they approve', async
   // The approval is Walnut's own, for the person to answer, and says exactly what in plain words:
   // who asks (no task here: "a Walnut agent"), the button, the site, the total the page shows.
   const apr = (await (await page.request.get(`${base}/api/v1/approvals/${ask.body.request}`)).json()).approval ?? {}
-  expect(apr.what).toBe(`Let a Walnut agent click button "Place order" on shop.example.test:${port} ($42.10)?`)
+  expect(apr.what).toBe(`Let a Walnut agent click button "Place order" on shop.example.test:${port} ($42.10)? It buys or pays.`)
   expect(apr.detail).toContain('Order total on the page: $42.10')
   expect(apr.requester).toMatchObject({ local: true })
   // Asked again before the answer: the same ask, still waiting, still nothing sent.
@@ -299,6 +301,58 @@ test('sending feedback waits too; a no stops it; Enter in a chat box with a mess
   expect(enter.status, JSON.stringify(enter.body)).toBe(202)
   expect(enter.body.what).toContain('press Enter in textbox "Chat"')
   await expect(news.locator('#said')).toHaveText('')
+})
+
+test('a long message reads whole in the side panel\'s Ask card before Approve: the title is cut, its Detail has every word (round 3 code review, item 2)', async () => {
+  test.setTimeout(150_000)
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', tab, url: site('shop.example.test', '/feedback') })).status).toBe(200)
+  const s = (await act(page, { action: 'snapshot', tab })).body.snapshot as string
+  const tail = `send it to the release desk at desk-${Date.now().toString(36)} only`
+  const message = `Thanks for the update on the uploads, the retry works well for me now, and please ${tail}`
+  expect(message.length).toBeGreaterThan(80)
+  const sub = await act(page, { action: 'type', tab, ref: refOf(s, /textbox "Your feedback"/), text: message, submit: true })
+  expect(sub.status, JSON.stringify(sub.body)).toBe(202)
+  const id = String(sub.body.request)
+  const panel = await ctx.newPage()
+  try {
+    await panel.setViewportSize({ width: 400, height: 760 })
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`)
+    const v = panel.frameLocator('iframe.panel-frame')
+    const card = v.locator(`[data-testid="ext-ask-approval"][data-approval-id="${id}"]`)
+    await expect(card).toBeVisible({ timeout: 60_000 })
+    // The title is cut before the message's end: its last words are not in it.
+    await expect(card.locator('.ext-ask-approval-what')).not.toContainText(tail)
+    const detail = card.getByTestId('approval-detail')
+    await expect(detail.locator('pre')).toBeHidden()
+    await detail.locator('summary').click()
+    // Read through the real view: the whole message, its last words on screen inside the card.
+    const pre = detail.locator('pre')
+    await expect(pre).toBeVisible()
+    await expect(pre).toContainText(`Message it sends: ${message}`)
+    await expect(pre).toContainText(site('shop.example.test', '/feedback'))
+    const cb = (await card.boundingBox())!
+    const pb = (await pre.boundingBox())!
+    expect(pb.x).toBeGreaterThanOrEqual(cb.x - 0.5)
+    expect(pb.x + pb.width).toBeLessThanOrEqual(cb.x + cb.width + 0.5)
+    // Nothing of it runs past its box sideways: long words wrap.
+    expect(await pre.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+    // The buttons are still there to answer with.
+    await expect(card.getByRole('button', { name: 'Deny' })).toBeVisible()
+    const shotDir = process.env.APPROVAL_SHOTS_DIR
+    if (shotDir) {
+      fs.mkdirSync(shotDir, { recursive: true })
+      await panel.screenshot({ path: path.join(shotDir, 'ask-approval-detail-light.png') })
+      await panel.emulateMedia({ colorScheme: 'dark' })
+      await panel.waitForTimeout(400)
+      await panel.screenshot({ path: path.join(shotDir, 'ask-approval-detail-dark.png') })
+      await panel.emulateMedia({ colorScheme: 'light' })
+    }
+    await card.getByRole('button', { name: 'Deny' }).click()
+    await expect(card).toHaveCount(0, { timeout: 15_000 })
+  } finally {
+    await panel.close()
+  }
 })
 
 test('keys are judged where the focus is: Enter or Space on a focused Place order, Control+Enter, a chat box with no form', async () => {

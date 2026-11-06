@@ -61,6 +61,10 @@ const SITES: Record<string, Record<string, string>> = {
       <label>Current password <input name="current" type="password" autocomplete="current-password"></label>
       <label>New password <input name="new1" type="password" autocomplete="new-password"></label>
       <label>Confirm new password <input name="new2" type="password" autocomplete="new-password"></label><button>Change password</button></form>`),
+    // A sign-up whose button sits right under the new password (review R3-11).
+    '/signup': page('Create your Lab Shop account', `<form onsubmit="return false"><label>Name <input name="name" autocomplete="name"></label>
+      <label>Email <input name="email" type="email" autocomplete="username"></label>
+      <label>Password <input name="password" type="password" autocomplete="new-password"></label><button>Create account</button></form>`),
     '/frame': page('Sign in (framed)', `<p>The sign-in form below is inside a frame from the same site.</p><iframe id="fr" src="/signin" style="width:100%;height:340px;border:1px solid #ccc"></iframe>`),
   },
   // A site with no login saved anywhere on it, and another part of a2lab.test with none of its own.
@@ -121,6 +125,43 @@ async function expectUnder(p: Page, field: import('@playwright/test').Locator): 
     const b = await menuBox(p)
     return !!b && Math.abs(b.y - (f.y + f.height + 4)) <= 2 && Math.abs(b.x - f.x) <= 2
   }).toBe(true)
+}
+
+/**
+ * The form's send button sits right under the field: the menu goes right over the field instead,
+ * on its left edge, clear of the button, when the room above holds it; else under the field, as
+ * always (never beside it). R3-11.
+ */
+async function expectClearWhenRoom(p: Page, field: import('@playwright/test').Locator, button: import('@playwright/test').Locator): Promise<'over' | 'under'> {
+  const f = (await field.boundingBox())!
+  let where: 'over' | 'under' = 'under'
+  await expect.poll(async () => {
+    const m = await menuBox(p)
+    if (!m) return 'no menu'
+    if (Math.abs(m.x - f.x) > 2) return `not on the field's edge: ${JSON.stringify(m)}`
+    if (Math.abs(m.y - (f.y + f.height + 4)) <= 2) {
+      where = 'under'
+      // Under it only when the room over the field cannot hold the menu.
+      return m.height > f.y - 8 ? 'ok' : `under, with room over it: ${JSON.stringify(m)} field ${JSON.stringify(f)}`
+    }
+    where = 'over'
+    return 'ok'
+  }).toBe('ok')
+  if (where === 'over') await expectAboveClear(p, field, button)
+  return where
+}
+
+/** Right over the field, on its left edge, clear of the button. */
+async function expectAboveClear(p: Page, field: import('@playwright/test').Locator, button: import('@playwright/test').Locator): Promise<void> {
+  const f = (await field.boundingBox())!
+  const b = (await button.boundingBox())!
+  await expect.poll(async () => {
+    const m = await menuBox(p)
+    if (!m) return 'no menu'
+    if (Math.abs(m.y + m.height - (f.y - 4)) > 2 || Math.abs(m.x - f.x) > 2) return `not over the field: ${JSON.stringify(m)} field ${JSON.stringify(f)}`
+    const covers = m.x < b.x + b.width && m.x + m.width > b.x && m.y < b.y + b.height && m.y + m.height > b.y
+    return covers ? 'covers the button' : m.y >= 0 ? 'ok' : 'past the top'
+  }).toBe('ok')
 }
 
 /** Every name in the page's accessibility tree, closed shadow roots included (the toast is in one). */
@@ -272,15 +313,15 @@ test('a login inside a same-site frame: the menu fits inside the frame, and a pi
   await p.close()
 })
 
-test('two-step sign in: the menu sits under the field, ArrowDown and Enter fill the email and close it, and the password step offers its login', async () => {
+test('two-step sign in: the menu sits on the field\'s edge (over it when there is room, clear of Next), ArrowDown and Enter fill the email and close it, and the password step offers its login', async () => {
   const p = await ctx.newPage()
   await p.goto(site('accounts.a2lab.test', '/email'))
   const email = p.getByLabel('Email')
   await email.click()
   await menuOf(p, false)
   await p.waitForTimeout(500)
-  // Where it always is: right under the field.
-  await expectUnder(p, email)
+  // Next is right under the field: the menu goes over the field when the room there holds it, else under it (R3-11).
+  await expectClearWhenRoom(p, email, p.getByRole('button', { name: 'Next' }))
   await shot(p, 'two-step-email-menu')
   await p.keyboard.press('ArrowDown')
   await p.keyboard.press('Enter')
@@ -334,6 +375,25 @@ test('a change-password page lists the account it names first, before the login 
   await p.close()
 })
 
+test('a sign-up: the menu on the last field, the new password, never covers Create account; the email\'s stays under it (R3-11)', async () => {
+  const p = await ctx.newPage()
+  await p.goto(site('shop.a2lab.test', '/signup'))
+  const pw = p.getByLabel('Password')
+  await pw.click()
+  await menuOf(p)
+  const create = p.getByRole('button', { name: 'Create account' })
+  await expectAboveClear(p, pw, create)
+  await shot(p, 'signup-menu-clear')
+  // The button stays clickable with the menu open.
+  await create.click({ trial: true, timeout: 3000 })
+  // The email field is not the last: its menu is under it, as always (what it covers is the form it fills).
+  await p.keyboard.press('Escape')
+  await p.getByLabel('Email').click()
+  await menuOf(p)
+  await expectUnder(p, p.getByLabel('Email'))
+  await p.close()
+})
+
 test('ArrowDown and Enter typed at once, before the menu has loaded: the form is not sent empty', async () => {
   const p = await ctx.newPage()
   await p.goto(site('accounts.a2lab.test', '/email'))
@@ -355,7 +415,7 @@ test('ArrowDown and Enter typed at once, before the menu has loaded: the form is
   await p.close()
 })
 
-test('the code page: the menu waits for the person to be in the field, then sits under it', async () => {
+test('the code page: the menu waits for the person to be in the field, then sits on its edge, clear of Verify when there is room', async () => {
   const p = await ctx.newPage()
   // A sign in Walnut knows, so the code page that follows has the code to offer.
   await p.goto(site('accounts.a2lab.test', '/password'))
@@ -368,7 +428,7 @@ test('the code page: the menu waits for the person to be in the field, then sits
   await p.getByLabel('Code').click()
   const menu = await menuOf(p)
   await expect(menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` })).toBeVisible()
-  await expectUnder(p, p.getByLabel('Code'))
+  await expectClearWhenRoom(p, p.getByLabel('Code'), p.getByRole('button', { name: 'Verify' }))
   await shot(p, 'code-menu')
   await menu.getByTestId('menu-item').filter({ hasText: `Accounts ${stamp}` }).click()
   await expect(p.getByLabel('Code')).toHaveValue(/^\d{6}$/)
@@ -491,6 +551,53 @@ test('the save bar: a name that tells the new login apart, an underscore in a re
   // The frame shrinks to the confirmation (or, at the least, shows nothing outside it).
   await expect.poll(async () => (await bar!.frameElement().then((e) => e.boundingBox()))?.height ?? 0, { timeout: 5000 }).toBeLessThan(110)
   await shot(p, 'savebar-saved')
+  await p.close()
+})
+
+test('a sign-up left unanswered: on another part of the site the bar is one line naming where the login was made; Edit opens it, Save saves it (R3-12)', async () => {
+  const p = await ctx.newPage()
+  const email = `robin_${stamp}@a2lab.test`
+  await p.goto(site('shop.a2lab.test', '/signup'))
+  await p.getByLabel('Name').pressSequentially('Robin')
+  await p.keyboard.press('Escape')
+  await p.getByLabel('Email').click()
+  await p.keyboard.press('Escape')
+  await p.getByLabel('Email').pressSequentially(email)
+  await p.keyboard.press('Escape')
+  await p.getByLabel('Password').pressSequentially('Robin-Pass-77!')
+  await p.keyboard.press('Escape')
+  await p.getByRole('button', { name: 'Create account' }).click()
+  const barOf = async () => {
+    let bar: Frame | undefined
+    await expect.poll(() => { bar = p.frames().find((x) => x.url().includes('/savebar.html') && !x.isDetached()); return !!bar }, { timeout: 10_000 }).toBe(true)
+    return bar!
+  }
+  // On the page it was made on: the full bar.
+  const here = await barOf()
+  await expect(here.locator('#password')).toHaveValue('Robin-Pass-77!', { timeout: 10_000 })
+  await expect(here.getByTestId('savebar-elsewhere')).toHaveCount(0)
+  // The person moves on to another part of the site without answering: one line, naming the site it was made on.
+  await p.goto(site('accounts.a2lab.test', '/email'))
+  const there = await barOf()
+  await expect(there.getByTestId('savebar-elsewhere')).toContainText('Save the login you made on shop.a2lab.test?', { timeout: 10_000 })
+  await expect(there.getByTestId('savebar-elsewhere')).toContainText(email)
+  await expect(there.locator('#password')).toHaveCount(0)
+  await shot(p, 'savebar-elsewhere')
+  // A click is the person's only once the bar has been on screen a moment (frame-guard.ts).
+  await p.waitForTimeout(700)
+  await there.getByTestId('savebar-expand').click()
+  await expect(there.locator('#username')).toHaveValue(email)
+  await expect(there.locator('#password')).toHaveValue('Robin-Pass-77!')
+  // On the next part of the site it is short again, and its Save saves the login as it was sent.
+  await p.goto(site('blog.a2lab.test', '/signin'))
+  const next = await barOf()
+  await expect(next.getByTestId('savebar-elsewhere')).toBeVisible({ timeout: 10_000 })
+  await p.waitForTimeout(700)
+  await next.getByTestId('savebar-save').click()
+  await expect(next.getByText(/^Saved to Walnut/)).toBeVisible()
+  const r = await p.request.get(`${base}/api/v1/vault/items`, { headers: { 'x-walnut-vault-session': await session(p) } })
+  const items = ((await r.json()).items ?? []) as Array<{ username?: string; urls?: string[] }>
+  expect(items.some((i) => i.username === email && (i.urls ?? []).some((u) => u.includes('shop.a2lab.test')))).toBe(true)
   await p.close()
 })
 

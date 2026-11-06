@@ -13,11 +13,15 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { holdVaultLock } from './vault-lock'
+import { isolateUiPrefsContext } from './status-section-helpers'
 
 test.use({ video: process.env.PW_DEMO_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
 // It locks every window, Lock all, and resets the master password with the recovery code: alone on the vault.
 holdVaultLock('exclusive', 'file')
+// It opens the sidebar, a synced layout pref: kept off the shared fixture, so no later spec
+// starts with it open (2026-11-06: notice-full-text measured its toast beside an open sidebar).
+test.beforeEach(async ({ context }) => { await isolateUiPrefsContext(context) })
 
 const MASTER = 'Correct Horse Battery Staple 42'
 const stamp = Date.now().toString(36)

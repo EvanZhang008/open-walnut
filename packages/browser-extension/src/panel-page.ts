@@ -55,9 +55,22 @@ export function startPagePlumbing(o: {
   /** The tab and address the page itself answered for: until it has, its tab names it. */
   let named = ''
   const contextOf = (r: { ok: boolean } & Partial<PageReply>) => ({ type: 'context', page: r.ok ? r.page ?? null : null, ...(tabId !== undefined ? { tab: tabId } : {}), agents: !!(r.ok && r.agents), ...(r.ok && r.owner ? { owner: r.owner } : {}) })
-  const tell = (m: Record<string, unknown>) => { told = m; post(m) }
-  const push = async () => {
+  /** What waits for the next page told, by whichever push tells it (a later push may overtake one). */
+  const afterTell: Array<() => void> = []
+  const tell = (m: Record<string, unknown>) => {
+    told = m
+    post(m)
+    for (const f of afterTell.splice(0)) f()
+  }
+  /**
+   * Name the page to every ready view: the tab at once, the page's own answer after it.
+   * `onTold` runs once, right after the next page told, by this push or a later one (review R3-7: a view that said it
+   * is ready waited for the page's own answer, a round trip into the tab, before it heard anything
+   * else, its vault state and a question the popup handed over included).
+   */
+  const push = async (onTold?: () => void) => {
     if (o.gone()) return
+    if (onTold) afterTell.push(onTold)
     const mine = ++seq
     const [tab] = await ext.tabs.query({ active: true, windowId: win.id })
     tabId = tab?.id
@@ -99,14 +112,16 @@ export function startPagePlumbing(o: {
       ready.add(from)
       if (told) from.postMessage({ walnut: MSG, ...told }, server)
       // The page first (it picks the conversation), then a selection held for the Ask view.
-      void push().then(() => {
+      void push(() => {
         if (from === frame.contentWindow && heldSelection) { postAsk({ type: 'ask-selection', text: heldSelection }); heldSelection = '' }
         o.onReady?.(from)
       }).then(pending)
       return
     }
     if (d.type === 'refresh') { soon(); return }
-    if (d.type === 'shown' || d.type === 'snapshot' || d.type === 'theme') { o.onMessage?.(d, from); return }
+    // `vault-changed`: Walnut announced a change of who holds an unlock (its `vault:changed`), heard by any of its views.
+    // `agent`: the agent the Ask view is on (its words are kept per agent, panel-snap.ts).
+    if (d.type === 'shown' || d.type === 'snapshot' || d.type === 'agent' || d.type === 'theme' || d.type === 'vault-changed') { o.onMessage?.(d, from); return }
     // Acting in the tab, the page's text and closing are the Ask view's alone.
     if (from !== frame.contentWindow) return
     switch (d.type) {

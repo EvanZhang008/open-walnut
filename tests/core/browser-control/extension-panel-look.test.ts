@@ -18,10 +18,12 @@ const local: Record<string, unknown> = {}
   storage: { local: { get: async (k: string) => ({ [k]: structuredClone(local[k]) }), set: async (o: Record<string, unknown>) => { Object.assign(local, structuredClone(o)) }, remove: async (ks: string | string[]) => { for (const k of [ks].flat()) delete local[k] } } },
 }
 
-const { keepSnap, shellOf, snapKeyOf, snapOf } = await import('../../../packages/browser-extension/src/panel-snap')
+const { agentAskKey, keepSnap, shellOf, snapOf } = await import('../../../packages/browser-extension/src/panel-snap')
+// The Ask view on Walnut's own agent said so (its `agent` word): its conversation is the one drawn.
+const CURRENT_ASK_KEY = agentAskKey('walnut')
 const { drawAskLook, NEW_CHAT_PLACEHOLDER, FOLLOW_UP_PLACEHOLDER } = await import('../../../packages/browser-extension/src/panel-look')
 
-beforeEach(() => { for (const k of Object.keys(local)) delete local[k]; local.panelServer = 'http://walnut.example.test' })
+beforeEach(() => { for (const k of Object.keys(local)) delete local[k]; local.panelServer = 'http://walnut.example.test'; local.panelSnaps = { agent: { id: 'walnut', at: 0 } } })
 
 const CONT = [
   { title: 'Compare two laptops', line: 'Zen 14 wins.', time: '3h ago', needs: false },
@@ -30,18 +32,18 @@ const CONT = [
 const text = (el: Element, sel: string) => el.querySelector(sel)?.textContent ?? null
 
 describe('kept: the view around the conversation', () => {
-  it("the view's fields come back with the page's conversation, and the Continue list and suggestions are kept for every page", async () => {
+  it("the view's fields come back with the open conversation, and the Continue list and suggestions are kept for every page", async () => {
     await keepSnap('ask', {
       title: 'Release notes', host: 'docs.example.test', messages: [],
       askTitle: 'New chat', agent: 'Ask Walnut', placeholder: NEW_CHAT_PLACEHOLDER, continue: CONT, suggestions: ['Which task is …', 'Schedule my day'], pageOn: true,
-    }, { key: snapKeyOf('https://docs.example.test/notes') }, 1000)
+    }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1000)
     const s = await snapOf('ask', 'https://docs.example.test/notes', 2000) as any
     expect(s).toMatchObject({ askTitle: 'New chat', agent: 'Ask Walnut', placeholder: NEW_CHAT_PLACEHOLDER, cont: CONT, suggestions: ['Which task is …', 'Schedule my day'], pageOn: true })
     expect(await shellOf(2000)).toMatchObject({ agent: 'Ask Walnut', cont: CONT, suggestions: ['Which task is …', 'Schedule my day'] })
   })
 
   it('an older view (messages alone) keeps no view fields and leaves the shell as it was', async () => {
-    await keepSnap('ask', { title: 'p', host: 'h', messages: [{ role: 'user', text: 'hi' }] }, { key: 'web:p' }, 5)
+    await keepSnap('ask', { title: 'p', host: 'h', messages: [{ role: 'user', text: 'hi' }] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 5)
     const s = await snapOf('ask', 'p', 6) as any
     expect(s.askTitle).toBeUndefined()
     expect(s.cont).toBeUndefined()
@@ -49,7 +51,7 @@ describe('kept: the view around the conversation', () => {
   })
 
   it('what is kept is cut short and a needs that is not true is false', async () => {
-    await keepSnap('ask', { title: 't', host: 'h', messages: [], continue: Array.from({ length: 9 }, () => ({ title: 'x'.repeat(500), line: 1, time: 'now', needs: 'yes' })), suggestions: ['a', 'b', 'c', 'd'] }, { key: 'web:t' }, 1)
+    await keepSnap('ask', { title: 't', host: 'h', messages: [], continue: Array.from({ length: 9 }, () => ({ title: 'x'.repeat(500), line: 1, time: 'now', needs: 'yes' })), suggestions: ['a', 'b', 'c', 'd'] }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1)
     const s = await snapOf('ask', 't', 2) as any
     expect(s.cont).toHaveLength(6)
     expect(s.cont[0].title.length).toBe(200)
@@ -89,6 +91,30 @@ describe('drawn: the view as it will look', () => {
     expect(el.querySelector('[data-testid="panel-snap-locked"]')).toBeNull()
   })
 
+  it('the conversation shown on another page: the page chip is on there, as the view draws it; on its own page as it was', () => {
+    const snap = { at: 1, title: 'Release notes 4.2', host: 'docs.example.test', pageKey: 'web:https://docs.example.test/notes', messages: [{ role: 'user' as const, text: 'What changed?' }], pageOn: false }
+    const other = drawAskLook({ surface: 'panel', snap, shell: null, page: { title: 'Shop', host: 'shop.example.test', key: 'web:https://shop.example.test/' }, locked: false })
+    expect(other.querySelector('.look-chip-page.is-on')).not.toBeNull()
+    const same = drawAskLook({ surface: 'panel', snap, shell: null, page: { title: 'Notes', host: 'docs.example.test', key: 'web:https://docs.example.test/notes' }, locked: false })
+    expect(same.querySelector('.look-chip-page.is-on')).toBeNull()
+  })
+
+  it('no agent known: the bare Ask, its header and composer, no chat, no Continue rows, no suggestions (round 3 code review, item 3)', () => {
+    const el = drawAskLook({ surface: 'panel', snap: null, shell: null, page, locked: true })
+    expect(el.querySelector('.look-chat')).toBeNull()
+    expect(el.querySelectorAll('.panel-snap-msg')).toHaveLength(0)
+    expect(el.querySelector('.look-cont')).toBeNull()
+    expect(el.querySelector('.look-sugg')).toBeNull()
+    expect(text(el, '[data-testid="panel-snap-title"]')).toBe('New chat')
+    expect(text(el, '[data-testid="panel-snap-placeholder"]')).toBe(NEW_CHAT_PLACEHOLDER)
+  })
+
+  it('an agent with none of its words kept yet: the drawing names it as its header does, with no chat', () => {
+    const el = drawAskLook({ surface: 'panel', snap: null, shell: null, page, locked: false, agentName: 'Ask Mentor' })
+    expect(el.querySelector('.look-agent')?.textContent).toBe('Ask Mentor')
+    expect(el.querySelectorAll('.panel-snap-msg')).toHaveLength(0)
+  })
+
   it('the popup: the agent alone in its header, the Continue list, no suggestions; no web page, no chips', () => {
     const el = drawAskLook({ surface: 'popup', snap: null, shell: { at: 1, agent: 'Ask Walnut', cont: CONT, suggestions: ['Schedule my day'] }, page: null, locked: true })
     expect(el.querySelector('[data-testid="panel-snap-title"]')).toBeNull()
@@ -102,7 +128,7 @@ describe('drawn: the view as it will look', () => {
     await keepSnap('ask', {
       title: 'Release notes', host: 'docs.example.test', messages: [],
       suggestions: ['Which task is …', 'Schedule my day', 'What is due'], suggestionIcons: ['search', 'calendar', '<svg onload=x>'],
-    }, { key: snapKeyOf('https://docs.example.test/notes') }, 1000)
+    }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1000)
     const snap = await snapOf('ask', 'https://docs.example.test/notes', 2000) as any
     expect(snap.suggestionIcons).toEqual(['search', 'calendar', ''])
     const el = drawAskLook({ surface: 'panel', snap, shell: null, page, locked: false })
@@ -119,7 +145,7 @@ describe('drawn: the view as it will look', () => {
     await keepSnap('ask', {
       title: 'Release notes', host: 'docs.example.test', askTitle: 'Uploads in 4.2',
       messages: [{ role: 'user', text: 'What changed?', page: 'Release notes 4.2 · docs.example.test', quote: '<b>retries</b> three times' }, { role: 'assistant', text: 'Uploads retry.', page: 'never on a reply' }],
-    }, { key: snapKeyOf('https://docs.example.test/notes') }, 1000)
+    }, { key: CURRENT_ASK_KEY, agentId: 'walnut' }, 1000)
     const snap = await snapOf('ask', 'https://docs.example.test/notes', 2000) as any
     expect(snap.messages[1].page).toBeUndefined()
     const el = drawAskLook({ surface: 'panel', snap, shell: null, page, locked: false })

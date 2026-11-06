@@ -6,6 +6,8 @@
  * writes nothing. `root.dataset.shows` says what the view on show holds, which the popup's watch
  * on the vault compares with Walnut's answer (popup.ts followVault).
  */
+import { ext } from './ext'
+
 let gen = 0
 
 /** `unlocked`: it shows vault data; `locked`: the lock screen; `neutral`: neither (connect, Settings, the generator, an error). */
@@ -40,4 +42,21 @@ export function paint(root: HTMLElement, el: HTMLElement, g: number, shows: Show
   root.dataset.shows = shows
   root.dataset.view = kind
   return true
+}
+
+/**
+ * A view that shows something kept in the extension's storage follows it while it is on show
+ * (review R3-5: Settings listed no site after the save bar's "Never for this site" until the panel
+ * was opened again). `onChange` runs when one of `keys` changes in `area` while the view of
+ * generation `g` is the current one; the listener goes with the next change after another view
+ * took over. tests/core/browser-control/extension-view-storage-guard.test.ts fails on a view that
+ * reads storage without following it.
+ */
+export function followStorage(keys: readonly string[], g: number, onChange: (changes: Record<string, { newValue?: unknown; oldValue?: unknown }>) => void, area: 'local' | 'session' = 'local'): void {
+  const on = (changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, a: string) => {
+    if (a !== area) return
+    if (!isCurrent(g)) { ext.storage.onChanged.removeListener(on); return }
+    if (keys.some((k) => k in changes)) onChange(changes)
+  }
+  ext.storage.onChanged.addListener(on)
 }

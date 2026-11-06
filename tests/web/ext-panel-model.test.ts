@@ -1,10 +1,10 @@
 /**
  * The side panel's exchange with the extension page that frames it (web/src/popout/ext-panel-model.ts):
- * only the framing extension page is heard, a page is only a web page, one conversation per page
- * address, and what the ask is told about the page.
+ * only the framing extension page is heard, a page is only a web page, the open conversation stays
+ * whatever page or tab (until New chat or a pick), and what the ask is told about the page.
  */
 import { describe, expect, it } from 'vitest'
-import { ACT_CONTEXT_NAME, actLine, conversationKey, handedOf, otherOwnerOf, pageContextBlock, pageKey, readInbound, rememberHanded, selectionQuote } from '../../web/src/popout/ext-panel-model'
+import { ACT_CONTEXT_NAME, actLine, currentConversation, handedOf, startConversation, otherOwnerOf, pageContextBlock, pageKey, readInbound, rememberHanded, selectionQuote } from '../../web/src/popout/ext-panel-model'
 
 const EXT = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop'
 const ctx = (page: unknown, extra: Record<string, unknown> = {}) => ({ walnut: 'ext-panel', type: 'context', page, tab: 7, agents: true, ...extra })
@@ -92,17 +92,10 @@ describe('what the ask is told', () => {
 describe('a tab handed to a conversation stays with it', () => {
   const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v) } } }
 
-  it('the panel shows the conversation the tab was handed to, wherever the tab went since', () => {
+  it('remembers which conversation a tab was handed to', () => {
     const s = mem()
-    const first = pageKey('https://mail.example.test/mail/u/0/')
-    rememberHanded(7, first, 't1', s)
-    const h = handedOf(7, s)
-    expect(h).toMatchObject({ key: first, taskId: 't1' })
-    // The mail app moved to a message: same tab, same conversation, while t1 still acts there.
-    expect(conversationKey('https://mail.example.test/mail/u/0/?view=msg', 7, 'task:t1', h)).toBe(first)
-    // Taken back, or another task holds it: the page's own conversation.
-    expect(conversationKey('https://mail.example.test/mail/u/0/?view=msg', 7, undefined, h)).toBe(pageKey('https://mail.example.test/mail/u/0/?view=msg'))
-    expect(conversationKey('https://mail.example.test/x', 7, 'task:t2', h)).toBe(pageKey('https://mail.example.test/x'))
+    rememberHanded(7, 'ext:abc', 't1', s)
+    expect(handedOf(7, s)).toMatchObject({ key: 'ext:abc', taskId: 't1' })
     expect(handedOf(8, s)).toBeNull()
     expect(handedOf(undefined, s)).toBeNull()
   })
@@ -178,5 +171,34 @@ describe('the selection a conversation already took', () => {
     expect(sentOf('web:k44', s)).toBe('')
     rememberSent('web:k1', 'again', s, 99)
     expect(sentOf('web:k1', s)).toBe('again')
+  })
+})
+
+describe('the open conversation stays until another is started', () => {
+  const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v) } } }
+
+  it('one key per agent, the same on every read (no page or tab in it)', () => {
+    const s = mem()
+    const k = currentConversation('walnut', s, 1000)
+    expect(k).toMatch(/^ext:/)
+    expect(currentConversation('walnut', s, 2000)).toBe(k)
+    expect(currentConversation('mentor', s, 2000)).not.toBe(k)
+    expect(currentConversation('walnut', s, 3000)).toBe(k)
+  })
+
+  it('New chat (or a pick) is a new key, never the old one emptied: a launch left behind writes elsewhere', () => {
+    const s = mem()
+    const before = currentConversation('walnut', s, 1000)
+    const next = startConversation('walnut', s, 1000)
+    expect(next).not.toBe(before)
+    expect(currentConversation('walnut', s, 2000)).toBe(next)
+    const again = startConversation('walnut', s, 1000)
+    expect(new Set([before, next, again]).size).toBe(3)
+  })
+
+  it('a storage that refuses still keeps the conversation for this view', () => {
+    const s = { getItem: () => null, setItem: () => { throw new Error('blocked') } }
+    const k = startConversation('blocked-agent', s, 1000)
+    expect(currentConversation('blocked-agent', s, 2000)).toBe(k)
   })
 })

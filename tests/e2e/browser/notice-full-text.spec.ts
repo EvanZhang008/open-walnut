@@ -442,3 +442,34 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
   await expect(dialog).toHaveCount(0)
   await landed()
 })
+
+// 2026-11-06: the title passed at 1280 with the sidebar shut and was cut 4px sideways with it
+// open (the corner 228px wide): the command's code box was cloned at each line break, and line
+// breaking left out the clone's end padding. Every corner width, the words shut and opened.
+test('at every corner width the words and the command are never cut sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const sock = await routeSocket(page)
+  await boot(page, sock)
+  sock()!.send(noticeEvent('widths', { body: BODY }))
+  const toast = page.locator('.corner-stack .notification-toast', { hasText: 'managed daemon update' })
+  await expect(toast).toBeVisible()
+  await expect.poll(() => toast.evaluate((el) => el.getAnimations().length)).toBe(0)
+  const cutAt = () => page.evaluate(() => {
+    const out: string[] = []
+    const style = document.createElement('style')
+    document.head.append(style)
+    for (let w = 200; w <= 420; w++) {
+      style.textContent = `.corner-stack { width: ${w}px !important; }`
+      for (const part of ['.notification-toast-title', '.notification-toast-body', '.notification-toast-detail']) {
+        const el = document.querySelector<HTMLElement>(`.corner-stack .notification-toast ${part}`)
+        if (el && el.scrollWidth - el.clientWidth > 1) out.push(`${w}px ${part} +${el.scrollWidth - el.clientWidth}`)
+      }
+    }
+    style.remove()
+    return out
+  })
+  expect(await cutAt(), 'shut').toEqual([])
+  await toast.getByTestId('notice-details').click()
+  await expect(toast.getByTestId('notification-toast-detail')).toBeVisible()
+  expect(await cutAt(), 'opened').toEqual([])
+})

@@ -1,13 +1,15 @@
 /**
  * Where the Ask view's words are kept and when they are sent again (web/src/popout/ext-snapshot.ts
  * askSnapKey, snapSchedule), with the extension's real store (packages/browser-extension/src/
- * panel-snap.ts) on a fake browser storage: the side panel keeps a page's conversation, the
- * toolbar popup only the shell, so a popup opened on that page never empties the panel's drawing
- * (review 2026-11-06, F3); and a view that keeps changing is still sent.
+ * panel-snap.ts) on a fake browser storage: the side panel keeps each agent's open conversation
+ * under a key of its own whatever the page (round 3: the conversation stays as the person moves
+ * on; its code review: an agent switch never draws another agent's question), the toolbar popup
+ * only the shell, so a popup never empties the panel's drawing (review 2026-11-06, F3); and a view
+ * that keeps changing is still sent.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parseHTML } from 'linkedom'
-import { NO_PAGE_SNAP_KEY, POPUP_SNAP_KEY, SNAP_MAX_WAIT_MS, SNAP_QUIET_MS, askSnapKey, snapKeyOf, snapSchedule } from '../../web/src/popout/ext-snapshot'
+import { PANEL_SNAP_PREFIX, POPUP_SNAP_KEY, SNAP_MAX_WAIT_MS, SNAP_QUIET_MS, askSnapKey, snapKeyOf, snapSchedule } from '../../web/src/popout/ext-snapshot'
 
 ;(globalThis as any).document ??= parseHTML('<!doctype html><html><body></body></html>').document
 const local: Record<string, unknown> = {}
@@ -24,31 +26,89 @@ const conversation = { title: 'Release notes', host: 'docs.example.test', messag
 const popupShell = { title: 'Release notes', host: 'docs.example.test', messages: [], placeholder: 'Ask Walnut…', continue: [{ title: 'Compare two laptops', line: 'Zen 14 wins.', time: '3h ago', needs: false }] }
 
 describe('where the words are kept', () => {
-  it("the side panel: the page's conversation (the extension's own key for it); no page: its own key", () => {
-    expect(askSnapKey('panel', PAGE)).toBe(ext.snapKeyOf(PAGE))
-    expect(askSnapKey('panel', PAGE)).toBe(snapKeyOf(PAGE))
-    expect(askSnapKey('panel', '')).toBe(NO_PAGE_SNAP_KEY)
+  it('the side panel: each agent\'s open conversation under a key of its own no page has; the page it was taken on rides in the words', () => {
+    expect(askSnapKey('panel', 'walnut')).toBe(`${PANEL_SNAP_PREFIX}walnut`)
+    expect(askSnapKey('panel', 'walnut')).not.toBe(askSnapKey('panel', 'mentor'))
+    expect(askSnapKey('panel', 'walnut').startsWith('web:')).toBe(false)
+    // The extension reads the same key for the same agent.
+    expect(ext.agentAskKey('mentor')).toBe(askSnapKey('panel', 'mentor'))
+    // The words name their page with the extension's own key for it (its chip is that page's).
+    expect(snapKeyOf(PAGE)).toBe(ext.snapKeyOf(PAGE))
   })
 
-  it('the popup: one key no page has, whatever the page', () => {
-    expect(askSnapKey('popup', PAGE)).toBe(POPUP_SNAP_KEY)
-    expect(askSnapKey('popup', '')).toBe(POPUP_SNAP_KEY)
+  it('the popup: another key no page has', () => {
+    expect(askSnapKey('popup', 'walnut')).toBe(POPUP_SNAP_KEY)
     expect(POPUP_SNAP_KEY.startsWith('web:')).toBe(false)
+    expect(POPUP_SNAP_KEY.startsWith(PANEL_SNAP_PREFIX)).toBe(false)
   })
 
   it('panel conversation, then the popup on that page, then the panel again: the conversation is still drawn, the shell is the popup\'s', async () => {
-    await ext.keepSnap('ask', conversation, { key: askSnapKey('panel', PAGE) }, 1000)
-    await ext.keepSnap('ask', popupShell, { key: askSnapKey('popup', PAGE) }, 2000)
+    await ext.keepAgent('walnut', 900)
+    await ext.keepSnap('ask', conversation, { key: askSnapKey('panel', 'walnut'), agentId: 'walnut' }, 1000)
+    await ext.keepSnap('ask', popupShell, { key: askSnapKey('popup', 'walnut'), agentId: 'walnut' }, 2000)
     const back = await ext.snapOf('ask', PAGE, 3000) as { messages: unknown[]; askTitle?: string }
     expect(back.messages).toEqual(conversation.messages)
     expect(back.askTitle).toBe('Release notes')
+    // On another page, and on a tab with no page: the same open conversation.
+    expect(((await ext.snapOf('ask', 'https://other.example.test/x', 3000)) as { messages: unknown[] }).messages).toEqual(conversation.messages)
+    expect(((await ext.snapOf('ask', '', 3000)) as { messages: unknown[] } | null)?.messages).toEqual(conversation.messages)
     expect((await ext.shellOf(3000))?.cont).toEqual(popupShell.continue)
   })
 
-  it('what the old key did (the popup under the page key) empties the conversation: the case this guards', async () => {
+  it('the popup switches to another agent: the panel\'s next drawing is that agent\'s (or the bare Ask), never the first agent\'s question (round 3 code review, item 3)', async () => {
+    await ext.keepAgent('walnut', 900)
+    await ext.keepSnap('ask', conversation, { key: askSnapKey('panel', 'walnut'), agentId: 'walnut' }, 1000)
+    // The popup's view, now on Mentor, says so, and sends its shell under the popup's key.
+    await ext.keepAgent('mentor', 1500)
+    await ext.keepSnap('ask', { ...popupShell, agent: 'Mentor', continue: [{ title: 'Plan the week', line: '', time: 'now', needs: false }] }, { key: askSnapKey('popup', 'mentor'), agentId: 'mentor' }, 2000)
+    expect(await ext.agentOf()).toBe('mentor')
+    // No conversation of Mentor's yet: nothing, never Walnut's.
+    expect(await ext.snapOf('ask', PAGE, 3000)).toBeNull()
+    const shell = await ext.shellOf(3000)
+    expect(shell?.agent).toBe('Mentor')
+    expect(shell?.cont?.map((r) => r.title)).toEqual(['Plan the week'])
+    // Mentor's own conversation, once kept, is its drawing; Walnut's is still Walnut's.
+    await ext.keepSnap('ask', { ...conversation, agent: 'Mentor', messages: [{ role: 'user', text: 'What is on Monday?' }] }, { key: askSnapKey('panel', 'mentor'), agentId: 'mentor' }, 4000)
+    expect(((await ext.snapOf('ask', PAGE, 5000)) as { messages: Array<{ text: string }> }).messages[0]?.text).toBe('What is on Monday?')
+    expect(((await ext.snapOf('ask', PAGE, 5000, 'walnut')) as { messages: Array<{ text: string }> }).messages[0]?.text).toBe('What changed?')
+    expect((await ext.shellOf(5000, 'walnut'))).toBeNull()
+  })
+
+  it('two windows on different agents: each keeps its own words, neither overwrites the other\'s', async () => {
+    const a = { ...conversation, agent: 'Ask Walnut', messages: [{ role: 'user', text: 'Window one asks' }] }
+    const b = { ...conversation, agent: 'Mentor', messages: [{ role: 'user', text: 'Window two asks' }] }
+    // Interleaved, as two views streaming at once send them.
+    await Promise.all([
+      ext.keepSnap('ask', a, { key: askSnapKey('panel', 'walnut'), agentId: 'walnut' }, 1000),
+      ext.keepSnap('ask', b, { key: askSnapKey('panel', 'mentor'), agentId: 'mentor' }, 1001),
+      ext.keepSnap('ask', { ...a, messages: [...a.messages, { role: 'assistant', text: 'One answers' }] }, { key: askSnapKey('panel', 'walnut'), agentId: 'walnut' }, 1002),
+    ])
+    expect(((await ext.snapOf('ask', PAGE, 2000, 'walnut')) as { messages: Array<{ text: string }> }).messages.map((m) => m.text)).toEqual(['Window one asks', 'One answers'])
+    expect(((await ext.snapOf('ask', PAGE, 2000, 'mentor')) as { messages: Array<{ text: string }> }).messages.map((m) => m.text)).toEqual(['Window two asks'])
+    // A conversation sent under another agent's key is no one's.
+    await ext.keepSnap('ask', { ...b, messages: [{ role: 'user', text: 'Wrong key' }] }, { key: askSnapKey('panel', 'walnut'), agentId: 'mentor' }, 3000)
+    expect(((await ext.snapOf('ask', PAGE, 4000, 'walnut')) as { messages: Array<{ text: string }> }).messages[0]?.text).toBe('Window one asks')
+  })
+
+  it('no agent known (no view has said one yet): nothing is drawn, not even a kept conversation', async () => {
+    await ext.keepSnap('ask', conversation, { key: askSnapKey('panel', 'walnut'), agentId: 'walnut' }, 1000)
+    expect(await ext.agentOf()).toBe('')
+    expect(await ext.snapOf('ask', PAGE, 2000)).toBeNull()
+    expect(await ext.shellOf(2000)).toBeNull()
+    // A name no agent has is no agent.
+    await ext.keepAgent('../x y', 1500)
+    expect(await ext.agentOf()).toBe('')
+  })
+
+  it('words kept under a page\'s key, or the one key for every agent of before, are never drawn as an agent\'s', async () => {
+    await ext.keepAgent('walnut', 900)
     await ext.keepSnap('ask', conversation, { key: snapKeyOf(PAGE) }, 1000)
-    await ext.keepSnap('ask', popupShell, { key: snapKeyOf(PAGE) }, 2000)
-    expect(((await ext.snapOf('ask', PAGE, 3000)) as { messages: unknown[] }).messages).toEqual([])
+    await ext.keepSnap('ask', conversation, { key: 'panel:current' }, 1000)
+    expect(await ext.snapOf('ask', PAGE, 3000)).toBeNull()
+    // The agent's open conversation, once kept, is what every page draws, and the old ones go.
+    await ext.keepSnap('ask', { ...conversation, messages: [{ role: 'user', text: 'Open one' }] }, { key: askSnapKey('panel', 'walnut'), agentId: 'walnut' }, 2000)
+    expect(((await ext.snapOf('ask', PAGE, 3000)) as { messages: Array<{ text: string }> }).messages[0]?.text).toBe('Open one')
+    expect(Object.keys((local.panelSnaps as any).ask)).toEqual([askSnapKey('panel', 'walnut')])
   })
 })
 

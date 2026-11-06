@@ -4,7 +4,9 @@
  * ExtAskChrome.tsx, ExtPopupBody.tsx), through the real extension in Chromium:
  *
  * - the panel opens on Ask with no tab strip: ≡, the ask's title over the agent, the key (with its
- *   padlock while Passwords is locked) and New chat; the composer names the page in a chip;
+ *   padlock while Passwords is locked) and New chat, all in the first frame; the composer names the
+ *   page in a chip; the open conversation stays on another page until New chat or a pick, and New
+ *   chat wins over a launch still on its way;
  * - ≡ opens Home's drawer: Main pinned with its line, the asks, New chat, and the foot rows Tasks,
  *   Passwords ("Locked" or this site's count) and Open Walnut; it is an overlay;
  * - the key opens a popover the extension page draws over the frame: locked, one row to unlock;
@@ -386,6 +388,62 @@ test('the selection is its own attachment: the page chip leaves out only the pag
   await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
 })
 
+test('a new chat under waiting approvals: the Continue list and the approvals give way, the quote and the composer are never covered', async () => {
+  test.setTimeout(180_000)
+  const v = askView(panel)
+  await lab.doc.goto(lab.site('docs.example.test', '/notes'))
+  await expect(pageChip(panel)).toContainText('Release notes 4.2', { timeout: 30_000 })
+  // Two (and more) agent steps waiting, as outward-asks.ts words them: wrapped whole, each card is tall.
+  const now = Date.now()
+  const approval = (i: number) => ({
+    id: `apr-tall-${i}-${now.toString(36)}`, digest: 'd', mode: 'tap', guard: 'person', status: 'pending',
+    what: `Let a Walnut agent press Enter in textbox "Your feedback" on shop.example.test:34567: "Great update number ${i}"? Enter sends the message in that box.`,
+    detail: `Message it sends: Great update number ${i}`,
+    requester: { host: '__local__', command: 'walnut browser press', local: true },
+    createdAt: new Date(now + i).toISOString(), expiresAt: new Date(now + 600_000).toISOString(),
+  })
+  const list = /\/api\/v1\/approvals(\?.*)?$/
+  await lab.ctx.route(list, (route) => route.request().method() === 'GET' ? route.fulfill({ json: { approvals: [1, 2, 3, 4].map(approval), keys: [] } }) : route.continue())
+  const frame = () => panel.frames().find((f) => f.url().includes('view=ext-panel'))!
+  try {
+    await frame().evaluate(() => location.reload())
+    await expect(v.getByTestId('ext-ask-approval')).toHaveCount(2, { timeout: 30_000 })
+    await v.getByTestId('ext-panel-new').click()
+    await expect(v.getByTestId('ext-continue-row').first()).toBeVisible({ timeout: 30_000 })
+    await selectText(lab.doc, 'p2')
+    const quote = v.getByTestId('ask-object-quote')
+    await expect(quote).toContainText('Dark mode follows', { timeout: 15_000 })
+    const drop = quote.getByTestId('ask-object-quote-drop')
+    // What is on top at the quote's ×, and at the composer's text box, is that control itself.
+    const onTop = (sel: string) => frame().evaluate((s) => {
+      const el = document.querySelector<HTMLElement>(s)!
+      const r = el.getBoundingClientRect()
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      return !!hit && (hit === el || el.contains(hit))
+    }, sel)
+    expect(await onTop('[data-testid="ask-object-quote-drop"]')).toBe(true)
+    expect(await onTop('[data-testid="ask-object-compose"] textarea')).toBe(true)
+    // In order down the view, none over the next: the approvals, the Continue list, the quote, the composer, all on screen.
+    const ap = (await v.getByTestId('ext-ask-approvals').boundingBox())!
+    const cont = (await v.getByTestId('ext-continue').boundingBox())!
+    const qb = (await quote.boundingBox())!
+    const box = (await v.locator('.session-panel.is-plain-chat .chat-input-box').boundingBox())!
+    expect(ap.y + ap.height).toBeLessThanOrEqual(cont.y + 0.5)
+    expect(cont.y + cont.height).toBeLessThanOrEqual(qb.y + 0.5)
+    expect(qb.y + qb.height).toBeLessThanOrEqual(box.y + box.height + 0.5)
+    expect(box.y + box.height).toBeLessThanOrEqual(760 + 0.5)
+    await shots(panel, 'panel-new-chat-quote-under-approvals')
+    // The × answers a real click.
+    await drop.click()
+    await expect(quote).toHaveCount(0)
+  } finally {
+    await lab.ctx.unroute(list)
+    await frame()?.evaluate(() => location.reload())
+    await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 30_000 })
+    await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
+  }
+})
+
 test('the popup sends what it shows: its quote goes with the page left out, and with its × nothing of the selection goes', async () => {
   test.setTimeout(240_000)
   await lab.doc.goto(lab.site('docs.example.test', '/notes'))
@@ -438,13 +496,19 @@ test('the popup sends what it shows: its quote goes with the page left out, and 
   expect(raw3).not.toContain('left the page itself out')
   expect(raw3).not.toContain('retries a failed upload three times')
   await lab.doc.evaluate(() => getSelection()?.removeAllRanges())
-  // A handed question belongs to the page it was asked on: on another page the panel starts empty,
-  // it never asks that question again there.
+  // A handed question is asked once, by the panel that took it: this panel keeps the conversation it
+  // shows on another page (the open one stays, round 3), and nothing asks the question again there.
+  const shownBefore = await askView(panel).getByTestId('ask-object-session').getAttribute('data-session-id', { timeout: 2_000 }).catch(() => null)
+  let launched = 0
+  const onLaunch = (r: { method(): string; url(): string }) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start') launched += 1 }
+  panel.on('request', onLaunch)
   await lab.doc.goto(lab.site('docs.example.test', '/login'))
   await expect(pageChip(panel)).toContainText('Sign in', { timeout: 30_000 })
-  await expect(askView(panel).getByTestId('ask-object-compose')).toBeVisible({ timeout: 15_000 })
   await panel.waitForTimeout(2000)
-  await expect(askView(panel).getByTestId('ask-object-session')).toHaveCount(0)
+  panel.off('request', onLaunch)
+  expect(launched).toBe(0)
+  if (shownBefore) await expect(askView(panel).getByTestId('ask-object-session')).toHaveAttribute('data-session-id', shownBefore)
+  else await expect(askView(panel).getByTestId('ask-object-session')).toHaveCount(0)
   // Back on the notes page, a new chat, so the later specs find that page as a person left it
   // (a conversation's title is renamed after the panel moved on, which its look cannot know).
   await lab.doc.goto(lab.site('docs.example.test', '/notes'))
@@ -570,7 +634,7 @@ test('Tasks and Passwords open as full views with Back to Ask', async () => {
   tasksBack = await panel.getByTestId('panel-view-tasks').getByTestId('panel-view-back').evaluate((e) => { const c = getComputedStyle(e); return [c.backgroundColor, c.color, c.fontSize, c.height, c.paddingLeft].join(' ') })
   await shot(panel, 'panel-view-tasks')
   await backToAsk(panel)
-  // Ask as it was: the sign-in page's own conversation (none yet), its composer ready.
+  // Ask as it was: the new chat, its composer ready.
   await expect(askView(panel).getByTestId('ask-object-compose')).toBeVisible()
   await expect(pageChip(panel)).toContainText('Sign in')
 
@@ -822,6 +886,98 @@ test('a new ask reads its question until Walnut titles it, then Walnut\'s title,
   await expect(v.locator('.ask-walnut-drawer').getByText(aiTitle)).toBeVisible({ timeout: 15_000 })
   await shot(p, 'panel-ask-titled')
   await p.keyboard.press('Escape')
+  await p.close()
+})
+
+test('New chat wins over a launch still on its way: the next question starts its own ask, and stays (review round 3, #3)', async () => {
+  test.setTimeout(180_000)
+  const p = await openAskPanel()
+  const v = askView(p)
+  await v.getByTestId('ext-panel-new').click()
+  const composer = v.locator('[data-testid="ask-object-compose"] textarea')
+  await expect(composer).toBeVisible({ timeout: 15_000 })
+  const launchPath = '/api/sessions/quick-start'
+  const isLaunch = (u: URL) => u.pathname === launchPath
+  const launches: string[] = []
+  const tasks: string[] = []
+  p.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === launchPath) launches.push(String((r.postDataJSON() as { message?: string }).message ?? '')) })
+  p.on('response', (r) => { if (r.request().method() === 'POST' && new URL(r.url()).pathname === launchPath) void r.json().then((j: { taskId?: string }) => { if (j.taskId) tasks.push(j.taskId) }).catch(() => undefined) })
+  // The first question's launch is held at the server's door for 4 s: New chat comes while it is out.
+  let seen = 0
+  await lab.ctx.route(isLaunch, async (route) => { seen += 1; if (seen === 1) await new Promise((r) => setTimeout(r, 4000)); await route.continue() })
+  const stamp = Date.now().toString(36)
+  const first = `First question ${stamp}`
+  const second = `Second question ${stamp}`
+  try {
+    await composer.fill(first)
+    await composer.press('Enter')
+    await expect.poll(() => launches.length, { timeout: 15_000 }).toBe(1)
+    await v.getByTestId('ext-panel-new').click()
+    await expect(composer).toBeVisible({ timeout: 15_000 })
+    await composer.fill(second)
+    await composer.press('Enter')
+    // Its own launch, not a follow-up into the first ask (it joined the launch still out before).
+    await expect.poll(() => launches, { timeout: 15_000 }).toEqual([first, second])
+    const session = v.getByTestId('ask-object-session')
+    await expect(session).toBeVisible({ timeout: 60_000 })
+    const sid = (await session.getAttribute('data-session-id')) ?? ''
+    // The first launch lands meanwhile: the panel stays on the second.
+    await expect.poll(() => tasks.length, { timeout: 30_000 }).toBe(2)
+    await p.waitForTimeout(1500)
+    await expect(session).toHaveAttribute('data-session-id', sid)
+    await expect(v.locator('.session-msg-user', { hasText: second }).first()).toBeVisible({ timeout: 30_000 })
+    await expect(v.locator('.session-msg-user', { hasText: first })).toHaveCount(0)
+    await p.close()
+    // Opened again: the conversation New chat started, never the one left behind.
+    const again = await openAskPanel()
+    await expect(askView(again).getByTestId('ask-object-session')).toHaveAttribute('data-session-id', sid, { timeout: 60_000 })
+    await again.close()
+  } finally {
+    await lab.ctx.unroute(isLaunch)
+    seeded.push(...tasks)
+  }
+})
+
+test('the header\'s key and New chat are in the first frame, the placeholder\'s and the view\'s (review round 3, #10)', async () => {
+  test.setTimeout(120_000)
+  await lab.doc.goto(lab.site('docs.example.test', '/notes'))
+  const { panel: p } = await openPanel(lab)
+  // Every frame from here on, as drawn: whenever the head shows, its icons are there and on screen.
+  await p.evaluate(() => {
+    const w = window as unknown as { __heads: Array<{ vw: number; at: number; menu: number[] | null; key: number[] | null; compose: number[] | null }> }
+    w.__heads = []
+    const box = (e: Element | null) => { if (!e) return null; const b = e.getBoundingClientRect(); return b.width > 0 ? [b.left, b.right] : null }
+    const tick = () => {
+      const look = document.querySelector('[data-testid="panel-snap"]')
+      if (look) w.__heads.push({ vw: innerWidth, at: performance.now(), menu: box(look.querySelector('[data-testid="panel-snap-menu"]')), key: box(look.querySelector('[data-testid="panel-snap-key"]')), compose: box(look.querySelector('.look-head > .look-btn:last-child')) })
+      if (w.__heads.length < 600) requestAnimationFrame(tick)
+    }
+    tick()
+  })
+  const v = askView(p)
+  await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  // The view's header, at its first render: the key and New chat with it.
+  const frame = p.frames().find((f) => f.url().includes('view=ext-panel'))!
+  const head = await frame.evaluate(() => {
+    const h = document.querySelector('[data-testid="ext-ask-head"]')
+    return { key: !!h?.querySelector('[data-testid="ext-ask-key"]'), compose: !!h?.querySelector('[data-testid="ext-panel-new"]') }
+  })
+  expect(head).toEqual({ key: true, compose: true })
+  await expect(p.getByTestId('panel-snap')).toHaveCount(0, { timeout: 20_000 })
+  const heads = await p.evaluate(() => (window as unknown as { __heads: Array<{ vw: number; menu: number[] | null; key: number[] | null; compose: number[] | null }> }).__heads)
+  const drawn = heads.filter((x) => x.menu)
+  expect(drawn.length, 'the placeholder was sampled').toBeGreaterThan(0)
+  for (const x of drawn) {
+    expect(x.key, 'key with the menu').not.toBeNull()
+    expect(x.compose, 'New chat with the menu').not.toBeNull()
+    expect(x.compose![1], 'New chat inside the panel').toBeLessThanOrEqual(x.vw + 0.5)
+  }
+  // The view's own: on screen, inside the panel.
+  const vw = await frame.evaluate(() => innerWidth)
+  for (const id of ['ext-ask-key', 'ext-panel-new']) {
+    const b = (await v.getByTestId(id).boundingBox())!
+    expect(b.x + b.width, `${id} inside the view`).toBeLessThanOrEqual(vw + 0.5)
+  }
   await p.close()
 })
 
