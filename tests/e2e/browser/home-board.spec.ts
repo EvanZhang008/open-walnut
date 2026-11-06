@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { loadHome } from './draft-helpers';
 import { isolateUiPrefs } from './todo-panel-helpers';
+import { keepTaskFramesTo } from './task-list-stub';
 
 const project = `Board acceptance ${Date.now().toString(36)}`;
 const made: string[] = [];
@@ -336,13 +337,19 @@ test('completed totals stay stable when the archive contains hidden organization
     expect((await (await request.get(`/api/tasks/${id}`)).json()).task.org_role).toBe(org_role);
   }
   let unloaded = -1;
+  // The board shows the list this route answers; another worker's task frames would move its
+  // counts away from that answer mid-test, so only frames about tasks it held pass.
+  const ours = new Set<string>();
+  await keepTaskFramesTo(page, ours);
   await page.route('**/api/tasks?*', async route => {
     const url = new URL(route.request().url());
-    if (!url.searchParams.has('completedWithinDays')) return route.continue();
-    url.searchParams.set('completedWithinDays', '0');
+    if (url.pathname !== '/api/tasks') return route.continue();
+    const archive = url.searchParams.has('completedWithinDays');
+    if (archive) url.searchParams.set('completedWithinDays', '0');
     const response = await route.fetch({ url: url.toString() });
     const json = await response.json();
-    unloaded = json.completedHidden;
+    for (const task of json.tasks ?? []) ours.add(task.id);
+    if (archive) unloaded = json.completedHidden;
     await route.fulfill({ response, json });
   });
   await open(page);

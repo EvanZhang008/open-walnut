@@ -10,7 +10,8 @@
  *
  * Every file under tests/e2e/browser that fulfills a task list route, or calls answerTaskList,
  * is found here from the source. It must answer through `answerTaskList`
- * (tests/e2e/browser/task-list-stub.ts) or route the socket itself (`routeWebSocket`). PREDATES
+ * (tests/e2e/browser/task-list-stub.ts), keep its frames to the tasks it passed through
+ * (`keepTaskFramesTo`), or route the socket itself (`routeWebSocket`). PREDATES
  * lists the files that did neither when this rule came in; it may only shrink: an entry that
  * now follows the rule, or is gone, fails.
  */
@@ -49,7 +50,7 @@ function members(): Array<{ file: string; isolated: boolean }> {
       const src = readFileSync(join(DIR, file), 'utf8');
       const answers = /\banswerTaskList\(/.test(src) || (routesTaskList(src) && src.includes('fulfill('));
       if (!answers) return [];
-      return [{ file, isolated: /\banswerTaskList\(|\.routeWebSocket\(/.test(src) }];
+      return [{ file, isolated: /\banswerTaskList\(|\bkeepTaskFramesTo\(|\.routeWebSocket\(/.test(src) }];
     });
 }
 

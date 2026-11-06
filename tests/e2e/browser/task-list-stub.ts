@@ -24,6 +24,15 @@ export async function answerTaskList(page: Page, tasks: () => Array<{ id: string
     for (const task of list) ours.add(task.id)
     await route.fulfill({ json: { tasks: list } })
   })
+  await keepTaskFramesTo(page, ours)
+}
+
+/**
+ * Drops every event frame about a task outside `ours` (filled by the caller as its list
+ * answers arrive). For a spec that passes the real list through with a change of its own
+ * instead of answering it with a fixed one.
+ */
+export async function keepTaskFramesTo(page: Page, ours: ReadonlySet<string>): Promise<void> {
   await page.routeWebSocket(/\/ws(\?|$)/, (ws: WebSocketRoute) => {
     const server = ws.connectToServer()
     ws.onMessage((message) => server.send(message))
