@@ -512,7 +512,9 @@ export async function noteAnswerDelivered(id: string, stamp: Pick<AnswerStamp, '
   await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
-    if (idx === -1) return undefined;
+    // The row keeps the first answer that reached its asker: a second, different late answer is
+    // delivered too, but the request was settled by the first (its reply stays the first's).
+    if (idx === -1 || requests[idx].answerDigest) return undefined;
     requests[idx] = { ...requests[idx], answerDigest: stamp.digest, deliveredTo: stamp.deliveredTo, answeredAt: new Date(now).toISOString() };
     return { requests };
   });

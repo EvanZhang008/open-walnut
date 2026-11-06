@@ -783,6 +783,17 @@ describe('performSessionSend — in_reply_to', () => {
       expect(sendMessageToSession).toHaveBeenCalledTimes(2);
     });
 
+    it('a second, different answer on one request is delivered, and the row keeps the first answer', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
+      const first = await getSessionRequest(a.id);
+      await performSessionSend({ text: 'One more detail: the iOS job was skipped.', inReplyTo: a.id, callerSid: TARGET });
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+      expect(await getSessionRequest(a.id)).toEqual(first);
+      // The first answer's words are still the ones a repeat is told apart by.
+      expect((await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET })).sameAnswerAs).toBe(a.id);
+    });
+
     it('a delivery that failed is no answer delivered: the same words retried go out', async () => {
       const a = await armRequest({ toTaskId: 'task-target' });
       sendMessageToSession.mockRejectedValueOnce(new Error('queue write failed'));
