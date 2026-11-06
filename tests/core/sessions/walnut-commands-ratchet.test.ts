@@ -146,6 +146,19 @@ describe('every listed command reads as Walnut\'s notice', () => {
     }
   }
 
+  it('a compaction that failed never reads as done: the notice says what Walnut asked for', () => {
+    // 2026-11-05 review: the notice said "Walnut compacted" above "Error during compaction".
+    for (const c of WALNUT_COMMANDS) {
+      const failed = compactLines(c.text, 'eeeeeeee-2222-4222-8222-222222222222', { queued: true })
+        .split('\n').filter((l) => !/compact_boundary|isCompactSummary/.test(l))
+        .map((l) => l.replace('<local-command-stdout>Compacted </local-command-stdout>', '<local-command-stderr>Error during compaction: API Error: 529 overloaded</local-command-stderr>'))
+        .join('\n');
+      const rows = parseSessionMessages(failed);
+      expect(rows.some((r) => r.role === 'system' && r.text === c.notice), c.source).toBe(true);
+      expect(rows.filter((r) => r.role === 'system' && /\bcompacted\b/i.test(r.text)).map((r) => r.text), c.source).toEqual([]);
+    }
+  });
+
   it('a person\'s /compact, bare or with words of his own, stays his message, shown once', () => {
     for (const text of ['/compact', '/compact keep the open review comments']) {
       const rows = parseSessionMessages(compactLines(text, 'ffffffff-2222-4222-8222-222222222222', { queued: true }));
@@ -160,10 +173,10 @@ describe('every listed command reads as Walnut\'s notice', () => {
     // text here: bump HISTORY_CACHE_SCHEMA (history-disk-cache.ts), move the old text to
     // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, then update this pin.
     expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
-      schema: 7,
+      schema: 8,
       notices: [
         'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.',
-        'Walnut compacted this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
+        'Walnut asked to compact this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
         'Walnut sent /compact to compact this session.',
       ],
     });

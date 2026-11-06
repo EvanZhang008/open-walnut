@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { envelopeSteps, foldStepsPhrase, systemRunLabel, type FoldStep } from '@/components/sessions/fold-steps';
+import { envelopeSteps, foldStepsPhrase, systemRunLabel, systemRunShows, type FoldStep } from '@/components/sessions/fold-steps';
 import { parseSessionEnvelopes } from '../../src/lib/history-session-envelope';
 import { CONTEXT_COMPACT_HISTORY_TEXT, LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, WALNUT_COMMAND_HISTORY_TEXT } from '../../src/core/sessions/walnut-commands';
 
@@ -136,8 +136,23 @@ describe('foldStepsPhrase', () => {
       expect(systemRunLabel([notice, progress])).toBe('Compacting to fit the context window');
     }
     expect(systemRunLabel([{ variant: 'info', message: WALNUT_COMMAND_HISTORY_TEXT }, done])).toBe('Compacted by Walnut \u00b7 178K \u2192 18K tokens');
+    // No boundary, an error instead: the line says it failed, never compacted.
+    const failed = { variant: 'error', message: 'Error during compaction: API Error: 529 overloaded' };
+    expect(systemRunLabel([{ variant: 'info', message: CONTEXT_COMPACT_HISTORY_TEXT }, failed])).toBe('Compaction failed');
+    expect(systemRunLabel([failed, { variant: 'info', message: 'Retrying' }])).toBe('2 system messages');
     expect(foldStepsPhrase([{ kind: 'notice', compact: 'context' }, { kind: 'notice', compact: 'cli' }])).toBe('Compacted by Walnut to fit the context window');
     expect(foldStepsPhrase([{ kind: 'notice', compact: 'context' }])).toBe('1 notice');
+  });
+
+  it('an opened run says the size once: the line has it when it names Walnut\'s compaction', () => {
+    const done = { variant: 'compact', message: 'Context compacted', detail: '178K \u2192 18K tokens' };
+    const notice = { variant: 'info', message: CONTEXT_COMPACT_HISTORY_TEXT };
+    expect(systemRunShows([notice, done])).toEqual([notice]);
+    // The CLI's own compaction, one with no size, or two of them: every row stays.
+    const error = { variant: 'error', message: 'API Error: 529 overloaded' };
+    expect(systemRunShows([error, done])).toEqual([error, done]);
+    expect(systemRunShows([notice, { variant: 'compact', message: 'Context compacted' }])).toHaveLength(2);
+    expect(systemRunShows([notice, done, done])).toHaveLength(3);
   });
 });
 

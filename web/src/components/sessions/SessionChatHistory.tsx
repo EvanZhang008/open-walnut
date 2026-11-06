@@ -5361,6 +5361,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (!isTransparentStreamItem(item)) tailFoldGroup = null;
     }
     if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
+    // While Walnut compacts, the working line says which compaction runs; the CLI's own
+    // "Compacting context..." row beside it would say it twice (2026-11-05 review).
+    if (walnutCompacting && item.kind === 'block' && item.block.type === 'system' && item.block.variant === 'compact'
+      && item.block.progress === true && !systemRunStart.has(i) && !systemRunMember.has(i)) return null;
     if (mixedMember.has(i)) return null;
     const stepGroup = mixedStart.get(i);
     if (stepGroup) return renderStepGroup(stepGroup);

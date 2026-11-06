@@ -127,6 +127,17 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
 }
 
 /**
+ * The rows a run shows when opened: all of them, except the finished compaction's own row when its
+ * line names Walnut's compaction with the size (one finished compaction, its size known), since that
+ * line already says it. Walnut's notice of why stays.
+ */
+export function systemRunShows<T extends { variant: string; message: string; detail?: string }>(members: readonly T[]): readonly T[] {
+  const done = members.filter((m) => m.variant === 'compact' && m.message === COMPACTED_MESSAGE);
+  if (done.length !== 1 || !done[0]!.detail || !members.some((m) => walnutCompactLine(m.message))) return members;
+  return members.filter((m) => m !== done[0]);
+}
+
+/**
  * A run of runtime rows' line. A compaction says so by name, with its size change and the count of
  * the other rows. Only one that made its boundary says compacted ("Context compacted"); one still
  * running says compacting, and one stopped halfway ("Compaction stopped") says stopped.
@@ -147,5 +158,8 @@ export function systemRunLabel(members: readonly { variant: string; message: str
   const last = compacts[compacts.length - 1]?.message;
   if (last === COMPACTING_MESSAGE) return `${lines.has('idle') ? 'Compacting while idle' : lines.has('context') ? 'Compacting to fit the context window' : 'Compacting context'}${more(compacts.length)}`;
   if (last === COMPACTION_STOPPED_MESSAGE) return `Compaction stopped${more(compacts.length)}`;
+  // Walnut asked for a compaction and an error came instead of its boundary.
+  const errors = members.filter((m) => m.variant === 'error').length;
+  if (lines.size > 0 && errors > 0) return `Compaction failed${more(errors)}`;
   return `${members.length} system messages`;
 }

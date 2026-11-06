@@ -36,7 +36,7 @@ import { injectedContextLabel } from '@open-walnut/walnut-added';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
-import { envelopeSteps, foldStepsPhrase, systemRunLabel } from './fold-steps';
+import { envelopeSteps, foldStepsPhrase, systemRunLabel, systemRunShows } from './fold-steps';
 import { IdleCompactLine } from './IdleCompactLine';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
@@ -502,6 +502,9 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error');
   // A compaction's run says so (its explanation and numbers are inside).
   const label = allErrors ? `${members.length} errors` : systemRunLabel(members);
+  // A line that names Walnut's compaction already says its size: the compaction's own row under it
+  // would say it again (2026-11-05 review), so the run shows Walnut's notice of why.
+  const shown = systemRunShows(members);
   return (
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
@@ -510,7 +513,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
       </button>
       {open && (
         <div className="tool-run-body">
-          {members.map((member, i) => (
+          {shown.map((member, i) => (
             <SystemLineCollapsible
               key={member.key ?? `${member.variant}:${member.message}:${i}`}
               variant={member.variant}

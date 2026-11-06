@@ -13,7 +13,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test'
 
 const SHOTS = process.env.WALNUT_COMMAND_SHOTS ?? '/tmp/walnut-command-notice'
-const NOTICE = 'Walnut compacted this conversation because it no longer fit the model\'s context window'
+const NOTICE = 'Walnut asked to compact this conversation because it no longer fit the model\'s context window'
 const RECORDING = !!process.env.WALNUT_COMMAND_VIDEO
 /** A recording stays on a screen long enough to read it. */
 const hold = (page: Page) => (RECORDING ? page.waitForTimeout(2_000) : Promise.resolve())
@@ -89,6 +89,8 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   await composer.fill('hi, where does the review stand?')
   await composer.press('Enter')
   await expect(panel.getByText('Walnut is compacting this conversation so it fits again')).toBeVisible({ timeout: 20_000 })
+  // The working line says which compaction runs, and no second row says it again.
+  await expect(history.getByText('Compacting context...', { exact: true })).toHaveCount(0)
   await hold(page)
   await expect.poll(async () => (await record(request, sid)).contextRecovery?.state, { timeout: 45_000 }).toBe('done')
   await expect.poll(async () => (await record(request, sid)).process_status, { timeout: 30_000 }).not.toBe('running')
@@ -112,6 +114,8 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   await hold(page)
   await compacted.click()
   await expect(history.getByText(NOTICE)).toBeVisible({ timeout: 10_000 })
+  // The line said the size: the compaction's own row is not repeated under it.
+  await expect(history.getByText(/^Context compacted/)).toHaveCount(0)
   await expect(history.getByText('hi, where does the review stand?').first()).toBeVisible()
   await expect(history.locator('.session-msg-user', { hasText: '/compact' })).toHaveCount(0)
   await expect(history).not.toContainText('Walnut started this compaction')

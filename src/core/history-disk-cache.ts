@@ -52,8 +52,11 @@ import type { SessionHistoryMessage } from './session-history.js';
  * 7 (2026-11-05): the recovery's notice row has its shorter words. A version-6 parse kept serving
  * the first wording after the deploy that changed it (a notice text that changes moves the schema:
  * tests/core/sessions/walnut-commands-ratchet.test.ts).
+ *
+ * 8 (2026-11-05): the recovery's notice says Walnut asked to compact, never that it compacted (a
+ * compaction that failed read as done).
  */
-export const HISTORY_CACHE_SCHEMA = 7;
+export const HISTORY_CACHE_SCHEMA = 8;
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a
