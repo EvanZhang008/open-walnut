@@ -6,6 +6,71 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.27] - 2026-11-06
+
+### Added
+
+- One tray for queued messages, a card where Stop landed, no stray stop on a double tap
+- Compact big idle sessions before their prompt cache expires
+- Stop a running session turn, steer it with a message, and manage the queue
+- The phone can stop a running turn and interrupt it with a message
+- A connection journal that tells a server restart from a failed node
+- The side panel gets Ask, Tasks and Passwords tabs
+- Host_exec strict stops at the first failing command and names it
+- Agents reach every open tab, use any site without an ask, and Walnut's notes ride as hints
+- A session creates a trigger while its Walnut server is away
+- A node's turn in an old letter meets the one-place rule too
+- Set up in Chrome from Settings, and the extension keeps up with every Walnut update
+- A thread that waits on the user buzzes his phone
+- Walnut in the browser side panel, asking about the page and acting in a tab the person hands it
+- The phone link shows its QR code again
+- One place per update, a thread's news never also a letter
+- Task_history reads short: compact, limit, since
+
+### Fixed
+
+- A bulk result line's Retry and Undo act on its own job; specs wait out a cold fixture and a leaving lead row
+- The interrupt route and Send now follow the boot-policy, agent-parity and picture-box rules
+- The reader's own scroll back to the end turns following on again
+- Daemon.pid is written before daemon.port
+- Probe cli-fast's call path in a clean env, place import.meta.url reads by the source map
+- Cli-fast runs strict, keeps import.meta.url to Walnut's files, and is probed before it lands
+- Bun builds dist/cli-fast.js as CommonJS with bytecode, a data command starts ~5-10x faster
+- The Browser extension pane is a settings section; the Devices spec counts only DELETEs
+- The side panel's task reply is Walnut's answer box
+- A retry of an interrupting send stops the turn only once
+- A Connect press only dials; the host is read once on its new link
+- The session host change meets its ratchets
+- A fleet run reports when it started, not its simulator's UDID
+- One place per update is prompt text only, no server refusal
+- The shipped skill, the launch parity list and the hints e2e follow the object-context hint
+- A fleet run says when it ran (UTC), how long, and its counts
+- A strict pipe that failed in its middle is named by its line and member
+- An edit to ios-fleet-test.sh during a run no longer breaks the run
+- A fleet iOS run goes to the other Macs first, and to this Walnut's own Mac only when none can take it
+- Side panel tabs keep a held selection, follow the page, hide a shown password
+- A deploy no longer asks again to allow Walnut on the local network
+- The extension setup's clipboard write hears its child's stdin
+- A phone stays signed in past Safari's 7-day storage rule
+- The compiled walnut file starts from bytecode, so every walnut call is ~650 ms faster
+- The daemon version hash lists host-exec-clt.ts too
+- A host that connects is read once, so its Overview card and profile fill without a press
+- Host_exec at its cap waits for a slot instead of refusing, and a burst can no longer pass the cap
+- A Mac without the Command Line Tools never shows their install dialog from host_exec
+- A machine away during a relay change is still dialled on the relay it was last seen on
+- Uninstall forgets the restart mark, so walnut calls stop waiting 45 s for a daemon that never comes
+- An offline host network machine says it is offline, not that its daemon failed
+- A shown value stays until a newer one comes, across failures, restarts and reopens
+- One npm install at a time per Walnut, the server's own and `walnut update`'s
+- A line the CLI read but never answered is sent again once
+- A phone pan up while a reply streams stays where the finger left it
+- Parenthesized noun lists and enumeration-comma items are not several things
+- A thread's buzz holds the absence only while it still waits on him
+- A decision is a thread's only through a task that one open thread went to
+- A field rehearsal skips a start point published after its release was picked, and a failed field-start runs nothing
+- The Org page's own overlays are solid, never see-through
+- A host card never shows a bare "?": sessions from Walnut's records, every unknown says why
+
 ## [0.6.26] - 2026-11-05
 
 ### Added
