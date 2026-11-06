@@ -1,11 +1,12 @@
 /**
- * A task's detail on a phone: each session row keeps its title readable and puts
- * its git state (branch, uncommitted files, +/- lines, unpushed commits) on a
- * line of its own, clear of the title and of the time. Beside the title it took
- * the whole width and ran into the time.
+ * A task's detail on a phone: each session row keeps its title readable, its time
+ * beside it, and no git state of its own. Git status stays out of every task row
+ * (9a627232f); the session's branch, uncommitted files and unpushed commits are in
+ * its Changed tab (session-git-glance.spec.ts). The fixture session has
+ * uncommitted files and an unpushed commit, so a row that drew git state would show it.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { GIT_GLANCE_SESSION } from './git-glance-fixture'
+import { GIT_GLANCE_BRANCH, GIT_GLANCE_SESSION } from './git-glance-fixture'
 import { PHONE } from './phone-helpers'
 
 test.use({
@@ -19,39 +20,37 @@ test.use({
 
 /** The session, by its link, then its task's detail from the session's menu. */
 async function openDetail(page: Page): Promise<void> {
+  // The session's git state has been read before the detail opens, so a row that
+  // still drew it would have it to draw.
+  const gitRead = page.waitForResponse((r) => r.url().includes('/api/sessions/git-status') && r.url().includes(GIT_GLANCE_SESSION) && r.ok(), { timeout: 30_000 })
   await page.goto(`/?s1=${GIT_GLANCE_SESSION}`)
   await expect(page.locator(`.main-page-session-column.is-mobile-active .session-panel[data-session-id="${GIT_GLANCE_SESSION}"]`)).toBeVisible({ timeout: 30_000 })
+  await gitRead
   await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
   await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
   await expect(page.locator('.task-detail-modal')).toBeVisible({ timeout: 10_000 })
 }
 
 for (const width of [390, 320]) {
-  test(`a session row in a task's detail at ${width} px: the title, then the git state, nothing overlapping`, async ({ page }) => {
+  test(`a session row in a task's detail at ${width} px: the title and its time, no git state, nothing overlapping`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 })
     await openDetail(page)
     const item = page.locator('.task-detail-modal').locator(`.todo-detail-session-item[data-session-id="${GIT_GLANCE_SESSION}"]`)
-    const line = item.locator('.tdp-row-gitline .git-glance-line')
-    await expect(line).toBeVisible({ timeout: 20_000 })
-    // The words, or (short of room) the pill's icons: the numbers stay either way.
-    await expect(line.getByTestId('git-glance-files')).toHaveText(/^\d+( uncommitted)?$/)
-    await expect(line.getByTestId('git-glance-ahead')).toHaveText(/^\u21911( unpushed)?$/)
+    const titleEl = item.locator('.tdp-row-title')
+    await expect(titleEl).toBeVisible({ timeout: 20_000 })
+    await expect(titleEl).not.toHaveClass(/is-loading/)
 
-    const box = async (sel: string) => (await item.locator(sel).first().boundingBox())!
+    // No git state in the row, though the session has uncommitted and unpushed work.
+    await expect(item.locator('.git-glance, .tdp-row-gitline')).toHaveCount(0)
+    await expect(item).not.toContainText(GIT_GLANCE_BRANCH)
+
     const rowBox = (await item.boundingBox())!
-    const title = await box('.tdp-row-title')
-    const ago = await box('.tdp-row-end')
-    const git = (await line.boundingBox())!
-    // The title reads (not squeezed to nothing), and the git line starts below it.
+    const title = (await titleEl.boundingBox())!
+    const ago = (await item.locator('.tdp-row-end').boundingBox())!
+    // The title reads (not squeezed to nothing), the time sits after it, and both stay in the row.
     expect(title.width).toBeGreaterThan(80)
-    expect(git.y).toBeGreaterThanOrEqual(title.y + title.height - 1)
-    expect(git.y).toBeGreaterThanOrEqual(ago.y + ago.height - 1)
-    // It stays inside its row, and every part of it is inside the line's own box.
-    expect(git.x + git.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1)
-    const parts = await line.evaluate((el) => {
-      const r = el.getBoundingClientRect()
-      return [...el.children].map((c) => { const b = c.getBoundingClientRect(); return b.width === 0 || (b.right <= r.right + 1 && b.left >= r.left - 1) })
-    })
-    expect(parts.every(Boolean)).toBe(true)
+    expect(ago.x).toBeGreaterThanOrEqual(title.x + title.width - 1)
+    expect(ago.x + ago.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1)
+    expect(title.x).toBeGreaterThanOrEqual(rowBox.x - 1)
   })
 }
