@@ -39,7 +39,7 @@ describe('status folds go through the one fold rule', () => {
   });
 
   it('nobody but useFoldStore reads or writes a fold store in localStorage', () => {
-    const keys = /LS_STATUS_SECTIONS_KEY|LS_PROJECT_FOLDS_KEY|walnut-todo-status-sections|walnut-todo-project-status-folds/;
+    const keys = /LS_STATUS_SECTIONS_KEY|LS_JUMP_SECTIONS_KEY|LS_PROJECT_FOLDS_KEY|walnut-todo-status-sections|walnut-todo-jump-status-sections|walnut-todo-project-status-folds/;
     const off = files
       .filter((f) => !RULE_FILES.has(f.path) && keys.test(f.text) && /localStorage\.(get|set|remove)Item/.test(f.text))
       .filter((f) => f.text.split('\n').some((line) => keys.test(line) && /localStorage/.test(line)))
@@ -52,7 +52,7 @@ describe('status folds go through the one fold rule', () => {
     const toggles = files.filter((f) => /aria-expanded/.test(f.text) && /STATUS_SECTION_(TITLES|LABELS)|statusFoldTooltip/.test(f.text));
     expect(toggles.length).toBeGreaterThan(0);
     const off = toggles.filter((f) => !f.text.includes('FOLD_KEY_ATTR')).map((f) => f.path);
-    expect(off, 'a status fold element without FOLD_KEY_ATTR: the 15-minute fold would close it under the pointer').toEqual([]);
+    expect(off, 'a status fold element without FOLD_KEY_ATTR: the clock could not find it on the page').toEqual([]);
   });
 
   it('every status section has a fold kind', () => {

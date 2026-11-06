@@ -129,7 +129,7 @@ import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, project
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
 import { useFoldStore } from './useFoldStore';
 import {
-  LS_STATUS_SECTIONS_KEY, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, type StatusSectionKey,
+  LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, type StatusSectionKey,
 } from './status-sections';
 import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
 import { usePageView } from '@/utils/view-memory';
@@ -2509,8 +2509,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // the tab it came from shows all of it there, every status section open, without writing the
   // saved tab or folds, so clearing the Project chip puts the view back as it was. Kept like a view.
   const [projectJump, setProjectJump] = usePageView<ProjectJump | null>('home', 'projectJump', null, isProjectJump);
-  const keepPickedTab = (section: TodoSection) => { startTransition(() => setActiveSection(section)); persistSection(section); };
+  // The sections inside a jump open and fold by the one fold rule too, in a store of their own:
+  // every section open when a jump starts, then the same clock (Working, Waiting / snoozed and
+  // Completed fold after 60 s with no action in the panel) and the user's own folds.
   const jumpLive = projectJumpHolds(projectJump, filterState.projects);
+  const jumpFolds = useFoldStore(LS_JUMP_SECTIONS_KEY, statusSectionFoldKind, undefined, jumpLive);
+  const openJumpFolds = jumpFolds.setOpen;
+  const keepPickedTab = (section: TodoSection) => { startTransition(() => setActiveSection(section)); persistSection(section); };
   const jumpLiveRef = useRef(jumpLive);
   jumpLiveRef.current = jumpLive;
   const jumpPicked = projectJump?.section ?? null;
@@ -2528,8 +2533,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     log.info('todo-panel', 'project jump', { project });
     const state = filterStateRef.current;
     setProjectJump((prev) => startProjectJump(project, projectJumpHolds(prev, state.projects) ? prev : null));
+    for (const key of STATUS_SECTION_ORDER) openJumpFolds(key, true);
     applyFilters({ ...state, projects: [project] }, 'board');
-  }, [applyFilters, setProjectJump]);
+  }, [applyFilters, setProjectJump, openJumpFolds]);
   // Mirror in a ref: the focus/locate effect reads the current section but must NOT
   // list it as a dependency (a tab switch would re-run the whole locate pass).
   // Holds the EFFECTIVE section (assigned after search-view resolution below).
@@ -4802,32 +4808,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** Flat draws Needs you as its own section; By project keeps those rows in the list. */
   const needsSection = sectionsActive && panelDesign === 'status';
   // Open and fold by the one fold rule (section-fold-rule.ts): Watching and Needs you keep the
-  // user's choice, the rest fold by default and fold again 15 minutes after they were opened.
-  const sectionFolds = useFoldStore(LS_STATUS_SECTIONS_KEY, statusSectionFoldKind);
+  // user's choice, the rest fold by default and fold again 60 s after the user's last action in the panel.
+  const sectionFolds = useFoldStore(LS_STATUS_SECTIONS_KEY, statusSectionFoldKind, undefined, !jumpLive);
   const sectionOpen = useMemo(() => statusSectionsOpen(sectionFolds.store), [sectionFolds.store]);
   const sectionOpenRef = useRef(sectionOpen);
   sectionOpenRef.current = sectionOpen;
   const setSectionFold = sectionFolds.setOpen;
   const setSectionOpenTo = useCallback((key: StatusSectionKey, open: boolean) => setSectionFold(key, open), [setSectionFold]);
-  // Inside a project jump the sections fold on the jump's own state, never the saved one.
-  const shownSectionOpen = jumpLive ? projectJump.open : sectionOpen;
+  // Inside a project jump the sections fold on the jump's own store, never the saved one.
+  const jumpOpen = useMemo(() => statusSectionsOpen(jumpFolds.store), [jumpFolds.store]);
+  const shownSectionOpen = jumpLive ? jumpOpen : sectionOpen;
+  const toggleJumpFold = jumpFolds.toggle;
   const toggleStatusSection = useCallback((key: StatusSectionKey) => {
-    if (jumpLiveRef.current) {
-      setProjectJump((prev) => (prev ? { ...prev, open: { ...prev.open, [key]: !prev.open[key] } } : prev));
-      return;
-    }
+    if (jumpLiveRef.current) { toggleJumpFold(key); return; }
     setSectionOpenTo(key, !sectionOpenRef.current[key]);
-  }, [setSectionOpenTo, setProjectJump]);
-  /** Open one section for a locate: the jump's own state while a jump is on, else the saved one. */
-  const shownSectionOpenRef = useRef(shownSectionOpen);
-  shownSectionOpenRef.current = shownSectionOpen;
+  }, [setSectionOpenTo, toggleJumpFold]);
+  /** Open one section for a locate: the jump's own store while a jump is on, else the saved one. */
   const openStatusSection = useCallback((key: StatusSectionKey) => {
-    // Outside a jump an open auto fold still hears it: its 15 minutes start again for the row shown.
-    if (jumpLiveRef.current) {
-      if (shownSectionOpenRef.current[key]) return;
-      setProjectJump((prev) => (prev ? { ...prev, open: { ...prev.open, [key]: true } } : prev));
-    } else setSectionOpenTo(key, true);
-  }, [setSectionOpenTo, setProjectJump]);
+    // An open auto fold still hears it: its time starts again for the row shown.
+    if (jumpLiveRef.current) openJumpFolds(key, true);
+    else setSectionOpenTo(key, true);
+  }, [setSectionOpenTo, openJumpFolds]);
   /** The section each task was drawn in last render: one completed or parked from a
    *  section stays there through its exit grace instead of popping into the list. */
   const lastPlaceRef = useRef<Map<string, StateSectionKey>>(new Map());

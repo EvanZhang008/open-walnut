@@ -62,6 +62,8 @@ export const STATUS_SECTION_BATCH = 30;
 
 /** localStorage key of the sections' fold store (section-fold-rule.ts; walnut-todo-* keys sync across devices, ui-prefs-sync.ts). */
 export const LS_STATUS_SECTIONS_KEY = 'walnut-todo-status-sections';
+/** The status sections' folds inside a project jump (project-jump.ts), kept apart from the saved ones. */
+export const LS_JUMP_SECTIONS_KEY = 'walnut-todo-jump-status-sections';
 
 type Watchable = Pick<Task, 'id'> & { watched_at?: string | null };
 

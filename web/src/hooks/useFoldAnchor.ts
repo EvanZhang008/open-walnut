@@ -19,7 +19,7 @@ import { useEffect, type RefObject } from 'react';
  * its place in the list: scrolled until that place is where the heading was showing.
  * A click that changes nothing (its ··· menu) moves nothing.
  *
- * A fold the clock makes (a status fold folding 15 minutes after it was opened) is held the
+ * A fold the clock makes (a status fold folding 60 s after the last action in its panel) is held the
  * same way: its toggle dispatches FOLD_PIN_EVENT right before it folds.
  *
  * A fold near the end of the list is the case scrolling alone cannot answer: the
@@ -28,7 +28,7 @@ import { useEffect, type RefObject } from 'react';
  * as the user scrolls back up (only the part still on screen is kept).
  */
 
-/** A fold that folds by itself (a status fold's 15-minute clock, useFoldStore) asks for the
+/** A fold that folds by itself (a status fold's 60-second clock, useFoldStore) asks for the
  *  same hold as a click: it dispatches this event from its toggle just before it folds. */
 export const FOLD_PIN_EVENT = 'walnut-fold-pin';
 /** Its `detail`: `inView` lands a heading scrolled above the scroller on its top edge, since

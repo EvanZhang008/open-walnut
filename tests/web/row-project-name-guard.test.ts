@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import {
-  allSectionsOpen, isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump,
+  isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump,
 } from '../../web/src/components/tasks/project-jump';
 
 const WEB_SRC = join(__dirname, '../../web/src');
@@ -99,10 +99,18 @@ describe('a task row\'s project name filters to the project', () => {
 });
 
 describe('project-jump model', () => {
-  it('stays on the tab the click came from, with every section open', () => {
+  it('opens every section in the jump\'s own fold store, folded by the one rule', () => {
+    const panel = readFileSync(join(WEB_SRC, 'components/tasks/TodoPanel.tsx'), 'utf8');
+    expect(panel).toMatch(/const jumpFolds = useFoldStore\(LS_JUMP_SECTIONS_KEY, statusSectionFoldKind, undefined, jumpLive\)/);
+    // The saved sections leave the page to the jump while it holds.
+    expect(panel).toMatch(/const sectionFolds = useFoldStore\(LS_STATUS_SECTIONS_KEY, statusSectionFoldKind, undefined, !jumpLive\)/);
+    expect(panel).toMatch(/for \(const key of STATUS_SECTION_ORDER\) openJumpFolds\(key, true\)/);
+    expect(panel).toMatch(/const shownSectionOpen = jumpLive \? jumpOpen : sectionOpen/);
+  });
+
+  it('stays on the tab the click came from', () => {
     const j = startProjectJump('Garden', null);
-    expect(j).toEqual({ project: 'Garden', open: allSectionsOpen(), section: null });
-    expect(Object.values(j.open).every(Boolean)).toBe(true);
+    expect(j).toEqual({ project: 'Garden', section: null });
     // A pin group's project click filters that group; it never goes to All by itself.
     expect(projectJumpSection(j, 'focus')).toBe('focus');
     expect(projectJumpSection(j, 'ct_reading')).toBe('ct_reading');
@@ -114,7 +122,6 @@ describe('project-jump model', () => {
     const prev = { ...startProjectJump('Garden', null), section: 'focus' };
     const next = startProjectJump('Kitchen', prev);
     expect(next.section).toBe('focus');
-    expect(next.open.done).toBe(true);
   });
 
   it('holds only while the Project filter is exactly its project', () => {
@@ -131,8 +138,10 @@ describe('project-jump model', () => {
   it('reads back only a well-formed stored jump', () => {
     expect(isProjectJump(null)).toBe(true);
     expect(isProjectJump(startProjectJump('Garden', null))).toBe(true);
-    expect(isProjectJump({ project: 'Garden', section: null })).toBe(false);
-    expect(isProjectJump({ project: 3, open: allSectionsOpen(), section: null })).toBe(false);
+    // A jump an older build stored, with its own open map, still reads back.
+    expect(isProjectJump({ project: 'Garden', open: { done: true }, section: null })).toBe(true);
+    expect(isProjectJump({ project: 'Garden' })).toBe(false);
+    expect(isProjectJump({ project: 3, section: null })).toBe(false);
     expect(isProjectJump('Garden')).toBe(false);
   });
 });

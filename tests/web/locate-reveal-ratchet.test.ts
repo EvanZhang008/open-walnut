@@ -49,7 +49,8 @@ const KNOWN: Record<string, Entry> = {
   queryFoldedProjects: { opens: 'setQueryFoldedProjects(' },     // a list project folded for the active filter
   expandedParents: { opens: 'setExpandedParents(' },             // every collapsed parent up the chain
   folderFolds: { opens: 'setFolderFolds(' },                     // a folder, in its tier or the list
-  sectionFolds: { opens: 'openStatusSection(' },                 // a status section (the jump's own fold while a project jump is on)
+  sectionFolds: { opens: 'openStatusSection(' },                 // a status section
+  jumpFolds: { opens: 'openStatusSection(' },                    // the same, inside a project jump
   openProjectFolds: { opens: 'toggleProjectFold(' },             // a project's Waiting / Completed fold
   listBatch: { hidesNoRow: 'cutRows always draws the focused row past the batch' },
   folderTargetId: { hidesNoRow: 'the folder a drag hovers, not a fold' },

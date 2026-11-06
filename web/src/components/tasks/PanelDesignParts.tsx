@@ -10,7 +10,7 @@ import { FOLD_KEY_ATTR, foldIsOpen, projectFoldKind } from './section-fold-rule'
 import { useFoldStore } from './useFoldStore';
 import { statusFoldTooltip } from './status-sections';
 
-/** The open folds, by the one fold rule (section-fold-rule.ts): folded by default, folded again 15 minutes after opening. */
+/** The open folds, by the one fold rule (section-fold-rule.ts): folded by default, folded again 60 s after the last action in the panel. */
 export function useProjectFolds(): [Set<string>, (key: string) => void] {
   const { store, toggle } = useFoldStore(LS_PROJECT_FOLDS_KEY, projectFoldKind);
   const open = useMemo(() => new Set(Object.keys(store).filter((k) => foldIsOpen(store, k, projectFoldKind))), [store]);

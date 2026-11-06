@@ -2,7 +2,7 @@
  * The one fold rule of the task panel's status folds (web/src/components/tasks/section-fold-rule.ts):
  * Watching and Needs you open first, then the user's choice; Working, Waiting / snoozed,
  * Completed and every per-project fold folded by default and folded again 15 minutes after
- * they were opened.
+ * they were opened; since 2026-11-06 that time is 60 s after the last action in their panel.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -40,12 +40,12 @@ describe('the fold rule', () => {
     expect(foldIsOpen(s, 'needs', kind)).toBe(true);
   });
 
-  it('an auto fold opened holds its opening time and is due 15 minutes later', () => {
+  it('an auto fold opened holds its opening time and is due 60 s later', () => {
     const s = setFold({}, 'waiting', true, kind, T0);
     expect(s).toEqual({ waiting: T0 });
     expect(foldIsOpen(s, 'waiting', kind)).toBe(true);
     expect(nextAutoClose(s, kind)).toBe(T0 + FOLD_AUTO_CLOSE_MS);
-    expect(FOLD_AUTO_CLOSE_MS).toBe(15 * 60_000);
+    expect(FOLD_AUTO_CLOSE_MS).toBe(60_000);
     expect(foldIsDue(s, 'waiting', kind, T0 + FOLD_AUTO_CLOSE_MS - 1)).toBe(false);
     expect(foldIsDue(s, 'waiting', kind, T0 + FOLD_AUTO_CLOSE_MS)).toBe(true);
     // Due is not folded: only the page's timer (or a load) folds it, so a render never does.
@@ -98,67 +98,29 @@ describe('the fold rule', () => {
 });
 
 describe('foldBusy', () => {
-  interface FakeFold { key: string; hover: boolean; contains?: boolean; menu?: boolean; openTask?: boolean; top?: number }
-  const fakeDoc = (els: FakeFold[], active: { editing: boolean; keyboard?: boolean; toggle?: boolean } | null = null, listTop = 0): Document => {
-    const doc = {
+  interface FakeFold { key: string; hover?: boolean; contains?: boolean; menu?: boolean; openTask?: boolean; top?: number }
+  const fakeDoc = (els: FakeFold[], active: { editing: boolean; keyboard?: boolean } | null = null): Document => ({
     body: {},
-    defaultView: { innerWidth: 1280, innerHeight: 800 },
-    // The panel's list area: the whole window here (no scroller around the fold).
-    scrollingElement: { getBoundingClientRect: () => ({ top: listTop, bottom: 800, left: 0, right: 1280, height: 800 - listTop }) },
-    activeElement: active && {
-      matches: (sel: string) => (sel === ':focus-visible' ? !!active.keyboard : active.editing),
-      hasAttribute: (name: string) => name === 'aria-expanded' && !!active.toggle,
-    },
+    activeElement: active && { matches: (sel: string) => (sel === ':focus-visible' ? !!active.keyboard : active.editing) },
     querySelectorAll: () => els.map((e) => ({
       getAttribute: () => e.key,
-      matches: () => e.hover,
+      matches: () => !!e.hover,
       contains: () => !!e.contains,
       querySelector: (sel: string) => ((sel.includes('menu') ? e.menu : e.openTask) ? {} : null),
-      getBoundingClientRect: () => ({ top: e.top ?? 100, bottom: (e.top ?? 100) + 200, left: 0, right: 400, height: 200 }),
-      parentElement: null,
-      ownerDocument: doc,
     })),
-    };
-    return doc as unknown as Document;
-  };
+  }) as unknown as Document;
 
-  it('the pointer over the fold, or typing inside it, keeps it open; a focused toggle does not', () => {
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: true }]), 'waiting')).toBe(true);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, contains: true }], { editing: true }), 'waiting')).toBe(true);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, contains: true }], { editing: false }), 'waiting')).toBe(false);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false }]), 'waiting')).toBe(false);
-    expect(foldBusy(fakeDoc([{ key: 'done', hover: true }]), 'waiting')).toBe(false);
+  it('typing inside it, or a menu open from one of its rows, holds it', () => {
+    expect(foldBusy(fakeDoc([{ key: 'waiting', contains: true }], { editing: true }), 'waiting')).toBe(true);
+    expect(foldBusy(fakeDoc([{ key: 'waiting', menu: true }]), 'waiting')).toBe(true);
+    expect(foldBusy(fakeDoc([{ key: 'done', menu: true }]), 'waiting')).toBe(false);
     expect(foldBusy(fakeDoc([]), 'waiting')).toBe(false);
   });
 
-  it('a keyboard focus on one of its rows keeps it open (moved there, or while they work); on its own toggle it does not', () => {
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, contains: true, top: 2000 }], { editing: false, keyboard: true }), 'waiting', () => true)).toBe(true);
-    // Moved there with the keyboard: it holds with no work in the panel since.
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, contains: true, top: 2000 }], { editing: false, keyboard: true }), 'waiting', () => false, () => true)).toBe(true);
-    // Put back by a closing menu, left alone: the focus no longer holds it.
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, contains: true }], { editing: false, keyboard: true }), 'waiting')).toBe(false);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, contains: true, top: 2000 }], { editing: false, keyboard: true, toggle: true }), 'waiting', () => true)).toBe(false);
-  });
-
-  it('the task the user has open, among its rows, keeps it open', () => {
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, openTask: true, top: 2000 }]), 'waiting')).toBe(true);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, openTask: false, top: 2000 }]), 'waiting')).toBe(false);
-  });
-
-  it('a menu open from one of its rows keeps it open', () => {
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, menu: true }]), 'waiting')).toBe(true);
-  });
-
-  it('on screen while the user reads around it keeps it open; off screen or away it folds', () => {
-    const reading = () => true;
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false }]), 'waiting', reading)).toBe(true);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: 2000 }]), 'waiting', reading)).toBe(false);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -500 }]), 'waiting', reading)).toBe(false);
-    // Scrolled up under the panel's toolbar (its list starts at 120): not on screen.
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -100 }], null, 120), 'waiting', reading)).toBe(false);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -60 }], null, 120), 'waiting', reading)).toBe(true);
-    // Only its bottom edge (a few px of padding) below the toolbar: not on screen either.
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -76 }], null, 120), 'waiting', reading)).toBe(false);
-    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false }]), 'waiting', () => false)).toBe(false);
+  it('no action holds it: the pointer resting on it, a focus a click left, its row the task open (2026-11-06)', () => {
+    expect(foldBusy(fakeDoc([{ key: 'done', hover: true }]), 'done')).toBe(false);
+    expect(foldBusy(fakeDoc([{ key: 'done', contains: true }], { editing: false, keyboard: true }), 'done')).toBe(false);
+    expect(foldBusy(fakeDoc([{ key: 'done', openTask: true }]), 'done')).toBe(false);
+    expect(foldBusy(fakeDoc([{ key: 'done', hover: true, contains: true, openTask: true }], { editing: false }), 'done')).toBe(false);
   });
 });
