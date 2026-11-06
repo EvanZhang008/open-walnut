@@ -20,6 +20,8 @@ export function classifyClaudeOutside(opts: {
   rollup: CostRollup; host: string; metas: ClaudeSessionMeta[]; hasRows: (sessionId: string) => boolean;
   /** Sessions Walnut has a record of on this machine, each with the host name its record uses (a machine reached two ways has two). */
   known: ReadonlyMap<string, string>;
+  /** Known sessions Walnut imported because they began outside it: the entrypoint of a script (claude -p) does not make them Walnut's. */
+  imported?: ReadonlySet<string>;
 }): UsageOwner[] {
   const { rollup, host } = opts;
   const origins: RunOrigin[] = [];
@@ -33,7 +35,8 @@ export function classifyClaudeOutside(opts: {
     // Walnut's own entrypoint settles a session it has a record of, even over a look an older build kept as outside.
     const ownEntry = WALNUT_SESSION_ENTRYPOINTS.has(meta.entrypoint);
     let outside: boolean;
-    if (known) outside = ownEntry ? false : keptStored || !!meta.entrypoint;
+    const importedHere = known && !!opts.imported?.has(meta.sessionId);
+    if (known) outside = importedHere ? !!meta.entrypoint || keptStored : ownEntry ? false : keptStored || !!meta.entrypoint;
     else {
       // The first look decides and is kept: rows stored later for the session must not turn it into Walnut's.
       if (before) { owners.push({ sessionId: meta.sessionId, taskId: taskIdOfCwd(meta.cwd) }); continue; }
@@ -41,7 +44,7 @@ export function classifyClaudeOutside(opts: {
       owners.push({ sessionId: meta.sessionId, taskId: taskIdOfCwd(meta.cwd) });
     }
     // `stored`: the rows came from this pass, not from a Walnut session's record (an import's day cutoff ignores them).
-    origins.push({ host: home, sessionId: meta.sessionId, originator: meta.entrypoint, provider: '', cwd: meta.cwd, outside, stored: (keptStored && !(known && ownEntry)) || outside, firstAt: '', lastAt: '' });
+    origins.push({ host: home, sessionId: meta.sessionId, originator: meta.entrypoint, provider: '', cwd: meta.cwd, outside, stored: (keptStored && !(known && ownEntry && !importedHere)) || outside, firstAt: '', lastAt: '' });
   }
   rollup.recordOrigins(origins);
   return owners;

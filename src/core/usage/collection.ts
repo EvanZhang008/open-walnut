@@ -105,8 +105,14 @@ async function collect(since: string | undefined, until: string) {
     for (const o of owners) byId.set(o.sessionId, host);
     ownerNames.set(asJoined(host), byId);
   }
+  // Sessions Walnut imported because they began outside it are outside whatever entrypoint they wrote (a script's claude -p).
+  const importedIds = new Set(sessions.filter(s => /started outside Walnut/.test(s.human_note ?? '')).map(s => s.claudeSessionId));
+  for (const [host, owners] of hosts) {
+    const ids = owners.filter(o => importedIds.has(o.sessionId) && !rollup.originOf(host, o.sessionId));
+    if (ids.length) rollup.recordOrigins(ids.map(o => ({ host, sessionId: o.sessionId, originator: 'imported', provider: '', cwd: '', outside: true, stored: true, firstAt: '', lastAt: '' })));
+  }
   // A look kept as outside for a session whose record came later, on an entrypoint Walnut's own sessions write, is put right.
-  rollup.repairWalnutOrigins([...WALNUT_SESSION_ENTRYPOINTS], (host, id) => ownerNames.get(asJoined(host))?.get(id) === host);
+  rollup.repairWalnutOrigins([...WALNUT_SESSION_ENTRYPOINTS], (host, id) => ownerNames.get(asJoined(host))?.get(id) === host && !importedIds.has(id));
   const results = [];
   for (const [host, owners] of hosts) {
     try {
@@ -157,7 +163,7 @@ async function collect(since: string | undefined, until: string) {
             if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
             // Who started each outside session is noted before its responses are stored.
             const extra = evidence.outsideSessions?.length
-              ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];
+              ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, imported: importedIds, hasRows: id => responseUsageStore().hasSession(id) }) : [];
             const imported = await responseUsageStore().importHost(host, evidence, extra.length ? [...owners, ...extra] : owners);
             responses += imported.responses; verified += imported.verified; unverified += imported.unverified;
             checks = imported.checks;

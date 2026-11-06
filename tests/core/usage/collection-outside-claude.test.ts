@@ -186,6 +186,20 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     expect(rollup.originOf('__local__', 'terminal-x')?.outside).toBe(true);
   });
 
+  it('a script\'s claude -p session Walnut imported because it began outside stays outside, and is not repaired into Walnut\'s', async () => {
+    mocks.sessions.mockResolvedValue([
+      { claudeSessionId: 'walnut-run', host: '__local__', engine: 'claude', taskId: 'example-task' },
+      { claudeSessionId: 'script-run', host: '__local__', engine: 'claude', taskId: 'imp', human_note: 'Imported on request \u2014 started outside Walnut (claude -p).' },
+      { claudeSessionId: 'script-seen', host: '__local__', engine: 'claude', taskId: 'imp2', human_note: 'Imported automatically \u2014 started outside Walnut (cli).' },
+    ]);
+    const rollup = responseUsageStore().rollup;
+    rollup.recordOrigins([{ host: '__local__', sessionId: 'script-run', originator: 'sdk-cli', provider: '', cwd: '/w', outside: true, stored: true, firstAt: '', lastAt: '' }]);
+    mocks.send.mockResolvedValueOnce(page([], [], '2026-11-06T12:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T12:00:00.000Z');
+    expect(rollup.originOf('__local__', 'script-run')?.outside).toBe(true); // not repaired
+    expect(rollup.originOf('__local__', 'script-seen')).toMatchObject({ outside: true, stored: true }); // noted although the daemon sent nothing for it
+  });
+
   it('a session of the SDK session server (sdk-ts) that Walnut has a record of is Walnut\'s', async () => {
     mocks.send.mockResolvedValueOnce(page([record('m32', 'walnut-run')], [{ sessionId: 'walnut-run', entrypoint: 'sdk-ts', cwd: '/home/u/tasks/example-task' }], '2026-11-06T09:30:00.000Z'));
     await collectUsage(INCREMENTAL, '2026-11-06T09:30:00.000Z');

@@ -438,6 +438,7 @@ export function originatorLabel(originator: string): string {
   if (originator === 'codex_vscode') return 'Codex VS Code';
   if (originator === 'walnut-utility') return 'Walnut helper';
   if (originator === 'unknown') return 'Claude Code (older)';
+  if (originator === 'imported') return 'Claude Code (imported)';
   // Claude Code sessions: the entrypoint the transcript names.
   if (originator === 'cli') return 'Claude Code terminal';
   if (originator === 'sdk-cli') return 'Claude Code (claude -p)';

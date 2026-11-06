@@ -130,7 +130,7 @@ export function UsageSection() {
         <SettingsGroup><SettingsLoadingRow>Loading usage...</SettingsLoadingRow></SettingsGroup>
       ) : (
         <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view}>
-          <Headline report={shown} days={days} />
+          <Headline report={shown} days={days} origin={origin} />
           {shown.totals.requests === 0 ? (
             <SettingsGroup><SettingsEmpty>No model calls in this period.</SettingsEmpty></SettingsGroup>
           ) : (
@@ -161,11 +161,13 @@ export function unpricedNote(report: CostReport): string | undefined {
   return `Not in the total: ${parts.join('; ')}.`;
 }
 
-function Headline({ report, days }: { report: CostReport; days: string[] }) {
+function Headline({ report, days, origin }: { report: CostReport; days: string[]; origin: CostOrigin }) {
   const t = report.totals;
   const unpriced = unpricedNote(report);
   const busiest = report.daily.reduce<CostReport['daily'][number] | undefined>((m, d) => (!m || d.costUsd > m.costUsd ? d : m), undefined);
-  const dayCount = Math.max(1, days.length);
+  // Walnut or Outside Walnut alone show nothing on the days an imported bill covers, so their average is over the days that have usage.
+  const billed = (report.started?.imported?.costUsd ?? 0) > 0;
+  const dayCount = Math.max(1, origin !== 'all' && billed ? report.daily.filter((d) => d.costUsd > 0).length : days.length);
   // Codex usage that bills the account Codex is signed in to, not a proxy: shown beside the total so it is not missed.
   const direct = (report.accounts ?? []).filter((a) => a.direct).reduce((n, a) => n + a.costUsd, 0);
   return (
