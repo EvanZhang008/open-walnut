@@ -8,14 +8,14 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 
-const TRIGGERS = ['every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request'] as const
+const TRIGGERS = ['every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_request'] as const
 const ROLES = ['main', 'lead', 'worker', 'ask', 'other'] as const
 
 const TRIGGER_HELP =
   'every_turn = every message; every_n_turns = every `every_turns` messages; session_start = the first message of '
   + 'a conversation; after_compaction = the first message after a compaction (also stated by the post-compaction hook); '
-  + 'on_change = when what it says changed (a mode switch, an edited setting); on_drift = after a reply broke its rule '
-  + '(the reply language); on_request = only when the sender asks (a voice send, a question number).'
+  + 'on_change = when what it says changed (a mode switch, an edited setting); '
+  + 'on_request = only when the sender asks (a voice send, a question number).'
 
 type HintRow = { kind: string; label: string; enabled: boolean; triggers: string[]; every_turns?: number; placement: string; built_in: boolean }
 
@@ -29,7 +29,7 @@ defineOp({
   title: 'List the message hints',
   description:
     'Every message hint: Walnut text sent with a message to a session\'s model as a <system-reminder> block '
-    + '(question number, rich output, reply language, voice reply, and custom ones), with when each is sent, who gets it '
+    + '(question number, rich output, voice reply, the org notes, and custom ones), with when each is sent, who gets it '
     + 'and where it goes. With `session`, also what that session was told and which hints its next message would carry. '
     + TRIGGER_HELP,
   input: {
@@ -54,9 +54,9 @@ defineOp({
   description:
     'Change when a message hint is sent, who gets it, or where it goes; or add a custom hint (a new kind with `text`). '
     + 'Only the fields you pass change. ' + TRIGGER_HELP
-    + ' A built-in keeps its own text: the reply language and the output mode are their own settings.',
+    + ' A built-in keeps its own text: the output mode is its own setting.',
   input: {
-    kind: z.string().min(2).describe('The hint kind, e.g. "rich-output", "reply-language", or a new one for a custom hint'),
+    kind: z.string().min(2).describe('The hint kind, e.g. "rich-output", "brief", or a new one for a custom hint'),
     enabled: z.boolean().optional(),
     triggers: z.array(z.enum(TRIGGERS)).optional().describe('When it is sent: any one that holds sends it'),
     every_turns: z.number().int().min(1).max(1000).optional().describe('For every_n_turns'),

@@ -7,7 +7,7 @@
  * A hint is one Claude Code style block, kept apart from the user's text:
  *
  *   <system-reminder>
- *   Walnut (reply-language): Talk to the user in Chinese; ...
+ *   Walnut (rich-output): rich output mode is on. ...
  *   </system-reminder>
  *
  * The first words name Walnut and the hint's kind (plus an optional argument, the
@@ -225,4 +225,75 @@ export function replaceHintBlocks(raw: string, line: (hint: CarriedHint) => stri
     last = m.index + m[0].length;
   }
   return out + raw.slice(last);
+}
+
+/**
+ * Rows the queue sends as one line, each composed on its own: a hint block a LATER row of the line
+ * also carries, word for word, is taken out of this one (the queue walks the rows newest first;
+ * `seen` holds what the later rows carry, updated here), so the model reads it once per message
+ * (2026-11-06 audit: 16 merged messages in a day carried one hint two or three times). The last
+ * copy is the one kept: a mode switched on, off and on again ends on, as its rows did. A block
+ * that says something else (another thread, a mode switched since) stays; one of a kind in `drop`
+ * goes whatever it says. The separators around a dropped block go with it.
+ */
+export function dropRepeatedHintBlocks(raw: string, seen: Set<string>, drop?: ReadonlySet<string>): string {
+  if (!raw.includes('system-reminder')) return raw;
+  let out = '';
+  let last = 0;
+  let cut = false;
+  BLOCK_RE.lastIndex = 0;
+  for (let m = BLOCK_RE.exec(raw); m; m = BLOCK_RE.exec(raw)) {
+    let between = raw.slice(last, m.index);
+    // The separator after a block dropped at the very start goes with it.
+    if (cut && out === '') between = between.replace(/^\n{1,2}/, '');
+    out += between;
+    if (seen.has(m[0]) || drop?.has(m[1])) { out = out.replace(/\n{1,2}$/, ''); cut = true; }
+    else { seen.add(m[0]); out += m[0]; }
+    last = m.index + m[0].length;
+  }
+  let rest = raw.slice(last);
+  if (cut && out === '') rest = rest.replace(/^\n{1,2}/, '');
+  out += rest;
+  return out.trim() === '' ? raw : out;
+}
+
+/**
+ * Rows of one line, oldest first: a threads cleanup a fresh row carries joins the last threads
+ * filing note a fresh row carries ("... Also threads to tidy: ..."), as planHints does inside one
+ * row, so the line holds one threads note and the cleanup still reaches the model (dropping it, the
+ * cleanup was recorded as told and never read). With no fresh filing note, nothing changes.
+ */
+export function foldTidyIntoThreads(rows: ReadonlyArray<{ message: string; fresh: boolean }>): string[] {
+  const out = rows.map((r) => r.message);
+  const blocksOf = (raw: string) => (raw.includes('system-reminder') ? [...raw.matchAll(BLOCK_RE)] : []);
+  let at = -1;
+  rows.forEach((r, i) => { if (r.fresh && blocksOf(r.message).some((m) => m[1] === 'threads')) at = i; });
+  if (at < 0) return out;
+  const tidy: string[] = [];
+  rows.forEach((r, i) => {
+    if (!r.fresh) return;
+    const found = blocksOf(r.message).filter((m) => m[1] === 'threads-tidy').map((m) => m[3].trim());
+    if (!found.length) return;
+    for (const t of found) if (!tidy.includes(t)) tidy.push(t);
+    out[i] = dropRepeatedHintBlocks(r.message, new Set(), new Set(['threads-tidy']));
+  });
+  if (!tidy.length) return out;
+  const filed = blocksOf(out[at]).filter((m) => m[1] === 'threads').pop()!;
+  const joined = renderHintBlock('threads', `${filed[3].trim()} Also ${tidy.join(' ')}`, filed[2]);
+  out[at] = out[at].slice(0, filed.index) + joined + out[at].slice(filed.index! + filed[0].length);
+  return out;
+}
+
+/** The Walnut hint blocks in a text, word for word, in order. */
+export function hintBlocksIn(raw: string): string[] {
+  if (!raw.includes('system-reminder')) return [];
+  BLOCK_RE.lastIndex = 0;
+  return [...raw.matchAll(BLOCK_RE)].map((m) => m[0]);
+}
+
+/** The kinds of the Walnut hint blocks in a text, in order. */
+export function hintKindsIn(raw: string): string[] {
+  if (!raw.includes('system-reminder')) return [];
+  BLOCK_RE.lastIndex = 0;
+  return [...raw.matchAll(BLOCK_RE)].map((m) => m[1]);
 }

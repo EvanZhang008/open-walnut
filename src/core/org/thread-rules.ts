@@ -1,9 +1,9 @@
 /**
  * The one rule every Org node follows to keep its Threads clean, in the words each place says it:
- * the node's prompt (sessions/session-context.ts THREADS_LINE), the `threads` hint on each of the
- * user's messages and the `threads-tidy` reminder (thread-capture.ts), and the thread ops
+ * the node's prompt (sessions/session-context.ts THREADS_LINE) and the thread ops
  * (ops/org-threads.ts). THREADS_OPEN_RULE, when a node opens a thread itself, and
- * THREAD_ONE_PLACE_RULE, a thread's news never also a letter, ride the prompt and the threads hint.
+ * THREAD_ONE_PLACE_RULE, a thread's news never also a letter, ride the prompt. The `threads` and
+ * `threads-tidy` hints (thread-capture.ts) carry only facts, never these rules (2026-11-06).
  * tests/core/org/thread-rules-guard.test.ts fails when one of them loses either.
  *
  * 2026-11-01, the user: "you should proactively clean the thread, make a decision if the user

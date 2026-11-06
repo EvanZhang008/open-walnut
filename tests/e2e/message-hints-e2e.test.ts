@@ -55,13 +55,14 @@ describe('message hints through a real server', () => {
     const r = await json('GET', '/hints')
     expect(r.status).toBe(200)
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
-    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'])
-    // Whose words: every built-in reads as Walnut's, Reply language names the setting it sends.
+    // No reply-language row since 2026-11-06: the setting is a line of the system prompt.
+    expect(kinds).toEqual(['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'])
+    // Whose words: every built-in reads as Walnut's, and none sends a setting of the user's.
     expect(r.body.hints.every((h: { built_in: boolean }) => h.built_in)).toBe(true)
-    expect(r.body.hints.find((h: { kind: string }) => h.kind === 'reply-language').user_setting).toMatchObject({ label: 'Reply language', anchor: 'session-reply-language' })
+    expect(r.body.hints.some((h: { user_setting?: unknown }) => h.user_setting)).toBe(false)
     const rich = r.body.hints.find((h: { kind: string }) => h.kind === 'rich-output')
     expect(rich).toMatchObject({ enabled: true, every_turns: 5, placement: 'after', overridden: false })
-    expect(rich.triggers).toEqual(['session_start', 'after_compaction', 'on_change', 'every_n_turns'])
+    expect(rich.triggers).toEqual(['session_start', 'after_compaction', 'on_change'])
     expect(r.body.triggers).toContain('on_drift')
   })
 
@@ -78,7 +79,10 @@ describe('message hints through a real server', () => {
 
   it('refuses settings that cannot work, and an unknown kind without text', async () => {
     expect((await json('PUT', '/hints/question', { triggers: ['every_turn'] })).status).toBe(400)
+    // Walnut's own name: no custom hint may take it.
     expect((await json('PUT', '/hints/reply-language', { text: 'x' })).status).toBe(400)
+    // No hint may use on_drift any more.
+    expect((await json('PUT', '/hints/rich-output', { triggers: ['on_drift'] })).status).toBe(400)
     expect((await json('PUT', '/hints/tone', { enabled: true })).status).toBe(400)
     expect((await json('DELETE', '/hints/nothing-here')).status).toBe(404)
   })

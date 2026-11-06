@@ -152,6 +152,19 @@ export function planHints(input: {
     if (!reasons.length) continue;
     const rendered = hint.render(content, new Set(reasons));
     if (!rendered) continue;
+    // One threads note per message: a cleanup due beside a filing note joins it as one block
+    // (the user's every message to Main or a VP files one, so a cleanup kept apart rarely went out).
+    const filed = hint.kind === 'threads-tidy' ? plan.carried.find((c) => c.kind === 'threads') : undefined;
+    if (filed) {
+      // The filing note sits where its own placement put it (a person may move it before the words).
+      const old = renderHintBlock('threads', filed.text);
+      const side = plan.before.includes(old) ? plan.before : plan.after;
+      filed.text = `${filed.text} Also ${rendered.text}`;
+      side[side.indexOf(old)] = renderHintBlock('threads', filed.text);
+      plan.told[hint.kind] = identity;
+      plan.reasons[hint.kind] = reasons;
+      continue;
+    }
     const block = renderHintBlock(hint.kind, rendered.text, rendered.arg);
     (hint.placement === 'before' ? plan.before : plan.after).push(block);
     plan.carried.push({ kind: hint.kind, ...(rendered.arg ? { arg: rendered.arg } : {}), text: rendered.text });

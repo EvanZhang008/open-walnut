@@ -6,10 +6,10 @@
  * (`walnut-notify`, composed by the queue); the first is the task's start message, composed as the
  * session runner composes a new conversation's. A compaction lands before the 6th.
  *
- * The rule this pins: a hint goes out only when one of its registry triggers holds. The reply
- * language's are session start, after a compaction, a change of the setting and a reply that
- * drifted, so 10 messages with one compaction and no drift carry it twice, for every role.
- * Would fail if any path forced it onto every turn again (the old `everyTurnRoles` and
+ * The rule this pins: a hint goes out only when one of its registry triggers holds, and the reply
+ * language is no hint at all since 2026-11-06 (the user: "just remove reply language"; it is a line
+ * of the system prompt now), so a set reply language puts no block on any of the 10 messages, for
+ * every role. Would fail if any path sent it on a message again (the old `everyTurnRoles` and
  * `everyPersonTurn` rules carried it 10 times out of 10).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -86,8 +86,9 @@ afterAll(async () => { await stopServer(); await fs.rm(WALNUT_HOME, { recursive:
 
 describe('hint blocks over 10 messages', () => {
   for (const role of ['worker', 'lead', 'main']) {
-    it(`${role}: the reply language goes out at session start and after the compaction, never on every message`, () => {
-      expect(results[role]['reply-language']).toBe(2);
+    it(`${role}: no message carries a reply-language block, though the setting is set`, () => {
+      expect(results[role]['reply-language'] ?? 0).toBe(0);
+      expect(results[role].messages).toBeGreaterThanOrEqual(MESSAGES);
     });
   }
 

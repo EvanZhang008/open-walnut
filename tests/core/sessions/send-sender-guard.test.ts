@@ -90,7 +90,6 @@ const CALL_SITES: Record<string, number> = {
   // Walnut, a task or a script sends: framed unless an envelope already frames the text
   'src/core/boards/board-delivery.ts': 1,          // a due reminder is `board-reminder`; a user's thread message is theirs
   'src/core/sessions/start-queue.ts': 1,           // a queued start replayed as `start-queue`, framed as the asking session's
-  'src/core/hints/hint-drift-live.ts': 1,
   'src/core/hooks/actions.ts': 1,
   'src/core/hosts/exec-grants.ts': 1,
   'src/core/human-inbox/letter-ops.ts': 2,         // the user's letter answer; a task's answer is framed

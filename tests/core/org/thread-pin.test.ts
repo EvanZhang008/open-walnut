@@ -10,7 +10,6 @@ import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { emptyThreads, fileMessage, mergeThreads, normalizeThreads, setAnswers, sortedThreads, ThreadError, updateThread, type ThreadsFile, type ThreadWriter } from '../../../src/core/org/threads-model.js'
 import { newsAt, pinnedFirst, pinnedNow, shownToHim, snoozedNow, threadCounts } from '../../../src/core/org/thread-view.js'
-import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 
 const T0 = Date.UTC(2026, 10, 3, 18, 0)
 const at = (min: number) => new Date(T0 + min * 60_000).toISOString()
@@ -168,16 +167,6 @@ describe('a pinned thread', () => {
     const n = normalizeThreads(raw, 'lead-1')
     expect(n.threads[0].pinned).toBeUndefined()
     expect(n.threads[1].pinned).toBeUndefined()
-  })
-
-  it('is named to the node in the threads hint', () => {
-    const s: ThreadHintState = {
-      threadId: 'th-111111', title: 'New', created: false, followUp: false, duplicate: false, closed: [],
-      open: [{ id: 'th-222222', title: 'Watch list', state: 'working', pinnedBy: 'human' }, { id: 'th-333333', title: 'Docs', state: 'pending', pinnedBy: NODE }],
-    }
-    const text = threadHintText(s)
-    expect(text).toContain('th-222222 "Watch list" (working, he pinned it)')
-    expect(text).toContain('th-333333 "Docs" (pending, pinned)')
   })
 })
 

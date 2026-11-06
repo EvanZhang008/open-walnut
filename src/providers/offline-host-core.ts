@@ -55,7 +55,7 @@ export interface OfflineSliceSession {
   taskRoutingPolicy?: string; taskRoutingDue?: string
   /**
    * The message hints owed to this session right now (core/hints/hint-send.ts hostReplyTail:
-   * `<system-reminder>` blocks, e.g. the reply language after a reply drifted). A message this
+   * `<system-reminder>` blocks, e.g. an every-turn hint or a change not yet told). A message this
    * host delivers itself (a peer note or reply between two sessions here) never passes the
    * server's queue, so the host appends them (2026-10-27: same-host peer notes reached the main
    * agent without the language line, and it answered the user in English).

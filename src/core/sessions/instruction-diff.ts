@@ -35,6 +35,7 @@ const BLOCK_KINDS: Array<[string, RegExp]> = [
   ['user-profile', /^Your user's profile and standing rules, from memory\/USER\.md /],
   // "<who> cleared the instructions for your role at <time>": who may be an agent's name.
   ['core-instructions', /^(Your core instructions[,:] |.+ cleared the instructions for your role at \d{4}-)/],
+  ['reply-language', /^Reply language, the user's setting \(v[0-9a-f]{8}\): /],
 ];
 
 /** The head without what changes at every save (its version, its time), so a change of form reads as one. */

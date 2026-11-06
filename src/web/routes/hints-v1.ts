@@ -125,8 +125,11 @@ hintsV1Router.delete('/hints/:kind', async (req: Request, res: Response, next: N
   try {
     if (CLOUD_MODE) return sendError(res, 501, 'not_supported_cloud', 'Message hints are changed on the primary box')
     const kind = String(req.params.kind ?? '')
-    const before = findHint(await getConfig().catch(() => null), kind)
-    if (!before) return sendError(res, 404, 'hint_not_found', `No message hint "${kind}"`)
+    const cfg = await getConfig().catch(() => null)
+    const before = findHint(cfg, kind)
+    // A kind no longer in the registry (reply-language, 2026-11-06) can still have its old override cleared.
+    const stale = !before && !!(cfg?.session?.hints as Record<string, unknown> | undefined)?.[kind]
+    if (!before && !stale) return sendError(res, 404, 'hint_not_found', `No message hint "${kind}"`)
     await writeOverride(kind, () => undefined)
     const after = await getConfig()
     const hint = findHint(after, kind)

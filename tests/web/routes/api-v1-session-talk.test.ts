@@ -218,8 +218,8 @@ describe('POST /api/v1/sessions/:id/messages', () => {
  * model drifting back to markdown. Both paths now go through the message-hint
  * pipeline (core/hints/hint-send.ts), so the semantics pinned in
  * session-output-mode.test.ts apply here too: the full instruction at session
- * start, a short reminder every 5 messages, nothing at all in markdown mode, and
- * never a hint on a slash command.
+ * start (no reminder every few messages by default since 2026-11-06), nothing at
+ * all in markdown mode, and never a hint on a slash command.
  *
  * Would-fail-if-reverted: drop the prepareHintedSend call in session-send-v1.ts
  * and the first assertions break; skip the commit() and the second send sees a
@@ -251,12 +251,10 @@ describe('POST /api/v1/sessions/:id/messages — output mode', () => {
     return queue.find((m) => m.id === messageId)?.message ?? ''
   }
 
-  it('first send carries the full instruction and records it; the reminder comes every 5 messages', async () => {
+  it('first send carries the full instruction and records it; the later ones nothing', async () => {
     const sid = 'talk-output-mode-edge-01'
     await freshSession(sid)
-    const {
-      RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER,
-    } = await import('../../../src/core/sessions/output-mode.js')
+    const { RICH_OUTPUT_MODE_ON_INSTRUCTION } = await import('../../../src/core/sessions/output-mode.js')
     const { renderHintBlock } = await import('../../../src/core/hints/hint-format.js')
     const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
 
@@ -268,9 +266,8 @@ describe('POST /api/v1/sessions/:id/messages — output mode', () => {
 
     const second = await enqueued(sid, await send(sid, 'and the reconnect path?'))
     expect(second).toBe('and the reconnect path?')
-    for (const n of [3, 4, 5]) expect(await enqueued(sid, await send(sid, `msg ${n}`))).toBe(`msg ${n}`)
-    const sixth = await enqueued(sid, await send(sid, 'msg 6'))
-    expect(sixth).toBe(`msg 6\n\n${renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)}`)
+    // No reminder every 5 messages by default (2026-11-06): message 6 is as typed too.
+    for (const n of [3, 4, 5, 6]) expect(await enqueued(sid, await send(sid, `msg ${n}`))).toBe(`msg ${n}`)
   })
 
   it('markdown mode leaves the phone message byte-identical', async () => {

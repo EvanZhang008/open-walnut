@@ -112,7 +112,7 @@ describe('Org Threads', () => {
   it('a second ask about the same subject: named open with how to merge; the lead merges it, and a wrong merge splits back out', async () => {
     const sent = await typeIntoChat(LEAD_SID, 'and asks about the same thing go under one thread')
     const hint = hintOf(sent)
-    expect(hint).toContain(`${first.id} "${first.title}" (new)`)
+    expect(hint).toContain(`${first.id} "${first.title}"`)
     expect(hint).toContain('merge_into')
     second = (await threads()).find((t) => t.id !== first.id)!
     expect(hint).toContain(`new thread ${second.id}`)
@@ -140,10 +140,10 @@ describe('Org Threads', () => {
 
   it('a Follow up is filed under its thread; a retry of one send is one message; a side question and a Retry file nothing', async () => {
     const sent = await typeIntoChat(LEAD_SID, 'also show pictures in the thread', first.id, { threadKey: 'qm-phone-1' })
-    expect(hintOf(sent)).toContain(`follow-up in his thread ${first.id}`)
+    expect(hintOf(sent)).toContain(`follow-up in thread ${first.id}`)
     // The phone retries the same send (same qm- id): filed once, and the lead hears it is a repeat.
     const retry = await typeIntoChat(LEAD_SID, 'also show pictures in the thread', first.id, { threadKey: 'qm-phone-1' })
-    expect(hintOf(retry)).toContain('repeats one already filed')
+    expect(hintOf(retry)).toContain('already filed under thread')
     await typeIntoChat(LEAD_SID, 'a side question beside the chat', undefined, { threads: false })
     const list = await threads()
     expect(list).toHaveLength(1)
@@ -154,11 +154,11 @@ describe('Org Threads', () => {
     expect((await patch(first.id, { close: 'acked' })).status).toBe(200)
     expect((await threads())[0].closed).toMatchObject({ how: 'acked', by: 'human' })
     const next = await typeIntoChat(LEAD_SID, 'Rich output should not be built in')
-    expect(hintOf(next)).toContain(`${first.id} "Org: Threads view" (he acknowledged it)`)
+    expect(hintOf(next)).toContain(`Closed since: ${first.id} (by him)`)
     const after = await typeIntoChat(LEAD_SID, 'one more, unrelated')
-    expect(hintOf(after)).not.toContain('he acknowledged it')
+    expect(hintOf(after)).not.toContain('Closed since')
     const again = await typeIntoChat(LEAD_SID, 'the Threads view lost my pictures', first.id)
-    expect(hintOf(again)).toContain(`asks again about ${first.id}`)
+    expect(hintOf(again)).toContain(`asks again about closed ${first.id}`)
     const list = await threads()
     const follows = list.find((t) => t.follows === first.id)
     expect(follows?.messages[0].text).toBe('the Threads view lost my pictures')
@@ -259,7 +259,7 @@ describe('Org Threads', () => {
     const opened = ((await res.json()) as { thread: OrgThread }).thread
     expect(opened).toMatchObject({ state: 'needs', messages: [], opener: { from: 'mail', by: `task:${leadId}` } })
     const sent = await typeIntoChat(LEAD_SID, 'yes, confirm it', opened.id)
-    expect(hintOf(sent)).toContain(`follow-up in his thread ${opened.id}`)
+    expect(hintOf(sent)).toContain(`follow-up in thread ${opened.id}`)
     const now = (await threads()).find((x) => x.id === opened.id)!
     expect(now.messages.map((m) => m.text)).toEqual(['yes, confirm it'])
     expect(now.state).toBe('working')

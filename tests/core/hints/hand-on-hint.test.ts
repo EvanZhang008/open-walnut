@@ -38,7 +38,7 @@ describe('the hand-on hint', () => {
     const sent = Array.from({ length: 7 }, () => send(rec, VP))
     expect(sent.map((s) => s.length)).toEqual([1, 0, 0, 1, 0, 0, 1])
     expect(sent[0][0]).toBe(orgHandOnHint('lead'))
-    expect(sent[0][0]).toMatch(/^you are a VP: never do the work yourself\. Run at most 3 commands of your own in a turn/)
+    expect(sent[0][0]).toBe('at most 3 commands of your own a turn, only to look; hand the rest to your team.')
   })
 
   it('after_compaction: the message after a compaction carries it again, and so does the hook', () => {
@@ -48,7 +48,6 @@ describe('the hand-on hint', () => {
     rec.lastCompactUuid = 'compact-1'
     const [text] = send(rec, MAIN)
     expect(text).toBe(orgHandOnHint('main'))
-    expect(text).toMatch(/org_send to the VP of its project/)
     // The post-compaction hook states it at once.
     const hooked: Rec = { claudeSessionId: 's3', output_mode: 'markdown', lastCompactUuid: 'compact-2' }
     send(hooked, VP)

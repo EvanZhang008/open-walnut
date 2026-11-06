@@ -18,7 +18,6 @@ import {
   fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
-import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from './thread-rules.js';
 import { exchangesOf, pinnedNow, snoozedNow } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
@@ -173,34 +172,24 @@ export async function prepareThreadCapture(input: {
 
 function q(s: string): string { return JSON.stringify(s); }
 
-/** What the `threads` hint tells the node about this message. */
+/**
+ * What the `threads` hint tells the node about this message: where it was filed, and for a new
+ * thread the open ones it might belong to. Only the facts of this message; the rules for keeping
+ * threads are in the node's prompt (session-context.ts THREADS_LINE). 2026-11-06, the user: "The
+ * text itself should be concise also"; it was 5.4 KB a message, 63% of it rules the prompt has.
+ */
 export function threadHintText(s: ThreadHintState): string {
-  const parts: string[] = [];
-  if (s.duplicate) {
-    parts.push(`this message repeats one already filed under the user's thread ${s.threadId} ${q(s.title)}.`);
-  } else if (s.followUp) {
-    parts.push(`the user sent this message as a follow-up in his thread ${s.threadId} ${q(s.title)} (your Threads page: his own requests to you). It is filed there.`);
-  } else if (s.created) {
-    parts.push(`Walnut filed this message of the user as a new thread ${s.threadId} on your Threads page (his own requests to you, beside your Brief)`
-      + (s.follows ? `; it asks again about ${s.follows.id} ${q(s.follows.title)}, which he closed.` : '.'));
-  } else {
-    parts.push(`Walnut filed this message under the user's thread ${s.threadId} ${q(s.title)}.`);
-  }
-  if (s.open.length) {
-    parts.push(`His other open threads: ${s.open.map((t) => `${t.id} ${q(t.title)} (${t.state}${t.snoozedUntil ? `, he snoozed it until ${t.snoozedUntil}` : ''}${t.pinnedBy ? (t.pinnedBy === 'human' ? ', he pinned it' : ', pinned') : ''})`).join('; ')}.`);
-    if (s.created && !s.duplicate) {
-      parts.push(`If this message is about the same thing as one of them, or only answers one (a yes, thanks, go on), put it under that thread now: thread_update {"id":"${s.threadId}","merge_into":"<that id>"}. Several asks about one subject are one thread.`);
-    }
-  }
-  if (s.created && !s.duplicate) {
-    parts.push('Then give the thread a short title of a few words, in the language you write to him, with thread_update (title, and ask: one line of what he wants).');
-  }
-  parts.push('As the work moves, keep it current with thread_update: state (working: you are on it, needs: waiting on him, answered: you answered and he may close it, pending: nothing new for him), reply (the summary the card shows), title as the subject moves, add_tasks (the tasks you hand it to). Walnut puts your chat reply under his message by itself.');
-  parts.push(THREADS_SUMMARY_RULE, PROOF_IN_PLACE_RULE, THREADS_PENDING_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREAD_ONE_PLACE_RULE);
-  if (s.closed.length) {
-    parts.push(`Closed since you were last told: ${s.closed.map((t) => `${t.id} ${q(t.title)} (${t.by === 'human' ? 'he acknowledged it' : t.how === 'dropped' ? 'dropped' : 'closed'})`).join('; ')}.`);
-  }
-  return parts.join(' ');
+  let text: string;
+  if (s.duplicate) text = `already filed under thread ${s.threadId} ${q(s.title)}.`;
+  else if (s.followUp) text = `a follow-up in thread ${s.threadId} ${q(s.title)}, filed there.`;
+  else if (s.created) {
+    text = `filed as new thread ${s.threadId}${s.follows ? ` (asks again about closed ${s.follows.id} ${q(s.follows.title)})` : ''}.`;
+    text += s.open.length
+      ? ` Open: ${s.open.map((t) => `${t.id} ${q(t.title)}`).join('; ')}. Same subject as one: thread_update merge_into; else give it a short title.`
+      : ' Give it a short title (thread_update).';
+  } else text = `filed under thread ${s.threadId} ${q(s.title)}.`;
+  if (s.closed.length) text += ` Closed since: ${s.closed.map((t) => `${t.id}${t.by === 'human' ? ' (by him)' : ''}`).join(', ')}.`;
+  return text;
 }
 
 /** A thread the node should look at again: why, in a few words. */
@@ -246,13 +235,16 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
 }
 
 const TIDY_WHY: Record<TidyItem['why'], string> = {
-  reacted: 'he wrote to you after your answer there: did he react to it? If not, say so with any thread_update (state answered) and it stays open',
-  untitled: 'still under Walnut\'s stand-in title',
-  state: 'you answered it, its state is still new',
+  reacted: 'did he react to your answer?',
+  untitled: 'needs a title',
+  state: 'answered, still new',
 };
 
-/** What the `threads-tidy` reminder says. */
+/** What the `threads-tidy` reminder says: one line, the threads by why (the rules are in the prompt). */
 export function threadsTidyText(s: ThreadsTidyState): string {
-  return `your Threads need cleaning: ${s.items.map((i) => `${i.id} ${q(i.title)} (${i.state}; ${TIDY_WHY[i.why]})`).join('; ')}. `
-    + `${THREADS_KNOWN_RULE} ${THREADS_SUMMARY_RULE} ${THREADS_PENDING_RULE} thread_list shows each with your answers.`;
+  const groups = (Object.keys(TIDY_WHY) as TidyItem['why'][])
+    .map((why) => ({ why, ids: s.items.filter((i) => i.why === why).map((i) => i.id) }))
+    .filter((g) => g.ids.length)
+    .map((g) => `${g.ids.join(', ')} (${TIDY_WHY[g.why]})`);
+  return `threads to tidy: ${groups.join('; ')}.`;
 }

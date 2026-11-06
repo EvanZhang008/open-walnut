@@ -1650,13 +1650,13 @@ export interface Config {
 
     /** One sentence saying which language to answer the user in (e.g. "Talk to
      *  the user in Chinese; code, commits, UI strings and repo docs stay English").
-     *  The `reply-language` message hint carries it (src/core/hints/hint-registry.ts):
-     *  at session start, after a compaction, when it changes and when a reply
-     *  drifts into another language. Empty/unset = no hint. */
+     *  Every session's system prompt carries it (src/core/sessions/reply-language-context.ts);
+     *  a change reaches a running session as a changed default instruction. Empty/unset =
+     *  nothing said about language. Walnut's own letters follow it too. */
     reply_language?: string;
 
     /** Message hints (src/core/hints/): per kind, the user's or an agent's change to a
-     *  built-in hint (question, rich-output, reply-language, voice-reply), or a whole
+     *  built-in hint (question, rich-output, voice-reply, ...), or a whole
      *  custom hint (a kind that is not built in, with `text`). Read and written through
      *  `GET/PUT/DELETE /api/v1/hints`; unset fields keep the built-in default. */
     hints?: Record<string, MessageHintSettings>;

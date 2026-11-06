@@ -7,10 +7,11 @@
  *   · FULL — the whole instruction at session start (nothing was ever said),
  *     after a compaction, and when the effective mode changed (the OFF words on
  *     a switch back to markdown).
- *   · REMINDER — while rich holds, a one-line reminder every 5 messages (it used
- *     to ride every message; 2026-10-27 the user asked for less). Without any
- *     reminder the model wrote HTML for the turn that carried the instruction and
- *     drifted back to markdown a turn or two later. Markdown mode sends nothing.
+ *   · REMINDER: a one-line reminder every 5 messages while rich holds, OFF by
+ *     default since 2026-11-06 (the user: "Yes reduce"; it rode every message
+ *     until 2026-10-27, then every 5): a person or an agent turns it back on by
+ *     adding `every_n_turns` to the hint's triggers, which the reminder tests here
+ *     do. Markdown mode sends nothing.
  *
  * The effective mode is `record.output_mode ?? config.session.output_mode ??
  * DEFAULT_SESSION_OUTPUT_MODE`, so a session that never touched the pill follows
@@ -69,7 +70,7 @@ import {
 import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
 import { effectiveHints } from '../../../src/core/hints/hint-registry.js'
 import { planHints } from '../../../src/core/hints/hint-send.js'
-import type { SessionHintState } from '../../../src/core/types.js'
+import type { MessageHintTrigger, SessionHintState } from '../../../src/core/types.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { frameForSource } from '../../../src/core/sessions/send-frame.js'
@@ -105,9 +106,14 @@ const reminderDue = (): SessionHintState => ({
   sends: 4, told: { 'rich-output': { send: 0, hash: 'rich', at: new Date(0).toISOString() } },
 })
 
+/** The rich-output hint with its reminder every 5 messages turned back on (off by default since 2026-11-06). */
+const REMINDER_ON = { 'rich-output': { triggers: ['session_start', 'after_compaction', 'on_change', 'every_n_turns'] as MessageHintTrigger[] } }
+
 /** Config stubs for the pure planner tests. */
 const cfgRich = { session: { output_mode: 'rich' as SessionOutputMode } }
 const cfgMarkdown = { session: { output_mode: 'markdown' as SessionOutputMode } }
+const cfgRichReminder = { session: { output_mode: 'rich' as SessionOutputMode, hints: REMINDER_ON } }
+const cfgMarkdownReminder = { session: { output_mode: 'markdown' as SessionOutputMode, hints: REMINDER_ON } }
 
 /** Fresh record per test: the session-db handle is a module singleton that
  *  survives the WALNUT_HOME wipe, so a shared id would carry the previous
@@ -122,8 +128,8 @@ async function newSession(): Promise<string> {
 
 /** The CONFIG default the send path reads. Written to the mocked WALNUT_HOME, so
  *  the route resolves it exactly the way production does (no config = default). */
-async function setConfigOutputMode(mode: SessionOutputMode): Promise<void> {
-  await updateConfig({ session: { output_mode: mode } })
+async function setConfigOutputMode(mode: SessionOutputMode, opts: { reminder?: boolean } = {}): Promise<void> {
+  await updateConfig({ session: { output_mode: mode, ...(opts.reminder ? { hints: REMINDER_ON } : {}) } })
 }
 
 async function callSend(payload: Record<string, unknown>): Promise<{ messageId?: string; dedupText?: string }> {
@@ -170,7 +176,7 @@ describe('resolveEffectiveOutputMode', () => {
 })
 
 /** What the rich-output hint says on the next send of a record (pure planner). */
-function richNext(record: Record<string, unknown> | null, config: typeof cfgRich | null = null): string[] {
+function richNext(record: Record<string, unknown> | null, config: { session: { output_mode: SessionOutputMode; hints?: typeof REMINDER_ON } } | null = null): string[] {
   return planHints({ hints: effectiveHints(config), target: { sessionId: 's' }, record: record as never, config })
     .carried.filter((h) => h.kind === 'rich-output').map((h) => h.text)
 }
@@ -198,14 +204,16 @@ describe('the rich-output hint (pure planner)', () => {
     expect(richNext(null, cfgRich)).toEqual([RICH_OUTPUT_MODE_ON_INSTRUCTION])
   })
 
-  it('once told, rich carries the short reminder every 5 messages (never both)', () => {
+  it('once told, rich carries no reminder by default; turned on, the short one every 5 messages (never both)', () => {
     // Told on the send before: nothing this time.
     expect(richNext({ output_mode_injected: 'rich' }, cfgRich)).toEqual([])
-    // Told 5 sends back: the reminder, not the full instruction.
-    expect(richNext({ hintState: reminderDue() }, cfgRich)).toEqual([RICH_OUTPUT_MODE_REMINDER])
-    expect(richNext({ output_mode: 'rich', hintState: reminderDue() }, cfgMarkdown)).toEqual([RICH_OUTPUT_MODE_REMINDER])
+    // Told 5 sends back: nothing by default since 2026-11-06.
+    expect(richNext({ hintState: reminderDue() }, cfgRich)).toEqual([])
+    // With every_n_turns turned back on: the reminder, not the full instruction.
+    expect(richNext({ hintState: reminderDue() }, cfgRichReminder)).toEqual([RICH_OUTPUT_MODE_REMINDER])
+    expect(richNext({ output_mode: 'rich', hintState: reminderDue() }, cfgMarkdownReminder)).toEqual([RICH_OUTPUT_MODE_REMINDER])
     // Markdown never gets a reminder, told or not.
-    expect(richNext({ output_mode_injected: 'markdown', hintState: { ...reminderDue(), told: {} } }, cfgMarkdown)).toEqual([])
+    expect(richNext({ output_mode_injected: 'markdown', hintState: { ...reminderDue(), told: {} } }, cfgMarkdownReminder)).toEqual([])
   })
 
   it('tells the model the truth about scripts, and points at the recipes', () => {
@@ -234,7 +242,7 @@ describe('the rich-output hint (pure planner)', () => {
       expect(s).toMatch(/unless (?:the user asks|requested)/)
       expect(s).toMatch(/blank lines/)
     }
-    expect(richNext({ output_mode: 'rich', hintState: reminderDue() }).join('')).toContain('raw HTML directly in this reply')
+    expect(richNext({ output_mode: 'rich', hintState: reminderDue() }, cfgRichReminder).join('')).toContain('raw HTML directly in this reply')
   })
 
   it('says markdown FIRST, and names what HTML is actually for', () => {
@@ -332,8 +340,21 @@ describe('session:send — markdown', () => {
 })
 
 describe('session:send — rich', () => {
-  it('appends the ON instruction once, then a short reminder every 5 messages', async () => {
+  it('appends the ON instruction once, then nothing by default', async () => {
     await setConfigOutputMode('markdown')
+    const sid = await newSession()
+    await patchSession(sid, { output_mode: 'rich' })
+    await callSend({ sessionId: sid, message: TEXT })
+    expect(await drain(sid)).toBe(hinted(TEXT, ON))
+    // No reminder every few messages since 2026-11-06: the start, a compaction and a switch carry it.
+    for (let n = 2; n <= 11; n++) {
+      await callSend({ sessionId: sid, message: `msg ${n}` })
+      expect(await drain(sid)).toBe(`msg ${n}`)
+    }
+  })
+
+  it('with the reminder turned on: the ON instruction once, then a short reminder every 5 messages', async () => {
+    await setConfigOutputMode('markdown', { reminder: true })
     const sid = await newSession()
     await patchSession(sid, { output_mode: 'rich' })
 
@@ -389,7 +410,7 @@ describe('session:send — rich', () => {
   })
 
   it('turns nobody typed carry the hint too: trigger, peer, wait_until, notices, auto-continue', async () => {
-    await setConfigOutputMode('rich')
+    await setConfigOutputMode('rich', { reminder: true })
     const sid = await newSession()
     // Never told: the first automated turn carries the full instruction and records it.
     await sendMessageToSession(sid, 'trigger fired: PR has a new comment', { source: 'routine-trigger' })
@@ -405,7 +426,7 @@ describe('session:send — rich', () => {
   })
 
   it('a peer message keeps its display text clean; the hint rides the text the CLI gets', async () => {
-    await setConfigOutputMode('rich')
+    await setConfigOutputMode('rich', { reminder: true })
     const sid = await newSession()
     await updateSessionRecord(sid, { hintState: reminderDue() })
     const seen: string[] = []
@@ -420,7 +441,7 @@ describe('session:send — rich', () => {
   })
 
   it('other sources, markdown sessions, composed text and slash commands are left as they are', async () => {
-    await setConfigOutputMode('rich')
+    await setConfigOutputMode('rich', { reminder: true })
     const sid = await newSession()
     await updateSessionRecord(sid, { hintState: reminderDue() })
     await sendMessageToSession(sid, 'plan step', { source: 'web-api' })
@@ -525,7 +546,7 @@ describe('session:send — rich', () => {
   })
 
   it('composes with the image preamble: attachments → text → hint', async () => {
-    await setConfigOutputMode('markdown')
+    await setConfigOutputMode('markdown', { reminder: true })
     const sid = await newSession()
     await patchSession(sid, { output_mode: 'rich' })
 
@@ -624,7 +645,7 @@ describe('session:send — slash commands bypass the hints', () => {
   })
 
   it('a due reminder never rides a slash command (it would land in the args)', async () => {
-    await setConfigOutputMode('rich')
+    await setConfigOutputMode('rich', { reminder: true })
     const sid = await newSession()
     await updateSessionRecord(sid, { hintState: reminderDue() })
 
@@ -808,7 +829,7 @@ describe('optimistic bubble is absorbed exactly once (inc-1785091339102)', () =>
     ({ role: 'user', text, ...(walnutMessageId ? { walnutMessageId } : {}) })
 
   it('rich + images: the RPC dedupText matches the projected history line', async () => {
-    await setConfigOutputMode('rich')
+    await setConfigOutputMode('rich', { reminder: true })
     const sid = await newSession()
 
     // A reminder send is the interesting one: image preamble AND a hint in the

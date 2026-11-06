@@ -164,7 +164,6 @@ export const LIFECYCLE_WAITS: readonly LifecycleWait[] = [
 export const TURN_END_OBSERVERS: Readonly<Record<string, string>> = {
   'src/core/sessions/subtask-notices.ts': 'delivers held notices at the parent\'s next turn; the notices themselves are bounded by HOLD_MAX_MS (held-subtask-notices)',
   'src/web/routes/quick-main-follow.ts': 'streams a quick ask\'s follow-up to the open request; the request has its own HTTP deadline',
-  'src/core/hints/hint-drift-live.ts': 'reads a turn\'s lines for the reply-language correction; ends with the turn',
   'src/core/sessions/turn-end-wait.ts': 'the shared wait itself',
   'src/core/user-status-sync.ts': 'derives the user status from the session\'s status on each change; waits for nothing',
   'src/core/sessions/queue-after-turn.ts': 'releases the messages held for a turn\'s end; its sweep releases them once it finds the session idle (a crash, a reap, a restart), so no hold outlives its turn',

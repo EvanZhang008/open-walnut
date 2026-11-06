@@ -252,7 +252,7 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
   // What the queue would append to a turn nobody typed; the host appends it to what it delivers itself.
   const config = await (await import('./config-manager.js')).getConfig().catch(() => null);
   // The instruction notice below compares against the user's profile as on disk now.
-  await (await import('./sessions/user-profile-context.js')).refreshUserProfile();
+  await Promise.all([(await import('./sessions/user-profile-context.js')).refreshUserProfile(), (await import('./sessions/reply-language-context.js')).refreshReplyLanguage()]);
 
   const body = {
     home: WALNUT_HOME,

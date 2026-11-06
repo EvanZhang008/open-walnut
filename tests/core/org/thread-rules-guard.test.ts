@@ -5,8 +5,9 @@
  * answering it: "I had not replied ... so clearly I had not acknowledged it ... you cannot remove
  * it"; and "you can also create a new thread even if it is not from me").
  *
- * Fails when the prompt line, the `threads` hint, the `threads-tidy` reminder or a thread op loses
- * the rule, when the hint again tells the node it may close on its own say, when Walnut lets a
+ * Fails when the prompt line or a thread op loses the rule (the `threads` hint and the
+ * `threads-tidy` reminder are one line of facts since 2026-11-06 and leave the rules to the
+ * prompt), when the hint again tells the node it may close on its own say, when Walnut lets a
  * node close or fold an answer the user has not reacted to, or when a thread the node opened stops
  * taking his reply; or when a place stops saying what a card holds (title, summary latest first,
  * only the answers he has not seen) and that news about a thread updates its summary, never adds
@@ -59,27 +60,19 @@ describe('every place a node reads it carries it', () => {
     expect(THREADS_LINE).toContain(THREADS_PENDING_RULE)
   })
 
-  it('the threads hint on each of his messages, and never the old "close it yourself when he says so"', () => {
+  it('the threads hint on each of his messages never says the old "close it yourself when he says so"', () => {
     for (const s of [hint, { ...hint, created: false, followUp: true }, { ...hint, open: [] }]) {
-      const text = threadHintText(s)
-      expect(text).toContain(THREADS_KNOWN_RULE)
-      expect(text).toContain(THREADS_OPEN_RULE)
-      expect(text).toContain(THREADS_SUMMARY_RULE)
-      expect(text).toContain(THREADS_PENDING_RULE)
-      expect(text).toMatch(/pending: nothing new for him/)
-      expect(text).not.toMatch(/close it yourself only when he says/i)
+      expect(threadHintText(s)).not.toMatch(/close it yourself only when he says/i)
     }
   })
 
-  it('the cleanup reminder, a built-in hint on a schedule', () => {
+  it('the cleanup reminder, a built-in hint on a schedule, names each thread and why in one line', () => {
     let f = fileMessage(emptyThreads('lead-1'), { text: 'what is the small model?', via: 'chat', at: at(0) }).file
     f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'The fast one.', at: at(1) }]])).file
     f = fileMessage(f, { text: 'ok, another thing', via: 'chat', at: at(2) }).file
     const tidy = threadsTidyOf(f, Date.parse(at(3)))
     expect(tidy?.items.map((i) => i.why)).toContain('reacted')
-    expect(threadsTidyText(tidy!)).toContain(THREADS_KNOWN_RULE)
-    expect(threadsTidyText(tidy!)).toContain(THREADS_SUMMARY_RULE)
-    expect(threadsTidyText(tidy!)).toContain(THREADS_PENDING_RULE)
+    expect(threadsTidyText(tidy!)).toBe(`threads to tidy: ${f.threads[0].id} (did he react to your answer?).`)
     const spec = findHint(null, 'threads-tidy')
     expect(spec?.enabled).toBe(true)
     expect(spec?.triggers).toContain('every_n_turns')

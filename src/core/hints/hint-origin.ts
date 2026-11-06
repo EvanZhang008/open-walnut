@@ -13,24 +13,14 @@
 
 
 /** Every hint kind the registry defines (hint-registry.ts BUILT_IN), in its order. */
-export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'reply-language', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'] as const;
+export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'] as const;
 
-/** Walnut text that rides a message outside the registry (no switch in Settings). */
-export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images', 'status-question-cut'] as const;
-
-/** Walnut's own clause after the user's reply-language sentence. */
-export const REPLY_LANGUAGE_SCOPE = 'This covers every line the user reads, the short progress lines between your tool calls included.';
-
-const CORRECTION_HEAD = 'Correction: your last reply the user read';
-const CORRECTION_TAIL = 'was not in his language. Write every line he reads in it from now on, '
-  + 'also when the message you answer, a tool result or your own notes are in English.';
-
-/** The line that leads the reply-language hint after a reply the user read broke it. */
-export function replyLanguageCorrection(driftAt: string): string {
-  const t = Date.parse(driftAt);
-  const when = Number.isFinite(t) ? ` (the turn that ended ${new Date(t).toISOString().slice(11, 16)} UTC)` : '';
-  return `${CORRECTION_HEAD}${when} ${CORRECTION_TAIL}`;
-}
+/**
+ * Walnut text that rides a message outside the registry (no switch in Settings). `reply-language`
+ * was a built-in hint until 2026-11-06 (the user: "just remove reply language"; the language is in
+ * the system prompt now): old rows still carry it, and no custom hint may take its name.
+ */
+export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images', 'status-question-cut', 'reply-language'] as const;
 
 /** A built-in whose text holds a setting of the user's: which one, and where Settings shows it. */
 export interface HintUserSetting {
@@ -39,14 +29,13 @@ export interface HintUserSetting {
   /** Its row's anchor on the Settings page. */
   anchor: string;
   /** Its key under config `session`. */
-  key: 'reply_language';
+  key: string;
   /** The Walnut text sent after it, the same for everyone. */
   walnutText: string;
 }
 
-export const HINT_USER_SETTINGS: Readonly<Record<string, HintUserSetting>> = {
-  'reply-language': { label: 'Reply language', anchor: 'session-reply-language', key: 'reply_language', walnutText: REPLY_LANGUAGE_SCOPE },
-};
+/** None today: the one such hint, the reply language, is part of the system prompt now. */
+export const HINT_USER_SETTINGS: Readonly<Record<string, HintUserSetting>> = {};
 
 export function isBuiltInHintKind(kind: string): boolean {
   return (BUILT_IN_HINT_KINDS as readonly string[]).includes(kind) || (WALNUT_ONLY_KINDS as readonly string[]).includes(kind);
@@ -72,13 +61,6 @@ export function hintTextParts(h: { kind: string; text: string }): HintTextPart[]
   if (!setting) return text ? [{ text, from: 'walnut' }] : [];
   const parts: HintTextPart[] = [];
   let rest = text;
-  if (rest.startsWith(CORRECTION_HEAD)) {
-    const end = rest.indexOf(CORRECTION_TAIL);
-    if (end >= 0) {
-      parts.push({ text: rest.slice(0, end + CORRECTION_TAIL.length), from: 'walnut' });
-      rest = rest.slice(end + CORRECTION_TAIL.length).trimStart();
-    }
-  }
   let tail = '';
   if (rest.endsWith(setting.walnutText)) {
     tail = setting.walnutText;

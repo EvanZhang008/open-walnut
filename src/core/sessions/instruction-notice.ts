@@ -36,6 +36,7 @@ import {
   noticeToldGeneration,
 } from './instruction-notice-flight.js';
 import { log } from '../../logging/index.js';
+import { isCompanion } from '../server-role.js';
 import { heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 import { parseHinted } from '../hints/hint-format.js';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '../../lib/history-session-envelope.js';
@@ -114,8 +115,11 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   const { told, views } = heldBeyondPrompt(record, current, parsedPrompt, ignoreTold);
   // Lines of USER.md past its budget are still the user's rules: never told as removed.
   const cut = currentUserProfile().cut;
-  const due = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {});
-  if (!due) return null;
+  const found = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {});
+  // The companion's copy of the config has no Reply language (config-allowlist.ts): there it is
+  // unknown, not gone, so a session it leads is never told the language rule stopped applying.
+  const due = found && isCompanion() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
+  if (!due || (!due.plain.length && !due.blocks.length && !due.gone.length)) return null;
   // Walnut's own wording waits out the gap; a change to the user's profile or a role's
   // instructions (the user's or an agent's words for this session) goes at once, with the rest.
   const lastAt = heldNoted(record)?.toldAt;
@@ -292,7 +296,7 @@ async function lookup(sessionId: string, now = Date.now()): Promise<{ record: Se
   const [task] = await listTasksByIds([record.taskId]);
   if (!task) return null;
   // The user's profile rides the default instructions: compare against it as on disk now.
-  await refreshUserProfile();
+  await Promise.all([refreshUserProfile(), import('./reply-language-context.js').then((m) => m.refreshReplyLanguage())]);
   const found = dueFor(record, task, false, now);
   return found ? { record, text: render(found.due), told: { noted: notedOf(record, found), changed: changedIds(found.due) } } : null;
 }

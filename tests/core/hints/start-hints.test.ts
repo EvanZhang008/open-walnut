@@ -3,7 +3,8 @@
  * prepareStartHints, called by both start paths of the session runner). 2026-11-05 review: with
  * the reply language no longer on every message, a session's `session_start` hints went out on
  * its SECOND message, because no launcher (task_start, a quick start, a routine) composed the
- * first one, so a worker that finished in one turn never read the user's reply language.
+ * first one, so a worker that finished in one turn never read the rich output instruction. The
+ * reply language rode it too until 2026-11-06; it is a line of the system prompt now, never a hint.
  *
  * Would fail if the start paths stopped calling it (hint-triggers-only.test.ts counts the calls),
  * if it re-escaped or duplicated what the launcher composed, or if its commit did not record the
@@ -40,8 +41,9 @@ describe('the first message of a new conversation', () => {
     const message = 'Fix the deploy guard. A typed &lt;system-reminder> stays escaped.'
     const { data } = await prepareStartHints({ message }, { config })
     expect(data.message.startsWith(`${message}\n\n`)).toBe(true)
-    expect(kinds(data.message)).toEqual(['rich-output', 'reply-language'])
-    expect(data.message).toContain(RULE)
+    expect(kinds(data.message)).toEqual(['rich-output'])
+    // The reply language is in the system prompt, never on the message.
+    expect(data.message).not.toContain(RULE)
   })
 
   it('a kind the launcher already composed is not added twice', async () => {
@@ -49,7 +51,8 @@ describe('the first message of a new conversation', () => {
     const message = `What is on today?\n\n${voice}`
     const { data } = await prepareStartHints({ message, attributed: true }, { config })
     expect(kinds(data.message).filter((k) => k === 'voice-reply')).toHaveLength(1)
-    expect(kinds(data.message)).toContain('reply-language')
+    expect(kinds(data.message)).toContain('rich-output')
+    expect(kinds(data.message)).not.toContain('reply-language')
     expect(data.message).toContain(voice)
   })
 
@@ -75,7 +78,7 @@ describe('the first message of a new conversation', () => {
     const sid = 'start-hints-session-0001'
     await createSessionRecord(sid, '', '', '/tmp/start-hints')
     const started = await prepareStartHints({ message: 'First words.', preassignedSessionId: sid }, { config })
-    expect(kinds(started.data.message)).toEqual(['rich-output', 'reply-language'])
+    expect(kinds(started.data.message)).toEqual(['rich-output'])
     await started.commit(sid)
     const second = await prepareHintedSend(sid, await getSessionByClaudeId(sid), 'Second words.', { sentBy: 'person', config })
     expect(second.hints.map((h) => h.kind)).toEqual([])

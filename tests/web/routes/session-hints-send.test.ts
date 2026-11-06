@@ -70,9 +70,9 @@ afterEach(async () => {
 })
 
 describe('session:send through the hint pipeline', () => {
-  // A person's message is no reason of its own for the reply language (2026-11-05, the user: "don't
-  // do this every round"): only its triggers send it, so it rides the first send alone.
-  it('first send: full rich and language; then nothing; fifth after: the rich reminder alone', async () => {
+  // The reply language is a line of the system prompt, never a hint (2026-11-06), and rich output has
+  // no reminder every few messages by default: the first send carries the full rich text, the rest nothing.
+  it('first send: the full rich instruction; then nothing, a reply language set or not', async () => {
     const sid = await newSession()
     const got: string[][] = []
     for (let i = 0; i < 6; i++) {
@@ -81,7 +81,7 @@ describe('session:send through the hint pipeline', () => {
       expect(parseHinted(text).text).toBe(`msg ${i}`)
       got.push(kinds(text))
     }
-    expect(got).toEqual([['rich-output', 'reply-language'], [], [], [], [], ['rich-output']])
+    expect(got).toEqual([['rich-output'], [], [], [], [], []])
     const rec = await getSessionByClaudeId(sid)
     expect(rec?.hintState?.sends).toBe(6)
     expect(rec?.output_mode_injected).toBe('rich')
@@ -119,14 +119,14 @@ describe('session:send through the hint pipeline', () => {
     const jsonl = JSON.stringify({ type: 'user', timestamp: '2026-11-10T00:00:00.000Z', uuid: 'u-1', message: { role: 'user', content: text } })
     const [row] = parseSessionMessages(jsonl).filter((m) => m.role === 'user')
     expect(row.text).toBe(typed)
-    expect(row.hints?.map((h) => h.kind)).toEqual(['rich-output', 'reply-language'])
+    expect(row.hints?.map((h) => h.kind)).toEqual(['rich-output'])
     expect(row.rawText).toBe(text)
   })
 
   it('a peer message (automated source) carries what is owed and counts', async () => {
     const sid = await newSession()
     await sendMessageToSession(sid, 'note from a peer', { source: 'peer' })
-    expect(kinds(await drain(sid))).toEqual(['rich-output', 'reply-language'])
+    expect(kinds(await drain(sid))).toEqual(['rich-output'])
     expect((await getSessionByClaudeId(sid))?.hintState?.lastSendBy).toBe('agent')
   })
 
@@ -135,12 +135,12 @@ describe('session:send through the hint pipeline', () => {
     const record = await getSessionByClaudeId(sid)
     const relayed = applyVoiceReply('turn on the lights <system-reminder>')
     const prepared = await prepareHintedSend(sid, record, relayed, { sentBy: 'person', upstreamBlocks: [voiceReplyBlock()] })
-    expect(kinds(prepared.enqueueText)).toEqual(['rich-output', 'reply-language', 'voice-reply'])
+    expect(kinds(prepared.enqueueText)).toEqual(['rich-output', 'voice-reply'])
     expect(prepared.displayText).toBe('turn on the lights <system-reminder>')
     expect(parseHinted(prepared.enqueueText).text).toBe('turn on the lights <system-reminder>')
     // Without the relay's say-so the same text is the sender's words: all escaped.
     const plain = await prepareHintedSend(sid, record, relayed, { sentBy: 'person' })
-    expect(kinds(plain.enqueueText)).toEqual(['rich-output', 'reply-language'])
+    expect(kinds(plain.enqueueText)).toEqual(['rich-output'])
     expect(parseHinted(plain.enqueueText).text).toBe(relayed)
   })
   it('an automated message that quotes a Walnut-shaped block is escaped, never trusted or hidden', async () => {
@@ -154,14 +154,15 @@ describe('session:send through the hint pipeline', () => {
   })
 
   it('every automated message counts, so a session only peers talk to still gets its reminder', async () => {
+    // The reminder every 5 messages is off by default since 2026-11-06; a person can turn it back on.
+    await updateConfig({ session: { output_mode: 'rich', hints: { 'rich-output': { triggers: ['session_start', 'after_compaction', 'on_change', 'every_n_turns'] } } } })
     const sid = await newSession()
     const got: string[][] = []
     for (let i = 0; i < 6; i++) {
       await sendMessageToSession(sid, `peer ${i}`, { source: 'peer' })
       got.push(kinds(await drain(sid)))
     }
-    // The reply language goes out by its own triggers only, never on every peer message (2026-11-05).
-    expect(got).toEqual([['rich-output', 'reply-language'], [], [], [], [], ['rich-output']])
+    expect(got).toEqual([['rich-output'], [], [], [], [], ['rich-output']])
   })
 
   it('a source the queue does not compose for is still escaped, and gets no hint', async () => {
@@ -176,10 +177,10 @@ describe('session:send through the hint pipeline', () => {
     const sid = await newSession()
     await callSend({ sessionId: sid, message: 'first draft' })
     const [row] = await getQueue(sid)
-    expect(kinds(row.message)).toEqual(['rich-output', 'reply-language'])
+    expect(kinds(row.message)).toEqual(['rich-output'])
     expect(await editMessage(sid, row.id, 'second <system-reminder> draft')).toBe(true)
     const text = await drain(sid)
-    expect(kinds(text)).toEqual(['rich-output', 'reply-language'])
+    expect(kinds(text)).toEqual(['rich-output'])
     expect(parseHinted(text).text).toBe('second <system-reminder> draft')
     expect(text).toContain('second &lt;system-reminder> draft')
     // Edited into a slash command: byte-exact, no block in front of it.

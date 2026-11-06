@@ -18,8 +18,9 @@ const SHOTS = process.env.MESSAGE_HINTS_SHOTS ?? '/tmp/message-hints'
 test.setTimeout(150_000)
 test.describe.configure({ mode: 'serial' })
 
-async function hints(page: Page): Promise<Array<{ kind: string; every_turns?: number; overridden: boolean; text?: string }>> {
-  return (await (await page.request.get('/api/v1/hints')).json() as { hints: Array<{ kind: string; every_turns?: number; overridden: boolean; text?: string }> }).hints
+type Hint = { kind: string; every_turns?: number; triggers: string[]; overridden: boolean; text?: string }
+async function hints(page: Page): Promise<Hint[]> {
+  return (await (await page.request.get('/api/v1/hints')).json() as { hints: Hint[] }).hints
 }
 
 async function openSessions(page: Page): Promise<Locator> {
@@ -56,36 +57,28 @@ test('Settings: change a built-in, reset it, add and remove a custom hint', asyn
   await expectReadableLabel(addRow)
   await addRow.screenshot({ path: `${SHOTS}/add-row.png` })
   const rich = group.getByTestId('message-hint-rich-output')
-  await expect(rich).toContainText('Every 5 messages', { ignoreCase: true })
+  // No reminder every few messages by default since 2026-11-06.
+  await expect(rich).toContainText('At session start, after a compaction, when it changes')
+  await expect(rich).not.toContainText('every 5 messages', { ignoreCase: true })
   // Whose hint each row is (2026-11-01): every built-in says so.
-  for (const kind of ['question', 'rich-output', 'reply-language', 'voice-reply']) {
+  for (const kind of ['question', 'rich-output', 'voice-reply']) {
     await expect(group.getByTestId(`message-hint-origin-${kind}`)).toHaveText('Built in')
   }
+  // The reply language is a line of the system prompt now, no hint row (2026-11-06).
+  await expect(group.getByTestId('message-hint-reply-language')).toHaveCount(0)
   await rich.getByRole('button', { name: /Rich output/ }).click()
+  // Turn the reminder back on, every 3 messages.
+  await page.getByTestId('hint-trigger-rich-output-every_n_turns').check()
   await page.getByTestId('hint-every-rich-output').fill('3')
   await page.getByTestId('hint-save-rich-output').click()
   await expect.poll(async () => (await hints(page)).find((h) => h.kind === 'rich-output')?.every_turns).toBe(3)
+  expect((await hints(page)).find((h) => h.kind === 'rich-output')?.triggers).toContain('every_n_turns')
   await expect(rich).toContainText('every 3 messages')
   await expect(group.getByTestId('message-hint-origin-rich-output')).toHaveText('Built in, changed by you')
   await rich.screenshot({ path: `${SHOTS}/rich-edited.png` })
   await page.getByTestId('hint-reset-rich-output').click()
   await expect.poll(async () => (await hints(page)).find((h) => h.kind === 'rich-output')?.overridden).toBe(false)
   await expect(group.getByTestId('message-hint-origin-rich-output')).toHaveText('Built in')
-
-  // Reply language: what it sends, the user's setting apart from Walnut's own sentence.
-  const lang = group.getByTestId('message-hint-reply-language')
-  await lang.getByRole('button', { name: /Reply language/ }).click()
-  const sends = page.getByTestId('message-hint-sends-reply-language')
-  // The value itself is settings-reply-language.spec.ts's (it owns that setting on the shared server).
-  await expect(sends.locator('.message-hint-origin-badge--yours')).toHaveText('Yours')
-  await expect(sends).toContainText('Built in This covers every line the user reads')
-  await sends.scrollIntoViewIfNeeded()
-  await lang.screenshot({ path: `${SHOTS}/${test.info().project.name}-settings-reply-language.png` })
-  // Its link scrolls to the setting itself, on the same page.
-  await sends.getByRole('link', { name: 'Edit your Reply language' }).click()
-  const input = page.getByTestId('session-reply-language')
-  await expect(input).toBeInViewport()
-  await lang.getByRole('button', { name: /Reply language/ }).click()
 
   await page.getByTestId('hint-new-kind').fill('pw-tone')
   await page.getByTestId('hint-new-text').fill('Keep answers short.')

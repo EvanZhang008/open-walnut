@@ -9,7 +9,6 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import { PROOF_IN_PLACE_RULE } from '../../../src/core/org/thread-rules.js'
 import { AWAY_INBOX_LINE, THREADS_LINE } from '../../../src/core/sessions/session-context.js'
-import { threadHintText } from '../../../src/core/org/thread-capture.js'
 import { getOp } from '../../../src/ops/index.js'
 
 describe('the proof-in-place rule', () => {
@@ -20,11 +19,9 @@ describe('the proof-in-place rule', () => {
     expect(PROOF_IN_PLACE_RULE).toContain('(letter:lt-...)')
   })
 
-  it('rides Main\'s and every lead\'s prompt, the away-inbox line and the threads hint', () => {
+  it('rides Main\'s and every lead\'s prompt and the away-inbox line', () => {
     expect(THREADS_LINE).toContain(PROOF_IN_PLACE_RULE)
     expect(AWAY_INBOX_LINE).toContain(PROOF_IN_PLACE_RULE)
-    const hint = threadHintText({ threadId: 'th-aaaaaaaaaaaa', title: 'x', created: false, followUp: false, duplicate: false, open: [], closed: [] })
-    expect(hint).toContain(PROOF_IN_PLACE_RULE)
   })
 
   it('rides the thread and letter ops and the walnut skill', () => {

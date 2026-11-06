@@ -76,12 +76,14 @@ describe('Main and a VP never do the work themselves', () => {
     expect(coreInstructionsBlock({ project: 'Walnut' })).toBe('')
   })
 
-  it('the mid-turn reminder and the hint both name the hand-on, never "do it here"', () => {
+  it('the mid-turn reminder names the hand-on and the hint says hand it to the team, never "do it here"', () => {
     for (const role of ['main', 'lead'] as const) {
       for (const text of [orgWorkReminder(role), orgHandOnHint(role)]) {
         for (const bad of DO_IT_YOURSELF) expect(text).not.toMatch(bad)
-        expect(text).toMatch(/task_create/)
       }
+      expect(orgWorkReminder(role)).toMatch(/task_create/)
+      // The hint is one short line; the ops it names are in the prompt (orgSelfWorkRule).
+      expect(orgHandOnHint(role)).toBe('at most 3 commands of your own a turn, only to look; hand the rest to your team.')
       // Short: they ride a tool result or a message.
       expect(orgWorkReminder(role).length).toBeLessThan(300)
       expect(orgHandOnHint(role).length).toBeLessThan(300)

@@ -191,8 +191,7 @@ function HintEditor({ hint, onSave, onReset }: {
   );
 }
 
-/** `replyLanguage`: the Reply language row's value on this page, so "What it sends" follows an edit there. */
-export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } = {}) {
+export function MessageHintsGroup() {
   const alwaysShowAdded = useShowWalnutAdditions();
   const [hints, setHints] = useState<HintRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -211,7 +210,7 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
-  useEffect(() => { void load(); }, [load, replyLanguage]);
+  useEffect(() => { void load(); }, [load]);
 
   /** True once stored; a refusal keeps the words in the box (and its draft). */
   const put = async (kind: string, patch: Record<string, unknown>): Promise<boolean> => {
@@ -240,7 +239,7 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
       heading="Message hints"
       id="message-hints"
       data-testid="message-hints"
-      footer="Short text sent with a message to the AI. Built in: Walnut's own, the same in every Walnut (Reply language sends your own setting with it). Yours: a hint you added. They are for the AI and are not shown in the chat; a session's menu, Raw input & output, shows exactly what it received. Agents can change these too (hint_set)."
+      footer="Short text sent with a message to the AI. Built in: Walnut's own, the same in every Walnut. Yours: a hint you added. They are for the AI and are not shown in the chat; a session's menu, Raw input & output, shows exactly what it received. Agents can change these too (hint_set)."
     >
       <SettingsRow
         anchor="settings-show-walnut-additions"

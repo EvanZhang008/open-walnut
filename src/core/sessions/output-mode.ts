@@ -2,12 +2,10 @@
  * Output mode ("markdown" vs "rich HTML"): the mode a session is on and the words
  * that tell its model about it, plus the reply-language text.
  *
- * WHEN those words ride a message is no longer decided here: they are two of the
- * message hints (src/core/hints/hint-registry.ts, kinds `rich-output` and
- * `reply-language`), sent as `<system-reminder>` blocks on the schedule the hint
- * registry gives them (full instruction at session start, after a compaction and on
- * a mode change; a short reminder every few messages; the language at start, after
- * a compaction, on a change and when a reply drifts).
+ * WHEN the mode's words ride a message is no longer decided here: they are the
+ * `rich-output` message hint (src/core/hints/hint-registry.ts), sent at session start,
+ * after a compaction and on a mode change. The reply language is a line of every
+ * session's prompt (sessions/reply-language-context.ts), no hint since 2026-11-06.
  *
  * Effective mode = record.output_mode ?? config.session.output_mode ?? default.
  * A record that never overrode the mode therefore follows the config LIVE, and
@@ -58,28 +56,18 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  fixed the reported ASCII call path (2026-10-22) and then over-reached in the
  *  eval (scripts/rich-output-eval.mjs): SVGs for a file tree, a debounce function,
  *  a complexity table and terminal output, and fixed pixel widths that overflow a
- *  narrow column. So the instruction names what stays a code block or table, the
- *  shapes that earn an SVG, and how an SVG must be built. */
+ *  narrow column. So the instruction names the shapes that earn an SVG and how
+ *  one is built; what stays a code block or table is in the walnut-rich-output skill. */
+// The rules each past miss earned, said once, and a pointer: sent at session start, after a
+// compaction and on a switch; the walnut-rich-output skill has the rest (2026-11-06, the user: "The
+// text itself should be concise also"; it was 1.9 KB).
 export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
-  'rich output mode is on. Write markdown for what markdown does well: headings, lists, '
-  + 'tables (also for a handful of numbers), and code blocks for real code, commands, terminal output, diffs '
-  + 'and file trees. Mix raw HTML into the same reply (separated by a blank line) only for what markdown cannot '
-  + 'express. A diagram with branches, a return path, a loop or four or more parts (a flow, a call path, a sequence '
-  + 'between parties, a state machine, an architecture, a trend over time) is inline <svg>, never ASCII or '
-  + 'box-drawing art in a code block and never mermaid, which does not render; a plain A -> B -> C stays a '
-  + 'sentence. Give each <svg> a viewBox and width="100%" (never a fixed pixel width), short labels with any '
-  + 'longer text outside it, and theme colours (var(--fg), var(--fg-muted), var(--border), var(--bg-secondary)); '
-  + 'state the diagram\'s point in prose as well. HTML is also for colour that carries meaning, '
-  + 'side-by-side or card layout, and interactivity (<details>, CSS :checked). The client renders it natively '
-  + 'while streaming. Write visual HTML directly in your reply, not in a file, screenshot, or HTML code fence, '
-  + 'unless the user asks for one. Keep each widget contiguous, without internal blank lines. '
-  + 'Set text and background colour together or neither: a custom background with '
-  + 'inherited or muted text loses contrast (theme vars --fg, --fg-muted, --bg-secondary, --border always fit). '
-  + 'For anything needing <script>, emit a ```html-app fenced block '
-  + '(rendered in a sandboxed iframe, rebuilt whenever the reply re-renders or the page reloads): keep its state in '
-  + 'localStorage, which Walnut restores, and call walnut.report(text) to offer a result the user can send to you. '
-  + 'A short answer needs none of this. '
-  + 'Component recipes (steppers, SVG diagrams, animations, islands): '
+  'rich output mode is on: markdown first (headings, lists, tables, code blocks for real code, output and '
+  + 'file trees); raw HTML directly in this reply only for colour that carries meaning, layout or interactivity, '
+  + 'never a file, screenshot or HTML fence unless the user asks, no blank lines in a widget, text and background '
+  + 'colour set together or neither. A diagram with branches, a return path, a loop or four or more parts is '
+  + 'inline <svg> (viewBox and width="100%", short labels, theme colours), never ASCII art or mermaid; A -> B -> C stays a '
+  + 'sentence. Script goes in an ```html-app fence (a sandboxed iframe). Recipes: '
   + `\`walnut tools call skill_read '{"dirName":"walnut-rich-output"}'\`.`;
 
 /** Turning it back OFF. Deliberately terse: the model already has the context. */
@@ -107,7 +95,7 @@ export const RICH_OUTPUT_MODE_REMINDER =
 /** Opening literal of the pre-registry reply-language line, kept to recognise old rows. */
 export const REPLY_LANGUAGE_MARKER = '[Reply language: ';
 
-/** The setting is one sentence; a pasted essay would ride every hint. */
+/** The setting is one sentence; a pasted essay would sit in every session's prompt. */
 export const REPLY_LANGUAGE_MAX_CHARS = 300;
 
 /**

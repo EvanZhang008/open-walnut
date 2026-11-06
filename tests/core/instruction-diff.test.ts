@@ -7,10 +7,16 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-instruction-diff'))
+const role = vi.hoisted(() => ({ companion: false }))
+vi.mock('../../src/core/server-role.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/core/server-role.js')>()),
+  isCompanion: () => role.companion,
+}))
 import { USER_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { defaultInstructions, type InstructionTask } from '../../src/core/sessions/session-context.js'
 import { refreshUserProfile } from '../../src/core/sessions/user-profile-context.js'
-import { dueChanges, hash, parseInstructions, renderDue } from '../../src/core/sessions/instruction-diff.js'
+import { dueChanges, hash, parseInstructions, renderDue, viewsAfter } from '../../src/core/sessions/instruction-diff.js'
+import { _resetReplyLanguageForTesting } from '../../src/core/sessions/reply-language-context.js'
 import { WALNUT_PROMPT_MARK } from '../../src/core/sessions/session-context.js'
 import { instructionNoticeFor, toldOnto } from '../../src/core/sessions/instruction-notice.js'
 
@@ -56,7 +62,7 @@ describe('every versioned line belongs to a block the diff reads', () => {
   // session would then be told it whole and told it is gone in one notice.
   it.each(ROLES)('%s: every block has a name of its own', (_label, task) => {
     const ids = [...parseInstructions(defaultInstructions(task)).blocks.keys()]
-    expect(ids.filter((id) => !['user-profile', 'core-instructions'].includes(id))).toEqual([])
+    expect(ids.filter((id) => !['user-profile', 'core-instructions', 'reply-language'].includes(id))).toEqual([])
   })
 
   it('a block keeps its name under a heading added above it', () => {
@@ -337,5 +343,40 @@ describe('a one-line change is told in about one line (2026-11-03)', () => {
     const text = notice(before, own(lines.map((l, i) => (i === 7 ? 'Instruction 8 for the lead, changed today.' : l)).join('\n'), '2026-11-03T01:00:00.000Z'))
     expect(text).toContain('Instruction 8 for the lead, changed today.')
     expect(text.length).toBeLessThanOrEqual('Instruction 8 for the lead, changed today.'.length + lines[7].length + FIXED)
+  })
+})
+
+describe('the reply language is a block: a change, a restore and a clear all reach a running session', () => {
+  // 2026-11-06 review: as a plain line, a cleared setting and one set back to an earlier language
+  // were never told (the old line was "told" already), and a new one waited out the 3-hour gap.
+  const task: InstructionTask = { id: 'w', project: 'marina' }
+  const promptWith = (lang: string | null) => { _resetReplyLanguageForTesting(lang); const p = parseInstructions(defaultInstructions(task)); _resetReplyLanguageForTesting(); return p }
+
+  it('French to German is told as the new line, German back to French too, and a clear as gone', () => {
+    const fr = promptWith('Answer in French.')
+    const de = promptWith('Answer in German.')
+    expect(fr.blocks.has('reply-language')).toBe(true)
+    const toGerman = dueChanges(de, fr, new Set(), {})!
+    expect(renderDue(toGerman)).toContain('Answer in German.')
+    const held = viewsAfter({}, toGerman)
+    const back = dueChanges(fr, fr, new Set(), held)!
+    expect(back.blocks.map((b) => b.block.id)).toEqual(['reply-language'])
+    expect(renderDue(back)).toContain('Answer in French.')
+    const cleared = dueChanges(promptWith(null), fr, new Set(), {})!
+    expect(cleared.gone.map((g) => g.id)).toEqual(['reply-language'])
+    expect(renderDue(cleared)).toContain('none of its lines apply any more')
+    expect(dueChanges(fr, fr, new Set(), {})).toBeNull()
+  })
+
+  it('on the companion, whose config copy has no Reply language, a session is never told the line is gone', () => {
+    _resetReplyLanguageForTesting('Answer in French.')
+    const before = defaultInstructions(task)
+    _resetReplyLanguageForTesting()
+    try {
+      role.companion = true
+      expect(instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)).toBeNull()
+      role.companion = false
+      expect(instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)).toContain('none of its lines apply any more')
+    } finally { role.companion = false }
   })
 })

@@ -224,7 +224,7 @@ export async function collectOpenItems(
       if (memory) items.text = [items.text, memory].filter(Boolean).join('\n\n');
       // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
       const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
-      await (await import('./user-profile-context.js')).refreshUserProfile();
+      await Promise.all([(await import('./user-profile-context.js')).refreshUserProfile(), (await import('./reply-language-context.js')).refreshReplyLanguage()]);
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
       // Only whole and within what the hook may add: a cut notice would leave rules unsaid. Left out,
       // it is not told, so the next message carries it (the compaction made everything due again).

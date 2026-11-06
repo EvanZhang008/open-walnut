@@ -104,6 +104,7 @@ import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
 import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
+import { currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
@@ -241,13 +242,13 @@ export const BRIEF_LINE =
 
 /**
  * Main's and every lead's chat is read by the user (the Org page, the phone) whoever started the
- * turn (2026-10-29: leads answered Walnut notices in English there). The reply-language hint goes
- * out only by its own triggers (hints/hint-registry.ts); a reply off it is corrected (hints/hint-drift.ts).
+ * turn (2026-10-29: leads answered Walnut notices in English there). The setting itself is a line of
+ * every session's prompt (reply-language-context.ts), never a hint on a message (2026-11-06).
  */
 export const ORG_REPLY_LANGUAGE_LINE =
   'The user reads your chat (the Org page, the phone), so every reply you write here is to them, whoever started '
   + 'the turn (the user, a Walnut notice, a worker\'s message, a trigger): write it, every line down to a short progress '
-  + 'note between tool calls, in the language they asked replies in (their reply-language note and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
+  + 'note between tool calls, in the language they asked replies in (their reply language and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
 
 /**
  * One fault, one owner (2026-10-30 org review: "the same deliverable continues its exact task" sent each
@@ -458,7 +459,7 @@ export async function buildSessionContext(
     import('../hosts/fleet-prompt.js').then((m) => m.buildFleetPromptLine(host), () => ''),
   ])
   // The copy composePrompt reads: as on disk now, not as at the last read.
-  await refreshUserProfile()
+  await Promise.all([refreshUserProfile(), refreshReplyLanguage()])
   return { systemPrompt: composePrompt(found, { taskLine, taskDir, fleet }) }
 }
 
@@ -588,6 +589,9 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + '(even which one made a commit) are answered by Walnut, never by '
     + 'guessing or by git.\n\n'
     + workRule
+    // The user's Reply language setting: a standing rule, so here (under no heading) and never on a
+    // message (reply-language-context.ts).
+    + replyLanguageLine(currentReplyLanguage())
     // The two words the user reaches for, pinned to the two different things
     // (2026-09-30: "use a subagent" was answered with a Walnut subtask).
     + 'Words: a "subagent" is Claude Code\'s Agent tool inside this session, '

@@ -9,7 +9,7 @@
  *                     (`SessionRecord.lastCompactUuid`, the boundary the place and
  *                     instruction notices use: one boundary, not a second tracker)
  *   on_change         what it says now differs from what the session was told
- *   on_drift          a reply since it last went out broke its rule (hint-drift.ts)
+ *   on_drift          a reply since it last went out broke its rule (no hint uses it since 2026-11-06)
  *   on_request        the sender asked for it on this message (a voice send, a question)
  */
 

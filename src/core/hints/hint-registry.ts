@@ -25,20 +25,15 @@ import type {
   Config, MessageHintRole, MessageHintSettings, MessageHintTrigger, SessionOutputMode,
 } from '../types.js';
 import {
-  RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER,
-  replyLanguageText, resolveEffectiveOutputMode,
+  RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { getHintContext, hintContextText } from './hint-context.js';
 import { ASK_THREAD_RE, askHintText, askNameOf } from '../sessions/ask-thread.js';
-import { languageDrift } from './hint-drift-detect.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
-import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
+import { HINT_USER_SETTINGS, WALNUT_ONLY_KINDS } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
-import { THREAD_ONE_PLACE_RULE } from '../org/thread-rules.js';
-
-export { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection };
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
   'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
@@ -87,13 +82,13 @@ interface HintSpec {
   identity(input: HintContentInput): string | null;
   /** Its text for this send, given why it is due; null = say nothing this time. */
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
-  /** Did this reply break the hint's rule? (`on_drift`; null = it cannot tell) */
-  drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
 }
 
-const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request');
+// on_drift stays a trigger name an older config may hold, but no hint can use it: its one user, the
+// reply language, is no hint any more (2026-11-06, the user: "just remove reply language").
+const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request' && t !== 'on_drift');
 const periodicOnly = (reasons: ReadonlySet<MessageHintTrigger>) =>
-  [...reasons].every((r) => r === 'every_turn' || r === 'every_n_turns' || r === 'on_drift');
+  [...reasons].every((r) => r === 'every_turn' || r === 'every_n_turns');
 
 const BUILT_IN: readonly HintSpec[] = [
   {
@@ -121,9 +116,11 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'rich-output',
     label: 'Rich output',
-    description: 'Tells the model the session is on rich output (markdown first, HTML and SVG where markdown has no shape), and that it is off again after a switch.',
+    description: 'Tells the model the session is on rich output (markdown first, HTML and SVG where markdown has no shape), and that it is off again after a switch. At session start, after a compaction and on a switch.',
     allowed: SCHEDULED,
-    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'every_n_turns'], every_turns: 5, placement: 'after' },
+    // No reminder every few messages (2026-11-06, the user: "Yes reduce"): the start and the compaction carry it.
+    // every_turns stays the spacing a person gets when they turn every_n_turns back on.
+    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change'], every_turns: 5, placement: 'after' },
     identity: (i) => resolveEffectiveOutputMode(i.record, i.config),
     render: (i, reasons) => {
       const mode = resolveEffectiveOutputMode(i.record, i.config);
@@ -132,33 +129,6 @@ const BUILT_IN: readonly HintSpec[] = [
         return reasons.has('on_change') && i.toldHash === 'rich' ? { text: RICH_OUTPUT_MODE_OFF_INSTRUCTION } : null;
       }
       return { text: periodicOnly(reasons) ? RICH_OUTPUT_MODE_REMINDER : RICH_OUTPUT_MODE_ON_INSTRUCTION };
-    },
-  },
-  {
-    kind: 'reply-language',
-    label: 'Reply language',
-    description: 'The language to answer the user in, in the words of your Reply language setting (Settings); nothing is sent while it is empty. At session start, after a compaction, when the setting changes, and on the message after a reply that was not in it.',
-    allowed: SCHEDULED,
-    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'], placement: 'after' },
-    // Only its triggers send it (2026-11-05, the user, of this block under every message of his:
-    // "I said don't do this every round remove thies, this alsoshoudln't be in any official walnut
-    // product"). Rules that forced it onto every message of a role or of a person, and lines Walnut
-    // wrote in a few languages of its own, are gone: the words are the user's setting, and a reply
-    // off it is corrected by on_drift (hint-drift.ts) and inside the turn (hint-drift-live.ts).
-    identity: (i) => replyLanguageText(i.config),
-    // 2026-10-29: after the user wrote Chinese, a worker's progress lines between its tool calls
-    // stayed English; the rule covers every line the user reads, not only the final reply.
-    // A reply that broke it is named first (hint-drift.ts).
-    render: (i, reasons) => {
-      const text = replyLanguageText(i.config);
-      if (!text) return null;
-      const driftAt = reasons.has('on_drift') ? i.record?.hintState?.drift?.['reply-language'] : undefined;
-      const correction = driftAt ? `${replyLanguageCorrection(driftAt)} ` : '';
-      return { text: `${correction}${text} ${REPLY_LANGUAGE_SCOPE}` };
-    },
-    drifted: (config, reply) => {
-      const rule = replyLanguageText(config);
-      return rule ? languageDrift(rule, reply) : null;
     },
   },
   {
@@ -185,7 +155,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'user-away',
     label: 'User away',
-    description: 'Main and the leads: the user has not been in this chat for a while, so what needs him and is on none of his threads goes to his inbox; and that he is back. A thread\'s news stays in that thread.',
+    description: 'Main and the leads: one line when the user has been away from this chat for a while (what needs him and is on none of his threads goes to his inbox), and one when he is back.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'on_change', 'after_compaction'], placement: 'after' },
     // 2026-10-31, the user: when he is not in a node's chat, an important update goes to his inbox.
@@ -217,7 +187,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'threads',
     label: 'Threads',
-    description: 'Main and the leads: which of the user\'s Threads (his own requests, beside the Brief) his message was filed under, his other open threads, and how to keep them current with thread_update. On each message the user sends there.',
+    description: 'Main and the leads: one line on each message the user sends there, naming the Thread it was filed under (for a new thread, his other open ones to merge it into).',
     allowed: SCHEDULED,
     // 2026-11-01, the user: every request of his becomes a thread the node keeps; "if my multiple
     // ask is about the same thread, add it below that thread".
@@ -228,7 +198,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'threads-tidy',
     label: 'Threads cleanup',
-    description: 'Main and the leads: the user\'s Threads that need the node\'s decision (he wrote after an answer: did he react to it? a stand-in title, a stale state), so it folds what he knows and closes what he reacted to as finished. Every 3 messages, when there is one.',
+    description: 'Main and the leads: one line naming the user\'s Threads that need the node\'s decision (did he react to your answer? needs a title; answered, still new). At session start, after a compaction and every 3 messages, when there is one; on a message that also files a thread it joins that line.',
     allowed: SCHEDULED,
     // 2026-11-01, the user: "you should proactively clean the thread ... make sure this is a Walnut
     // feature, not just your memory".
@@ -250,16 +220,13 @@ const BUILT_IN: readonly HintSpec[] = [
   },
 ];
 
-/** What a node hears while the user is away from its chat (org/user-away.ts). */
+/** What a node hears while the user is away from its chat (org/user-away.ts); the rules are in its prompt (AWAY_INBOX_LINE). */
 export function userAwayText(lastSeenAt: number | null): string {
-  const when = lastSeenAt ? `since ${new Date(lastSeenAt).toISOString().slice(0, 16)}Z` : 'for as long as Walnut knows';
-  return `the user has not been in this chat ${when}, and it is not open anywhere. What needs him and is on none of his threads `
-    + '(a decision only he can make, something to review) goes to his inbox now with human_inbox_send, a decision as '
-    + 'action_required with its options so one tap answers it; Walnut adds your letters of this absence to one thread and his '
-    + 'phone buzzes once. Anything else stays in this chat and is never a letter. ' + THREAD_ONE_PLACE_RULE;
+  const when = lastSeenAt ? `since ${new Date(lastSeenAt).toISOString().slice(0, 16)}Z` : 'for a while';
+  return `the user has been away from this chat ${when}: what needs his decision or review and is on none of his threads goes to his inbox.`;
 }
 
-export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again (a thread\'s in its thread), not to his inbox.';
+export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again, not to his inbox.';
 
 const BUILT_IN_BY_KIND = new Map(BUILT_IN.map((s) => [s.kind, s]));
 
@@ -287,7 +254,6 @@ export interface EffectiveHint {
   override?: MessageHintSettings;
   identity(input: HintContentInput): string | null;
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
-  drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
 }
 
 /** The strings of a list from config.yaml, which a person may have hand-edited into any shape. */
@@ -354,7 +320,6 @@ export function effectiveHints(config: Pick<Config, 'session'> | null | undefine
       ...(o ? { override: o } : {}),
       identity: spec.identity,
       render: spec.render,
-      ...(spec.drifted ? { drifted: spec.drifted } : {}),
     };
   });
 }
@@ -410,7 +375,7 @@ export function validateHintSettings(kind: string, input: unknown): MessageHintS
     if (i.label.trim()) out.label = i.label.trim();
   }
   if (i.text !== undefined) {
-    if (spec) throw new HintSettingsError('a built-in hint keeps its own text (reply language and output mode are their own settings)');
+    if (spec) throw new HintSettingsError('a built-in hint keeps its own text (the output mode is its own setting)');
     if (typeof i.text !== 'string' || !i.text.trim()) throw new HintSettingsError('text must be a non-empty string');
     if (i.text.length > HINT_TEXT_MAX) throw new HintSettingsError(`text must be at most ${HINT_TEXT_MAX} characters`);
     out.text = i.text.trim();
@@ -452,10 +417,8 @@ export function validateHintSettings(kind: string, input: unknown): MessageHintS
 }
 
 /** A hint as the API and the ops show it (no functions). */
-export function describeHint(h: EffectiveHint, config?: Pick<Config, 'session'> | null) {
+export function describeHint(h: EffectiveHint, _config?: Pick<Config, 'session'> | null) {
   const setting = h.builtIn ? HINT_USER_SETTINGS[h.kind] : undefined;
-  // As it is sent: whitespace collapsed, a long one cut (output-mode.ts).
-  const value = setting?.key === 'reply_language' ? replyLanguageText(config) : null;
   return {
     kind: h.kind,
     label: h.label,
@@ -473,7 +436,7 @@ export function describeHint(h: EffectiveHint, config?: Pick<Config, 'session'> 
     ...(setting ? {
       user_setting: {
         label: setting.label, anchor: setting.anchor,
-        value,
+        value: null,
         walnut_text: setting.walnutText,
       },
     } : {}),

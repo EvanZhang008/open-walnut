@@ -2045,8 +2045,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     void import('../core/sessions/status-push.js').then((m) => m.startStatusPush()).catch(() => {})
     // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.
     void import('../core/org/user-away.js').then((m) => m.startUserAway()).catch(() => {})
-    // The reply language, corrected inside a turn a person started (src/core/hints/hint-drift-live.ts).
-    if (role() === 'leader') void import('../core/hints/hint-drift-live.js').then((m) => m.startLiveDrift()).catch(() => {})
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
     // A look at Main or a lead whose Brief is stale asks it for one refresh turn (src/core/sessions/brief-refresh.ts).
     if (role() === 'leader') void import('../core/sessions/brief-refresh.js').then((m) => m.startBriefRefreshLooks()).catch(() => {})

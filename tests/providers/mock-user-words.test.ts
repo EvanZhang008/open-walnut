@@ -36,7 +36,7 @@ describe('the mock ACP agent echoes only what the user wrote', () => {
   const kinds = hintKinds()
 
   it('finds the hint kinds in the source', () => {
-    expect(kinds).toEqual(expect.arrayContaining(['question', 'reply-language', 'rich-output', 'session-context', 'voice-reply']))
+    expect(kinds).toEqual(expect.arrayContaining(['question', 'rich-output', 'session-context', 'voice-reply']))
   })
 
   it.each(kinds)('a %s hint before and after the message comes off', (kind) => {

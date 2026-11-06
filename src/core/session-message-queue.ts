@@ -45,7 +45,7 @@ import type { PendingInstructionNotice } from './sessions/instruction-notice.js'
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 import { frameForSource } from './sessions/send-frame.js';
-import { replaceHintedText } from './hints/hint-format.js';
+import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
 
@@ -453,6 +453,18 @@ export async function markProcessing(
       const freshText = staleTriggerText(head.message, head.enqueuedAt, Date.now()) ?? head.message;
       // The whole line counts: Walnut's notes at its head may lead a person's message.
       head.message = routing.apply(freshText, queue, batch.map((m) => (m === head ? freshText : m.message)));
+    }
+    // A fresh line holds each hint once, however many rows it merges, the last copy kept (it is
+    // the newest state), and one threads note: a cleanup joins the filing note, as in one row
+    // (hints/hint-send.ts planHints). A row that must stay byte-exact still counts as carrying its blocks.
+    if (!head.lineUuid && batch.length > 1) {
+      const folded = foldTidyIntoThreads(batch.map((m) => ({ message: m.message, fresh: isFreshRow(m) })));
+      batch.forEach((m, i) => { m.message = folded[i]; });
+      const seen = new Set<string>();
+      for (const m of [...batch].reverse()) {
+        if (isFreshRow(m)) m.message = dropRepeatedHintBlocks(m.message, seen);
+        else for (const b of hintBlocksIn(m.message)) seen.add(b);
+      }
     }
     const lineUuid = head.lineUuid ?? lineUuidFor(batch);
     const now = Date.now();

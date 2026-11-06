@@ -10,9 +10,9 @@
  * person's message from a follower, a cold resume, a leader's text.
  *
  * Since the hint registry (src/core/hints/) the tail holds only the hints OWED
- * right now, as `<system-reminder>` blocks (a session never told the reply
- * language, a reply that drifted), never a line on every message (2026-11-05, the user:
- * not every round); the bracket-line
+ * right now, as `<system-reminder>` blocks (a session never told rich output, a mode
+ * switch), never a line on every message (2026-11-05, the user: not every round). The
+ * reply language is in the system prompt since 2026-11-06, never in a tail; the bracket-line
  * tail of an older server still works on a host.
  *
  * Would-fail-if-reverted: drop withReplyTail from deliverWithTaskRouting or
@@ -36,8 +36,6 @@ import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../src/core/sessions/output-mode.js'
 import { hostReplyTail } from '../../src/core/hints/hint-send.js'
 import { escapeHintTags, renderHintBlock } from '../../src/core/hints/hint-format.js'
-import { REPLY_LANGUAGE_SCOPE } from '../../src/core/hints/hint-registry.js'
-import { replyLanguageCorrection } from '../../src/core/hints/hint-origin.js'
 import { addTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
@@ -51,9 +49,6 @@ const LANG = 'Talk to the user in Chinese; code stays English.'
 const LINE = `[Reply language: ${LANG}]`
 const TAIL = `${RICH_OUTPUT_MODE_REMINDER}\n\n${LINE}`
 // The tail this server ships: owed hint blocks.
-// What the session reads: the configured sentence, then Walnut's clause on what it covers.
-// Nothing of Walnut's leads it, whatever language the message is in (2026-11-05).
-const LANG_BLOCK = renderHintBlock('reply-language', `${LANG} ${REPLY_LANGUAGE_SCOPE}`)
 const RICH_BLOCK = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
 const dirs: string[] = []
 const journals: Array<{ close: () => void }> = []
@@ -135,7 +130,7 @@ describe('a host delivery carries the session reply tail', () => {
   })
 
   it('a tail of hint blocks goes whole, once, never on a slash command', async () => {
-    const tail = `${RICH_BLOCK}\n${LANG_BLOCK}`
+    const tail = `${RICH_BLOCK}\n${renderHintBlock('tone', 'Keep it short.')}`
     const f = fixture(tail)
     await f.host.deliverHuman(home, mainSid, 'what changed today?', 'qm-blocks-1')
     expect(f.writes[0].text).toBe(`what changed today?\n\n${tail}`)
@@ -169,27 +164,25 @@ describe('hostReplyTail (what the server ships)', () => {
   const sid = mainSid
   const told = (hash: string, at = '2026-10-27T10:00:00.000Z') => ({ send: 1, hash, at })
 
-  it('only the hints owed now: never told, changed, drifted; nothing once all were told', () => {
+  it('only the hints owed now: never told or changed; nothing once all were told; never a reply language', () => {
     const rich = { session: { output_mode: 'rich' as const, reply_language: LANG } }
-    // A session never told anything is owed the full rich instruction and the language.
-    expect(hostReplyTail({ claudeSessionId: sid }, rich)).toBe(`${RICH_BLOCK}\n${LANG_BLOCK}`)
-    // Told rich before the registry (output_mode_injected): only the language is owed.
-    expect(hostReplyTail({ claudeSessionId: sid, output_mode_injected: 'rich' }, rich)).toBe(LANG_BLOCK)
+    // A session never told anything is owed the full rich instruction; the reply language is in the
+    // system prompt since 2026-11-06, never in a tail.
+    expect(hostReplyTail({ claudeSessionId: sid }, rich)).toBe(RICH_BLOCK)
+    // Told rich before the registry (output_mode_injected): nothing is owed.
+    expect(hostReplyTail({ claudeSessionId: sid, output_mode_injected: 'rich' }, rich)).toBeNull()
     // Markdown says nothing to a session never told rich.
-    expect(hostReplyTail({ claudeSessionId: sid }, { session: { output_mode: 'markdown', reply_language: LANG } })).toBe(LANG_BLOCK)
+    expect(hostReplyTail({ claudeSessionId: sid }, { session: { output_mode: 'markdown', reply_language: LANG } })).toBeNull()
     expect(hostReplyTail({ claudeSessionId: sid }, { session: { output_mode: 'markdown' } })).toBeNull()
-    // Everything told and current: the periodic reminder is the server's to count, and the language
-    // is not owed again (2026-11-05: never on every message), for a lead and a worker too.
-    const allTold = { sends: 9, told: { 'rich-output': told('rich'), 'reply-language': told(LANG) } }
+    // Everything told and current: nothing, for a lead and a worker too.
+    const allTold = { sends: 9, told: { 'rich-output': told('rich') } }
     expect(hostReplyTail({ claudeSessionId: sid, hintState: allTold }, rich)).toBeNull()
     // (A lead's tail may hold its own hand-on hint, tests/core/hints/hand-on-hint.test.ts.)
     expect(hostReplyTail({ claudeSessionId: sid, hintState: allTold }, rich, { org_role: 'lead' } as never) ?? '').not.toContain('Walnut (reply-language)')
     expect(hostReplyTail({ claudeSessionId: sid, hintState: allTold }, rich, { parent_task_id: 'p' } as never)).toBeNull()
-    // A reply that drifted after the language was told owes it again.
+    // A drift mark an older Walnut left owes nothing.
     const drifted = { ...allTold, drift: { 'reply-language': '2026-10-27T11:00:00.000Z' } }
-    // ...led by Walnut's English correction naming the turn.
-    expect(hostReplyTail({ claudeSessionId: sid, hintState: drifted }, rich))
-      .toBe(renderHintBlock('reply-language', `${replyLanguageCorrection('2026-10-27T11:00:00.000Z')} ${LANG} ${REPLY_LANGUAGE_SCOPE}`))
+    expect(hostReplyTail({ claudeSessionId: sid, hintState: drifted }, rich)).toBeNull()
   })
 })
 
@@ -202,21 +195,14 @@ describe('buildHostSlice ships replyTail', () => {
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
     await updateSessionRecord(sid, { output_mode_injected: 'rich' })
     const row = async () => (await buildHostSlice('__local__')).sessions.find((r) => r.sid === sid)
+    // Told rich before the registry, and a reply language set: nothing is owed (the language is in the prompt).
     await updateConfig({ session: { output_mode: 'rich', reply_language: LANG } })
-    expect((await row())?.replyTail).toBe(LANG_BLOCK)
-    await updateSessionRecord(sid, {
-      hintState: { sends: 1, told: { 'rich-output': { send: 1, hash: 'rich', at: new Date().toISOString() }, 'reply-language': { send: 1, hash: LANG, at: new Date().toISOString() } } },
-    })
-    // Both told: nothing is owed, the language included (2026-11-05: never on every message).
     expect(await row()).not.toHaveProperty('replyTail')
-    // A switch away from rich owes the "off" words until the server tells them; the language stays told.
+    // A switch away from rich owes the "off" words until the server tells them.
     await updateConfig({ session: { output_mode: 'markdown', reply_language: LANG } })
     expect((await row())?.replyTail).toBe(renderHintBlock('rich-output', RICH_OUTPUT_MODE_OFF_INSTRUCTION))
-    // A record that never told the language owes it (session_start).
+    // Told: gone again.
     await updateSessionRecord(sid, { hintState: { sends: 2, told: { 'rich-output': { send: 2, hash: 'markdown', at: new Date().toISOString() } } } })
-    expect((await row())?.replyTail).toBe(LANG_BLOCK)
-    // No reply language set: nothing rides.
-    await updateConfig({ session: { output_mode: 'markdown', reply_language: '' } })
     expect(await row()).not.toHaveProperty('replyTail')
   })
 })

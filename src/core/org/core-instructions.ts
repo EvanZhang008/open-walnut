@@ -48,9 +48,7 @@ export function orgHandOn(role: CoreInstructionRole): string {
  * eaach compation or at start some ever xround"). Short: it rides a message.
  */
 export function orgHandOnHint(role: CoreInstructionRole): string {
-  const who = role === 'main' ? 'Main' : 'a VP';
-  return `you are ${who}: never do the work yourself. Run at most ${ORG_SELF_COMMAND_LIMIT} commands of your own in a turn, only to look, `
-    + `then hand the rest on: ${orgHandOn(role)} (Walnut's own ops do not count; host_exec does).`;
+  return `at most ${ORG_SELF_COMMAND_LIMIT} commands of your own a turn, only to look; hand the rest to your team.`;
 }
 
 export function orgSelfWorkRule(role: CoreInstructionRole): string {

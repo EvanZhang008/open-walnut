@@ -26,7 +26,6 @@ import type {
   TaskHookContext,
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
-import { hintDriftHook } from '../hints/hint-drift.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
@@ -2597,5 +2596,4 @@ export const builtinHooks: SessionHookDefinition[] = [
   sessionErrorNotifyHook,
   cwdRenameDetectorHook,
   sessionRequestWatchHook,
-  hintDriftHook,
 ];

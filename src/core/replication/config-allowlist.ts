@@ -143,7 +143,10 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
   },
   // Read only by the leader's send path. Named in the copy, an older replica would refuse the whole session row.
   session: {
-    reply_language: 'the reply-language hint the Mac sends with messages, by its triggers',
+    // A session the companion starts while it leads lacks the line until the Mac is back and its
+    // instruction notice adds it (as the hint did before, 2026-11-06); the companion never tells a
+    // session the line is gone (sessions/instruction-notice.ts).
+    reply_language: 'the reply language every session\'s prompt carries, built on the Mac',
     idle_compaction: 'the idle compaction runs on the Mac only (sessions/idle-compaction.ts)',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',
   },

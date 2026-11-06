@@ -192,7 +192,6 @@ const RAW_READERS: Record<string, string> = {
   'src/core/session-history.ts': 'carries the team signal across a restart',
   'src/core/event-types.ts': 'the session:result payload',
   'src/web/server.ts': 'a session:result: an intermediate result is no turn end',
-  'src/core/hints/hint-drift-live.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/org/thread-answers.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/session-auto-continue.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/session-hooks/derive/session.ts': 'a session:result: an intermediate result is no turn end',

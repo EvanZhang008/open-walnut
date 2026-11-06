@@ -1,7 +1,7 @@
 /**
- * Did a reply drift off the reply-language rule? Pure and cheap: it runs on every
- * turn end the chat shows (hint-drift.ts) and on each progress line inside a turn
- * (hint-drift-live.ts).
+ * Which language a reply-language sentence asks for, and is a text in it? Pure and
+ * cheap. Walnut's own letters use it to pick their language (walnut-letters/languages.ts);
+ * it judged the reply-language hint's drift until that hint was removed (2026-11-06).
  *
  * The rule is the user's own sentence ("Talk to the user in Chinese; code ...
  * stays English"), so the language it asks for is read from the language names it
@@ -90,6 +90,3 @@ export function languageDrift(rule: string, reply: string, minLetters = MIN_LETT
   const mine = want === 'kana' ? c.kana * 4 + c.han * 4 : c[want] * weight[want];
   return mine / total < 0.2;
 }
-
-/** Letters a progress line needs to be judged inside a turn (hint-drift-live.ts). */
-export const LIVE_MIN_LETTERS = 12;

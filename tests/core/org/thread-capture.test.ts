@@ -58,30 +58,35 @@ describe('what the node is told', () => {
 
   it('a new thread: its id, the open ones, how to merge into one of them, and to give it a title', () => {
     const text = threadHintText(base)
-    expect(text).toContain('new thread th-aaaaaaaaaaaa')
-    expect(text).toContain('th-bbbbbbbbbbbb "Hints: built in or yours" (working)')
-    expect(text).toContain('"merge_into":"<that id>"')
-    expect(text).toContain('short title')
+    expect(text).toBe('filed as new thread th-aaaaaaaaaaaa. Open: th-bbbbbbbbbbbb "Hints: built in or yours". '
+      + 'Same subject as one: thread_update merge_into; else give it a short title.')
+    // No open threads: only the title is asked.
+    expect(threadHintText({ ...base, open: [] })).toBe('filed as new thread th-aaaaaaaaaaaa. Give it a short title (thread_update).')
   })
 
   it('a follow-up: filed under the thread, no merge asked', () => {
     const text = threadHintText({ ...base, created: false, followUp: true })
-    expect(text).toContain('follow-up in his thread th-aaaaaaaaaaaa')
+    expect(text).toBe('a follow-up in thread th-aaaaaaaaaaaa "Org page threads", filed there.')
     expect(text).not.toContain('merge_into')
   })
 
   it('asked again after a close: says which thread it follows', () => {
-    expect(threadHintText({ ...base, open: [], follows: { id: 'th-cccccccccccc', title: 'Old' } })).toContain('asks again about th-cccccccccccc "Old"')
+    expect(threadHintText({ ...base, open: [], follows: { id: 'th-cccccccccccc', title: 'Old' } })).toContain('(asks again about closed th-cccccccccccc "Old")')
   })
 
   it('names the threads he closed since the node was last told', () => {
     const text = threadHintText({ ...base, closed: [{ id: 'th-dddddddddddd', title: 'Done thing', how: 'acked', by: 'human' }] })
-    expect(text).toContain('th-dddddddddddd "Done thing" (he acknowledged it)')
+    expect(text).toMatch(/ Closed since: th-dddddddddddd \(by him\)\.$/)
   })
 
   it('a repeat is named as one, with nothing to do', () => {
     const text = threadHintText({ ...base, duplicate: true, created: false })
-    expect(text).toContain('repeats one already filed')
-    expect(text).not.toContain('merge_into')
+    expect(text).toBe('already filed under thread th-aaaaaaaaaaaa "Org page threads".')
+  })
+
+  it('is one or two lines: the rules for keeping threads are in the prompt, not the hint', () => {
+    const text = threadHintText({ ...base, closed: [{ id: 'th-dddddddddddd', title: 'Done thing', how: 'acked', by: 'human' }] })
+    expect(text.length).toBeLessThan(300)
+    expect(text).not.toMatch(/state \(working|Walnut puts your chat reply/)
   })
 })

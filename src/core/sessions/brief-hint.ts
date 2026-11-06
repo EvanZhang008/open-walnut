@@ -30,14 +30,8 @@ export function briefHintStateOf(owner: Task, tasks: readonly Task[]): BriefHint
 
 /** The hint's words: behind (moved since, or none yet), or the plain reminder. */
 export function briefHintText(state: BriefHintState, nowMs = Date.now()): string {
-  if (!state.at) {
-    return 'you keep no Brief yet. Write it now with brief_write (content: the three sections "### Needs you", "### Working", '
-      + '"### Waiting / snoozed", one line per piece of work starting with its <task-ref/>); brief_read lists your team by its live status.';
-  }
-  const age = agoWords(Math.max(0, nowMs - Date.parse(state.at)));
-  if (state.stale) {
-    return `your Brief was written ${age} and is behind (${state.words}). Update it now with brief_write (edits for the lines that `
-      + 'changed); brief_read compact:true shows only what moved, with the lines to edit.';
-  }
-  return `your Brief was written ${age}. When anything you or your teams did changes what the user should know, update it with brief_write.`;
+  // One line of what is new; how a Brief is written is in the prompt (session-context.ts BRIEF_LINE).
+  if (!state.at) return 'you keep no Brief yet: write it with brief_write.';
+  if (state.stale) return `your Brief is behind (${state.words}): update it with brief_write.`;
+  return `your Brief was written ${agoWords(Math.max(0, nowMs - Date.parse(state.at)))}.`;
 }

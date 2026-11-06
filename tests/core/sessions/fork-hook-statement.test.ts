@@ -68,8 +68,8 @@ describe('a fork\'s compaction tells the main conversation nothing', () => {
   })
 
   it('message hints: a fork\'s statement of a changed hint leaves it owed to the main conversation', () => {
-    // The default triggers (session_start, after_compaction, on_change, on_drift): never every message.
-    const cfg = (lang: string) => ({ session: { reply_language: lang } }) as unknown as Pick<Config, 'session'>
+    // rich-output's default triggers (session_start, after_compaction, on_change): never every message.
+    const cfg = (mode: 'rich' | 'markdown') => ({ session: { output_mode: mode } }) as unknown as Pick<Config, 'session'>
     const rec: { claudeSessionId: string; hintState?: SessionHintState; lastCompactUuid?: string; lastCompactAt?: string } =
       { claudeSessionId: 's-lead', lastCompactUuid: 'c0', lastCompactAt: longBefore }
     const send = (config: Pick<Config, 'session'>, opts: { afterCompaction?: boolean; byHook?: boolean; now: number }) => {
@@ -77,15 +77,15 @@ describe('a fork\'s compaction tells the main conversation nothing', () => {
       rec.hintState = advanceHintState(rec.hintState, rec as never, plan.told, { now: opts.now, ...(opts.byHook ? { byHook: true, count: false } : { sentBy: 'person' }) })
       return plan.carried.map((c) => c.kind)
     }
-    send(cfg('Chinese.'), { now: hookAt - 600_000 })
-    // The user changes the reply language; the fork compacts and its hook states the new one.
-    expect(send(cfg('French.'), { afterCompaction: true, byHook: true, now: hookAt })).toContain('reply-language')
+    expect(send(cfg('markdown'), { now: hookAt - 600_000 })).toEqual([])
+    // The user switches the session to rich output; the fork compacts and its hook states it.
+    expect(send(cfg('rich'), { afterCompaction: true, byHook: true, now: hookAt })).toContain('rich-output')
     // The main conversation never read it: its next message still carries the change.
     const snapshot = structuredClone(rec)
-    expect(send(cfg('French.'), { now: hookAt + 60_000 })).toContain('reply-language')
+    expect(send(cfg('rich'), { now: hookAt + 60_000 })).toContain('rich-output')
     // Had it been the conversation's own compaction (boundary read 2 s later), it is told.
     Object.assign(rec, structuredClone(snapshot), { lastCompactAt: carried })
-    expect(send(cfg('French.'), { now: hookAt + 60_000 })).not.toContain('reply-language')
+    expect(send(cfg('rich'), { now: hookAt + 60_000 })).not.toContain('rich-output')
   })
 })
 

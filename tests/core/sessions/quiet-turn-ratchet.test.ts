@@ -75,7 +75,7 @@ describe('every reader of a turn end decides about quiet turns', () => {
     for (const f of [
       'src/web/server.ts', 'src/core/session-hooks/derive/session.ts', 'src/core/push-notification.ts',
       'src/core/session-auto-continue.ts', 'src/core/sessions/endpoint-wait.ts', 'src/core/org/thread-answers.ts',
-      'src/core/sessions/thread-title.ts', 'src/core/sessions/thread-takeaway.ts', 'src/core/hints/hint-drift-live.ts',
+      'src/core/sessions/thread-title.ts', 'src/core/sessions/thread-takeaway.ts',
       'src/core/time-tracking/agent-time.ts', 'src/core/triage/runs.ts', 'src/web/routes/quick-main-follow.ts',
       'src/core/user-status-sync.ts', 'src/core/phase.ts',
     ]) {

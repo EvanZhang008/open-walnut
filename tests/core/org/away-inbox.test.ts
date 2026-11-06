@@ -66,11 +66,11 @@ describe('the user-away hint', () => {
     const away = { away: true, lastSeenAt: NOW - 40 * MIN };
     const first = send(rec, 'lead', away);
     expect(first).toHaveLength(1);
-    expect(first[0]).toMatch(/has not been in this chat since 2026-11-01T14:20Z/);
+    expect(first[0]).toMatch(/has been away from this chat since 2026-11-01T14:20Z/);
     // The same absence after a restart that forgot a heartbeat (an earlier "last seen") is not news.
     expect(send(rec, 'lead', { away: true, lastSeenAt: NOW - 90 * MIN })).toEqual([]);
-    expect(first[0]).toMatch(/goes to his inbox now with human_inbox_send/);
-    expect(first[0]).toMatch(/one thread and his phone buzzes once/);
+    // One line; how to write the letters is in the prompt (AWAY_INBOX_LINE).
+    expect(first[0]).toMatch(/needs his decision or review and is on none of his threads goes to his inbox\.$/);
     expect(send(rec, 'lead', away)).toEqual([]);
     // His own message is presence, whatever the clock said.
     // An answer from the inbox is a person, not the chat: still away, nothing said.

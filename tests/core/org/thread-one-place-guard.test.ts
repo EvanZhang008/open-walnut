@@ -4,8 +4,9 @@
  * cluster and duplicate everything everywhere, inbox leave for something else ... if it is just a
  * thread just put it there without sending it to inbox").
  *
- * Fails when a place an Org node reads (its prompt, the user-away and threads hints, the thread ops,
- * human_inbox_send) loses THREAD_ONE_PLACE_RULE; when ANY text a node reads (every prompt line,
+ * Fails when a place an Org node reads (its prompt, the thread ops, human_inbox_send) loses
+ * THREAD_ONE_PLACE_RULE (the user-away and threads hints are one line of facts since 2026-11-06 and
+ * leave the rules to the prompt); when ANY text a node reads (every prompt line,
  * hint, op and param description, built-in skill) tells it again to send a thread's result to the
  * inbox, or that a result he asked for goes there while he is away; and when any of them says
  * again that Walnut refuses such a letter. The rule is prompt text only (2026-11-04, the user: "I
@@ -48,14 +49,6 @@ describe('every place a node reads it carries it', () => {
     for (const t of [MAIN, LEAD]) expect(defaultInstructions(t)).toContain(THREAD_ONE_PLACE_RULE)
     // A worker has no threads: none of it.
     expect(defaultInstructions({ project: 'Walnut' })).not.toContain(THREAD_ONE_PLACE_RULE)
-  })
-
-  it('the user-away note and the threads hint on each of his messages', () => {
-    expect(userAwayText(null)).toContain(THREAD_ONE_PLACE_RULE)
-    expect(userAwayText(Date.parse('2026-11-04T00:00:00Z'))).toContain(THREAD_ONE_PLACE_RULE)
-    for (const s of [hint, { ...hint, created: false, followUp: true }, { ...hint, open: [] }]) {
-      expect(threadHintText(s)).toContain(THREAD_ONE_PLACE_RULE)
-    }
   })
 
   it('the thread ops and human_inbox_send', () => {
