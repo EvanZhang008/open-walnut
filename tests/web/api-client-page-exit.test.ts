@@ -111,6 +111,38 @@ describe('writes made as the page goes', () => {
     await Promise.all(gets)
   })
 
+  // 2026-11-06, CI: the visit batch its timer sent behind a full pool sat in the queue when the
+  // page reloaded, and JS stopped before the queue drained, so it never reached the server.
+  for (const edge of ['pagehide', 'hide'] as const) {
+    it(`a write already waiting in the queue goes at once with keepalive at the ${edge} edge; a waiting GET stays`, async () => {
+      const { apiGet, apiPost, getFetchQueueStats } = await loadClient()
+      stubFetch(true)
+      const gets = Array.from({ length: 8 }, (_, i) => apiGet(`/api/slow/${i}`))
+      const visits = apiPost('/api/page-visits', { keys: ['page:org'] }, { background: true, priority: 'low', keepalive: true })
+      const save = apiPost('/api/config', { a: 1 })
+      // A background POST that only reads: it may wait, and must not burst past the cap.
+      const listing = apiPost('/api/files/list-many', { paths: [] }, { background: true })
+      await Promise.resolve()
+      expect(calls.map((c) => c.url)).not.toContain('/api/page-visits')
+      expect(calls.map((c) => c.url)).not.toContain('/api/config')
+      if (edge === 'pagehide') win.dispatchEvent(new Event('pagehide'))
+      else hide()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(calls.find((c) => c.url === '/api/page-visits')?.init.keepalive).toBe(true)
+      expect(calls.find((c) => c.url === '/api/config')?.init.keepalive).toBe(true)
+      // The GETs past the six slots still wait their turn.
+      expect(calls.filter((c) => c.url.startsWith('/api/slow/'))).toHaveLength(6)
+      expect(calls.map((c) => c.url)).not.toContain('/api/files/list-many')
+      expect(getFetchQueueStats().queued).toBe(3)
+      await Promise.all([visits, save])
+      hold = false
+      held.forEach((r) => r())
+      await Promise.all([...gets, listing])
+      // Every slot taken past the cap was given back.
+      expect(getFetchQueueStats()).toEqual({ inFlight: 0, queued: 0 })
+    })
+  }
+
   it('a write on pagehide goes with keepalive; a GET there does not', async () => {
     const { apiGet, apiPost } = await loadClient()
     stubFetch()

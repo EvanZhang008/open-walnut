@@ -51,6 +51,10 @@ interface QueuedFetch {
   callerSignal?: AbortSignal;
   onCallerAbort?: () => void;
   waitTimer: ReturnType<typeof setTimeout>;
+  /** A write: sent at once when the page goes (sendQueuedWritesNow). */
+  write: boolean;
+  /** `METHOD /path`, for the queue's test hook. */
+  label: string;
 }
 
 let inFlightFetches = 0;
@@ -80,7 +84,7 @@ function pumpFetchQueue(): void {
   }
 }
 
-function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal): Promise<void> {
+function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?: AbortSignal, write = false): Promise<void> {
   if (callerSignal?.aborted) {
     return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
@@ -98,6 +102,8 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
       dispatch: resolve,
       fail: reject,
       callerSignal,
+      write,
+      label,
       waitTimer: setTimeout(() => {
         const idx = queue.indexOf(entry);
         if (idx >= 0) queue.splice(idx, 1);
@@ -138,6 +144,21 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
   });
 }
 
+/**
+ * The page is going: every write still waiting for a slot is sent now, past the cap. JS stops
+ * before the queue would drain, so a write left in it is never sent at all (2026-11-06, CI: the
+ * visit batch its timer had queued behind a full pool was gone when the page reloaded). A write
+ * resumes in a microtask, still inside the exit edge, and so goes with keepalive. GETs stay put.
+ */
+function sendQueuedWritesNow(): void {
+  for (const [queue, low] of [[fetchQueue, false], [lowFetchQueue, true]] as const) {
+    for (const entry of queue.filter((e) => e.write)) {
+      queue.splice(queue.indexOf(entry), 1);
+      startQueued(entry, low);
+    }
+  }
+}
+
 function releaseFetchSlot(priority: FetchPriority): void {
   inFlightFetches--;
   if (priority === 'low') inFlightLowFetches--;
@@ -148,6 +169,11 @@ function releaseFetchSlot(priority: FetchPriority): void {
 export function getFetchQueueStats(): { inFlight: number; queued: number } {
   // `queued` counts BOTH lanes: callers use it as "is anything still waiting".
   return { inFlight: inFlightFetches, queued: fetchQueue.length + lowFetchQueue.length };
+}
+
+/** Test hook — `METHOD /path` of every request still waiting for a slot, both lanes. */
+export function queuedFetchLabels(): string[] {
+  return [...fetchQueue, ...lowFetchQueue].map((e) => e.label);
 }
 
 /** Test hook — the low-priority lane alone (its share of in-flight + its queue). */
@@ -191,6 +217,7 @@ let exitEdge = false;
 function markExitEdge(): void {
   exitEdge = true;
   setTimeout(() => { exitEdge = false; }, 0);
+  sendQueuedWritesNow();
 }
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('pagehide', () => { pageLeaving = true; markExitEdge(); });
@@ -268,7 +295,13 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
     }
   }
   const priority = priorityOf(method, extra);
-  await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal);
+  // A write that must outlive the page: a person's write, or a background one that asked for
+  // keepalive. A background POST that only reads (list-many, quick-parse) stays in the queue at
+  // a hide, so a burst past the cap never starves the page's own reads when it shows again.
+  const outlives = isWriteMethod(method) && (!extra?.background || extra?.keepalive === true);
+  await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal, outlives);
+  // Queued while the page showed, released by its exit edge (sendQueuedWritesNow): keepalive now.
+  if (outlives && !extra?.keepalive && writeMayOutlivePage()) extra = { ...extra, keepalive: true };
   let retryWithBypass = false;
   let retryWithToken: RetryWithToken | null = null;
   try {
