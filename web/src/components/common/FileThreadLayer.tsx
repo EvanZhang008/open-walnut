@@ -22,6 +22,7 @@
 import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type RefObject,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { keepWindowHighlightRepaints } from '@/utils/highlight-repaint';
 import {
@@ -37,7 +38,7 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { buildTextIndex, quoteFromRange, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
 import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
-  askableBlockOf, blockQuoteOf, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
+  askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
 import { FileQuestionRail } from '@/components/common/FileQuestionRail';
 import { caretFromPoint, hitMark, rafThrottle, selectionIsEmpty, type ThreadMark } from '@/utils/thread-mark-hit';
@@ -129,6 +130,9 @@ const TEXT_SKIP: Partial<Record<FileThreadSurface, QuoteSkip>> = {
 /** A file question is found in every view of the file, whatever its views make
  *  of line and block breaks (locateQuote's `ignoreWhitespace`). */
 const LOCATE_FILE = { ignoreWhitespace: true } as const;
+/** On the layer while the open card's height is not known yet: the card is
+ *  drawn unseen until its side is decided (file-thread.css). */
+const CARD_MEASURE_ATTR = 'data-card-measure';
 
 /** Where a code surface's text column starts (its line-number gutter ends
  *  there): the card never covers the gutter (2026-11-06: in the read-only code
@@ -418,6 +422,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   }, []);
   const mine = openKey ? cardPlaceOf(openKey) : null;
   const scrolledForRef = useRef<string | null>(null);
+  /** The open card's height as it first showed (`placeFileCard`'s `need`), for
+   *  the passage it is about. Kept while a card stays open on that passage, so
+   *  an answer streaming in (or a send promoting the draft) never moves it to
+   *  the other side: it scrolls inside its max height instead. A close forgets
+   *  it, and the next open measures again. */
+  const needRef = useRef<{ exact: string | undefined; need: number } | null>(null);
   useEffect(() => {
     const layer = layerRef.current;
     const root = rootRef.current;
@@ -428,12 +438,20 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       // mark, the sidebar), brings its passage on screen again. Kept per key,
       // a reopen after the reader scrolled away docked the card at the edge
       // over whatever was showing (2026-10-03).
-      if (!openKey) scrolledForRef.current = null;
+      // Its height too, on a close only: a draft's first send moves the open
+      // key to a question the tree has not read back yet (no `mine` for a
+      // moment), and it must come back on the side it opened on.
+      if (!openKey) { scrolledForRef.current = null; needRef.current = null; }
+      layer.removeAttribute(CARD_MEASURE_ATTR);
       set({ path: filePath, el: layer, place: null });
       return;
     }
+    // Another passage: a new card there. (A question read back without its
+    // quote yet is the same card.)
+    if (needRef.current && mine.quote && needRef.current.exact !== mine.quote.exact) needRef.current = null;
     const frame = () => (argsRef.current.surface === 'html' ? frameRef.current : null);
-    const measure = () => {
+    /** `canRender`: false inside the effect itself, where no render may run. */
+    const measure = (canRender: boolean) => {
       const hostBox = root.getBoundingClientRect();
       const host = { width: hostBox.width, height: hostBox.height };
       const b = body();
@@ -460,13 +478,41 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const col = CODE_COLUMN[argsRef.current.surface];
       const colEl = col ? root.querySelector(col) : null;
       const minLeft = colEl ? colEl.getBoundingClientRect().left - hostBox.left : undefined;
-      set({ path: filePath, el: layer, place: placeFileCard(anchor, host, undefined, minLeft) });
+      const placeFor = (need?: number) => ({ path: filePath, el: layer, place: placeFileCard(anchor, host, undefined, minLeft, need) });
+      const kept = needRef.current?.need;
+      if (kept !== undefined) { set(placeFor(kept)); return; }
+      // Not measured yet: the side waits for the card's height. A place without
+      // `need` lets the card mount, unseen (the layer's measure flag); the
+      // mutation that mounts it measures it before the frame paints and commits
+      // its real place in that same task (flushSync), so the card's first
+      // painted frame is already on its side: no jump, no blank frame.
+      const card = layer.querySelector<HTMLElement>(':scope > .thread-card');
+      const need = card && canRender ? cardNaturalHeight(card) : null;
+      if (need === null) {
+        layer.setAttribute(CARD_MEASURE_ATTR, '');
+        set(placeFor());
+        // Already drawn when this effect starts: measured right after it (no
+        // render inside an effect). Not laid out yet: the observers call again.
+        if (card && !canRender) queueMicrotask(() => { if (live && !needRef.current) measure(true); });
+        return;
+      }
+      needRef.current = { exact: mine.quote?.exact, need };
+      flushSync(() => set(placeFor(need)));
+      layer.removeAttribute(CARD_MEASURE_ATTR);
     };
+    let live = true;
     let raf = 0;
-    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measure(); }); };
-    measure();
-    const mo = new MutationObserver(later);
+    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measure(true); }); };
+    measure(false);
+    // While waiting for the card, each mutation is looked at at once (a
+    // microtask, before paint), so the card is placed in the frame it first shows in.
+    const mo = new MutationObserver(() => {
+      if (live && !needRef.current && layer.querySelector(':scope > .thread-card')) measure(true);
+      else later();
+    });
     mo.observe(root, { childList: true, subtree: true, characterData: true });
+    // The card is portaled into the layer: its arrival is what the first place waits for.
+    if (!root.contains(layer)) mo.observe(layer, { childList: true });
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(later);
     ro?.observe(root);
     root.addEventListener('scroll', later, true);
@@ -480,7 +526,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       root.removeEventListener('scroll', later, true);
       window.removeEventListener('resize', later);
       fdoc?.removeEventListener('scroll', later, true);
+      live = false;
       if (raf) cancelAnimationFrame(raf);
+      layer.removeAttribute(CARD_MEASURE_ATTR);
     };
   }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, skip, rootRef, frameRef]);
   useEffect(() => () => { argsRef.current.threads.setFileCardHost(null); }, []);

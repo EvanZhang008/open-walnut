@@ -146,12 +146,17 @@ export const FILE_CARD_MIN_HEIGHT = 180;
 /**
  * Where the card sits inside the file view: right-aligned to the passage, never
  * outside the host box, and never over the passage when the box has room for it
- * on either side:
- *  - under the passage's last line when a card of FILE_CARD_MIN_HEIGHT fits there;
+ * on either side. The room a side must have is the card's own height (`need`,
+ * its content uncapped) when that is smaller than FILE_CARD_MIN_HEIGHT, else
+ * FILE_CARD_MIN_HEIGHT (no `need`: FILE_CARD_MIN_HEIGHT):
+ *  - under the passage's last line when that room is there;
  *  - else over its first line (anchored by its bottom edge, `bottom`, so it grows
  *    upward and its foot never reaches the passage), when it fits there;
- *  - else on the side with more room, at least FILE_CARD_MIN_HEIGHT tall (the
- *    passage is taller than the box leaves room for).
+ *  - else on the side with more room, at least that tall (the passage is taller
+ *    than the box leaves room for).
+ * 2026-11-06 (later): a ~70px draft card with 135px free under a passage near
+ * the end of the Changed tab's rendered diff still hung above, over the lines
+ * before the passage, because the side was chosen for a 180px card.
  * 2026-11-06: the card was always placed under the passage and then pushed up
  * to keep FILE_CARD_MIN_HEIGHT in the box, so a passage in the box's last 188px
  * (the Changed tab's rendered diff, a selection near the bottom of any view) had
@@ -161,7 +166,7 @@ export const FILE_CARD_MIN_HEIGHT = 180;
  * reachable in a document.
  */
 export function placeFileCard(
-  anchor: HostRect, host: { width: number; height: number }, preferred = CARD_WIDTH, minLeft?: number,
+  anchor: HostRect, host: { width: number; height: number }, preferred = CARD_WIDTH, minLeft?: number, need?: number,
 ): ThreadCardPlace {
   // `minLeft`: where the text column starts (a code view's line-number gutter
   // ends there). The card stays right of it, narrowed down to its minimum width
@@ -172,9 +177,12 @@ export function placeFileCard(
   const band = host.width - floor - CARD_GAP;
   const width = Math.max(Math.min(preferred, band), Math.min(CARD_MIN_WIDTH, host.width));
   const left = Math.max(floor, Math.min(anchor.right - width, host.width - width - CARD_GAP));
+  // The room a side must have: the card's own height when it is smaller.
+  const least = need !== undefined && Number.isFinite(need) && need > 0
+    ? Math.min(Math.ceil(need), FILE_CARD_MIN_HEIGHT) : FILE_CARD_MIN_HEIGHT;
   const roomBelow = host.height - (anchor.bottom + CARD_GAP) - CARD_GAP;
   const roomAbove = anchor.top - CARD_GAP - CARD_GAP;
-  const above = roomBelow < FILE_CARD_MIN_HEIGHT && (roomAbove >= FILE_CARD_MIN_HEIGHT || roomAbove > roomBelow);
+  const above = roomBelow < least && (roomAbove >= least || roomAbove > roomBelow);
   const capOf = (room: number) => Math.max(Math.min(FILE_CARD_MIN_HEIGHT, room), Math.min(Math.round(host.height * 0.6), room));
   // Expanded: the same edge, as wide as the view allows, all the room on its side.
   const wide = Math.max(Math.min(CARD_GROWN_WIDTH, band), width);
@@ -183,7 +191,7 @@ export function placeFileCard(
   if (above) {
     // The card's foot: a gap over the passage's first line, kept low enough for
     // the smallest card and inside the box (a passage below the box docks it there).
-    const highest = Math.min(host.height - CARD_GAP, FILE_CARD_MIN_HEIGHT + CARD_GAP);
+    const highest = Math.min(host.height - CARD_GAP, least + CARD_GAP);
     const foot = Math.min(Math.max(anchor.top - CARD_GAP, highest), host.height - CARD_GAP);
     const room = foot - CARD_GAP;
     const maxHeight = capOf(room);
@@ -192,7 +200,7 @@ export function placeFileCard(
       grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
     };
   }
-  const lowest = Math.max(CARD_GAP, host.height - FILE_CARD_MIN_HEIGHT - CARD_GAP);
+  const lowest = Math.max(CARD_GAP, host.height - least - CARD_GAP);
   const top = Math.max(CARD_GAP, Math.min(anchor.bottom + CARD_GAP, lowest));
   const room = host.height - top - CARD_GAP;
   const maxHeight = capOf(room);
@@ -200,6 +208,14 @@ export function placeFileCard(
     top: Math.round(top), ...across, maxHeight: Math.round(maxHeight),
     grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
   };
+}
+
+/** How tall a comment card would be with no max height: its box now plus what
+ *  its scrolling body hides (`placeFileCard`'s `need`). Null before layout. */
+export function cardNaturalHeight(card: HTMLElement): number | null {
+  const body = card.querySelector<HTMLElement>(':scope > .thread-card-body');
+  const height = card.offsetHeight + (body ? Math.max(0, body.scrollHeight - body.clientHeight) : 0);
+  return height > 0 ? height : null;
 }
 
 /** A rect of the file's surface translated into host coordinates; a rect inside

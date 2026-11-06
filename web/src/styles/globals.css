@@ -32609,6 +32609,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
+/* On a dark page the light shadow does not show: a deeper one keeps the lift. */
+[data-theme="dark"] .quote-pin-menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); }
 
 /* The choice: inline or in Tree, each with what it does under its name. */
 .quote-ask-modes {

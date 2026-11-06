@@ -688,9 +688,13 @@ show inline after the open ones, other completed hits that show the query fold i
   head's back arrow in Tree Mode). The host box does not scroll, so `placeFileCard`
   (`utils/file-thread.ts`) works in host coordinates and re-measures on scroll, resize and
   mutation; a passage scrolled off keeps its card docked at the edge. The card never covers its
-  passage when the box has room: under the last line when a card of `FILE_CARD_MIN_HEIGHT` fits
-  there, else over the first line, hung by its foot (`place.bottom`, so it grows upward; 2026-11-06:
-  pushed up to keep its minimum height, it sat ON a passage near the bottom of the view). The pill's
+  passage when the box has room: under the last line when the card fits there, else over the
+  first line, hung by its foot (`place.bottom`, so it grows upward; 2026-11-06: pushed up to keep
+  its minimum height, it sat ON a passage near the bottom of the view). "Fits" is the card's own
+  height (`need`, measured uncapped by `cardNaturalHeight`) when under `FILE_CARD_MIN_HEIGHT`: the
+  layer draws a new card unseen (`data-card-measure`), measures it, then commits its place and
+  shows it in one frame, and keeps that height while the card stays open on the passage, so a
+  growing answer scrolls inside the card instead of moving it to the other side. The pill's
   `Ask here` asks with the quote taken at mouseup (`FileThreadLayerHandle.quoteOf`: a quote is text,
   found again in whatever DOM shows the file by the click), and an Ask that opens no card says why
   (`FileAskResult`, logged, and shown in the view as `.fv-ask-notice`), never nothing. A file

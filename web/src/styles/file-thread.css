@@ -39,6 +39,14 @@
 .fv-thread-layer > .thread-card {
   position: absolute;
 }
+/* Its height decides which side of the passage it goes to: drawn unseen for
+   the frame that measures it, never shown on one side and then moved. Opacity,
+   not visibility: the card focuses its composer as it mounts, and a
+   visibility-hidden box takes no focus. */
+.fv-thread-layer[data-card-measure] > .thread-card {
+  opacity: 0;
+  pointer-events: none;
+}
 /* The scanning lines under passages being answered: the layer's own box, under
    the rail and the card (both come later in the layer). */
 .fv-thread-layer > .fv-live-lines {

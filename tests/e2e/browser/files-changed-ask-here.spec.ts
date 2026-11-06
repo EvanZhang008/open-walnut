@@ -228,9 +228,11 @@ type FileAnchor = { msgId: string; parent: string; line?: number; quote?: { exac
 /** A question typed into the open draft card and sent: the record gains a `file:` anchor for `path`. */
 async function sendAndCheckRecord(
   request: APIRequestContext, card: Locator, question: string, path: string, exact: string,
+  onSend?: { before?: () => Promise<void>; after?: () => Promise<void> },
 ): Promise<FileAnchor> {
   const input = card.locator('.thread-card-input')
   await input.fill(question)
+  if (onSend?.before) await onSend.before()
   await input.press('Enter')
   await expect(card).not.toHaveAttribute('data-draft', 'true', { timeout: 30_000 })
   await expect(card.locator('.thread-card-q').first()).toHaveText(question)
@@ -241,10 +243,73 @@ async function sendAndCheckRecord(
     anchor = (rec.threadAnchors as FileAnchor[]).filter((a) => a.parent === `file:${path}` && a.quote?.exact.includes(exact)).at(-1)
     expect(anchor, `a file anchor for ${path} quoting "${exact}"`).toBeTruthy()
   }).toPass({ timeout: 15_000 })
+  if (onSend?.after) await onSend.after()
   await input.press('Escape')
   await expect(card).toHaveCount(0)
   return anchor!
 }
+
+/** Which side of its passage a file card hangs on: by its foot (`bottom`) over
+ *  the passage, or by its top under it. */
+async function cardSide(card: Locator): Promise<'above' | 'below'> {
+  return card.evaluate((el) => ((el as HTMLElement).style.bottom ? 'above' : 'below'))
+}
+
+/** One frame of the file card: its side, layout top (no slide transform), opacity,
+ *  and where the passage's last line ends then (host coordinates, -1 if not found). */
+interface CardSample { side: string; top: number; opacity: string; height: number; passageBottom: number }
+
+/** Every frame for `ms` from now, read in requestAnimationFrame (what the frame paints). */
+async function startCardSampler(page: Page, ms: number, phrase: string): Promise<void> {
+  await page.evaluate(([span, needle]) => {
+    const w = window as unknown as { __cardSamples: CardSample[]; __cardSampled: boolean }
+    w.__cardSamples = []
+    w.__cardSampled = false
+    const passageBottom = (layer: HTMLElement): number => {
+      const root = layer.parentElement
+      if (!root) return -1
+      // The phrase may cross text nodes (a diff's edit marks split its lines).
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      const nodes: Array<{ n: Text; start: number }> = []
+      let text = ''
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (layer.contains(n)) continue
+        nodes.push({ n: n as Text, start: text.length })
+        text += (n as Text).data
+      }
+      const at = text.indexOf(needle)
+      if (at === -1) return -1
+      const end = at + needle.length
+      const last = nodes.filter((x) => x.start < end).at(-1)!
+      const r = document.createRange()
+      r.setStart(last.n, Math.max(0, at - last.start))
+      r.setEnd(last.n, end - last.start)
+      return Math.round(r.getBoundingClientRect().bottom - layer.getBoundingClientRect().top)
+    }
+    const t0 = performance.now()
+    const tick = () => {
+      const el = document.querySelector<HTMLElement>('.fv-thread-layer > .thread-card')
+      if (el) {
+        w.__cardSamples.push({
+          side: el.style.bottom ? 'above' : 'below', top: el.offsetTop, opacity: getComputedStyle(el).opacity,
+          height: el.offsetHeight, passageBottom: passageBottom(el.parentElement as HTMLElement),
+        })
+      }
+      if (performance.now() - t0 < span) requestAnimationFrame(tick)
+      else w.__cardSampled = true
+    }
+    requestAnimationFrame(tick)
+  }, [ms, phrase] as const)
+}
+
+async function cardSamples(page: Page): Promise<CardSample[]> {
+  await page.waitForFunction(() => (window as unknown as { __cardSampled: boolean }).__cardSampled, undefined, { timeout: 30_000 })
+  return page.evaluate(() => (window as unknown as { __cardSamples: CardSample[] }).__cardSamples)
+}
+
+/** The samples that differ from the one before: a short story of what moved. */
+const cardChanges = (xs: CardSample[]): CardSample[] =>
+  xs.filter((x, i) => i === 0 || JSON.stringify(x) !== JSON.stringify(xs[i - 1])).slice(0, 12)
 
 /** The quote landed in the composer: focused, on screen, holding the words. */
 async function expectComposerQuoted(page: Page, panel: Locator, words: string, name: string): Promise<void> {
@@ -576,13 +641,59 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       const diff = await openChanged(panel, MD_FILE)
       await diff.getByRole('button', { name: 'Rendered', exact: true }).click()
       await expect(diff.locator('.session-diff-rendered')).toContainText(MD_PASSAGE, { timeout: 10_000 })
-      const card = await askHereInDiff(page, diff, MD_PASSAGE, 'changed-rendered-md')
+      const main = diff.locator('.session-diff-main')
+      await selectUntil(page, () => textRects(main, MD_PASSAGE), askHereBtn(page))
+      await expect(quoteBtn(page)).toBeVisible()
+      // Every frame from the press on: the card must show on ONE side, never
+      // drawn on one and moved to the other (its side waits for its height).
+      await startCardSampler(page, 1_500, MD_PASSAGE)
+      await askHereBtn(page).click()
+      const card = await expectCardShown(page, diff, 'changed-rendered-md', () => textRects(main, MD_PASSAGE, 0, false))
+      const samples = await cardSamples(page)
+      const shown = samples.filter((x) => x.opacity === '1')
+      const story = JSON.stringify(cardChanges(samples))
+      expect(shown.length, 'the card was sampled while on show').toBeGreaterThan(0)
+      expect(samples.filter((x) => x.opacity !== '1'), `no frame shows the card unseen while it is measured: ${story}`).toEqual([])
+      // The passage did not move meanwhile, so neither may the card.
+      expect(new Set(shown.map((x) => x.passageBottom)).size, `the passage stays put: ${story}`).toBe(1)
+      expect(new Set(shown.map((x) => x.side)).size, `the card keeps one side from its first frame: ${story}`).toBe(1)
+      expect(Math.max(...shown.map((x) => x.top)) - Math.min(...shown.map((x) => x.top)), `the card does not move while open: ${story}`).toBeLessThanOrEqual(1)
+      // 2026-11-06: a ~70px draft hung ABOVE the passage, over the lines before
+      // it, with ~135px free below, because the side was chosen for a 180px card.
+      // When the card's own height fits under the passage, it goes there.
+      const rects = await textRects(main, MD_PASSAGE, 0, false)
+      const lastBottom = Math.max(...rects.map((r) => r.top + r.height))
+      const layerBox = (await diff.locator('.fv-thread-layer').boundingBox())!
+      const cardBox = (await card.boundingBox())!
+      const roomBelow = layerBox.y + layerBox.height - lastBottom - 2 * 8
+      test.info().annotations.push({ type: 'rendered-md-room', description: `below ${Math.round(roomBelow)}px, card ${Math.round(cardBox.height)}px` })
+      if (cardBox.height <= roomBelow) {
+        expect(await cardSide(card), `the card fits below (room ${Math.round(roomBelow)}px, card ${Math.round(cardBox.height)}px): it goes under the passage`).toBe('below')
+        expect(cardBox.y).toBeGreaterThanOrEqual(lastBottom - 1)
+      }
+      const openSide = await cardSide(card)
       // The passage scrolled away: the card stays docked inside the diff, on screen.
-      await diff.locator('.session-diff-main').evaluate((el) => { el.scrollTop = el.scrollHeight })
+      await main.evaluate((el) => { el.scrollTop = el.scrollHeight })
       await page.waitForTimeout(200)
       expect(await seen(card), 'the card stays on screen with the passage scrolled off').toEqual({ inViewport: true, topmost: true })
-      await diff.locator('.session-diff-main').evaluate((el) => { el.scrollTop = 0 })
-      await sendAndCheckRecord(request, card, 'What does the ledger keep?', `${cwd}/${MD_FILE}`, MD_PASSAGE)
+      await main.evaluate((el) => { el.scrollTop = 0 })
+      await page.waitForTimeout(200)
+      const sideBeforeSend = await cardSide(card)
+      await sendAndCheckRecord(request, card, 'What does the ledger keep?', `${cwd}/${MD_FILE}`, MD_PASSAGE, {
+        // Every frame from the send on: the draft becomes a question (its key
+        // moves, its body grows with the question and the wait), and the card
+        // stays on the side it opened on, scrolling inside its height instead.
+        before: () => startCardSampler(page, 3_000, MD_PASSAGE),
+        after: async () => {
+          const after = await cardSamples(page)
+          expect(after.length).toBeGreaterThan(0)
+          // While the passage stays where it was: a diff re-rendered or scrolled
+          // under the card places it again, which is not a jump.
+          const still = after.filter((x) => x.passageBottom === after[0].passageBottom)
+          expect(new Set(still.map((x) => x.side)), `the card keeps its side through the send (opened ${openSide}): ${JSON.stringify(cardChanges(after))}`)
+            .toEqual(new Set([sideBeforeSend]))
+        },
+      })
 
       await quoteInDiff(page, diff, MD_SOURCE_LINE)
       await expectComposerQuoted(page, panel, MD_SOURCE_LINE, 'changed-rendered-md-quote')

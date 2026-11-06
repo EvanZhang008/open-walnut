@@ -67,6 +67,38 @@ describe('placeFileCard', () => {
     expect(placeFileCard({ top: edge - 20, bottom: edge, left: 40, right: 600 }, host).bottom).toBeUndefined();
     expect(placeFileCard({ top: edge - 19, bottom: edge + 1, left: 40, right: 600 }, host).bottom).toBeDefined();
   });
+  it('a small card goes under the passage when its own height fits there (2026-11-06, the rendered diff\'s last lines)', () => {
+    // 135px free below: no room for a 180px card, room for a 70px draft.
+    const anchor = { top: 517, bottom: 541, left: 40, right: 600 };
+    const roomBelow = host.height - (anchor.bottom + CARD_GAP) - CARD_GAP;
+    expect(roomBelow).toBe(143);
+    const small = placeFileCard(anchor, host, undefined, undefined, 70);
+    expect(small.bottom).toBeUndefined();
+    expect(small.top).toBe(anchor.bottom + CARD_GAP);
+    // It never reaches past the box, and it never sits on the passage.
+    expect(small.top + small.maxHeight).toBeLessThanOrEqual(host.height - CARD_GAP);
+    expect(small.maxHeight).toBe(roomBelow);
+    // Exactly its height of room still goes below; one pixel less goes above.
+    expect(placeFileCard(anchor, host, undefined, undefined, roomBelow).bottom).toBeUndefined();
+    expect(placeFileCard(anchor, host, undefined, undefined, roomBelow + 1).bottom).toBe(host.height - (anchor.top - CARD_GAP));
+    // A card taller than the minimum asks for the minimum only, like no height given.
+    expect(placeFileCard(anchor, host, undefined, undefined, 900)).toEqual(placeFileCard(anchor, host));
+    // No height (or a useless one): exactly the old placement.
+    expect(placeFileCard(anchor, host, undefined, undefined, 0)).toEqual(placeFileCard(anchor, host));
+    expect(placeFileCard(anchor, host, undefined, undefined, Number.NaN)).toEqual(placeFileCard(anchor, host));
+    expect(placeFileCard(anchor, host).bottom).toBeDefined();
+  });
+  it('a small card over a passage near the top of the box needs only its own height above', () => {
+    // 60px above, 20px below: a 50px card hangs above, its foot over the first line.
+    const short = { width: 900, height: 140 };
+    const anchor = { top: 76, bottom: 104, left: 40, right: 600 };
+    const place = placeFileCard(anchor, short, undefined, undefined, 50);
+    expect(place.bottom).toBe(short.height - (anchor.top - CARD_GAP));
+    expect(place.top).toBeGreaterThanOrEqual(CARD_GAP);
+    // Docking still works: a passage scrolled past either edge keeps its card at that edge.
+    expect(placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host, undefined, undefined, 70).top).toBe(CARD_GAP);
+    expect(placeFileCard({ top: 1200, bottom: 1220, left: 40, right: 600 }, host, undefined, undefined, 70).bottom).toBe(CARD_GAP);
+  });
   it('never leaves the box sideways, and a narrow box gets a card as wide as it allows', () => {
     const right = placeFileCard({ top: 0, bottom: 10, left: 800, right: 1200 }, host);
     expect(right.left + right.width).toBeLessThanOrEqual(host.width - CARD_GAP);
