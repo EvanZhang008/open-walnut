@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { updateSession } from '@/api/sessions';
 import type { SessionPassageComment } from '@/types/session';
 import type { SessionCommentsApi } from '@/contexts/SessionCommentsContext';
-import { editComment, isPending, markRemoved, markSent, mergeKeepingClaimed, pruneComments, recordNeedsWrite } from '@/utils/passage-comments';
+import { editComment, isPending, markRemoved, markSent, mergeKeepingClaimed, pruneComments, recordNeedsWrite, settleSent } from '@/utils/passage-comments';
 import { log } from '@/utils/log';
 
 const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
@@ -215,17 +215,16 @@ export function useSessionComments(
     for (const id of ids) { sendingRef.current.delete(id); claimedRef.current.delete(id); }
     setSending(new Set(sendingRef.current));
     if (accepted) {
-      // Stamped on the words that went, whatever reached this list meanwhile.
-      const asSent = listRef.current.map((c) => {
-        const was = claimed.get(c.id);
-        return was && c.comment !== was.comment ? { ...c, comment: was.comment } : c;
-      });
-      persist(markSent(asSent, new Set(ids), new Date().toISOString()));
+      // The newest record copy merged in (a removal made elsewhere meanwhile stands),
+      // then stamped sent on the words that went, whatever edit reached it meanwhile.
+      persist(markSent(settleSent(listRef.current, lastRecord.current, claimed, sendingRef.current), new Set(ids), new Date().toISOString()));
       return;
     }
-    // Given back: the newest record copy decides again (another window's edit made meanwhile wins now).
-    adopt(mergeKeepingClaimed(listRef.current, lastRecord.current, sendingRef.current));
-  }, [persist, adopt]);
+    // Given back: the newest record copy decides again (another window's edit made
+    // meanwhile wins now), and a record that lost them while they were held gets them back.
+    meetRecordRef.current(lastRecord.current);
+    flushRef.current();
+  }, [persist]);
 
   const requestJump = useCallback<SessionCommentsApi['requestJump']>((id, opts) => {
     setJump((prev) => ({

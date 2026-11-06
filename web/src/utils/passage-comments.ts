@@ -93,13 +93,16 @@ export function editComment(list: readonly SessionPassageComment[], id: string, 
   return next;
 }
 
+/** The earlier of two stamps, or the one there is. */
+const earliest = (a?: string, b?: string): string | undefined => (a && b ? (a < b ? a : b) : a || b || undefined);
+
 const newest = (c: SessionPassageComment): string =>
   [c.createdAt, c.updatedAt, c.sentAt, c.removedAt].reduce<string>((a, b) => (b && b > a ? b : a), '');
 
 /**
  * Two copies of the list (ours and the record's, or the record's and another
  * window's) become one: every id either holds, in the order first seen. Sent and
- * taken out are one-way, so either copy's stamp stands. The words are the sent
+ * taken out are one-way, so either copy's stamp stands (the earliest, when both have one). The words are the sent
  * copy's when only one copy was sent (an edit made elsewhere while it went never
  * rewrites what the model read), otherwise the copy edited last wins (on a tie in
  * time, the larger words, so two windows always agree). Nothing is ever dropped here, so neither a stale read nor a write from another window can
@@ -113,8 +116,9 @@ export function mergeComments(a: readonly SessionPassageComment[], b: readonly S
     const winner = !c.sentAt !== !prev.sentAt
       ? (c.sentAt ? c : prev)
       : newest(c) > newest(prev) || (newest(c) === newest(prev) && c.comment > prev.comment) ? c : prev;
-    const sentAt = prev.sentAt ?? c.sentAt;
-    const removedAt = prev.removedAt ?? c.removedAt;
+    // Two windows may stamp one item at different times: both keep the earliest, so they agree.
+    const sentAt = earliest(prev.sentAt, c.sentAt);
+    const removedAt = earliest(prev.removedAt, c.removedAt);
     byId.set(c.id, { ...winner, ...(sentAt ? { sentAt } : {}), ...(removedAt ? { removedAt } : {}) });
   }
   return [...byId.values()];
@@ -137,6 +141,24 @@ export function mergeKeepingClaimed(
   if (!claimed.size) return merged;
   const mine = new Map(ours.map((c) => [c.id, c]));
   return merged.map((c) => (claimed.has(c.id) && mine.has(c.id) ? mine.get(c.id)! : c));
+}
+
+/**
+ * What an accepted send writes before stamping it sent: ours merged with the newest
+ * record copy (another window's removal made meanwhile stands; items another send
+ * still holds stay as held), with each item this send carried back on the words it
+ * carried.
+ */
+export function settleSent(
+  ours: readonly SessionPassageComment[],
+  record: readonly SessionPassageComment[],
+  carried: ReadonlyMap<string, SessionPassageComment>,
+  stillHeld: ReadonlySet<string> = new Set(),
+): SessionPassageComment[] {
+  return mergeKeepingClaimed(ours, record, stillHeld).map((c) => {
+    const was = carried.get(c.id);
+    return was && c.comment !== was.comment ? { ...c, comment: was.comment } : c;
+  });
 }
 
 /**

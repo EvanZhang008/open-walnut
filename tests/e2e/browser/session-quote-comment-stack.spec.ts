@@ -431,6 +431,18 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
     await expectRows(panel, [{ passage: p1, comment: 'the first one' }, { passage: p3 }])
     await expect.poll(() => painted(page, 'walnut-comment')).toBe(2)
 
+    // Editing, then the keyboard way to the composer (no press anywhere): the focus
+    // leaving the editor keeps the typed words, so the Enter below sends them.
+    const firstId = (await rows(panel).nth(0).getAttribute('data-comment-id'))!
+    await centreInHistory(page, panel, p1, { tolerance: 20 })
+    await humanPress(page, page.locator(`[data-testid="passage-comment-marker"][data-comment-id="${firstId}"]`))
+    const card = page.getByTestId('passage-comment-card')
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await expect(page.getByTestId('passage-comment-input')).toBeFocused()
+    await page.keyboard.type(', edited')
+    await composer.focus()
+    await expectRows(panel, [{ passage: p1, comment: 'the first one, edited' }, { passage: p3 }])
+
     // Nothing typed: the list alone is the message, and Enter sends it.
     await expect(composer).toHaveValue('')
     await expect(panel.locator('.session-panel-input .chat-send-btn-icon')).toBeEnabled()
@@ -439,7 +451,7 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
     await page.keyboard.press('Enter')
     await page.keyboard.press('Enter')
     await expect.poll(() => sent.length, { timeout: 20_000 }).toBe(1)
-    expect(sent[0].message).toBe(`${quoted(p1)}\n\nthe first one\n\n${quoted(p3)}`)
+    expect(sent[0].message).toBe(`${quoted(p1)}\n\nthe first one, edited\n\n${quoted(p3)}`)
     await expect(tray(panel)).toHaveCount(0)
     await expect.poll(() => painted(page, 'walnut-comment-sent')).toBe(1)
     await page.waitForTimeout(1000)

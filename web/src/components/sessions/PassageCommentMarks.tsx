@@ -170,6 +170,8 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
   }, [any, containerRef, painted, openAt]);
 
   // ── Editing the words (only while they wait for the send) ────────────────
+  /** FALSE when the editor opens late (a tray row's Edit) and the reader has gone on to type elsewhere. */
+  const focusEditor = useRef(true);
   /** The id whose words are in the editor, and the words as typed so far. */
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -177,9 +179,18 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
   const isEditing = canEdit && editing === openItem.id;
   // Another card, a closed one, or a comment sent meanwhile: the editor goes, the saved words stay.
   useEffect(() => { if (!isEditing && editing !== null) setEditing(null); }, [isEditing, editing]);
+  /** The id in the editor right now (a ref, for the handlers that outlive a render). */
+  const editingId = useRef<string | null>(null);
+  editingId.current = isEditing ? editing : null;
   const startEdit = useCallback((id: string) => {
     const c = byId.get(id);
-    if (!c || c.sentAt || c.doc || !onUpdate) return;
+    if (!c || c.sentAt || c.doc || !onUpdate) {
+      // Sent meanwhile: no editor, and the next Edit takes the focus as usual.
+      focusEditor.current = true;
+      return;
+    }
+    // Already in the editor (a tray row's Edit on the comment being edited): the typed words stay.
+    if (editingId.current === id) return;
     setDraft(c.comment);
     setEditing(id);
   }, [byId, onUpdate]);
@@ -192,8 +203,6 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
   const editBox = useRef<HTMLTextAreaElement | null>(null);
   const editBtn = useRef<HTMLButtonElement | null>(null);
   const refocusEdit = useRef(false);
-  /** FALSE when the editor opens late (a tray row's Edit) and the reader has gone on to type elsewhere. */
-  const focusEditor = useRef(true);
   // The editor opens with the caret after the last word, the end of a long comment in view.
   useLayoutEffect(() => {
     if (!isEditing) return;
@@ -223,17 +232,20 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
     setRefused(true);
   }, [openItem, onUpdate]);
   /**
-   * A press outside the open editor keeps what was typed (synchronously, before the
-   * press's own click: a Send that follows carries these words). Empty or unchanged
-   * words keep the saved ones.
+   * A press or a focus outside the open editor keeps what was typed (synchronously,
+   * before the press's own click or the key that follows the focus: a Send carries
+   * these words). Empty or unchanged words keep the saved ones. `refused` = a send
+   * holds it: the card stays open on the typed words with the hint.
    */
-  const commitDraft = useRef<() => void>(() => {});
-  commitDraft.current = () => {
-    if (!isEditing || !openItem || !onUpdate) return;
+  const commitDraft = useRef<(via: 'press' | 'focus') => 'none' | 'saved' | 'refused'>(() => 'none');
+  commitDraft.current = (via) => {
+    if (!isEditing || !openItem || !onUpdate) return 'none';
     const words = draft.trim();
-    if (!words || words === openItem.comment) return;
+    if (!words || words === openItem.comment) return 'none';
     const ok = onUpdate(openItem.id, words);
-    log.info('session', 'passage comment edit kept by a press outside', { id: openItem.id, saved: ok });
+    log.info('session', 'passage comment edit kept on leaving the editor', { id: openItem.id, via, saved: ok });
+    if (!ok) { setRefused(true); return 'refused'; }
+    return 'saved';
   };
 
   // A tray row's Edit: once its passage is in view and has stopped moving (the jump
@@ -304,15 +316,25 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
       if (t?.closest('.passage-comment-card')) return;
-      commitDraft.current();
+      // Refused: a send holds it; closing now would drop the typed words.
+      if (commitDraft.current('press') === 'refused') return;
       if (t?.closest('.passage-comment-marker')) return;
       setOpen(null);
     };
+    // The keyboard way out (Tab or a shortcut to the composer, then Enter): no press,
+    // so the focus leaving the card keeps the words the same way.
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || t.closest?.('.passage-comment-card')) return;
+      commitDraft.current('focus');
+    };
     document.addEventListener('keydown', onKey);
     document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('focusin', onFocus, true);
     return () => {
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('focusin', onFocus, true);
     };
   }, [isOpen]);
   // Follow the passage while the timeline scrolls; close when it leaves the view.

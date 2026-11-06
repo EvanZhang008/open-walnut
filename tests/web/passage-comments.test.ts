@@ -6,13 +6,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   composeWithComments, countLabel, DOC_COMMENTS_HOW, editComment, fitsAsComment, isMarked, isPending, markRemoved, markSent,
-  MAX_COMMENT_CHARS, MAX_COMMENTS, mergeComments, mergeKeepingClaimed, pruneComments, recordNeedsWrite, snippetOf,
+  MAX_COMMENT_CHARS, MAX_COMMENTS, mergeComments, mergeKeepingClaimed, pruneComments, recordNeedsWrite, settleSent, snippetOf,
 } from '@/utils/passage-comments';
 import type { SessionPassageComment } from '@/types/session';
 
 const T0 = '2026-11-01T10:00:00.000Z';
 const T1 = '2026-11-01T10:05:00.000Z';
 const T2 = '2026-11-01T10:09:00.000Z';
+const T3 = '2026-11-01T10:12:00.000Z';
 const item = (id: string, text: string, comment = '', over: Partial<SessionPassageComment> = {}): SessionPassageComment => ({
   id, msgId: `m-${id}`, role: 'assistant', quote: { exact: text.replace(/\n/g, '') }, text, comment, createdAt: T0, ...over,
 });
@@ -189,7 +190,6 @@ describe('mergeComments', () => {
 });
 
 describe('a send in flight meets another window\'s edit (mergeKeepingClaimed)', () => {
-  const T3 = '2026-11-01T10:12:00.000Z';
   it('the claimed words stay until the send settles, then the sent copy keeps them everywhere', () => {
     // Window A claimed "as claimed" for its send; window B edits the same item later.
     const ours = [item('a', 'x', 'as claimed'), item('b', 'y', 'free')];
@@ -214,6 +214,49 @@ describe('a send in flight meets another window\'s edit (mergeKeepingClaimed)', 
     const record = [item('a', 'x', 'edited in window B', { updatedAt: T2 })];
     expect(mergeKeepingClaimed(ours, record, new Set(['a']))[0]!.comment).toBe('as claimed');
     expect(mergeKeepingClaimed(ours, record, new Set())[0]!.comment).toBe('edited in window B');
+  });
+
+  it('a send given back after a stale window wrote the claimed item away: it stays ours and the record needs it again', () => {
+    const now = Date.parse('2026-11-01T11:00:00.000Z');
+    const ours = [item('a', 'x', 'as claimed'), item('b', 'y', 'kept')];
+    const staleRecord = [item('b', 'y', 'kept')];
+    // While held, the record's lack of it is not acted on.
+    expect(recordNeedsWrite(mergeKeepingClaimed(ours, staleRecord, new Set(['a'])), staleRecord, now, new Set(['a']))).toBe(false);
+    // Given back (settle refused): merged again with the newest record, it is still here, and must be written back.
+    const back = mergeKeepingClaimed(ours, staleRecord, new Set());
+    expect(back.filter(isPending).map((c) => c.id)).toEqual(['a', 'b']);
+    expect(recordNeedsWrite(back, staleRecord, now)).toBe(true);
+  });
+
+  it('an accepted send keeps a removal another window made meanwhile, and its own words', () => {
+    const carried = new Map([['a', item('a', 'x', 'as claimed')]]);
+    const ours = [item('a', 'x', 'as claimed'), item('c', 'z', 'held by another send')];
+    const record = [
+      item('a', 'x', 'edited then removed in window B', { updatedAt: T1, removedAt: T2 }),
+      item('c', 'z', 'edited in window B', { updatedAt: T2 }),
+    ];
+    const settled = markSent(settleSent(ours, record, carried, new Set(['c'])), new Set(['a']), T3);
+    expect(settled[0]).toMatchObject({ comment: 'as claimed', removedAt: T2 });
+    expect(settled[0]!.sentAt).toBeUndefined();
+    expect(isPending(settled[0]!)).toBe(false);
+    // An item another send still holds stays as held.
+    expect(settled[1]!.comment).toBe('held by another send');
+    // Not removed elsewhere: stamped sent on the carried words, over an edit that came in meanwhile.
+    const plain = markSent(settleSent([item('a', 'x', 'as claimed')], [item('a', 'x', 'late edit', { updatedAt: T2 })], carried), new Set(['a']), T3);
+    expect(plain[0]).toMatchObject({ comment: 'as claimed', sentAt: T3 });
+  });
+
+  it('two windows stamping one item at different times agree on the earliest, so neither writes again', () => {
+    const now = Date.parse('2026-11-01T11:00:00.000Z');
+    const a = [item('s', 'x', 'went', { sentAt: T1 }), item('r', 'y', '', { removedAt: T2 })];
+    const b = [item('s', 'x', 'went', { sentAt: T2 }), item('r', 'y', '', { removedAt: T1 })];
+    const ab = mergeComments(a, b);
+    const ba = mergeComments(b, a);
+    expect(ab).toEqual(ba);
+    expect(ab.map((c) => [c.sentAt ?? null, c.removedAt ?? null])).toEqual([[T1, null], [null, T1]]);
+    // Each window writes its merge; the other reads it and finds nothing to add.
+    expect(recordNeedsWrite(mergeComments(a, ab), ab, now)).toBe(false);
+    expect(recordNeedsWrite(mergeComments(b, ba), ba, now)).toBe(false);
   });
 
   it('two copies edited at the same instant settle on the same words in either order', () => {
