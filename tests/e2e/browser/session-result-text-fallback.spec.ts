@@ -127,6 +127,8 @@ test(`a failed native ${commandFailure.name} stays an error after reload and the
   const error = commandFailure.error
   await expect(panel.locator('.session-system-text').filter({ hasText: error })).toHaveCount(1)
   await expect(panel.getByText('Compacting context...', { exact: true })).toHaveCount(0)
+  // A compaction that failed reads as its error, never as one someone stopped (2026-11-05 review).
+  await expect(panel.getByText(/^Compaction stopped/)).toHaveCount(0)
   await expect.poll(async () => {
     const response = await page.request.get(`/api/sessions/${sessionId}`)
     return (await response.json()).session.process_status

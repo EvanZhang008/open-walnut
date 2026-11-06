@@ -151,10 +151,20 @@ describe('every listed command reads as Walnut\'s notice', () => {
     for (const c of WALNUT_COMMANDS) {
       const failed = compactLines(c.text, 'eeeeeeee-2222-4222-8222-222222222222', { queued: true })
         .split('\n').filter((l) => !/compact_boundary|isCompactSummary/.test(l))
-        .map((l) => l.replace('<local-command-stdout>Compacted </local-command-stdout>', '<local-command-stderr>Error during compaction: API Error: 529 overloaded</local-command-stderr>'))
+        // How Claude Code files a failed /compact: a system local_command row with a failed outcome.
+        .map((l) => (l.includes('<local-command-stdout>Compacted') ? JSON.stringify({
+          type: 'system', subtype: 'local_command', uuid: 'o-1', parentUuid: 'eeeeeeee-2222-4222-8222-222222222222', sessionId: SID,
+          timestamp: '2026-11-05T21:37:34.634Z', isSidechain: false, cwd: '/w',
+          content: '<local-command-stderr>Error during compaction: API Error: 400 Input is too long.</local-command-stderr>',
+          commandRun: { command: 'compact', args: '' }, commandOutcome: { kind: 'failed' },
+        }) : l))
         .join('\n');
       const rows = parseSessionMessages(failed);
-      expect(rows.some((r) => r.role === 'system' && r.text === c.notice), c.source).toBe(true);
+      const at = rows.findIndex((r) => r.role === 'system' && r.text === c.notice);
+      expect(at, c.source).toBeGreaterThan(-1);
+      // The error is Walnut's notice's neighbour as a system error row, never a message of the person's.
+      expect(rows.slice(at + 1).find((r) => r.text.includes('Error during compaction'))?.role, c.source).toBe('system');
+      expect(rows.filter((r) => r.role === 'user' && r.text.includes('Error during compaction')), c.source).toEqual([]);
       expect(rows.filter((r) => r.role === 'system' && /\bcompacted\b/i.test(r.text)).map((r) => r.text), c.source).toEqual([]);
     }
   });
@@ -173,10 +183,10 @@ describe('every listed command reads as Walnut\'s notice', () => {
     // text here: bump HISTORY_CACHE_SCHEMA (history-disk-cache.ts), move the old text to
     // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, then update this pin.
     expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
-      schema: 8,
+      schema: 9,
       notices: [
         'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.',
-        'Walnut asked to compact this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
+        'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.',
         'Walnut sent /compact to compact this session.',
       ],
     });

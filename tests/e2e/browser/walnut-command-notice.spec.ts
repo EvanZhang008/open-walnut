@@ -13,7 +13,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test'
 
 const SHOTS = process.env.WALNUT_COMMAND_SHOTS ?? '/tmp/walnut-command-notice'
-const NOTICE = 'Walnut asked to compact this conversation because it no longer fit the model\'s context window'
+const NOTICE = 'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.'
 const RECORDING = !!process.env.WALNUT_COMMAND_VIDEO
 /** A recording stays on a screen long enough to read it. */
 const hold = (page: Page) => (RECORDING ? page.waitForTimeout(2_000) : Promise.resolve())

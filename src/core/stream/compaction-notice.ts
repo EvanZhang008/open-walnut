@@ -35,6 +35,10 @@ export const COMPACTED_MESSAGE = 'Context compacted'
 /** Outcome line: the turn ended with no boundary (a Stop cancels `/compact`: "Compaction canceled."). */
 export const COMPACTION_STOPPED_MESSAGE = 'Compaction stopped'
 export const COMPACTION_STOPPED_DETAIL = 'context unchanged'
+/** Outcome line: the turn ended with no boundary and an error, nobody stopped it (its detail is
+ *  COMPACTION_STOPPED_DETAIL; the error is its own row). A reloaded history says the same
+ *  ("Compaction failed", web fold-steps.ts). */
+export const COMPACTION_FAILED_MESSAGE = 'Compaction failed'
 
 /** `compact_metadata`, either dialect. Canonical JSONL uses camelCase
  *  (`compactMetadata.preTokens`); the CLI's stream-json stdout — what the daemon

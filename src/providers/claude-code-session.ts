@@ -33,7 +33,7 @@ import { frameStartData } from '../core/sessions/send-frame.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
 import { requestTagOn, requestTagValue, withRequestTagHeaders } from '../core/sessions/request-tag.js'
-import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
+import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-event-view.js'
 import { isProcessAliveAsync } from '../utils/process.js'
@@ -7788,10 +7788,16 @@ export class ClaudeCodeSession {
         // ran: an auto-compaction mid-work is not one) ends as no work stopped (server.ts).
         const compactionStopped = compactionOpen && this._isReplayedByOffset() !== true
         const onlyCompactionStopped = compactionStopped && userInterrupted && this._firstToolTs === undefined
+        // One that ended on an error nobody asked for failed, and says so as a reload does (2026-11-05
+        // review: live read "Compaction stopped", the reloaded history "Compaction failed").
+        const compactionFailed = compactionStopped && !userInterrupted && effectiveIsError
         if (compactionStopped) {
           bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
             sessionId: this.claudeSessionId, taskId: this.taskId,
-            variant: 'compact' as const, message: COMPACTION_STOPPED_MESSAGE, detail: COMPACTION_STOPPED_DETAIL, progress: false,
+            variant: 'compact' as const,
+            message: compactionFailed ? COMPACTION_FAILED_MESSAGE : COMPACTION_STOPPED_MESSAGE,
+            detail: COMPACTION_STOPPED_DETAIL,
+            progress: false,
           }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
         }
 

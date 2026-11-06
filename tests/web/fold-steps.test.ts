@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { envelopeSteps, foldStepsPhrase, systemRunLabel, systemRunShows, type FoldStep } from '@/components/sessions/fold-steps';
 import { parseSessionEnvelopes } from '../../src/lib/history-session-envelope';
+import { parseSessionMessages } from '../../src/core/session-history';
+import { CONTEXT_COMPACT_TEXT } from '../../src/core/sessions/context-full-recovery';
 import { CONTEXT_COMPACT_HISTORY_TEXT, LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, WALNUT_COMMAND_HISTORY_TEXT } from '../../src/core/sessions/walnut-commands';
 
 // The first argument names the sender in the test only: a step carries none.
@@ -142,6 +144,29 @@ describe('foldStepsPhrase', () => {
     expect(systemRunLabel([failed, { variant: 'info', message: 'Retrying' }])).toBe('2 system messages');
     expect(foldStepsPhrase([{ kind: 'notice', compact: 'context' }, { kind: 'notice', compact: 'cli' }])).toBe('Compacted by Walnut to fit the context window');
     expect(foldStepsPhrase([{ kind: 'notice', compact: 'context' }])).toBe('1 notice');
+  });
+
+  it('a reloaded Walnut compaction that failed reads "Compaction failed", from the transcript to its line', () => {
+    // 2026-11-05 review: only the absence of "compacted" was checked, never the line a reader sees.
+    const base = { sessionId: 's', isSidechain: false, userType: 'external', entrypoint: 'sdk-cli', cwd: '/w' };
+    const args = CONTEXT_COMPACT_TEXT.slice('/compact'.length).trim();
+    const jsonl = [
+      { type: 'user', uuid: 'u-1', parentUuid: null, timestamp: '2026-11-05T21:37:20.000Z', ...base, message: { role: 'user', content: 'hi' } },
+      { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', timestamp: '2026-11-05T21:37:21.000Z', ...base, message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'Prompt is too long' }] } },
+      { type: 'user', uuid: 'c-1', parentUuid: 'a-1', timestamp: '2026-11-05T21:37:29.549Z', ...base, message: { role: 'user', content: `<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>${args}</command-args>` } },
+      // How Claude Code files a failed local command (the mock CLI's failed-compact-command, same shape).
+      { type: 'system', subtype: 'local_command', uuid: 'o-1', parentUuid: 'c-1', timestamp: '2026-11-05T21:37:34.634Z', ...base, content: '<local-command-stderr>Error during compaction: API Error: 400 Input is too long.</local-command-stderr>', commandRun: { command: 'compact', args }, commandOutcome: { kind: 'failed' } },
+    ].map((l) => JSON.stringify(l)).join('\n') + '\n';
+    const rows = parseSessionMessages(jsonl);
+    const at = rows.findIndex((r) => r.role === 'system' && r.text === CONTEXT_COMPACT_HISTORY_TEXT);
+    expect(at).toBeGreaterThan(-1);
+    const run = [];
+    for (let k = at; k < rows.length && rows[k]!.role === 'system'; k++) run.push({ variant: rows[k]!.systemVariant ?? 'info', message: rows[k]!.text });
+    expect(systemRunLabel(run)).toBe('Compaction failed');
+  });
+
+  it('a live compaction that failed says so, as the reloaded one does', () => {
+    expect(systemRunLabel([{ variant: 'compact', message: 'Compacting context...' }, { variant: 'compact', message: 'Compaction failed', detail: 'API Error: 529 overloaded' }])).toBe('Compaction failed');
   });
 
   it('an opened run says the size once: the line has it when it names Walnut\'s compaction', () => {

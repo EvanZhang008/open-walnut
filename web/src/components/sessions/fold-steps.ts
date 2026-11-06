@@ -14,7 +14,7 @@
  */
 import type { EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { noticeTitle } from './message-fold';
-import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_STOPPED_MESSAGE } from '@open-walnut/compaction-notice';
+import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_MESSAGE } from '@open-walnut/compaction-notice';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { walnutNoticeKind } from '../../../../src/core/sessions/walnut-commands';
 import type { ToolRunMember } from './tool-run-phrase';
@@ -158,6 +158,7 @@ export function systemRunLabel(members: readonly { variant: string; message: str
   const last = compacts[compacts.length - 1]?.message;
   if (last === COMPACTING_MESSAGE) return `${lines.has('idle') ? 'Compacting while idle' : lines.has('context') ? 'Compacting to fit the context window' : 'Compacting context'}${more(compacts.length)}`;
   if (last === COMPACTION_STOPPED_MESSAGE) return `Compaction stopped${more(compacts.length)}`;
+  if (last === COMPACTION_FAILED_MESSAGE) return `Compaction failed${more(compacts.length)}`;
   // Walnut asked for a compaction and an error came instead of its boundary.
   const errors = members.filter((m) => m.variant === 'error').length;
   if (lines.size > 0 && errors > 0) return `Compaction failed${more(errors)}`;

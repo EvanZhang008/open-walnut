@@ -29,7 +29,8 @@ export const CONTEXT_COMPACT_COMMAND = `/compact ${WALNUT_COMMAND_MARK} because 
 
 /** The history row that stands for the recovery's command line. */
 // It says what Walnut asked for, never how it ended: the compaction's own row (or its error) says that.
-export const CONTEXT_COMPACT_HISTORY_TEXT = 'Walnut asked to compact this conversation because it no longer fit the model\'s context window ("Prompt is too long").';
+// Its compaction's line says what it was for ("to fit the context window"), so this says the cause.
+export const CONTEXT_COMPACT_HISTORY_TEXT = 'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.';
 /** A Walnut command line whose wording this release does not know (an older or newer Walnut wrote it). */
 export const WALNUT_COMMAND_HISTORY_TEXT = 'Walnut sent /compact to compact this session.';
 /**
@@ -40,6 +41,7 @@ export const WALNUT_COMMAND_HISTORY_TEXT = 'Walnut sent /compact to compact this
 export const LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS: readonly string[] = [
   'Walnut sent /compact because the conversation no longer fit the model\u2019s context window ("Prompt is too long"); what got no answer goes again after it.',
   'Walnut compacted this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
+  'Walnut asked to compact this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
 ];
 
 export interface WalnutCommand {
