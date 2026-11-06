@@ -71,7 +71,9 @@ import { useShowPriorityState } from '@/hooks/useShowPriority';
 import { useQuickParseEnabled } from '@/hooks/useQuickParse';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { MAX_PANELS, useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
-import { resolveTaskSessionId } from '@/utils/session-status';
+import { resolveTaskSessionId, taskOfSession } from '@/utils/session-status';
+import { SessionTaskbar } from '@/components/sessions/SessionTaskbar';
+import { chipsAfterStripChange, moveChip, parseChips, removeChip } from './sessionTaskbar';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
 import { publishBannerHealth } from '@/components/common/banner-mount-hooks';
@@ -95,7 +97,7 @@ import {
 } from './sessionColumns';
 import { useColumnCompleteClose } from './useColumnCompleteClose';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
-import { createStripWriter, readColumns, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
+import { createStripWriter, readColumns, readLayoutField, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
 import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -524,6 +526,32 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(
     () => restoredDrafts.reduce((cols, d) => forceAddSessionColumn(cols, d.id), loadSessionColumns()),
   );
+
+  // ── The taskbar (pages/sessionTaskbar.ts): open sessions that are not on the strip ──
+  // A real session that leaves the strip without a close (Minimize, a sixth open, a
+  // lower panel count) becomes a chip; one the user closed goes to the background. A
+  // desktop strip only: the phone's one-at-a-time strip has no taskbar.
+  const [taskbarChips, setTaskbarChips] = useState<string[]>(() => parseChips(readLayoutField('homeTaskbar')));
+  useEffect(() => { writeLayoutField('homeTaskbar', taskbarChips.length > 0 ? taskbarChips : null); }, [taskbarChips]);
+  const closedColumnIdsRef = useRef(new Set<string>());
+  const stripBeforeRef = useRef(sessionColumns);
+  useEffect(() => {
+    const before = stripBeforeRef.current;
+    stripBeforeRef.current = sessionColumns;
+    const closed = closedColumnIdsRef.current;
+    closedColumnIdsRef.current = new Set();
+    if (before === sessionColumns || phoneLayout) return;
+    setTaskbarChips(chips => chipsAfterStripChange(chips, before, sessionColumns, closed));
+  }, [sessionColumns, phoneLayout]);
+  const handleMinimizeSession = useCallback((sessionId: string) => {
+    setSessionColumns(prev => removeSessionColumn(prev, sessionId));
+  }, []);
+  const handleCloseChip = useCallback((sessionId: string) => {
+    setTaskbarChips(chips => removeChip(chips, sessionId));
+  }, []);
+  const handleMoveChip = useCallback((sessionId: string, toIndex: number) => {
+    setTaskbarChips(chips => moveChip(chips, sessionId, toIndex));
+  }, []);
 
   // Triage panel state — shares the first column slot with sessions
   const [triagePanelOpen, setTriagePanelOpen] = useState(false);
@@ -1768,15 +1796,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleCloseSession = useCallback((sessionId: string) => {
     const opener = sessionOpenersRef.current.get(sessionId);
     sessionOpenersRef.current.delete(sessionId);
-    const task = [...taskMapRef.current.values()].find((candidate) =>
-      candidate.session_id === sessionId
-      || candidate.exec_session_id === sessionId
-      || candidate.plan_session_id === sessionId
-      || candidate.session_ids?.includes(sessionId));
+    const task = taskOfSession(taskMapRef.current.values(), sessionId);
     pendingSessionFocusRef.current = {
       opener,
       taskId: task?.id,
     };
+    // A close goes to the background, never to the taskbar.
+    closedColumnIdsRef.current.add(sessionId);
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
 
@@ -3181,6 +3207,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [launchQuickStart, openSessionOrToast, showOperationError]);
 
   return (
+    <>
     <div
       className={`main-page${sessionColumns.length > 0 ? ' has-mobile-session' : ''}`}
       style={{ position: 'relative' }}
@@ -3508,6 +3535,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   viewPlace="home-column"
                   locked={slot.locked}
                   onToggleLock={handleToggleLockSession}
+                  onMinimize={phoneLayout ? undefined : handleMinimizeSession}
                   onTaskCompleted={columnComplete.onTaskCompleted}
                   onClose={handleClosePanel}
                   onTaskClick={handleFocusTaskById}
@@ -3564,5 +3592,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       />
 
     </div>
+    {!phoneLayout && (
+      <SessionTaskbar
+        chips={taskbarChips}
+        tasks={tasks}
+        onRestore={openSessionOrToast}
+        onClose={handleCloseChip}
+        onMove={handleMoveChip}
+      />
+    )}
+    </>
   );
 }

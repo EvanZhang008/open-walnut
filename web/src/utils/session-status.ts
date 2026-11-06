@@ -21,6 +21,15 @@ export function resolveTaskSessionId(task: Task): string | null {
     || null;
 }
 
+/** The task a session belongs to: any of its session slots names it. */
+export function taskOfSession(tasks: Iterable<Task>, sessionId: string): Task | undefined {
+  for (const task of tasks) {
+    if (task.session_id === sessionId || task.exec_session_id === sessionId
+      || task.plan_session_id === sessionId || task.session_ids?.includes(sessionId)) return task;
+  }
+  return undefined;
+}
+
 /** "Human action needed" — the task-level red treatment (whole row/card tint).
  *
  *  PHASE-driven, deliberately NOT the `unread` marker (2026-08-14 user report:

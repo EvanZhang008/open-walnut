@@ -31,6 +31,9 @@ export interface SessionSlot {
    * by the id). Never persisted (writeColumns keeps id and locked).
    */
   key?: string;
+  /** The id this slot held before its latest in-place swap (replaceSessionColumn): the
+   *  taskbar reads it to tell a swap from a session leaving the strip. Never persisted. */
+  from?: string;
 }
 
 let columnKeySeq = 0;
@@ -337,13 +340,13 @@ export function replaceSessionColumn(cols: SessionSlot[], oldId: string, newId: 
     const locked = cols[existing].locked || cols[idx].locked;
     return cols
       .filter((_, i) => i !== idx)
-      .map(c => (c.id === newId ? { ...c, locked } : c));
+      .map(c => (c.id === newId ? { ...c, locked, from: oldId } : c));
   }
   const next = [...cols];
   // A fresh `col:<n>` keeps the kept key apart from every id and from every other
   // kept key: one id swapped away twice (plan P -> E1, P opened again -> E2) must
   // not give two columns one key.
-  next[idx] = { id: newId, locked: cols[idx].locked, key: cols[idx].key ?? `col:${++columnKeySeq}` };
+  next[idx] = { id: newId, locked: cols[idx].locked, key: cols[idx].key ?? `col:${++columnKeySeq}`, from: oldId };
   return next;
 }
 
