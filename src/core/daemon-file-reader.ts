@@ -14,6 +14,25 @@ import { claudeProjectsSearchRoots } from './claude-config-dir.js'
 import { encodeProjectPath, isSafeForProjectEncoding, type SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
 
+/** A stream larger than this ran long past any boot: not read, reads as unknown. */
+const STREAM_EVIDENCE_MAX_BYTES = 1024 * 1024
+
+/** Whether stream text holds a line the CLI writes only inside a conversation:
+ *  a top-level `assistant` or `result` line (parsed, so a message that quotes
+ *  one inside a string never counts). A resume's own refusal ("No conversation
+ *  found", a result line too) is the opposite evidence and never counts. */
+export function streamTextHeldConversation(text: string): boolean {
+  for (const line of text.split('\n')) {
+    if (!line.includes('"assistant"') && !line.includes('"result"')) continue
+    if (line.includes('No conversation found')) continue
+    try {
+      const type = (JSON.parse(line) as { type?: unknown }).type
+      if (type === 'assistant' || type === 'result') return true
+    } catch { /* a torn or foreign line */ }
+  }
+  return false
+}
+
 /**
  * The daemon on this host predates a capability the caller needs.
  *
@@ -748,6 +767,36 @@ export class DaemonFileReader implements SessionFileReader {
         if ((result.files as string[] | undefined)?.length) return (result.files as string[])[0]
       }
       return null
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Whether a session's own stream file on the host shows its CLI held a
+   * conversation: an assistant or result line of its own. `streamPaths` are the
+   * daemon's candidates (daemonStreamPathCandidates). false only when every one is
+   * absent or read whole with no such line; undefined when that cannot be told (a
+   * failed stat or read, a file too large to read here). A transcript the probe
+   * cannot find proves nothing about a session whose stream answered: a CLI with
+   * another config dir, or a stand-in CLI that writes none (2026-11-06: a side
+   * thread's follow-up started fresh and its first answer was wiped).
+   */
+  async streamHeldConversation(streamPaths: string[], timeoutMs?: number): Promise<boolean | undefined> {
+    try {
+      await this.resolve()
+      const conn = await link(this.host)
+      for (const p of streamPaths) {
+        const st = await conn.send('fs.stat', { path: p }, timeoutMs)
+        if (!st.ok) return undefined
+        if (!st.exists) continue
+        if (typeof st.size !== 'number' || st.size > STREAM_EVIDENCE_MAX_BYTES) return undefined
+        if (st.size === 0) continue
+        const read = await conn.send('fs.read', { path: p, encoding: 'utf-8' }, timeoutMs)
+        if (!read.ok || typeof read.data !== 'string') return undefined
+        if (streamTextHeldConversation(read.data)) return true
+      }
+      return false
     } catch {
       return undefined
     }

@@ -3004,10 +3004,28 @@ export class ClaudeCodeSession {
       // started while clouddev's certificate had expired, and four Mac sessions killed
       // mid-boot, all failed this way). Only a proven absence switches: a host that
       // cannot be asked keeps the resume, and a transcript a probe missed is refused by
-      // the CLI ("Session ID ... is already in use"), never overwritten.
+      // the CLI ("Session ID ... is already in use"), never overwritten. A stream that
+      // holds an answer proves the conversation ran, wherever its transcript is: a
+      // fresh start empties that stream, so it keeps the resume (2026-11-06: a side
+      // thread's follow-up lost its first answer that way).
       if (isResume && message) {
-        const found = await new DaemonFileReader(host ?? '__local__').probeSessionPath(resumeSessionId!, resolvedCwd, 10_000)
+        const hostReader = new DaemonFileReader(host ?? '__local__')
+        const found = await hostReader.probeSessionPath(resumeSessionId!, resolvedCwd, 10_000)
+        let ran: boolean | undefined
         if (found === null) {
+          const { daemonStreamPathCandidates } = await import('../core/session-reconcile.js')
+          // A local session's stream may also sit in the pre-daemon streams dir (as
+          // session-liveness.ts reads it).
+          const streams = daemonStreamPathCandidates(resumeSessionId!, host)
+          if (!host || host === '__local__') streams.push(path.join(SESSION_STREAMS_DIR, `${resumeSessionId}.jsonl`))
+          ran = await hostReader.streamHeldConversation(streams, 10_000)
+        }
+        if (found === null && ran !== false) {
+          log.session.info('resume: no transcript found, but the session may have run here; keeping --resume', {
+            taskId: this.taskId, sessionId: resumeSessionId, host: host ?? '__local__', streamHeldConversation: ran ?? 'unknown',
+          })
+        }
+        if (found === null && ran === false) {
           const at = args.indexOf('--resume')
           if (at !== -1) args.splice(at, 2, '--session-id', resumeSessionId!)
           const cut = args.indexOf('--resume-session-at')
