@@ -33,10 +33,22 @@ async function createTaskViaApi(title: string, opts: Record<string, unknown> = {
 
 test.beforeEach(async ({ page }) => { await presetPanelView(page) })
 
+// What a test made, removed even when it failed: a folder left on the shared fixture by a failed
+// first attempt was the one its retry's locator found first (CI, 2026-11-06).
+let litter: { tasks: string[]; folders: string[]; projects: string[] } = { tasks: [], folders: [], projects: [] }
+test.beforeEach(() => { litter = { tasks: [], folders: [], projects: [] } })
+test.afterEach(async () => {
+  for (const gid of litter.folders) await fetch(`${API}/api/tasks/folders/${gid}`, { method: 'DELETE' }).catch(() => undefined)
+  for (const id of litter.tasks) await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
+  for (const name of litter.projects) await fetch(`${API}/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => undefined)
+})
+
 test('grouped tasks render as a folder; deleting the folder releases members in place', async ({ page }) => {
   const project = `FolderProj${Date.now().toString(36)}`
+  litter.projects.push(project)
   const a = await createTaskViaApi('Folder member A', { project })
   const b = await createTaskViaApi('Folder member B', { project })
+  litter.tasks.push(a.id, b.id)
   const groupRes = await fetch(`${API}/api/tasks/groups`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -44,6 +56,7 @@ test('grouped tasks render as a folder; deleting the folder releases members in 
   })
   expect(groupRes.ok).toBe(true)
   const group = (await groupRes.json()) as { group_id: string; project?: string }
+  litter.folders.push(group.group_id)
 
   // The listing carries the new folder fields.
   const listing = (await (await fetch(`${API}/api/tasks/groups`)).json()) as { groups: Array<{ group_id: string; project?: string }> }
@@ -55,7 +68,9 @@ test('grouped tasks render as a folder; deleting the folder releases members in 
   await showEverything(page)
 
   // 1. The folder chip renders above the lead member with the folder label.
-  const chip = page.locator(`.task-group-chip[data-group-id="${group.group_id}"], .task-group-chip:has-text("Migrated Folder")`).first()
+  // This test's folder only: other tests (and other attempts of this one) on the shared fixture
+  // make folders with the same name.
+  const chip = page.locator(`.task-group-chip[data-group-id="${group.group_id}"]`).first()
   await expect(chip).toBeVisible()
   await expect(page.locator(`[data-task-id="${a.id}"]`).first()).toBeVisible()
   await expect(page.locator(`[data-task-id="${b.id}"]`).first()).toBeVisible()
@@ -65,7 +80,7 @@ test('grouped tasks render as a folder; deleting the folder releases members in 
   await chip.hover()
   await chip.locator('.task-group-chip-more').click()
   await page.locator('[data-testid="folder-ctx-menu"]').getByRole('menuitem', { name: 'Delete folder' }).click()
-  await expect(page.locator(`.task-group-chip:has-text("Migrated Folder")`)).toHaveCount(0, { timeout: 10000 })
+  await expect(page.locator(`.task-group-chip[data-group-id="${group.group_id}"]`)).toHaveCount(0, { timeout: 10000 })
   await expect(page.locator(`[data-task-id="${a.id}"]`).first()).toBeVisible()
   await expect(page.locator(`[data-task-id="${b.id}"]`).first()).toBeVisible()
   await page.screenshot({ path: '/tmp/folder-model/folder-deleted-members-stay.png' })
