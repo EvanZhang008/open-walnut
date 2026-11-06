@@ -217,6 +217,7 @@ test('days imported from a bill are named as such in the line above the chart an
   const coverage = page.getByTestId('usage-coverage')
   await expect(coverage).toContainText('imported from Cloud usage bill, counted for the whole account, with no sessions or projects.')
   await expect(coverage).toContainText('Nothing earlier in it.')
+  await expect(page.getByTestId('usage-imported-note')).toContainText('imported from the usage bill')
   await expect(coverage).toContainText('Recorded by Walnut from ')
   await expect(coverage).not.toContainText('transcripts were gone')
   // Nine days before the bill: not recorded. Then the bill's days. Hover one of each.

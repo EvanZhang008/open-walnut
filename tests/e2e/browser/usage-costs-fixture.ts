@@ -93,7 +93,8 @@ function wholePicture(start: string | null, end: string | null, opts: FixtureOpt
     { key: 'bp', label: 'Proxy: bp', direct: false, costUsd: 80 * keep, requests: 900, outsideRequests: 800, tokens: 151_000_000 },
   ]
   const started = { walnut: { costUsd: everything * (1 - OUTSIDE_SHARE), requests: 52_000, tokens: 9_100_000_000 },
-    outside: { costUsd: everything * OUTSIDE_SHARE, requests: 12_270, tokens: 1_900_000_000 } }
+    outside: { costUsd: everything * OUTSIDE_SHARE, requests: 12_270, tokens: 1_900_000_000 },
+    ...(opts.imported ? { imported: { costUsd: 1_234, requests: 0, tokens: 400_000_000 } } : {}) }
   return { ...agents, view: 'all', engine: null, origin, started, accounts, totals: line('total', 'Total', total, 64_270, 14), daily, groups,
     stored: [{ host: '__local__', from, to: end ?? '2026-09-23' }, { host: 'devbox', from, to: end ?? '2026-09-23' },
       ...(opts.imported ? [{ host: 'Cloud usage bill', ...opts.imported, imported: true }] : [])],

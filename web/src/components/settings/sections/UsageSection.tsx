@@ -105,13 +105,19 @@ export function UsageSection() {
         />
         <SettingsRow
           label="Started by"
-          title="Work Walnut started, or Codex runs it did not (a codex exec from a shell, the Codex app or terminal). Both count by default."
+          title="Work Walnut started, or Claude Code and Codex sessions it did not (a terminal claude, an agent's claude -p, a codex exec from a shell, the Codex app). Both count by default."
           control={
             <SegmentedControl aria-label="Started by" value={origin} onChange={setOrigin}
               options={ORIGINS.map((o) => ({ value: o.value, label: originLabel(o.value, o.label, shown), testId: `usage-origin-${o.value}` }))} />
           }
         />
       </SettingsGroup>
+
+      {(shown?.started?.imported?.costUsd ?? 0) > 0 && (
+        <p className="settings-addons-muted usage-headline-note" data-testid="usage-imported-note">
+          {`All also counts ${money(shown!.started!.imported!.costUsd)} imported from the usage bill (the whole account, no sessions); it is in neither Walnut nor Outside Walnut.`}
+        </p>
+      )}
 
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't load usage: ${error}`}</SettingsNotice>}
       {updateError && <SettingsNotice kind="error" role="alert">{updateError}</SettingsNotice>}
