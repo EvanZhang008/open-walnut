@@ -84,7 +84,7 @@ import { ASK_MODE_HINT, ASK_MODE_LABEL, ASK_MODES, type AskMode } from '@/utils/
 const BAR_GAP = 8;
 const MENU_GAP = 4;
 /** The narrowest Ask choice and Comment box that still read (their words wrap). */
-const MENU_MIN_ASK = 200;
+const MENU_MIN_ASK = 180;
 const MENU_MIN_COMMENT = 240;
 /** The room a menu needs under the bar to open downward: the Comment box's height. */
 const MENU_ROOM = 110;

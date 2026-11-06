@@ -222,7 +222,11 @@ async function expectMenu(page: Page, scope: Locator, phrase: string, anchor: Lo
   const leftMeets = Math.abs(g.box.x - a.x) <= 2
   const rightMeets = Math.abs(g.box.x + g.box.width - (a.x + a.width)) <= 2
   // The menu keeps a 4px margin inside its column (QuotePinSelectionBar's placement).
-  const neitherFits = a.x + g.box.width > edgeR - 4.5 && a.x + a.width - g.box.width < edgeL + 4.5
+  // A menu narrows to its button's wider side down to its floor (180px for the Ask
+  // choice, 240px for the Comment box): only a column narrower than that holds it at
+  // the edge.
+  const floorW = at.startsWith('comment') ? 240 : 180
+  const neitherFits = a.x + floorW > edgeR - 4.5 && a.x + a.width - floorW < edgeL + 4.5
   expect(leftMeets || rightMeets || (neitherFits && (g.box.x <= edgeL + 6 || g.box.x + g.box.width >= edgeR - 6)),
     `hangs from its own button: left ${Math.round(g.box.x - a.x)}px, right ${Math.round(g.box.x + g.box.width - a.x - a.width)}px off it (${at})`).toBe(true)
   expect(overlaps(g.box, { left: bar.x, right: bar.x + bar.width, top: bar.y, height: bar.height }), `the menu is not drawn on the bar (${at})`).toBe(false)
