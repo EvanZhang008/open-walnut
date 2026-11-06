@@ -19,7 +19,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
-import { readJsonFile, updateJsonFile } from '../utils/fs.js';
+import { readJsonFile, updateJsonFile, writeJsonFile } from '../utils/fs.js';
 import { buildWalnutMessage, sessionHandle } from './peers/walnut-message-tag.js';
 import { createEnvelopeKit, type EnvelopeHandedOn } from './peers/envelope-kit.js';
 import { isHeldElsewhereReason } from './sessions/undelivered-requests.js';
@@ -139,6 +139,13 @@ export interface SessionRequest {
   waitMs?: number;
   /** How many times its deadline moved because its target was at work, and the last reason. */
   activeWaits?: number;
+  /**
+   * Time Walnut was not running (stopped, or the Mac asleep) while it was pending (ms): its
+   * deadline moved by as much (creditDowntime), and its own wait leaves it out.
+   */
+  pausedMs?: number;
+  /** The same, while it was overdue and not reminded yet: its reminder moved by as much. */
+  remindPausedMs?: number;
   activeWhy?: string;
   /**
    * The answer that settled it, as a fingerprint (answerDigest), and the asker session it was
@@ -558,10 +565,12 @@ export async function overdueOpenRequests(now = Date.now()): Promise<SessionRequ
 /** When an overdue request's one reminder is due: twice its own wait, counted from the ask. */
 export function reminderDueAt(r: SessionRequest): number {
   const asked = Date.parse(r.createdAt);
+  const paused = r.pausedMs ?? 0;
+  const after = r.remindPausedMs ?? 0;
   // A wait its active target moved counts as it ended: the reminder is one more wait after it went overdue.
-  if (r.activeWaits && r.overdueAt) return Date.parse(r.overdueAt) + requestWaitMs(r);
-  const wait = (r.ownDeadlineAt ?? r.deadlineAt) - asked;
-  return asked + 2 * Math.max(wait, MIN_REPLY_TIMEOUT_SECS * 1000);
+  if (r.activeWaits && r.overdueAt) return Date.parse(r.overdueAt) + requestWaitMs(r) + after;
+  const wait = (r.ownDeadlineAt ?? r.deadlineAt) - asked - paused;
+  return asked + paused + 2 * Math.max(wait, MIN_REPLY_TIMEOUT_SECS * 1000) + after;
 }
 
 /** Claim an overdue request's reminder (exactly once). Null when it was answered or already reminded. */
@@ -776,6 +785,9 @@ export async function importOfflineRequest(row: SessionRequest): Promise<boolean
         ...(here.carriedBy ? { carriedBy: here.carriedBy, deadlineAt: Math.max(row.deadlineAt, here.deadlineAt) } : {}),
         ...(here.ownDeadlineAt !== undefined ? { ownDeadlineAt: here.ownDeadlineAt } : {}),
         ...(here.carries ? { carries: here.carries } : {}),
+        // Time this server credited for being away (creditDowntime) stays credited.
+        ...(here.pausedMs ? { pausedMs: here.pausedMs, deadlineAt: Math.max(row.deadlineAt, here.deadlineAt) } : {}),
+        ...(here.remindPausedMs ? { remindPausedMs: here.remindPausedMs } : {}),
       };
       if (requests[idx].status !== 'pending' || JSON.stringify(requests[idx]) === JSON.stringify(next)) return undefined;
       requests[idx] = next;
@@ -792,7 +804,7 @@ export async function importOfflineRequest(row: SessionRequest): Promise<boolean
 export function requestWaitMs(r: SessionRequest): number {
   if (typeof r.waitMs === 'number' && r.waitMs > 0) return r.waitMs;
   const asked = Date.parse(r.createdAt);
-  return Math.max(MIN_REPLY_TIMEOUT_SECS * 1000, (r.ownDeadlineAt ?? r.deadlineAt) - (Number.isFinite(asked) ? asked : 0));
+  return Math.max(MIN_REPLY_TIMEOUT_SECS * 1000, (r.ownDeadlineAt ?? r.deadlineAt) - (Number.isFinite(asked) ? asked : 0) - (r.pausedMs ?? 0));
 }
 
 /**
@@ -810,7 +822,7 @@ export async function waitWhileActive(id: string, why: string, now = Date.now())
     if (!r || r.status !== 'pending' || r.deadlineAt > now) return undefined;
     const wait = requestWaitMs(r);
     const asked = Date.parse(r.createdAt);
-    const cap = (Number.isFinite(asked) ? asked : now) + Math.min(MAX_REPLY_TIMEOUT_SECS * 1000, ACTIVE_WAIT_FACTOR * wait);
+    const cap = (Number.isFinite(asked) ? asked : now) + (r.pausedMs ?? 0) + Math.min(MAX_REPLY_TIMEOUT_SECS * 1000, ACTIVE_WAIT_FACTOR * wait);
     const next = Math.min(now + wait, cap);
     if (next <= now) return undefined;
     moved = { ...r, deadlineAt: next, waitMs: wait, activeWaits: (r.activeWaits ?? 0) + 1, activeWhy: why };
@@ -818,6 +830,62 @@ export async function waitWhileActive(id: string, why: string, now = Date.now())
     return { requests };
   });
   return moved;
+}
+
+/** When this process started: a restart ends the time Walnut was away there. */
+const PROCESS_STARTED_AT = Date.now();
+
+/** The sweep's clock: when it last ran (creditDowntime). */
+const CLOCK_FILE = path.join(WALNUT_HOME, 'local', 'session-request-clock.json');
+
+/** A gap between two sweeps (60 s apart) longer than this is time Walnut was not running. */
+export const DOWNTIME_GAP_MS = 3 * 60_000;
+
+/**
+ * Walnut was not running from the last sweep to `now` (stopped, or the Mac asleep): no target
+ * could answer then, so that time does not count against any deadline. Every pending request
+ * still running its clock then gets its deadline moved by the gap, and an overdue one not yet
+ * reminded gets its reminder moved too. 2026-11-06: the Mac and Walnut were away 02:37 to 06:46
+ * UTC, and five OVERDUE notices went out within 12 s of coming back. Returns the gap credited
+ * (0 when there was none). The first sweep ever only starts the clock.
+ */
+export async function creditDowntime(now = Date.now(), clockFile = CLOCK_FILE, startedAt = PROCESS_STARTED_AT): Promise<number> {
+  const clock = await readJsonFile<{ aliveAt?: number } | null>(clockFile, null).catch(() => null);
+  const last = Number(clock?.aliveAt);
+  const gap = Number.isFinite(last) && last > 0 && now - last > DOWNTIME_GAP_MS ? now - last : 0;
+  if (gap > 0) {
+    // Away until this process started (a restart), or until now (the Mac asleep, this process
+    // paused). A row gets only the part of it that it lived through: one asked after the restart
+    // gets none.
+    const awayEnd = startedAt > last ? Math.min(startedAt, now) : now;
+    const owed = (r: SessionRequest) => {
+      const born = Date.parse(r.createdAt);
+      return Math.max(0, awayEnd - Math.max(last, Number.isFinite(born) ? born : last));
+    };
+    let pending = 0;
+    let reminders = 0;
+    await updateRequests((store) => {
+      const requests = (store.requests ?? []).map((r) => {
+        const credit = owed(r);
+        if (credit <= 0) return r;
+        if (r.status === 'pending' && r.deadlineAt > last) {
+          pending++;
+          return { ...r, deadlineAt: r.deadlineAt + credit, ...(r.ownDeadlineAt !== undefined ? { ownDeadlineAt: r.ownDeadlineAt + credit } : {}), pausedMs: (r.pausedMs ?? 0) + credit };
+        }
+        if (r.status === 'expired' && r.overdueAt && !r.remindedAt && reminderDueAt(r) > last) {
+          reminders++;
+          return { ...r, remindPausedMs: (r.remindPausedMs ?? 0) + credit };
+        }
+        return r;
+      });
+      return pending + reminders ? { requests } : undefined;
+    });
+    log.session.info('walnut was away: request deadlines moved by the time it was not running', {
+      from: new Date(last).toISOString(), minutes: Math.round(gap / 60_000), pending, reminders,
+    });
+  }
+  await writeJsonFile(clockFile, { aliveAt: now });
+  return gap;
 }
 
 /** Pending requests past their deadline (the sweeper's query). */

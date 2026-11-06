@@ -82,8 +82,14 @@ import {
   notifyRequesterFallback,
   sweepSessionRequests,
 } from '../../src/core/sessions/session-request-notify.js';
+import path from 'node:path';
+import { WALNUT_HOME } from '../../src/constants.js';
 import {
   REQUESTS_FILE,
+  DOWNTIME_GAP_MS,
+  creditDowntime,
+  reminderDueAt,
+  requestWaitMs,
   createSessionRequest,
   getSessionRequest,
   settleNotified,
@@ -183,8 +189,11 @@ function deliveredText(n = 0): string {
   return busText;
 }
 
+const CLOCK = path.join(WALNUT_HOME, 'local', 'session-request-clock.json');
+
 beforeEach(() => {
   fs.rmSync(REQUESTS_FILE, { force: true });
+  fs.rmSync(CLOCK, { force: true });
   sessions = [rec(ASKER, { title: 'Asker', taskId: 'task-asker' }), rec(TARGET, { title: 'Target' })];
   _clearHeldNotices();
   getSessionByClaudeId.mockReset();
@@ -1551,5 +1560,99 @@ describe('sessionRequestWatchHook — a turn that only made progress leaves its 
     taskPhase('COMPLETE');
     await fire(phasePayload({ newPhase: 'COMPLETE' }));
     expect(await status(done)).toEqual(['notified']);
+  });
+});
+
+describe('time Walnut was away never counts against a deadline (2026-11-06)', () => {
+  // The Mac and Walnut were away 02:37 to 06:46 UTC, and five OVERDUE notices went out within
+  // 12 s of coming back: every deadline that ran out while nothing could answer.
+  const HOUR = 3_600_000;
+  const setRow = (id: string, patch: Partial<SessionRequest>) => {
+    const store = JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf-8')) as { requests: SessionRequest[] };
+    Object.assign(store.requests.find((r) => r.id === id)!, patch);
+    fs.writeFileSync(REQUESTS_FILE, JSON.stringify(store));
+  };
+  const lastAlive = (at: number) => {
+    fs.mkdirSync(path.dirname(CLOCK), { recursive: true });
+    fs.writeFileSync(CLOCK, JSON.stringify({ aliveAt: at }));
+  };
+
+  it('a deadline that ran out while Walnut was away is not overdue on the first sweep back, and keeps its own wait', async () => {
+    const now = Date.now();
+    const rq = await arm({ text: 'asked before the Mac slept' });
+    setRow(rq.id, { createdAt: new Date(now - 4.5 * HOUR).toISOString(), deadlineAt: now - 3 * HOUR });
+    const wait = requestWaitMs((await getSessionRequest(rq.id))!);
+    lastAlive(now - 4 * HOUR);
+    expect(await sweepSessionRequests()).toBe(0);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    const row = (await getSessionRequest(rq.id))!;
+    expect(row.status).toBe('pending');
+    // The 4 h away were credited: what was left of its wait (1 h) runs from now on.
+    expect(row.deadlineAt).toBeGreaterThan(now + 0.9 * HOUR);
+    expect(requestWaitMs(row)).toBe(wait);
+  });
+
+  it('a request already overdue before Walnut stopped is still told; a short gap moves nothing', async () => {
+    const now = Date.now();
+    const before = await arm({ text: 'overdue before the stop' });
+    setRow(before.id, { deadlineAt: now - 5 * HOUR });
+    lastAlive(now - 4 * HOUR);
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(before.id))?.status).toBe('expired');
+    const quick = await arm({ text: 'past due a minute ago' });
+    backdateDeadline(quick.id);
+    lastAlive(Date.now() - (DOWNTIME_GAP_MS - 30_000));
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(quick.id))?.status).toBe('expired');
+  });
+
+  it('an overdue request whose reminder fell due while away is reminded one away-time later', async () => {
+    const now = Date.now();
+    const rq = await arm({ text: 'went overdue, reminder pending' });
+    setRow(rq.id, { status: 'expired', outcome: 'timeout', overdueAt: new Date(now - 5 * HOUR).toISOString(), createdAt: new Date(now - 6 * HOUR).toISOString(), deadlineAt: now - 5 * HOUR });
+    const due = reminderDueAt((await getSessionRequest(rq.id))!);
+    expect(due).toBeLessThan(now);
+    lastAlive(now - 4.5 * HOUR);
+    // The Mac asleep: this process ran all along, so the time away ends now.
+    expect(await creditDowntime(now, CLOCK, now - 10 * HOUR)).toBeGreaterThan(4 * HOUR);
+    expect(reminderDueAt((await getSessionRequest(rq.id))!)).toBe(due + (now - (now - 4.5 * HOUR)));
+    // The clock now says alive: the next sweep a minute later credits nothing.
+    expect(await creditDowntime(now + 60_000, CLOCK, now - 10 * HOUR)).toBe(0);
+  });
+
+  it('after a restart, a request asked once Walnut was back gets nothing; one asked before gets the time away', async () => {
+    const now = Date.now();
+    const old = await arm({ text: 'asked before the stop' });
+    setRow(old.id, { createdAt: new Date(now - 5 * HOUR).toISOString(), deadlineAt: now + HOUR });
+    const fresh = await arm({ text: 'asked after the restart' });
+    setRow(fresh.id, { createdAt: new Date(now - 30_000).toISOString(), deadlineAt: now + HOUR });
+    lastAlive(now - 4 * HOUR);
+    // This process started a minute before the sweep: the 4 h away ended then.
+    await creditDowntime(now, CLOCK, now - 60_000);
+    expect((await getSessionRequest(old.id))!.deadlineAt).toBe(now + HOUR + (4 * HOUR - 60_000));
+    expect((await getSessionRequest(fresh.id))!.deadlineAt).toBe(now + HOUR);
+    expect((await getSessionRequest(fresh.id))!.pausedMs).toBeUndefined();
+  });
+
+  it('a host copy of a row taken in later keeps the time this server credited', async () => {
+    const { importOfflineRequest } = await import('../../src/core/session-requests.js');
+    const now = Date.now();
+    const rq = await arm({ text: 'asked on a host' });
+    setRow(rq.id, { createdAt: new Date(now - 5 * HOUR).toISOString(), deadlineAt: now - HOUR });
+    const hostCopy = (await getSessionRequest(rq.id))!;
+    lastAlive(now - 4 * HOUR);
+    await creditDowntime(now, CLOCK, now - 60_000);
+    const credited = (await getSessionRequest(rq.id))!;
+    await importOfflineRequest({ ...hostCopy, text: 'asked on a host (its copy)' });
+    const merged = (await getSessionRequest(rq.id))!;
+    expect(merged.deadlineAt).toBe(credited.deadlineAt);
+    expect(merged.pausedMs).toBe(credited.pausedMs);
+  });
+
+  it('the first sweep ever only starts the clock', async () => {
+    const rq = await arm();
+    backdateDeadline(rq.id);
+    expect(await sweepSessionRequests()).toBe(1);
+    expect(JSON.parse(fs.readFileSync(CLOCK, 'utf-8')).aliveAt).toBeGreaterThan(Date.now() - 60_000);
   });
 });

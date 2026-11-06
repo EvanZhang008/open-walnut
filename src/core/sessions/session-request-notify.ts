@@ -536,6 +536,7 @@ async function deliverSettled(
 
 /** One sweeper tick: notify every pending request past its deadline. */
 let sweeping: Promise<number> | undefined;
+let clock: Promise<void> = Promise.resolve();
 
 /**
  * One sweep at a time: each overdue notice may wait up to LAST_MESSAGE_READ_MS on
@@ -543,8 +544,16 @@ let sweeping: Promise<number> | undefined;
  * during a sweep joins it instead of scanning the same rows again.
  */
 export function sweepSessionRequests(): Promise<number> {
+  // Every tick, a sweep running or not, keeps the clock: time Walnut was away (stopped, the Mac
+  // asleep) never counts against a deadline, and a long sweep is never taken for it.
+  const tick = Date.now();
+  clock = clock.then(async () => {
+    const { creditDowntime } = await import('../session-requests.js');
+    await creditDowntime(tick);
+  }).catch((err) => log.session.warn('request downtime credit failed', { error: err instanceof Error ? err.message : String(err) }));
   sweeping ??= (async () => {
     try {
+      await clock;
       const now = Date.now();
       const overdue = await overdueRequests(now);
       const { listAllSessionRequests } = await import('../session-requests.js');
