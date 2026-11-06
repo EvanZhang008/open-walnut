@@ -158,6 +158,20 @@ export class CostRollup {
     this.db.transaction(() => { for (const r of rows) put.run(r.host, r.sessionId, r.originator, r.provider, r.cwd, r.outside ? 1 : 0, r.stored ? 1 : 0, r.firstAt, r.lastAt); })();
   }
 
+  /**
+   * A session Walnut has a record of that an earlier look kept as outside, though its entrypoint is one Walnut's own sessions write
+   * (the origin keeps the entrypoint as `originator`), is Walnut's: the record may have been written after that look.
+   */
+  repairWalnutOrigins(entrypoints: readonly string[], isKnown: (host: string, sessionId: string) => boolean): number {
+    if (!entrypoints.length) return 0;
+    const rows = this.db.prepare(`SELECT host, session_id sid FROM usage_rollup_origin WHERE outside = 1 AND originator IN (${entrypoints.map(() => '?').join(',')})`)
+      .all(...entrypoints) as { host: string; sid: string }[];
+    const fix = this.db.prepare('UPDATE usage_rollup_origin SET outside = 0, stored = 0 WHERE host = ? AND session_id = ?');
+    let n = 0;
+    this.db.transaction(() => { for (const r of rows) if (isKnown(r.host, r.sid)) { fix.run(r.host, r.sid); n += 1; } })();
+    return n;
+  }
+
   origins(): Map<string, RunOrigin> {
     const rows = this.db.prepare('SELECT host, session_id sid, originator, provider, cwd, outside, stored, first_at first_day, last_at last_day FROM usage_rollup_origin').all() as
       { host: string; sid: string; originator: string; provider: string; cwd: string; outside: number; stored: number; first_day: string; last_day: string }[];

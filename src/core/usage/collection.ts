@@ -105,6 +105,8 @@ async function collect(since: string | undefined, until: string) {
     for (const o of owners) byId.set(o.sessionId, host);
     ownerNames.set(asJoined(host), byId);
   }
+  // A look kept as outside for a session whose record came later, on an entrypoint Walnut's own sessions write, is put right.
+  rollup.repairWalnutOrigins([...WALNUT_SESSION_ENTRYPOINTS], (host, id) => ownerNames.get(asJoined(host))?.get(id) === host);
   const results = [];
   for (const [host, owners] of hosts) {
     try {

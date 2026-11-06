@@ -101,7 +101,8 @@ describe('claudeSessionMetas', () => {
     await writeFile(fresh, JSON.stringify({ type: 'user', cwd: '/work/marina' }) + '\n');
     const past = new Date(Date.now() - 3 * 24 * 60 * 60_000);
     await utimes(oldFile, past, past);
-    await claudeSessionMetas(root, index);
+    const first = await claudeSessionMetas(root, index);
+    expect(first.unreadable).toBe(1); // the fresh one is pending: a full read of the host is repeated until it settles
     const cache = JSON.parse(await readFile(path.join(index, 'claude-session-meta.json'), 'utf8'));
     expect(cache['p1/old.jsonl']).toEqual(['', '/work/marina', expect.any(Number)]);
     expect(cache['p1/fresh.jsonl']).toBeUndefined();

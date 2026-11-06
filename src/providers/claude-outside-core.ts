@@ -116,10 +116,12 @@ export async function claudeSessionMetas(projectsDir: string, indexDir?: string)
       if (!hit) {
         try {
           const head = await readHead(file);
-          // A file that ended with no entrypoint is a session just begun, unless it has not been written for a day: an old
+          // A file that ended with no entrypoint is a session just begun, unless it has been quiet for ten minutes: an older
           // transcript from a CLI that wrote none is remembered like one read to the limit, so a pass does not read it whole again.
-          const settled = head && !head.complete && head.size < HEAD_MAX_BYTES
-            && Date.now() - (await fs.stat(file)).mtimeMs > 24 * 60 * 60_000;
+          // One still pending is counted unreadable, so a full read of the host is repeated and picks its whole history up once it settles.
+          const pending = !!head && !head.complete && head.size < HEAD_MAX_BYTES;
+          const settled = pending && Date.now() - (await fs.stat(file)).mtimeMs > 10 * 60_000;
+          if (pending && !settled) out.unreadable++;
           if (head && (head.complete || head.size >= HEAD_MAX_BYTES || settled)) { hit = head.entrypoint ? [head.entrypoint, head.cwd] : ['', head.cwd, head.size]; dirty = true; }
         } catch { out.unreadable++; /* unreadable now: listed without an entrypoint, read again next time, and the pass says so */ }
       }

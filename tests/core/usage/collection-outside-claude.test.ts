@@ -176,6 +176,16 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     expect(rollup.originOf('__local__', 'terminal-p')?.outside).toBe(true); // a session nobody listed stays outside
   });
 
+  it('an outside look an older build kept for a session Walnut has a record of is put right on the next pass, without the daemon resending it', async () => {
+    responseUsageStore().rollup.recordOrigins([{ host: '__local__', sessionId: 'walnut-run', originator: 'sdk-ts', provider: '', cwd: '/w', outside: true, stored: true, firstAt: '', lastAt: '' },
+      { host: '__local__', sessionId: 'terminal-x', originator: 'cli', provider: '', cwd: '/w', outside: true, stored: true, firstAt: '', lastAt: '' }]);
+    mocks.send.mockResolvedValueOnce(page([], [], '2026-11-06T11:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T11:00:00.000Z');
+    const rollup = responseUsageStore().rollup;
+    expect(rollup.originOf('__local__', 'walnut-run')).toMatchObject({ outside: false, stored: false });
+    expect(rollup.originOf('__local__', 'terminal-x')?.outside).toBe(true);
+  });
+
   it('a session of the SDK session server (sdk-ts) that Walnut has a record of is Walnut\'s', async () => {
     mocks.send.mockResolvedValueOnce(page([record('m32', 'walnut-run')], [{ sessionId: 'walnut-run', entrypoint: 'sdk-ts', cwd: '/home/u/tasks/example-task' }], '2026-11-06T09:30:00.000Z'));
     await collectUsage(INCREMENTAL, '2026-11-06T09:30:00.000Z');
