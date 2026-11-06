@@ -942,6 +942,15 @@ test('Open session from the panel card navigates and leaves the ask pending', as
 
 test('a real permission ask arrives enriched and is approved from the toast', async ({ page }) => {
   test.setTimeout(120_000)
+  // An ACP start that names no mode runs in bypass, as a Claude Code start does
+  // (2026-11-05), and in bypass Walnut answers every permission request itself:
+  // no toast, the mock agent prints "permission granted: allow-once" on its own.
+  // A Codex draft has no mode pill (its modes are the adapter's own presets), so
+  // the start carries the restrictive mode a person picks to be asked, the way
+  // session-hold-turn-subagents.spec.ts starts its asking sessions.
+  await page.route('**/api/sessions/quick-start', (route) => route.continue({
+    postData: JSON.stringify({ ...route.request().postDataJSON(), mode: 'default' }),
+  }))
   await loadHome(page)
   const draft = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 
