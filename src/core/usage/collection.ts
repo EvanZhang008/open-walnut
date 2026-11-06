@@ -129,7 +129,6 @@ async function collect(since: string | undefined, until: string) {
       let outsideNow = outsideScan && !(cooling && !rollup.claudeOutsideBuilt(host));
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
-      let relisted = 0;
       let logged = false;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -140,12 +139,9 @@ async function collect(since: string | undefined, until: string) {
             if (scan && !logged) { logged = true; log.usage.info('usage scan read', { host, scan }); }
             const evidence = reply.result as UsageEvidence & { outsideSessions?: ClaudeSessionMeta[] };
             unreadable += (evidence.canonical?.diagnostics as { unreadable_files?: number } | undefined)?.unreadable_files ?? 0;
-            // A session another name of this machine owns is stored by that name's own read.
-            if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
             // A Walnut session begun after this pass listed the sessions is not in `known` yet: its record is read again before
             // the first look, because that look is kept for good and would otherwise call it outside.
-            if (Date.now() - relisted > 5_000 && evidence.outsideSessions?.some(m => !known.has(m.sessionId) && WALNUT_SESSION_ENTRYPOINTS.has(m.entrypoint))) {
-              relisted = Date.now();
+            if (evidence.outsideSessions?.some(m => !known.has(m.sessionId) && WALNUT_SESSION_ENTRYPOINTS.has(m.entrypoint) && !rollup.originOf(host, m.sessionId))) {
               for (const s of await listSessions()) {
                 if (engineCaps(s.engine).historySource !== 'provider-jsonl' || known.has(s.claudeSessionId)) continue;
                 const named = s.host ?? '__local__';
@@ -155,6 +151,8 @@ async function collect(since: string | undefined, until: string) {
                 if (named === host) owners.push({ sessionId: s.claudeSessionId, taskId: s.taskId || undefined, title: s.title, project: s.project, lane: s.lane });
               }
             }
+            // A session another name of this machine owns is stored by that name's own read.
+            if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
             // Who started each outside session is noted before its responses are stored.
             const extra = evidence.outsideSessions?.length
               ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];

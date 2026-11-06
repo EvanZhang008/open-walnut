@@ -102,6 +102,28 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     for (const row of rows) expect(row.hosts).toBe(1);
   });
 
+  it('sessions that appear in the record while a long read runs are routed to their owner name, on every page', async () => {
+    mocks.config.mockResolvedValue({ usage: {}, net: { enabled: true },
+      hosts: { studio: { transport: 'net', endpoint: 'x', enabled: true }, old: { discovered: true, hostname: 'studio', enabled: true } } });
+    const mine = { claudeSessionId: 'on-studio', host: 'studio', engine: 'claude', taskId: 't2' };
+    mocks.sessions.mockReset();
+    mocks.sessions.mockResolvedValueOnce([mine]);
+    mocks.sessions.mockResolvedValueOnce([mine, { claudeSessionId: 'late-1', host: 'old', engine: 'claude', taskId: 'l1' }]);
+    mocks.sessions.mockResolvedValue([mine, { claudeSessionId: 'late-1', host: 'old', engine: 'claude', taskId: 'l1' }, { claudeSessionId: 'late-2', host: 'studio', engine: 'claude', taskId: 'l2' }]);
+    const first = { ...page([record('a1', 'late-1')], [{ sessionId: 'late-1', entrypoint: 'sdk-cli', cwd: '/w/l1' }], '2026-11-06T10:00:00.000Z'), done: false, key: 'k', offset: 1 };
+    mocks.send.mockResolvedValueOnce(page([], [], '2026-11-06T10:00:00.000Z')); // this computer answers first, with nothing
+    mocks.send.mockImplementation(async (_cmd: string, params: { key?: string }) => params.key
+      ? page([record('a2', 'late-2')], [{ sessionId: 'late-2', entrypoint: 'sdk-cli', cwd: '/w/l2' }], '2026-11-06T10:00:00.000Z')
+      : first);
+    await collectUsage(INCREMENTAL, '2026-11-06T10:00:00.000Z');
+    const rows = responseUsageStore().database.prepare("SELECT session_id s, host h FROM response_usage WHERE session_id IN ('late-1','late-2')").all() as { s: string; h: string }[];
+    expect(rows.filter(r => r.s === 'late-1').length).toBe(0); // owned by the name 'old': that name's own read stores it
+    expect(rows.find(r => r.s === 'late-2')?.h).toBe('studio');
+    const rollup = responseUsageStore().rollup;
+    expect(rollup.originOf('old', 'late-1')?.outside).toBeFalsy();
+    expect(rollup.originOf('studio', 'late-2')?.outside).toBeFalsy(); // the second page came at once, still Walnut's
+  });
+
   it('reads the machine under its own name when only another name of it has sessions, so the read never moves between names', async () => {
     mocks.config.mockResolvedValue({ usage: {}, net: { enabled: true },
       hosts: { studio: { transport: 'net', endpoint: 'x', enabled: true }, old: { discovered: true, hostname: 'studio', enabled: true } } });

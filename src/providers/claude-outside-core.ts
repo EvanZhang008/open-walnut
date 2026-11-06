@@ -19,8 +19,10 @@ export const CLAUDE_OUTSIDE = true;
 /** Entrypoints of Walnut's own helper calls: counted from Walnut's call records, never as outside work. */
 export const WALNUT_ENTRYPOINTS: ReadonlySet<string> = new Set(['walnut-utility']);
 
-/** The entrypoints a Walnut session writes: `claude -p --input-format stream-json` (sdk-cli), the SDK session server's (sdk-ts), and Walnut's helper calls (walnut-utility, which AI search can turn into a task). */
-export const WALNUT_SESSION_ENTRYPOINTS: ReadonlySet<string> = new Set(['sdk-cli', 'sdk-ts', 'walnut-utility']);
+/** The entrypoints a Walnut session writes: `claude -p --input-format stream-json` (sdk-cli), the SDK session server's (sdk-ts), Walnut's helper calls (walnut-utility, which AI search can turn into a task), and a session that named none (unknown). */
+export const WALNUT_SESSION_ENTRYPOINTS: ReadonlySet<string> = new Set(['sdk-cli', 'sdk-ts', 'walnut-utility', 'unknown']);
+/** What a transcript that never named its entrypoint (an older CLI, or one read to the limit) is called; it still counts as a session. */
+export const UNKNOWN_ENTRYPOINT = 'unknown';
 
 export interface ClaudeSessionMeta { sessionId: string; entrypoint: string; cwd: string }
 
@@ -122,7 +124,7 @@ export async function claudeSessionMetas(projectsDir: string, indexDir?: string)
         } catch { out.unreadable++; /* unreadable now: listed without an entrypoint, read again next time, and the pass says so */ }
       }
       if (hit) next[key] = hit;
-      out.set(sessionId, { sessionId, entrypoint: hit?.[0] ?? '', cwd: hit?.[1] ?? '' });
+      out.set(sessionId, { sessionId, entrypoint: hit?.length === 3 ? UNKNOWN_ENTRYPOINT : hit?.[0] ?? '', cwd: hit?.[1] ?? '' });
       if (++seen % YIELD_EVERY === 0) await setImmediate();
     }
   }

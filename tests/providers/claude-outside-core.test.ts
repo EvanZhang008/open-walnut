@@ -88,7 +88,7 @@ describe('claudeSessionMetas', () => {
     const target = path.join(root, 'p1/huge.jsonl');
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, JSON.stringify({ type: 'attachment', blob: 'x'.repeat(34_000_000) }) + '\n');
-    expect((await claudeSessionMetas(root, index)).get('huge')!.entrypoint).toBe('');
+    expect((await claudeSessionMetas(root, index)).get('huge')!.entrypoint).toBe('unknown');
     const cache = JSON.parse(await readFile(path.join(index, 'claude-session-meta.json'), 'utf8'));
     expect(cache['p1/huge.jsonl'][2]).toBeGreaterThan(32_000_000);
   });
@@ -105,6 +105,9 @@ describe('claudeSessionMetas', () => {
     const cache = JSON.parse(await readFile(path.join(index, 'claude-session-meta.json'), 'utf8'));
     expect(cache['p1/old.jsonl']).toEqual(['', '/work/marina', expect.any(Number)]);
     expect(cache['p1/fresh.jsonl']).toBeUndefined();
+    const metas = await claudeSessionMetas(root, index);
+    expect(outsideSessionIds(metas)).toContain('old'); // an older CLI named no entrypoint: its usage still counts
+    expect(outsideSessionIds(metas)).not.toContain('fresh'); // a session just begun waits for its entrypoint
   });
 
   it('counts a transcript whose head cannot be read, and the scan reports it as an unreadable file', async () => {
