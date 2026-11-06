@@ -28,7 +28,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-history-cach
 }))
 
 import { HISTORY_CACHE_DIR } from '../../src/constants.js'
-import { flushHistoryCacheWrites, readHistoryCache, writeHistoryCache } from '../../src/core/history-disk-cache.js'
+import { HISTORY_CACHE_SCHEMA, flushHistoryCacheWrites, readHistoryCache, writeHistoryCache } from '../../src/core/history-disk-cache.js'
 import type { SessionHistoryMessage } from '../../src/core/session-history.js'
 
 const SID = 'cache-schema-session'
@@ -83,7 +83,10 @@ describe('history disk cache: schema stamp', () => {
   })
 
   it('drops an entry stamped with any other version', async () => {
-    for (const schema of [1, 2, 3, 4, 5, 6, 7, 8, 10, '9', null]) {
+    // Every earlier version, the next one, the current one as a string, and none: derived from
+    // the writer's stamp, so a version bump keeps this list right by itself.
+    const earlier = Array.from({ length: HISTORY_CACHE_SCHEMA - 1 }, (_, i) => i + 1)
+    for (const schema of [...earlier, HISTORY_CACHE_SCHEMA + 1, String(HISTORY_CACHE_SCHEMA), null]) {
       await fs.writeFile(entryPath(), JSON.stringify({
         schema, messages: staleMessages(), cachedAt: 'then', mtimeMs: 5,
       }), 'utf-8')
