@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod'
+import { REVIEW_SCORE_INPUT } from './review-score-input.js'
 import { defineOp, type HttpBinding } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
@@ -1189,11 +1190,7 @@ defineOp({
     result: z.string().min(1).max(2000).optional().describe('One sentence: what came of the work'),
     evidence: z.union([z.string(), z.array(z.string())]).optional().describe('Paths or links that show the result (a list, or one per line)'),
     not_done: z.union([z.string(), z.array(z.string())]).optional().describe('What is NOT done or not verified (a list, or one per line). Non-empty = Partial'),
-    score: z.object({
-      function: z.number().min(0).max(10).optional().describe('Does it do what the user asked, correctly, out of 10'),
-      ux: z.number().min(0).max(10).optional().describe('How it feels to use, out of 10'),
-      ui: z.number().min(0).max(10).optional().describe('How it looks, out of 10'),
-    }).optional().describe('A reviewer closing its own review: the verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}, when its reply did not carry it'),
+    score: REVIEW_SCORE_INPUT.optional().describe('A reviewer closing its own review: the verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}, when its reply did not carry it (function: does it do what the user asked, correctly; ux: how it feels to use; ui: how it looks; or the text "8/7.5/9")'),
     force: z.boolean().optional().describe('Complete another task still in use (409 task_in_use), or a task whose items for the user were named by a 409 owed_to_user. Needs `reason`'),
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right although the task is in use, or how the user\'s items were handled'),
   },

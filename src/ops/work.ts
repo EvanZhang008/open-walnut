@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REVIEW_SCORE_INPUT } from './review-score-input.js';
 // Type-only: erased at compile time, so work.ts never depends on core.ts at load
 // time (the ops modules are imported in a fixed order by ./index.ts).
 import type { OpCall } from './core.js';
@@ -84,11 +85,7 @@ defineOp({
     result: z.string().min(1).max(2000).optional().describe('With in_reply_to: one sentence saying what came of the work'),
     evidence: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
     not_done: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: what is NOT done or not verified (a list, or one per line). Non-empty = the reply reads as Partial'),
-    score: z.object({
-      function: z.number().min(0).max(10).optional().describe('Does it do what the user asked, correctly, out of 10'),
-      ux: z.number().min(0).max(10).optional().describe('How it feels to use, out of 10'),
-      ui: z.number().min(0).max(10).optional().describe('How it looks, out of 10'),
-    }).optional().describe('With in_reply_to, answering a review request: your verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}. Usage & Costs compares the engines by it'),
+    score: REVIEW_SCORE_INPUT.optional().describe('With in_reply_to, answering a review request: your verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}. Usage & Costs compares the engines by it (function: does it do what the user asked, correctly; ux: how it feels to use; ui: how it looks; or the text "8/7.5/9")'),
   },
   bind: { method: 'POST', path: '/messages' },
   mapResult: ({ body, args }) => {

@@ -13,7 +13,7 @@
  * "review"); a task's review count is how many it had.
  */
 import type { SessionEngine, Task } from '../types.js';
-import { SCORE_DIMENSIONS, type ReviewScore, type TaskReviewScore } from '../peers/structured-reply.js';
+import { SCORE_DIMENSIONS, type ReviewScore } from '../peers/structured-reply.js';
 import { builderLabel, REVIEW_RE, splitBuilders } from '../agents/engine-split.js';
 import { resolveEngine } from '../agents/engine-registry.js';
 import type { CostRollup } from './cost-rollup.js';
@@ -199,6 +199,18 @@ function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
   return modelLineLabel(builderLabel({ engine: b.engine }), resolveEngine(b.engine), b.model);
 }
 
+/**
+ * The split's entries by key, named as the card shows them: an entry with no model, beside one of the
+ * same engine that names a model, says it runs the engine's default ("Claude Code · default model"
+ * beside "Claude Code · Sonnet"), so the two columns are told apart.
+ */
+function entryLabels(builders: ReadonlyArray<{ key: string; engine: SessionEngine; model?: string }>): Map<string, string> {
+  return new Map(builders.map((b) => {
+    const twin = !b.model && builders.some((o) => o.engine === b.engine && !!o.model);
+    return [b.key, `${entryLabelOf(b)}${twin ? ' · default model' : ''}`];
+  }));
+}
+
 type SessionFacts = CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R : never;
 
 /**
@@ -277,16 +289,20 @@ function firstStart(t: Task, sessions: CompareInput['sessions']): string | undef
   return firstWork ?? first;
 }
 
+/** One company's latest score on a task, part by part, with when each part was given. */
+type CompanyScore = ReviewScore & { at: Record<string, string> };
+
 /**
- * A task's verdict: each company's latest score, the lower on each dimension. Only companies that
- * scored all three make a full verdict; when none did, the parts are shown but marked partial, so
- * one company's function score and another's UX and UI never add up to a full one.
+ * A task's verdict: each company's latest score, the lower on each dimension, every company's
+ * parts counted (a dissent is never hidden). It is a full verdict only when some company scored
+ * all three; otherwise the parts are shown but marked partial, so one company's function score and
+ * another's UX and UI never add up to a full one.
  */
-function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { score?: ReviewScore; scoredBy?: number; scoredFamilies?: string[]; scorePartial?: boolean } {
+function verdictOf(byFam: ReadonlyMap<string, CompanyScore> | undefined): { score?: ReviewScore; scoredBy?: number; scoredFamilies?: string[]; scorePartial?: boolean } {
   if (!byFam?.size) return {};
   const full = (x: ReviewScore) => SCORE_DIMENSIONS.every((d) => typeof x[d] === 'number');
   const fullOnes = [...byFam].filter(([, x]) => full(x));
-  const used = fullOnes.length ? fullOnes : [...byFam];
+  const used = [...byFam];
   const score: ReviewScore = {};
   for (const d of SCORE_DIMENSIONS) {
     const vals = used.map(([, x]) => x[d]).filter((v): v is number => typeof v === 'number');
@@ -323,7 +339,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   // Tasks with a reviewer of a known company, verdict or not: whether another company checked them is known.
   const reviewKnownOf = new Set<string>();
   // Each company's latest reviewer score per task.
-  const scoresOf = new Map<string, Map<string, TaskReviewScore>>();
+  const scoresOf = new Map<string, Map<string, CompanyScore>>();
   for (const t of input.tasks) {
     if (!t.parent_task_id || !REVIEW_RE.test(t.title)) continue;
     const spend = input.spend.get(t.id);
@@ -349,8 +365,15 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       const byFam = scoresOf.get(t.parent_task_id)!;
       // A reviewer of no known company is a company of its own: two unknown reviewers are never one.
       const fk = rfam ?? `?${t.id}`;
-      const was = byFam.get(fk);
-      if (!was || (t.review_score.at ?? '') > (was.at ?? '')) byFam.set(fk, t.review_score);
+      // Within a company, each part's latest: a later UI-only score updates UI and keeps the rest.
+      const was: CompanyScore = byFam.get(fk) ?? { at: {} };
+      for (const d of SCORE_DIMENSIONS) {
+        const v = t.review_score[d];
+        if (typeof v !== 'number') continue;
+        const at = t.review_score.at ?? '';
+        if (was[d] === undefined || at > (was.at[d] ?? '')) { was[d] = v; was.at[d] = at; }
+      }
+      byFam.set(fk, was);
     }
     reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
     reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
@@ -359,7 +382,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   // A column: `key` names it; `familyKey` is the engine, model family and model line it belongs to (the All view's columns).
   type Group = { key: string; familyKey: string; engine: string; family: ModelFamily; label: string };
   type Candidate = EngineCompareTask & { byCost: Group; byPick: Group | null; everDone: boolean; notStarted: boolean; sortAt: string };
-  const entryLabel = new Map(splitBuilders(input.config).map((b) => [b.key, entryLabelOf(b)]));
+  const entryLabel = entryLabels(splitBuilders(input.config));
   const candidates: Candidate[] = [];
   for (const t of input.tasks) {
     // A reviewer subtask counts toward its parent; a top-level task titled "Review ..." is work of its own.
@@ -452,7 +475,9 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     if (lines?.size === 1) c.byCost = [...lines.values()][0];
     c.key = c.byCost.key;
   }
-  const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: entryLabelOf(b), weight: b.weight }));
+  const builders = splitBuilders(input.config);
+  const labels = entryLabels(builders);
+  const entries = builders.map((b) => ({ key: b.key, label: labels.get(b.key)!, weight: b.weight }));
   const splitOn = entries.length >= 2;
   const inProject = (c: Candidate) => input.project === undefined || c.project === input.project;
   const splitTasks = candidates.filter((c) => c.split && inProject(c)).length;

@@ -58,8 +58,11 @@ with a reviewer of a known company count, and none reads "-", never 0%), the rev
 kept on its task as `review_score`, also when the host answered or closed it while the server was
 away (the host journals it with the reply or the close); a score out of 0 to 10 is refused with 400, never dropped; per task,
 each company's latest score, the lower on each, a reviewer of no known company counting on its own,
-and only companies that scored all three making a full verdict (parts from two companies are shown as
-partial and left out of the medians); a text score needs exactly three valid parts;
+each company's parts its latest one by one, every company's parts counted (a lower part from
+another company still lowers the verdict), and a verdict full only when some company scored all
+three (parts from two companies alone are shown as partial and left out of the medians); the ops,
+the HTTP routes and the offline host read a score by one rule: keys in any case or the text "n/n/n",
+and an unknown key, an empty part or a part out of 0 to 10 is refused;
 per column, the median of each over the finished tasks scored on all three, with how many those are,
 ranked by the lowest of the three; the verdict says when too few are scored to rank;
 each task in the list shows its own and which companies gave it), the

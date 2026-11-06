@@ -234,7 +234,7 @@ describe('aggregateEngineCompare', () => {
 
   it('names split entries like the columns they land in', () => {
     const on = aggregateEngineCompare(input([], {}, { config: { defaults: { engine_split: ['claude', { engine: 'claude', model: 'gpt-6.1-sol' }] } } }));
-    expect(on.split.entries.map((e) => e.label)).toEqual(['Claude Code', 'Claude Code · GPT Sol']);
+    expect(on.split.entries.map((e) => e.label)).toEqual(['Claude Code · default model', 'Claude Code · GPT Sol']);
   });
 
   it('requests with no token counts make cost and tokens unknown, never a zero that wins', () => {
@@ -332,7 +332,7 @@ describe('round-7 counting', () => {
     const inp = input(tasks, { o: { costUsd: 1 }, s: { costUsd: 2, model: 'claude-sonnet-5-5' } }, cfg);
     const fair = aggregateEngineCompare({ ...inp, splitOnly: true });
     expect(fair.rows.map((r) => [r.key, r.label, r.done]).sort()).toEqual([
-      ['split:claude', 'Claude Code', 1], ['split:claude:sonnet', 'Claude Code · Sonnet', 1]]);
+      ['split:claude', 'Claude Code · default model', 1], ['split:claude:sonnet', 'Claude Code · Sonnet', 1]]);
     expect(fair.rows.every((r) => r.switched === 0)).toBe(true);
     expect(aggregateEngineCompare(inp).rows.map((r) => [r.key, r.label, r.done])).toEqual([['claude|Claude|Opus', 'Claude Code · Opus', 1], ['claude|Claude|Sonnet', 'Claude Code · Sonnet', 1]]);
   });
@@ -609,6 +609,14 @@ describe('taskSpend', () => {
   });
 });
 
+describe('split entry names', () => {
+  it('an entry with no model beside one of the same engine that names a model says it runs the default', () => {
+    const config = { defaults: { engine_split: ['claude', { engine: 'claude', model: 'claude-sonnet-5-5' }, 'codex'] } } as unknown as CompareInput['config'];
+    const out = aggregateEngineCompare(input([done('w1', 1)], { w1: { costUsd: 1 } }, { config }));
+    expect(out.split?.entries.map((e) => e.label)).toEqual(['Claude Code · default model', 'Claude Code · Sonnet', 'Codex']);
+  });
+});
+
 describe('final round', () => {
   const at = '2026-11-02T00:00:00.000Z';
   it('an entry naming a model line whose work ran on another known line moved; a plain entry or an alias did not', () => {
@@ -741,10 +749,21 @@ describe('reviewer scores', () => {
     const out = aggregateEngineCompare(input(tasks, Object.assign({ w1: { costUsd: 1 }, w2: { costUsd: 1 } }, ...rs.map((r) => r.spend))));
     const byId = Object.fromEntries(out.tasks.map((t) => [t.taskId, t]));
     expect(byId.w1).toMatchObject({ score: { function: 10, ux: 9, ui: 9 }, scorePartial: true });
-    // A full verdict from one company is the verdict; a part from another does not lower it.
-    expect(byId.w2).toMatchObject({ score: { function: 8, ux: 8, ui: 8 }, scoredFamilies: ['GPT'] });
+    // One company's full verdict makes it full; another company's lower part still counts (a dissent is never hidden).
+    expect(byId.w2).toMatchObject({ score: { function: 6, ux: 8, ui: 8 }, scoredFamilies: ['Claude', 'GPT'] });
     expect(byId.w2.scorePartial).toBeUndefined();
-    expect(out.rows[0]).toMatchObject({ scoredDone: 1, reviewScore: { function: 8, ux: 8, ui: 8 } });
+    expect(out.rows[0]).toMatchObject({ scoredDone: 1, reviewScore: { function: 6, ux: 8, ui: 8 } });
+  });
+
+  it('within a company each part keeps its latest: a later UI-only score updates UI and keeps the full verdict', () => {
+    const rs = [
+      reviewer('c1', 'w1', { function: 9, ux: 9, ui: 9 }, 1, 'claude-opus-5-5'),
+      reviewer('c2', 'w1', { ui: 6 }, 2, 'claude-opus-5-5'),
+    ];
+    const out = aggregateEngineCompare(input([done('w1', 1), ...rs.map((r) => r.t)], Object.assign({ w1: { costUsd: 1 } }, ...rs.map((r) => r.spend))));
+    const w1 = out.tasks.find((t) => t.taskId === 'w1')!;
+    expect(w1).toMatchObject({ score: { function: 9, ux: 9, ui: 6 }, scoredBy: 1 });
+    expect(w1.scorePartial).toBeUndefined();
   });
 
   it('no reviewer score anywhere reads none, never a zero', () => {
