@@ -139,6 +139,9 @@ test('search, favorites, trash and restore', async ({ page }) => {
 test('import a CSV after its dry run, and the security check finds the weak one', async ({ page }) => {
   await openPasswords(page)
   await unlockIfLocked(page)
+  // The section is a kept view (ui-prefs), and the last test's final click on All may not
+  // have reached the server before its context closed: start from All, as the search does.
+  await page.getByTestId('pw-section-all').click()
   await page.getByRole('button', { name: 'Import…' }).click()
   const dialog = page.getByTestId('pw-import')
   await dialog.getByTestId('pw-import-file').setInputFiles({
@@ -156,8 +159,11 @@ test('import a CSV after its dry run, and the security check finds the weak one'
   await page.getByLabel('Search passwords').fill('')
   await page.getByTestId('pw-section-security').click()
   const sec = page.getByTestId('pw-security')
-  await expect(sec).toContainText('Weak passwords')
-  await sec.getByRole('button', { name: new RegExp(`mail ${stamp}`) }).click()
+  // An item can be in more than one group (a retry's first import also used 123456, so
+  // this one is Reused too): open it from the Weak passwords card.
+  const weak = sec.locator('.pw-card').filter({ has: page.locator('.pw-card-label', { hasText: /^Weak passwords$/ }) })
+  await expect(weak).toBeVisible()
+  await weak.getByRole('button', { name: new RegExp(`mail ${stamp}`) }).click()
   await expect(page.getByTestId('pw-detail').getByRole('heading', { name: `mail ${stamp}` })).toBeVisible()
 })
 
