@@ -52,8 +52,8 @@ describe('Home board grouping', () => {
   });
 
   it('finds Unicode child titles and includes their leader as context, without duplicate cards', () => {
-    const rows = [task('parent-123', { pinned: true }), task('child', { title: `${String.fromCodePoint(0x9762, 0x8bd5)} practice`, pinned: true, parent_task_id: 'parent' })];
-    const column = buildHomeBoard(rows, [], 'pin', String.fromCodePoint(0x9762, 0x8bd5))[1];
+    const rows = [task('parent-123', { pinned: true }), task('child', { title: `${String.fromCodePoint(0x5199, 0x4f5c)} practice`, pinned: true, parent_task_id: 'parent' })];
+    const column = buildHomeBoard(rows, [], 'pin', String.fromCodePoint(0x5199, 0x4f5c))[1];
     expect(column.count).toBe(2);
     expect(boardFamilyIds(column.projects[0].families[0])).toEqual(['parent-123', 'child']);
   });
