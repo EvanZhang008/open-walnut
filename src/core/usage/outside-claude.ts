@@ -41,7 +41,7 @@ export function classifyClaudeOutside(opts: {
       owners.push({ sessionId: meta.sessionId, taskId: taskIdOfCwd(meta.cwd) });
     }
     // `stored`: the rows came from this pass, not from a Walnut session's record (an import's day cutoff ignores them).
-    origins.push({ host: home, sessionId: meta.sessionId, originator: meta.entrypoint, provider: '', cwd: meta.cwd, outside, stored: (keptStored && !(known && ownEntry)) || (outside && !known), firstAt: '', lastAt: '' });
+    origins.push({ host: home, sessionId: meta.sessionId, originator: meta.entrypoint, provider: '', cwd: meta.cwd, outside, stored: (keptStored && !(known && ownEntry)) || outside, firstAt: '', lastAt: '' });
   }
   rollup.recordOrigins(origins);
   return owners;

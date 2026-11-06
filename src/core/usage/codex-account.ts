@@ -33,3 +33,21 @@ export function directoryLabel(cwd: string): string {
   const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts.length ? parts.slice(-2).join('/') : 'Unknown folder';
 }
+
+/** Labels for a set of folders: the last two path parts, with more parts added to the ones that would read the same as another folder. */
+export function uniqueDirectoryLabels(cwds: Iterable<string>): (cwd: string) => string {
+  const parts = new Map<string, string[]>();
+  for (const cwd of cwds) parts.set(cwd, cwd.replace(/\\/g, '/').split('/').filter(Boolean));
+  const depth = new Map<string, number>([...parts.keys()].map(cwd => [cwd, 2]));
+  const label = (cwd: string) => { const p = parts.get(cwd) ?? []; return p.length ? p.slice(-(depth.get(cwd) ?? 2)).join('/') : 'Unknown folder'; };
+  for (let round = 0; round < 12; round++) {
+    const byLabel = new Map<string, string[]>();
+    for (const cwd of parts.keys()) byLabel.set(label(cwd), [...(byLabel.get(label(cwd)) ?? []), cwd]);
+    let grew = false;
+    for (const same of byLabel.values()) if (same.length > 1) for (const cwd of same) {
+      if ((depth.get(cwd) ?? 2) < (parts.get(cwd)?.length ?? 0)) { depth.set(cwd, (depth.get(cwd) ?? 2) + 1); grew = true; }
+    }
+    if (!grew) break;
+  }
+  return (cwd: string) => parts.has(cwd) ? label(cwd) : directoryLabel(cwd);
+}

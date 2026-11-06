@@ -22,7 +22,7 @@ import { DEFAULT_PRICING } from './pricing.js';
 import { priceBucket } from './session-cost-pricing.js';
 import type { SessionCostBucket } from '../../providers/session-cost-core.js';
 import { originKey, type CostRollup, type RunOrigin } from './cost-rollup.js';
-import { codexAccount, directoryLabel } from './codex-account.js';
+import { codexAccount, uniqueDirectoryLabels } from './codex-account.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { addPriced, emptyLine, GroupAcc, partsOf, REPORTED_KIND, sorted, TokenAcc, WORK_KINDS, workKindOf,
   type Priced, type Sums, type WorkKind } from './cost-report-parts.js';
@@ -363,17 +363,18 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     }
     const tasks = await deps.tasks([...perTask.values()].flatMap(t => t.taskId ? [t.taskId] : []));
     const byProject = group('project', 'By project');
+    const dirLabel = uniqueDirectoryLabels([...perTask.values()].flatMap(t => t.folder ? [t.folder.cwd] : []));
     const lines: CostTaskLine[] = [...perTask.values()].map(t => {
       const task = t.taskId ? tasks.get(t.taskId) : undefined;
       const session = !task && t.sessionId ? sessions.get(t.sessionId) : undefined;
       const project = task?.project ?? session?.project ?? '';
-      const title = oneLine(task?.title || session?.title || (t.folder ? `${originatorLabel(t.folder.originator)} in ${directoryLabel(t.folder.cwd)}`
+      const title = oneLine(task?.title || session?.title || (t.folder ? `${originatorLabel(t.folder.originator)} in ${dirLabel(t.folder.cwd)}`
         : t.taskId ? 'Removed task' : t.outside ? 'Session started outside Walnut' : 'Session without a task'));
       // A project and a routine are known only once the task is read, so their days come from the task's.
       for (const [date, rows] of t.days) {
         for (const { p, subagent, sessionId, outside } of rows) {
           // No project to put an outside run under: its folder stands in.
-          if (t.folder && !project) byProject.add(`dir:${t.folder.cwd}`, directoryLabel(t.folder.cwd), date, p);
+          if (t.folder && !project) byProject.add(`dir:${t.folder.cwd}`, dirLabel(t.folder.cwd), date, p);
           else byProject.add(project, project || 'Inbox', date, p);
           const kind: WorkKind = workKindOf({ subagent, routineTask: task?.routine, sessionType: sessions.get(sessionId)?.type, outside });
           byKind.add(kind, WORK_KINDS[kind], date, p);

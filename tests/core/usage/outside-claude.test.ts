@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ResponseUsageStore } from '../../../src/core/usage/response-store.js';
 import { buildCostReport, type CostReportDeps } from '../../../src/core/usage/cost-report.js';
+import { uniqueDirectoryLabels } from '../../../src/core/usage/codex-account.js';
 import { classifyClaudeOutside } from '../../../src/core/usage/outside-claude.js';
 import { priceThresholds, resetPriceBookForTests } from '../../../src/core/usage/price-book.js';
 import type { PriceSnapshot } from '../../../src/core/usage/price-data.js';
@@ -73,7 +74,7 @@ describe('Claude Code sessions outside Walnut', () => {
     expect(o('old-deleted')).toMatchObject({ outside: false });
     // A known session claude -p started is Walnut's own, so it needs no origin; a known terminal one was imported.
     expect(o('walnut-run')).toMatchObject({ outside: false });
-    expect(o('terminal-imported')).toMatchObject({ outside: true, stored: false, originator: 'cli' });
+    expect(o('terminal-imported')).toMatchObject({ outside: true, stored: true, originator: 'cli' });
   });
 
   it('the first look is kept: usage stored for the session afterwards does not turn it into Walnut\'s', async () => {
@@ -170,5 +171,14 @@ describe('days a bill brought in from outside covers', () => {
     const report = await buildCostReport('all', {}, deps());
     expect(report.totals.costUsd).toBeCloseTo(24, 9);
     expect(report.started.walnut.costUsd).toBeCloseTo(4, 9);
+  });
+});
+
+describe('folder labels for sessions outside Walnut', () => {
+  it('two different folders never read the same, and a lone folder keeps its two-part name', () => {
+    const label = uniqueDirectoryLabels(['/home/a/software/agent-orchestrator', '/home/b/software/agent-orchestrator', '/home/a/repo/marina']);
+    expect(label('/home/a/repo/marina')).toBe('repo/marina');
+    expect(label('/home/a/software/agent-orchestrator')).toBe('a/software/agent-orchestrator');
+    expect(label('/home/b/software/agent-orchestrator')).toBe('b/software/agent-orchestrator');
   });
 });
