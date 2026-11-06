@@ -8,7 +8,7 @@
  * a listed Walnut command (sessions/walnut-commands.ts) or the user's own hook or routine command;
  * each listed command, filed by the CLI the ways Claude Code files it (read at once under its uuid,
  * or queued first and filed under a fresh one), reads as Walnut's notice in both transcript
- * parsers and in the phone's queue strip.
+ * parsers, and no queue read a panel or the phone draws shows it.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -73,6 +73,27 @@ describe('the raw passes of the send framing', () => {
       "if (opts.callerSid?.trim()) return frameAsWalnut(text, 'task start');",
       'return frameForSource(text, opts.source);',
     ]);
+  });
+
+  it('every queue read a panel or the phone draws goes through the same filter', () => {
+    // The web routes and the phone's queue payload: a reloaded panel draws each queue row as a bubble.
+    const files: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(path.join(ROOT, d), { withFileTypes: true })) {
+        const rel = path.join(d, e.name);
+        if (e.isDirectory()) walk(rel);
+        else if (/\.tsx?$/.test(e.name)) files.push(rel);
+      }
+    };
+    walk('src/web');
+    files.push('src/core/sessions/session-extras.ts');
+    const readers = files.filter((f) => /\bgetQueue\(/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')));
+    expect(readers.sort()).toEqual(['src/core/sessions/session-extras.ts', 'src/web/routes/session-chat.ts']);
+    for (const f of readers) {
+      for (const line of fs.readFileSync(path.join(ROOT, f), 'utf8').split('\n').filter((l) => /\bgetQueue\(/.test(l))) {
+        expect(line, f).toMatch(/withoutWalnutRows\(await getQueue\(/);
+      }
+    }
   });
 
   it('the phone\'s queue strip shows none of Walnut\'s quiet commands, and every message of the person\'s', async () => {

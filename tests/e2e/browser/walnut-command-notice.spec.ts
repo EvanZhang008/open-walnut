@@ -13,7 +13,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test'
 
 const SHOTS = process.env.WALNUT_COMMAND_SHOTS ?? '/tmp/walnut-command-notice'
-const NOTICE = 'Walnut sent /compact because the conversation no longer fit the model’s context window'
+const NOTICE = 'Walnut compacted this conversation because it no longer fit the model\'s context window'
 
 test.use({ viewport: { width: 1280, height: 860 }, video: process.env.WALNUT_COMMAND_VIDEO ? { mode: 'on', size: { width: 1280, height: 860 } } : 'off' })
 test.describe.configure({ timeout: 120_000 })
@@ -81,8 +81,14 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   const composer = panel.locator('.session-panel-input textarea')
   await composer.fill('hi, where does the review stand?')
   await composer.press('Enter')
+  await expect(panel.getByText('Walnut is compacting this conversation so it fits again')).toBeVisible({ timeout: 20_000 })
   await expect.poll(async () => (await record(request, sid)).contextRecovery?.state, { timeout: 45_000 }).toBe('done')
   await expect.poll(async () => (await record(request, sid)).process_status, { timeout: 30_000 }).not.toBe('running')
+
+  // Live, while it ran: the working line said which compaction, and no /compact bubble came.
+  await expect(history.locator('.session-msg-user', { hasText: '/compact' })).toHaveCount(0)
+  await expect(history.locator('.session-msg-user', { hasText: 'hi, where does the review stand?' })).toHaveCount(1)
+  await panel.screenshot({ path: `${SHOTS}/${info.project.name}-live.png` })
 
   // Read back as a fresh page would: the transcript, not the live stream.
   await page.reload()
@@ -101,6 +107,8 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   await expect(history.getByText('hi, where does the review stand?').first()).toBeVisible()
   await expect(history.locator('.session-msg-user', { hasText: '/compact' })).toHaveCount(0)
   await expect(history).not.toContainText('Walnut started this compaction')
+  // The user's own message stays his bubble, once, after the reload as before it.
+  await expect(history.locator('.session-msg-user', { hasText: 'hi, where does the review stand?' })).toHaveCount(1)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-notice.png` })
   expect(errors).toEqual([])
 })

@@ -130,9 +130,10 @@ function defaultDeps(): ContextFullRecoveryDeps {
         ['main-ai'], { source: CONTEXT_COMPACT_SOURCE, urgency: 'urgent' });
     },
     announce: (sessionId, active) => {
-      // The idle compaction's event: the panels already say "Walnut is compacting" on it.
+      // The idle compaction's event: the panels say "Walnut is compacting" on it, and `reason` says
+      // this one is for a conversation that no longer fits (an older page reads it as idle).
       void import('./idle-compaction.js').then(({ IDLE_COMPACTION_EVENT }) =>
-        import('../../web/ws/handler.js').then(({ broadcastEvent }) => broadcastEvent(IDLE_COMPACTION_EVENT, { sessionId, active })))
+        import('../../web/ws/handler.js').then(({ broadcastEvent }) => broadcastEvent(IDLE_COMPACTION_EVENT, { sessionId, active, reason: 'context' })))
         .catch(() => {});
     },
     announceState: (sessionId, state) => {

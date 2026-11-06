@@ -1243,9 +1243,11 @@ if (outputFormat === 'stream-json') {
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
       emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
       setTimeout(() => {
-        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, isApiErrorMessage: true, error: 'invalid_request',
-          message: { id: `msg_ptl_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence',
-            content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+        const refused = { id: `msg_ptl_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence',
+          content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } };
+        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, isApiErrorMessage: true, error: 'invalid_request', message: refused });
+        // The real CLI files the refused line and its error in the transcript (2026-11-05, a real one).
+        persistMockTurn(sid, effectiveMessage, { message: refused }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
         emit({ type: 'result', subtype: 'success', is_error: true, duration_ms: 60, num_turns: 1, result: 'Prompt is too long', session_id: sid,
           total_cost_usd: nextSnapshotCost(0.0001), usage: { input_tokens: 0, output_tokens: 0 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });

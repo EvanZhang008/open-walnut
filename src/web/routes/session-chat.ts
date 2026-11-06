@@ -477,7 +477,10 @@ export function registerSessionChatRpc(): void {
     // write failed) is stale until the next attempt releases it, so it says nothing.
     const held = heldRows(data.sessionId)
     const { presentAfterTurn } = await import('../../core/sessions/queue-after-turn.js')
-    const messages = (await getQueue(data.sessionId)).map(presentAfterTurn).map((m) => {
+    // Walnut's own quiet commands (its /compact) are no message of the person's: a reloaded panel
+    // would draw one as his bubble (sessions/walnut-commands.ts).
+    const { withoutWalnutRows } = await import('../../core/sessions/session-extras.js')
+    const messages = (await withoutWalnutRows(await getQueue(data.sessionId))).map(presentAfterTurn).map((m) => {
       const why = held?.get(m.id)
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
       return holds ? { ...m, heldReason: why } : m

@@ -57,22 +57,30 @@ export const IDLE_COMPACTING_TEXT = 'Walnut is compacting this idle session\u202
  * ends (session:idle-compaction), and the turn's result ends it here too.
  */
 export function useIdleCompacting(sessionId: string | null | undefined): boolean {
-  const [on, setOn] = useState(false);
-  useEffect(() => { setOn(false); }, [sessionId]);
+  return useWalnutCompacting(sessionId) !== null;
+}
+
+/** The working line while Walnut compacts a conversation that no longer fits (the same event, `reason: 'context'`). */
+export const CONTEXT_COMPACTING_TEXT = 'Walnut is compacting this conversation so it fits again\u2026';
+
+/** Which of Walnut's own compactions runs in the session now, if one does: the working line says which. */
+export function useWalnutCompacting(sessionId: string | null | undefined): 'idle' | 'context' | null {
+  const [on, setOn] = useState<'idle' | 'context' | null>(null);
+  useEffect(() => { setOn(null); }, [sessionId]);
   useEvent('session:idle-compaction', useCallback((data: unknown) => {
-    const d = data as { sessionId?: string; active?: boolean };
-    if (sessionId && d.sessionId === sessionId) setOn(d.active === true);
+    const d = data as { sessionId?: string; active?: boolean; reason?: string };
+    if (sessionId && d.sessionId === sessionId) setOn(d.active === true ? (d.reason === 'context' ? 'context' : 'idle') : null);
   }, [sessionId]));
   // Its result ends it; so does the CLI failing or ending before one.
   const ended = useCallback((data: unknown) => {
-    if (sessionId && (data as { sessionId?: string })?.sessionId === sessionId) setOn(false);
+    if (sessionId && (data as { sessionId?: string })?.sessionId === sessionId) setOn(null);
   }, [sessionId]);
   useEvent('session:result', ended);
   useEvent('session:error', ended);
   // A reconnect may have missed the result: the composer goes back to the turn's own Stop rather
   // than hide it for the rest of a turn the user started.
   useEffect(() => {
-    const onState = (state: ConnectionState) => { if (state === 'connected') setOn(false); };
+    const onState = (state: ConnectionState) => { if (state === 'connected') setOn(null); };
     wsClient.onConnectionChange(onState);
     return () => wsClient.offConnectionChange(onState);
   }, []);

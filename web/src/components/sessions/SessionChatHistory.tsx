@@ -27,7 +27,7 @@ import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, Stre
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
-import { IDLE_COMPACTING_TEXT, useIdleCompacting } from './CompactContext';
+import { CONTEXT_COMPACTING_TEXT, IDLE_COMPACTING_TEXT, useWalnutCompacting } from './CompactContext';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { isWalnutCommandNotice } from '../../../../src/core/sessions/walnut-commands';
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
@@ -616,7 +616,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // the catalog, so a newly registered engine names itself in the transcript.
   const engineCatalog = useEngineCatalog();
   const assistantLabel = engineCaps(engine, engineCatalog).displayName;
-  const idleCompacting = useIdleCompacting(sessionId);
+  const walnutCompacting = useWalnutCompacting(sessionId);
   // Turn watermark: history length when the CURRENT turn started streaming.
   // Content matching (id-less blocks + bubble text fallback) only trusts
   // messages[watermark..] — identical short texts recur across turns, and the
@@ -5429,8 +5429,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             label={assistantLabel}
             {...(workingText ? { text: workingText } : {})}
             tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
-            {...(idleCompacting
-              ? { text: IDLE_COMPACTING_TEXT }
+            {...(walnutCompacting
+              ? { text: walnutCompacting === 'context' ? CONTEXT_COMPACTING_TEXT : IDLE_COMPACTING_TEXT }
               // A compaction's progress row is open: the line says the same, not "is working".
               : blocks.some((b) => b.type === 'system' && b.variant === 'compact' && b.progress === true)
                 ? { text: `${assistantLabel} is compacting the context\u2026` }

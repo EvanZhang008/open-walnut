@@ -28,7 +28,7 @@ export const IDLE_COMPACT_COMMAND = `/compact ${WALNUT_COMMAND_MARK} while the s
 export const CONTEXT_COMPACT_COMMAND = `/compact ${WALNUT_COMMAND_MARK} because the conversation no longer fit the model's context window. Summarize as usual.`;
 
 /** The history row that stands for the recovery's command line. */
-export const CONTEXT_COMPACT_HISTORY_TEXT = 'Walnut sent /compact because the conversation no longer fit the model’s context window ("Prompt is too long"); what got no answer goes again after it.';
+export const CONTEXT_COMPACT_HISTORY_TEXT = 'Walnut compacted this conversation because it no longer fit the model\'s context window ("Prompt is too long").';
 /** A Walnut command line whose wording this release does not know (an older or newer Walnut wrote it). */
 export const WALNUT_COMMAND_HISTORY_TEXT = 'Walnut sent /compact to compact this session.';
 
