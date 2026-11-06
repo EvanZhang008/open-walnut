@@ -12,8 +12,7 @@
 .idle-compact-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
 .idle-compact-body {
   margin: 2px 0 6px;
-  padding: 8px 10px;
-  border-left: 2px solid var(--border);
+  padding: 6px 0 6px 2px;
   font-size: 12px;
   line-height: 1.45;
   color: var(--fg);
@@ -24,14 +23,14 @@
 .idle-compact-why { color: var(--fg-muted); font-weight: 400; }
 .idle-compact-setting { display: flex; flex-direction: column; gap: 4px; }
 .idle-compact-setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.idle-compact-setting-row label { font-weight: 500; cursor: pointer; }
+.idle-compact-setting-row label { font-weight: 400; color: var(--fg-muted); cursor: pointer; }
 .idle-compact-setting-at, .idle-compact-setting-unit { color: var(--fg-muted); }
 /* The share and its % never split across lines. */
-.idle-compact-percent-group { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+.idle-compact-percent-group { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .idle-compact-percent {
   width: 2.9em;
   padding: 2px 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   background: var(--bg);
   color: var(--fg);

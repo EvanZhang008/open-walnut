@@ -247,12 +247,17 @@ test('the idle compaction row says why it ran and changes its setting in place',
     "Why: 400K tokens, past 85% (383K) of the model's 450K context window (no auto-compaction window is set).", { timeout: 15_000 })
   const pct = line.getByTestId('idle-compact-percent')
   await expect(pct).toHaveValue('85')
-  // Out of range: said so, nothing saved.
+  // Out of range: kept to the nearest end, as Settings keeps it, and said so.
   await pct.fill('120')
   await pct.press('Enter')
-  await expect(line.locator('.idle-compact-error')).toContainText('50% to 99%; it stays at 85%')
-  await expect(pct).toHaveValue('85')
-  expect((await idleCompactionConfig(request))?.limit_percent ?? null).toBe(null)
+  await expect(pct).toHaveValue('99')
+  await expect(line.getByRole('status').filter({ hasText: 'set to 99%' })).toBeVisible()
+  await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(99)
+  // Not a number: said so, and the box shows the share in force again; nothing saved.
+  await pct.fill('abc')
+  await pct.press('Enter')
+  await expect(line.locator('.idle-compact-error')).toContainText('50% to 99%; it stays at 99%')
+  await expect(pct).toHaveValue('99')
   await pct.fill('90')
   await pct.press('Enter')
   await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(90)

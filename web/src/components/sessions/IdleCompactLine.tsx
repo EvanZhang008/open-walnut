@@ -49,12 +49,16 @@ export function IdleCompactSetting() {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const load = useCallback((fresh = false) => {
     (fresh ? fetchFreshConfig() : fetchConfig()).then((c) => {
       const s = settingOf(c);
       setSetting(s);
       setDraft(String(s.percent));
+      // What it says is about the setting as it was: a change made elsewhere clears it.
+      setError(null);
+      setNote(null);
     }).catch(() => setError('Could not read the setting.'));
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -86,13 +90,15 @@ export function IdleCompactSetting() {
     const n = Number(draft.trim());
     const { min, max } = IDLE_COMPACT_LIMIT_PERCENT_RANGE;
     if (draft.trim() === '') { setDraft(String(setting.percent)); return; }
-    // Out of range: said so, and the box shows the share in force again (what it shows is what runs).
-    if (!Number.isFinite(n) || n < min || n > max) {
+    // Not a number: said so, and the box shows the share in force again (what it shows is what runs).
+    if (!Number.isFinite(n)) {
       setError(`Use a share from ${min}% to ${max}%; it stays at ${setting.percent}%.`);
       setDraft(String(setting.percent));
       return;
     }
-    const percent = Math.round(n);
+    // Out of range: kept to the nearest end, as Settings keeps it, and said so.
+    const percent = Math.min(max, Math.max(min, Math.round(n)));
+    setNote(percent !== Math.round(n) ? `Shares run from ${min}% to ${max}%: set to ${percent}%.` : null);
     setDraft(String(percent));
     if (percent !== setting.percent) void save({ limit_percent: percent });
   };
@@ -118,7 +124,7 @@ export function IdleCompactSetting() {
           inputMode="numeric"
           value={draft}
           disabled={!setting.enabled}
-          onChange={(e) => { setDraft(e.target.value); setError(null); }}
+          onChange={(e) => { setDraft(e.target.value); setError(null); setNote(null); }}
           onBlur={commitPercent}
           onKeyDown={onKey}
         />
@@ -132,6 +138,7 @@ export function IdleCompactSetting() {
         <Link to="/settings#sessions">All session settings</Link>
       </div>
       {error && <div className="idle-compact-error" role="alert">{error}</div>}
+      {note && !error && <div className="idle-compact-setting-help" role="status">{note}</div>}
     </div>
   );
 }
