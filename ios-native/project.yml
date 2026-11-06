@@ -39,8 +39,8 @@ targets:
       path: Walnut/Support/Info.plist
       properties:
         CFBundleDisplayName: Walnut
-        CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "157"
+        CFBundleShortVersionString: "1.0.1"
+        CFBundleVersion: "158"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
