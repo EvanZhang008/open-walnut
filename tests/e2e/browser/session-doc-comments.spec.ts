@@ -553,6 +553,30 @@ test.describe('Doc comments: at their words, in their sidecar, to the AI with th
     await expectInPlace(view, card, source, 'until done')
     await shot(view, '07-preview-comment-in-source')
 
+    // The open card moves with its words in the scroll's own event, and a pointer
+    // moving right after a scroll (before its event comes) moves it first: a press
+    // right after a scroll lands on the lines, never on the card that was there
+    // (2026-11-06: a drag after a scroll began on the old card).
+    const lag = await view.locator('.cm-scroller').evaluate((scroller) => new Promise<number[]>((resolve) => {
+      const card = document.querySelector<HTMLElement>('[data-testid="doc-comment-card"].is-current')!
+      const off = (top0: number, from: number) => (card.closest<HTMLElement>('.doc-comment-slot')!.style.visibility === 'hidden'
+        ? 0 : Math.abs(top0 - (scroller.scrollTop - from) - card.getBoundingClientRect().top))
+      const top0 = card.getBoundingClientRect().top
+      const from = scroller.scrollTop
+      scroller.addEventListener('scroll', () => {
+        const inEvent = off(top0, from)
+        const top1 = card.getBoundingClientRect().top
+        const from1 = scroller.scrollTop
+        scroller.scrollTop -= 60
+        const line = scroller.querySelector('.cm-line')!.getBoundingClientRect()
+        scroller.querySelector('.cm-content')!.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: line.left + 4, clientY: line.top + 4 }))
+        resolve([inEvent, off(top1, from1)])
+      }, { once: true })
+      scroller.scrollTop += 120
+    }))
+    expect(lag[0], 'the card moved with the scroll in its own event').toBeLessThan(2)
+    expect(lag[1], 'a pointer move after a scroll moved the card before its event').toBeLessThan(2)
+
     // A comment made in the source, on markup: seen in the preview on the rendered words.
     await scrollSourceTo(view, 'warning.')
     await dragBetween(page, source, 'rb verify', 'warning.')

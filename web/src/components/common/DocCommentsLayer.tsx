@@ -295,9 +295,23 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     // The text reflows inside an unchanged box (a wrap, an image that loads).
     const b = bodyOf(root);
     if (b) ro?.observe(b);
-    const onScroll = () => later(false);
+    // A card is never left over lines that scrolled under it, where it takes the
+    // press meant for them (2026-11-06: a drag started right after a scroll in the
+    // source began on the old comment's card, which stayed put for 300ms while a
+    // busy WebKit held the scroll's event and the frame back). A scroll re-places
+    // the cards in its own event, not a frame later; a pointer moving over the doc
+    // re-places them before its press can land, whenever the scroll event comes.
+    // A relocate still waits for the frame.
+    const onScroll = () => placeRef.current();
+    const onResize = () => later(false);
+    const onPointer = (e: Event) => {
+      if (!cardEls.current.size) return;
+      const t = e.target as Node | null;
+      if (t && (root.contains(t) || t.ownerDocument !== document)) placeRef.current();
+    };
     document.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onScroll);
+    document.addEventListener('pointermove', onPointer, true);
+    window.addEventListener('resize', onResize);
     // The HTML preview: its page changes, scrolls and resizes in its own document,
     // which is replaced on every load.
     const frame = inFrame ? frameRef.current : null;
@@ -316,6 +330,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       fmo?.disconnect();
       fro?.disconnect();
       fdoc?.removeEventListener('scroll', onScroll, true);
+      fdoc?.removeEventListener('pointermove', onPointer, true);
       fwin?.removeEventListener('resize', onFrameChange);
       fwin?.removeEventListener('keydown', onFrameKey);
       fmo = null; fro = null; fdoc = null; fwin = null;
@@ -333,6 +348,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       fro = FrameRO ? new FrameRO(onFrameChange) : null;
       fro?.observe(fdoc.body);
       fdoc.addEventListener('scroll', onScroll, { capture: true, passive: true });
+      fdoc.addEventListener('pointermove', onPointer, { capture: true, passive: true });
       fwin?.addEventListener('resize', onFrameChange);
       later(true);
     };
@@ -345,7 +361,8 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       mo.disconnect();
       ro?.disconnect();
       document.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onScroll);
+      document.removeEventListener('pointermove', onPointer, true);
+      window.removeEventListener('resize', onResize);
       frame?.removeEventListener('load', attachFrame);
       detachFrame();
       if (raf) cancelAnimationFrame(raf);
