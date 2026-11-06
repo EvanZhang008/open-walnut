@@ -28,6 +28,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { openTaskOnHome } from '@/utils/open-session';
+import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
@@ -95,11 +96,11 @@ function AskerLink({ a, label }: { a: Approval; label: string }) {
   const openAsker = useOpenAsker();
   const id = a.requester.taskId!;
   return (
-    <a className="task-link approval-task-link" data-task-id={id} data-testid="approval-task-link" href={`/tasks/${id}`} title="Open the task that asked"
+    <a className="task-link approval-task-link" data-task-id={id} data-testid="approval-task-link" href={taskPath(id)} title="Open the task that asked"
       onClick={(e) => {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault(); e.stopPropagation(); openAsker(a);
-      }}>{label}<span className="approval-task-link-go" aria-hidden="true"> ↗</span></a>
+      }}><span className="approval-task-link-label">{label}</span><span className="approval-task-link-go" aria-hidden="true">&nbsp;↗</span></a>
   );
 }
 
@@ -154,7 +155,9 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
         ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
         : <div className="approval-what">{a.what}</div>}
       <div className="approval-who">
-        <span className="approval-who-text">{asker ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} /> on {hostName}</> : requesterText(a, hostName)}</span>
+        <span className="approval-who-text">{asker
+          ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} /><span className="approval-who-host">on {hostName}</span></>
+          : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
         {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
       </div>
       {a.detail ? (
@@ -421,7 +424,7 @@ export function ApprovalPrompts() {
                       ? <span className="approval-line-more">{waiting.length} waiting</span>
                       : <button type="button" className="approval-line-more" data-testid="approval-count" title={`See all ${waiting.length} approvals waiting`} onClick={() => openApproval(card.id)}>{waiting.length} waiting</button>)}
                     {/* Who asks stays in sight beside the buttons: nothing is approved on a title alone. */}
-                    <span className="approval-line-who" title={requesterText(card, cardHost)}>
+                    <span className={`approval-line-who${card.requester.taskId && !phone ? ' approval-line-who-link' : ''}`} title={requesterText(card, cardHost)}>
                       {card.requester.taskId && !phone ? <AskerLink a={card} label={shortRequester(card)} /> : shortRequester(card)}
                     </span>
                     <Clock a={card} now={now} />

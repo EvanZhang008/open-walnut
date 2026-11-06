@@ -365,7 +365,16 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await expect(card3).toBeVisible({ timeout: 15_000 })
   await card3.getByTestId('approval-minimize').click()
   await expect(card3).toHaveClass(/approval-card-line/)
-  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(64)
+  // Two lines where they fit; in this narrow column (Settings' nav) the buttons take a third line
+  // rather than sit over the time (2026-11-06: "9:56 le" cut under Deny in the Org list).
+  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(90)
+  expect(await card3.evaluate((el) => {
+    const c = el.querySelector('.approval-clock')!.getBoundingClientRect()
+    return [...el.querySelectorAll('.approval-actions .approval-btn')].every((b) => {
+      const r = b.getBoundingClientRect()
+      return r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom
+    })
+  })).toBe(true)
   // Its "+" shows the whole card again; "–" puts it down once more.
   await card3.getByTestId('approval-expand').click()
   await expect(card3).not.toHaveClass(/approval-card-line/)
@@ -406,7 +415,16 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await expect(card3.getByTestId('approval-count')).toHaveCount(0, { timeout: 15_000 })
   await page.setViewportSize({ width: 390, height: 844 })
   // On the phone: two short lines that open the request (its buttons are in the dialog).
-  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(64)
+  // Two lines where they fit; in this narrow column (Settings' nav) the buttons take a third line
+  // rather than sit over the time (2026-11-06: "9:56 le" cut under Deny in the Org list).
+  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(90)
+  expect(await card3.evaluate((el) => {
+    const c = el.querySelector('.approval-clock')!.getBoundingClientRect()
+    return [...el.querySelectorAll('.approval-actions .approval-btn')].every((b) => {
+      const r = b.getBoundingClientRect()
+      return r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom
+    })
+  })).toBe(true)
   await expect(card3.getByRole('button', { name: 'Deny' })).toHaveCount(0)
   await expect(card3.getByText('Approve?')).toBeVisible()
   // It sits at the bottom of the screen, as on a computer: the bar's search and buttons stay clear.

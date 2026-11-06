@@ -19,7 +19,9 @@ html .open-walnut-fullscreen.is-changed-open {
   --fullscreen-side: max(var(--fullscreen-gutter), min(calc(var(--fullscreen-area) * 0.1), calc((var(--fullscreen-area) - 960px) / 2)));
   top: var(--fullscreen-gutter);
   bottom: var(--fullscreen-gutter);
-  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-side));
+  /* A corner notice reaching past the backdrop moves the sheet's left edge past it
+     (--corner-sheet-inset, corner-stack.tsx), so the whole sheet keeps one left line. */
+  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-side) + var(--corner-sheet-inset, 0px));
   right: var(--fullscreen-side);
   width: auto;
   height: auto;

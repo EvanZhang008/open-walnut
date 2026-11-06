@@ -300,9 +300,13 @@ for (const size of [{ width: 1512, height: 900 }, { width: 2200, height: 1100 }]
         if (over) fails.push(`stack r${Math.round(stack.right)} over the composer's ${el.tagName.toLowerCase()} at x${Math.round(r.left)}`)
       }
       if (stack.right - sheet.left > 16 && sheet.left - side - 32 >= 220) fails.push(`stack r${Math.round(stack.right)} past the sheet x${Math.round(sheet.left)} with room beside it`)
-      // The sheet's chat makes room too: its lines start past the corner.
+      // The sheet itself moves past the corner, so it is never under it, and its header, chat and
+      // composer keep one left line (2026-11-06 review: the header stayed put while the chat moved).
+      if (stack.right > sheet.left) fails.push(`stack r${Math.round(stack.right)} over the sheet x${Math.round(sheet.left)}`)
       const chat = document.querySelector('.open-walnut-fullscreen .session-history')?.getBoundingClientRect()
       if (chat && chat.left < stack.right && chat.bottom > stack.top) fails.push(`the sheet's chat at x${Math.round(chat.left)} under the stack r${Math.round(stack.right)}`)
+      const head = document.querySelector('.open-walnut-fullscreen .session-panel-header')?.getBoundingClientRect()
+      if (head && Math.abs(head.left - sheet.left) > 1) fails.push(`the sheet's header at x${Math.round(head.left)}, the sheet at x${Math.round(sheet.left)}`)
       if (stack.width < 219) fails.push(`stack only ${Math.round(stack.width)}px wide`)
       return fails.join('; ') || 'beside the sidebar'
     })).toBe('beside the sidebar')
@@ -334,6 +338,12 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
   await expect(card).toBeVisible({ timeout: 15_000 })
   const link = card.getByTestId('approval-task-link')
   await expect(link).toContainText(made.approval.requester.taskTitle!)
+  // A long name is cut inside the link: its ↗ stays in sight (2026-11-06 review: "fixture task ↗…").
+  expect(await link.evaluate((el) => {
+    const go = el.querySelector('.approval-task-link-go')!.getBoundingClientRect()
+    const card = el.closest('[data-testid="approval-card"]')!.getBoundingClientRect()
+    return go.width > 0 && go.right <= card.right - 8
+  })).toBe(true)
   await page.waitForTimeout(1_000) // its buttons take a click 700ms after it shows
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-jump-before.png` })
   const asker = page.locator('.main-page-session-column .session-panel[data-session-id="pw-provenance-session"]')
@@ -352,6 +362,12 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
       const list = n.closest('.main-page-todo')!.getBoundingClientRect()
       return r.height > 0 && r.top >= list.top && r.bottom <= list.bottom
     }), { timeout: 10_000 }).toBe(true)
+    // ...and not behind the corner's card (2026-11-06 review: the focused row sat under it).
+    await expect.poll(() => row.evaluate((n) => {
+      const r = n.getBoundingClientRect()
+      const c = document.querySelector('.corner-stack')!.getBoundingClientRect()
+      return c.height === 0 || r.bottom <= c.top || r.left >= c.right || r.right <= c.left
+    }), { timeout: 10_000 }).toBe(true)
   }
   // The title opens the whole request; its task name there is a link too.
   await card.getByTestId('approval-what').click()
@@ -366,6 +382,22 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
   await page.getByTestId('sidebar-org').click()
   await expect.poll(() => new URL(page.url()).pathname).toBe('/org')
   await expect(card).toBeVisible()
+  await page.waitForTimeout(1_000)
+  // In the Org list's narrow column the time and the task name keep their room: the buttons wrap
+  // under them (2026-11-06: "9:56 le" cut under Deny).
+  expect(await card.evaluate((el) => {
+    const box = el.getBoundingClientRect()
+    const clock = el.querySelector('.approval-line-meta .approval-clock') ?? el.querySelector('.approval-clock')!
+    const c = clock.getBoundingClientRect()
+    const btns = [...el.querySelectorAll('.approval-actions .approval-btn')].map((b) => b.getBoundingClientRect())
+    const fails: string[] = []
+    if (c.right > box.right - 4) fails.push(`clock r${Math.round(c.right)} past the card r${Math.round(box.right)}`)
+    for (const b of btns) if (b.left < c.right && b.right > c.left && b.top < c.bottom && b.bottom > c.top) fails.push('a button over the clock')
+    const go = el.querySelector('.approval-task-link-go')?.getBoundingClientRect()
+    if (go && (go.width === 0 || go.right > box.right - 4)) fails.push('the task link arrow out of sight')
+    return fails.join('; ') || 'fits'
+  })).toBe('fits')
+  await page.screenshot({ path: `${SHOTS}/${info.project.name}-jump-org.png` })
   await card.getByTestId('approval-task-link').click()
   await expect.poll(() => new URL(page.url()).pathname).toBe('/')
   await landed()

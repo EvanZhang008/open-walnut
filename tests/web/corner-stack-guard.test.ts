@@ -198,7 +198,10 @@ describe('one corner for every notice', () => {
     expect(src).not.toMatch(/floor = Math\.max\(0, Math\.round\(window\.innerHeight - b\.bottom\)\)/);
     // A narrow strip beside the sheet: the sheet's content makes room, the corner keeps a readable width.
     expect(src).toMatch(/width = Math\.min\(width, Math\.max\(MIN_BESIDE_SHEET_PX, strip\)\)/);
-    expect(read('web/src/styles/corner-stack.css')).toMatch(/\.open-walnut-fullscreen \{ padding-left: var\(--corner-sheet-inset, 0px\); \}/);
+    // ...by moving the whole sheet's left edge, header included, measured from its edge with no inset.
+    expect(read('web/src/styles/fullscreen-tab.css')).toMatch(/left: calc\(var\(--fullscreen-left, 0px\) \+ var\(--fullscreen-side\) \+ var\(--corner-sheet-inset, 0px\)\);/);
+    expect(read('web/src/styles/corner-stack.css')).not.toMatch(/padding-left: var\(--corner-sheet-inset/);
+    expect(src).not.toMatch(/sheet\.getBoundingClientRect\(\)\.left\) - left - 16/);
     const layer = (file: string, sel: string) => Number(/z-index:\s*(\d+)/.exec(cssRules(file).find((r) => r.selector === sel)!.body)![1]);
     expect(layer('web/src/styles/corner-stack.css', '.corner-stack')).toBeGreaterThan(layer('web/src/styles/globals.css', '.open-walnut-fullscreen'));
     expect(layer('web/src/styles/corner-stack.css', '.corner-stack')).toBeGreaterThan(layer('web/src/styles/globals.css', '.open-walnut-fullscreen-backdrop'));

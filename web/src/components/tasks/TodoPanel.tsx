@@ -2814,15 +2814,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, [flashCard]);
 
-  /** scrollIntoView({block:'nearest'}) that also counts a card under the stuck headings as out of
-   *  view. The card's scroll margin is how much they cover; Chromium ignores it for a card that is
-   *  already on screen, and would leave it hidden under them. */
+  /** scrollIntoView({block:'nearest'}) that also counts a card under the stuck headings, or under
+   *  the corner's notices at the bottom (the list's scroll padding, corner-stack.css), as out of
+   *  view. The card's scroll margin is how much the headings cover; Chromium ignores it for a card
+   *  that is already on screen, and would leave it hidden under them. */
   const revealBelowHeadings = useCallback((el: Element) => {
     const covered = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
     let scroller = el.parentElement;
     while (scroller && !(/(auto|scroll)/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) scroller = scroller.parentElement;
-    const top = scroller ? el.getBoundingClientRect().top - scroller.getBoundingClientRect().top : covered;
+    const box = scroller?.getBoundingClientRect();
+    const top = scroller && box ? el.getBoundingClientRect().top - box.top : covered;
+    const under = scroller && box ? el.getBoundingClientRect().bottom - (box.bottom - (parseFloat(getComputedStyle(scroller).scrollPaddingBottom) || 0)) : 0;
     if (scroller && top < covered) scroller.scrollBy({ top: top - covered, behavior: 'smooth' });
+    else if (scroller && under > 0) scroller.scrollBy({ top: Math.min(under + 8, top - covered), behavior: 'smooth' });
     else el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, []);
 

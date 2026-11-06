@@ -396,7 +396,9 @@
 }
 .approval-line-what { flex: 1 1 0; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Second line: how many and the time, then the buttons. */
-.approval-line-meta { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+/* Never narrower than a short name and its time: in a narrow column (the Org list) the buttons
+   wrap under it instead of cutting the time to "9:56 le". */
+.approval-line-meta { flex: 1 1 0; min-width: 15ch; display: inline-flex; align-items: center; gap: 8px; }
 .approval-line-who { flex: 0 1 auto; min-width: 7ch; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .approval-line-meta .approval-clock { flex: none; }
 .approval-card-line .approval-actions { flex: none; margin-top: 4px; gap: 6px; }
@@ -485,13 +487,19 @@ button.approval-row { width: 100%; font: inherit; font-size: 13px; text-align: l
 /* The asking task's name: a link to it (ApprovalPrompts AskerLink), drawn as one, ↗ included. */
 .approval-task-link { color: var(--accent-text, var(--accent)); font-weight: 500; text-decoration: none; }
 .approval-task-link:hover { text-decoration: underline; text-underline-offset: 2px; }
-.approval-task-link-go { font-size: 0.9em; }
+.approval-task-link-go { flex: none; font-size: 0.9em; }
+/* A long name is cut inside the link, so its ↗ always shows; the host after it gives way first. */
+.approval-task-link-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Who asks reads on a row of its own above the buttons, so the task's name is never squeezed away. */
 .corner-stack .approval-card:not(.approval-card-line) .approval-who { display: flex; align-items: baseline; flex: 1 0 100%; }
-.corner-stack .approval-card .approval-who-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.corner-stack .approval-card .approval-who-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.3em; min-width: 0; overflow: hidden; }
+.corner-stack .approval-who-text .approval-task-link { display: inline-flex; min-width: 0; white-space: nowrap; }
+.approval-who-host { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600; }
 /* "10:01 left" never splits over two lines in a narrow corner. */
 .approval-clock { white-space: nowrap; }
 .approval-dialog-list-task { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted); }
 /* The short line's task name is cut to an ellipsis: the link fills its place, so a click on the cut end opens it too. */
-.approval-line-who .approval-task-link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* With a link the row cuts the name inside it (its ↗ stays), never an ellipsis of its own after the ↗. */
+.approval-line-who-link { display: flex; align-items: center; text-overflow: clip; }
+.approval-line-who .approval-task-link { display: flex; min-width: 0; white-space: nowrap; }

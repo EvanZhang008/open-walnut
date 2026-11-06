@@ -131,7 +131,7 @@ function syncAround(sidebarRight: number, columnRight: number): void {
   // Beside a sheet: kept in the strip of backdrop left of it, a narrow strip reached past only as
   // far as a readable width, over the sheet's edge rather than up over its chat.
   if (sheet && !centerOpen) {
-    const strip = Math.round(sheet.getBoundingClientRect().left) - left - 16;
+    const strip = Math.round(sheetBaseLeft(sheet)) - left - 16;
     width = Math.min(width, Math.max(MIN_BESIDE_SHEET_PX, strip));
   }
   // The left column's foot row stays in sight and clickable: the corner stands on it, still its
@@ -315,12 +315,17 @@ function syncRoom(): void {
 
 /**
  * Beside a full-screen sheet the corner keeps its place, and a narrow strip left of the sheet can
- * leave it reaching over the sheet's edge: the sheet's content (its chat and composer) then starts
- * just past the corner (`--corner-sheet-inset`, corner-stack.css), the way a list makes room at its
+ * leave it reaching over the sheet's edge: the sheet's left edge then moves just past the corner
+ * (`--corner-sheet-inset`, fullscreen-tab.css), header, chat and composer together, the way a list makes room at its
  * end (syncRoom). It only grows while the stack holds something, and goes when the stack is empty
  * or the sheet closes.
  */
 let insetSheet: HTMLElement | null = null;
+/** The sheet's left edge as it would be with no inset. */
+function sheetBaseLeft(sheet: Element): number {
+  const held = parseFloat((sheet as HTMLElement).style.getPropertyValue('--corner-sheet-inset')) || 0;
+  return sheet.getBoundingClientRect().left - held;
+}
 function releaseInset(): void {
   insetSheet?.style.removeProperty('--corner-sheet-inset');
   insetSheet = null;
@@ -332,8 +337,8 @@ function syncSheetInset(): void {
   if (!sheet || parts.length === 0 || stack.classList.contains('is-tucked')) { releaseInset(); return; }
   if (insetSheet !== sheet) releaseInset();
   const held = parseFloat(sheet.style.getPropertyValue('--corner-sheet-inset')) || 0;
-  // The sheet's box does not move with the inset (it is padding), so this never undoes itself.
-  const reach = Math.ceil(Math.max(...parts.map((p) => p.right)) + 12 - sheet.getBoundingClientRect().left);
+  // Measured from where the sheet starts without the inset, so moving it never undoes itself.
+  const reach = Math.ceil(Math.max(...parts.map((p) => p.right)) + 12 - sheetBaseLeft(sheet));
   const inset = Math.max(held, reach);
   if (inset <= 0) { releaseInset(); return; }
   insetSheet = sheet;

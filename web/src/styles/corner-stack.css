@@ -240,6 +240,8 @@
 .corner-stack .kanban-toast-text.is-open { display: block; overflow: visible; }
 .corner-stack .kanban-toast-main .notice-details-toggle { margin: 0 auto 0 0; }
 
+/* A row scrolled into view stops above the stack, not behind it (TodoPanel revealBelowHeadings). */
+[data-corner-room] { scroll-padding-bottom: var(--corner-room, 0px); }
 /* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
 [data-corner-room]::after {
   content: '';
@@ -306,4 +308,3 @@
 
 /* A full-screen sheet's content (its chat and composer) starts past the corner when a narrow strip
    leaves the corner reaching over the sheet (corner-stack.tsx syncSheetInset); 0 otherwise. */
-html .open-walnut-fullscreen { padding-left: var(--corner-sheet-inset, 0px); }
