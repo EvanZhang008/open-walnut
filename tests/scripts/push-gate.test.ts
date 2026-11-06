@@ -449,3 +449,34 @@ describe('the pre-push hook', () => {
     expect(hook.indexOf('| bash scripts/push-gate.sh')).toBeGreaterThan(hook.indexOf('| "$scanner"'))
   })
 })
+
+/**
+ * Every GitHub read of the gate has a time limit (2026-11-06: one `gh api` call hung for most of
+ * an hour, the gate never read the failed tier written meanwhile, and reported "did not answer"
+ * at its deadline). Fails on a new bare `gh api` call, and pins that the limit really ends a call.
+ */
+describe('the GitHub reads of the gate', () => {
+  const src = fs.readFileSync(GATE, 'utf8')
+
+  it('all go through ghcall, the time-limited wrapper', () => {
+    const bare = src.split('\n').filter((line) => /(^|[^\w-])gh api\b/.test(line) && !line.trim().startsWith('#'))
+    expect(bare, 'call ghcall api ..., never gh api ... directly').toEqual([])
+    expect(src.match(/\bghcall api\b/g)?.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('the wrapper ends a call past its limit and passes an exit code through', () => {
+    const body = /ghcall\(\) \{\n([\s\S]*?)\n  \}\n/.exec(src)?.[1]
+    expect(body).toBeTruthy()
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'push-gate-ghcall-'))
+    dirs.push(dir)
+    // A gh that sleeps, or exits 3: the wrapper runs whatever `gh` is on PATH.
+    fs.writeFileSync(path.join(dir, 'gh'), '#!/bin/sh\n[ "$2" = slow ] && exec sleep 30\nexit 3\n', { mode: 0o755 })
+    const run = (arg: string) => spawnSync('bash', ['-c', `ghcall() {\n${body}\n}\nghcall api ${arg}`], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, WALNUT_PUSH_GATE_CALL_SECS: '1' }, encoding: 'utf8', timeout: 20_000,
+    })
+    const started = Date.now()
+    expect(run('slow').status).toBe(124)
+    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(run('quick').status).toBe(3)
+  })
+})

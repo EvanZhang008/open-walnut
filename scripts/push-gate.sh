@@ -167,9 +167,22 @@ if [ -z "$runner" ]; then
   command -v gh >/dev/null 2>&1 || refuse "the test gate reads its verdict with the GitHub CLI (gh), which is not installed here."
   gh auth status >/dev/null 2>&1 || refuse "the GitHub CLI (gh) is not signed in here (gh auth login), so the test gate cannot read its verdict."
   errf=$(mktemp)
+  # Every GitHub read has its own time limit: one gh call that hung for most of an hour once left
+  # the gate blind to verdicts already written, until its deadline said "did not answer"
+  # (2026-11-06). A call past the limit counts as one failed read and the loop polls again.
+  # The Mac has no timeout command, so perl runs the call as its child and ends that pid at the
+  # limit (TERM, then KILL): gh is a Go program, which may not die of a plain SIGALRM. Plain gh
+  # without perl.
+  ghcall() {
+    if command -v perl >/dev/null 2>&1; then
+      perl -e '$t = shift; $p = fork; defined $p or exit 125; if (!$p) { exec @ARGV; exit 127 }
+        $SIG{ALRM} = sub { kill "TERM", $p; sleep 2; kill "KILL", $p; exit 124 }; alarm $t;
+        waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "${WALNUT_PUSH_GATE_CALL_SECS:-60}" gh "$@"
+    else gh "$@"; fi
+  }
   # A verdict this commit already has (walnut-cloud runs the gate before its push lock): the
   # newest walnut/push-gate status, when it reads success.
-  passed=$(gh api "repos/$repo/commits/$target/statuses?per_page=100" 2>"$errf" \
+  passed=$(ghcall api "repos/$repo/commits/$target/statuses?per_page=100" 2>"$errf" \
     | jq -r '[.[] | select(.context == "walnut/push-gate")][0] | select(.state == "success") | .target_url // empty' 2>/dev/null)
   if [ -n "$passed" ]; then echo "✓ Test gate passed on $short ($passed)."; passed_files "$passed"; rm -f "$errf"; exit 0; fi
 
@@ -187,7 +200,7 @@ if [ -z "$runner" ]; then
   tiers=$(git show "$target:scripts/push-gate-status.sh" 2>/dev/null | sed -n 's/^TIERS=\([0-9][0-9]*\).*/\1/p')
   tiers=${tiers:-5}
   deadline=$(( $(date +%s) + mins * 60 )) run= state=pending statuses='[]' fails=0
-  ghq() { gh api "$@" 2>"$errf" && { fails=0; return 0; }; fails=$((fails + 1)); return 1; }
+  ghq() { ghcall api "$@" 2>"$errf" && { fails=0; return 0; }; fails=$((fails + 1)); return 1; }
   while :; do
     # Only what this push's own run wrote: an earlier or a cancelled gate of the same commit
     # may still be writing its own verdict.
@@ -202,6 +215,9 @@ if [ -z "$runner" ]; then
       # one failed tier refuses at once, every tier passed lets the push through.
       bad=$(printf '%s' "$statuses" | jq '[.[] | select(.context != "walnut/push-gate" and (.state == "failure" or .state == "error"))] | length')
       good=$(printf '%s' "$statuses" | jq '[.[] | select(.context != "walnut/push-gate" and .state == "success")] | length')
+      # One line each time the run writes something new, so a log shows when the gate last heard.
+      seen="$good passed, $bad failed"
+      [ "$seen" = "${shown:-}" ] || { shown=$seen; echo "  $(date -u +%H:%M:%SZ)  $seen of $tiers tiers"; }
       if [ "$bad" -gt 0 ]; then state=failure; break; fi
       if [ "$good" -ge "$tiers" ]; then state=success; break; fi
     fi
@@ -215,10 +231,10 @@ if [ -z "$runner" ]; then
   # The failing tests, from each failed tier's job log.
   for tier in $(printf '%s' "$statuses" | jq -r '.[] | select(.state != "success" and .context != "walnut/push-gate") | .context | sub("^walnut/push-gate \\("; "") | sub("\\)$"; "") | gsub(" "; "_")'); do
     tier=${tier//_/ }
-    job=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=50" 2>/dev/null | jq -r --arg n "Gate ($tier)" '.jobs[] | select(.name == $n) | .id' | head -1)
+    job=$(ghcall api "repos/$repo/actions/runs/$run/jobs?per_page=50" 2>/dev/null | jq -r --arg n "Gate ($tier)" '.jobs[] | select(.name == $n) | .id' | head -1)
     [ -n "$job" ] || continue
     echo ""; echo "── $tier (https://github.com/$repo/actions/runs/$run/job/$job)"
-    gh api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g' \
+    ghcall api "repos/$repo/actions/jobs/$job/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*[A-Za-z]//g' \
       | awk '/^Fix them|^##\[error\]|^##\[group\]Run /{if (p) exit} /NEW failure|New failures|FAIL |✗/{p=1} p{print; if (++n > 60) exit}' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} '
   done
   blocked "the test gate failed on $short. The failing tests are listed above."
