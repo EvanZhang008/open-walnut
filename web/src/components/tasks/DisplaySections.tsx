@@ -15,6 +15,7 @@ import { DisplayRow, SORT_CHOICES, Segmented, SortRow, SwitchRow, type SegChoice
 import { ICON_VIEW } from './filter-dim-icons';
 import { arrowFocus } from './FilterValueList';
 import { PANEL_DESIGNS, type PanelDesign } from './panel-design';
+import { useTaskStatusLines } from './useTaskStatusLines';
 
 export const TAB_BAR_SWITCH_TITLE = 'All, Pinned and the other views as tabs across the top';
 export const VIEW_ROW_TITLE = 'View: All, Pinned and the other views';
@@ -54,6 +55,7 @@ export interface DisplaySectionsProps {
 export function DisplaySections({ display: p, flashOption, viewLabel, onOpenViews }: DisplaySectionsProps) {
   // Rendered only while open, so the session setting's config read runs only then.
   const sessionRow = useSessionPanelsViewGroup().options[0] as ViewChoiceRow;
+  const [showStatusLines, setShowStatusLines] = useTaskStatusLines();
   const sessionValue = sessionRow.choices.find((c) => c.active)?.key ?? null;
   const o = p.order;
   // Flat sorts each section by its own state (latest activity, soonest wake), so Sort
@@ -113,6 +115,8 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
         </button>
         <SwitchRow option="quick-views" label="Show tab bar" title={TAB_BAR_SWITCH_TITLE}
           checked={p.quickViews} onChange={p.onQuickViewsChange} />
+        <SwitchRow option="status-lines" label="Show task status line" title="Show what each task needs or is waiting on"
+          checked={showStatusLines} onChange={setShowStatusLines} />
         <DisplayRow option={sessionRow.key} label="Session columns" title={sessionRow.title} flash={flashOption === sessionRow.key}>
           <Segmented label="Session columns" value={sessionValue}
             choices={sessionRow.choices.map((c) => ({ key: c.key, label: c.label, title: c.title }))}

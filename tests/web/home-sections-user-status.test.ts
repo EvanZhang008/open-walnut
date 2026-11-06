@@ -139,6 +139,18 @@ describe('Home sections equal the user status', () => {
     expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', toRead: 'result', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting')
   })
 
+  it('every shared task status sentence uses the default-off Display preference', () => {
+    const dir = path.join(ROOT, 'web/src/components/tasks')
+    const renderers = fs.readdirSync(dir).filter((name) => /\.tsx$/.test(name))
+      .filter((name) => /className=\{?`?"?status-card-reason/.test(fs.readFileSync(path.join(dir, name), 'utf8')))
+    expect(renderers).toEqual(['StatusSections.tsx'])
+    const card = fs.readFileSync(path.join(dir, renderers[0]), 'utf8')
+    expect(card).toContain('const [showStatusLines] = useTaskStatusLines()')
+    expect(card).toContain("const reason = !showStatusLines && reasonText !== 'Snoozed' ? null")
+    expect(fs.readFileSync(path.join(dir, 'useTaskStatusLines.ts'), 'utf8')).toContain("usePageView('tasks', 'statusLines', false, isBoolean)")
+    expect(fs.readFileSync(path.join(dir, 'DisplaySections.tsx'), 'utf8')).toContain('checked={showStatusLines} onChange={setShowStatusLines}')
+  })
+
   it('a row wears its section\'s mark, never the phase\'s: no ring under Waiting / snoozed', () => {
     const wrong: string[] = []
     for (const phase of PHASES) {

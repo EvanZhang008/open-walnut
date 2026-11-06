@@ -11,6 +11,7 @@ import type { Page } from '@playwright/test'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
 import { closeDisplayMenu, displayMenu, openDisplayMenu } from './filter-bar-helpers'
 import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSectionRows } from './status-section-helpers'
+import { openHome } from './home-navigation-helpers'
 
 // The fixture server is shared: every task made here goes again (other specs measure the panel).
 const made: string[] = []
@@ -38,14 +39,66 @@ async function seed(page: Page, project: string, title: string, patch: Record<st
 test.describe('Flat layout', () => {
   test.describe.configure({ timeout: 120_000 })
 
-  test('sections only, two-line rows, a snoozed task under Waiting, Group switches to By project and back', async ({ page }) => {
+  test('status sentences are hidden by default; Display toggles every row and keeps the choice after reload', async ({ page, baseURL }) => {
     await isolateUiPrefs(page)
     await presetPanelDesign(page, 'status')
+    await openHome(page, baseURL!)
+    const project = `Status lines ${Date.now()}`
+    const needs = await seed(page, project, 'Choose the rollout date', { phase: 'NEED_ACTION' })
+    const waiting = await seed(page, project, 'Prepare the rollout', {})
+    await seed(page, project, 'Wait for rollout approval', { phase: 'WAITING' })
+    const report = await page.request.put(`/api/v1/tasks/${needs}/report`, { data: { state: 'needs', ask: 'Which date should the rollout use?' } })
+    expect(report.ok(), await report.text()).toBe(true)
+    await page.reload()
+    await selectSection(page, 'All')
+    const panel = page.locator('.todo-panel').first()
+    await setStatusSectionOpen(panel, 'needs', true)
+    await setStatusSectionOpen(panel, 'waiting', true)
+    const needsRow = await showSectionCard(panel, 'needs', needs)
+    const waitingRow = await showSectionCard(panel, 'waiting', waiting)
+    await expect(needsRow.getByTestId('status-card-needs-line')).toHaveCount(0)
+    await expect(waitingRow.getByTestId('status-card-reason')).toHaveCount(0)
+    await openDisplayMenu(page)
+    await displayMenu(page).locator('[data-view-option="group"] [data-choice="project"]').click()
+    await closeDisplayMenu(page)
+    const projectFold = panel.locator(`[data-testid="project-status-folds"][data-project="${project}"]`).first()
+    await projectFold.getByTestId('project-status-fold-waiting').click()
+    await expect(projectFold.locator('.status-card-reason')).toHaveCount(0)
+    await openDisplayMenu(page)
+    await displayMenu(page).locator('[data-view-option="group"] [data-choice="status"]').click()
+    await closeDisplayMenu(page)
+    await expect(needsRow.locator('.task-unread-dot')).toBeVisible()
+    await expect(needsRow.locator('.todo-pinned-title')).toHaveText('Choose the rollout date')
+    for (let i = 0; i < 2; i++) {
+      await openDisplayMenu(page)
+      const toggle = displayMenu(page).getByRole('switch', { name: 'Show task status line', exact: true })
+      await expect(toggle).toHaveAttribute('aria-checked', 'false')
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-checked', 'true')
+      await expect(needsRow.getByTestId('status-card-needs-line')).toContainText('Which date should the rollout use?')
+      await expect(waitingRow.getByTestId('status-card-reason')).toHaveText('Not started yet')
+      await closeDisplayMenu(page)
+      await page.reload()
+      await expect(needsRow.getByTestId('status-card-needs-line')).toBeVisible()
+      await openDisplayMenu(page)
+      await displayMenu(page).getByRole('switch', { name: 'Show task status line', exact: true }).click()
+      await closeDisplayMenu(page)
+      await expect(needsRow.getByTestId('status-card-needs-line')).toHaveCount(0)
+      await expect(waitingRow.getByTestId('status-card-reason')).toHaveCount(0)
+      await page.reload()
+      await expect(needsRow.getByTestId('status-card-needs-line')).toHaveCount(0)
+    }
+  })
+
+  test('sections only, two-line rows, a snoozed task under Waiting, Group switches to By project and back', async ({ page, baseURL }) => {
+    await isolateUiPrefs(page)
+    await presetPanelDesign(page, 'status')
+    await page.addInitScript(() => localStorage.setItem('open-walnut-view:tasks.statusLines', 'true'))
     // A user who never picked a tier sees no tier headings while one tier holds cards (5.10).
     await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'))
     const stamp = Date.now()
     const project = `Flatland${stamp}`
-    await page.goto('/')
+    await openHome(page, baseURL!)
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     const needs = await seed(page, project, `flat needs ${stamp}`, { phase: 'NEED_ACTION' })
     const working = await seed(page, project, `flat working ${stamp}`, { phase: 'IN_PROGRESS' })

@@ -119,7 +119,7 @@ test('one menu: the filter rows, then the display rows; the View page lists the 
     els.map((el) => (el.classList.contains('fb-home') ? 'filters' : [...el.classList].find((c) => c !== 'dm-section'))))
   expect(sections).toEqual(['filters', 'dm-order', 'dm-settings', 'dm-context'])
   expect(await menu.locator('.dm-settings > [data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option'))))
-    .toEqual(['view', 'quick-views', 'session-panels'])
+    .toEqual(['view', 'quick-views', 'status-lines', 'session-panels'])
   // C13 / C13b: no view sits on page one; the View row names the current one, and no tier
   // word shows anywhere on the page.
   for (const key of ['all', 'pinned', 'focus', 'tasks']) await expect(option(page, key)).toHaveCount(0)

@@ -41,6 +41,7 @@ import {
 } from './status-sections';
 import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
 import { FOLD_KEY_ATTR } from './section-fold-rule';
+import { useTaskStatusLines } from './useTaskStatusLines';
 import '@/styles/status-sections.css';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
@@ -118,6 +119,7 @@ export interface SectionRowHandlers {
 
 const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoLine }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean }) {
   const circleClass = useTaskCircle(task);
+  const [showStatusLines] = useTaskStatusLines();
   // On a phone a title tap opens the row, as on a list row (phone-row-behavior.ts).
   const edit = useInlineTitleEdit(task, handlers.onUpdateTitle, { doubleClick: !isPhoneLayout() });
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
@@ -145,7 +147,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   // keeps only the project, its tags and the wake time (2026-11-02, the user: the sentence cut
   // the top line short). "Snoozed" is a label, not a sentence: it stays up top, no third line.
   const reasonBelow = twoLine && reasonText !== '' && reasonText !== 'Snoozed';
-  const reason = need ? (
+  const reason = !showStatusLines && reasonText !== 'Snoozed' ? null : need ? (
     <span className={`status-card-reason status-card-needs-line${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-needs-line" data-category={need.category} title={reasonText}>
       <span className={`needs-category needs-category-${need.category}`}>{need.label}{need.text ? ':' : ''}</span>
       {need.text ? <span className="needs-line-text">{need.text}</span> : null}
