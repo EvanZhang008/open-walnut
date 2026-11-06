@@ -32564,6 +32564,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
+/* The bar is one row of buttons, never a scrolling strip (its placement is never
+   capped below that row). */
+.quote-pin-pill { overflow: hidden; }
+/* A timeline narrower than the bar: Pin, Ask here and Comment show icons only. */
+.quote-pin-pill.is-compact .quote-pin-pill-btn > svg + span { display: none; }
 
 .quote-pin-pill-btn {
   display: flex;

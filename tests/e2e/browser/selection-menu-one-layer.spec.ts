@@ -189,9 +189,11 @@ async function expectBar(page: Page, scope: Locator, phrase: string, where: stri
   await expectInColumn(scope, g, `bar at ${where}`)
   const lines = await passageRects(scope, phrase, ANSWER)
   expect(lines.filter((r) => overlaps(g.box, r)), `the bar is never on the selected words (${where})`).toEqual([])
-  // Under the passage when it fits there (the mockup the user was shown), above otherwise.
+  // Under the passage when the bar and a menu fit there (the mockup the user was
+  // shown), above it otherwise, so a menu never has to flip onto the words.
   const bottom = Math.max(...lines.map((r) => r.top + r.height))
-  if (bottom + 8 + g.box.height + 8 <= g.vh) expect(g.box.y, `the bar is under the passage (${where})`).toBeGreaterThanOrEqual(bottom - 0.5)
+  const floor = await scope.locator('.session-history').first().evaluate((el) => Math.min(el.getBoundingClientRect().bottom, window.innerHeight))
+  if (floor - bottom >= 8 + g.box.height + 4 + 110) expect(g.box.y, `the bar is under the passage (${where})`).toBeGreaterThanOrEqual(bottom - 0.5)
 }
 
 /** A menu: one popover with a border and a shadow, hanging off its button, which moved
@@ -206,13 +208,18 @@ async function expectMenu(page: Page, scope: Locator, phrase: string, anchor: Lo
   const below = g.box.y - (a.y + a.height)
   const above = a.y - (g.box.y + g.box.height)
   expect((below >= -0.5 && below <= 12) || (above >= -0.5 && above <= 12), `hangs off its button: ${Math.round(below)}px below or ${Math.round(above)}px above (${at})`).toBe(true)
-  // A dropdown: under its button whenever it fits there.
-  if (a.y + a.height + 4 + g.box.height + 8 <= g.vh) expect(below, `drops down from its button (${at})`).toBeGreaterThanOrEqual(-0.5)
-  const aligned = Math.abs(g.box.x - a.x) <= 2 || Math.abs(g.box.x + g.box.width - (a.x + a.width)) <= 2
-    || g.box.x <= edgeL + 6 || g.box.x + g.box.width >= edgeR - 6
-  expect(aligned, `lined up with its button, or held at its column's edge (${at})`).toBe(true)
   // Over the bar is wrong too: the menu sits beside it, never on it.
   const bar = (await pill(page).boundingBox())!
+  // On the bar's side away from the passage: down from a bar under the words when
+  // it fits, up from a bar above them.
+  const words = await passageRects(scope, phrase, ANSWER)
+  const barAbove = bar.y + bar.height <= Math.min(...words.map((r) => r.top)) + 0.5
+  if (barAbove) expect(above, `opens up from a bar above the words (${at})`).toBeGreaterThanOrEqual(-0.5)
+  else if (a.y + a.height + 4 + g.box.height + 8 <= g.vh) expect(below, `drops down from its button (${at})`).toBeGreaterThanOrEqual(-0.5)
+  const aligned = Math.abs(g.box.x - a.x) <= 2 || Math.abs(g.box.x + g.box.width - (a.x + a.width)) <= 2
+    || Math.abs(g.box.x - bar.x) <= 2
+    || g.box.x <= edgeL + 6 || g.box.x + g.box.width >= edgeR - 6
+  expect(aligned, `lined up with its button or the bar, or held at its column's edge (${at})`).toBe(true)
   expect(overlaps(g.box, { left: bar.x, right: bar.x + bar.width, top: bar.y, height: bar.height }), `the menu is not drawn on the bar (${at})`).toBe(false)
   expect(await layout(scope), `the conversation did not move (${at})`).toEqual(before)
   // It opens away from the passage, so the words it is about stay in view.
@@ -221,10 +228,10 @@ async function expectMenu(page: Page, scope: Locator, phrase: string, anchor: Lo
 }
 
 /** Select `phrase` in `scope`, then check the bar, the Ask choice and the Comment box. */
-async function checkAllStates(page: Page, scope: Locator, phrase: string, where: string): Promise<void> {
+async function checkAllStates(page: Page, scope: Locator, phrase: string, where: string, at = 0.4): Promise<void> {
   const select = async () => {
     await page.evaluate(() => window.getSelection()?.removeAllRanges())
-    await centreInHistory(page, scope, phrase, { at: 0.4, tolerance: 30 })
+    await centreInHistory(page, scope, phrase, { at, tolerance: 30 })
     await selectPassage(page, scope, phrase, ANSWER)
     await expect(pill(page)).toBeVisible()
   }
@@ -276,6 +283,14 @@ async function checkAllStates(page: Page, scope: Locator, phrase: string, where:
     const above = btn.y - (box.y + box.height)
     return (below >= -0.5 && below <= 12) || (above >= -0.5 && above <= 12)
   }, { message: `the box follows its button through a scroll (${where})`, timeout: 3_000 }).toBe(true)
+  // A shorter window: the bar stays one whole row, never clipped into a scrolling strip.
+  const vp = page.viewportSize()!
+  await page.setViewportSize({ width: vp.width, height: vp.height - 220 })
+  await expect.poll(() => pill(page).evaluate((el) => {
+    const btn = el.querySelector<HTMLElement>('.quote-pin-pill-btn')!
+    return el.scrollHeight - el.clientHeight <= 1 && el.clientHeight >= btn.offsetHeight
+  }), { message: `the bar keeps its whole row in a shorter window (${where})`, timeout: 3_000 }).toBe(true)
+  await page.setViewportSize(vp)
   // Discard, so no draft is left on the shared fixture's passage.
   await menu.getByRole('button', { name: 'Discard' }).click()
   await expect(pill(page)).toHaveCount(0)
@@ -295,6 +310,13 @@ test.describe('Selection menu: a bar and normal menus over the conversation, in 
     const long = await lastAnswerWords(panel, 24)
     expect((await passageRects(panel, long, ANSWER)).length, 'the passage runs over several lines').toBeGreaterThan(1)
     await checkAllStates(page, panel, long, 'linear-lines')
+  })
+
+  test('Conversation Mode: a passage on the last lines above the composer', async ({ page }) => {
+    // The common case of selecting an answer's last lines: the bar goes above the
+    // passage and both menus open upward from it, never onto the words.
+    const panel = await openAt(page, 1100, 'linear')
+    await checkAllStates(page, panel, await lastAnswerWords(panel), 'linear-bottom', 0.93)
   })
 
   test('Tree Mode: the main page, then a page one level down', async ({ page }) => {

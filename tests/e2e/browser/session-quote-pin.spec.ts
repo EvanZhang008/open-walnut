@@ -415,10 +415,18 @@ test.describe('Quote pins', () => {
     // end-centred placement would be far to the right of this), and just under the
     // passage's last line, off the selected words (the bar sits under the passage).
     expect(Math.abs(centreX - release.x)).toBeLessThanOrEqual(48)
+    // Off the words: under the passage when the bar and a menu fit there, else above it.
     const { rects } = await phraseGeometry(page, clause)
     const bottom = Math.max(...rects.map((r) => r.top + r.height))
-    expect(box.y).toBeGreaterThanOrEqual(bottom - 0.5)
-    expect(box.y - bottom).toBeLessThanOrEqual(24)
+    const top = Math.min(...rects.map((r) => r.top))
+    const floor = await panel.locator('.session-history').evaluate((el) => Math.min(el.getBoundingClientRect().bottom, window.innerHeight))
+    if (floor - bottom >= 8 + box.height + 4 + 110) {
+      expect(box.y).toBeGreaterThanOrEqual(bottom - 0.5)
+      expect(box.y - bottom).toBeLessThanOrEqual(24)
+    } else {
+      expect(box.y + box.height).toBeLessThanOrEqual(top + 0.5)
+      expect(top - (box.y + box.height)).toBeLessThanOrEqual(24)
+    }
     await shot(page, '05-backward-drag-pill')
     await page.keyboard.press('Escape')
     await expect(pill).toHaveCount(0)

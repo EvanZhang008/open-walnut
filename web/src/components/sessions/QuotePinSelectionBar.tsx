@@ -56,7 +56,7 @@
  * pushed into the text: "Just a normal menu", "it is an overlay. Nobody would design
  * it this way").
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import {
@@ -83,6 +83,8 @@ import { ASK_MODE_HINT, ASK_MODE_LABEL, ASK_MODES, type AskMode } from '@/utils/
 /** Room between the passage and the bar, and between a button and its menu. */
 const BAR_GAP = 8;
 const MENU_GAP = 4;
+/** The room a menu needs under the bar to open downward: the Comment box's height. */
+const MENU_ROOM = 110;
 
 /** A speech bubble with a question mark: Ask opens a question page. */
 const ICON_ASK = (
@@ -285,16 +287,50 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     }
     return { x: anchor.x, y: top, bottom };
   }, [anchor, containerRef]);
+  // Under the passage when the bar AND a menu opened from it fit there, else above
+  // it: a menu that had to flip up from a bar under the passage landed on the very
+  // words (a passage on the last lines above the composer). The menus open on the
+  // same side, away from the words. Decided once per passage: a scroll never flips it.
+  const passageKey = state ? `${state.msgId}|${state.quote.exact}|${state.quote.prefix}` : '';
+  const sideRef = useRef<{ key: string; side: 'up' | 'down' }>({ key: '', side: 'down' });
+  if (barAnchor && sideRef.current.key !== passageKey) {
+    const box = containerRef.current?.getBoundingClientRect();
+    const lo = Math.min(box ? box.bottom : window.innerHeight, window.innerHeight);
+    const hi = Math.max(box ? box.top : 0, 0);
+    const need = BAR_GAP + (pillRef.current?.offsetHeight || 32) + MENU_GAP + MENU_ROOM;
+    const below = lo - barAnchor.bottom;
+    const above = barAnchor.y - hi;
+    sideRef.current = { key: passageKey, side: below >= need || below >= above ? 'down' : 'up' };
+  }
+  const side = sideRef.current.side;
   const placement = useMenuPlacement(!!state, noTrigger, pillRef, {
     anchorPoint: barAnchor,
     align: 'center',
-    preferSide: 'down',
+    preferSide: side,
     gap: BAR_GAP,
     margin: 4,
-    minHeight: 28,
+    // Never capped below its own height (one row of buttons): a short timeline, or a
+    // passage scrolled past its edge, keeps the whole bar, never a clipped one.
+    minHeight: 48,
     // Over the timeline's text column: never on Tree Mode's Questions list, the
     // pane beside a split, the scrollbar or the composer.
     boundsRef: containerRef,
+  });
+  // A timeline narrower than the bar (a narrow column; macOS's wider face) gets
+  // the compact bar: Pin, Ask here and Comment show their icons only (their names
+  // stay as labels and titles). Decided before paint, so the wide bar never shows.
+  const [compact, setCompact] = useState(false);
+  const fullWidthRef = useRef(0);
+  useLayoutEffect(() => {
+    const bar = pillRef.current;
+    // The text column, the box the bar is placed in first.
+    const el = containerRef.current;
+    const cs = el ? getComputedStyle(el) : null;
+    const room = el && cs ? el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) : 0;
+    if (!state || !bar || !room) return;
+    if (!compact) fullWidthRef.current = bar.offsetWidth;
+    const fits = fullWidthRef.current + 8 <= room;
+    if (compact === fits) setCompact(!fits);
   });
   const menuOpen = !!state && (askPick || commentOpen);
   // The menu hangs off its button, read from where the bar is PLACED rather than
@@ -305,7 +341,10 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     const bar = pillRef.current;
     const btn = askPick ? askGroupRef.current : commentBtnRef.current;
     if (!menuOpen || !placement || !bar || !btn) return null;
-    const left = window.innerWidth - placement.right - bar.offsetWidth + bar.clientLeft + btn.offsetLeft;
+    // Ask here's choice drops from its caret's group; the Comment box, as wide as the
+    // bar, lines up with the bar's left edge so the two read as one control.
+    const barLeft = window.innerWidth - placement.right - bar.offsetWidth;
+    const left = askPick ? barLeft + bar.clientLeft + btn.offsetLeft : barLeft;
     const top = placement.top + bar.clientTop + btn.offsetTop;
     return { x: left, y: top, bottom: top + btn.offsetHeight };
   }, [menuOpen, placement, askPick]);
@@ -313,7 +352,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     anchorPoint: menuAnchor,
     align: 'start',
     edgeOverflow: 'clamp',
-    preferSide: 'down',
+    preferSide: side,
     gap: MENU_GAP,
     margin: 4,
     minHeight: askPick ? 96 : 150,
@@ -774,7 +813,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
           <div className="quote-pin-comment-foot">
             {/* The same promise as a doc comment's card (DocCommentCard), and what Esc does. */}
             <div className="quote-pin-comment-hint" title="Sent with your next message. Esc keeps a draft.">
-              Sent with your next message<span className="quote-pin-comment-keys"><span aria-hidden="true"> · </span>Esc keeps a draft</span>
+              Sent with your next message<span className="quote-pin-comment-keys"><span aria-hidden="true">{'\u00a0·\u00a0'}</span>Esc keeps a draft</span>
             </div>
             {/* Discard throws the words away; an Esc keeps them as the passage's draft. */}
             <button
@@ -796,7 +835,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     <>
     <div
       ref={pillRef}
-      className="quote-pin-pill"
+      className={`quote-pin-pill${compact ? ' is-compact' : ''}`}
       style={menuPlacementStyle(placement)}
       data-testid="quote-pin-pill"
       {...stopPress}
@@ -808,6 +847,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
           onMouseDown={(e) => e.preventDefault()}
           onClick={pin}
           title="Pin this passage (adds it to the outline)"
+          aria-label="Pin"
         >
           {ICON_PIN}
           <span>Pin</span>
@@ -822,6 +862,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => ask()}
             title={`${ASK_MODE_LABEL[askMode]}: ${ASK_MODE_HINT[askMode].toLowerCase()}`}
+            aria-label="Ask here"
           >
             {ICON_ASK}
             <span>Ask here</span>
@@ -871,6 +912,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
           // The keyboard path has no pointerdown, and its selection is still live here.
           onClick={() => { hold(); setAskPick(false); setCommentOpen(true); }}
           title="Comment on this passage: the words stay marked, and the comment is sent with your next message"
+          aria-label="Comment"
         >
           {ICON_COMMENT}
           <span>Comment</span>
