@@ -312,9 +312,11 @@ test('a narrow column keeps the tool row on one line and the labels whole under 
   await expect(more.getByTestId('session-header-more-item-locate')).toHaveText(/Locate task/)
   await expect(more.getByTestId('session-header-more-item-lock')).toHaveCount(0)
   await expect(more.getByTestId('session-header-more-item-popout')).toHaveText(/Open in new tab/)
+  // Home's columns also carry Minimize (the taskbar), the third movable window button.
+  await expect(more.getByTestId('session-header-more-item-minimize')).toHaveText(/Minimize/)
   await expect(more.getByTestId('session-header-more-item-expand')).toHaveCount(0)
   const moreRows = await more.locator('[role="menuitem"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.replace('session-header-more-item-', '')))
-  expect(moreRows.slice(-2), 'window buttons come after the views').toEqual(['locate', 'popout'])
+  expect(moreRows.slice(-3), 'window buttons come after the views').toEqual(['locate', 'popout', 'minimize'])
   await shootHeader(panel, '180-more', 220)
   await more.getByTestId('session-header-more-item-files').click()
   await expect(more).toHaveCount(0)

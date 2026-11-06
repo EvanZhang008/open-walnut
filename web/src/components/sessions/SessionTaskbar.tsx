@@ -24,6 +24,7 @@ import { fetchSessionHistory } from '@/api/sessions';
 import { taskNeedsAction, taskOfSession, taskStatusLabel } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments } from '@/components/common/image-attachments';
 import { log } from '@/utils/log';
 
 export interface SessionTaskbarProps {
@@ -190,15 +191,18 @@ function PeekCard({ sessionId, task, title, state, anchorRef, processStatus, onO
     return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener('pointerdown', onDown, true); };
   }, [onDismiss, anchorRef]);
 
+  // A reply here goes to the session's AI, so it takes pictures as the chat does.
+  const pictures = useImageAttachments();
   const submit = useCallback(async (raw: string) => {
     const text = raw.trim();
-    if (!text || sent === 'sending') return;
+    const images = pictures.images;
+    if ((!text && images.length === 0) || sent === 'sending') return;
     setSent('sending');
-    const ok = await send(sessionId, text);
-    log.info('taskbar', 'card message sent', { sessionId, ok });
-    if (ok) setDraft('');
+    const ok = await send(sessionId, text, images.length ? images : undefined);
+    log.info('taskbar', 'card message sent', { sessionId, ok, images: images.length });
+    if (ok) { setDraft(''); pictures.clear(); }
     setSent(ok ? 'sent' : 'failed');
-  }, [send, sent, sessionId]);
+  }, [send, sent, sessionId, pictures]);
 
   return createPortal(
     <div
@@ -232,6 +236,7 @@ function PeekCard({ sessionId, task, title, state, anchorRef, processStatus, onO
         sendLabel="Send"
         sending={sent === 'sending'}
         ariaLabel={`Message ${title}`}
+        pictures={pictures}
         onChange={(text) => { setDraft(text); if (sent !== 'sending') setSent('idle'); }}
         onSubmit={(text) => { void submit(text); }}
       />

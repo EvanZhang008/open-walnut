@@ -11,8 +11,13 @@
   background: var(--bg-secondary, var(--bg));
   color: var(--fg);
   overflow-x: auto;
-  scrollbar-width: thin;
 }
+/* A standard scrollbar value switches ::-webkit-scrollbar off in WebKit and Chromium and draws
+   the native track (white in the Mac app), so it is only for engines without the pseudo. */
+@supports not selector(::-webkit-scrollbar) { .session-taskbar { scrollbar-width: thin; } }
+.session-taskbar::-webkit-scrollbar { height: 6px; }
+.session-taskbar::-webkit-scrollbar-track { background: transparent; }
+.session-taskbar::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 22%, transparent); border-radius: 3px; }
 
 .session-taskbar-chip {
   flex: 0 0 auto;
