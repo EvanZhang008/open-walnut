@@ -336,8 +336,8 @@ defineOp({
   description:
     'The live state a plugin App shares about your task, whole: for example the code typed in its editor (saved or not), ' +
     'the last test run, a timer. Messages into your session already carry what changed since you last read it ' +
-    '(a <walnut-message kind="app-state"> note); call this when you need all of it. `briefs` holds what an App gave you alone ' +
-    '(a rubric, notes, a reference), whole: it is for you, never to quote to the person unless the App\'s rules allow it. ' +
+    '(a <walnut-message kind="app-state"> note); call this when you need all of it. `briefs` names what an App gave you alone ' +
+    '(a rubric, notes, a reference) without its text: that comes whole as a note ahead of your next message, and is never to be quoted to the person unless the App\'s rules allow it. ' +
     'Read-only; it never changes the App.',
   input: {},
   bind: { method: 'GET', path: '/me/app-state' },
@@ -348,7 +348,7 @@ defineOp({
     const shared = count === 1 ? 'One App shares state about your task.' : count ? `${count} Apps share state about your task.` : 'No App shares state about your task.';
     return withOutcome(
       { ...read },
-      briefs ? `${shared} ${briefs === 1 ? 'One App brief is' : `${briefs} App briefs are`} for you alone: hold it, do not quote it to the person.` : shared,
+      briefs ? `${shared} ${briefs === 1 ? 'One App brief is' : `${briefs} App briefs are`} for you alone; its text comes as a note ahead of your next message.` : shared,
       count || briefs ? 'Later messages carry only what changes after this read.' : 'Nothing else is required.',
     );
   },

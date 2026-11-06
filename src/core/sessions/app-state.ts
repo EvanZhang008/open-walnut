@@ -375,10 +375,8 @@ export async function readAppState(
       taskId: entry.taskId, state: entry.state, version: entry.version, compactUuid: record.lastCompactUuid ?? '',
     });
   }
-  // The session read every brief whole: the next note starts from here (app-brief.ts).
-  const briefs = briefsOf(record.taskId);
-  rememberBriefsTold(sessionId, briefs.map((b) => ({ owner: b.plugin, taskId: record.taskId!, text: b.text, version: b.version })), record.lastCompactUuid ?? '');
-  return { taskId: record.taskId, states, briefs };
+  // The briefs by name only: their text reaches the model as a note, never as a tool result (app-brief.ts).
+  return { taskId: record.taskId, states, briefs: briefsOf(record.taskId) };
 }
 
 function scheduleProactive(taskId: string, owner: string, nowMs: number): void {

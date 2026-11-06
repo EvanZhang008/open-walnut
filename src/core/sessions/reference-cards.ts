@@ -452,9 +452,10 @@ export function stripReferenceCards(text: string): string {
  * registry may carry the old bracket lines (output-mode.ts stripLegacyHintLines).
  */
 export function projectUserText(text: string, at?: number | string | null): { text: string; hints: CarriedHint[] } {
-  const parsed = parseHinted(text);
-  // An App's AI-only brief keeps its fold and loses its body (lib/ai-only-envelope.ts).
-  return { text: redactAiOnly(stripReferenceCards(stripLegacyHintLines(parsed.text, at))), hints: parsed.hints };
+  // An App's AI-only brief keeps its fold and loses its body FIRST (lib/ai-only-envelope.ts): no
+  // parse below may read inside it (a hint or a reference card in its text is its text).
+  const parsed = parseHinted(redactAiOnly(text));
+  return { text: stripReferenceCards(stripLegacyHintLines(parsed.text, at)), hints: parsed.hints };
 }
 
 export function toDisplayedUserText(text: string, at?: number | string | null): string {

@@ -1442,10 +1442,12 @@ export interface AppStateService {
   /**
    * Give the AI on `taskId` background that is for it only (the rubric it grades by, notes behind
    * the task, a reference to guide toward): Walnut tells the text whole, once per session, ahead
-   * of the next message, and again after each compaction (the compaction hook says it is coming);
+   * of the next message (the first message of a session Walnut starts included), and again after
+   * each compaction (the compaction hook says it is coming);
    * a new text is told again, only its added part when it extends the old one; the same text is
    * never told twice. Every view a person reads (the session timeline on the web and the phone)
-   * shows a fold, never the text, so show the person what you decide, when you decide. At most
+   * shows a fold, never the text, and `app_state` names it without its text, so show the person
+   * what you decide, when you decide. At most
    * 48 KB, always told whole; an empty text clears it. Server side only: the App in the browser
    * can neither set nor read it. In memory on the primary Walnut, like `publish`: set it again
    * when your App opens. Absent on a Walnut older than this API.

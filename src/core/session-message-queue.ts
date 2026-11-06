@@ -48,7 +48,8 @@ import { frameForSource } from './sessions/send-frame.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
-import { keepAiOnly } from '../lib/ai-only-envelope.js';
+import { hasAiOnly, keepAiOnly } from '../lib/ai-only-envelope.js';
+import { forgetBriefsTold } from './sessions/app-brief.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -297,7 +298,8 @@ export async function sendMessageToSession(
   // A slash command must start its line or the CLI no longer reads it as one: Walnut's notes wait
   // for the next message (each is told only when the row holds it, below).
   const slashCommand = body.trimStart().startsWith('/');
-  const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
+  // App state leads: an App's AI-only brief counts only at the head of a line (lib/ai-only-envelope.ts).
+  const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const lead = [notes, switchContext?.text].filter(Boolean).join('\n\n');
   const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
   let msg: QueuedMessage;
@@ -585,6 +587,7 @@ export async function editMessage(
   sessionId: string, messageId: string, newText: string, opts?: { onlyUnsent?: boolean },
 ): Promise<boolean> {
   let stored: string | undefined;
+  let droppedBrief = false;
   const ok = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
@@ -596,10 +599,13 @@ export async function editMessage(
     // Its hint blocks stay (their state is already recorded); the new words are escaped.
     // A slash command stays byte-exact (the CLI reads a command only at the start).
     // An App's AI-only brief on the row stays as it was: the editor saw its fold (lib/ai-only-envelope.ts).
+    if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = true;
     msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, newText));
     stored = msg.message;
     return true;
   });
+  // A command goes to the CLI raw: the brief that rode the row is owed again (sessions/app-brief.ts).
+  if (ok && droppedBrief) forgetBriefsTold(sessionId);
   // The "Prompt is too long" recovery resends a row as it reaches the session: the edited words.
   if (ok && stored !== undefined) {
     const text = stored;
@@ -624,6 +630,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
   const keptEarly = early && !before.some((m) => m.id !== messageId && m.status === 'pending' && !m.message.trimStart().startsWith('/'))
     ? await keepSwitchContext(sessionId, early) : false;
   let keep: string | null = null;
+  let droppedBrief = false;
   const deleted = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
@@ -633,6 +640,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (queue[idx].status === 'processing') return false;
 
     const [removed] = queue.splice(idx, 1);
+    if (hasAiOnly(removed.message)) droppedBrief = true;
     // The engine switch's carried context rode this row: the next queued row takes it, else the
     // session record keeps it for the next send (engine-switch-io.ts).
     const carried = switchContextIn(removed.message);
@@ -651,6 +659,8 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     return true;
   }, false, true);
   if (deleted && keep && !keptEarly) await keepSwitchContext(sessionId, keep);
+  // The brief that rode the removed row never reached the model: the next message carries it again.
+  if (deleted && droppedBrief) forgetBriefsTold(sessionId);
   if (keptEarly && (!deleted || !keep)) await dropKeptSwitchContext(sessionId);
   return deleted;
 }

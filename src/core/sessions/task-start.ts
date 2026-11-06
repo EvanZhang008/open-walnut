@@ -434,10 +434,17 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         }) + (replyTrailer ? `\n${replyTrailer}` : '');
         // The reply trailer after an envelope that is not the request's own reads as typed words: frame the whole.
         if (replyTrailer && readsAsPerson(firstMessage)) firstMessage = frameAsWalnut(firstMessage, params.source);
+        // The first message carries what an App gave the task (its state, an AI-only brief) as every
+        // later one does: it does not pass the queue (app-state.ts; the brief leads the line).
+        const { pendingAppState } = await import('./app-state.js');
+        const appState = sid ? await pendingAppState(sid, firstMessage) : null;
+        if (appState) firstMessage = `${appState.text}\n\n${firstMessage}`;
         const starting = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
+          appState?.markTold();
           await settle({ state: 'started', session_id: ready.claudeSessionId });
           return { ...result, sessionId: ready.claudeSessionId, started: true };
         }, async (error) => {
+          appState?.release();
           await settle({ state: isDaemonCommandOutcomeUnknown(error) ? 'unconfirmed' : 'failed', error: String(error) });
           throw error;
         });

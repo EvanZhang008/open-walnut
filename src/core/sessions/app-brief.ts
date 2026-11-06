@@ -12,13 +12,18 @@
  *     as an app-state note, so it costs no turn);
  *   - again after a compaction, whose summary may drop it (a new boundary voids
  *     what the session was told), and the compaction hook says it is coming;
+ *   - ahead of the first message of a session Walnut starts for the task too
+ *     (task-start.ts), an engine switch's included;
+ *   - again when a queued row that carried it is discarded, or edited into a
+ *     command, before it reached the model (session-message-queue.ts);
  *   - again when the plugin sets a different text: only the added part when the
  *     new text extends the old one, else the new text whole.
  *
  * Never cut: a brief longer than MAX_BRIEF_BYTES is refused at set, so the AI
  * never gets a pointer in place of the text it must hold. The envelope carries
- * `ai-only="true"`, and every view a person reads shows its fold, never its body
- * (history-session-envelope.ts). In memory on the leader, like app state: a
+ * `ai-only="true"` and leads the line, and every view a person reads shows its
+ * fold, never its body (lib/ai-only-envelope.ts); `app_state` names it without
+ * its text, since a tool result is a view too. In memory on the leader, like app state: a
  * restart forgets it, and the plugin sets it again when its App opens.
  */
 
@@ -223,22 +228,31 @@ export function rememberBriefsTold(sessionId: string, notes: Array<Pick<BriefNot
   for (const n of notes) byOwner.set(n.owner, { taskId: n.taskId, text: n.text, version: n.version, compactUuid });
 }
 
+/** What the session was told goes: a row that carried it never reached the model. */
+export function forgetBriefsTold(sessionId: string): void {
+  told.delete(sessionId);
+}
+
 export interface AppBriefView {
   plugin: string;
   label: string;
   version: number;
   updatedAt: string;
-  text: string;
+  bytes: number;
 }
 
-/** Every brief for the task, whole, for the session's own read (`app_state`). */
+/**
+ * The briefs of the task, without their text, for the session's own read (`app_state`): a tool
+ * result is a view the person reads (the web's expanded tool, the phone's preview), so the text
+ * reaches the model only as a note ahead of a message.
+ */
 export function briefsOf(taskId: string): AppBriefView[] {
   return [...(briefs.get(taskId)?.values() ?? [])].map((entry) => ({
     plugin: entry.owner,
     label: entry.label,
     version: entry.version,
     updatedAt: new Date(entry.updatedAt).toISOString(),
-    text: entry.text,
+    bytes: Buffer.byteLength(entry.text, 'utf8'),
   }));
 }
 
@@ -250,7 +264,7 @@ export function briefsOf(taskId: string): AppBriefView[] {
 export function briefAfterCompactionLine(taskId: string): string {
   const labels = [...(briefs.get(taskId)?.values() ?? [])].map((b) => b.label);
   if (labels.length === 0) return '';
-  return `The App brief from ${labels.join(' and ')} (for the AI only) may be missing from this summary: it comes again, whole, ahead of the next message, and \`walnut tools call app_state\` reads it now.`;
+  return `The App brief from ${labels.join(' and ')} (for the AI only) may be missing from this summary: it comes again, whole, ahead of the next message.`;
 }
 
 /** Test seam: forget everything. */

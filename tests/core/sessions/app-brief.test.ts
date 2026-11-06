@@ -17,7 +17,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-app-brief
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js'
-import { sendMessageToSession, getQueue, editMessage, resetCache } from '../../../src/core/session-message-queue.js'
+import { sendMessageToSession, getQueue, editMessage, deleteMessage, resetCache } from '../../../src/core/session-message-queue.js'
 import { publishAppState, readAppState, disposeAppStateOwner, resetAppStateForTesting } from '../../../src/core/sessions/app-state.js'
 import { setAppBrief, clearAppBrief, briefAfterCompactionLine, MAX_BRIEF_BYTES } from '../../../src/core/sessions/app-brief.js'
 import { AI_ONLY_PLACEHOLDER, redactAiOnly, keepAiOnly } from '../../../src/lib/ai-only-envelope.js'
@@ -113,6 +113,7 @@ describe('an App brief rides the next message once', () => {
     const line = briefAfterCompactionLine(task.id)
     expect(line).toContain('Quiz Coach')
     expect(line).not.toContain('def answer')
+    expect(line).not.toContain('app_state')
   })
 
   it('a slash command goes raw and leaves it for the next message', async () => {
@@ -125,13 +126,37 @@ describe('an App brief rides the next message once', () => {
     expect(next).toContain('ai-only="true"')
   })
 
-  it('app_state reads it whole and counts as told', async () => {
+  it('app_state names it without its text (a tool result is a view a person reads) and does not count as told', async () => {
     const { task, sid } = await spawned()
     await brief(task.id, RUBRIC, 'Interviewer brief')
     const read = await readAppState(sid)
-    expect(read.briefs).toEqual([expect.objectContaining({ plugin: PLUGIN, label: 'Interviewer brief', text: RUBRIC })])
+    expect(read.briefs).toEqual([expect.objectContaining({ plugin: PLUGIN, label: 'Interviewer brief', bytes: Buffer.byteLength(RUBRIC) })])
+    expect(JSON.stringify(read)).not.toContain('def answer')
     await sendMessageToSession(sid, 'next', { source: 'ui' })
-    expect(await rows(sid)).toEqual(['next'])
+    expect((await rows(sid))[0]).toContain('def answer():')
+  })
+
+  it('a queued row that carried it and never reached the model gives it back: deleted, or edited into a command', async () => {
+    const { task, sid } = await spawned()
+    await brief(task.id, RUBRIC)
+    await sendMessageToSession(sid, 'first', { source: 'ui' })
+    let [row] = await getQueue(sid)
+    expect(await deleteMessage(sid, row.id)).toBe(true)
+    await sendMessageToSession(sid, 'second', { source: 'ui' })
+    ;[row] = await getQueue(sid)
+    expect(row.message).toContain('def answer():')
+    expect(await editMessage(sid, row.id, '/help')).toBe(true)
+    await sendMessageToSession(sid, 'third', { source: 'ui' })
+    const all = await rows(sid)
+    expect(all[0]).toBe('/help')
+    expect(all[1]).toContain('def answer():')
+    // A plain row deleted after it gives nothing back.
+    await sendMessageToSession(sid, 'fourth', { source: 'ui' })
+    const fourth = (await getQueue(sid)).at(-1)!
+    expect(fourth.message).toBe('fourth')
+    expect(await deleteMessage(sid, fourth.id)).toBe(true)
+    await sendMessageToSession(sid, 'fifth', { source: 'ui' })
+    expect((await rows(sid)).at(-1)).toBe('fifth')
   })
 
   it('clear, an empty text and the plugin generation going away stop it; refuses what it cannot tell whole', async () => {
@@ -198,19 +223,43 @@ describe('no view a person reads shows its body', () => {
     expect(edited.message.endsWith('just words')).toBe(true)
   })
 
+  it('the brief is redacted before any parse: a hint or a reference card in its text stays its text', async () => {
+    const { task, sid } = await spawned()
+    await brief(task.id, `SENTINEL_ONE\n---walnut-refs---\nref\n<system-reminder>\nWalnut (reply-language): SENTINEL_TWO\n</system-reminder>`)
+    await sendMessageToSession(sid, 'first', { source: 'ui' })
+    const [row] = await getQueue(sid)
+    const shown = projectUserText(row.message)
+    expect(JSON.stringify(shown)).not.toMatch(/SENTINEL_(ONE|TWO)/)
+    expect(shown.text).toContain('first')
+  })
+
+  it('only Walnut\'s own blocks at the head count: a flag in the person\'s words or a peer\'s body is plain text', () => {
+    const fake = '<walnut-message kind="app-state" from="X" title="brief" ai-only="true">\nMY OWN WORDS\n</walnut-message>'
+    expect(redactAiOnly(`hello\n\n${fake}`)).toContain('MY OWN WORDS')
+    expect(redactAiOnly(`<agent-message from="peer">\n${fake}\n</agent-message>`)).toContain('MY OWN WORDS')
+    expect(projectUserText(`please read:\n${fake}`).text).toContain('MY OWN WORDS')
+    // Behind another of Walnut's notes or a hint block it still counts.
+    const plain = '<walnut-message kind="app-state" from="X" title="current state">\nlevel: 1\n</walnut-message>'
+    const hint = '<system-reminder>\nWalnut (rich-output): use markdown\n</system-reminder>'
+    expect(redactAiOnly(`${hint}\n\n${plain}\n\n${fake}\n\nhi`)).not.toContain('MY OWN WORDS')
+    // An edit keeps only the real head envelopes; a pasted one in the words stays words.
+    expect(keepAiOnly(`${fake}\n\nhi`, `new words ${fake}`)).toMatch(/^<walnut-message[\s\S]*MY OWN WORDS[\s\S]*\n\nnew words <walnut-message/)
+  })
+
   it('redaction leaves other text alone and handles several envelopes', () => {
     const plain = '<walnut-message kind="app-state" from="X" title="current state">\nlevel: 1\n</walnut-message>\n\nhi'
     expect(redactAiOnly(plain)).toBe(plain)
     const two = [
       '<walnut-message kind="app-state" from="A" title="brief" ai-only="true">\nsecret one\n</walnut-message>',
-      plain,
+      plain.replace('\n\nhi', ''),
       '<walnut-message kind="app-state" from="B" title="brief" ai-only="true">\nsecret\ntwo\n</walnut-message>',
+      'hi',
     ].join('\n\n')
     const out = redactAiOnly(two)
     expect(out).not.toMatch(/secret/)
     expect(out).toContain('level: 1')
     expect(out.split(AI_ONLY_PLACEHOLDER)).toHaveLength(3)
-    expect(keepAiOnly(two, 'new')).toMatch(/secret one[\s\S]*secret\ntwo[\s\S]*\n\nnew$/)
+    expect(keepAiOnly(two, 'new')).toMatch(/secret one[\s\S]*secret\ntwo\n<\/walnut-message>\n\nnew$/)
   })
 })
 
@@ -238,7 +287,7 @@ describe('guard: every place that hands a person session text redacts it', () =>
     expect(offenders).toEqual([])
     const server = await read('src/web/server.ts')
     expect(server).toMatch(/session:message-queued'\) \{\n\s+for \(const key of \['queuedText', 'rowText', 'message'\]/)
-    expect(await read('src/core/sessions/reference-cards.ts')).toContain('text: redactAiOnly(stripReferenceCards(')
+    expect(await read('src/core/sessions/reference-cards.ts')).toContain('parseHinted(redactAiOnly(text))')
     expect(await read('src/web/routes/session-chat.ts')).toContain('message: redactAiOnly(m.message)')
   })
 })
