@@ -80,6 +80,9 @@ export interface MenuPlacementOptions {
     y: number;
     /** The anchor's bottom when it is a line rather than a point (default `y`). */
     bottom?: number;
+    /** The anchor's right edge when it is a box (a button) and `x` its left edge:
+     *  a 'start' menu that would run off the right then right-aligns to it. */
+    right?: number;
   } | null;
   /**
    * Horizontal alignment relative to the anchor. Default 'right' (menu's right
@@ -339,7 +342,9 @@ export function useMenuPlacement(
           : null);
       // Vertical anchor: the element's own top/bottom, the trigger's left/right.
       const r = anchorPoint
-        ? { top: anchorPoint.y, bottom: anchorPoint.bottom ?? anchorPoint.y, right: anchorPoint.x }
+        ? (anchorPoint.right !== undefined
+          ? { top: anchorPoint.y, bottom: anchorPoint.bottom ?? anchorPoint.y, left: anchorPoint.x, right: anchorPoint.right }
+          : { top: anchorPoint.y, bottom: anchorPoint.bottom ?? anchorPoint.y, right: anchorPoint.x })
         : triggerRect && vertical && vertical.isConnected && vertical.offsetHeight > 0
           ? (() => { const v = vertical.getBoundingClientRect(); return { top: v.top, bottom: v.bottom, left: triggerRect.left, right: triggerRect.right }; })()
           : triggerRect;

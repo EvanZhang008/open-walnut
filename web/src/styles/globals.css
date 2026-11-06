@@ -32646,7 +32646,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: var(--quote-comment-w, min(340px, calc(100vw - 32px), calc(var(--quote-menu-room, 100vw) - 10px)));
+  width: min(320px, calc(100vw - 32px), calc(var(--quote-menu-room, 100vw) - 10px));
   padding: 2px;
   /* The hint drops its second half in a narrow box. */
   container-type: inline-size;

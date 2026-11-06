@@ -216,10 +216,15 @@ async function expectMenu(page: Page, scope: Locator, phrase: string, anchor: Lo
   const barAbove = bar.y + bar.height <= Math.min(...words.map((r) => r.top)) + 0.5
   if (barAbove) expect(above, `opens up from a bar above the words (${at})`).toBeGreaterThanOrEqual(-0.5)
   else if (a.y + a.height + 4 + g.box.height + 8 <= g.vh) expect(below, `drops down from its button (${at})`).toBeGreaterThanOrEqual(-0.5)
-  const aligned = Math.abs(g.box.x - a.x) <= 2 || Math.abs(g.box.x + g.box.width - (a.x + a.width)) <= 2
-    || Math.abs(g.box.x - bar.x) <= 2
-    || g.box.x <= edgeL + 6 || g.box.x + g.box.width >= edgeR - 6
-  expect(aligned, `lined up with its button or the bar, or held at its column's edge (${at})`).toBe(true)
+  // A dropdown off its own button: left edges meet, or right edges where the column
+  // leaves no room to the right; only a menu wider than either side of the button
+  // is held at the column's edge.
+  const leftMeets = Math.abs(g.box.x - a.x) <= 2
+  const rightMeets = Math.abs(g.box.x + g.box.width - (a.x + a.width)) <= 2
+  // The menu keeps a 4px margin inside its column (QuotePinSelectionBar's placement).
+  const neitherFits = a.x + g.box.width > edgeR - 4.5 && a.x + a.width - g.box.width < edgeL + 4.5
+  expect(leftMeets || rightMeets || (neitherFits && (g.box.x <= edgeL + 6 || g.box.x + g.box.width >= edgeR - 6)),
+    `hangs from its own button: left ${Math.round(g.box.x - a.x)}px, right ${Math.round(g.box.x + g.box.width - a.x - a.width)}px off it (${at})`).toBe(true)
   expect(overlaps(g.box, { left: bar.x, right: bar.x + bar.width, top: bar.y, height: bar.height }), `the menu is not drawn on the bar (${at})`).toBe(false)
   expect(await layout(scope), `the conversation did not move (${at})`).toEqual(before)
   // It opens away from the passage, so the words it is about stay in view.

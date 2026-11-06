@@ -355,17 +355,17 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     const bar = pillRef.current;
     const btn = askPick ? askGroupRef.current : commentBtnRef.current;
     if (!menuOpen || !placement || !bar || !btn) return null;
-    // Ask here's choice drops from its caret's group; the Comment box, as wide as the
-    // bar, lines up with the bar's left edge so the two read as one control.
+    // Each drops from its own button, as any dropdown does: Ask here's choice from
+    // its caret's group, the Comment box from Comment. Left edges meet; where the
+    // column leaves no room to the right, right edges meet instead.
     const barLeft = window.innerWidth - placement.right - bar.offsetWidth;
-    const left = askPick ? barLeft + bar.clientLeft + btn.offsetLeft : barLeft;
+    const left = barLeft + bar.clientLeft + btn.offsetLeft;
     const top = placement.top + bar.clientTop + btn.offsetTop;
-    return { x: left, y: top, bottom: top + btn.offsetHeight };
+    return { x: left, right: left + btn.offsetWidth, y: top, bottom: top + btn.offsetHeight };
   }, [menuOpen, placement, askPick]);
   const menuPlacement = useMenuPlacement(menuOpen && !!menuAnchor, noTrigger, menuRef, {
     anchorPoint: menuAnchor,
     align: 'start',
-    edgeOverflow: 'clamp',
     preferSide: side,
     gap: MENU_GAP,
     margin: 4,
@@ -782,11 +782,6 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       style={{
         ...menuPlacementStyle(menuPlacement),
         ...(menuRoom ? { '--quote-menu-room': `${menuRoom - 12}px` } : {}),
-        // The Comment box is as wide as the bar it lines up with (no wider than the
-        // column, no narrower than its field needs).
-        ...(commentOpen && pillRef.current && menuRoom
-          ? { '--quote-comment-w': `${Math.min(Math.max(pillRef.current.offsetWidth, 300), menuRoom - 12) - 10}px` }
-          : {}),
       } as React.CSSProperties}
       data-testid="quote-pin-menu"
       {...stopPress}
