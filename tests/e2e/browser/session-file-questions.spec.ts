@@ -405,7 +405,9 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await rail.locator('.thread-map-rail').click()
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect(card).toBeVisible()
-    // The card fades in (120ms): the shot is of the settled card over the frame.
+    // Opaque from its first frame (it slides in, never fades from 0: WebKit under
+    // load renders a frame every ~300ms, and a fade left it at 0 here). The wait
+    // is for the shot of the settled card over the frame.
     await page.waitForTimeout(300)
     const opaque = await card.evaluate((el) => {
       const cs = getComputedStyle(el)

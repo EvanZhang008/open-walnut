@@ -1625,7 +1625,16 @@ export function FileContentView({
   const canAskHere = threadsApi.canAsk && !!sessionId;
   const threadLayerRef = useRef<FileThreadLayerHandle>(null);
   const askHereFromSelection = useCallback(() => {
-    threadLayerRef.current?.askSelection({ inFrame: !!selection?.inHtml, ...(selection?.line ? { line: selection.line } : {}) });
+    // The selection as the pill rose for it (as Comment does): by the pill's click
+    // the live DOM selection is gone (CodeMirror drops it; so did WebKit in the
+    // read-only views), and reading only that made `Ask here` in the Source tab,
+    // code files and the read-only views do nothing at all (2026-11-06).
+    const kept = pillRangeRef.current;
+    threadLayerRef.current?.askSelection({
+      inFrame: !!selection?.inHtml,
+      ...(selection?.line ? { line: selection.line } : {}),
+      ...(kept && !kept.collapsed ? { range: kept } : {}),
+    });
     setSelection(null);
   }, [selection]);
   const askHereFromBubble = useCallback((range: Range) => {
