@@ -76,8 +76,20 @@ test('Share new tasks: two engines turn it on, the other defaults stay, one turn
   await boxes.nth(1).uncheck()
   await expect(state).toHaveText('Off')
   await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(1)
-  await boxes.nth(0).uncheck()
+  // An engine on a named model is added in place, checked, and is an entry of its own.
+  await section.getByTestId('engine-split-add-model').fill('sonnet')
+  await section.getByTestId('engine-split-add-button').click()
+  await expect(state).toHaveText('On')
+  await expect.poll(async () => (await serverDefaults(request)).engine_split).toEqual(expect.arrayContaining([expect.objectContaining({ model: 'sonnet' })]))
+  const added = section.locator('input[type="checkbox"][data-testid$=":sonnet"]')
+  await expect(added).toBeChecked()
+  await expect(section.getByTestId('engine-split-add-button')).toBeDisabled()
+  // The switch turns the whole split off in one step.
+  await section.getByTestId('engine-split-switch').click()
+  await expect(state).toHaveText('Off')
   await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(0)
+  await expect(added).toHaveCount(0)
+  await expect(section.getByTestId('engine-split-switch')).toBeDisabled()
 })
 
 test('Engines compared: engines side by side, the best marked, a project filter, the tasks behind it', async ({ page }) => {
@@ -135,6 +147,11 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('errored', 1)).toHaveAttribute('data-best', 'true')
   // Unranked rows (counts) mark nothing.
   await expect(table.locator('tr[data-metric="done"] td[data-best]')).toHaveCount(0)
+  // One line on who is ahead where, from the same marks.
+  const verdict = card.getByTestId('usage-engines-verdict')
+  await expect(verdict).toContainText('Fastest: Codex · GPT')
+  await expect(verdict).toContainText('Fewest review rounds: Claude Code · Claude')
+  await expect(verdict).toContainText('Fewest errors: Claude Code · Claude')
   await card.screenshot({ path: path.join(SHOTS, `engines-card-${test.info().project.name}.png`) })
 
   await card.getByTestId('usage-engines-project').selectOption('Walnut')

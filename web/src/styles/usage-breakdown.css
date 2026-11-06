@@ -114,6 +114,7 @@
 .usage-ec-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
 .usage-ec-split { margin: 0; font-size: 12px; color: var(--fg-muted); flex: 1 1 260px; }
 .usage-ec-project { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+.usage-ec-verdict { margin: 10px 0 6px; font-size: 13px; font-weight: 600; color: var(--fg); }
 .usage-ec-scroll { overflow-x: auto; }
 .usage-ec-table { table-layout: auto; min-width: 420px; }
 .usage-ec-table th.num { white-space: nowrap; }

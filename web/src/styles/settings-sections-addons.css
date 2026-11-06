@@ -485,3 +485,8 @@ span.plugin-store-why {
   font-size: 13px;
   color: var(--text-secondary, var(--fg-muted));
 }
+
+/* Settings, Sessions, "Share new tasks" (EngineSplitRow): the state word beside its off switch, and the add row. */
+.engine-split-switch { display: inline-flex; align-items: center; gap: 8px; }
+.engine-split-add { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.engine-split-add .settings-input { width: 180px; max-width: 100%; }

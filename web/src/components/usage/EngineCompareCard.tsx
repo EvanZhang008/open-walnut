@@ -97,14 +97,33 @@ const METRICS: Metric[] = [
   { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review" or "Reviewer"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
-    value: (r) => (r.reviewCostPerTask === 0 && r.done > 0 && reviewPartial(r) >= r.done ? null : r.reviewCostPerTask),
+    // No reviews: nothing to show, as a cost with no usage recorded reads.
+    value: (r) => (r.reviewsPerTask === 0 || (r.reviewCostPerTask === 0 && r.done > 0 && reviewPartial(r) >= r.done) ? null : r.reviewCostPerTask),
     show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial,
     partialNote: (n) => `${finishedWord(n)} had reviewers whose cost leaves out ${LEFT_OUT}` },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of the tasks it finished that were reopened, those being worked on again included.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
-  { id: 'switched', label: 'Moved to another engine', help: 'Assigned here by the split, but most of its cost ran on another engine (a switch or a rescue). Counted in the column the split assigned; counting only the split\'s tasks, the task itself stays there too. A Claude Code task whose subagents ran mostly on another model counts as moved as well.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0) },
+  { id: 'switched', label: 'Moved to another engine', help: 'The split assigned it one engine, but most of its cost ran on another (a switch or a rescue). Counted in the column it was assigned, in either view. A Claude Code task whose subagents ran mostly on another company\'s model counts as moved as well.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
 ];
+
+/** The rows the table shows: a row only some engines have is shown when one has it. */
+const shownMetrics = (rows: EngineCompareRow[]) => METRICS.filter((m) => !m.onlyWhenAny || rows.some((r) => (m.value(r) ?? 0) > 0));
+
+/** How the one-line verdict names the best of a row. */
+const VERDICT: Record<string, string> = {
+  time: 'Fastest', cost: 'Cheapest', tokens: 'Fewest tokens', reviews: 'Fewest review rounds', reviewcost: 'Cheapest reviews',
+  followups: 'Fewest of your messages', reopens: 'Reopened least', errored: 'Fewest errors',
+};
+
+/** One sentence on who is ahead where, from the rows' best marks; or why no one is yet. */
+function verdictOf(rows: EngineCompareRow[], best: Map<string, string | null>, label: (key: string) => string): string | null {
+  if (rows.length < 2) return null;
+  const wins = METRICS.filter((m) => VERDICT[m.id] && best.get(m.id)).map((m) => `${VERDICT[m.id]}: ${label(best.get(m.id)!)}`);
+  if (wins.length) return `${wins.join('. ')}.`;
+  const short = rows.filter((r) => r.done < FEW).length;
+  return short ? `Too few finished tasks to call a winner yet: each engine needs ${FEW} finished tasks behind a value.` : 'No engine is clearly ahead on any row yet.';
+}
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
 function bestOf(rows: EngineCompareRow[], m: Metric): string | null {
@@ -185,6 +204,10 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
           <SettingsEmpty>No task finished or started in this period.</SettingsEmpty>
         ) : (
           <>
+            {(() => {
+              const v = ready ? verdictOf(data.rows, best, label) : null;
+              return v ? <p className="usage-ec-verdict" data-testid="usage-engines-verdict">{v}</p> : null;
+            })()}
             <div className="usage-ec-scroll">
               <table className="usage-bd-table usage-ec-table" data-testid="usage-engines-table">
                 <thead>
@@ -198,7 +221,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                   </tr>
                 </thead>
                 <tbody>
-                  {METRICS.filter((m) => !m.onlyWhenAny || data.rows.some((r) => (m.value(r) ?? 0) > 0)).map((m) => (
+                  {shownMetrics(data.rows).map((m) => (
                     <tr key={m.id} data-metric={m.id}>
                       <td title={m.help}>{m.label}</td>
                       {data.rows.map((r) => (
@@ -213,15 +236,16 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
               </table>
             </div>
             <p className="usage-bd-foot">
-              {`${data.splitOnly ? 'A task counts under the engine the split assigned it, even when it moved to another.' : 'A task counts under the engine and model that carried most of its cost.'} A task counts by the day it first finished (a reopened one too), or the day it started if it never finished. Main, leads, asks and routine runs are left out. The best value of a row is in bold, among engines with ${FEW} or more tasks behind that value (finished, and with a known cost or time where the row needs one); "+?" marks a value that leaves out requests to a model with no price or tasks with no usage recorded.`}
+              {`${data.splitOnly ? 'Each task counts under the engine the split assigned it.' : 'Each task counts under the engine and model that carried most of its cost.'} The best value of a row is in bold. "-" means nothing to show yet (no usage recorded, no finished task or no reviews); "+?" marks a value that leaves some usage out.`}
             </p>
             {!data.splitOnly && split?.on && (
               <p className="usage-bd-foot" data-testid="usage-engines-bias">Counting every task: a lead may have picked an engine by hand for some of them, so this is not a fair test. "Assigned by the split" is.</p>
             )}
             <details className="usage-more" data-testid="usage-engines-defs">
-              <summary>What each row means</summary>
+              <summary>How these are counted</summary>
+              <p className="usage-bd-foot">{`A task counts by the day it first finished (a reopened one too), or the day it started if it never finished. Main, leads, asks and routine runs are left out. A row's best is marked only among engines with ${FEW} or more tasks behind that value (finished, and with a known cost or time where the row needs one). Usage is read from each engine's own records, so a task's cost can show up some minutes after it ran; an engine Walnut reads no usage from shows "-".`}</p>
               <dl className="usage-ec-defs">
-                {METRICS.filter((m) => m.help).map((m) => <div key={m.id}><dt>{m.label}</dt><dd>{m.help}</dd></div>)}
+                {shownMetrics(data.rows).filter((m) => m.help).map((m) => <div key={m.id}><dt>{m.label}</dt><dd>{m.help}</dd></div>)}
               </dl>
             </details>
             <details className="usage-more" data-testid="usage-engines-tasks">

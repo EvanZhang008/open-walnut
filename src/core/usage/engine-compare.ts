@@ -34,6 +34,13 @@ export function modelFamily(model: string | undefined | null): ModelFamily | nul
   return 'Other';
 }
 
+/** A model line within a family, from its id ("claude-sonnet-5-5" is Sonnet, "gpt-6.1-sol" is Sol); null when it names none. */
+const TIER = /(?:^|[^a-z])(opus|sonnet|haiku|fable|sol|astra|luna|flash|pro|mini|nano)(?=[^a-z]|$)/;
+export function modelTier(model: string | undefined | null): string | null {
+  const hit = TIER.exec((model ?? '').trim().toLowerCase());
+  return hit ? hit[1][0].toUpperCase() + hit[1].slice(1) : null;
+}
+
 /** What one task's usage summed to. */
 export interface TaskSpend {
   costUsd: number;
@@ -176,10 +183,25 @@ function usageUnknown(spend: TaskSpend | undefined): boolean {
   return !spend || (spend.unknown > 0 && spend.tokens === 0 && spend.costUsd === 0);
 }
 
-/** A split entry's name, as its column is named in the fair view: "Claude Code · Claude (sonnet)". */
+/**
+ * A column's name: the engine alone on its own company's models ("Claude Code", "Codex"), with the model
+ * line when one is known ("Claude Code · Sonnet"), and the company when it is another's ("Claude Code · GPT Sol").
+ */
+function columnLabel(engine: string, family: ModelFamily, tier: string | null): string {
+  const name = builderLabel({ engine: engine as SessionEngine });
+  const own = ENGINE_FAMILY[engine] === family;
+  if (tier) return `${name} · ${own ? '' : `${family} `}${tier}`;
+  return own ? name : `${name} · ${family}`;
+}
+
+/** A split entry's name, as its column is named in the fair view: "Claude Code", "Claude Code · Sonnet". */
 function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
-  const fam = modelFamily(b.model) ?? ENGINE_FAMILY[resolveEngine(b.engine)] ?? 'Other';
-  return `${builderLabel({ engine: b.engine })} · ${fam}${b.model ? ` (${b.model})` : ''}`;
+  const engine = resolveEngine(b.engine);
+  const fam = modelFamily(b.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
+  const tier = modelTier(b.model);
+  // A model id of no known line (an alias) is named as it is.
+  if (b.model && !tier) return `${builderLabel({ engine: b.engine })} · ${b.model}`;
+  return columnLabel(engine, fam, tier);
 }
 
 type SessionFacts = CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R : never;
@@ -276,7 +298,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
     if (!spend || spend.unpriced > 0 || spend.unknown > 0) reviewPartial.add(t.parent_task_id);
   }
-  // A column: `key` names it; `familyKey` is the engine + model family it belongs to (the All view's columns).
+  // A column: `key` names it; `familyKey` is the engine, model family and model line it belongs to (the All view's columns).
   type Group = { key: string; familyKey: string; engine: string; family: ModelFamily; label: string };
   type Candidate = EngineCompareTask & { byCost: Group; byPick: Group | null; everDone: boolean; notStarted: boolean; sortAt: string };
   const entryLabel = new Map(splitBuilders(input.config).map((b) => [b.key, entryLabelOf(b)]));
@@ -317,10 +339,13 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const engine = resolveEngine(spend?.engine ?? session?.engine ?? t.engine_pick?.engine ?? t.last_start?.engine);
     // The first signal that names a known family; a model id of no known family (a proxy alias) falls
     // through to the next, so one engine is not split into a known column and an "Other" one.
-    const signals = [spend?.model, session?.acpModel ?? session?.cliModel ?? session?.model, t.engine_pick?.model].map(modelFamily);
-    const family = signals.find((f): f is ModelFamily => !!f && f !== 'Other') ?? ENGINE_FAMILY[engine] ?? 'Other';
-    const familyKey = `${engine}|${family}`;
-    const byCost: Group = { key: familyKey, familyKey, engine, family, label: `${builderLabel({ engine: engine as SessionEngine })} · ${family}` };
+    const named = [spend?.model, session?.acpModel ?? session?.cliModel ?? session?.model, t.engine_pick?.model]
+      .find((m) => { const f = modelFamily(m); return !!f && f !== 'Other'; });
+    const family = (named ? modelFamily(named) : null) ?? ENGINE_FAMILY[engine] ?? 'Other';
+    // The All view's column: the engine and the model line of that same signal (Opus and Sonnet apart).
+    const tier = named ? modelTier(named) : null;
+    const lineKey = `${engine}|${family}|${tier ?? ''}`;
+    const byCost: Group = { key: lineKey, familyKey: lineKey, engine, family, label: columnLabel(engine, family, tier) };
     // Where the split put it: the fair test keeps a task in that column even when it was rescued elsewhere.
     let byPick: Group | null = null;
     if (t.engine_pick) {
@@ -330,7 +355,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       const pf = modelFamily(t.engine_pick.model) ?? ENGINE_FAMILY[pe] ?? (pe === engine ? family : 'Other');
       // One column per split entry: two entries of one engine and family (Claude Code and Claude Code
       // on Sonnet) are what the fair test compares, so they never merge.
-      byPick = { key: `split:${t.engine_pick.key}`, familyKey: `${pe}|${pf}`, engine: pe, family: pf,
+      byPick = { key: `split:${t.engine_pick.key}`, familyKey: `${pe}|${pf}|${modelTier(t.engine_pick.model) ?? ''}`, engine: pe, family: pf,
         label: entryLabel.get(t.engine_pick.key) ?? entryLabelOf({ engine: pe as SessionEngine, model: t.engine_pick.model }) };
     }
     const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
@@ -346,6 +371,21 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
       switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!firstDone), notStarted, sortAt: done ? t.completed_at! : startedAt,
     });
+  }
+  // A task whose signals name no model line (no usage yet, an alias) joins its engine and family's one
+  // line when there is only one, so one engine on one model is one column; with several, it stays apart.
+  const linesOf = new Map<string, Map<string, Group>>();
+  for (const c of candidates) {
+    const fk = `${c.byCost.engine}|${c.byCost.family}`;
+    if (c.byCost.key.endsWith('|')) continue;
+    if (!linesOf.has(fk)) linesOf.set(fk, new Map());
+    linesOf.get(fk)!.set(c.byCost.key, c.byCost);
+  }
+  for (const c of candidates) {
+    if (!c.byCost.key.endsWith('|')) continue;
+    const lines = linesOf.get(`${c.byCost.engine}|${c.byCost.family}`);
+    if (lines?.size === 1) c.byCost = [...lines.values()][0];
+    c.key = c.byCost.key;
   }
   const entries = splitBuilders(input.config).map((b) => ({ key: b.key, label: entryLabelOf(b), weight: b.weight }));
   const splitOn = entries.length >= 2;
@@ -364,6 +404,17 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   });
   const meta = new Map(picked.map((p) => [p.key, p.group]));
   const splitView = splitOnly;
+  // The column a moved task was assigned, where its move counts: the split's entry; counting every task,
+  // the column of the engine and family it was given (its model line when that has a column, else the
+  // family's one line), none when that is not one column.
+  const movedFrom = (p: (typeof picked)[number]): string | undefined => {
+    if (!p.byPick) return undefined;
+    if (splitView) return p.byPick.key;
+    if (meta.has(p.byPick.familyKey)) return p.byPick.familyKey;
+    const fam = `${p.byPick.engine}|${p.byPick.family}|`;
+    const lines = [...meta.keys()].filter((k) => k.startsWith(fam));
+    return lines.length === 1 ? lines[0] : undefined;
+  };
   const rows: EngineCompareRow[] = [];
   for (const [key, { engine, family, label }] of meta) {
     const all = picked.filter((p) => p.key === key);
@@ -382,7 +433,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       partialCostDone: known.filter((p) => p.partialCost).length, partialTokensDone: known.filter((p) => p.partialTokens).length,
       noUsageDone: done.length - known.length, timedDone: done.filter((p) => p.hours !== null).length,
       // Under the column the split assigned, in either view.
-      noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && (splitView ? p.byPick?.key : p.byPick?.familyKey) === key).length,
+      noUsage: all.filter((p) => p.noUsage).length, partialTokens: all.filter((p) => p.partialTokens).length, switched: picked.filter((p) => p.switched && movedFrom(p) === key).length,
       // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),

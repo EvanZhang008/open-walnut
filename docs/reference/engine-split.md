@@ -1,7 +1,9 @@
 # The engine split: share new tasks between coding engines
 
 New task work can take turns between coding engines instead of all running on one. Turn it
-on in Settings, Sessions, "Share new tasks" (check two or more engines), or in `config.yaml`:
+on in Settings, Sessions, "Share new tasks" (check two or more entries: an engine, or an engine on a
+model added there, such as Claude Code on sonnet; its switch turns the split off in one step), or in
+`config.yaml`:
 
 ```yaml
 defaults:
@@ -43,11 +45,12 @@ start refused after it (a host that went away) still took its turn.
 ## Comparing them
 
 Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&project&split`):
-per engine and model family, the tasks finished in the period, still open, assigned by the
+per engine and model line (Claude Code on Opus and on Sonnet apart; a task whose usage names no
+line joins its engine's one line when there is only one), the tasks finished in the period, still open, assigned by the
 split, median time to done, median and total cost, median tokens, review subtasks per task
 (subtasks whose title starts with "Review" or "Reviewer"; a top-level task so named is work of its own), the
 user's messages per task, reopens after completion, and tasks whose session had an error. A
-task counts under the engine and model family that carried most of its cost (dollars first,
+task counts under the engine and model that carried most of its cost (dollars first,
 tokens only for a tie); counting only the split's tasks, it counts under the engine the split
 assigned it, and "Moved to another engine" counts those whose cost mostly ran elsewhere. A
 task with no usage recorded (or only requests with no token counts) has an unknown cost and
@@ -55,7 +58,8 @@ tokens, never a zero, and a start that failed counts as an error even after a la
 succeeded. A task counts in the period of the day it first finished, reopened or not, so its rework
 stays with the work it reopened; one that never finished, by the day it started.
 
-In that view each split entry is its own column, so two entries of one engine and family
+A line above the table names who is ahead where (fastest, cheapest, fewest reopens, and so on),
+from the same marks as the bold values, or says why no one is yet. Counting only the split's tasks, each split entry is its own column, so two entries of one engine and family
 (Claude Code and Claude Code on Sonnet) are compared side by side. A closed task that never
 ran a turn (its start failed, on any engine) is neither finished nor open: it counts as not
 started, as an error, and at a known cost of $0.
