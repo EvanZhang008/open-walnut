@@ -46,11 +46,11 @@ const WORDS: ByLang<Words> = {
   },
   zh: {
     someHost: '你的远程主机',
-    genericStep: '请重新登录以续期凭据',
+    genericStep: '重新登录以续期凭据',
     names: (l) => (l.length === 2 ? `${l[0]} 和 ${l[1]}` : `${l[0]} 等 ${l.length} 台主机`),
     inAbout: (m) => (m < 60 ? `大约 ${Math.max(1, m)} 分钟后` : `大约 ${Math.round(m / 60)} 小时后`),
     subject: (names, at) => `${names} 的 SSH 证书将于 ${at} 过期`,
-    soon: (named, at, inWords, step) => `这台机器登录 ${named} 用的 SSH 证书将于 ${at} 过期（${inWords}）。过期后，那里新开的会话和测试都无法登录。为了不中断，请在此之前${step}。`,
+    soon: (named, at, inWords, step) => `这台机器登录 ${named} 用的 SSH 证书将于 ${at} 过期（${inWords}）。过期后，那里新开的会话和测试都无法登录。为了不中断，请在此之前完成：${step}。`,
     why: 'Walnut 无法替你续期：这需要你本人登录。',
     closes: '续期后的新证书就位后，这封信会自动归档。',
     expired: (named, at, step) => `证书已于 ${at} 过期，现在新建的 SSH 登录 ${named} 会失败。过期前建立的连接可能还能用一阵，但新的连接无法登录。解决办法：${step}。`,

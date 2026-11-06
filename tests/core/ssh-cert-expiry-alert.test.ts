@@ -242,6 +242,17 @@ describe('the SSH certificate letter', () => {
     expect(subject).toBe('Dev box 的 SSH 证书将于 2026-11-04 15:52 UTC 过期')
     expect(sshCertExpiredTurn('zh', { hosts: ['Dev box'], expiresAt: EXPIRES })).toContain('2026-11-04 15:52 UTC')
   })
+
+  it('a step in another script than the letter stands apart after a colon, and the generic step asks once', () => {
+    // 2026-11-06 on prod: the user's English hint ran straight into the Chinese sentence.
+    const withHint = SSH_CERT_EXPIRY.render('zh', { hosts: ['Dev box'], expiresAt: EXPIRES, now: EXPIRES - 2 * HOUR, hint: 'run your login command on this Mac.' }).markdown
+    expect(withHint).toContain('\u5b8c\u6210\uff1arun your login command on this Mac\u3002')
+    const generic = SSH_CERT_EXPIRY.render('zh', { hosts: ['Dev box'], expiresAt: EXPIRES, now: EXPIRES - 2 * HOUR }).markdown
+    expect(generic).toContain('\uff1a\u91cd\u65b0\u767b\u5f55')
+    // "please" once, never "please ... please".
+    expect(generic.split('\u8bf7').length - 1).toBe(1)
+    expect(sshCertExpiredTurn('zh', { hosts: ['Dev box'], expiresAt: EXPIRES, hint: 'run your login command' })).toContain('\uff1arun your login command\u3002')
+  })
 })
 
 describe('the sign-in letter joins the certificate letter (one expiry, one thread)', () => {
