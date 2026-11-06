@@ -11,7 +11,10 @@
  * up), the button gets a real click (locator.click), and the result must be on
  * screen:
  *  - a question card: opaque (computed opacity 1, and it stays so), inside the
- *    viewport, the topmost thing at its center, its box focused;
+ *    viewport, the topmost thing at its center, its box focused, and BESIDE the
+ *    passage: over none of its rects, under its last line (or over its first
+ *    when there is no room below; 2026-11-06, the rendered diff drew it ON the
+ *    passage);
  *  - `Quote in chat`: the composer focused, on screen, holding the quote.
  *
  * The Changed tab has the Files tab's toolbar and card (the same question layer
@@ -70,8 +73,8 @@ async function openFile(panel: Locator, name: string): Promise<Locator> {
 /** Viewport rects of `phrase` inside `root` (top document), the passage scrolled
  *  into view first. The phrase may cross text nodes (a diff's syntax tokens and
  *  intra-line edit marks split a line into many). */
-async function textRects(root: Locator, phrase: string, nth = 0): Promise<Rect[]> {
-  const rects = await root.evaluate((el, [needle, which]) => {
+async function textRects(root: Locator, phrase: string, nth = 0, scroll = true): Promise<Rect[]> {
+  const rects = await root.evaluate((el, [needle, which, mayScroll]) => {
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
     const nodes: Array<{ n: Text; start: number }> = []
     let text = ''
@@ -97,12 +100,12 @@ async function textRects(root: Locator, phrase: string, nth = 0): Promise<Rect[]
     // Off screen only: a scroll of an editor's line from outside moves the box
     // CodeMirror measures from, and it draws its lines over its gutter.
     const box = r.getBoundingClientRect()
-    if (box.top < 0 || box.bottom > window.innerHeight) {
+    if (mayScroll && (box.top < 0 || box.bottom > window.innerHeight)) {
       a.node.parentElement?.scrollIntoView({ block: 'nearest' })
     }
     return Array.from(r.getClientRects()).filter((x) => x.width > 0)
       .map((x) => ({ left: x.left, right: x.right, top: x.top, height: x.height }))
-  }, [phrase, nth] as const)
+  }, [phrase, nth, scroll] as const)
   expect(rects, `"${phrase}" is not rendered`).not.toBeNull()
   return rects!
 }
@@ -162,15 +165,39 @@ async function seen(el: Locator): Promise<{ inViewport: boolean; topmost: boolea
 
 /** The Ask landed: a draft card in the file view, opaque and staying so, on screen,
  *  its box focused. `whileOpen` runs with the card open, before Esc closes it. */
-async function expectCardLanded(page: Page, view: Locator, name: string, whileOpen?: (card: Locator) => Promise<void>): Promise<void> {
-  const card = await expectCardShown(page, view, name)
+async function expectCardLanded(
+  page: Page, view: Locator, name: string, passage: () => Promise<Rect[]>, whileOpen?: (card: Locator) => Promise<void>,
+): Promise<void> {
+  const card = await expectCardShown(page, view, name, passage)
   if (whileOpen) await whileOpen(card)
   // Nothing written: Esc leaves no card behind.
   await card.locator('.thread-card-input').press('Escape')
   await expect(card).toHaveCount(0)
 }
 
-async function expectCardShown(page: Page, view: Locator, name: string): Promise<Locator> {
+/** The card sits beside the passage: over none of its rects, and under its last
+ *  line (or, with no room there, over its first). 2026-11-06: in the Changed tab's
+ *  rendered markdown diff the card was drawn ON the passage and the line above. */
+async function expectCardBesidePassage(card: Locator, passage: () => Promise<Rect[]>, name: string): Promise<void> {
+  const rects = (await passage()).slice().sort((a, b) => a.top - b.top)
+  expect(rects.length, `${name}: the passage is on screen`).toBeGreaterThan(0)
+  const c = (await card.boundingBox())!
+  const cardBox = { left: c.x, right: c.x + c.width, top: c.y, bottom: c.y + c.height }
+  const over = rects.filter((r) => r.left < cardBox.right - 1 && r.right > cardBox.left + 1
+    && r.top < cardBox.bottom - 1 && r.top + r.height > cardBox.top + 1)
+  expect(over, `${name}: the card covers none of the passage (card ${JSON.stringify(cardBox)})`).toEqual([])
+  const first = rects[0]
+  const last = rects[rects.length - 1]
+  const lastBottom = Math.max(...rects.map((r) => r.top + r.height))
+  const below = cardBox.top >= lastBottom - 1 && cardBox.top - lastBottom <= 32
+  const above = cardBox.bottom <= first.top + 1 && first.top - cardBox.bottom <= 32
+  expect(below || above, `${name}: the card sits under the passage's last line or over its first `
+    + `(card ${Math.round(cardBox.top)}..${Math.round(cardBox.bottom)}, passage ${Math.round(first.top)}..${Math.round(last.top + last.height)})`).toBe(true)
+}
+
+/** `passage`: the asked passage's viewport rects, read without scrolling (the card
+ *  must sit beside it: expectCardBesidePassage). */
+async function expectCardShown(page: Page, view: Locator, name: string, passage: () => Promise<Rect[]>): Promise<Locator> {
   const card = view.locator('.fv-thread-layer .thread-card')
   await expect(card, `${name}: a card opened`).toBeVisible({ timeout: 5_000 })
   await expect(card).toHaveAttribute('data-draft', 'true')
@@ -184,6 +211,7 @@ async function expectCardShown(page: Page, view: Locator, name: string): Promise
   expect(later, `${name}: the card stays opaque, mounted once`).toEqual({ opacity: '1', same: true })
   expect(await seen(card), `${name}: the card is on screen and on top`).toEqual({ inViewport: true, topmost: true })
   await expect(card.locator('.thread-card-input'), `${name}: the card's box takes the keyboard`).toBeFocused()
+  await expectCardBesidePassage(card, passage, name)
   await shot(page, name)
   return card
 }
@@ -318,7 +346,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="bubble-ask-here"]')
     await selectUntil(page, () => textRects(editor, MD_PASSAGE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-md-wysiwyg', async () => {
+    await expectCardLanded(page, view, 'files-md-wysiwyg', () => textRects(editor, MD_PASSAGE, 0, false), async () => {
       // While this file's card is open the chip stays away: it covered a word.
       await hoverPassage()
       await page.waitForTimeout(300)
@@ -335,7 +363,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(cm, MD_SOURCE_LINE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-md-source')
+    await expectCardLanded(page, view, 'files-md-source', () => textRects(cm, MD_SOURCE_LINE, 0, false))
     // Back to the preview for the next test (the tab is remembered per file).
     await view.getByRole('button', { name: 'Preview', exact: true }).click()
   })
@@ -348,7 +376,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(cm, GO_LINE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-code-source')
+    await expectCardLanded(page, view, 'files-code-source', () => textRects(cm, GO_LINE, 0, false))
   })
 
   test('Files: the read-only markdown render (.mdx, pill)', async ({ page }) => {
@@ -359,7 +387,35 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(preview, MDX_LINE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-md-readonly')
+    await expectCardLanded(page, view, 'files-md-readonly', () => textRects(preview, MDX_LINE, 0, false))
+  })
+
+  test('Files: the read-only render re-rendered between the selection and the press: Ask here still opens the card', async ({ page }) => {
+    // 2026-11-06, the Mac app: Ask here on the .mdx render once opened nothing.
+    // The press asked with a range kept at mouseup, and a re-render of the view
+    // in between (React rewriting its html) leaves that range pointing at
+    // nothing: the ask returned silently. It now asks with the QUOTE taken at
+    // mouseup (text, found again in the new DOM), and says why when it cannot.
+    const panel = await openSession(page)
+    const view = await openFile(panel, MDX_FILE)
+    const preview = view.locator('.fv-md-preview')
+    await expect(preview).toContainText(MDX_LINE, { timeout: 10_000 })
+    const askHere = page.locator('[data-testid="file-ask-here"]')
+    await selectUntil(page, () => textRects(preview, MDX_LINE), askHere)
+    // The same html written again (every node the selection was in is replaced)
+    // and Ask here pressed in the same task: the window before the selection's
+    // loss reaches the pill (its selectionchange comes later, and dismisses it).
+    // Pressed later, the pill is gone, which is right: the words are unselected.
+    const pressed = await preview.evaluate((el) => {
+      const before = el.firstElementChild
+      el.innerHTML = el.innerHTML // eslint-disable-line no-self-assign
+      const btn = document.querySelector<HTMLButtonElement>('[data-testid="file-ask-here"]')
+      btn?.click()
+      return { replaced: el.firstElementChild !== before, pressed: !!btn }
+    })
+    expect(pressed, 'the render was replaced under the pill, and Ask here pressed').toEqual({ replaced: true, pressed: true })
+    await expectCardLanded(page, view, 'files-md-readonly-rerendered', () => textRects(preview, MDX_LINE, 0, false))
+    await expect(view.locator('[data-testid="file-ask-notice"]')).toHaveCount(0)
   })
 
   test('Files: the read-only code view (a truncated read, pill)', async ({ page }) => {
@@ -377,7 +433,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(pre, RO_LINE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-code-readonly', async (card) => {
+    await expectCardLanded(page, view, 'files-code-readonly', () => textRects(pre, RO_LINE, 0, false), async (card) => {
       await expectCardRightOfGutter(card, pre.locator('.fv-line-text'), 'files-code-readonly')
     })
   })
@@ -389,7 +445,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => frameTextRects(view, HTML_PASSAGE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-html')
+    await expectCardLanded(page, view, 'files-html', () => frameTextRects(view, HTML_PASSAGE))
   })
 
   test.describe('Changed', () => {
@@ -418,7 +474,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), phrase), askHereBtn(page))
       await expect(quoteBtn(page)).toBeVisible()
       await askHereBtn(page).click()
-      return expectCardShown(page, diff, name)
+      return expectCardShown(page, diff, name, () => textRects(diff.locator('.session-diff-main'), phrase, 0, false))
     }
 
     /** Select `phrase` in the diff and press Quote in chat. */
@@ -477,7 +533,9 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
         (await textRects(main, 'package marina', 1))[0], ...(await textRects(main, GO_NEW)).slice(-1),
       ], askHereBtn(page))
       await askHereBtn(page).click()
-      card = await expectCardShown(page, diff, 'changed-split-multiline')
+      card = await expectCardShown(page, diff, 'changed-split-multiline', async () => [
+        ...(await textRects(main, 'package marina', 1, false)), ...(await textRects(main, GO_NEW, 0, false)),
+      ])
       // Its mark paints the file's text only: no gutter number, no removed line.
       const painted = await diff.locator('.session-diff-filepane').evaluate((pane) => {
         const reg = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights
@@ -497,7 +555,11 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       expect(painted.total, 'the passage is marked').toBeGreaterThan(0)
       expect(painted.chrome, 'no mark paints a gutter or a removed line').toBe(0)
       anchor = await sendAndCheckRecord(request, card, 'Why this comment here?', `${cwd}/${GO_FILE}`, GO_NEW)
-      expect(anchor.quote!.exact).toBe(`package marina// registerResources ${GO_NEW}`)
+      // The file's own text, line breaks and the blank line included (2026-11-06:
+      // it was `package marina// registerResources ...`, lines joined, which is
+      // not in the file and read so in the chat's question rail).
+      expect(anchor.quote!.exact).toBe(`package marina\n\n// registerResources ${GO_NEW}`)
+      expect(go.includes(anchor.quote!.exact), 'the quote is a passage of the file').toBe(true)
       expect(anchor.line).toBe(1)
 
       // The removed line: no Ask here, Quote in chat says why and quotes it.

@@ -687,7 +687,17 @@ show inline after the open ones, other completed hits that show the query fold i
   `onFileOpen(path, line)` to open the Files tab first (a sidebar row, a turn label, the quote
   head's back arrow in Tree Mode). The host box does not scroll, so `placeFileCard`
   (`utils/file-thread.ts`) works in host coordinates and re-measures on scroll, resize and
-  mutation; a passage scrolled off keeps its card docked at the edge. **The Changed tab mounts the
+  mutation; a passage scrolled off keeps its card docked at the edge. The card never covers its
+  passage when the box has room: under the last line when a card of `FILE_CARD_MIN_HEIGHT` fits
+  there, else over the first line, hung by its foot (`place.bottom`, so it grows upward; 2026-11-06:
+  pushed up to keep its minimum height, it sat ON a passage near the bottom of the view). The pill's
+  `Ask here` asks with the quote taken at mouseup (`FileThreadLayerHandle.quoteOf`: a quote is text,
+  found again in whatever DOM shows the file by the click), and an Ask that opens no card says why
+  (`FileAskResult`, logged, and shown in the view as `.fv-ask-notice`), never nothing. A file
+  question is located with whitespace ignored (`locateQuote`'s `ignoreWhitespace`), and the views
+  that draw a file line by line (the read-only code view, the source editor, a table diff) index
+  it with its line breaks (`QuoteSkip.lines`), so a passage over several lines is quoted as the file
+  has it, never with its lines joined. **The Changed tab mounts the
   same layer over the open file's diff (surface `diff`, 2026-11-06)**, on a non-scrolling
   `.session-diff-main-wrap` around the scroller: same pill (Ask here / Quote in chat), same card, same
   `file:` record. Its index is the CURRENT file's text only (`utils/diff-passage.ts`: no gutters or

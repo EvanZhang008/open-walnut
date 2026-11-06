@@ -354,7 +354,9 @@ export interface ComposerTarget {
 function samePlace(a: ThreadCardPlace | null, b: ThreadCardPlace | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.top === b.top && a.left === b.left && a.width === b.width && a.maxHeight === b.maxHeight
+  // `bottom` too: a card hung over its passage moves with it alone (the box
+  // grew taller, everything else the same).
+  return a.top === b.top && a.bottom === b.bottom && a.left === b.left && a.width === b.width && a.maxHeight === b.maxHeight
     && a.grown?.left === b.grown?.left && a.grown?.width === b.grown?.width && a.grown?.maxHeight === b.grown?.maxHeight;
 }
 

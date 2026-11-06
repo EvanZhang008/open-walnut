@@ -34,7 +34,7 @@ import { ThreadMarkTipLayer } from '@/components/sessions/ThreadStackFrame';
 import { fileOfParent, fileParentOf, findSamePassageThread } from '@/utils/thread-tree';
 import { pendingPageKey } from '@/utils/thread-stack-state';
 import type { SessionPinnedQuote } from '@/types/session';
-import { buildTextIndex, quoteFromRange, rangeForQuote, rangePieces, type QuoteSkip } from '@/utils/text-quote-anchor';
+import { buildTextIndex, quoteFromRange, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
 import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
   askableBlockOf, blockQuoteOf, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
@@ -47,14 +47,33 @@ import '@/styles/file-thread.css';
 
 export type FileThreadSurface = 'html' | 'wysiwyg' | 'source' | 'preview' | 'pre' | 'diff' | 'none';
 
+/** What an Ask did: the card opened, or why it could not (logged, and the
+ *  caller shows it: a pressed Ask here never does nothing). */
+export type FileAskResult = { ok: true } | { ok: false; reason: FileAskFailure };
+export type FileAskFailure = 'no-selection' | 'not-in-file' | 'no-text' | 'cannot-ask' | 'no-layer';
+
+/** Why an Ask here opened no card, in the words the file view shows. */
+export const FILE_ASK_FAILURE_TEXT: Record<FileAskFailure, string> = {
+  'no-selection': 'Ask here found no selected words: select the passage again',
+  'not-in-file': 'The view changed under the selection: select the passage again',
+  'no-text': 'Only the file\'s text can be asked about: select some words of it',
+  'cannot-ask': 'Questions cannot be asked in this session right now',
+  'no-layer': 'The file is still loading: select the passage again in a moment',
+};
+
 export interface FileThreadLayerHandle {
+  /** The selection as a quote of this file, read now (the pill takes it at
+   *  mouseup: by its click the DOM the selection was in may have been replaced,
+   *  and a quote is text, found again in whatever DOM shows the file). The live
+   *  selection (in the frame's document for the HTML preview) or `range`. */
+  quoteOf: (opts: { inFrame: boolean; range?: Range }) => SessionPinnedQuote | null;
   /** The pill's `Ask here`: the selection (the live one, in the frame's document
    *  for the HTML preview; or `range`, the editor's own, from the WYSIWYG bubble
    *  menu) becomes a draft question with its card beside it. */
-  askSelection: (opts: { inFrame: boolean; line?: number; range?: Range }) => void;
-  /** A quote taken already (the Changed tab reads it at mouseup: diffPassageOf)
-   *  becomes a draft question with its card beside it. */
-  askPassage: (opts: { quote: SessionPinnedQuote; line?: number }) => void;
+  askSelection: (opts: { inFrame: boolean; line?: number; range?: Range }) => FileAskResult;
+  /** A quote taken already (the Changed tab reads it at mouseup: diffPassageOf;
+   *  the Files tab's pill, quoteOf) becomes a draft question with its card beside it. */
+  askPassage: (opts: { quote: SessionPinnedQuote; line?: number; inFrame?: boolean }) => FileAskResult;
 }
 
 interface FileThreadLayerProps {
@@ -76,13 +95,40 @@ function bodyOf(root: HTMLElement | null, frame: HTMLIFrameElement | null, surfa
   return root?.querySelector('.ProseMirror, .fv-md-preview, .file-viewer-code, .cm-content') ?? null;
 }
 
-/** Chrome inside a surface's body that is not the file's text: the read-only
- *  code view's line numbers, a diff's gutters and removed lines. Without it a
- *  passage over two lines quoted the number between them. */
+/** The read-only code view's rows: `data-line` numbers. */
+const PRE_LINES: QuoteLines = {
+  rowOf: (t) => t.parentElement?.closest('.fv-line[data-line]') ?? null,
+  breaks: (prev, next) => Math.max(0, Number(next.getAttribute('data-line')) - Number(prev.getAttribute('data-line')) || 0),
+};
+
+/** The source editor's rows: CodeMirror's `.cm-line` elements, one per line in
+ *  its drawn window (a blank line is a row with no text). */
+const CM_LINES: QuoteLines = {
+  rowOf: (t) => t.parentElement?.closest('.cm-line') ?? null,
+  breaks: (prev, next) => {
+    let n = 0;
+    for (let el = prev.nextElementSibling; el && n < 100_000; el = el.nextElementSibling) {
+      if (el.classList.contains('cm-line')) n++;
+      if (el === next) return n;
+    }
+    return 0;
+  },
+};
+
+/** How a surface's body is indexed: chrome that is not the file's text (the
+ *  read-only code view's line numbers, a diff's gutters and removed lines;
+ *  without it a passage over two lines quoted the number between them), and the
+ *  line rows of the views that draw a file line by line, so a passage over
+ *  several lines is quoted with the file's line breaks. */
 const TEXT_SKIP: Partial<Record<FileThreadSurface, QuoteSkip>> = {
-  pre: '.fv-line-num',
+  pre: { selector: '.fv-line-num', lines: PRE_LINES },
+  source: { lines: CM_LINES },
   diff: DIFF_FILE_TEXT_SKIP,
 };
+
+/** A file question is found in every view of the file, whatever its views make
+ *  of line and block breaks (locateQuote's `ignoreWhitespace`). */
+const LOCATE_FILE = { ignoreWhitespace: true } as const;
 
 /** Where a code surface's text column starts (its line-number gutter ends
  *  there): the card never covers the gutter (2026-11-06: in the read-only code
@@ -204,7 +250,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const openCard = useCallback((key: string, via: string) => argsRef.current.threads.requestCard(key, via), []);
   const locatePassage = useCallback((p: { msgId: string; quote?: SessionPinnedQuote }) => {
     const b = body();
-    return b && p.quote ? rangeForQuote(b, p.quote, skip) : null;
+    return b && p.quote ? rangeForQuote(b, p.quote, skip, LOCATE_FILE) : null;
   }, [body, skip]);
   // Where the surface has chrome between its lines, a mark paints only the text.
   const piecesOf = useCallback((range: Range) => {
@@ -275,7 +321,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const out: ThreadMark[] = [];
       const byName = new Map<string, { ranges: Range[]; priority: number }>();
       for (const s of specs) {
-        const range = rangeForQuote(doc.body, s.quote);
+        const range = rangeForQuote(doc.body, s.quote, undefined, LOCATE_FILE);
         if (!range) continue;
         const { live, wait } = markFlagsOf(s, liveKeys);
         out.push({
@@ -391,7 +437,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const hostBox = root.getBoundingClientRect();
       const host = { width: hostBox.width, height: hostBox.height };
       const b = body();
-      const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip) : null;
+      const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip, LOCATE_FILE) : null;
       let anchor: HostRect;
       if (range) {
         const rects = range.getClientRects();
@@ -441,33 +487,56 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   useEffect(() => { scrolledForRef.current = null; }, [filePath]);
 
   // ── Ask: a quote of this file becomes a draft question with its card ──
-  const askQuote = useCallback((quote: SessionPinnedQuote, line: number | undefined, via: string) => {
+  const askQuote = useCallback((quote: SessionPinnedQuote, line: number | undefined, via: string): FileAskResult => {
     const t = argsRef.current.threads;
-    if (!t.canAsk) return;
+    if (!t.canAsk) {
+      log.warn('threads', 'ask about a file passage refused: the session cannot ask', { sessionId, path: filePath, via });
+      return { ok: false, reason: 'cannot-ask' };
+    }
     const same = findSamePassageThread(t.tree, t.anchors, t.hiddenKeys, { parent, quote });
     t.stack.ask({ msgId: parent, quote, ...(line ? { line } : {}) }, { focusComposer: false });
     t.requestCard(same ?? pendingPageKey(parent, quote.exact), via);
     log.info('threads', 'ask about a file passage', { sessionId, path: filePath, line: line ?? null, via, same: !!same });
+    return { ok: true };
   }, [parent, filePath, sessionId]);
 
+  const docOf = useCallback((inFrame: boolean): Document | null => {
+    if (!inFrame) return document;
+    try { return frameRef.current?.contentDocument ?? null; } catch { return null; }
+  }, [frameRef]);
+  /** The selection (or `given`) as a quote of this file, or why it is not one. */
+  const readQuote = useCallback((inFrame: boolean, given?: Range): SessionPinnedQuote | Exclude<FileAskFailure, 'cannot-ask' | 'no-layer'> => {
+    const sel = docOf(inFrame)?.getSelection();
+    const b = body();
+    const range = given && !given.collapsed ? given : (sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null);
+    if (!range || range.collapsed) return 'no-selection';
+    // A kept range whose words were re-rendered away points at nothing now.
+    if (!b || !b.contains(range.commonAncestorContainer)) return 'not-in-file';
+    return quoteFromRange(buildTextIndex(b, skip), range) ?? 'no-text';
+  }, [body, docOf, skip]);
+
   useImperativeHandle(ref, () => ({
+    quoteOf: ({ inFrame, range }) => {
+      const q = readQuote(inFrame, range);
+      return typeof q === 'string' ? null : q;
+    },
     askSelection: ({ inFrame, line, range: given }) => {
-      let doc: Document | null = document;
-      if (inFrame) { try { doc = frameRef.current?.contentDocument ?? null; } catch { doc = null; } }
-      const sel = doc?.getSelection();
-      const b = body();
-      const range = given ?? (sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null);
-      if (!range || range.collapsed || !b || !b.contains(range.commonAncestorContainer)) return;
-      const quote = quoteFromRange(buildTextIndex(b, skip), range);
-      if (!quote) return;
-      sel?.removeAllRanges();
-      askQuote(quote, line, 'file-selection');
+      const quote = readQuote(inFrame, given);
+      if (typeof quote === 'string') {
+        log.warn('threads', 'ask here on a file selection opened no card', {
+          sessionId, path: filePath, surface: argsRef.current.surface, reason: quote, given: !!given, inFrame,
+        });
+        return { ok: false, reason: quote };
+      }
+      docOf(inFrame)?.getSelection()?.removeAllRanges();
+      return askQuote(quote, line, 'file-selection');
     },
-    askPassage: ({ quote, line }) => {
+    askPassage: ({ quote, line, inFrame }) => {
       document.getSelection()?.removeAllRanges();
-      askQuote(quote, line, argsRef.current.surface === 'diff' ? 'diff-selection' : 'file-selection');
+      if (inFrame) docOf(true)?.getSelection()?.removeAllRanges();
+      return askQuote(quote, line, argsRef.current.surface === 'diff' ? 'diff-selection' : 'file-selection');
     },
-  }), [askQuote, body, frameRef, skip]);
+  }), [askQuote, readQuote, docOf, sessionId, filePath]);
 
   // ── The inline Ask on the block under the pointer ──
   const [hover, setHover] = useState<{ el: Element; rect: HostRect } | null>(null);
@@ -538,7 +607,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const ln = h.el.closest('[data-line]')?.getAttribute('data-line');
     const line = ln ? Number(ln) : undefined;
     setHover(null);
-    askQuote(quote, Number.isFinite(line) ? line : undefined, 'file-block');
+    void askQuote(quote, Number.isFinite(line) ? line : undefined, 'file-block');
   }, [askQuote, body, skip]);
 
   if (!threads.canAsk) return null;

@@ -96,6 +96,36 @@ describe('locateQuote — whitespace-normalised retry', () => {
   });
 });
 
+describe('locateQuote — whitespace ignored (a file question, ignoreWhitespace)', () => {
+  // A passage of a file is quoted by views that keep its line breaks (a code
+  // view, a diff) and found in views that join its blocks (a rendered preview),
+  // and the other way round; questions from before 2026-11-06 joined lines.
+  const loose = (text: string, quote: Parameters<typeof locateQuote>[1]) => {
+    const at = locateQuote(text, quote, { ignoreWhitespace: true });
+    return at ? text.slice(at.start, at.end) : null;
+  };
+  it('finds a quote with line breaks in a text that joins the lines, and the other way round', () => {
+    expect(loose('package marina// registerResources wires', { exact: 'package marina\n\n// registerResources' })).toBe('package marina// registerResources');
+    expect(loose('package marina\n\n// registerResources wires', { exact: 'package marina// registerResources' })).toBe('package marina\n\n// registerResources');
+  });
+  it('picks the occurrence its context names', () => {
+    // Twice in the text once whitespace is dropped, never as written: the suffix decides.
+    const text = 'flush order\nfirst\nflush\norder\nsecond';
+    const quote = { exact: 'flushorder', suffix: 'second' };
+    const at = locateQuote(text, quote, { ignoreWhitespace: true });
+    expect(at && text.slice(at.start, at.end)).toBe('flush\norder');
+    expect(at!.start).toBe(text.indexOf('flush\norder'));
+    const first = locateQuote(text, { exact: 'flushorder', suffix: 'first' }, { ignoreWhitespace: true });
+    expect(first!.start).toBe(0);
+  });
+  it('a short passage is not matched with whitespace dropped: `tx` must not find the end of one word and the start of the next', () => {
+    expect(locateQuote('pot\nxray', { exact: 'tx' }, { ignoreWhitespace: true })).toBeNull();
+  });
+  it('is off by default: a message passage does not match words run together', () => {
+    expect(locateQuote('package marina// registerResources', { exact: 'package marina\n// registerResources' })).toBeNull();
+  });
+});
+
 describe('locateQuote — nothing to anchor to', () => {
   it('returns null when the passage is gone', () => {
     expect(locateQuote('the reply was rewritten', { exact: 'a sentence that left' })).toBeNull();

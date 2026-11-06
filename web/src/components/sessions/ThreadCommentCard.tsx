@@ -102,7 +102,7 @@ export interface ThreadCommentCardProps {
   onTextChange?: (text: string) => void;
   /** Where the card sits (content coordinates of its layer) and how tall it may
    *  grow; `grown`, how far it reaches expanded (no ⤢ without it). */
-  style: { top: number; left: number; width: number; maxHeight: number; grown?: CardGrown };
+  style: { top: number; bottom?: number; left: number; width: number; maxHeight: number; grown?: CardGrown };
   /** The scroll box whose visible area the card fills in full screen (⤢). Given,
    *  ⤢ toggles full screen; without it, ⤢ grows the card where it is. */
   fillRef?: RefObject<HTMLElement | null>;
@@ -358,7 +358,12 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     : { left: p.style.left, width: p.style.width, maxHeight: p.style.maxHeight };
   const place = fill
     ? { position: 'fixed' as const, top: fill.top, left: fill.left, width: fill.width, height: fill.height, ['--thread-card-maxh' as string]: `${fill.height}px` }
-    : { top: p.style.top, left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px` };
+    // A card over its passage (a file card with no room below it) hangs by its
+    // bottom edge, so it grows upward and never reaches the passage.
+    : {
+      ...(p.style.bottom !== undefined ? { bottom: p.style.bottom } : { top: p.style.top }),
+      left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px`,
+    };
   return (
     <div
       ref={cardRef}

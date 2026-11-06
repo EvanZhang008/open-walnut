@@ -66,7 +66,10 @@ import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMe
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
 import { SelectionAskPill, selectionClientRect } from '@/components/common/SelectionAskPill';
-import { FileThreadLayer, type FileThreadLayerHandle, type FileThreadSurface } from '@/components/common/FileThreadLayer';
+import {
+  FILE_ASK_FAILURE_TEXT, FileThreadLayer, type FileAskResult, type FileThreadLayerHandle, type FileThreadSurface,
+} from '@/components/common/FileThreadLayer';
+import type { SessionPinnedQuote } from '@/types/session';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
@@ -1558,6 +1561,14 @@ export function FileContentView({
   // The selection as the pill rose for it (its Comment): by the pill's click the
   // editor may have dropped the DOM selection (CodeMirror does), so it is kept from then.
   const pillRangeRef = useRef<Range | null>(null);
+  // ...and as the quote its Ask here asks about, taken at the same moment: by the
+  // click the DOM those words were in may have been re-rendered (a range into it
+  // then points at nothing), while a quote is text, found again in the new DOM.
+  const pillQuoteRef = useRef<SessionPinnedQuote | null>(null);
+  const threadLayerRef = useRef<FileThreadLayerHandle>(null);
+  const keepPillQuote = useCallback((range: Range | null, inFrame: boolean) => {
+    pillQuoteRef.current = range && !range.collapsed ? threadLayerRef.current?.quoteOf({ inFrame, range }) ?? null : null;
+  }, []);
 
   // The anchor is the POINTER at release: the pill hugs the cursor (below the
   // selection after a downward drag, above after an upward one) — the side is
@@ -1589,8 +1600,9 @@ export function FileContentView({
     }
 
     pillRangeRef.current = range.cloneRange();
+    keepPillQuote(range, false);
     setSelection({ x: e.clientX, y: e.clientY, text, line });
-  }, [onSelectCode]);
+  }, [onSelectCode, keepPillQuote]);
 
   const commitSelection = useCallback(() => {
     if (!selection || !onSelectCode) return;
@@ -1623,23 +1635,42 @@ export function FileContentView({
   // can record anchors); the file stays on screen, so fullscreen stays too.
   const threadsApi = useSessionThreadsApi();
   const canAskHere = threadsApi.canAsk && !!sessionId;
-  const threadLayerRef = useRef<FileThreadLayerHandle>(null);
+  // An Ask here that opened no card says why, in the view, for a few seconds.
+  // (An object per failure: the same words twice restart the timer.)
+  const [askNotice, setAskNotice] = useState<{ text: string } | null>(null);
+  useEffect(() => {
+    if (!askNotice) return;
+    const t = window.setTimeout(() => setAskNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [askNotice]);
+  useEffect(() => { setAskNotice(null); }, [filePath]);
+  const askLanded = useCallback((res: FileAskResult, via: string) => {
+    if (res.ok) { setAskNotice(null); return; }
+    log.warn('threads', 'ask here opened no card', { path: filePath, via, reason: res.reason });
+    setAskNotice({ text: FILE_ASK_FAILURE_TEXT[res.reason] });
+  }, [filePath]);
   const askHereFromSelection = useCallback(() => {
     // The selection as the pill rose for it (as Comment does): by the pill's click
     // the live DOM selection is gone (CodeMirror drops it; so did WebKit in the
     // read-only views), and reading only that made `Ask here` in the Source tab,
-    // code files and the read-only views do nothing at all (2026-11-06).
+    // code files and the read-only views do nothing at all (2026-11-06). First the
+    // quote taken then (text survives a re-render of the view), else the range.
+    const layer = threadLayerRef.current;
+    const quote = pillQuoteRef.current;
     const kept = pillRangeRef.current;
-    threadLayerRef.current?.askSelection({
-      inFrame: !!selection?.inHtml,
-      ...(selection?.line ? { line: selection.line } : {}),
-      ...(kept && !kept.collapsed ? { range: kept } : {}),
-    });
+    const inFrame = !!selection?.inHtml;
+    const line = selection?.line ? { line: selection.line } : {};
+    const res: FileAskResult = !layer ? { ok: false, reason: 'no-layer' }
+      : quote ? layer.askPassage({ quote, inFrame, ...line })
+        : layer.askSelection({ inFrame, ...line, ...(kept && !kept.collapsed ? { range: kept } : {}) });
+    askLanded(res, quote ? 'pill-quote' : 'pill-range');
+    pillQuoteRef.current = null;
     setSelection(null);
-  }, [selection]);
+  }, [selection, askLanded]);
   const askHereFromBubble = useCallback((range: Range) => {
-    threadLayerRef.current?.askSelection({ inFrame: false, range });
-  }, []);
+    const layer = threadLayerRef.current;
+    askLanded(layer ? layer.askSelection({ inFrame: false, range }) : { ok: false, reason: 'no-layer' }, 'bubble');
+  }, [askLanded]);
 
   // "Comment": a Google Docs style comment kept in the doc's sidecar file, its card
   // in place under its words (DocCommentsLayer); it also waits above the
@@ -1658,10 +1689,10 @@ export function FileContentView({
   // The source editor's selection as document offsets, kept the same way.
   const pillOffsetsRef = useRef<{ from: number; to: number } | null>(null);
   const onSourceSelect = useCallback((sel: Parameters<typeof setSelection>[0]) => {
-    if (sel) keepPillRange();
+    if (sel) { keepPillRange(); keepPillQuote(pillRangeRef.current, false); } else pillQuoteRef.current = null;
     pillOffsetsRef.current = sel ? editorRef.current?.selectionOffsets?.() ?? null : null;
     setSelection(sel);
-  }, [keepPillRange]);
+  }, [keepPillRange, keepPillQuote]);
   const commentFromSelection = useCallback(() => {
     const range = pillRangeRef.current;
     docCommentsRef.current?.commentOn({
@@ -1689,6 +1720,7 @@ export function FileContentView({
       const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString().trim() : '';
       if (!text) { setSelection((prev) => (prev?.inHtml ? null : prev)); return; }
       pillRangeRef.current = sel!.getRangeAt(0).cloneRange();
+      keepPillQuote(pillRangeRef.current, true);
       // Anchor = the pointer at release, translated from iframe to top-viewport
       // coords — the pill hugs the cursor (side decided by SelectionAskPill).
       const box = frame.getBoundingClientRect();
@@ -1707,7 +1739,7 @@ export function FileContentView({
       frame.removeEventListener('load', attach);
       doc?.removeEventListener('mouseup', onFrameMouseUp);
     };
-  }, [onSelectCode, htmlPreviewLive, filePath]);
+  }, [onSelectCode, htmlPreviewLive, filePath, keepPillQuote]);
 
   // ── HTML preview scroll memory ─────────────────────────────────────────────
   // The HTML preview scrolls inside its IFRAME's own document, so the parent-
@@ -2965,6 +2997,7 @@ export function FileContentView({
           getDocText={docTextNow}
         />
       )}
+      {askNotice && <div className="fv-ask-notice" role="status" data-testid="file-ask-notice">{askNotice.text}</div>}
       {selection && (
         <SelectionAskPill
           anchor={selection}

@@ -21,7 +21,7 @@
  *    file; the quote is checked against the file's text (whitespace aside) and
  *    refused when it is not there.
  */
-import { buildTextIndex, quoteFromRange, type QuoteSkip, type TextQuote } from '@/utils/text-quote-anchor';
+import { buildTextIndex, quoteFromRange, type QuoteLines, type QuoteSkip, type TextQuote } from '@/utils/text-quote-anchor';
 
 /** Chrome inside a diff pane that is not file text (the diff's search skips it too). */
 export const DIFF_CHROME_SKIP = '.diff-gutter, .diff-widget, .session-diff-expander, .session-diff-filepane-head, .session-diff-ai-summary, .session-diff-rendered-lineno, .session-diff-pending-card';
@@ -42,10 +42,34 @@ export function isBlankLineFiller(t: Text): boolean {
   return t.data === ' ' && !!cell && cell.matches('td.diff-code') && cell.childNodes.length === 1;
 }
 
-/** What the question layer indexes in a diff pane: the current file's text only. */
+/** A table row's new-side line number: its last gutter (unified: old, new;
+ *  split: old, code, new, code). */
+function newLineOfRow(row: Element): number | undefined {
+  const gutters = row.querySelectorAll(':scope > td.diff-gutter');
+  const m = /\d+/.exec(gutters[gutters.length - 1]?.textContent ?? '');
+  const n = m ? Number(m[0]) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** A table diff's rows as the file's lines: between two rows, as many line
+ *  breaks as their new-side numbers are apart (a blank line between them makes
+ *  two). The rendered markdown view has no rows: it reads like the Files tab's
+ *  rendered views. */
+export const DIFF_FILE_LINES: QuoteLines = {
+  rowOf: (t) => t.parentElement?.closest('tr.diff-line') ?? null,
+  breaks: (prev, next) => {
+    const a = newLineOfRow(prev);
+    const b = newLineOfRow(next);
+    return a !== undefined && b !== undefined && b > a ? b - a : 0;
+  },
+};
+
+/** What the question layer indexes in a diff pane: the current file's text only,
+ *  with its line breaks. */
 export const DIFF_FILE_TEXT_SKIP: QuoteSkip = {
   selector: `${DIFF_CHROME_SKIP}, ${REMOVED_CELL}, ${OLD_COPY_CELL}`,
   text: isBlankLineFiller,
+  lines: DIFF_FILE_LINES,
 };
 
 export type DiffPassage =
@@ -60,8 +84,8 @@ export const DIFF_ASK_OFF_REASON: Record<'removed' | 'not-in-file' | 'empty' | '
   deleted: 'This file was deleted, so a question cannot sit beside it: quote it in the chat',
 };
 
-/** Does the passage occur in the file's text? Whitespace is ignored: the diff's
- *  index joins lines without their line breaks. PURE. */
+/** Does the passage occur in the file's text? Whitespace is ignored: a tab the
+ *  diff draws wider, a CRLF file's `\r` (the rows hold none). PURE. */
 export function occursInFile(exact: string, fileText: string): boolean {
   const needle = exact.replace(/\s+/g, '');
   if (!needle) return false;
@@ -143,13 +167,8 @@ function onNewSide(container: Node, offset: number): { node: Node; offset: numbe
 function lineAt(node: Node): number | undefined {
   const el = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
   const row = el?.closest('tr.diff-line');
-  let text: string | null | undefined;
-  if (row) {
-    const gutters = row.querySelectorAll(':scope > td.diff-gutter');
-    text = gutters[gutters.length - 1]?.textContent;
-  } else {
-    text = el?.closest('.session-diff-rendered-row')?.querySelector('.session-diff-rendered-lineno')?.textContent;
-  }
+  if (row) return newLineOfRow(row);
+  const text = el?.closest('.session-diff-rendered-row')?.querySelector('.session-diff-rendered-lineno')?.textContent;
   const m = text ? /\d+/.exec(text) : null;
   const n = m ? Number(m[0]) : NaN;
   return Number.isFinite(n) && n > 0 ? n : undefined;

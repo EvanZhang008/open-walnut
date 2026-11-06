@@ -100,10 +100,13 @@ export interface ThreadDerived {
 /** Where a comment card sits inside its host box (left/top relative to the host). */
 export interface ThreadCardPlace {
   top: number;
+  /** Set, the card hangs over its passage: its bottom edge this far above the
+   *  host's bottom, growing upward (`top` is where it would reach at maxHeight). */
+  bottom?: number;
   left: number;
   width: number;
   maxHeight: number;
-  /** Where the card reaches when the reader expands it (same top). */
+  /** Where the card reaches when the reader expands it (same top, or same bottom). */
   grown?: CardGrown;
 }
 

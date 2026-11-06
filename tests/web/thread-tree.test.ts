@@ -483,6 +483,14 @@ describe('findSamePassageThread (plan A)', () => {
   it('a hidden question never matches', () => {
     expect(findSamePassageThread(tree, anchors, new Set([k1]), { parent: 'r0', quote: { exact: 'alpha beta' } })).toBeNull();
   });
+  it('a file passage is the same with its lines joined or broken (a code view and a rendered view, older questions)', () => {
+    const fileAnchors = [anchor('u1', 'file:/repo/a.go', { quote: { exact: 'package marina// registerResources' } })];
+    const fileTree = buildThreadTree(messages, fileAnchors);
+    const key = threadKeyOf(fileAnchors[0]);
+    expect(findSamePassageThread(fileTree, fileAnchors, new Set(), { parent: 'file:/repo/a.go', quote: { exact: 'package marina\n\n// registerResources' } })).toBe(key);
+    // A reply's passage keeps the words apart: `ab` is not `a b` there.
+    expect(findSamePassageThread(tree, anchors, new Set(), { parent: 'r0', quote: { exact: 'alphabeta' } })).toBeNull();
+  });
   it('normalizePassage folds width and whitespace', () => {
     // Full-width A and B (test data as escapes).
     expect(normalizePassage('\uFF21\uFF22  c\n')).toBe('AB c');

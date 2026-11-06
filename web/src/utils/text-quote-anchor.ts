@@ -35,9 +35,22 @@ export interface TextQuote {
   suffix?: string;
 }
 
-/** Chrome of a body's own that is not its text: a selector, and optionally a
- *  test for single text nodes no selector can name (a diff's blank-line filler). */
-export type QuoteSkip = string | { selector: string; text?: (t: Text) => boolean };
+/** The line rows of a body that draws a file line by line (a code view, a diff):
+ *  the index puts the file's line breaks between them, so a passage over several
+ *  lines is quoted as the file has it (2026-11-06: a split diff quoted
+ *  `package marina// registerResources ...`, joined, which is not in the file). */
+export interface QuoteLines {
+  /** The row (one file line) a text node is drawn in, or null outside any row. */
+  rowOf: (t: Text) => Element | null;
+  /** How many line breaks the file has from row `prev` to the later row `next`
+   *  (two for a blank line between them); 0 when it cannot tell. */
+  breaks: (prev: Element, next: Element) => number;
+}
+
+/** Chrome of a body's own that is not its text: a selector, optionally a test for
+ *  single text nodes no selector can name (a diff's blank-line filler), and the
+ *  body's line rows when it draws a file's lines (`lines`). */
+export type QuoteSkip = string | { selector?: string; text?: (t: Text) => boolean; lines?: QuoteLines };
 
 /** The message body's plain text plus the map back to its text nodes. */
 export interface QuoteTextIndex {
@@ -50,17 +63,45 @@ export interface QuoteTextIndex {
  * index is the raw concatenation of text nodes, which is all the anchor needs —
  * it is built the same way at pin time and at locate time. `skip` adds chrome of
  * the body's own that is not its text (a code view's line numbers, a diff's
- * gutters and removed lines); pass the same one at both times.
+ * gutters and removed lines); pass the same one at both times. A body that draws
+ * a file line by line passes its rows (`skip.lines`): between two rows the index
+ * holds the file's line breaks, so its text reads like the file.
  */
+/** The most line breaks the index puts between two rows. */
+const LINE_BREAKS_MAX = 50;
+
 export function buildTextIndex(root: Element, skip?: QuoteSkip): QuoteTextIndex {
   const selector = typeof skip === 'string' ? skip : skip?.selector;
   const raw = buildDomTextIndex(
     root, selector ? `${SKIP_INSIDE_MESSAGE}, ${selector}` : SKIP_INSIDE_MESSAGE, typeof skip === 'object' ? skip.text : undefined,
   );
-  return {
-    text: raw.text,
-    nodes: raw.nodes.map((node, i) => ({ node, start: raw.starts[i] })),
-  };
+  const lines = typeof skip === 'object' ? skip.lines : undefined;
+  if (!lines) {
+    return {
+      text: raw.text,
+      nodes: raw.nodes.map((node, i) => ({ node, start: raw.starts[i] })),
+    };
+  }
+  // The file's line breaks between rows: text the index adds, mapped to no node
+  // (a passage's ends are never a break: quoteFromText trims whitespace).
+  const parts: string[] = [];
+  const nodes: QuoteTextIndex['nodes'] = [];
+  let len = 0;
+  let prevRow: Element | null = null;
+  for (const node of raw.nodes) {
+    const row = lines.rowOf(node);
+    if (row && prevRow && row !== prevRow) {
+      // Capped: rows far apart (a diff's unfold bar) are not one passage anyway,
+      // and thousands of breaks would eat QUOTE_MAX_CHARS.
+      const n = Math.min(LINE_BREAKS_MAX, Math.max(0, lines.breaks(prevRow, row)));
+      if (n) { parts.push('\n'.repeat(n)); len += n; }
+    }
+    if (row) prevRow = row;
+    nodes.push({ node, start: len });
+    parts.push(node.data);
+    len += node.data.length;
+  }
+  return { text: parts.join(''), nodes };
 }
 
 /** Global offset of a range boundary inside `index`. */
@@ -151,6 +192,20 @@ function commonPrefixLength(a: string, b: string): number {
   return n;
 }
 
+/** Every whitespace character dropped, keeping the map back to the original
+ *  string (map[j] = original index of kept char j). */
+function stripWhitespace(text: string): { text: string; map: number[] } {
+  let out = '';
+  const map: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (/\s/.test(ch)) continue;
+    out += ch;
+    map.push(i);
+  }
+  return { text: out, map };
+}
+
 /** Runs of whitespace → one space. */
 function collapseWhitespace(s: string): string {
   return s.replace(/\s+/g, ' ');
@@ -225,7 +280,16 @@ function normalizeWhitespace(text: string): { text: string; map: number[] } {
  * /compact rewrote it). The pin then simply has no paint; its outline row still
  * jumps to the message.
  */
-export function locateQuote(text: string, quote: TextQuote): { start: number; end: number } | null {
+export interface LocateOptions {
+  /** A fourth pass, whitespace ignored altogether: a file's passage is quoted by
+   *  views that index line and block breaks differently (a code view's line
+   *  breaks, a rendered view's blocks joined, questions asked before 2026-11-06
+   *  with lines joined), and it must be found in each of them. Off for messages:
+   *  there `ab` should not find `a b`. */
+  ignoreWhitespace?: boolean;
+}
+
+export function locateQuote(text: string, quote: TextQuote, opts?: LocateOptions): { start: number; end: number } | null {
   const exact = quote.exact ?? '';
   if (!exact.trim() || !text) return null;
 
@@ -237,9 +301,29 @@ export function locateQuote(text: string, quote: TextQuote): { start: number; en
   if (!needle) return null;
   // contextScore collapses whitespace itself, so the stored context goes in raw.
   const loose = bestOccurrence(norm.text, needle, { ...quote, exact: needle });
-  if (loose === null) return null;
+  if (loose === null) return opts?.ignoreWhitespace ? locateIgnoringWhitespace(text, quote) : null;
   const start = norm.map[loose];
   const lastChar = norm.map[loose + needle.length - 1];
+  if (start === undefined || lastChar === undefined) return null;
+  return { start, end: lastChar + 1 };
+}
+
+/** The shortest passage (whitespace dropped) the whitespace-blind pass looks for. */
+const LOOSE_MIN_CHARS = 8;
+
+function locateIgnoringWhitespace(text: string, quote: TextQuote): { start: number; end: number } | null {
+  const bare = stripWhitespace(text);
+  const needle = stripWhitespace(quote.exact).text;
+  // A short one would find the end of one word and the start of the next.
+  if (needle.length < LOOSE_MIN_CHARS) return null;
+  const at = bestOccurrence(bare.text, needle, {
+    exact: needle,
+    ...(quote.prefix ? { prefix: stripWhitespace(quote.prefix).text } : {}),
+    ...(quote.suffix ? { suffix: stripWhitespace(quote.suffix).text } : {}),
+  });
+  if (at === null) return null;
+  const start = bare.map[at];
+  const lastChar = bare.map[at + needle.length - 1];
   if (start === undefined || lastChar === undefined) return null;
   return { start, end: lastChar + 1 };
 }
@@ -321,9 +405,9 @@ export function rangePieces(index: QuoteTextIndex, range: Range): Range[] {
 }
 
 /** Locate a quote inside a message body in one call (index → locate → Range). */
-export function rangeForQuote(body: Element, quote: TextQuote, skip?: QuoteSkip): Range | null {
+export function rangeForQuote(body: Element, quote: TextQuote, skip?: QuoteSkip, opts?: LocateOptions): Range | null {
   const index = buildTextIndex(body, skip);
-  const at = locateQuote(index.text, quote);
+  const at = locateQuote(index.text, quote, opts);
   if (!at) return null;
   return rangeFromOffsets(index, at.start, at.end);
 }

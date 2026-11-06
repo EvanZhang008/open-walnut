@@ -39,11 +39,33 @@ describe('placeFileCard', () => {
     expect(place.width).toBe(CARD_WIDTH);
     expect(place.maxHeight).toBe(Math.round(host.height * 0.6));
   });
-  it('a passage scrolled above the box docks the card at the top; one below docks it at the bottom', () => {
-    expect(placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host).top).toBe(CARD_GAP);
+  it('a passage scrolled above the box docks the card at the top; one below docks it, by its foot, at the bottom', () => {
+    const high = placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host);
+    expect(high.top).toBe(CARD_GAP);
+    expect(high.bottom).toBeUndefined();
     const low = placeFileCard({ top: 1200, bottom: 1220, left: 40, right: 600 }, host);
-    expect(low.top).toBe(host.height - FILE_CARD_MIN_HEIGHT - CARD_GAP);
-    expect(low.maxHeight).toBe(FILE_CARD_MIN_HEIGHT);
+    expect(low.bottom).toBe(CARD_GAP);
+    expect(low.maxHeight).toBe(Math.round(host.height * 0.6));
+  });
+  it('a passage near the bottom of the box: the card hangs over its first line, never on it (2026-11-06, the rendered diff)', () => {
+    // The old placement pushed the card up onto the passage to keep 180px in the box.
+    const anchor = { top: 560, bottom: 600, left: 40, right: 600 };
+    const place = placeFileCard(anchor, host);
+    expect(place.bottom).toBe(host.height - (anchor.top - CARD_GAP));
+    // Its foot is over the passage, and at full height it stays in the box.
+    expect(host.height - place.bottom!).toBeLessThanOrEqual(anchor.top - CARD_GAP);
+    expect(place.top).toBeGreaterThanOrEqual(CARD_GAP);
+    expect(place.top + place.maxHeight).toBe(anchor.top - CARD_GAP);
+    // Expanded: the same foot, all the room above.
+    expect(place.grown!.maxHeight).toBe(anchor.top - 2 * CARD_GAP);
+    // Room for the smallest card below: under the last line, as before.
+    const roomy = placeFileCard({ top: 400, bottom: 420, left: 40, right: 600 }, host);
+    expect(roomy.bottom).toBeUndefined();
+    expect(roomy.top).toBe(420 + CARD_GAP);
+    // Exactly the smallest card's room below still goes below.
+    const edge = host.height - CARD_GAP - FILE_CARD_MIN_HEIGHT - CARD_GAP;
+    expect(placeFileCard({ top: edge - 20, bottom: edge, left: 40, right: 600 }, host).bottom).toBeUndefined();
+    expect(placeFileCard({ top: edge - 19, bottom: edge + 1, left: 40, right: 600 }, host).bottom).toBeDefined();
   });
   it('never leaves the box sideways, and a narrow box gets a card as wide as it allows', () => {
     const right = placeFileCard({ top: 0, bottom: 10, left: 800, right: 1200 }, host);

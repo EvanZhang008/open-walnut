@@ -34,7 +34,7 @@ import { hiddenFunctionContext, splitSourceLines, type StickyDef } from '@/compo
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
-import { FileThreadLayer, type FileThreadLayerHandle } from '@/components/common/FileThreadLayer';
+import { FILE_ASK_FAILURE_TEXT, FileThreadLayer, type FileAskResult, type FileThreadLayerHandle } from '@/components/common/FileThreadLayer';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { DIFF_ASK_OFF_REASON, DIFF_CHROME_SKIP, diffPassageOf, type DiffPassage } from '@/utils/diff-passage';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
@@ -2812,13 +2812,27 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     setSelection({ x: e.clientX, y: e.clientY, text, filePath, line, ...(ask ? { ask } : {}) });
   }, [selectedChange, refreshDiffSelectionMatches, lineFromNode, canAskHere]);
 
+  // An Ask here that opened no card says why, over the diff, for a few seconds.
+  const [askNotice, setAskNotice] = useState<{ text: string } | null>(null);
+  useEffect(() => {
+    if (!askNotice) return;
+    const t = window.setTimeout(() => setAskNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [askNotice]);
   const askHereSelection = useCallback(() => {
     const ask = selection?.ask;
     if (!ask?.ok) return;
-    diffLayerRef.current?.askPassage({ quote: ask.quote, ...(ask.line ? { line: ask.line } : {}) });
+    const layer = diffLayerRef.current;
+    const res: FileAskResult = layer
+      ? layer.askPassage({ quote: ask.quote, ...(ask.line ? { line: ask.line } : {}) })
+      : { ok: false, reason: 'no-layer' };
+    if (!res.ok) {
+      log.warn('threads', 'ask here on a diff selection opened no card', { sessionId, path: selection?.filePath ?? '', reason: res.reason });
+      setAskNotice({ text: FILE_ASK_FAILURE_TEXT[res.reason] });
+    } else setAskNotice(null);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
-  }, [selection]);
+  }, [selection, sessionId]);
 
   const commitSelection = useCallback(() => {
     if (!selection) return;
@@ -3247,6 +3261,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               surfaceNonce={`${selectedChange.filePath}:${phoneDiff ? 'unified' : viewType}:${rendered}:${selectedChange.after.length}`}
             />
           )}
+          {askNotice && <div className="fv-ask-notice" role="status" data-testid="file-ask-notice">{askNotice.text}</div>}
           </div>
           {refState && (
             <ReferencePanel

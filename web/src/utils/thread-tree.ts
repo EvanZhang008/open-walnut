@@ -584,14 +584,19 @@ export function findSamePassageThread(
   hiddenKeys: ReadonlySet<string>,
   target: { parent: string; quote?: SessionPinnedQuote },
 ): string | null {
-  const want = normalizePassage(target.quote?.exact);
+  // A file's passage is quoted with its line breaks by the code views and the
+  // diff, with its lines joined by the rendered views and by questions asked
+  // before 2026-11-06: the same passage either way, so whitespace is ignored.
+  const fileish = target.parent.startsWith('file:');
+  const norm = (t: string | undefined) => (fileish ? normalizePassage(t).replace(/\s+/g, '') : normalizePassage(t));
+  const want = norm(target.quote?.exact);
   if (!want || !target.parent) return null;
   for (const node of tree.threads) {
     if (node.key === ROOT_THREAD_KEY || hiddenKeys.has(node.key)) continue;
-    if (node.parent === target.parent && normalizePassage(node.quote?.exact) === want) return node.key;
+    if (node.parent === target.parent && norm(node.quote?.exact) === want) return node.key;
   }
   for (const a of anchors ?? []) {
-    if (a.parent !== target.parent || normalizePassage(a.quote?.exact) !== want) continue;
+    if (a.parent !== target.parent || norm(a.quote?.exact) !== want) continue;
     const key = threadKeyOf(a);
     if (tree.byKey.has(key) && !hiddenKeys.has(key)) return key;
   }

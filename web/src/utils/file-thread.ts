@@ -144,10 +144,21 @@ export interface HostRect {
 export const FILE_CARD_MIN_HEIGHT = 180;
 
 /**
- * Where the card sits inside the file view: below the passage, right-aligned to
- * it and never outside the host box. The host does not scroll (the file's own
- * surface does), so a passage scrolled past an edge keeps its card docked at
- * that edge, the way a comment stays reachable in a document.
+ * Where the card sits inside the file view: right-aligned to the passage, never
+ * outside the host box, and never over the passage when the box has room for it
+ * on either side:
+ *  - under the passage's last line when a card of FILE_CARD_MIN_HEIGHT fits there;
+ *  - else over its first line (anchored by its bottom edge, `bottom`, so it grows
+ *    upward and its foot never reaches the passage), when it fits there;
+ *  - else on the side with more room, at least FILE_CARD_MIN_HEIGHT tall (the
+ *    passage is taller than the box leaves room for).
+ * 2026-11-06: the card was always placed under the passage and then pushed up
+ * to keep FILE_CARD_MIN_HEIGHT in the box, so a passage in the box's last 188px
+ * (the Changed tab's rendered diff, a selection near the bottom of any view) had
+ * the card drawn ON it and the line above it.
+ * The host does not scroll (the file's own surface does), so a passage scrolled
+ * past an edge keeps its card docked at that edge, the way a comment stays
+ * reachable in a document.
  */
 export function placeFileCard(
   anchor: HostRect, host: { width: number; height: number }, preferred = CARD_WIDTH, minLeft?: number,
@@ -161,15 +172,32 @@ export function placeFileCard(
   const band = host.width - floor - CARD_GAP;
   const width = Math.max(Math.min(preferred, band), Math.min(CARD_MIN_WIDTH, host.width));
   const left = Math.max(floor, Math.min(anchor.right - width, host.width - width - CARD_GAP));
+  const roomBelow = host.height - (anchor.bottom + CARD_GAP) - CARD_GAP;
+  const roomAbove = anchor.top - CARD_GAP - CARD_GAP;
+  const above = roomBelow < FILE_CARD_MIN_HEIGHT && (roomAbove >= FILE_CARD_MIN_HEIGHT || roomAbove > roomBelow);
+  const capOf = (room: number) => Math.max(Math.min(FILE_CARD_MIN_HEIGHT, room), Math.min(Math.round(host.height * 0.6), room));
+  // Expanded: the same edge, as wide as the view allows, all the room on its side.
+  const wide = Math.max(Math.min(CARD_GROWN_WIDTH, band), width);
+  const wideLeft = Math.max(floor, Math.min(anchor.right - wide, host.width - wide - CARD_GAP));
+  const across = { left: Math.round(left), width: Math.round(width) };
+  if (above) {
+    // The card's foot: a gap over the passage's first line, kept low enough for
+    // the smallest card and inside the box (a passage below the box docks it there).
+    const highest = Math.min(host.height - CARD_GAP, FILE_CARD_MIN_HEIGHT + CARD_GAP);
+    const foot = Math.min(Math.max(anchor.top - CARD_GAP, highest), host.height - CARD_GAP);
+    const room = foot - CARD_GAP;
+    const maxHeight = capOf(room);
+    return {
+      top: Math.round(foot - maxHeight), bottom: Math.round(host.height - foot), ...across, maxHeight: Math.round(maxHeight),
+      grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
+    };
+  }
   const lowest = Math.max(CARD_GAP, host.height - FILE_CARD_MIN_HEIGHT - CARD_GAP);
   const top = Math.max(CARD_GAP, Math.min(anchor.bottom + CARD_GAP, lowest));
   const room = host.height - top - CARD_GAP;
-  const maxHeight = Math.max(Math.min(FILE_CARD_MIN_HEIGHT, room), Math.min(Math.round(host.height * 0.6), room));
-  // Expanded: the same top, as wide as the view allows, all the room below it.
-  const wide = Math.max(Math.min(CARD_GROWN_WIDTH, band), width);
-  const wideLeft = Math.max(floor, Math.min(anchor.right - wide, host.width - wide - CARD_GAP));
+  const maxHeight = capOf(room);
   return {
-    top: Math.round(top), left: Math.round(left), width: Math.round(width), maxHeight: Math.round(maxHeight),
+    top: Math.round(top), ...across, maxHeight: Math.round(maxHeight),
     grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },
   };
 }
