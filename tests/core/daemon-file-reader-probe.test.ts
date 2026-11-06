@@ -93,7 +93,7 @@ describe('streamHeldConversation', () => {
     wire.read.set(p, { ok: true, data })
   }
   const BOOT = [
-    { type: 'walnut_process', pid: 1, walnutTurn: true },
+    { type: 'system', subtype: 'walnut_process', walnutPid: 1, walnutTurn: true },
     { type: 'user', message: { role: 'user', content: 'hello "type":"result"' } },
   ]
 
@@ -116,6 +116,11 @@ describe('streamHeldConversation', () => {
   it('a resume refused with No conversation found is no answer: false', async () => {
     put(PRIMARY, [...BOOT, { type: 'result', subtype: 'error_during_execution', is_error: true, errors: [`No conversation found with session ID: ${SID}`] }])
     expect(await held()).toBe(false)
+  })
+
+  it('an answer that quotes the refusal still counts', async () => {
+    put(PRIMARY, [...BOOT, { type: 'assistant', message: { content: 'It said "No conversation found"' } }])
+    expect(await held()).toBe(true)
   })
 
   it('no stream at all (a start that never reached its host): false', async () => {

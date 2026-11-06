@@ -24,10 +24,10 @@ const STREAM_EVIDENCE_MAX_BYTES = 1024 * 1024
 export function streamTextHeldConversation(text: string): boolean {
   for (const line of text.split('\n')) {
     if (!line.includes('"assistant"') && !line.includes('"result"')) continue
-    if (line.includes('No conversation found')) continue
     try {
-      const type = (JSON.parse(line) as { type?: unknown }).type
-      if (type === 'assistant' || type === 'result') return true
+      const ev = JSON.parse(line) as { type?: unknown; is_error?: unknown }
+      if (ev.type === 'result' && ev.is_error === true && line.includes('No conversation found')) continue
+      if (ev.type === 'assistant' || ev.type === 'result') return true
     } catch { /* a torn or foreign line */ }
   }
   return false
