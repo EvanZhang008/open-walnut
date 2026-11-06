@@ -108,8 +108,14 @@ async function collect(since: string | undefined, until: string) {
   // Sessions Walnut imported because they began outside it are outside whatever entrypoint they wrote (a script's claude -p).
   const importedIds = new Set(sessions.filter(s => /started outside Walnut/.test(s.human_note ?? '')).map(s => s.claudeSessionId));
   for (const [host, owners] of hosts) {
-    const ids = owners.filter(o => importedIds.has(o.sessionId) && !rollup.originOf(host, o.sessionId));
-    if (ids.length) rollup.recordOrigins(ids.map(o => ({ host, sessionId: o.sessionId, originator: 'imported', provider: '', cwd: '', outside: true, stored: true, firstAt: '', lastAt: '' })));
+    // One with no origin yet is noted; one an older build kept as Walnut's is put right (the import says it began outside).
+    const rows = owners.filter(o => importedIds.has(o.sessionId)).flatMap(o => {
+      const before = rollup.originOf(host, o.sessionId);
+      if (before?.outside) return [];
+      return [{ host, sessionId: o.sessionId, originator: before?.originator || 'imported', provider: before?.provider ?? '', cwd: before?.cwd ?? '',
+        outside: true, stored: true, firstAt: before?.firstAt ?? '', lastAt: before?.lastAt ?? '' }];
+    });
+    if (rows.length) rollup.recordOrigins(rows);
   }
   // A look kept as outside for a session whose record came later, on an entrypoint Walnut's own sessions write, is put right.
   rollup.repairWalnutOrigins([...WALNUT_SESSION_ENTRYPOINTS], (host, id) => ownerNames.get(asJoined(host))?.get(id) === host && !importedIds.has(id));
@@ -155,6 +161,7 @@ async function collect(since: string | undefined, until: string) {
                 const named = s.host ?? '__local__';
                 if (asJoined(named) !== machine) continue;
                 known.set(s.claudeSessionId, named);
+                if (/started outside Walnut/.test(s.human_note ?? '')) importedIds.add(s.claudeSessionId);
                 if (named !== host) foreign.add(s.claudeSessionId);
                 if (named === host) owners.push({ sessionId: s.claudeSessionId, taskId: s.taskId || undefined, title: s.title, project: s.project, lane: s.lane });
               }

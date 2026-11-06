@@ -198,6 +198,10 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     await collectUsage(INCREMENTAL, '2026-11-06T12:00:00.000Z');
     expect(rollup.originOf('__local__', 'script-run')?.outside).toBe(true); // not repaired
     expect(rollup.originOf('__local__', 'script-seen')).toMatchObject({ outside: true, stored: true }); // noted although the daemon sent nothing for it
+    rollup.recordOrigins([{ host: '__local__', sessionId: 'script-seen', originator: 'sdk-cli', provider: '', cwd: '/w', outside: false, stored: false, firstAt: '', lastAt: '' }]);
+    mocks.send.mockResolvedValueOnce(page([], [], '2026-11-06T12:30:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T12:30:00.000Z');
+    expect(rollup.originOf('__local__', 'script-seen')).toMatchObject({ outside: true, stored: true, originator: 'sdk-cli' }); // an older build's Walnut look is put right
   });
 
   it('a session of the SDK session server (sdk-ts) that Walnut has a record of is Walnut\'s', async () => {
@@ -212,5 +216,17 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     mocks.send.mockRejectedValue(new Error('timed out'));
     await collectUsage(INCREMENTAL, '2026-10-13T15:00:00.000Z');
     expect(responseUsageStore().rollup.claudeOutsideBuilt('devbox')).toBe(false);
+  });
+});
+
+describe('an import that appears while a long read runs', () => {
+  it('is Outside, because the second listing carries its note too', async () => {
+    mocks.sessions.mockReset();
+    const mine = { claudeSessionId: 'walnut-run', host: '__local__', engine: 'claude', taskId: 'example-task' };
+    mocks.sessions.mockResolvedValueOnce([mine]);
+    mocks.sessions.mockResolvedValue([mine, { claudeSessionId: 'late-import', host: '__local__', engine: 'claude', taskId: 'imp3', human_note: 'Imported automatically \u2014 started outside Walnut (claude -p).' }]);
+    mocks.send.mockResolvedValueOnce(page([record('m50', 'late-import')], [{ sessionId: 'late-import', entrypoint: 'sdk-cli', cwd: '/w/x' }], '2026-11-06T13:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T13:00:00.000Z');
+    expect(responseUsageStore().rollup.originOf('__local__', 'late-import')?.outside).toBe(true);
   });
 });
