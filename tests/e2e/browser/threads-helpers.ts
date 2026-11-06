@@ -386,10 +386,10 @@ export async function askHereThenTree(page: Page, panel: Locator, pill: Locator 
 }
 
 /** Ask here inline (the card beside the passage, in Conversation Mode) from any
- *  view: the pill's caret, then "Ask inline". */
+ *  view: the pill's caret, then "Ask inline" in the menu it opens under itself. */
 export async function askInline(page: Page, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
   await pill.locator('[data-testid="quote-ask-mode-btn"]').click()
-  await pill.locator('[data-testid="quote-ask-inline"]').click()
+  await page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-inline"]').click()
 }
 
 /** Every scrollTop the timeline takes, one sample per frame, from now until

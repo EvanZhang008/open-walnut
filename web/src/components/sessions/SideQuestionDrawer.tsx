@@ -91,6 +91,7 @@ import {
   updateLegacySideQuestions,
   applySideThreadTitle,
 } from '@/stores/side-threads';
+import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 
 interface SideQuestionDrawerProps {
   /** The PARENT Claude session id. Drawer is disabled until the session has one. */
@@ -392,7 +393,7 @@ export function SideQuestionDrawer({
       if (!rootRef.current || !target || rootRef.current.contains(target)) return;
       // Popups the thread body opens (Bash output, plan, quote pins) portal to
       // document.body: a click inside them must not read as "outside".
-      if (target.closest?.('.plan-popup-overlay, .quote-pin-popover, .quote-pin-pill')) return;
+      if (target.closest?.(`.plan-popup-overlay, .quote-pin-popover, ${SELECTION_BAR_LAYERS}`)) return;
       // Full screen: the backdrop click leaves full screen only (useFullscreen), as the panel's does.
       if (isFullscreen && target.closest?.('.open-walnut-fullscreen-backdrop')) return;
       closeDrawer();

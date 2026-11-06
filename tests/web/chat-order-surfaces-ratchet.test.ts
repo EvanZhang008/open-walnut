@@ -58,9 +58,6 @@ const SURFACES: Record<string, string> = {
   'web/src/components/notes/NotesSessionChat.tsx': 'no stream before the session; SessionChatHistory after',
   // Draws nothing: reads the rows SessionChatHistory already placed, in screen order, as text for the side panel's snapshot.
   'web/src/popout/ext-snapshot.ts': 'reads drawn rows',
-  // Draw nothing: find the user bubble a selected passage is in, to open the Comment box's room under it.
-  'web/src/components/sessions/comment-gap.ts': 'reads drawn rows',
-  'web/src/components/sessions/useHeldPassage.ts': 'reads drawn rows',
 };
 
 describe('ratchet: every chat surface keeps one order', () => {

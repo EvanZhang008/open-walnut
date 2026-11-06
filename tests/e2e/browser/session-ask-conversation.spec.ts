@@ -201,11 +201,11 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     // The pill names the view on screen as the current choice.
     await selectPassage(page, mainPage(panel), PHRASE)
     await pill(page).locator('[data-testid="quote-ask-mode-btn"]').click()
-    await expect(pill(page).locator('[data-testid="quote-ask-tree"]')).toHaveClass(/is-current/)
-    await expect(pill(page).locator('[data-testid="quote-ask-inline"]')).not.toHaveClass(/is-current/)
-    // Esc in the choices goes back to the pill's buttons; a second Esc closes the pill.
+    await expect(page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-tree"]')).toHaveClass(/is-current/)
+    await expect(page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-inline"]')).not.toHaveClass(/is-current/)
+    // Esc closes the choices' menu and leaves the pill's buttons; a second Esc closes the pill.
     await page.keyboard.press('Escape')
-    await expect(pill(page).locator('[data-testid="quote-ask-modes"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="quote-ask-modes"]')).toHaveCount(0)
     await expect(pill(page).locator('[data-testid="quote-ask-mode-btn"]')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(pill(page)).toHaveCount(0)
@@ -280,8 +280,8 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
     await selectPassage(page, mainPage(panel), PHRASE)
     await pill(page).locator('[data-testid="quote-ask-mode-btn"]').click()
-    await expect(pill(page).locator('[data-testid="quote-ask-inline"]')).toHaveClass(/is-current/)
-    await pill(page).locator('[data-testid="quote-ask-tree"]').click()
+    await expect(page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-inline"]')).toHaveClass(/is-current/)
+    await page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-tree"]').click()
     await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
     await expect(card(panel)).toHaveCount(0)

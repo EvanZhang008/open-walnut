@@ -133,18 +133,16 @@ export interface MenuPlacementOptions {
    */
   bounds?: 'layout' | 'visual';
   /**
-   * Fit inside this element's box instead of the window, vertically: a box that
-   * belongs to a scrolling timeline stays inside the timeline and never lies on
-   * the composer under it. With `bounds: 'visual'` it also stays above a phone
-   * keyboard. Falls back to `bounds` when the element is missing.
+   * Fit inside this element's box instead of the window: a box that belongs to a
+   * scrolling timeline stays inside the timeline and never lies on the composer
+   * under it. With `bounds: 'visual'` it also stays above a phone keyboard.
+   * Sideways it stays over the element's text column (its content box, so a panel
+   * in its padding, Tree Mode's Questions list, is not covered), or over its
+   * padding box, never its scrollbar, when it is too wide for that, or in the
+   * window when it is too wide for both. Falls back to `bounds` when the element
+   * is missing.
    */
   boundsRef?: RefObject<HTMLElement | null>;
-  /**
-   * Always open on this side: the caller has made room there itself (the passage
-   * Comment box opens in a gap it opened in the text), so flipping would only
-   * move the box onto the words it is about.
-   */
-  side?: 'up' | 'down';
 }
 
 /** The phone top bar's height and the keyboard's inset, from the CSS variables. */
@@ -205,6 +203,12 @@ export interface PlacementInput {
   preferSide?: 'up' | 'down';
   /** Extra room kept free at the top (the phone top bar); default 0. */
   topInset?: number;
+  /**
+   * Horizontal boxes (viewport coords) to stay inside, tried in order: the first
+   * the menu fits in (with `margin` each side) wins; none fitting leaves the
+   * viewport. See MenuPlacementOptions.boundsRef.
+   */
+  boxes?: Array<{ left: number; right: number }>;
 }
 
 /**
@@ -268,14 +272,18 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
         : input.align === 'start' && menuWidth > 0
           ? viewportWidth - anchorLeft - menuWidth
           : viewportWidth - anchor.right;
-  if ((input.align === 'left' || input.align === 'start') && menuWidth > 0 && right < margin
+  // The horizontal box: the first of `boxes` the menu fits in, else the viewport.
+  const box = (menuWidth > 0 && input.boxes?.find((b) => b.right - b.left >= menuWidth + margin * 2))
+    || { left: 0, right: viewportWidth };
+  const minRight = viewportWidth - box.right + margin;
+  if ((input.align === 'left' || input.align === 'start') && menuWidth > 0 && right < minRight
       && input.edgeOverflow !== 'clamp') {
     right = viewportWidth - anchor.right;
   }
   if (menuWidth > 0) {
-    right = Math.min(right, Math.max(margin, viewportWidth - menuWidth - margin));
+    right = Math.min(right, Math.max(minRight, viewportWidth - box.left - menuWidth - margin));
   }
-  right = Math.max(right, margin);
+  right = Math.max(right, minRight);
 
   return { top, right, maxHeight, side: openUp ? 'up' : 'down' };
 }
@@ -294,7 +302,7 @@ export function useMenuPlacement(
 ): MenuPlacement | null {
   const {
     gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down',
-    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost, boundsRef, side,
+    edgeOverflow = 'flip', verticalAnchorRef, onAnchorLost, boundsRef,
   } = options;
   const bounds = options.bounds ?? (isPhoneLayout() ? 'visual' : 'layout');
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
@@ -414,15 +422,24 @@ export function useMenuPlacement(
         ...(boundsRef?.current?.isConnected
           ? (() => {
               // The element's box, and on a phone also what the keyboard leaves.
-              const b = boundsRef.current!.getBoundingClientRect();
+              const el = boundsRef.current!;
+              const b = el.getBoundingClientRect();
               const v = bounds === 'visual' ? visualBounds() : { top: 0, height: window.innerHeight };
-              return { viewportHeight: Math.min(b.bottom, v.height), topInset: Math.max(0, b.top, v.top) };
+              // The padding box without the scrollbar, and inside it the text column.
+              const cs = getComputedStyle(el);
+              const padLeft = b.left + el.clientLeft;
+              const padRight = padLeft + el.clientWidth;
+              const boxes = [
+                { left: padLeft + (parseFloat(cs.paddingLeft) || 0), right: padRight - (parseFloat(cs.paddingRight) || 0) },
+                { left: padLeft, right: padRight },
+              ];
+              return { viewportHeight: Math.min(b.bottom, v.height), topInset: Math.max(0, b.top, v.top), boxes };
             })()
           : bounds === 'visual'
             ? (() => { const b = visualBounds(); return { viewportHeight: b.height, topInset: b.top }; })()
             : { viewportHeight: window.innerHeight }),
         gap, margin, minHeight: bounds === 'visual' ? Math.min(minHeight, 132) : minHeight, align, preferSide, edgeOverflow,
-        forceSide: side ?? sideRef.current,
+        forceSide: sideRef.current,
       });
       // Latch on the first pass only — but not before the menu has been measured,
       // or we'd freeze a side chosen from naturalHeight 0 (which always "fits
@@ -518,7 +535,7 @@ export function useMenuPlacement(
       document.removeEventListener('transitionend', onScrollOrResize, true);
       if (bounds === 'visual') window.visualViewport?.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds, boundsRef, side]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef, bounds, boundsRef]);
 
   return placement;
 }

@@ -411,21 +411,22 @@ test.describe('Quote pins', () => {
     await expect(pill).toBeVisible()
     const box = (await pill.boundingBox())!
     const centreX = box.x + box.width / 2
-    // Horizontally under the release point (the clause is ~600px wide, so the old
-    // end-centred placement would be far to the right of this), and hanging just
-    // above the line that was released on, never below it.
+    // Horizontally at the release point (the clause is ~600px wide, so the old
+    // end-centred placement would be far to the right of this), and just under the
+    // passage's last line, off the selected words (the bar sits under the passage).
     expect(Math.abs(centreX - release.x)).toBeLessThanOrEqual(48)
-    expect(box.y + box.height).toBeLessThanOrEqual(release.y)
-    expect(release.y - (box.y + box.height)).toBeLessThanOrEqual(40)
+    const { rects } = await phraseGeometry(page, clause)
+    const bottom = Math.max(...rects.map((r) => r.top + r.height))
+    expect(box.y).toBeGreaterThanOrEqual(bottom - 0.5)
+    expect(box.y - bottom).toBeLessThanOrEqual(24)
     await shot(page, '05-backward-drag-pill')
     await page.keyboard.press('Escape')
     await expect(pill).toHaveCount(0)
   })
 
-  // The pill hangs just above the line under the pointer, which is where an upward
-  // drag goes next. Shown mid-drag, WebKit extended the selection onto the pill (a
-  // node outside the transcript): the drag selected to the end of the page and no
-  // pill came at all (3 in 4 runs of the test above, WebKit only).
+  // Shown mid-drag, the pill can sit where the drag goes next, and WebKit extended the
+  // selection onto it (a node outside the transcript): the drag selected to the end of
+  // the page and no pill came at all (3 in 4 runs of the test above, WebKit only).
   test('no pill while the button is still down: it comes at the release, and the drag selects only the words', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')

@@ -329,3 +329,32 @@ describe('computePlacement: a box inside a timeline (the passage Comment box, 20
     expect(out.top).toBeGreaterThanOrEqual(timeline.topInset + MARGIN);
   });
 });
+
+describe('computePlacement: horizontal boxes (the selection bar over its timeline)', () => {
+  // A timeline whose text column is x 500..900 inside a padding box 300..920: a
+  // panel in the padding (Tree Mode's Questions list) and the scrollbar past 920.
+  const boxes = [{ left: 500, right: 900 }, { left: 300, right: 920 }];
+  const leftOf = (out: { right: number }, width = 260) => 1440 - out.right - width;
+
+  it('a centred bar near the column edge is held inside the column, not over the panel', () => {
+    const { out } = place({ anchor: { top: 100, bottom: 120, left: 510, right: 520 }, align: 'center', boxes });
+    expect(leftOf(out)).toBe(500 + MARGIN);
+  });
+
+  it('a start-aligned menu at the column right edge stops at the column, not over the scrollbar', () => {
+    const { out } = place({ anchor: { top: 100, bottom: 120, left: 860, right: 880 }, align: 'start', edgeOverflow: 'clamp', boxes });
+    expect(leftOf(out) + 260).toBe(900 - MARGIN);
+  });
+
+  it('too wide for the column: the padding box; too wide for both: the viewport', () => {
+    const wide = place({ anchor: { top: 100, bottom: 120, left: 510, right: 520 }, align: 'center', menuWidth: 500, boxes });
+    expect(leftOf(wide.out, 500)).toBe(300 + MARGIN);
+    const wider = place({ anchor: { top: 100, bottom: 120, left: 510, right: 520 }, align: 'center', menuWidth: 700, boxes });
+    expect(leftOf(wider.out, 700)).toBe(515 - 350);
+  });
+
+  it('no boxes: the viewport, as before', () => {
+    const { out } = place({ anchor: { top: 100, bottom: 120, left: 510, right: 520 }, align: 'center' });
+    expect(leftOf(out)).toBe(515 - 130);
+  });
+});

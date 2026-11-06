@@ -132,6 +132,7 @@ import type { ContinueInNewFolderResult } from '@/api/sessions';
 import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { PartIdentity } from './part-identity';
+import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 
 /** A send call's targets (send-targets.ts), parsed once per call and result: a
  *  fold line reads them on every render of a long session. */
@@ -5006,7 +5007,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A click outside the card (and outside the controls that open one) closes it.
   useEffect(() => {
     if (!cardKey) return;
-    const exempt = '.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill';
+    const exempt = `.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, ${SELECTION_BAR_LAYERS}, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill`;
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       if (!t || t.closest(exempt)) return;

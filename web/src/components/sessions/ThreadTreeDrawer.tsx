@@ -31,6 +31,7 @@ import type { SessionThreadMetaPatch } from '@/types/session';
 import { log } from '@/utils/log';
 import { isModifierOnly, markKeyboardFocus } from '@/utils/keyboard-focus';
 import '@/styles/thread-stack.css';
+import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 
 const EXIT_MS = 160;
 const LAZY_NAME_LIMIT = 10;
@@ -39,7 +40,7 @@ const LAZY_NAME_CONCURRENCY = 2;
  *  renders it once per crossing, not per pixel). */
 const DRAWER_WIDTH_TIERS = [420] as const;
 /** Clicks here are not "outside" (portals the drawer's own actions open). */
-const OUTSIDE_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .quote-pin-pill, .thread-menu`;
+const OUTSIDE_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, ${SELECTION_BAR_LAYERS}, .thread-menu`;
 /** Where focus goes back to after a close when the opener is unknown: the map's
  *  list button (panel shape) or its rail (the map's one tab stop when narrow). */
 const MAP_OPENER = '.thread-map .thread-map-icon[aria-label="Open the question list"], .thread-map .thread-map-rail';

@@ -43,6 +43,7 @@ async function open(page: Page): Promise<Locator> {
 }
 
 const pill = (page: Page) => page.locator('[data-testid="quote-pin-pill"]')
+const menu = (page: Page) => page.locator('[data-testid="quote-pin-menu"]')
 const composerOf = (panel: Locator) => panel.locator('.session-panel-input .chat-input-textarea')
 const tray = (panel: Locator) => panel.getByTestId('pending-comments')
 const rows = (panel: Locator) => panel.getByTestId('pending-comment-row')
@@ -93,31 +94,6 @@ async function settledBox(box: Locator): Promise<{ x: number; y: number; width: 
   return JSON.parse(last)
 }
 
-/** The words of any message that lie under a box (its rectangle, viewport px). */
-async function wordsUnder(history: Locator, box: { x: number; y: number; width: number; height: number }): Promise<string[]> {
-  return history.evaluate((root, b) => {
-    const hits: string[] = []
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const t = n as Text
-      if (!t.data.trim()) continue
-      // Only words a reader can see (a hidden control keeps its box).
-      const host = t.parentElement
-      if (!host || getComputedStyle(host).visibility !== 'visible') continue
-      const r = document.createRange()
-      r.selectNodeContents(t)
-      for (const rect of Array.from(r.getClientRects())) {
-        if (rect.width < 1 || rect.height < 1) continue
-        if (rect.right > b.x + 1 && rect.left < b.x + b.width - 1 && rect.bottom > b.y + 1 && rect.top < b.y + b.height - 1) {
-          hits.push(t.data.trim().slice(0, 40))
-          break
-        }
-      }
-    }
-    return hits
-  }, box)
-}
-
 async function select(page: Page, panel: Locator, phrase: string): Promise<void> {
   await page.evaluate(() => window.getSelection()?.removeAllRanges())
   await centreInHistory(page, panel, phrase, { tolerance: 20 })
@@ -137,7 +113,6 @@ async function comment(page: Page, panel: Locator, phrase: string, words: string
   await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
   const input = page.getByTestId('quote-comment-input')
   await expect(input).toBeFocused()
-  await expect(pill(page).getByRole('button', { name: 'Pin' })).toHaveCount(0)
   await expect(page.getByTestId('quote-comment-add')).toBeDisabled()
   const lines = words.split('\n')
   for (const [i, line] of lines.entries()) {
@@ -222,7 +197,7 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
     await expect(tray(panel)).toHaveCount(0)
     await reopen()
     await expect(input).toHaveValue('never added')
-    await pill(page).getByRole('button', { name: 'Discard', exact: true }).click()
+    await menu(page).getByRole('button', { name: 'Discard', exact: true }).click()
     await reopen()
     await expect(input).toHaveValue('')
     await page.keyboard.press('Escape')
@@ -307,191 +282,113 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
     expect(sent).toHaveLength(1)
   })
 
-  test('the Comment box opens in room the text makes for it: it covers no words and never the composer', async ({ page }) => {
-    // 2026-11-04, the user's screenshot: the box sat on the selected lines and on
-    // the first table row under them, and its field had a blue glow inside the
-    // box's blue border. Then two reviewers of a box placed under the passage: it
-    // still hid the words after it, and at the bottom it lay on the composer.
-    // Measured with the passage near the top, the middle and the bottom.
+  test('the Comment box and the Ask choice are menus under their buttons, over the conversation, which never moves', async ({ page }) => {
+    // 2026-11-05, the user, of a choice that opened in a gap pushed into the text: "Just
+    // a normal menu", "it is an overlay. Nobody would design it this way". Measured with
+    // the passage near the top, the middle and in the last message.
     const panel = await open(page)
     const [, p2, , p4, p5] = await passages(panel)
-    const input = page.getByTestId('quote-comment-input')
     const history = panel.locator('.session-history')
-    // The last one is in the last message, the timeline scrolled to its end.
+    const layout = () => history.evaluate((el) => ({
+      scrollTop: Math.round(el.scrollTop),
+      height: el.scrollHeight,
+      rows: Array.from(el.querySelectorAll('[data-message-id]')).map((r) => Math.round(r.getBoundingClientRect().top)),
+    }))
     for (const [phrase, at] of [[p2, 0.12], [p4, 0.5], [p5, 'bottom']] as const) {
       await place(page, panel, phrase, at)
       await selectPassage(page, panel, phrase, ANSWER)
       await expect(pill(page)).toBeVisible()
-      await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
+      const before = await layout()
+      // Comment: a box under the button, the field focused, the bar still there.
+      const commentBtn = pill(page).getByRole('button', { name: 'Comment', exact: true })
+      await commentBtn.click()
+      const input = page.getByTestId('quote-comment-input')
       await expect(input).toBeFocused()
-      const box = await settledBox(pill(page))
-      // No line of any message lies under the box.
-      const covered = await wordsUnder(history, box)
-      expect(covered, `words under the box at ${at}`).toEqual([])
-      // The passage keeps its mark while the box is open, every line of it above the box.
+      await expect(pill(page).getByRole('button', { name: 'Pin' })).toBeVisible()
+      const box = await settledBox(menu(page))
+      const btn = (await commentBtn.boundingBox())!
+      expect(box.y >= btn.y + btn.height - 1 || box.y + box.height <= btn.y + 1, `the box hangs off its button at ${at}`).toBe(true)
+      expect(await layout(), `the conversation did not move for the Comment box at ${at}`).toEqual(before)
+      // The passage keeps its mark while the box is open.
       await expect.poll(() => painted(page, 'walnut-held-quote')).toBe(1)
-      expect(Math.max(...(await passageRects(panel, phrase, ANSWER)).map((r) => r.top + r.height))).toBeLessThanOrEqual(box.y + 0.5)
-      // What the comment is on, in one line over the field.
-      await expect(page.getByTestId('quote-comment-on')).toContainText(phrase.split(/\s+/).slice(0, 2).join(' '))
-      // Inside the timeline: never on the composer.
-      const tl = (await history.boundingBox())!
-      expect(box.y).toBeGreaterThanOrEqual(tl.y - 0.5)
-      expect(box.y + box.height).toBeLessThanOrEqual(tl.y + tl.height + 0.5)
-      const composerTop = (await panel.locator('.session-panel-input').first().boundingBox())!.y
-      expect(box.y + box.height, `the box ends above the composer at ${at}`).toBeLessThanOrEqual(composerTop + 0.5)
-      // The passage itself is in view above the box.
-      const lines = await passageRects(panel, phrase, ANSWER)
-      expect(Math.max(...lines.map((r) => r.top + r.height))).toBeLessThanOrEqual(box.y + 0.5)
-      expect(Math.min(...lines.map((r) => r.top))).toBeGreaterThanOrEqual(tl.y - 0.5)
-      // One ring: the box border in the accent color, never a glow on the field inside it.
+      // One ring: the field's border in the accent color, never a glow on the field.
       expect(await input.evaluate((el) => getComputedStyle(el).boxShadow)).toBe('none')
       expect(await page.getByTestId('quote-comment-box').locator('.answer-box').evaluate((el) => getComputedStyle(el).borderTopColor))
         .toBe(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
           .replace(/^#(..)(..)(..)$/, (_, r, g, b) => `rgb(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)})`)))
-      // One frame: the field's border; the box draws none of its own.
-      expect(await pill(page).evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('0px')
       // Add is off until there are words; the hint and Discard sit under the field.
       await expect(page.getByTestId('quote-comment-add')).toBeDisabled()
       const field = (await page.getByTestId('quote-comment-box').locator('.answer-box').boundingBox())!
-      const discard = (await pill(page).getByRole('button', { name: 'Discard', exact: true }).boundingBox())!
+      const discard = (await menu(page).getByRole('button', { name: 'Discard', exact: true }).boundingBox())!
       expect(discard.y).toBeGreaterThanOrEqual(field.y + field.height - 0.5)
-      const hint = pill(page).getByText('Sent with your next message')
+      const hint = menu(page).getByText('Sent with your next message')
       await expect(hint).toBeVisible()
-      // The hint is one line, even in the narrowest box.
+      // One line in every face: the hint never wraps to a second line (macOS's
+      // wider face first did), its Esc part drops whole when it does not fit.
       expect((await hint.boundingBox())!.height).toBeLessThanOrEqual(20)
-      // The same room above and below the box in its gap: a room under the passage's
-      // own line (a spacer in a long paragraph) or under its block (the block's margin).
-      const gap = await panel.evaluate((root) => {
-        const g = root.querySelector<HTMLElement>('[data-comment-gap]')!
-        const r = g.getBoundingClientRect()
-        if (g.hasAttribute('data-comment-gap-spacer')) return { top: r.top, next: r.bottom }
-        const next = g.nextElementSibling ?? g.parentElement!.nextElementSibling
-        return { top: r.bottom, next: next ? next.getBoundingClientRect().top : null }
-      })
-      if (gap.next !== null) {
-        const above = box.y - gap.top
-        const under = gap.next - (box.y + box.height)
-        expect(Math.abs(under - above), `room above ${above}, below ${under}`).toBeLessThanOrEqual(6)
-      }
-      await expect(panel.locator('.scroll-to-bottom-btn')).not.toBeVisible()
+      expect(await hint.evaluate((el) => {
+        const keys = el.querySelector('.quote-pin-comment-keys')
+        const top = el.getBoundingClientRect().top
+        return !keys || keys.getBoundingClientRect().top - top < 4 || keys.getBoundingClientRect().top - top >= 15
+      }), 'the Esc part is on the hint line or wholly cut off').toBe(true)
       await shot(page, `05-comment-box-${at === 'bottom' ? 'bottom' : Math.round(at * 100)}`)
-      await pill(page).getByRole('button', { name: 'Discard', exact: true }).click()
+      await menu(page).getByRole('button', { name: 'Discard', exact: true }).click()
       await expect(pill(page)).toHaveCount(0)
-      // The text gets its own spacing back, and the jump-to-latest arrow may show again.
-      await expect(panel.locator('[data-comment-gap]')).toHaveCount(0)
-      await expect(page.locator('html.quote-comment-open')).toHaveCount(0)
-    }
-  })
-
-  test('the Ask choice drops below the passage in one box, never over the selected words', async ({ page }) => {
-    // 2026-11-04, the user ("bro this is still not fixed"): selecting two words and
-    // opening the Ask choice put it over the line above, its rows spilling out of a
-    // box sized for the small button bar (two boxes out of line).
-    const panel = await open(page)
-    const [p1, , , p4, p5] = await passages(panel)
-    const two = (p: string) => p.split(/\s+/).slice(1, 3).join(' ')
-    for (const [phrase, at] of [[two(p1), 0.12], [two(p4), 0.5], [two(p5), 'bottom']] as const) {
-      await place(page, panel, phrase, at)
+      await expect(menu(page)).toHaveCount(0)
+      expect(await layout(), `the conversation is where it was after the box at ${at}`).toEqual(before)
+      // Ask: a menu under Ask here's caret, one row lit, Up and Down move.
       await selectPassage(page, panel, phrase, ANSWER)
       await expect(pill(page)).toBeVisible()
-      await pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' }).click()
+      const caret = pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' })
+      await caret.click()
       const modes = page.getByTestId('quote-ask-modes')
       await expect(modes).toBeVisible()
-      const box = await settledBox(pill(page))
-      const lines = await passageRects(panel, phrase, ANSWER)
-      const bottom = Math.max(...lines.map((r) => r.top + r.height))
-      // Under the passage, in a gap the text made for it: no words of any message under it.
-      expect(box.y, `menu at ${Math.round(box.y)} vs passage bottom ${Math.round(bottom)} at ${at}`).toBeGreaterThanOrEqual(bottom - 0.5)
-      expect(await wordsUnder(panel.locator('.session-history'), box), `words under the choice at ${at}`).toEqual([])
-      // Inside the timeline (never on the composer) and inside the message column.
-      const tl = (await panel.locator('.session-history').boundingBox())!
-      expect(box.y + box.height).toBeLessThanOrEqual(tl.y + tl.height + 0.5)
-      const composerTop = (await panel.locator('.session-panel-input').first().boundingBox())!.y
-      expect(box.y + box.height, `the choice ends above the composer at ${at}`).toBeLessThanOrEqual(composerTop + 0.5)
-      // One row lit at a time, one width whatever is hovered, and the way back said.
+      await expect(caret).toHaveAttribute('aria-expanded', 'true')
+      const list = await settledBox(menu(page))
+      const group = (await pill(page).locator('.quote-pin-ask-group').boundingBox())!
+      expect(list.y >= group.y + group.height - 1 || list.y + list.height <= group.y + 1, `the choice hangs off Ask here at ${at}`).toBe(true)
+      expect(await layout(), `the conversation did not move for the choice at ${at}`).toEqual(before)
       const filled = await modes.locator('.quote-ask-mode').evaluateAll((els) => els.filter((el) => {
         const c = getComputedStyle(el).backgroundColor
         return c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent'
       }).length)
       expect(filled, `one row lit at ${at}`).toBe(1)
-      // One signal for what Enter asks: only the lit row names itself in the accent.
-      const accentNames = await modes.locator('.quote-ask-mode').evaluateAll((els) => {
-        const probe = document.createElement('span')
-        probe.style.color = 'var(--accent)'
-        document.body.appendChild(probe)
-        const accent = getComputedStyle(probe).color
-        probe.remove()
-        return els.filter((el) => getComputedStyle(el.querySelector('span')!).color === accent).length
-      })
-      expect(accentNames, `one accent name at ${at}`).toBe(1)
-      // The message's own last line (its copy and time row) stays above the composer.
-      if (at === 'bottom') {
-        const msgBottom = await modes.evaluate(() => {
-          const sel = document.querySelector('.quote-pin-pill')
-          const rows = Array.from(document.querySelectorAll('[data-message-id]'))
-          const last = rows[rows.length - 1] as HTMLElement | undefined
-          return sel && last ? last.getBoundingClientRect().bottom : 0
-        })
-        expect(msgBottom, 'the last message ends above the composer').toBeLessThanOrEqual(composerTop + 0.5)
-      }
-      // The same form as the Comment box: the column's width, no frame of its own, the "On" line.
-      expect(await pill(page).evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('0px')
-      await expect(page.getByTestId('quote-comment-on')).toBeVisible()
-      await expect(modes.getByText('Esc goes back')).toBeVisible()
-      // The passage keeps its mark, every line of it above the choice.
-      await expect.poll(() => painted(page, 'walnut-held-quote')).toBe(1)
-      // Up and Down move between the two ways.
       await expect(page.getByTestId('quote-ask-inline')).toBeFocused()
       await page.keyboard.press('ArrowDown')
       await expect(page.getByTestId('quote-ask-tree')).toBeFocused()
       await page.keyboard.press('ArrowUp')
       await expect(page.getByTestId('quote-ask-inline')).toBeFocused()
-      const column = (await panel.locator(`.session-history ${ANSWER} .session-msg-content`).filter({ hasText: phrase }).first().boundingBox())!
-      expect(box.x).toBeGreaterThanOrEqual(column.x - 0.5)
-      expect(box.x + box.width).toBeLessThanOrEqual(column.x + column.width + 0.5)
-      // One box: the rows fit inside it, nothing spills out.
-      const rows = (await modes.boundingBox())!
-      expect(rows.y).toBeGreaterThanOrEqual(box.y - 0.5)
-      expect(rows.y + rows.height).toBeLessThanOrEqual(box.y + box.height + 0.5)
-      expect(await pill(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1)
       await shot(page, `06-ask-choice-${at === 'bottom' ? 'bottom' : Math.round(at * 100)}`)
-      // Esc steps back to the bar first, a second Esc closes it.
+      // Esc closes the menu and leaves the bar, a second Esc closes the bar.
       await page.keyboard.press('Escape')
-      await expect(modes).toHaveCount(0)
+      await expect(menu(page)).toHaveCount(0)
       await expect(pill(page)).toBeVisible()
       await page.keyboard.press('Escape')
       await expect(pill(page)).toHaveCount(0)
     }
   })
 
-  test('a Comment on a short user message gets a whole box under the bubble', async ({ page }) => {
-    // A user message is a bubble as wide as its words: the box keeps the width its
-    // field and buttons need, lines up with the bubble's right edge, and the bubble
-    // keeps its own size (the room opens under it, not inside it).
+  test('a Comment on a short user message: the box keeps its width and the bubble its size', async ({ page }) => {
     const panel = await open(page)
     const USER = '[data-message-id][data-msg-role="user"]'
     const bubble = panel.locator('.session-history .session-msg-user').filter({ hasText: 'two workers race' }).first()
     await expect(bubble).toBeVisible()
-    const before = (await bubble.boundingBox())!
     await page.evaluate(() => window.getSelection()?.removeAllRanges())
     await centreInHistory(page, panel, 'two workers', { at: 0.4, tolerance: 20 })
+    const before = (await bubble.boundingBox())!
     await selectPassage(page, panel, 'two workers', USER)
     await expect(pill(page)).toBeVisible()
     await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
     await expect(page.getByTestId('quote-comment-input')).toBeFocused()
-    const box = await settledBox(pill(page))
+    const box = await settledBox(menu(page))
     const after = (await bubble.boundingBox())!
-    const history = (await panel.locator('.session-history').boundingBox())!
     expect(box.width).toBeGreaterThanOrEqual(279)
-    expect(Math.abs(after.height - before.height), 'the bubble keeps its size').toBeLessThanOrEqual(1)
-    expect(box.y, 'the box opens under the bubble').toBeGreaterThanOrEqual(after.y + after.height - 0.5)
-    expect(Math.abs(box.x + box.width - (after.x + after.width)), 'lined up with the bubble').toBeLessThanOrEqual(1)
-    expect(box.x).toBeGreaterThanOrEqual(history.x)
-    expect(await pill(page).evaluate((el) => el.scrollWidth - el.clientWidth), 'no sideways scroll').toBeLessThanOrEqual(1)
+    expect(after, 'the bubble does not move or grow').toEqual(before)
+    expect(await menu(page).evaluate((el) => el.scrollWidth - el.clientWidth), 'no sideways scroll').toBeLessThanOrEqual(1)
     const add = (await page.getByTestId('quote-comment-add').boundingBox())!
     expect(add.x + add.width).toBeLessThanOrEqual(box.x + box.width)
     await shot(page, '07-comment-user-bubble')
-    await pill(page).getByRole('button', { name: 'Discard', exact: true }).click()
+    await menu(page).getByRole('button', { name: 'Discard', exact: true }).click()
     await expect(pill(page)).toHaveCount(0)
   })
 

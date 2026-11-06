@@ -1,20 +1,22 @@
 /**
- * The selection menu is ONE box, beside the selected words, in every view that has it
- * (2026-11-05, the user, of the Ask inline / Ask in Tree choice over a table: "why sitll
- * fucking broekn"; the choice sat on the table above the selection, and its rows spilled
- * out of a box sized for the small button bar, so it read as two boxes drawn out of line).
+ * The selection menu is a normal menu in every view that has it. 2026-11-05, the user,
+ * first of the Ask inline / Ask in Tree choice over a table: "why sitll fucking broekn";
+ * then of the design that opened the choice in a gap pushed into the text: "Just a normal
+ * menu", "the ask here dro won", "it is an overlay. Nobody would design it this way".
  *
- * The pill is one component (QuotePinSelectionBar, placed by useMenuPlacement) mounted by
+ * The bar is one component (QuotePinSelectionBar, placed by useMenuPlacement) mounted by
  * every session timeline that can keep a pin: Conversation Mode, Tree Mode's page, a page
  * one level down, the left half of Tree Mode's split, and a narrow column. Each of them is
- * checked here, on the line right under a table and inside a table cell (the user's case),
- * in all three states of the pill: the button bar, the Ask choice, the Comment box.
+ * checked here, on the line right under a table and inside a table cell, with the bar, the
+ * Ask choice and the Comment box.
  *
- *   one layer      one pill in the document; nothing inside it is drawn outside its box,
- *                  and it does not scroll (a box shorter than its rows is the bug)
- *   beside         inside the viewport; never on the selected words; the Ask choice and
- *                  the Comment box open under the passage with no words of the
- *                  conversation under them
+ *   the bar        one, solid, inside the viewport, never on the selected words
+ *   the menus      the Ask choice and the Comment box are ONE popover each, apart from
+ *                  the bar: a solid background, a border and a shadow, inside the
+ *                  viewport, hanging off its own button (Ask here's caret, Comment), with
+ *                  nothing drawn outside it and no scroll
+ *   an overlay     opening either menu moves nothing: the conversation's scroll position,
+ *                  its height and every message's top are the same before and after
  *
  * Nothing is written: no Pin, Ask or Add is pressed, so the shared map fixture only needs
  * its lease for the questions it shows.
@@ -80,31 +82,43 @@ async function lastAnswerWords(scope: Locator, count = 3): Promise<string> {
 }
 
 type Box = { x: number; y: number; width: number; height: number }
+type Geometry = {
+  count: number; box: Box; spill: string[]; scroll: number; vw: number; vh: number
+  alpha: number; border: number; shadow: string
+}
 
-/** What the pill looks like right now, read in one pass once it stops moving. */
-async function menuGeometry(page: Page): Promise<{ count: number; box: Box; spill: string[]; scroll: number; vw: number; vh: number }> {
+const SOLID_BG = (bg: string) => {
+  // "rgb(r, g, b)" is opaque; "rgba(r, g, b, a)" and "color(srgb r g b / a)" carry an alpha.
+  const m = /\/\s*([\d.]+)\)$|rgba\([^)]*,\s*([\d.]+)\)$/.exec(bg)
+  if (bg === 'transparent') return 0
+  return m ? Number(m[1] ?? m[2]) : 1
+}
+
+/** One element's geometry and paint, read in one pass once it stops moving. */
+async function geometry(page: Page, selector: string): Promise<Geometry> {
+  const target = page.locator(selector)
   let last = ''
   await expect.poll(async () => {
     await page.waitForTimeout(150)
-    const now = JSON.stringify(await pill(page).boundingBox())
+    const now = JSON.stringify(await target.first().boundingBox())
     const same = now === last
     last = now
     return same
   }, { timeout: 5_000 }).toBe(true)
-  return page.evaluate(() => {
-    const pills = Array.from(document.querySelectorAll<HTMLElement>('.quote-pin-pill'))
-    const el = pills[0]!
+  const g = await page.evaluate((sel) => {
+    const all = Array.from(document.querySelectorAll<HTMLElement>(sel))
+    const el = all[0]!
     const r = el.getBoundingClientRect()
     const spill: string[] = []
     for (const child of Array.from(el.querySelectorAll<HTMLElement>('*'))) {
-      // What is DRAWN: a part an ancestor inside the box clips (the "On ..." line's
-      // ellipsis) is not on screen. The box's own clip is not counted: rows it has to
-      // clip are the bug, and the scroll check below catches them.
+      // What is DRAWN: a part an ancestor inside the box clips is not on screen. The
+      // box's own clip is not counted: rows it has to clip are the bug, and the scroll
+      // check catches them.
       const r0 = child.getBoundingClientRect()
       const c = { left: r0.left, right: r0.right, top: r0.top, bottom: r0.bottom }
       for (let up = child.parentElement; up && up !== el; up = up.parentElement) {
-        const s = getComputedStyle(up)
-        if (s.overflowX === 'visible' && s.overflowY === 'visible') continue
+        const st = getComputedStyle(up)
+        if (st.overflowX === 'visible' && st.overflowY === 'visible') continue
         const u = up.getBoundingClientRect()
         c.left = Math.max(c.left, u.left); c.right = Math.min(c.right, u.right)
         c.top = Math.max(c.top, u.top); c.bottom = Math.min(c.bottom, u.bottom)
@@ -114,61 +128,96 @@ async function menuGeometry(page: Page): Promise<{ count: number; box: Box; spil
         spill.push(`${child.tagName.toLowerCase()}.${child.className} ${Math.round(c.top)}..${Math.round(c.bottom)} in ${Math.round(r.top)}..${Math.round(r.bottom)}`)
       }
     }
+    const st = getComputedStyle(el)
     return {
-      count: pills.length,
+      count: all.length,
       box: { x: r.left, y: r.top, width: r.width, height: r.height },
       spill,
       scroll: el.scrollHeight - el.clientHeight,
       vw: window.innerWidth,
       vh: window.innerHeight,
+      bg: st.backgroundColor,
+      border: parseFloat(st.borderTopWidth),
+      shadow: st.boxShadow,
+      backdrop: st.backdropFilter || (st as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || 'none',
     }
-  })
+  }, selector)
+  return { ...g, alpha: SOLID_BG(g.bg) }
 }
 
-/** The words of any message under a box (viewport px). */
-async function wordsUnder(scope: Locator, b: Box): Promise<string[]> {
-  return scope.locator('.session-history').first().evaluate((root, box) => {
-    const hits: string[] = []
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const t = n as Text
-      if (!t.data.trim()) continue
-      const host = t.parentElement
-      if (!host || getComputedStyle(host).visibility !== 'visible') continue
-      const r = document.createRange()
-      r.selectNodeContents(t)
-      for (const rect of Array.from(r.getClientRects())) {
-        if (rect.width < 1 || rect.height < 1) continue
-        if (rect.right > box.x + 1 && rect.left < box.x + box.width - 1 && rect.bottom > box.y + 1 && rect.top < box.y + box.height - 1) {
-          hits.push(t.data.trim().slice(0, 40))
-          break
-        }
-      }
-    }
-    return hits
-  }, b)
-}
+/** Where the conversation is: its scroll, its height and every message's top. */
+const layout = (scope: Locator) => scope.locator('.session-history').first().evaluate((el) => ({
+  scrollTop: Math.round(el.scrollTop),
+  height: el.scrollHeight,
+  rows: Array.from(el.querySelectorAll('[data-message-id]')).map((r) => Math.round(r.getBoundingClientRect().top)),
+}))
 
 const overlaps = (b: Box, r: { left: number; right: number; top: number; height: number }) =>
   r.right > b.x + 1 && r.left < b.x + b.width - 1 && r.top + r.height > b.y + 1 && r.top < b.y + b.height - 1
 
-/** One box, in the viewport, off the selected words; the choice and the box under them. */
-async function expectOneMenuBeside(page: Page, scope: Locator, phrase: string, where: string, state: 'bar' | 'ask' | 'comment'): Promise<void> {
-  const g = await menuGeometry(page)
-  const at = `${state} at ${where}`
-  expect(g.count, `one pill in the document (${at})`).toBe(1)
+function expectInViewport(g: Geometry, at: string): void {
+  expect(g.count, `one in the document (${at})`).toBe(1)
   expect(g.spill, `nothing drawn outside the box (${at})`).toEqual([])
   expect(g.scroll, `the box holds its rows without scrolling (${at})`).toBeLessThanOrEqual(1)
   expect(g.box.x, `inside the viewport (${at})`).toBeGreaterThanOrEqual(-0.5)
   expect(g.box.y, `inside the viewport (${at})`).toBeGreaterThanOrEqual(-0.5)
   expect(g.box.x + g.box.width, `inside the viewport (${at})`).toBeLessThanOrEqual(g.vw + 0.5)
   expect(g.box.y + g.box.height, `inside the viewport (${at})`).toBeLessThanOrEqual(g.vh + 0.5)
+  expect(g.alpha, `a solid background, nothing shows through (${at})`).toBe(1)
+}
+
+/** Over the timeline's text column (not Tree Mode's Questions list, a split's other
+ *  pane or the scrollbar), or its padding box when too wide for the column. */
+async function expectInColumn(scope: Locator, g: Geometry, at: string): Promise<number[]> {
+  const col = await scope.locator('.session-history').first().evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const cs = getComputedStyle(el)
+    const padLeft = r.left + el.clientLeft
+    const padRight = padLeft + el.clientWidth
+    return { padLeft, padRight, left: padLeft + parseFloat(cs.paddingLeft), right: padRight - parseFloat(cs.paddingRight) }
+  })
+  const [l, r] = g.box.width + 8 <= col.right - col.left ? [col.left, col.right] : [col.padLeft, col.padRight]
+  expect(g.box.x, `inside the text column on the left (${at}): ${Math.round(g.box.x)} < ${Math.round(l)}`).toBeGreaterThanOrEqual(l - 0.5)
+  expect(g.box.x + g.box.width, `inside the text column on the right (${at}): ${Math.round(g.box.x + g.box.width)} > ${Math.round(r)}`).toBeLessThanOrEqual(r + 0.5)
+  return [l, r]
+}
+
+/** The bar: one, solid, in the viewport, off the selected words. */
+async function expectBar(page: Page, scope: Locator, phrase: string, where: string): Promise<void> {
+  const g = await geometry(page, '.quote-pin-pill')
+  expectInViewport(g, `bar at ${where}`)
+  await expectInColumn(scope, g, `bar at ${where}`)
   const lines = await passageRects(scope, phrase, ANSWER)
-  expect(lines.filter((r) => overlaps(g.box, r)), `never on the selected words (${at})`).toEqual([])
-  if (state === 'bar') return
+  expect(lines.filter((r) => overlaps(g.box, r)), `the bar is never on the selected words (${where})`).toEqual([])
+  // Under the passage when it fits there (the mockup the user was shown), above otherwise.
   const bottom = Math.max(...lines.map((r) => r.top + r.height))
-  expect(g.box.y, `under the passage (${at})`).toBeGreaterThanOrEqual(bottom - 0.5)
-  expect(await wordsUnder(scope, g.box), `no words under the ${state} (${at})`).toEqual([])
+  if (bottom + 8 + g.box.height + 8 <= g.vh) expect(g.box.y, `the bar is under the passage (${where})`).toBeGreaterThanOrEqual(bottom - 0.5)
+}
+
+/** A menu: one popover with a border and a shadow, hanging off its button, which moved
+ *  nothing in the conversation. */
+async function expectMenu(page: Page, scope: Locator, phrase: string, anchor: Locator, before: Awaited<ReturnType<typeof layout>>, at: string): Promise<void> {
+  const g = await geometry(page, '[data-testid="quote-pin-menu"]')
+  expectInViewport(g, at)
+  const [edgeL, edgeR] = await expectInColumn(scope, g, at)
+  expect(g.border, `a border (${at})`).toBeGreaterThanOrEqual(1)
+  expect(g.shadow, `a shadow (${at})`).not.toBe('none')
+  const a = (await anchor.boundingBox())!
+  const below = g.box.y - (a.y + a.height)
+  const above = a.y - (g.box.y + g.box.height)
+  expect((below >= -0.5 && below <= 12) || (above >= -0.5 && above <= 12), `hangs off its button: ${Math.round(below)}px below or ${Math.round(above)}px above (${at})`).toBe(true)
+  // A dropdown: under its button whenever it fits there.
+  if (a.y + a.height + 4 + g.box.height + 8 <= g.vh) expect(below, `drops down from its button (${at})`).toBeGreaterThanOrEqual(-0.5)
+  const aligned = Math.abs(g.box.x - a.x) <= 2 || Math.abs(g.box.x + g.box.width - (a.x + a.width)) <= 2
+    || g.box.x <= edgeL + 6 || g.box.x + g.box.width >= edgeR - 6
+  expect(aligned, `lined up with its button, or held at its column's edge (${at})`).toBe(true)
+  // Over the bar is wrong too: the menu sits beside it, never on it.
+  const bar = (await pill(page).boundingBox())!
+  expect(overlaps(g.box, { left: bar.x, right: bar.x + bar.width, top: bar.y, height: bar.height }), `the menu is not drawn on the bar (${at})`).toBe(false)
+  expect(await layout(scope), `the conversation did not move (${at})`).toEqual(before)
+  // It opens away from the passage, so the words it is about stay in view.
+  const lines = await passageRects(scope, phrase, ANSWER)
+  expect(lines.filter((r) => overlaps(g.box, r)), `the menu is not on the selected words (${at})`).toEqual([])
 }
 
 /** Select `phrase` in `scope`, then check the bar, the Ask choice and the Comment box. */
@@ -179,29 +228,63 @@ async function checkAllStates(page: Page, scope: Locator, phrase: string, where:
     await selectPassage(page, scope, phrase, ANSWER)
     await expect(pill(page)).toBeVisible()
   }
+  const menu = page.locator('[data-testid="quote-pin-menu"]')
   await select()
-  await expectOneMenuBeside(page, scope, phrase, where, 'bar')
-  await pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' }).click()
+  await expectBar(page, scope, phrase, where)
+  const before = await layout(scope)
+  // Ask: a menu under Ask here's caret; Up and Down move; Esc closes it and keeps the bar.
+  const caret = pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' })
+  await caret.click()
   await expect(page.getByTestId('quote-ask-modes')).toBeVisible()
-  await expectOneMenuBeside(page, scope, phrase, where, 'ask')
+  await expect(caret).toHaveAttribute('aria-expanded', 'true')
+  await expectMenu(page, scope, phrase, pill(page).locator('.quote-pin-ask-group'), before, `ask at ${where}`)
+  // The current way (Tree Mode asks in Tree) has the focus; Down moves to the other.
+  const current = page.locator('[data-testid="quote-ask-modes"] .quote-ask-mode.is-current')
+  await expect(current).toBeFocused()
+  const other = (await current.getAttribute('data-testid')) === 'quote-ask-inline' ? 'quote-ask-tree' : 'quote-ask-inline'
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByTestId(other)).toBeFocused()
   await shot(page, `${where}-ask`)
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('quote-ask-modes')).toHaveCount(0)
+  await expect(menu).toHaveCount(0)
+  await expect(pill(page)).toBeVisible()
+  expect(await layout(scope), `the conversation is where it was (${where})`).toEqual(before)
+  // The caret again closes it too.
+  await caret.click()
+  await expect(menu).toHaveCount(1)
+  await caret.click()
+  await expect(menu).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(pill(page)).toHaveCount(0)
+  // Comment: a box under the Comment button, the field focused.
   await select()
-  await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
+  const beforeComment = await layout(scope)
+  const commentBtn = pill(page).getByRole('button', { name: 'Comment', exact: true })
+  await commentBtn.click()
   await expect(page.getByTestId('quote-comment-input')).toBeFocused()
-  await expectOneMenuBeside(page, scope, phrase, where, 'comment')
+  await expect(commentBtn).toHaveAttribute('aria-expanded', 'true')
+  await expectMenu(page, scope, phrase, commentBtn, beforeComment, `comment at ${where}`)
+  await expectBar(page, scope, phrase, `${where} with the Comment box`)
   await shot(page, `${where}-comment`)
+  // A scroll moves the bar with the passage: the box goes with its button, never
+  // left behind on the bar or the words.
+  await scope.locator('.session-history').first().evaluate((el) => { el.scrollTop -= 60 })
+  await expect.poll(async () => {
+    const box = (await menu.boundingBox())!
+    const btn = (await commentBtn.boundingBox())!
+    const below = box.y - (btn.y + btn.height)
+    const above = btn.y - (box.y + box.height)
+    return (below >= -0.5 && below <= 12) || (above >= -0.5 && above <= 12)
+  }, { message: `the box follows its button through a scroll (${where})`, timeout: 3_000 }).toBe(true)
   // Discard, so no draft is left on the shared fixture's passage.
-  await pill(page).getByRole('button', { name: 'Discard' }).click()
+  await menu.getByRole('button', { name: 'Discard' }).click()
   await expect(pill(page)).toHaveCount(0)
+  await expect(menu).toHaveCount(0)
 }
 
 const mapRow = (panel: Locator, title: string) => panel.locator('.thread-map .thread-map-row', { hasText: title }).first()
 
-test.describe('Selection menu: one box beside the selection, in every view that has it', () => {
+test.describe('Selection menu: a bar and normal menus over the conversation, in every view that has it', () => {
   test.describe.configure({ timeout: 240_000 })
 
   test('Conversation Mode: a few words, and a passage dragged down over several lines', async ({ page }) => {
@@ -235,7 +318,7 @@ test.describe('Selection menu: one box beside the selection, in every view that 
     await checkAllStates(page, left, await underTable(left), 'split-left-under-table')
   })
 
-  test('a narrow column: the box stays inside it, off the words', async ({ page }) => {
+  test('a narrow column: the bar and the menus stay in the viewport', async ({ page }) => {
     const panel = await openAt(page, 360, 'stack')
     await checkAllStates(page, panel, await underTable(panel), 'narrow-under-table')
   })

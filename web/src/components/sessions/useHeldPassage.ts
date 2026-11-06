@@ -33,7 +33,6 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { setHeldQuoteRange } from '@/utils/pin-highlights';
 import { bodyForMsgId, rangeVisibleIn } from '@/utils/selection-quote';
 import { rangeForQuote, rangeIsLive, type TextQuote } from '@/utils/text-quote-anchor';
-import { messageColumnOf, passageEndBlock } from './comment-gap';
 
 /** Floor between two mutation-driven repairs — the pins' paint uses the same figure. */
 const REPAIR_MIN_GAP_MS = 250;
@@ -49,7 +48,7 @@ export interface HeldPassage {
 /**
  * Where a pill hangs: the caret point the gesture ended at (`x`, `y` = that line's
  * top), plus the bottom of that line and the passage's whole vertical extent, so
- * a box opened from the pill can sit clear of the words it is about.
+ * the bar can sit clear of the words it is about.
  */
 export interface HeldPoint {
   x: number;
@@ -59,37 +58,19 @@ export interface HeldPoint {
   /** Top and bottom of the whole passage, in viewport coordinates. */
   passageTop?: number;
   passageBottom?: number;
-  /** Bottom of the block the passage ends in (comment-gap.ts passageEndBlock). */
-  blockBottom?: number;
-  /** Left edge and width of the message body the passage is in. */
-  columnLeft?: number;
-  columnWidth?: number;
 }
 
 /** Same point, same line, same passage extent. */
 export function sameHeldPoint(a: HeldPoint, b: HeldPoint): boolean {
   return a.x === b.x && a.y === b.y && a.lineBottom === b.lineBottom
-    && a.passageTop === b.passageTop && a.passageBottom === b.passageBottom
-    && a.blockBottom === b.blockBottom && a.columnLeft === b.columnLeft && a.columnWidth === b.columnWidth;
+    && a.passageTop === b.passageTop && a.passageBottom === b.passageBottom;
 }
 
-/** The passage's vertical extent, the block it ends in and its column, rounded;
- *  nothing for a range with no box. */
-export function passageExtent(range: Range): Pick<HeldPoint, 'passageTop' | 'passageBottom' | 'blockBottom' | 'columnLeft' | 'columnWidth'> {
+/** The passage's vertical extent, rounded; nothing for a range with no box. */
+export function passageExtent(range: Range): Pick<HeldPoint, 'passageTop' | 'passageBottom'> {
   const r = range.getBoundingClientRect();
   if (!r || (!r.width && !r.height)) return {};
-  const out: ReturnType<typeof passageExtent> = { passageTop: Math.round(r.top), passageBottom: Math.round(r.bottom) };
-  const block = passageEndBlock(range);
-  // The box lines up with the message: a user message's bubble, else its body.
-  const body = messageColumnOf(range.endContainer);
-  const column = body?.closest<HTMLElement>('.session-msg-user') ?? body;
-  if (block) out.blockBottom = Math.round(Math.max(block.getBoundingClientRect().bottom, r.bottom));
-  if (column) {
-    const c = column.getBoundingClientRect();
-    out.columnLeft = Math.round(c.left);
-    out.columnWidth = Math.round(c.width);
-  }
-  return out;
+  return { passageTop: Math.round(r.top), passageBottom: Math.round(r.bottom) };
 }
 
 /** The end of a Range the gesture finished at. */

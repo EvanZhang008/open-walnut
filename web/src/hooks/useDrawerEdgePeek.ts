@@ -14,11 +14,11 @@
  * over the outline rail's box. Leaving the band cancels the dwell.
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { SELECTION_BAR_LAYERS } from '@/components/sessions/selection-bar-layers';
 
 export const EDGE_BAND_PX = 8;
 export const EDGE_DWELL_MS = 300;
 const RAIL_SELECTOR = '[data-thread-rail], .session-toc';
-const SELECTION_PILL_SELECTOR = '.quote-pin-pill';
 
 export interface EdgePoint { x: number; y: number }
 export interface EdgeRect { left: number; top: number; right: number; bottom: number }
@@ -93,7 +93,7 @@ export function useDrawerEdgePeek({ panelRef, enabled, onPeek, dwellMs = EDGE_DW
         const rail = railEl ? railEl.getBoundingClientRect() : null;
         const arm = shouldArmEdge({
           prev, now: p, panel: pr, band: br, rail: rail && rail.width > 0 ? rail : null, buttons,
-          selectionPill: document.querySelector(SELECTION_PILL_SELECTOR) !== null,
+          selectionPill: document.querySelector(SELECTION_BAR_LAYERS) !== null,
         });
         if (arm) {
           isArmed = true;
