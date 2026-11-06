@@ -68,7 +68,9 @@ struct OrgThreadsView: View {
                         }
                     } else if sections.open.isEmpty {
                         emptyText(sections)
-                    } else if sections.open.count > 2 {
+                    } else {
+                        // Always above the cards while there are any, so the page keeps one header
+                        // as a snooze or an acknowledge takes a card away (r8 review).
                         jumps(sections, proxy: proxy)
                     }
                     ForEach(sections.open) { t in
@@ -143,8 +145,8 @@ struct OrgThreadsView: View {
         DispatchQueue.main.async { withAnimation { proxy.scrollTo(id, anchor: .top) } }
     }
 
-    /// Under a long list, one tap to the folds below it (2026-11-04 review: a dozen screens of
-    /// cards before them).
+    /// The count of cards for him, and one tap to each fold below them (2026-11-04 review: a
+    /// dozen screens of cards before them).
     private func jumps(_ s: OrgThreadModel.Sections, proxy: ScrollViewProxy) -> some View {
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
             ("snoozed", "Snoozed", s.snoozed.count, foldBinding("snoozed")),
@@ -674,6 +676,16 @@ struct OrgThreadFollowUpSheet: View {
                     .frame(minHeight: 80, maxHeight: .infinity)
                     .padding(8)
                     .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(alignment: .topLeading) {
+                        if text.isEmpty {
+                            Text("Write your follow up")
+                                .font(.body)
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 16)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .accessibilityIdentifier("org.thread.followUp.input")
                 ReplyPictureStrip(images: $images, notice: $pictureNotice, idPrefix: "org.thread.followUp")
                 ReplyPictureButton(

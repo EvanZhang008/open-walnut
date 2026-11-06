@@ -60,7 +60,7 @@ final class OrgNodeTasksModelTests: XCTestCase {
         let s = OrgNodeTasksModel.statusSections(rows)
         XCTAssertEqual(s.map(\.id), ["watching", "needs", "working", "waiting", "done"])
         XCTAssertEqual(s.first?.rows.map(\.id), ["w"])
-        XCTAssertEqual(s.map(\.openByDefault), [true, true, false, false, false])
+        XCTAssertEqual(s.map(\.openByDefault), [true, true, true, false, false])
     }
 
     func testPinGroupsFollowTheTierOrderThenNotPinned() {

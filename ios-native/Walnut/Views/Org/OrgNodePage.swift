@@ -85,7 +85,8 @@ struct OrgNodePage: View {
         guard t == .threads else { return t.label }
         let shown = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.count }
             ?? node?.userStatus?.threads?.shown ?? 0
-        return shown > 0 ? "Threads \(shown)" : "Threads"
+        // "Threads 0" too, as the bar under the chat reads (the owner: "even if no thread, show 0").
+        return "Threads \(shown)"
     }
 }
 

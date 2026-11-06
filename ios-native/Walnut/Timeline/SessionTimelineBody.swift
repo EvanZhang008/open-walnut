@@ -193,6 +193,9 @@ struct SessionTimelineLoadingState: View {
 struct SessionTimelineUnreadableState: View {
     var onRetry: (() async -> Void)?
     @State private var retrying = false
+    /// A retry finished and this page is still here, so it failed again: say so, or the tap
+    /// looks like it did nothing.
+    @State private var triedAgain = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -209,13 +212,21 @@ struct SessionTimelineUnreadableState: View {
             if let onRetry {
                 Button {
                     retrying = true
-                    Task { await onRetry(); retrying = false }
+                    triedAgain = false
+                    Task { await onRetry(); retrying = false; triedAgain = true }
                 } label: {
                     if retrying { ProgressView() } else { Text("Try Again") }
                 }
                 .buttonStyle(.bordered)
                 .disabled(retrying)
                 .accessibilityIdentifier("session.transcript.retry")
+                if triedAgain {
+                    Text("Still can't read it. Try again in a moment.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .accessibilityIdentifier("session.transcript.retryFailed")
+                }
             }
         }
         .frame(maxWidth: .infinity)

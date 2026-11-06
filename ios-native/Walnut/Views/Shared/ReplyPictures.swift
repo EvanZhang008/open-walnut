@@ -47,6 +47,8 @@ struct ReplyPictureButton: View {
             .accessibilityIdentifier("\(idPrefix).paste")
         } label: {
             Image(systemName: "photo.badge.plus")
+                // The menu's own label is read from this image, not the menu: name it too.
+                .accessibilityLabel(images.isEmpty ? "Add a picture" : "Add a picture, \(images.count) attached")
                 .font(.system(size: 19))
                 .frame(width: 40, height: 44)
                 .contentShape(Rectangle())

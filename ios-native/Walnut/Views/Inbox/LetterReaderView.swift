@@ -384,7 +384,11 @@ struct LetterReaderView: View {
                         .lineLimit(stacked ? nil : 1)
                         .fixedSize(horizontal: false, vertical: stacked)
                 }
-                .layoutPriority(1)
+                // The task link wins the line (it is the tap target); a long sender name
+                // truncates, keeping enough to read. With the sender first it took the line
+                // and squeezed a short task name into a column ("W…").
+                .frame(minWidth: stacked ? nil : 72, alignment: .leading)
+                .layoutPriority(letter.taskTitle == nil ? 1 : 0)
                 if let title = letter.taskTitle {
                     if let id = letter.sender?.taskId, !id.isEmpty {
                         Button {
@@ -392,8 +396,8 @@ struct LetterReaderView: View {
                         } label: {
                             HStack(spacing: 4) {
                                 Text(title)
-                                    .lineLimit(stacked ? nil : 2)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineLimit(stacked ? nil : 1)
+                                    .fixedSize(horizontal: false, vertical: stacked)
                                 Image(systemName: "chevron.right").font(.caption2)
                             }
                             .font(.caption)
@@ -403,8 +407,9 @@ struct LetterReaderView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(Theme.tint)
-                        .accessibilityHint("Opens task details")
+                        .accessibilityHint("Opens this task's conversation")
                         .accessibilityIdentifier("inbox.letter.taskTitle")
+                        .layoutPriority(1)
                     } else {
                         Text(stacked ? title : "· \(title)").font(.caption)
                             .lineLimit(stacked ? nil : 1)

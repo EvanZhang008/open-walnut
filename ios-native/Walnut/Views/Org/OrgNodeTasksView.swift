@@ -12,8 +12,21 @@ struct OrgNodeTasksView: View {
     @State private var tree: OrgTreeWire?
     @State private var loaded = false
     @State private var error: String?
-    /// Sections the user opened or closed on this visit; the rest follow their default.
-    @State private var flipped: Set<String> = []
+    /// Sections the user opened or closed, kept per node ("nodeId/section" keys); the rest
+    /// follow their default.
+    @AppStorage("org.node.tasksFlipped") private var flippedRaw = ""
+    private var flipped: Set<String> {
+        Set(flippedRaw.split(separator: " ").compactMap { key in
+            let parts = key.split(separator: "/", maxSplits: 1)
+            return parts.count == 2 && parts[0] == Substring(nodeId) ? String(parts[1]) : nil
+        })
+    }
+    private func flip(_ section: String) {
+        let key = "\(nodeId)/\(section)"
+        var keys = flippedRaw.split(separator: " ").map(String.init)
+        if let i = keys.firstIndex(of: key) { keys.remove(at: i) } else { keys.append(key) }
+        flippedRaw = keys.suffix(60).joined(separator: " ")
+    }
     @State private var target: TaskOpenTarget?
 
     private var mode: OrgNodeTasksModel.Mode { OrgNodeTasksModel.Mode(rawValue: modeRaw) ?? .status }
@@ -83,7 +96,7 @@ struct OrgNodeTasksView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.snappy) {
-                    if flipped.contains(s.id) { flipped.remove(s.id) } else { flipped.insert(s.id) }
+                    flip(s.id)
                 }
             } label: {
                 HStack(spacing: 8) {

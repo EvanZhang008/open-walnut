@@ -31,7 +31,8 @@ enum OrgNodeTasksModel {
             }
         }
         /// Open on a page's first look: what is in front of him now (the home rule).
-        var openByDefault: Bool { self == .watching || self == .needs }
+        /// What needs him and what runs now open; what waits and what is done stay folded.
+        var openByDefault: Bool { self == .watching || self == .needs || self == .working }
     }
 
     struct Section: Equatable, Identifiable {
