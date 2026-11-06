@@ -439,6 +439,10 @@ export function originatorLabel(originator: string): string {
   if (originator === 'sdk-cli') return 'Claude Code (claude -p)';
   if (originator === 'sdk-ts' || originator === 'sdk-py') return 'Claude SDK';
   if (originator === 'claude-desktop') return 'Claude desktop';
+  if (originator === 'mcp') return 'Claude Code (MCP)';
+  if (originator === 'local-agent') return 'Claude Code (agent)';
+  if (originator === 'remote') return 'Claude Code (remote)';
+  if (originator === 'github-action') return 'Claude Code (GitHub action)';
   if (originator.startsWith('claude-')) return `Claude Code (${originator.slice('claude-'.length)})`;
   return originator || 'Codex';
 }

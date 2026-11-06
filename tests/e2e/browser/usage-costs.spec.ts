@@ -427,6 +427,7 @@ test('work Walnut did not start is counted by default, a filter narrows it, and 
   // What bills the signed-in account directly is called out beside the total.
   await expect(page.getByTestId('usage-direct-cost')).toContainText('Billed directly')
   expect(money(await page.getByTestId('usage-direct-cost').textContent())).toBeGreaterThan(0)
+  await expect(page.getByTestId('usage-direct-note')).toContainText('part of the total')
   // The account Codex went through: the one billed directly is first and marked.
   const accounts = page.getByTestId('usage-accounts')
   await expect(accounts).toBeVisible()

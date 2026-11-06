@@ -127,6 +127,19 @@ describe('collecting Claude Code sessions outside Walnut', () => {
     expect(mocks.send.mock.calls[2][1].outside).toBeUndefined();
   });
 
+  it('a full read that fails between pages falls back the same way, and keeps what the pages stored', async () => {
+    const first = { ...page([record('m21', 'walnut-run')], [], '2026-11-06T08:00:00.000Z'), done: false, key: 'k1', offset: 1 };
+    mocks.send.mockResolvedValueOnce(first);
+    mocks.send.mockRejectedValueOnce(new Error('daemon command lost: usage.scan: connection closed'));
+    mocks.send.mockResolvedValueOnce(page([], [], '2026-11-06T08:00:00.000Z'));
+    await collectUsage(INCREMENTAL, '2026-11-06T08:00:00.000Z');
+    expect(mocks.send.mock.calls[2][1].outside).toBeUndefined();
+    const rollup = responseUsageStore().rollup;
+    expect(rollup.claudeOutsideBuilt('__local__')).toBe(false);
+    expect(rollup.claudeOutsideFailedAt('__local__')).toBeGreaterThan(0);
+    expect(responseUsageStore().hasSession('walnut-run')).toBe(true);
+  });
+
   it('a host that failed does not count as read in full', async () => {
     responseUsageStore().rollup.setThresholds([]);
     mocks.sessions.mockResolvedValue([{ claudeSessionId: 'walnut-run', host: 'devbox', engine: 'claude', taskId: 'example-task' }]);

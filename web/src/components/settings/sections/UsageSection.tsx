@@ -170,6 +170,11 @@ function Headline({ report, days }: { report: CostReport; days: string[] }) {
         {direct > 0 && <Stat value={money(direct)} label="Billed directly" testId="usage-direct-cost" highlight />}
         <Stat value={busiest && busiest.costUsd > 0 ? money(busiest.costUsd) : '-'} label={busiest && busiest.costUsd > 0 ? `Busiest day, ${dayLabel(busiest.date)}` : 'Busiest day'} />
       </div>
+      {direct > 0 && (
+        <p className="settings-addons-muted usage-headline-note" data-testid="usage-direct-note">
+          Billed directly: Codex requests on an account of its own, not through a proxy. They are part of the total.
+        </p>
+      )}
       <p className="settings-addons-muted usage-headline-note" data-testid="usage-volume">
         {`${formatTokens(totalTokens(t))} tokens · ${count(t.requests, 'request')}: in ${formatTokens(t.tokens.input)} · out ${formatTokens(t.tokens.output)} · cache read ${formatTokens(t.tokens.cacheRead)} · cache write ${formatTokens(t.tokens.cacheWrite)}.`}
       </p>

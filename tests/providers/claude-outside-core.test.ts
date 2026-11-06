@@ -134,7 +134,7 @@ describe('scanHostUsage with outside', () => {
     expect(result.canonical.records.map(r => r.responseId).sort()).toEqual(['own', 'shared']);
   });
 
-  it('carries each session with the page its first record is on, not on every page', async () => {
+  it('carries each session on every page that holds one of its records', async () => {
     const ids = Array.from({ length: 600 }, (_, i) => `r${i}`);
     await transcript('p1/big.jsonl', 'cli', ids);
     await transcript('p1/other.jsonl', 'cli', ['z']);
@@ -143,8 +143,9 @@ describe('scanHostUsage with outside', () => {
     const seen = (r: { outsideSessions?: { sessionId: string }[] }) => (r.outsideSessions ?? []).map(s => s.sessionId);
     expect(first.done).toBe(false);
     const second = pages.page(first.key, first.offset);
-    expect([...seen(first.result as never), ...seen(second.result as never)].sort()).toEqual(['big', 'big', 'other'].filter((s, i, a) => a.indexOf(s) === i || s === 'big').sort());
-    expect(seen(first.result as never).length + seen(second.result as never).length).toBeGreaterThanOrEqual(2);
+    const all = [...seen(first.result as never), ...seen(second.result as never)];
+    expect(all.filter(id => id === 'big').length).toBe(2); // its 600 records span both pages
+    expect(all).toContain('other');
   });
 
   it('reads every session when no list is given, outside or not', async () => {

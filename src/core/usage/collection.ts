@@ -127,35 +127,38 @@ async function collect(since: string | undefined, until: string) {
         ...(outside ? { outside: true } : {}), proxyLogDir: config.usage?.proxy_log_dirs?.[host] });
       let requestSince = fullOutside ? undefined : sinceFor(host);
       let outsideNow = outsideScan && !(cooling && !rollup.claudeOutsideBuilt(host));
-      let reply: Awaited<ReturnType<typeof conn.send>>;
-      try { reply = await conn.send('usage.scan', scanArgs(outsideNow, requestSince), 30 * 60_000); }
-      catch (error) {
-        if (!fullOutside) throw error;
-        // The long read did not end: the host's own sessions are still collected, the full read of the rest is tried again later.
-        log.usage.warn('claude outside full read failed; collecting without it', { host, error: String(error) });
-        rollup.setClaudeOutsideFailedAt(host, Date.now());
-        fullOutside = false; outsideNow = false; requestSince = sinceFor(host);
-        reply = await conn.send('usage.scan', scanArgs(false, requestSince), 30 * 60_000);
-      }
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
       let logged = false;
-      for (;;) {
-        if (!reply.ok || !reply.result) throw new Error(String(reply.error ?? 'No usage evidence returned.'));
-        const scan = (reply.result as { scan?: unknown }).scan;
-        if (scan && !logged) { logged = true; log.usage.info('usage scan read', { host, scan }); }
-        const evidence = reply.result as UsageEvidence & { outsideSessions?: ClaudeSessionMeta[] };
-        unreadable += (evidence.canonical?.diagnostics as { unreadable_files?: number } | undefined)?.unreadable_files ?? 0;
-        // A session another name of this machine owns is stored by that name's own read.
-        if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
-        // Who started each outside session is noted before its responses are stored.
-        const extra = evidence.outsideSessions?.length
-          ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];
-        const imported = await responseUsageStore().importHost(host, evidence, extra.length ? [...owners, ...extra] : owners);
-        responses += imported.responses; verified += imported.verified; unverified += imported.unverified;
-        checks = imported.checks;
-        if (reply.done !== false) break;
-        reply = await conn.send('usage.scan', { key: reply.key, offset: reply.offset }, 30_000);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          let reply = await conn.send('usage.scan', scanArgs(outsideNow, requestSince), 30 * 60_000);
+          for (;;) {
+            if (!reply.ok || !reply.result) throw new Error(String(reply.error ?? 'No usage evidence returned.'));
+            const scan = (reply.result as { scan?: unknown }).scan;
+            if (scan && !logged) { logged = true; log.usage.info('usage scan read', { host, scan }); }
+            const evidence = reply.result as UsageEvidence & { outsideSessions?: ClaudeSessionMeta[] };
+            unreadable += (evidence.canonical?.diagnostics as { unreadable_files?: number } | undefined)?.unreadable_files ?? 0;
+            // A session another name of this machine owns is stored by that name's own read.
+            if (outsideNow && foreign.size) evidence.reconciliation = { ...evidence.reconciliation, records: evidence.reconciliation.records.filter(r => !foreign.has(r.sessionId)) };
+            // Who started each outside session is noted before its responses are stored.
+            const extra = evidence.outsideSessions?.length
+              ? classifyClaudeOutside({ rollup, host, metas: evidence.outsideSessions, known, hasRows: id => responseUsageStore().hasSession(id) }) : [];
+            const imported = await responseUsageStore().importHost(host, evidence, extra.length ? [...owners, ...extra] : owners);
+            responses += imported.responses; verified += imported.verified; unverified += imported.unverified;
+            checks = imported.checks;
+            if (reply.done !== false) break;
+            reply = await conn.send('usage.scan', { key: reply.key, offset: reply.offset }, 30_000);
+          }
+          break;
+        } catch (error) {
+          if (attempt > 0 || !fullOutside) throw error;
+          // The long read did not end, whether its link dropped or its pages ran out: the host's own sessions are still collected
+          // now, and the full read of the rest is tried again after a wait. What it stored already is kept (a response has one row).
+          log.usage.warn('claude outside full read failed; collecting without it', { host, error: String(error) });
+          rollup.setClaudeOutsideFailedAt(host, Date.now());
+          fullOutside = false; outsideNow = false; requestSince = sinceFor(host); unreadable = 0;
+        }
       }
       responseUsageStore().finishHost(host, until, checks);
       // Only a read from the beginning counts as the full one; a pass with a start (a manual window) leaves it for the next.
