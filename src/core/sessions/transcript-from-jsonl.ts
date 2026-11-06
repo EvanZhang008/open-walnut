@@ -14,6 +14,7 @@ import { nonHumanOrigin } from '../../lib/history-session-envelope.js'
 import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
 import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
 import { walnutCommandNotice } from './walnut-commands.js'
+import { cliErrorRowText } from './cli-error-reply.js'
 
 export const TRANSCRIPT_TAIL_ROWS = 200
 // Tail-only read: ~200 rendered rows fit comfortably in the last 512KB even
@@ -24,6 +25,7 @@ export const TRANSCRIPT_TAIL_BYTES = 512 * 1024
 type TranscriptRow = InjectedCarrier & {
   role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string
   agent?: string; isError?: true; sentBy?: TranscriptSentBy; personText?: string; added?: WalnutAddedItem[]; textWithoutContext?: string
+  cliError?: true
 }
 
 export function transcriptFromJsonl(sessionId: string, main: string): Record<string, unknown> {
@@ -72,6 +74,16 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
       const text = hookContextText(attachment.content, attachment.hookEvent)
       if (text) injected.take(text, messages)
       continue
+    }
+    // Claude Code's own error reply ("Prompt is too long"): the row the primary's projection gives
+    // it, the turn's last words marked `cliError`, so the phone draws its error line, never a reply.
+    if (parsed.type === 'assistant') {
+      const cliError = cliErrorRowText(parsed as Parameters<typeof cliErrorRowText>[0])
+      if (cliError) {
+        const ts = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString()
+        messages.push({ role: 'assistant', text: clip(cliError), timestamp: ts, cliError: true })
+        continue
+      }
     }
     // CLI-injected user lines (a skill's text, a compaction summary): as on the
     // primary box, they ride the row before them, and one that is only a Walnut

@@ -233,3 +233,27 @@ describe('session stream: tool / tool-result preview fields', () => {
     }
   }, 20_000)
 })
+
+describe("session stream: Claude Code's own error reply", () => {
+  // 2026-11-06: "Prompt is too long" never streams as text-delta (the runner sends it as its error
+  // line, session:system-event with cliError), so the phone's live turn showed nothing of it and
+  // then drew the transcript's row as a reply. It gets its own frame, the row's text in it.
+  it('relays a cliError system event as cli-error, and no other system notice', async () => {
+    const sse = await connectSse(apiUrl(`/api/v1/sessions/${SID}/stream`))
+    try {
+      await sse.waitFor((e) => e.event === 'snapshot')
+      const system = (payload: Record<string, unknown>) => bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+        sessionId: SID, ...payload,
+      }, ['main-ai'], { source: 'session-runner' })
+      system({ variant: 'error', message: 'Hook PreToolUse failed' })
+      system({ variant: 'info', message: 'Context compacted' })
+      system({ variant: 'error', message: 'Claude Code: Prompt is too long', cliError: true, uuid: 'u-ptl' })
+      const frame = await sse.waitFor((e) => e.event === 'cli-error')
+      expect(frame.data).toEqual({ message: 'Claude Code: Prompt is too long' })
+      expect(sse.events.filter((e) => e.event === 'cli-error')).toHaveLength(1)
+      expect(JSON.stringify(sse.events)).not.toContain('Hook PreToolUse failed')
+    } finally {
+      sse.close()
+    }
+  }, 20_000)
+})

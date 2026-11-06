@@ -278,6 +278,21 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     /// An assistant reply the cloud companion computed, not the Mac.
     var answeredOnCloud: Bool { !isUser && kind == nil && answeredBy == "cloud" }
+
+    /// The notice source of Claude Code's own error reply ("Claude Code: Prompt is too long").
+    static let cliErrorSource = "cli-error"
+
+    /// Claude Code's own error reply as the timeline draws it: its error notice on a row of its
+    /// own, never the assistant's bubble (the web console's grey line with its amber "!"). One
+    /// shape for every way it arrives: a session transcript row marked `cliError`, the live
+    /// stream's `cli-error` frame, and a chat row the server already sends as this notice.
+    static func cliErrorNotice(text: String, createdAt: String, id: String = "") -> ChatMessage {
+        ChatMessage(id: id, role: "assistant", text: text, createdAt: createdAt,
+                    kind: .notification, source: cliErrorSource)
+    }
+
+    /// Claude Code's own error reply (`cliErrorNotice`).
+    var isCliError: Bool { kind == .notification && source == Self.cliErrorSource }
 }
 
 /// One thing Walnut added to a person's message (`added` on a transcript user row):
@@ -1018,6 +1033,11 @@ struct SessionTranscript: Codable {
         /// Rich reads only: the drawer's handle on the full text the previews cut
         /// (additive). See `ChatMessage.detailRef`.
         var detailRef: String? = nil
+        /// An assistant text row that is Claude Code's own error reply, not the model's
+        /// answer (additive 2026-11-06): `text` reads "Claude Code: Prompt is too long".
+        /// The timeline draws it as its error notice (`ChatMessage.cliErrorNotice`), never
+        /// a reply bubble. nil on every other row and on an older server.
+        var cliError: Bool? = nil
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
@@ -1025,7 +1045,7 @@ struct SessionTranscript: Codable {
              sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil,
              injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
              sentTo: [SentTarget]? = nil, detailRef: String? = nil,
-             about: [String]? = nil, aboutTagged: Bool? = nil) {
+             about: [String]? = nil, aboutTagged: Bool? = nil, cliError: Bool? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -1045,6 +1065,7 @@ struct SessionTranscript: Codable {
             self.detailRef = detailRef
             self.about = about
             self.aboutTagged = aboutTagged
+            self.cliError = cliError
         }
     }
 

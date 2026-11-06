@@ -533,6 +533,11 @@ export interface ProjectedTranscriptMessage {
    *  task pills under the replies of Main's and a lead's session. Absent when none. */
   about?: string[]
   aboutTagged?: true
+  /** Assistant text rows (additive, 2026-11-06): the row is Claude Code's own error reply,
+   *  `text` reading "Claude Code: Prompt is too long" (or "Claude Code: API Error: ..."), not
+   *  the model's answer. It stays role `assistant`, the turn's last words, for every reader of
+   *  the turn; a client draws it as an error line, never a reply bubble. Absent otherwise. */
+  cliError?: true
   /** Any row (additive, 2026-10-30): the lines the CLI put in right after it, a
    *  loaded skill's text or a hook's added context (transcript-injected.ts). */
   injectedAfter?: CliAddedItem[]
@@ -824,6 +829,8 @@ export async function buildSessionTranscript(
         ...(m.role === 'user' ? projectWalnutAdded(text, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
         // The tasks the reply is about (history parse, core/org/message-about.ts), for the phone's pills.
         ...(m.role === 'assistant' && m.about?.length ? { about: m.about, ...(m.aboutTagged ? { aboutTagged: true as const } : {}) } : {}),
+        // Claude Code's own error reply, drawn as its error line on the phone (history twin: session-history cliError).
+        ...(m.cliError ? { cliError: true as const } : {}),
       })
     }
     // Indexed: the tool's position in ITS OWN message is what makes a row

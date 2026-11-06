@@ -129,10 +129,10 @@ enum TimelineHostedCell {
             .padding(.horizontal, TimelineMetrics.hMargin)
             .padding(.vertical, TimelineMetrics.chipRowVMargin)
             .frame(maxWidth: .infinity, alignment: .leading)
-        case .notification(let badge, let icon, let isError, let body,
+        case .notification(let badge, let icon, let tone, let body,
                            let collapsedLine, let collapsedLimit, let collapsible, let expanded):
             TimelineNotificationView(
-                badge: badge, icon: icon, isError: isError,
+                badge: badge, icon: icon, tone: tone,
                 body: body, collapsedLine: collapsedLine, collapsedLimit: collapsedLimit,
                 collapsible: collapsible, expanded: expanded,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
@@ -1676,7 +1676,7 @@ struct TimelineActivitySheet: View {
 private struct TimelineNotificationView: View {
     let badge: String
     let icon: String
-    let isError: Bool
+    let tone: TimelineNoticeTone
     let body_: NSAttributedString
     let collapsedLine: String
     let collapsedLimit: Int?
@@ -1684,12 +1684,12 @@ private struct TimelineNotificationView: View {
     let expanded: Bool
     let onToggle: () -> Void
 
-    init(badge: String, icon: String, isError: Bool, body: NSAttributedString,
+    init(badge: String, icon: String, tone: TimelineNoticeTone, body: NSAttributedString,
          collapsedLine: String, collapsedLimit: Int?, collapsible: Bool, expanded: Bool,
          onToggle: @escaping () -> Void) {
         self.badge = badge
         self.icon = icon
-        self.isError = isError
+        self.tone = tone
         self.body_ = body
         self.collapsedLine = collapsedLine
         self.collapsedLimit = collapsedLimit
@@ -1698,12 +1698,23 @@ private struct TimelineNotificationView: View {
         self.onToggle = onToggle
     }
 
-    private var accent: Color { isError ? Theme.danger : Theme.tint }
+    private var quiet: Bool { tone == .warning }
+
+    private var accent: Color {
+        switch tone {
+        case .info: return Theme.tint
+        case .error: return Theme.danger
+        case .warning: return Theme.warning
+        }
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            // Claude Code's error reply is a grey row (the web console's error line): no
+            // coloured bar, tint or border, only its "!" in the warning colour. The bar's
+            // width stays, so the builder's reserved height and text width still hold.
             RoundedRectangle(cornerRadius: 2)
-                .fill(accent)
+                .fill(quiet ? Color.clear : accent)
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -1732,7 +1743,12 @@ private struct TimelineNotificationView: View {
                     guard collapsible else { return }
                     onToggle()
                 }
-                if expanded {
+                if expanded, tone == .warning {
+                    // Claude Code's own error reply: its words grey, as the builder styled them.
+                    Text(AttributedString(body_))
+                        .font(.subheadline)
+                        .foregroundStyle(ReadableText.secondary)
+                } else if expanded {
                     Text(AttributedString(body_))
                         .font(.subheadline)
                 } else {
@@ -1756,10 +1772,13 @@ private struct TimelineNotificationView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(TimelineMetrics.notificationPadding)
-        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(quiet ? Color(.tertiarySystemFill) : accent.opacity(0.07),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(accent.opacity(0.25), lineWidth: 0.5)
+            if !quiet {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(accent.opacity(0.25), lineWidth: 0.5)
+            }
         }
         .padding(.horizontal, TimelineMetrics.hMargin)
         .padding(.vertical, TimelineMetrics.notificationVMargin)

@@ -228,6 +228,28 @@ describe('cloud conversation stream: status truth', () => {
     }
   })
 
+  it("forwards Claude Code's own error reply as a cli-error frame, and a model reply as no such frame", async () => {
+    // 2026-11-06: "Prompt is too long" streams no deltas; its stream line is the CLI's synthetic
+    // message, the error named on it. The phone draws it as the error line the transcript row reads.
+    const daemon = await connectFakeDaemon(machineToken, '__local__')
+    const sse = await connectSse(apiUrl(`/api/v1/sessions/${SID}/stream`))
+    try {
+      await sse.waitFor((e) => e.event === 'bridge-online')
+      const assistantLine = (text: string, fields: Record<string, unknown>, model: string) => JSON.stringify({
+        type: 'assistant', session_id: SID, parent_tool_use_id: null, ...fields,
+        message: { id: `msg-${model}`, role: 'assistant', model, content: [{ type: 'text', text }] },
+      })
+      daemon.send({ ev: 'jsonl', sid: SID, v: 400, line: assistantLine('Your prompt is too long, so I split it.', {}, 'claude-opus-5-5') })
+      daemon.send({ ev: 'jsonl', sid: SID, v: 500, line: assistantLine('Prompt is too long', { error: 'invalid_request' }, '<synthetic>') })
+      const frame = await sse.waitFor((e) => e.event === 'cli-error')
+      expect(frame.data).toEqual({ message: 'Claude Code: Prompt is too long' })
+      expect(sse.events.filter((e) => e.event === 'cli-error')).toHaveLength(1)
+    } finally {
+      sse.close()
+      daemon.close()
+    }
+  })
+
   it('echoes mobile-event session-upsert as a status frame on the session channel (ACP lane)', async () => {
     const daemon = await connectFakeDaemon(machineToken, '__local__')
     const sse = await connectSse(apiUrl(`/api/v1/sessions/${SID}/stream`))

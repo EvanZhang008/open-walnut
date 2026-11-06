@@ -542,6 +542,11 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
 - `kind: "thinking"` — a reasoning step; `text` is a short (≤160+`…`,
   whitespace folded onto one line) excerpt. `thinkingText` (additive) carries a
   fuller ≤2000+`…` excerpt with newlines kept, for a card that expands on tap.
+- `kind: "notification"`, `source: "cli-error"` (additive, 2026-11-06): Claude
+  Code's own error reply in a lane conversation, `text` reading `"Claude Code:
+  Prompt is too long"` (or `"Claude Code: API Error: ..."`). The model never
+  answered: draw it as an error notice, never as the assistant's reply. An older
+  client draws it as a plain notification card.
 - `detailRef` (additive, 2026-09): an **opaque** handle on this row's FULL text,
   fetched from `GET /api/v1/activity/detail?ref=<detailRef>`. Present **only when
   the excerpts above had to cut something**, so its presence is exactly the
@@ -2254,7 +2259,7 @@ directory on that host.
 - `GET /api/v1/sessions/:id/transcript?fresh=1&rich=1` →
   `{ "sessionId", "exportedAt", "truncated", "rich"?, "messages": [ { role, text,
   timestamp, kind?, detail?, resultPreview?, agent?, isError?, inputPreview?,
-  thinkingText?, detailRef?, sentBy? } ] }`: a slim transcript tail (last ~100 entries; text
+  thinkingText?, detailRef?, sentBy?, cliError? } ] }`: a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row, or 12 KB for a row that
   carries HTML, 16 KB / 48 KB on any read built live (`fresh=1`, `rich=1`, a page;
   see `rich=1` below), and the cut is made where it cannot leave half a tag behind so a
@@ -2313,7 +2318,12 @@ directory on that host.
   an assistant text row: the task ids the message is about, at most 6, as on the history
   route's rows, with `aboutTagged: true` when the message named them itself (its
   `<walnut-about>` line, already off `text`); a client draws them as live task pills under
-  the replies of Main's and a lead's session. Rows of one message come as thinking,
+  the replies of Main's and a lead's session. `cliError: true` (additive, 2026-11-06) rides
+  an assistant text row that is Claude Code's own error reply, not the model's answer: `text`
+  reads `"Claude Code: Prompt is too long"` (or `"Claude Code: API Error: ..."`). The row stays
+  `role: "assistant"` (it is how the turn ended), and a client draws it as an error notice on
+  its own row, never a reply bubble; an older client ignores the field and draws a reply. The
+  cloud companion's own tail (`fresh=1` over the bridge) carries it too. Rows of one message come as thinking,
   then the text, then the tool calls (see the `/conversations/:id/messages`
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote
@@ -2863,6 +2873,11 @@ primary box the same endpoints serve directly — no bridge involved.
     stream is dropped, the rule the web console applies by `statusRevision`.
   - `turn-end {}` — refetch the transcript here to reconcile.
   - `error { message }`
+  - `cli-error { message }` (additive, 2026-11-06) — Claude Code's own error
+    reply ("Claude Code: Prompt is too long"), which never arrives as
+    `text-delta`. `message` is the text of the transcript row the next read
+    returns with `cliError: true`, so a client can draw that row at once and let
+    the read replace it. An older client ignores the event (on both boxes).
   - `bridge-online {}` / `bridge-offline {}` (cloud only) — sent on attach
     (id-less) and whenever the daemon bridge for this session's host comes or
     goes (with an id, into the replay ring). A bridge redial takes about 1.3 s,

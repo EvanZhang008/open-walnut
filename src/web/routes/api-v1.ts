@@ -871,6 +871,15 @@ function laneTranscriptToApiV1(rows: ProjectedTranscriptMessage[]): Array<Omit<A
       })
       continue
     }
+    // Claude Code's own error reply ("Claude Code: Prompt is too long") is no answer of the
+    // model's: a card, the way this mapping draws the abort marker below (source 'cli-error').
+    if (row.cliError && raw.trim()) {
+      out.push({
+        role: 'assistant', text: raw.trim(),
+        ...(createdAt ? { createdAt } : {}), kind: 'notification', source: 'cli-error',
+      })
+      continue
+    }
     // The CLI writes this marker on any AbortController fire (incl. idle reaps) —
     // a user bubble would misattribute it. Card, like the chat-history branch.
     if (role === 'user' && raw.trim() === '[Request interrupted by user]') {

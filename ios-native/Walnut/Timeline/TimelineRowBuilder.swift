@@ -1370,7 +1370,8 @@ final class TimelineRowBuilder {
         // a sum: the tight line, not the capsule's cushion (3pt of blank per card).
         let headerHeight = TimelineMetrics.hostedTightLine(TimelineTextStyler.caption2Font) + 6
         let body = TimelineTextStyler.inlineText(styled.displayText,
-                                                 font: TimelineTextStyler.subheadlineFont)
+                                                 font: TimelineTextStyler.subheadlineFont,
+                                                 color: styled.tone == .warning ? ReadableText.secondaryUIColor : .label)
         let bodyHeight: CGFloat
         if expanded {
             // The card renders the body as a SwiftUI `Text`, which ignores the
@@ -1404,7 +1405,7 @@ final class TimelineRowBuilder {
         return TimelineRow(
             id: id, revision: expanded ? 1 : 0,
             content: .notification(
-                badge: styled.badgeLabel, icon: styled.iconName, isError: styled.isError,
+                badge: styled.badgeLabel, icon: styled.iconName, tone: styled.tone,
                 body: body, collapsedLine: styled.collapsedLine,
                 collapsedLimit: styled.collapsedLimit,
                 collapsible: collapsible, expanded: expanded
@@ -1445,12 +1446,21 @@ struct NotificationStyling {
 
     var isError: Bool {
         message.source == "session-error" || message.source == "agent-error"
+            || message.isCliError
             || message.text.contains("**Session Error**")
             || message.text.contains("**Subagent Error**")
     }
 
+    /// Claude Code's own error reply is an error (it ends the turn unanswered) drawn in the
+    /// web console's quiet tone: amber "!", grey words. Every other error is red.
+    var tone: TimelineNoticeTone {
+        if message.isCliError { return .warning }
+        return isError ? .error : .info
+    }
+
     var iconName: String {
         switch message.source {
+        case ChatMessage.cliErrorSource: return "exclamationmark.circle"
         case "session-error", "agent-error": return "exclamationmark.triangle.fill"
         case "cron": return "clock.badge.checkmark"
         case "compaction": return "arrow.down.right.and.arrow.up.left"
@@ -1469,12 +1479,14 @@ struct NotificationStyling {
         case "session": return "Session result"
         case "subagent": return "Subagent"
         case "interrupt": return "Interrupted"
+        case ChatMessage.cliErrorSource: return "Error"
         default: return "Notification"
         }
     }
 
     /// Strip the "**Session Error** (…):" boilerplate — same logic as
-    /// NotificationCard.displayText.
+    /// NotificationCard.displayText. Claude Code's error reply keeps its words whole
+    /// ("Claude Code: Prompt is too long"), the line the web console draws.
     var displayText: String {
         var text = message.text
         for prefix in ["**Session Error**", "**Session Result**", "**Session Delivery Failed**",

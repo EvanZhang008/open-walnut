@@ -197,6 +197,14 @@ function ensureBusSubscriber(): void {
         emitSse(key, 'error', { message: typeof d.error === 'string' ? d.error : 'session error' })
         return
       }
+      case 'session:system-event': {
+        // Claude Code's own error reply ("Claude Code: Prompt is too long"), the one system line
+        // the phone draws live: its error line, as the transcript row (`cliError`) reads after the
+        // turn. A new event name, so an older app ignores it (additive). Other notices stay off.
+        if (d.cliError !== true || typeof d.message !== 'string' || !d.message) return
+        emitSse(key, 'cli-error', { message: d.message })
+        return
+      }
     }
   }, { global: true, interest: ['session:'] })
 }

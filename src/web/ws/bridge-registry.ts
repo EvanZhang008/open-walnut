@@ -30,6 +30,7 @@ import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../l
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { emitSse, sseConnCount } from '../sse-channels.js'
 import { toolDetail, toolInputPreview, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
+import { cliErrorRowText } from '../../core/sessions/cli-error-reply.js'
 import { log } from '../../logging/index.js'
 import { noteSessionContentChanged } from './bridge-read-history.js'
 import {
@@ -262,6 +263,13 @@ function forwardJsonlLine(sessionId: string, line: string): void {
     // Tool starts only — text already streamed via stream_event deltas, and
     // re-emitting full text blocks here would duplicate it on the phone.
     if (parsed.parent_tool_use_id) return
+    // Claude Code's own error reply ("Prompt is too long") is never streamed as deltas: its error
+    // line, the frame the primary's own stream sends for it (routes/session-stream-v1.ts).
+    const cliError = cliErrorRowText(parsed as Parameters<typeof cliErrorRowText>[0])
+    if (cliError) {
+      emitSse(key, 'cli-error', { message: cliError })
+      return
+    }
     const content = (parsed.message as { content?: unknown[] } | undefined)?.content
     if (!Array.isArray(content)) return
     for (const block of content) {

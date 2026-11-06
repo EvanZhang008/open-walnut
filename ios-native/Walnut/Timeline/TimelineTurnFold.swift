@@ -338,7 +338,9 @@ private final class Planner {
     /// failed one too: the fold's header counts it, "1 failed"), a message
     /// received or sent, reasoning alone, the no-action line, a line the CLI put
     /// in, a notice the runtime wrote (a turn interrupted). Only a row the person
-    /// reads ends a stretch: words, the person's message, a question to them.
+    /// reads ends a stretch: words, the person's message, a question to them, and
+    /// Claude Code's own error reply ("Claude Code: Prompt is too long"), which is how
+    /// its turn ended, never a step folded away (the web's fold role "reads").
     /// 2026-10-30, the user's fourth report: a failed command split one stretch
     /// into three rows. Every `ChatMessage.Kind` is named here
     /// (tests/web/fold-rows.test.ts reads this switch).
@@ -349,7 +351,8 @@ private final class Planner {
             if TimelineTurnShape.isInbound(m) || TimelineTurnFold.isAckOnly(m) { return true }
             switch m.kind {
             case .tool: return TimelineTurnFold.isOutbound(m) && isFinishedStep(m)
-            case .thinking, .injected, .notification: return true
+            case .thinking, .injected: return true
+            case .notification: return !m.isCliError
             case nil: return false
             }
         }

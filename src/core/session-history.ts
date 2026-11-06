@@ -48,6 +48,7 @@ import { isWalnutCommandNotice, walnutCommandNotice } from './sessions/walnut-co
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
 import { messageAbout, readAboutTag } from './org/message-about.js';
+import { CLI_ERROR_PREFIX, isCliErrorReply } from './sessions/cli-error-reply.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
 } from './sessions/side-thread-digest.js';
@@ -157,13 +158,8 @@ interface HistoryIncrementalState {
 }
 
 /** Tail segment re-parsed on every delta; rolled into the prefix past this. */
-/** How a Claude Code error reply reads as a row: whose words they are, then its own. */
-export const CLI_ERROR_PREFIX = 'Claude Code: ';
-
-/** Claude Code's own error reply: its transcript marks it, its stream-json output names the error on its synthetic message. */
-function isCliErrorReply(raw: { isApiErrorMessage?: boolean; error?: unknown; message?: { model?: string } }): boolean {
-  return raw.isApiErrorMessage === true || (typeof raw.error === 'string' && raw.message?.model === '<synthetic>');
-}
+// Claude Code's own error reply, read the same way by every reader of a session's lines.
+export { CLI_ERROR_PREFIX } from './sessions/cli-error-reply.js';
 
 const TAIL_SEGMENT_ROLL_BYTES = 4 * 1024 * 1024;
 /** After a roll, keep this much as the new tail (fresh lookbehind window). */

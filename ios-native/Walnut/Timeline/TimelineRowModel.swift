@@ -125,6 +125,17 @@ enum TimelineToolPhase: Hashable, Sendable {
     case failed
 }
 
+/// A notification card's colour (its accent bar, header and glyph).
+enum TimelineNoticeTone: Hashable, Sendable {
+    /// Walnut's own notices: the app tint.
+    case info
+    /// A session or agent error: the danger red.
+    case error
+    /// Claude Code's own error reply ("Claude Code: Prompt is too long"): its "!" amber and its
+    /// words grey, the web console's line for it.
+    case warning
+}
+
 enum TimelineRowContent {
     /// Assistant / notification prose: pre-styled attributed text, rendered
     /// by a TextKit cell. `selectable` keeps UITextView selection on.
@@ -236,8 +247,8 @@ enum TimelineRowContent {
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
     /// SwiftUI card; both heights pre-measured. `collapsedLimit` caps the folded
-    /// line's wrap (nil: it wraps whole).
-    case notification(badge: String, icon: String, isError: Bool,
+    /// line's wrap (nil: it wraps whole). `tone` colours its bar and header.
+    case notification(badge: String, icon: String, tone: TimelineNoticeTone,
                       body: NSAttributedString, collapsedLine: String, collapsedLimit: Int?,
                       collapsible: Bool, expanded: Bool)
     /// Raw-HTML run from a rich reply, rendered as ONE self-contained web
@@ -403,11 +414,11 @@ extension TimelineRowContent {
         case .chip(let icon, let text):
             hasher.combine(icon)
             hasher.combine(text)
-        case .notification(let badge, let icon, let isError, let body,
+        case .notification(let badge, let icon, let tone, let body,
                            let collapsedLine, let collapsedLimit, let collapsible, let expanded):
             hasher.combine(badge)
             hasher.combine(icon)
-            hasher.combine(isError)
+            hasher.combine(tone)
             hasher.combine(body.string)
             Self.combineLinks(of: body, into: &hasher)
             hasher.combine(collapsedLine)

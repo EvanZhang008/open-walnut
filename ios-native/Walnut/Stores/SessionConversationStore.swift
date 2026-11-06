@@ -1161,6 +1161,11 @@ final class SessionConversationStore {
                 createdAt: m.timestamp, kind: .notification, source: "interrupt"
             )
         }
+        if m.cliError == true, m.role != "user" {
+            // Claude Code's own error reply ("Claude Code: Prompt is too long"): the model never
+            // answered. Its error notice, as the live `cli-error` frame draws it.
+            return ChatMessage.cliErrorNotice(text: text ?? m.text, createdAt: m.timestamp)
+        }
         var row = ChatMessage(
             id: "",
             role: m.role,
@@ -1973,6 +1978,10 @@ final class SessionConversationStore {
             }
         case "turn-end":
             finalizeTurn()
+        case "cli-error":
+            if let p = try? JSONDecoder().decode(ErrorPayload.self, from: data) {
+                showLiveCliError(p.message)
+            }
         case "error":
             let p = try? JSONDecoder().decode(ErrorPayload.self, from: data)
             awaitingFirstTurn = false
@@ -2478,6 +2487,25 @@ final class SessionConversationStore {
         // keep the reader glued to the end of the reply they were watching.
         if isActive && wasPinned { scrollToBottomSignal += 1 }
         requestTranscriptRefresh()
+    }
+
+    /// Claude Code's own error reply arrived live (`cli-error`): it never streams as text, so
+    /// the turn would show nothing of it until the transcript read. Its notice shows at once, as
+    /// a provisional row the read replaces with the canonical one (the same shape, built by
+    /// `ChatMessage.cliErrorNotice`, so nothing moves). Skipped when the turn's own text or a
+    /// run of it is still live (the notice would land above words that came first) and when the
+    /// rows of this turn already hold it; the read draws it then.
+    private func showLiveCliError(_ message: String) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer { requestTranscriptRefresh() }
+        guard !text.isEmpty, liveText.isEmpty, pendingDelta.isEmpty, sentRuns.isEmpty else { return }
+        let turn = historyMessages.reversed().prefix { !$0.isUser }
+        guard !turn.contains(where: { $0.isCliError && $0.text == text }) else { return }
+        let notice = ChatMessage.cliErrorNotice(
+            text: text, createdAt: ISO8601DateFormatter().string(from: AppClock.now()),
+            id: "provisional-cli-error-\(text.hashValue)")
+        historyMessages.append(notice)
+        if isActive && bottomPinned { scrollToBottomSignal += 1 }
     }
 
     // MARK: - Polling fallback
