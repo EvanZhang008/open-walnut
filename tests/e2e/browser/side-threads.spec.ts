@@ -322,7 +322,10 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // ── The drawer's composer is the real one: every control the main composer has
   //    EXCEPT "btw" itself — a side thread of a side thread is not a feature. ──
   const composer = popover.locator('.side-question-composer')
-  await expect(composer.locator('.mic-btn-wrapper button')).toBeVisible()
+  // The mic shows only where the browser can record (Playwright's Linux WebKit has no MediaRecorder).
+  if (await page.evaluate(() => typeof MediaRecorder !== 'undefined')) {
+    await expect(composer.locator('.mic-btn-wrapper button')).toBeVisible()
+  }
   // Mode pill (first .mode-toggle-pill; the output-mode pill shares the class).
   const modePill = composer.locator('.mode-toggle-pill').first()
   await expect(modePill).toBeVisible()
