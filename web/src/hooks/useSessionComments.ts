@@ -11,16 +11,22 @@
  *
  * A send claims the pending ones at once (`claim`), so a second send while the
  * first is in flight cannot carry them again; `settle` marks them sent, or gives
- * them back when the send was refused.
+ * them back when the send was refused. An edit of one a send has claimed is
+ * refused, and a record copy met meanwhile leaves it as claimed
+ * (`mergeKeepingClaimed`): the words on their way are the ones it is stamped with.
+ * A record copy that lacks something of ours (a stale window wrote over it) is
+ * written again (`recordNeedsWrite`; our own write's echo matches, so it stops).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { updateSession } from '@/api/sessions';
 import type { SessionPassageComment } from '@/types/session';
 import type { SessionCommentsApi } from '@/contexts/SessionCommentsContext';
-import { isPending, markRemoved, markSent, mergeComments, pruneComments } from '@/utils/passage-comments';
+import { editComment, isPending, markRemoved, markSent, mergeKeepingClaimed, pruneComments, recordNeedsWrite } from '@/utils/passage-comments';
 import { log } from '@/utils/log';
 
 const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+/** Rewrites in a row over record copies that keep lacking ours, with no change of ours between: a guard, never reached when the echo matches. */
+const MAX_ECHO_WRITES = 3;
 
 function newId(): string {
   const c = typeof crypto !== 'undefined' ? crypto : undefined;
@@ -54,7 +60,12 @@ export function useSessionComments(
   const listRef = useRef<SessionPassageComment[]>(serverList ?? []);
   const [sending, setSending] = useState<ReadonlySet<string>>(new Set());
   const sendingRef = useRef<Set<string>>(new Set());
-  const [jump, setJump] = useState<{ id: string; seq: number; at: number } | null>(null);
+  /** What each claimed item was when its send took it (id -> the item). */
+  const claimedRef = useRef<Map<string, SessionPassageComment>>(new Map());
+  /** The newest record copy seen, merged in again when a send gives its items back. */
+  const lastRecord = useRef<SessionPassageComment[]>(serverList ?? []);
+  const echoWrites = useRef(0);
+  const [jump, setJump] = useState<SessionCommentsApi['jump']>(null);
   // One write at a time; `dirty` = local changes the record does not have yet.
   const writing = useRef(false);
   const dirty = useRef(false);
@@ -82,7 +93,7 @@ export function useSessionComments(
         if (gen !== generation.current) return;
         attempt.current = 0;
         // The record's answer may hold another window's entries: merged in, never replacing ours.
-        adopt(mergeComments(listRef.current, record.passageComments ?? []));
+        meetRecordRef.current(record.passageComments ?? []);
       })
       .catch((err) => {
         if (gen !== generation.current) return;
@@ -101,8 +112,25 @@ export function useSessionComments(
   }, [sessionId, adopt]);
   const flushRef = useRef(flush);
   flushRef.current = flush;
+  const meetRecordRef = useRef<(record: SessionPassageComment[]) => void>(() => {});
+
+  /** A record copy: merged in (claimed items as claimed); written over when it lacks ours. */
+  const meetRecord = useCallback((record: SessionPassageComment[]) => {
+    lastRecord.current = record;
+    adopt(mergeKeepingClaimed(listRef.current, record, sendingRef.current));
+    if (!recordNeedsWrite(listRef.current, record, Date.now(), sendingRef.current)) { echoWrites.current = 0; return; }
+    if (echoWrites.current >= MAX_ECHO_WRITES) {
+      log.warn('session', 'passage comments: the record keeps lacking ours, not writing again', { sessionId });
+      return;
+    }
+    echoWrites.current += 1;
+    log.info('session', 'passage comments: the record lacks ours, writing again', { sessionId });
+    dirty.current = true;
+  }, [adopt, sessionId]);
+  meetRecordRef.current = meetRecord;
 
   const persist = useCallback((next: SessionPassageComment[]) => {
+    echoWrites.current = 0;
     adopt(next);
     dirty.current = true;
     flushRef.current();
@@ -116,6 +144,9 @@ export function useSessionComments(
     attempt.current = 0;
     clearTimeout(retryTimer.current);
     sendingRef.current = new Set();
+    claimedRef.current = new Map();
+    lastRecord.current = serverList ?? [];
+    echoWrites.current = 0;
     setSending(new Set());
     listRef.current = serverList ?? [];
     setComments(serverList ?? []);
@@ -127,9 +158,9 @@ export function useSessionComments(
   // Every record copy is merged in; a change made before the record loaded is written now.
   useEffect(() => {
     if (!loaded) return;
-    adopt(mergeComments(listRef.current, serverList ?? []));
+    meetRecord(serverList ?? []);
     flushRef.current();
-  }, [serverList, loaded, adopt]);
+  }, [serverList, loaded, meetRecord]);
 
   const add = useCallback(({ msgId, role, quote, text, comment, doc, thread }: SessionCommentInput) => {
     if (!msgId || !quote.exact.trim() || !text.trim()) return;
@@ -150,30 +181,64 @@ export function useSessionComments(
     persist(markRemoved(listRef.current, id, new Date().toISOString()));
   }, [persist, sessionId]);
 
+  const update = useCallback((id: string, comment: string): boolean => {
+    const words = comment.trim();
+    const cur = listRef.current.find((c) => c.id === id);
+    if (!cur || !isPending(cur) || cur.doc || sendingRef.current.has(id)) {
+      log.info('session', 'passage comment edit refused', {
+        sessionId, id, reason: !cur ? 'gone' : cur.removedAt ? 'removed' : cur.doc ? 'doc' : cur.sentAt ? 'sent' : 'sending',
+      });
+      return false;
+    }
+    if (cur.comment === words) return true;
+    const next = editComment(listRef.current, id, words, new Date().toISOString());
+    if (next === listRef.current) return false;
+    log.info('session', 'passage comment edited', { sessionId, id, commentChars: words.length, wasQuote: !cur.comment });
+    persist([...next]);
+    return true;
+  }, [persist, sessionId]);
+
   const claim = useCallback((which?: (c: SessionPassageComment) => boolean) => {
     const taken = listRef.current.filter((c) => isPending(c) && !sendingRef.current.has(c.id) && (!which || which(c)));
     if (!taken.length) return taken;
-    for (const c of taken) sendingRef.current.add(c.id);
+    for (const c of taken) { sendingRef.current.add(c.id); claimedRef.current.set(c.id, c); }
     setSending(new Set(sendingRef.current));
     return taken;
   }, []);
 
   const settle = useCallback((ids: readonly string[], accepted: boolean) => {
     if (!ids.length) return;
-    for (const id of ids) sendingRef.current.delete(id);
+    const claimed = new Map(ids.flatMap((id) => {
+      const c = claimedRef.current.get(id);
+      return c ? [[id, c] as const] : [];
+    }));
+    for (const id of ids) { sendingRef.current.delete(id); claimedRef.current.delete(id); }
     setSending(new Set(sendingRef.current));
-    if (accepted) persist(markSent(listRef.current, new Set(ids), new Date().toISOString()));
-  }, [persist]);
+    if (accepted) {
+      // Stamped on the words that went, whatever reached this list meanwhile.
+      const asSent = listRef.current.map((c) => {
+        const was = claimed.get(c.id);
+        return was && c.comment !== was.comment ? { ...c, comment: was.comment } : c;
+      });
+      persist(markSent(asSent, new Set(ids), new Date().toISOString()));
+      return;
+    }
+    // Given back: the newest record copy decides again (another window's edit made meanwhile wins now).
+    adopt(mergeKeepingClaimed(listRef.current, lastRecord.current, sendingRef.current));
+  }, [persist, adopt]);
 
-  const requestJump = useCallback((id: string) => {
-    setJump((prev) => ({ id, seq: (prev?.seq ?? 0) + 1, at: Date.now() }));
+  const requestJump = useCallback<SessionCommentsApi['requestJump']>((id, opts) => {
+    setJump((prev) => ({
+      id, seq: (prev?.seq ?? 0) + 1, at: Date.now(),
+      ...(opts?.edit ? { edit: true } : {}), ...(opts?.origin ? { origin: opts.origin } : {}),
+    }));
   }, []);
 
   const pending = useMemo(() => comments.filter((c) => isPending(c) && !sending.has(c.id)), [comments, sending]);
   const shown = useMemo(() => comments.filter((c) => !c.removedAt), [comments]);
 
   return useMemo<SessionCommentsStore>(
-    () => ({ comments: shown, pending, add, remove, claim, settle, requestJump, jump, canComment: true }),
-    [shown, pending, add, remove, claim, settle, requestJump, jump],
+    () => ({ comments: shown, pending, add, update, remove, claim, settle, requestJump, jump, canComment: true }),
+    [shown, pending, add, update, remove, claim, settle, requestJump, jump],
   );
 }

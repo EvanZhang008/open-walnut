@@ -6,20 +6,29 @@
  *             waits for the next send, `walnut-comment-sent` after (quieter)
  *   marker    a small chip at the passage's end, a real button: hover reads the
  *             comment, a press opens the card
- *   card      the passage, the whole comment, whether it was sent, Remove
+ *   card      the passage, the whole comment, whether it was sent, Remove; while it
+ *             waits for the send, Edit (or a click on its words) changes them in
+ *             place (2026-11-06, the user: "comment need to be able to edit"):
+ *             Save, Enter or a press outside keeps the new words (a press on the
+ *             composer's Send included, so what goes is what the reader sees),
+ *             Cancel or Esc the old ones
  *
  * The paint and the Range bookkeeping are useQuotePinPaint's (the same repair
  * rules as quote pins). Markers are fixed-position chips in a <body> portal,
  * placed from the live Ranges after every relocate, scroll and resize, and hidden
  * outside the timeline's visible box. A session with no comments installs nothing.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuotePinPaint } from '@/hooks/useQuotePinPaint';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { HL_COMMENT, HL_COMMENT_SENT, panelLayer } from '@/utils/pin-highlights';
-import { snippetOf } from '@/utils/passage-comments';
+import { MAX_COMMENT_CHARS, snippetOf } from '@/utils/passage-comments';
+import { AnswerBox } from '@/components/common/AnswerBox';
+import { isImeKey } from '@/hooks/usePanelKeyRouter';
+import { log } from '@/utils/log';
 import type { SessionPassageComment } from '@/types/session';
+import type { SessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { anchorRectOf, caretAtPoint, pointInRangeRects } from './QuotePinPopover';
 import '@/styles/passage-comments.css';
 
@@ -34,9 +43,16 @@ interface Props {
   panelKey: string;
   renderNonce: number;
   onRemove: (id: string) => void;
+  /** Change a pending one's words; FALSE when it cannot be (it is being sent). */
+  onUpdate?: (id: string, comment: string) => boolean;
+  /** The store's newest jump: one asking `edit` opens that card in its editor. */
+  jump?: SessionCommentsApi['jump'];
   /** The page under the marks changed: an open card closes. */
   resetKey?: string;
 }
+
+/** How long a tray row's Edit waits for its passage to come into view and settle. */
+const EDIT_JUMP_WAIT_MS = 5_000;
 
 interface Marker { id: string; x: number; y: number; sent: boolean; comment: string }
 
@@ -46,7 +62,7 @@ function timeOf(iso: string): string {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-export function PassageCommentMarks({ containerRef, comments, panelKey, renderNonce, onRemove, resetKey }: Props) {
+export function PassageCommentMarks({ containerRef, comments, panelKey, renderNonce, onRemove, onUpdate, jump, resetKey }: Props) {
   // A plain Quote leaves no mark once sent; a comment does.
   // A doc comment's words are in its doc (DocCommentsLayer), not in this transcript.
   const pending = useMemo(() => comments.filter((c) => !c.doc && !c.sentAt && !c.removedAt), [comments]);
@@ -153,6 +169,122 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
     return () => document.removeEventListener(release, onRelease as EventListener);
   }, [any, containerRef, painted, openAt]);
 
+  // ── Editing the words (only while they wait for the send) ────────────────
+  /** The id whose words are in the editor, and the words as typed so far. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const canEdit = !!onUpdate && !!openItem && !openItem.sentAt && !openItem.doc;
+  const isEditing = canEdit && editing === openItem.id;
+  // Another card, a closed one, or a comment sent meanwhile: the editor goes, the saved words stay.
+  useEffect(() => { if (!isEditing && editing !== null) setEditing(null); }, [isEditing, editing]);
+  const startEdit = useCallback((id: string) => {
+    const c = byId.get(id);
+    if (!c || c.sentAt || c.doc || !onUpdate) return;
+    setDraft(c.comment);
+    setEditing(id);
+  }, [byId, onUpdate]);
+  // The tray's timer opens the editor seconds later: on the words as they are then.
+  const startEditRef = useRef(startEdit);
+  startEditRef.current = startEdit;
+  /** Save was refused: a send has just taken this one. */
+  const [refused, setRefused] = useState(false);
+  useEffect(() => { setRefused(false); }, [isEditing]);
+  const editBox = useRef<HTMLTextAreaElement | null>(null);
+  const editBtn = useRef<HTMLButtonElement | null>(null);
+  const refocusEdit = useRef(false);
+  /** FALSE when the editor opens late (a tray row's Edit) and the reader has gone on to type elsewhere. */
+  const focusEditor = useRef(true);
+  // The editor opens with the caret after the last word, the end of a long comment in view.
+  useLayoutEffect(() => {
+    if (!isEditing) return;
+    const el = editBox.current;
+    if (!el) return;
+    const take = focusEditor.current;
+    focusEditor.current = true;
+    if (take) el.focus({ preventScroll: true });
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+    el.scrollTop = el.scrollHeight;
+  }, [isEditing]);
+  // Back from the editor by the keyboard: the focus waits on Edit, so a second Esc closes the card.
+  useEffect(() => {
+    if (isEditing || !refocusEdit.current) return;
+    refocusEdit.current = false;
+    editBtn.current?.focus({ preventScroll: true });
+  }, [isEditing]);
+  const cancelEdit = useCallback(() => { refocusEdit.current = true; setEditing(null); }, []);
+  const saveEdit = useCallback((text: string) => {
+    if (!openItem || !onUpdate) return;
+    const words = text.trim();
+    if (!words) return;
+    // Refused = a send has just taken it: the words stay in the editor, and the
+    // editor goes once the card shows it sent.
+    if (words === openItem.comment || onUpdate(openItem.id, words)) { refocusEdit.current = true; setEditing(null); return; }
+    setRefused(true);
+  }, [openItem, onUpdate]);
+  /**
+   * A press outside the open editor keeps what was typed (synchronously, before the
+   * press's own click: a Send that follows carries these words). Empty or unchanged
+   * words keep the saved ones.
+   */
+  const commitDraft = useRef<() => void>(() => {});
+  commitDraft.current = () => {
+    if (!isEditing || !openItem || !onUpdate) return;
+    const words = draft.trim();
+    if (!words || words === openItem.comment) return;
+    const ok = onUpdate(openItem.id, words);
+    log.info('session', 'passage comment edit kept by a press outside', { id: openItem.id, saved: ok });
+  };
+
+  // A tray row's Edit: once its passage is in view and has stopped moving (the jump
+  // scrolls to it), its card opens in the editor. Each request lands once.
+  const jumpSeen = useRef(jump?.seq ?? 0);
+  const paintedRef = useRef(painted);
+  paintedRef.current = painted;
+  useEffect(() => {
+    if (!jump || jump.seq === jumpSeen.current) return;
+    jumpSeen.current = jump.seq;
+    if (!jump.edit) return;
+    const { id, origin } = jump;
+    // The editor takes the focus only if it is still where the press left it and
+    // nothing was typed since (the reader went on in the composer: it stays theirs).
+    const pressFocus = document.activeElement;
+    let typed = false;
+    const onType = () => { typed = true; };
+    document.addEventListener('keydown', onType, true);
+    const until = Date.now() + EDIT_JUMP_WAIT_MS;
+    let last = '';
+    const stop = () => { clearInterval(timer); document.removeEventListener('keydown', onType, true); };
+    const openEditor = (anchor: { x: number; y: number }) => {
+      stop();
+      focusEditor.current = !typed && document.activeElement === pressFocus;
+      setOpen({ id, anchor });
+      startEditRef.current(id);
+    };
+    const timer = setInterval(() => {
+      const entry = paintedRef.current().find((p) => p.id === id);
+      const rect = entry ? anchorRectOf(entry.range) : null;
+      const box = containerRef.current?.getBoundingClientRect();
+      const inView = !!rect && !!box && rect.top >= box.top && rect.bottom <= box.bottom;
+      const at = rect ? `${Math.round(rect.left)},${Math.round(rect.top)}` : '';
+      const anchor = rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.bottom) } : null;
+      if (inView && at === last) { openEditor(anchor!); return; }
+      last = at;
+      if (Date.now() <= until) return;
+      // Its passage never settled in view (not loaded, on another page): the card
+      // opens anyway, at its passage when it is in view, else at the row it was asked from.
+      log.warn('session', 'passage comment edit: its passage did not settle in view, opening the card where it can', {
+        id, painted: !!rect, inView, waitedMs: EDIT_JUMP_WAIT_MS,
+      });
+      if (inView && anchor) openEditor(anchor);
+      else if (origin) openEditor(origin);
+      else if (anchor) openEditor(anchor);
+      else stop();
+    }, 120);
+    return stop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
+  }, [jump?.seq]);
+
   const cardRef = useRef<HTMLDivElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
   const placement = useMenuPlacement(!!open, noTrigger, cardRef, {
@@ -161,10 +293,19 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
   const isOpen = !!open;
   useEffect(() => {
     if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
+    // Esc inside the editor is the editor's (it stops there); here it closes the card.
+    const onKey = (e: KeyboardEvent) => {
+      // An Esc that ends an IME composition is the composition's, not a close.
+      if (e.key !== 'Escape' || isImeKey(e)) return;
+      // One Esc closes one layer: the panel's router must not also close a drawer or page.
+      e.preventDefault();
+      setOpen(null);
+    };
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t?.closest('.passage-comment-card, .passage-comment-marker')) return;
+      if (t?.closest('.passage-comment-card')) return;
+      commitDraft.current();
+      if (t?.closest('.passage-comment-marker')) return;
       setOpen(null);
     };
     document.addEventListener('keydown', onKey);
@@ -175,14 +316,20 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
     };
   }, [isOpen]);
   // Follow the passage while the timeline scrolls; close when it leaves the view.
+  // An open editor stays (a streamed turn may scroll the timeline under it): it
+  // holds on at the view's edge, and with no passage to follow, where it was.
+  const editingRef = useRef(false);
+  editingRef.current = isEditing;
   useEffect(() => {
     if (!open) return;
     const entry = painted().find((p) => p.id === open.id);
     const rect = entry ? anchorRectOf(entry.range) : null;
     const box = containerRef.current?.getBoundingClientRect();
-    if (!rect || (box && (rect.bottom < box.top || rect.top > box.bottom))) { setOpen(null); return; }
+    const gone = !rect || (box && (rect.bottom < box.top || rect.top > box.bottom));
+    if (gone && !editingRef.current) { setOpen(null); return; }
+    if (!rect) return;
     const x = Math.round(rect.left + rect.width / 2);
-    const y = Math.round(rect.bottom);
+    const y = Math.round(box ? Math.min(Math.max(rect.bottom, box.top), box.bottom) : rect.bottom);
     if (x !== open.anchor.x || y !== open.anchor.y) setOpen({ id: open.id, anchor: { x, y } });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-anchored on every marker re-read
   }, [tick]);
@@ -229,17 +376,83 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
             </span>
           </div>
           <div className="passage-comment-card-quote" title={openItem.text}>❝ {snippetOf(openItem.text, 120)}</div>
-          {openItem.comment && <div className="passage-comment-card-text">{openItem.comment}</div>}
-          <div className="passage-comment-card-actions">
-            <button
-              type="button"
-              className="passage-comment-card-remove"
-              data-testid="passage-comment-remove"
-              onClick={() => { onRemove(openItem.id); setOpen(null); }}
+          {isEditing ? (
+            <div
+              className="passage-comment-card-edit"
+              onKeyDown={(e) => {
+                // Esc anywhere in the editor puts the old words back and stays in the card.
+                if (e.key !== 'Escape' || isImeKey(e.nativeEvent)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                cancelEdit();
+              }}
             >
-              {openItem.sentAt ? 'Remove mark' : 'Remove'}
-            </button>
-          </div>
+              <AnswerBox
+                value={draft}
+                onChange={(t) => { setDraft(t); setRefused(false); }}
+                onSubmit={saveEdit}
+                sendLabel="Save"
+                sendTestId="passage-comment-save"
+                testId="passage-comment-input"
+                boxRef={editBox}
+                minRows={2}
+                maxRows={12}
+                maxLength={MAX_COMMENT_CHARS}
+                placeholder="Add a comment"
+                ariaLabel="Edit comment"
+              />
+              <div className="passage-comment-card-edit-foot">
+                <span className="passage-comment-card-edit-hint" data-testid="passage-comment-edit-hint" role={refused ? 'status' : undefined}>
+                  {refused ? 'Being sent now, so it keeps its words' : 'Enter saves · Esc keeps the old words'}
+                </span>
+                <button
+                  type="button"
+                  className="passage-comment-card-cancel"
+                  data-testid="passage-comment-cancel"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={cancelEdit}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : openItem.comment ? (
+            <div
+              className={`passage-comment-card-text${canEdit ? ' is-editable' : ''}`}
+              data-testid="passage-comment-text"
+              title={canEdit ? 'Click to edit' : undefined}
+              onClick={() => {
+                // A drag that selects words to copy is reading, not editing.
+                const sel = window.getSelection();
+                if (canEdit && (!sel || sel.isCollapsed)) startEdit(openItem.id);
+              }}
+            >
+              {openItem.comment}
+            </div>
+          ) : null}
+          {!isEditing && (
+            <div className="passage-comment-card-actions">
+              {canEdit && (
+                <button
+                  ref={editBtn}
+                  type="button"
+                  className="passage-comment-card-remove"
+                  data-testid="passage-comment-edit"
+                  onClick={() => startEdit(openItem.id)}
+                >
+                  {openItem.comment ? 'Edit' : 'Add comment'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="passage-comment-card-remove"
+                data-testid="passage-comment-remove"
+                onClick={() => { onRemove(openItem.id); setOpen(null); }}
+              >
+                {openItem.sentAt ? 'Remove mark' : 'Remove'}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </>,

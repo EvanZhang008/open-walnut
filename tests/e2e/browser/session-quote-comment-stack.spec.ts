@@ -21,7 +21,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, test } from './threads-helpers'
+import { centreInHistory, humanPress, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, test } from './threads-helpers'
 import { COMMENTS_SESSION as AI_SESSION } from './threads-fixture'
 import { loadHome } from './draft-helpers'
 
@@ -31,6 +31,13 @@ const ANSWER = '[data-message-id][data-msg-role="assistant"]'
 
 async function shot(scope: Page | Locator, name: string): Promise<void> {
   const dir = `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/quote-comment-stack/${test.info().project.name}`
+  await fs.mkdir(dir, { recursive: true })
+  await scope.screenshot({ path: `${dir}/${name}.png` })
+}
+
+/** The edit flow's pictures, where the task keeps its evidence. */
+async function editShot(scope: Page | Locator, name: string): Promise<void> {
+  const dir = `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/comment-edit/${test.info().project.name}`
   await fs.mkdir(dir, { recursive: true })
   await scope.screenshot({ path: `${dir}/${name}.png` })
 }
@@ -436,6 +443,329 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
     await expect(tray(panel)).toHaveCount(0)
     await expect.poll(() => painted(page, 'walnut-comment-sent')).toBe(1)
     await page.waitForTimeout(1000)
+    expect(sent).toHaveLength(1)
+  })
+
+  test('a pending comment is edited in its card and from its row: saved, kept over a reload, sent with its new words; a sent one stays as it went', async ({ page, request }) => {
+    // 2026-11-06, the user, on a long comment's card that offered only Remove:
+    // "comment need to be able to edit".
+    const sent = captureSends(page)
+    // The page's socket, to hand it a server event (the record is read again on a turn's result).
+    await page.addInitScript(() => {
+      const Native = window.WebSocket
+      class Kept extends Native {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols)
+          if (new URL(String(url), location.href).pathname === '/ws') (window as unknown as { pwSocket?: WebSocket }).pwSocket = this
+        }
+      }
+      for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'] as const) Object.defineProperty(Kept, key, { value: Native[key] })
+      window.WebSocket = Kept
+    })
+    const serverEvent = async (name: string, data: Record<string, unknown>) => {
+      await page.waitForFunction(() => (window as unknown as { pwSocket?: WebSocket }).pwSocket?.readyState === 1, null, { timeout: 5_000 })
+      await page.evaluate(({ name, data }) => {
+        (window as unknown as { pwSocket: WebSocket }).pwSocket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name, data }) }))
+      }, { name, data })
+    }
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    let panel = await open(page)
+    const composer = composerOf(panel)
+    const history = panel.locator('.session-history')
+    const [p1, p2, p3] = await passages(panel)
+    const long = 'This paragraph says the reader trusts the newest copy, but the section before it says the oldest copy wins when two disagree. '
+      + 'Which one is right? If the newest wins, the rule about stale copies in the third answer needs to change too, and the example with '
+      + 'two windows reads the other way round. Please check both places and say which rule the code follows today.'
+    expect(long.length).toBeGreaterThan(300)
+
+    await comment(page, panel, p1, long)
+    await quote(page, panel, p2)
+    const id1 = (await rows(panel).nth(0).getAttribute('data-comment-id'))!
+    const id2 = (await rows(panel).nth(1).getAttribute('data-comment-id'))!
+    const chipOf = (id: string) => page.locator(`[data-testid="passage-comment-marker"][data-comment-id="${id}"]`)
+    const card = page.getByTestId('passage-comment-card')
+    const text = card.getByTestId('passage-comment-text')
+    const input = page.getByTestId('passage-comment-input')
+    const save = page.getByTestId('passage-comment-save')
+    const openCard = async (id: string, phrase: string) => {
+      await centreInHistory(page, panel, phrase, { tolerance: 20 })
+      await humanPress(page, chipOf(id))
+      await expect(card).toBeVisible()
+    }
+    /** The rows, each with its whole comment (a row shows the start of a long one, its title all of it). */
+    const expectWords = async (items: Array<{ passage: string; comment?: string }>) => {
+      await expect(rows(panel)).toHaveCount(items.length)
+      for (const [i, it] of items.entries()) {
+        const row = rows(panel).nth(i)
+        await expect(row.locator('.pending-comments-where')).toHaveAttribute('title', it.passage)
+        await expect(row.locator('.pending-comments-kind')).toHaveText(it.comment ? 'Comment' : 'Quote')
+        if (it.comment) await expect(row.locator('.pending-comments-text')).toHaveAttribute('title', it.comment)
+        else await expect(row.locator('.pending-comments-text')).toHaveCount(0)
+      }
+    }
+    const recordOf = async (id: string) =>
+      ((await readRecord(request, AI_SESSION)).passageComments as Array<{ id: string; comment: string; updatedAt?: string; sentAt?: string }>)
+        .find((c) => c.id === id)
+    /** The editor is open on `words`: focused, the caret after the last one, wrapped, inside the view. */
+    const expectEditor = async (words: string) => {
+      await expect(input).toBeFocused()
+      await expect(input).toHaveValue(words)
+      const caret = await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd, el.value.length])
+      expect(caret).toEqual([words.length, words.length, words.length])
+      const wrap = await input.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }))
+      expect(wrap.sw, 'long words wrap, never scroll sideways').toBeLessThanOrEqual(wrap.cw + 1)
+      const b = (await settledBox(card))
+      const vp = page.viewportSize()!
+      expect(b.y).toBeGreaterThanOrEqual(0)
+      expect(b.y + b.height).toBeLessThanOrEqual(vp.height)
+      expect(await card.evaluate((el) => getComputedStyle(el).position)).toBe('fixed')
+    }
+
+    // The card: whose words wait for the send, Edit beside Remove.
+    await openCard(id1, p1)
+    await expect(card).toContainText('Goes with your next message')
+    await expect(text).toHaveText(long)
+    await expect(card.getByTestId('passage-comment-edit')).toHaveText('Edit')
+    await expect(card.getByTestId('passage-comment-remove')).toHaveText('Remove')
+    await editShot(page, '01-card')
+    const top0 = await history.evaluate((el) => el.scrollTop)
+    const cardBox0 = await settledBox(card)
+
+    // A click on the words opens the editor on all of them; the conversation never moves.
+    await humanPress(page, text)
+    await expectEditor(long)
+    expect(await history.evaluate((el) => el.scrollTop)).toBe(top0)
+    expect((await card.boundingBox())!.x).toBeCloseTo(cardBox0.x, -1)
+    await editShot(page, '02-editing-long')
+
+    // Esc puts the old words back and stays in the card; a second Esc closes it.
+    await page.keyboard.type(' Never saved.')
+    await page.keyboard.press('Escape')
+    await expect(input).toHaveCount(0)
+    await expect(card).toBeVisible()
+    await expect(text).toHaveText(long)
+    await expect(card.getByTestId('passage-comment-edit')).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+
+    // Edit, then Cancel: the old words again.
+    await openCard(id1, p1)
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await expectEditor(long)
+    await page.keyboard.type(' Also never saved.')
+    await humanPress(page, card.getByTestId('passage-comment-cancel'))
+    await expect(input).toHaveCount(0)
+    await expect(text).toHaveText(long)
+
+    // A press outside with nothing changed closes the card on the saved words.
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await expectEditor(long)
+    await humanPress(page, composer)
+    await expect(card).toHaveCount(0)
+    expect((await recordOf(id1))!.comment).toBe(long)
+
+    // The Esc that ends an IME composition (WebKit: isComposing false, keyCode 229) is the composition's.
+    await openCard(id1, p1)
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await page.keyboard.type(' Half typed')
+    await input.evaluate((el) => {
+      const e = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      Object.defineProperty(e, 'keyCode', { get: () => 229 })
+      el.dispatchEvent(e)
+    })
+    await page.waitForTimeout(200)
+    await expect(card).toBeVisible()
+    await expect(input).toHaveValue(`${long} Half typed`)
+
+    // A press outside on the conversation keeps what was typed (only Esc and Cancel throw it away).
+    const half = `${long} Half typed`
+    // On a person's message in view: words of the conversation that carry no mark.
+    const spot = await history.evaluate((h) => {
+      const box = h.getBoundingClientRect()
+      for (const el of Array.from(h.querySelectorAll<HTMLElement>('.session-msg-user'))) {
+        const r = el.getBoundingClientRect()
+        if (r.top >= box.top && r.bottom <= box.bottom && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      }
+      return null
+    })
+    expect(spot, 'a person\'s message in view to press on').not.toBeNull()
+    await page.mouse.move(spot!.x, spot!.y)
+    await page.mouse.down()
+    await page.waitForTimeout(110)
+    await page.mouse.up()
+    await expect(card).toHaveCount(0)
+    await expect.poll(async () => (await recordOf(id1))?.comment, { timeout: 10_000 }).toBe(half)
+    await openCard(id1, p1)
+    await expect(text).toHaveText(half)
+
+    // The timeline scrolls the passage away while the editor is open (a streamed turn
+    // does): the editor stays, held in the view, with the words typed so far.
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await page.keyboard.type(' Kept while it scrolls.')
+    await history.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await page.waitForTimeout(500)
+    await expect(input).toHaveValue(`${half} Kept while it scrolls.`)
+    const held = (await settledBox(card))
+    expect(held.y).toBeGreaterThanOrEqual(0)
+    expect(held.y + held.height).toBeLessThanOrEqual(page.viewportSize()!.height)
+    await page.keyboard.press('Escape')
+    await expect(text).toHaveText(half)
+    // Not editing any more: the card goes with its passage out of view, as before.
+    await history.evaluate((el) => { el.scrollTop = el.scrollHeight - el.clientHeight - 40 })
+    await expect(card).toHaveCount(0)
+    await openCard(id1, p1)
+
+    // Edit and Save: all the words replaced, the card, the row and the chip read the new ones.
+    const edited = `${long.replace('Please check both places', 'Please check the second answer and the third one')} Thanks.`
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await expectEditor(half)
+    await page.keyboard.press('ControlOrMeta+A')
+    await page.keyboard.press('Backspace')
+    await expect(save, 'no words, nothing to save (the Comment box\'s own Add rule)').toBeDisabled()
+    await input.fill(edited.slice(0, -8))
+    await page.keyboard.type(' Thanks.')
+    await expect(input).toHaveValue(edited)
+    await editShot(page, '03-edited-before-save')
+    await humanPress(page, save)
+    await expect(input).toHaveCount(0)
+    await expect(text).toHaveText(edited)
+    await expect(card).toContainText('Goes with your next message')
+    await expect(rows(panel).nth(0).locator('.pending-comments-text')).toHaveAttribute('title', edited)
+    await expect(chipOf(id1)).toHaveAttribute('title', edited)
+    await expect.poll(async () => (await recordOf(id1))?.comment, { timeout: 10_000 }).toBe(edited)
+    expect((await recordOf(id1))!.updatedAt).toBeTruthy()
+    await editShot(page, '04-saved')
+
+    // A stale window writes its whole list over the record, our edit taken out: this
+    // window writes it back once it reads that copy (here on a turn's result), and
+    // then stops (the echo matches).
+    const patches: string[] = []
+    page.on('request', (r) => { if (r.method() === 'PATCH' && r.url().includes(`/api/sessions/${AI_SESSION}`)) patches.push(r.url()) })
+    const fresh = (await readRecord(request, AI_SESSION)).passageComments as Array<Record<string, unknown>>
+    const stale = fresh.map((c) => (c.id === id1 ? { ...c, comment: long, updatedAt: undefined } : c))
+    const staleRes = await request.patch(`/api/sessions/${AI_SESSION}`, { data: { passage_comments: stale } })
+    expect(staleRes.ok()).toBe(true)
+    expect((await recordOf(id1))!.comment).toBe(long)
+    await serverEvent('session:result', { sessionId: AI_SESSION })
+    await expect.poll(async () => (await recordOf(id1))?.comment, { timeout: 15_000 }).toBe(edited)
+    await expect(text).toHaveText(edited)
+    const afterHeal = patches.length
+    expect(afterHeal, 'one write puts ours back').toBeGreaterThanOrEqual(1)
+    await page.waitForTimeout(2_500)
+    expect(patches.length, 'and the echo of that write starts no more').toBe(afterHeal)
+
+    // Enter saves too (Shift+Enter breaks the line).
+    await humanPress(page, text)
+    await expectEditor(edited)
+    await page.keyboard.press('Shift+Enter')
+    await page.keyboard.type('One more line.')
+    await page.keyboard.press('Enter')
+    const edited2 = `${edited}\nOne more line.`
+    await expect(text).toHaveText(edited2)
+    await expect.poll(async () => (await recordOf(id1))?.comment, { timeout: 10_000 }).toBe(edited2)
+    await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+
+    // A reload keeps the new words.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    panel = await open(page)
+    await expectWords([{ passage: p1, comment: edited2 }, { passage: p2 }])
+    await openCard(id1, p1)
+    await expect(text).toHaveText(edited2)
+    await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+
+    // A row whose passage is not in this transcript (no row to land on): its pencil
+    // still opens the card, at the row, after the wait, in the editor.
+    const ghostId = 'pw-comment-edit-ghost'
+    const nowRec = (await readRecord(request, AI_SESSION)).passageComments as Array<Record<string, unknown>>
+    const ghost = { id: ghostId, msgId: 'pw-msg-not-in-transcript', role: 'assistant', quote: { exact: 'A passage no row holds.' }, text: 'A passage no row holds.', comment: 'Left on words gone from the view.', createdAt: new Date().toISOString() }
+    expect((await request.patch(`/api/sessions/${AI_SESSION}`, { data: { passage_comments: [...nowRec, ghost] } })).ok()).toBe(true)
+    await serverEvent('session:result', { sessionId: AI_SESSION })
+    const ghostRow = panel.locator(`[data-testid="pending-comment-row"][data-comment-id="${ghostId}"]`)
+    await expect(ghostRow).toHaveCount(1, { timeout: 15_000 })
+    await humanPress(page, ghostRow.getByTestId('pending-comment-edit'))
+    await expect(card).toBeVisible({ timeout: 10_000 })
+    await expect(input).toBeFocused()
+    await expect(input).toHaveValue('Left on words gone from the view.')
+    const gb = (await settledBox(card))
+    expect(gb.y + gb.height, 'over the tray, inside the view').toBeLessThanOrEqual(page.viewportSize()!.height)
+    await editShot(page, '05a-row-edit-no-passage')
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+    // Opening late never takes the focus from words being typed in the composer.
+    await humanPress(page, ghostRow.getByTestId('pending-comment-edit'))
+    await composer.focus()
+    await page.keyboard.type('typing meanwhile')
+    await expect(card).toBeVisible({ timeout: 10_000 })
+    await expect(composer).toBeFocused()
+    await expect(composer).toHaveValue('typing meanwhile')
+    await expect(input).toHaveValue('Left on words gone from the view.')
+    await composer.fill('')
+    await humanPress(page, ghostRow.getByTestId('pending-comment-remove'))
+    await expect(ghostRow).toHaveCount(0)
+
+    // A row's pencil, with its passage far away: the passage comes into view and its card opens in the editor.
+    const edited3 = `${edited2} Third pass.`
+    await history.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await page.waitForTimeout(300)
+    await humanPress(page, rows(panel).nth(0).getByTestId('pending-comment-edit'))
+    await expect(card).toBeVisible({ timeout: 10_000 })
+    await expectEditor(edited2)
+    await editShot(page, '05-row-edit')
+    await page.keyboard.type(' Third pass.')
+    await page.keyboard.press('Enter')
+    await expect(text).toHaveText(edited3)
+    await page.keyboard.press('Escape')
+
+    // A plain Quote's pencil gives it words: it becomes a comment.
+    await humanPress(page, rows(panel).nth(1).getByTestId('pending-comment-edit'))
+    await expect(card).toBeVisible({ timeout: 10_000 })
+    await expect(input).toBeFocused()
+    await expect(input).toHaveValue('')
+    await expect(save).toBeDisabled()
+    await page.keyboard.type('Now a comment.')
+    await page.keyboard.press('Enter')
+    await expect(card).toContainText('Now a comment.')
+    await expectWords([{ passage: p1, comment: edited3 }, { passage: p2, comment: 'Now a comment.' }])
+    await page.keyboard.press('Escape')
+
+    // Remove still takes one out from its card.
+    await quote(page, panel, p3)
+    const id3 = (await rows(panel).nth(2).getAttribute('data-comment-id'))!
+    await openCard(id3, p3)
+    await expect(card.getByTestId('passage-comment-edit')).toHaveText('Add comment')
+    await humanPress(page, card.getByTestId('passage-comment-remove'))
+    await expect(card).toHaveCount(0)
+    await expectWords([{ passage: p1, comment: edited3 }, { passage: p2, comment: 'Now a comment.' }])
+
+    // Editing, then Send without Save: the press on Send keeps the new words first, so
+    // the message carries what the card showed.
+    await openCard(id2, p2)
+    await humanPress(page, card.getByTestId('passage-comment-edit'))
+    await expectEditor('Now a comment.')
+    await page.keyboard.type(' Changed at send.')
+    await humanPress(page, panel.locator('.session-panel-input .chat-send-btn-icon'))
+    await expect.poll(() => sent.length, { timeout: 20_000 }).toBe(1)
+    expect(sent[0].message).toBe(`${quoted(p1)}\n\n${edited3}\n\n${quoted(p2)}\n\nNow a comment. Changed at send.`)
+    await expect(card).toHaveCount(0)
+    await expect(tray(panel)).toHaveCount(0)
+    await expect.poll(async () => (await recordOf(id1))?.sentAt, { timeout: 10_000 }).toBeTruthy()
+
+    // A sent comment is what went: no Edit, and a click on its words edits nothing.
+    await openCard(id1, p1)
+    await expect(card).toContainText('Sent')
+    await expect(card.getByTestId('passage-comment-edit')).toHaveCount(0)
+    await expect(card.getByTestId('passage-comment-remove')).toHaveText('Remove mark')
+    await humanPress(page, text)
+    await page.waitForTimeout(300)
+    await expect(input).toHaveCount(0)
+    await expect(text).toHaveText(edited3)
+    await editShot(page, '06-sent-read-only')
+    expect((await recordOf(id1))!.comment).toBe(edited3)
     expect(sent).toHaveLength(1)
   })
 })

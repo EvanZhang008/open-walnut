@@ -5,7 +5,10 @@
  *
  *   pending   no `sentAt`: listed above the composer, and the next accepted send
  *             carries each one (quote, then its comment) ahead of the typed words
- *   sent      stays a mark on the words it was left on
+ *   sent      stays a mark on the words it was left on, its words as they went
+ *
+ * A pending one's words can be changed until it goes (`editComment`); a sent one's
+ * cannot, they are what the model read.
  *
  * The list lives on the session record (`passage_comments`), like quote pins.
  */
@@ -73,27 +76,88 @@ export function markRemoved(list: readonly SessionPassageComment[], id: string, 
   return list.map((c) => (c.id === id && !c.removedAt ? { ...c, removedAt: at } : c));
 }
 
+/**
+ * Change a pending item's words (its card's Edit, 2026-11-06): a plain Quote given
+ * words becomes a comment. Only while it waits for a send: a sent or taken out one,
+ * a doc's (its words live in the doc's sidecar), empty words or words past the cap
+ * leave the list as it is (the same array, so the caller can tell nothing changed).
+ */
+export function editComment(list: readonly SessionPassageComment[], id: string, comment: string, at: string): readonly SessionPassageComment[] {
+  const words = comment.trim();
+  if (!words || words.length > MAX_COMMENT_CHARS) return list;
+  const at0 = list.findIndex((c) => c.id === id);
+  const c = list[at0];
+  if (!c || !isPending(c) || c.doc || c.comment === words) return list;
+  const next = list.slice();
+  next[at0] = { ...c, comment: words, updatedAt: at };
+  return next;
+}
+
 const newest = (c: SessionPassageComment): string =>
   [c.createdAt, c.updatedAt, c.sentAt, c.removedAt].reduce<string>((a, b) => (b && b > a ? b : a), '');
 
 /**
  * Two copies of the list (ours and the record's, or the record's and another
  * window's) become one: every id either holds, in the order first seen. Sent and
- * taken out are one-way, so either copy's stamp stands; otherwise the copy edited
- * last wins. Nothing is ever dropped here, so neither a stale read nor a write from
- * another window can lose a comment, un-send one, or bring a removed one back.
+ * taken out are one-way, so either copy's stamp stands. The words are the sent
+ * copy's when only one copy was sent (an edit made elsewhere while it went never
+ * rewrites what the model read), otherwise the copy edited last wins (on a tie in
+ * time, the larger words, so two windows always agree). Nothing is ever dropped here, so neither a stale read nor a write from another window can
+ * lose a comment, un-send one, or bring a removed one back.
  */
 export function mergeComments(a: readonly SessionPassageComment[], b: readonly SessionPassageComment[]): SessionPassageComment[] {
   const byId = new Map<string, SessionPassageComment>();
   for (const c of [...a, ...b]) {
     const prev = byId.get(c.id);
     if (!prev) { byId.set(c.id, c); continue; }
-    const winner = newest(c) > newest(prev) ? c : prev;
+    const winner = !c.sentAt !== !prev.sentAt
+      ? (c.sentAt ? c : prev)
+      : newest(c) > newest(prev) || (newest(c) === newest(prev) && c.comment > prev.comment) ? c : prev;
     const sentAt = prev.sentAt ?? c.sentAt;
     const removedAt = prev.removedAt ?? c.removedAt;
     byId.set(c.id, { ...winner, ...(sentAt ? { sentAt } : {}), ...(removedAt ? { removedAt } : {}) });
   }
   return [...byId.values()];
+}
+
+/**
+ * A record copy met while a send is in flight: merged in as `mergeComments` does,
+ * except that each item the send has claimed stays exactly as it was claimed. The
+ * model reads the claimed words, so another window's edit arriving meanwhile must
+ * not become the words the send then stamps as sent; once the send settles, the
+ * normal merge decides (a sent copy keeps its words, a refused send lets the newer
+ * edit win).
+ */
+export function mergeKeepingClaimed(
+  ours: readonly SessionPassageComment[],
+  theirs: readonly SessionPassageComment[],
+  claimed: ReadonlySet<string>,
+): SessionPassageComment[] {
+  const merged = mergeComments(ours, theirs);
+  if (!claimed.size) return merged;
+  const mine = new Map(ours.map((c) => [c.id, c]));
+  return merged.map((c) => (claimed.has(c.id) && mine.has(c.id) ? mine.get(c.id)! : c));
+}
+
+/**
+ * The record lacks something of ours (a stale window's whole-list write took our
+ * edit, a send or a removal back out): write ours again. Only the fields the server
+ * keeps verbatim are compared, and only on what a write would store, so the echo of
+ * our own write always matches and this cannot loop. Ids a send has claimed are
+ * left alone until it settles.
+ */
+export function recordNeedsWrite(
+  ours: readonly SessionPassageComment[],
+  record: readonly SessionPassageComment[],
+  now: number,
+  skip: ReadonlySet<string> = new Set(),
+): boolean {
+  const byId = new Map(record.map((c) => [c.id, c]));
+  return pruneComments(ours, now).some((c) => {
+    if (skip.has(c.id)) return false;
+    const r = byId.get(c.id);
+    return !r || r.comment !== c.comment || (r.sentAt ?? '') !== (c.sentAt ?? '') || (r.removedAt ?? '') !== (c.removedAt ?? '');
+  });
 }
 
 /**

@@ -634,7 +634,14 @@ show inline after the open ones, other completed hits that show the query fold i
   the user's sketch): a `passage_comments` entry on the session record (`useSessionComments`,
   `utils/passage-comments.ts`) that `PassageCommentMarks` paints on the words (orange
   `walnut-comment`, a chip at the passage's end, a card on press) and `PendingCommentsTray`
-  lists above the composer (three rows in view, a row's click jumps there). The composer's
+  lists above the composer (three rows in view, a row's click jumps there). Until it is sent its
+  words are edited in its card (2026-11-06: Edit, a click on them, or the row's pencil, which jumps
+  there and opens the card in its editor, at the row when the passage cannot be shown): `update`
+  stamps `updatedAt` on the same whole-list PATCH. Save, Enter or a press outside (the composer's
+  Send included, saved before its click) keeps the new words, Cancel or Esc the old ones. A sent one
+  or one a send has claimed is never rewritten (`editComment`; `mergeKeepingClaimed` while the send
+  is in flight; `mergeComments` keeps the sent copy's words), and a record read that lacks ours
+  (a stale window's write) is written over once (`recordNeedsWrite`). The composer's
   accepted send carries each one (`composeWithComments`: quote, its comment, in order, then
   the typed words); a sent comment stays as a quieter `walnut-comment-sent` mark, a sent plain
   Quote leaves none. A row with no message id yet, or a timeline with no record behind it,

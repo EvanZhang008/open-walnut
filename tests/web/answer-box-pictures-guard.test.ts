@@ -24,6 +24,7 @@ const WEB_SRC = path.resolve(import.meta.dirname, '../../web/src')
 const TEXT_ONLY_ANSWERS: Record<string, string> = {
   'components/common/DocCommentCard.tsx': 'a comment on a document, kept until the next chat message, which the composer sends with its pictures',
   'components/sessions/QuotePinSelectionBar.tsx': 'a comment on a passage, kept until the next chat message, which the composer sends with its pictures',
+  'components/sessions/PassageCommentMarks.tsx': "editing a passage comment's words before the next chat message, which the composer sends with its pictures",
   'components/inbox/ItemConfirmation.tsx': "a mail item's one-line work goal, kept on the item before any session exists",
   'apps/mail/MailGroupCard.tsx': 'why a mail belongs in a group: a sorting rule, never delivered to a session',
   'apps/mail/MailCorrectStepWhere.tsx': 'why a mail was sorted wrong: a sorting rule, never delivered to a session',

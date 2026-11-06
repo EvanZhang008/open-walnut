@@ -5882,6 +5882,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             panelKey={quotePanelKey}
             renderNonce={messages.length + truncationOffset}
             onRemove={commentsApi.remove}
+            onUpdate={commentsApi.update}
+            jump={commentsApi.jump}
             resetKey={currentKey}
           />
         )}

@@ -20,11 +20,20 @@ export interface SessionCommentsApi {
     /** The Tree Mode page it was made on (a thread key, '' = the main conversation). */
     pageKey?: string;
   }) => void;
+  /**
+   * Change a pending one's words (a plain Quote given words becomes a comment).
+   * FALSE when it cannot be: sent, being sent, taken out, a doc's, or no words.
+   */
+  update: (id: string, comment: string) => boolean;
   remove: (id: string) => void;
-  /** Ask the timeline (or, for a doc's entry, its doc) to show this one's passage (a tray row's click). */
-  requestJump: (id: string) => void;
+  /**
+   * Ask the timeline (or, for a doc's entry, its doc) to show this one's passage (a
+   * tray row's click); `edit` also opens its card with the words in the editor,
+   * at `origin` (the row, a viewport point) when its passage cannot be shown.
+   */
+  requestJump: (id: string, opts?: { edit?: boolean; origin?: { x: number; y: number } }) => void;
   /** The newest jump request; each `seq` lands once, `at` = when it was asked. */
-  jump: { id: string; seq: number; at: number } | null;
+  jump: { id: string; seq: number; at: number; edit?: boolean; origin?: { x: number; y: number } } | null;
   /** FALSE for the stub: no record to write, so the pill keeps the old text path. */
   canComment: boolean;
 }
@@ -32,6 +41,7 @@ export interface SessionCommentsApi {
 const EMPTY: SessionCommentsApi = {
   comments: [],
   add: () => {},
+  update: () => false,
   remove: () => {},
   requestJump: () => {},
   jump: null,

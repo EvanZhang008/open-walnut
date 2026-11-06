@@ -1280,11 +1280,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const openDocRef = useRef<(path: string) => void>(() => {});
   const commentsApi = useMemo<SessionCommentsApi>(() => ({
     comments: commentsStore.comments,
+    update: commentsStore.update,
     remove: commentsStore.remove,
-    requestJump: (id) => {
+    requestJump: (id, opts) => {
       const c = commentsStore.comments.find((x) => x.id === id);
       if (c?.doc) openDocRef.current(c.doc.path);
-      commentsStore.requestJump(id);
+      commentsStore.requestJump(id, opts);
     },
     jump: commentsStore.jump,
     canComment: commentsStore.canComment,
@@ -1312,7 +1313,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         else setComposerFocusNonce((n) => n + 1);
       }
     },
-  }), [commentsStore.comments, commentsStore.remove, commentsStore.requestJump, commentsStore.jump, commentsStore.canComment, addPassageComment, sessionId, phoneLayer]);
+  }), [commentsStore.comments, commentsStore.update, commentsStore.remove, commentsStore.requestJump, commentsStore.jump, commentsStore.canComment, addPassageComment, sessionId, phoneLayer]);
+  // A tray row's Edit: show its passage and open its card with the words in the editor.
+  const requestCommentJump = commentsStore.requestJump;
+  const editPendingComment = useCallback(
+    (id: string, origin: { x: number; y: number }) => requestCommentJump(id, { edit: true, origin }),
+    [requestCommentJump],
+  );
   // Messages the CLI had queued behind the turn that a Stop dropped: like Esc in
   // Claude Code, their text goes back into the input (ahead of anything typed since)
   // and the "Delivered" bubbles go, since the model never saw them.
@@ -3572,6 +3579,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <PendingCommentsTray
             pending={ownPendingComments}
             onJump={commentsStore.requestJump}
+            onEdit={editPendingComment}
             onRemove={commentsStore.remove}
           />
           <ChatInput
