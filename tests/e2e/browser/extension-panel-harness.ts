@@ -4,7 +4,7 @@
  * browser with no side panel gets: Playwright cannot open Chrome's side panel itself). Shared by
  * the side panel specs (extension-panel-*.spec.ts).
  */
-import { expect, chromium, type BrowserContext, type FrameLocator, type Page } from '@playwright/test'
+import { expect, chromium, type BrowserContext, type FrameLocator, type Locator, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -101,18 +101,57 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
 
 export const sw = (lab: PanelLab) => lab.ctx.serviceWorkers()[0]
 
-/** Open the panel window for the person's window, on `tab` (the tab it keeps), timed from the click. */
-export async function openPanel(lab: PanelLab, tab?: 'ask' | 'tasks' | 'passwords'): Promise<{ panel: Page; t0: number }> {
-  if (tab) await sw(lab).evaluate((t: string) => chrome.storage.local.set({ panelTab: t }), tab)
+/**
+ * Open the panel window for the person's window, timed from the click. The panel opens on Ask
+ * (Walnut's own Ask, with the key in its header); `view` then opens the drawer's Tasks or Passwords
+ * row, the full view with its Back control (panel-ask.ts). A Walnut too old for that shape shows
+ * the three tabs, where `view` picks the tab it keeps.
+ */
+export async function openPanel(lab: PanelLab, view?: 'ask' | 'tasks' | 'passwords'): Promise<{ panel: Page; t0: number }> {
+  if (view) await sw(lab).evaluate((t: string) => chrome.storage.local.set({ panelTab: t }), view)
   const opened = lab.ctx.waitForEvent('page')
   const t0 = Date.now()
   await sw(lab).evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`sidepanel.html?window=${w}`), type: 'popup', width: 420, height: 760 }), lab.docWindow)
   const panel = await opened
+  if (view === 'tasks' || view === 'passwords') await openView(panel, view)
   return { panel, t0 }
+}
+
+/** The ≡ drawer's Tasks or Passwords row: that full view over Ask, with Back. */
+export async function openView(panel: Page, view: 'tasks' | 'passwords'): Promise<void> {
+  const v = askView(panel)
+  await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  // Another full view on show: Back to Ask first.
+  if (await panel.locator('.panel-view:not([hidden])').count()) await backToAsk(panel)
+  await v.getByTestId('ask-walnut-menu').click()
+  await v.getByTestId(`ext-drawer-${view}`).click()
+  await expect(panel.getByTestId(`panel-view-${view}`)).toBeVisible({ timeout: 15_000 })
+}
+
+/**
+ * The Back of the full view on show: Tasks has it in the panel's bar, Passwords in its own bar
+ * inside its frame (popup.ts `inView`).
+ */
+export async function viewBack(panel: Page): Promise<Locator> {
+  const shown = panel.locator('.panel-view:not([hidden])')
+  const inFrame = (await shown.getAttribute('data-testid')) === 'panel-view-passwords'
+  return inFrame
+    ? shown.frameLocator('iframe.panel-frame-passwords').getByTestId('panel-view-back')
+    : shown.locator('> .panel-view-bar').getByTestId('panel-view-back')
+}
+
+/** Back to Ask from a full view. */
+export async function backToAsk(panel: Page): Promise<void> {
+  await (await viewBack(panel)).click()
+  await expect(panel.locator('.panel-view:not([hidden])')).toHaveCount(0)
 }
 
 export const askView = (panel: Page): FrameLocator => panel.frameLocator('iframe.panel-frame')
 export const tasksView = (panel: Page): FrameLocator => panel.frameLocator('iframe.panel-frame-tasks')
+export const passwordsView = (panel: Page): FrameLocator => panel.frameLocator('iframe.panel-frame-passwords')
+
+/** The page chip of Ask's composer: it names the page the person is on ("<title> · <host>"). */
+export const pageChip = (panel: Page) => askView(panel).getByTestId('ext-panel-include')
 
 export function selectText(doc: Page, id: string): Promise<void> {
   return doc.evaluate((id) => {

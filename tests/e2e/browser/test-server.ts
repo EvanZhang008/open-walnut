@@ -79,6 +79,8 @@ process.env.WALNUT_LOCAL_CLAUDE_PROBE ??= '0'
 process.env.WALNUT_TEST_HOST_FIXTURE_MODE ??= '1'
 // One vault, many specs side by side: only an extension a spec names shares an unlock (extension-one-unlock.spec.ts).
 process.env.WALNUT_TEST_VAULT_JOIN ??= 'named'
+// POST /api/test/task-fixture/hand-back: a task handed back with its last words, which Walnut reads from a transcript the mock CLI never writes.
+process.env.WALNUT_TEST_TASK_FIXTURE ??= '1'
 process.env.WALNUT_TEST_HOST_FIXTURE_DIR ??= path.resolve(path.dirname(new URL(import.meta.url).pathname), 'fixtures')
 // Keep host discovery, Claude history, credentials, and child processes inside
 // the fixture. Inheriting the developer's HOME makes browser tests probe real

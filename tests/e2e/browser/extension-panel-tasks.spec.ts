@@ -1,18 +1,18 @@
 /**
  * The side panel after the second review (web/src/popout/PopoutExtTasks.tsx, PopoutExtPanel.tsx,
- * packages/browser-extension/src/popup.ts in the Passwords tab):
+ * packages/browser-extension/src/popup.ts in the Passwords view):
  *
  * - Tasks: a waiting approval leads Needs you with Approve and Deny; a row does not repeat its
  *   section; a task goes to Focus from its row or the opened task; a reply leaves the row in place
  *   with what was said; the save button is plainly off on a Walnut tab, with the reason.
  * - Ask: the brand colour on the person's bubble, no bare actions under a bubble, and the page
  *   quote of a new question on the composer.
- * - Passwords: one header (the panel's tabs), no second Walnut brand bar.
+ * - Passwords: one header (the panel's view bar with Back), no second Walnut brand bar.
  */
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { askView, openPanel, startPanelLab, tasksView, type PanelLab } from './extension-panel-harness'
+import { askView, openPanel, openView, selectText, startPanelLab, tasksView, type PanelLab } from './extension-panel-harness'
 import { holdApprovalsLock } from './approvals-lock'
 
 test.describe.configure({ mode: 'serial' })
@@ -33,6 +33,8 @@ test.afterAll(async () => { await lab?.close() })
 
 test('Ask: the brand colour, no bare actions under a bubble, the page quote on the composer', async () => {
   test.setTimeout(120_000)
+  // A selection on the page: the composer quotes it (with none, the page chip alone says what goes).
+  await selectText(lab.doc, 'p1')
   ;({ panel } = await openPanel(lab, 'ask'))
   const v = askView(panel)
   const quote = v.getByTestId('ask-object-quote')
@@ -69,7 +71,7 @@ test('Tasks: an approval leads Needs you and is answered here; rows say no secti
   expect(made.ok(), await made.text()).toBe(true)
   const approvalId = String(((await made.json()) as { approval: { id: string } }).approval.id)
 
-  await panel.getByTestId('panel-tab-tasks').click()
+  await openView(panel, 'tasks')
   const t = tasksView(panel)
   const needs = t.getByTestId('ext-tasks-needs')
   const row = needs.locator('[data-testid="approval-row"]').filter({ hasText: order })
@@ -144,10 +146,10 @@ test('Tasks: on a Walnut tab the save button is plainly off and says why', async
 })
 
 // The list with its tools, unlocked, is checked in extension-sidepanel.spec.ts (it has a vault);
-// here the tab with no vault yet shows no second header either.
-test('Passwords: one header, the panel\'s tabs', async () => {
+// here the view with no vault yet shows no second header either: its bar is the panel's, with Back.
+test('Passwords: one header, the panel\'s view bar', async () => {
   test.setTimeout(60_000)
-  await panel.getByTestId('panel-tab-passwords').click()
+  await openView(panel, 'passwords')
   const pw = panel.frameLocator('iframe.panel-frame-passwords')
   await expect(pw.locator('body')).toBeVisible({ timeout: 20_000 })
   await panel.waitForTimeout(1500)

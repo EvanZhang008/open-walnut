@@ -372,13 +372,15 @@ interface Props {
   plainChat?: boolean;
   /** The composer's placeholder, in place of the draft's own. */
   placeholder?: string;
+  /** In plain chat: the host's controls in the composer's bottom row (SessionPanel `composerBar`). */
+  composerBar?: ReactNode;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -936,7 +938,7 @@ export function DraftSessionPanel({
           mentionSelfTaskId={draft.taskId}
           // Shift+Tab cycles the permission mode, as it does in a running session.
           onToggleMode={showModePill ? cycleDraftMode : undefined}
-          controlsSlot={plainChat ? undefined : (
+          controlsSlot={plainChat ? composerBar : (
             <div className="session-mode-bar draft-actions-bar">
               {/* The row reads like a running session's: mode first, then model.
                   The mode is the one launch choice that changes what the session

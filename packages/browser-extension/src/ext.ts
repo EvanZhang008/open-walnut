@@ -58,7 +58,7 @@ export interface ExtApi {
   /** getSelf needs no permission. */
   management?: { getSelf?(): Promise<{ installType?: string }> }
   alarms: { create(name: string, o: { periodInMinutes?: number; delayInMinutes?: number }): Promise<void> | void; clear?(name: string): Promise<boolean>; onAlarm: Event<(a: { name: string }) => void> }
-  action: { openPopup?(): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; getBadgeText?(o: { tabId?: number }): Promise<string>; setBadgeBackgroundColor(o: { color: string; tabId?: number }): Promise<void> }
+  action: { openPopup?(): Promise<void>; setPopup?(o: { popup: string }): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; getBadgeText?(o: { tabId?: number }): Promise<string>; setBadgeBackgroundColor(o: { color: string; tabId?: number }): Promise<void> }
   /** The computer's idle and lock state (the auto-lock); needs the `idle` permission. */
   idle?: { setDetectionInterval(seconds: number): void; onStateChanged: Event<(state: 'active' | 'idle' | 'locked') => void> }
   commands?: { onCommand: Event<(name: string, tab?: Tab) => void> }

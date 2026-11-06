@@ -3,11 +3,12 @@
   --fg: #1d1d1f; --fg2: #3c3c43; --muted: #86868b; --line: #e8e3dc; --bg: #ffffff; --bg2: #f8f5f1;
   --accent: #8a5a2b; --accent-hover: #74481f; --accent-soft: #f4ece3; --ok: #2e7d32; --bad: #c62828;
   --radius: 12px; color-scheme: light dark;
-  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 /* Chrome gives extension pages a default body { font-size: 75% }: every inherited size would be
    9.75 px. The body takes the type scale itself: 13 px text, 12 px secondary, nothing smaller. */
-html body { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+/* Walnut's own stack (web/src/styles/globals.css), so these pages read as one with the Walnut frame beside them. */
+html body { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 @media (prefers-color-scheme: dark) {
   :root { --fg: #f5f5f7; --fg2: #d1d1d6; --muted: #98989d; --line: #3a3530; --bg: #1f1d1b; --bg2: #2a2724; --accent: #d8a26a; --accent-hover: #e8b47e; --accent-soft: #3a2f24; }
   /* Dark text on the light brown: white on it is too faint to read. */
@@ -88,6 +89,9 @@ html.in-panel .top:not(.top-sub) > .logo, html.in-panel .top:not(.top-sub) > h1 
 .top-sub { display: grid; grid-template-columns: 1fr auto 1fr; padding-left: 6px; }
 .top-sub h1 { flex: none; font-size: 14px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
 .top-sub > :nth-child(3) { justify-self: end; }
+/* The side panel's Passwords view bar (popup.ts `inView`): the same height as the panel's Tasks bar. */
+.top-sub.view-bar { min-height: 44px; padding: 4px 8px 4px 6px; }
+.top-sub.view-bar h1 { font-weight: 650; }
 .back-btn { justify-self: start; display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 0 10px 0 4px; border: 0; border-radius: 8px; background: none; color: var(--accent); font-weight: 500; }
 .back-btn:hover { background: var(--accent-soft); }
 .pane { padding: 14px; }
@@ -295,3 +299,40 @@ body.bar > #root { background: var(--bg); border: 1px solid var(--line); border-
 .panel-snap-task-text { display: flex; flex-direction: column; min-width: 0; }
 .panel-snap-task-title { font-size: 13px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .panel-snap-task-line { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── the side panel and the toolbar popup as Walnut's Ask (panel-ask.ts, key-pop.ts) ── */
+/* The toolbar popup on Ask: the side panel's page at the popup's size. */
+html.askpop, html.askpop body.sidepanel { width: 380px; height: 560px; }
+html.askpop body.sidepanel #root { height: 560px; }
+/* A test's tab, or a window of its own: as large as it is given. */
+html.askpop.wide, html.askpop.wide body.sidepanel, html.askpop.wide body.sidepanel #root { width: auto; height: 100%; }
+.panel-shell.is-ask .panel-body { overflow: hidden; }
+/* The full Tasks and Passwords views the drawer opens: over the Ask frame, with a Back to it. */
+.panel-view { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; background: var(--bg); }
+.panel-view[hidden] { display: none; }
+.panel-view-bar { flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 44px; padding: 4px 8px 4px 6px; border-bottom: 1px solid var(--line); }
+.panel-view-title { font-weight: 650; font-size: 14px; }
+.panel-view > iframe { display: block; flex: 1; min-height: 0; width: 100%; border: 0; }
+.panel-view .panel-snap { top: 44px; }
+.btn-sm { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 7px; }
+/* The key popover: an overlay over the frame under its key button, never moving what is under it. */
+.key-pop { position: absolute; z-index: 10; display: flex; flex-direction: column; max-height: calc(100% - 70px); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.08); outline: none; overflow: hidden; }
+.key-pop-head { flex: none; padding: 11px 12px 8px; font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.key-pop-body { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 8px; }
+.key-pop-unlock { display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
+.key-pop-locked { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 0 0 4px; font-weight: 600; color: var(--fg2); }
+.key-pop-unlock .input { flex: 1; min-width: 0; height: 30px; padding: 0 8px; font-size: 12.5px; }
+.key-pop-unlock .btn { height: 30px; flex: none; padding: 0 12px; }
+.key-pop-sk { margin-top: 8px; }
+.key-pop-sk[hidden] { display: none; }
+.key-pop-note { margin: 6px 4px 0; font-size: 12px; color: var(--muted); }
+.key-pop-empty { margin: 10px 4px 4px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+.key-pop .err:empty { display: none; }
+.key-pop-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; }
+.key-pop-row + .key-pop-row { border-top: 1px solid var(--line); }
+.key-pop-row .row-sub { font-family: inherit; }
+.key-pop-fill { flex: none; }
+.key-pop-foot { flex: none; display: flex; justify-content: space-between; padding: 9px 12px; border-top: 1px solid var(--line); }
+.key-pop-foot .link-btn { font-size: 12.5px; }
+.key-pop-all { color: var(--fg) !important; }
+.panel-snap.is-ask .panel-snap-head { padding: 10px 12px 9px 48px; min-height: 52px; }

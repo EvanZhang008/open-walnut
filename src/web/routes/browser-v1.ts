@@ -7,7 +7,7 @@
  *   POST /api/v1/browser/act      an agent's command: { action, tab?, device?, ...args }
  *   GET  /api/v1/browser/status   connected browsers, the site setting, the allowed sites
  *   PUT  /api/v1/browser/settings the person's choice: { mode?, removeSite? }
- *   GET  /api/v1/browser/panel    { panel, extension: { version, build } }: the build Walnut ships
+ *   GET  /api/v1/browser/panel    { panel, askPanel, extension: { version, build } }: the build Walnut ships
  *   POST /api/v1/browser/extension/setup { browser } → { dir, build, copied, opened }
  *
  * A site an agent has not used before asks the person first (a Walnut approval), unless they
@@ -190,7 +190,10 @@ browserV1Router.put('/browser/settings', (req, res, next) => {
 /**
  * The side panel asks whether this Walnut has it (an older one answers 404), and the extension
  * which build of it Walnut ships: a folder Walnut set up (extension-install.ts) is brought up to
- * that build first, so the extension can reload itself from it.
+ * that build first, so the extension can reload itself from it. `askPanel: 2`: the panel view
+ * opens as Walnut's own Ask (its drawer of asks, the key button the extension draws its vault
+ * popover for), and the toolbar popup opens on it too; an extension that sees no such field keeps
+ * its older panel (Ask, Tasks and Passwords tabs) and its vault popup.
  */
 browserV1Router.get('/browser/panel', (req, res, next) => {
   void run(res, next, async () => {
@@ -202,7 +205,7 @@ browserV1Router.get('/browser/panel', (req, res, next) => {
     }
     // `folder`: the id the marker in a folder this Walnut keeps carries (only such a copy reloads itself).
     const folder = bundled ? x.folderId() : null
-    return { panel: 1, ...(bundled ? { extension: { ...bundled, ...(folder ? { folder } : {}) } } : {}) }
+    return { panel: 1, askPanel: 2, ...(bundled ? { extension: { ...bundled, ...(folder ? { folder } : {}) } } : {}) }
   })
 })
 

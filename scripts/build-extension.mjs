@@ -34,7 +34,18 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const version = String(pkg.version).split(/[-+]/)[0].split('.').slice(0, 4).map((n) => String(Number(n) || 0)).join('.')
 
 const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar', 'sidepanel']
-const PAGES = { popup: 'popup', menu: 'menu frame', savebar: 'bar frame', sidepanel: 'sidepanel panel' }
+/**
+ * Each page: its body class, its html class, and the script it runs (its own name's by default).
+ * popup-ask.html is the toolbar popup on Ask: the side panel's page in its popup form (sidepanel.ts),
+ * which shows the vault popup (popup.html) instead for a Walnut older than that.
+ */
+const PAGES = {
+  popup: { body: 'popup' },
+  menu: { body: 'menu', html: 'frame' },
+  savebar: { body: 'bar', html: 'frame' },
+  sidepanel: { body: 'sidepanel', html: 'panel' },
+  'popup-ask': { body: 'sidepanel askpop', html: 'panel askpop', script: 'sidepanel' },
+}
 const SITES = ['http://*/*', 'https://*/*']
 
 /**
@@ -53,7 +64,7 @@ export function manifestFor(browser, build) {
     ...(build ? { version_name: `${version} build ${build}` } : {}),
     description: 'Your own Walnut in the browser: fill and save passwords, and ask Walnut about the page you are on.',
     icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
-    action: { default_title: 'Walnut', default_popup: 'popup.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
+    action: { default_title: 'Walnut', default_popup: 'popup-ask.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
     background: browser === 'chrome' ? { service_worker: 'background.js' } : { scripts: ['background.js'] },
     content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
     // alarms: agents in this browser (agent.ts) come back after the background was stopped.
@@ -87,8 +98,7 @@ export function manifestFor(browser, build) {
 }
 
 function page(name) {
-  const cls = PAGES[name]
-  const [bodyClass, htmlClass] = cls.split(' ')
+  const { body: bodyClass, html: htmlClass, script = name } = PAGES[name]
   return `<!doctype html>
 <html lang="en"${htmlClass ? ` class="${htmlClass}"` : ''}>
 <head>
@@ -99,7 +109,7 @@ function page(name) {
 </head>
 <body class="${bodyClass}">
 <div id="root"></div>
-<script src="${name}.js"></script>
+<script src="${script}.js"></script>
 </body>
 </html>
 `

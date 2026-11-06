@@ -6,7 +6,7 @@
  * numbers go to PANEL_SPEED_OUT (JSON) when it is set.
  *
  * What it holds the panel to: opened again, Ask shows the page and its conversation (the person's
- * last question on screen) and Tasks shows its list, each within a second.
+ * last question on screen), and Tasks, opened from the drawer, shows its list, each within a second.
  */
 import { expect, test, type Frame, type Page } from '@playwright/test'
 import fs from 'node:fs'
@@ -69,7 +69,7 @@ async function trace(panel: Page, t0: number): Promise<void> {
 test('Ask, the first time: the page and the composer', async () => {
   test.setTimeout(120_000)
   const { panel, t0 } = await openPanel(lab, 'ask')
-  record('ask-first:title', await until(panel, 'ext-panel', '.ext-panel-title', t0))
+  record('ask-first:title', await until(panel, 'ext-panel', '[data-testid="ext-panel-include"]', t0))
   record('ask-first:composer', await until(panel, 'ext-panel', '[data-testid="ask-object-drawer"] textarea', t0))
   // A conversation for the next opens.
   const composer = askView(panel).locator('[data-testid="ask-object-compose"] textarea')
@@ -89,7 +89,7 @@ test('Ask, opened again: the page, then the conversation with the person\'s ques
     // conversation shows the reply, which repeats the question; the measure before the fix was the same).
     const q = 'What changed for uploads?'
     record('ask-again:shown', await firstShown(panel, 'ext-panel', `[data-testid="ask-object-drawer"] :text("${q}")`, `[data-testid="panel-snap"] .panel-snap-msg:has-text("${q}")`, t0))
-    record('ask-again:title', await until(panel, 'ext-panel', '.ext-panel-title', t0))
+    record('ask-again:title', await until(panel, 'ext-panel', '[data-testid="ext-panel-include"]', t0))
     record('ask-again:question', await until(panel, 'ext-panel', `[data-testid="ask-object-drawer"] :text("${q}")`, t0))
     // The person keeps the panel open a moment, as people do; then it closes.
     await panel.waitForTimeout(1200)
@@ -99,15 +99,28 @@ test('Ask, opened again: the page, then the conversation with the person\'s ques
   expect.soft(median(results['ask-again:shown'])).toBeLessThan(1000)
 })
 
+/** The panel on Ask, then the drawer's Tasks row, timed from that press (Tasks is a view the drawer opens). */
+async function openTasks(): Promise<{ panel: Page; t0: number }> {
+  const { panel } = await openPanel(lab, 'ask')
+  const v = askView(panel)
+  await expect(v.getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  await v.getByTestId('ask-walnut-menu').click()
+  const row = v.getByTestId('ext-drawer-tasks')
+  await expect(row).toBeVisible()
+  const t0 = Date.now()
+  await row.click()
+  return { panel, t0 }
+}
+
 test('Tasks, opened again: the list', async () => {
   test.setTimeout(180_000)
   // The first open of Tasks loads its frame; the person's usual case is the ones after.
-  const first = await openPanel(lab, 'tasks')
+  const first = await openTasks()
   record('tasks-first:list', await until(first.panel, 'ext-tasks', '[data-testid="ext-task"]', first.t0))
   await first.panel.waitForTimeout(1500)
   await first.panel.close()
   for (let i = 0; i < 5; i++) {
-    const { panel, t0 } = await openPanel(lab, 'tasks')
+    const { panel, t0 } = await openTasks()
     record('tasks-again:shown', await firstShown(panel, 'ext-tasks', '[data-testid="ext-task"]', '[data-testid="panel-snap"] .panel-snap-task', t0))
     record('tasks-again:list', await until(panel, 'ext-tasks', '[data-testid="ext-task"]', t0))
     await panel.waitForTimeout(1200)

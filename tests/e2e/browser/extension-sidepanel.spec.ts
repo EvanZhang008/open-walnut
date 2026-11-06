@@ -132,8 +132,11 @@ test('connect the extension, then open the panel beside a page with a selection'
   await sw().evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`sidepanel.html?window=${w}`), type: 'popup', width: 420, height: 760 }), ids.window)
   panel = await panelOpened
   await expect(view().getByTestId('ext-panel')).toBeVisible({ timeout: 60_000 })
-  await expect(view().locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 30_000 })
-  await expect(view().locator('.ext-panel-host')).toHaveText(`docs.example.test:${port}`)
+  await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-include')).toContainText(`docs.example.test:${port}`)
+  // Walnut's own Ask: no tab strip, the key in the header.
+  await expect(panel.getByTestId('panel-tab-ask')).toHaveCount(0)
+  await expect(view().getByTestId('ext-ask-key')).toBeVisible()
   await expect(view().getByTestId('ask-object-quote')).toContainText('retries a failed upload three times')
   await expect(view().getByTestId('ext-panel-include')).toBeChecked()
   await expect(view().getByTestId('ext-panel-act')).not.toBeChecked()
@@ -260,10 +263,10 @@ test('Stop on the page takes the tab back, and the panel\'s switch follows', asy
 test('another page has its own conversation, and the first one comes back', async () => {
   test.setTimeout(90_000)
   await doc.goto(site('docs.example.test', '/other'))
-  await expect(view().locator('.ext-panel-title')).toHaveText('Another page', { timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-include')).toContainText('Another page', { timeout: 30_000 })
   await expect(view().getByTestId('ask-object-compose')).toBeVisible({ timeout: 30_000 })
   await doc.goto(site('docs.example.test', '/notes'))
-  await expect(view().locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
   await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession, { timeout: 30_000 })
 })
 
@@ -332,7 +335,7 @@ test('New chat while the ask acts in the tab: the new conversation keeps the swi
 test('the page in a handed tab moves on (a link, a mail app opening a message): the same conversation, still acting', async () => {
   test.setTimeout(90_000)
   await doc.goto(site('docs.example.test', '/other'))
-  await expect(view().locator('.ext-panel-title')).toHaveText('Another page', { timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-include')).toContainText('Another page', { timeout: 30_000 })
   await expect(view().getByTestId('ask-object-session')).toHaveAttribute('data-session-id', askSession, { timeout: 30_000 })
   await expect(view().getByTestId('ext-panel-other-owner')).toHaveCount(0)
   await expect(view().getByTestId('ext-panel-act')).toBeChecked()
@@ -340,7 +343,7 @@ test('the page in a handed tab moves on (a link, a mail app opening a message): 
   expect(snap.status, JSON.stringify(snap.body)).toBe(200)
   expect(snap.body.snapshot).toContain('Another page')
   await doc.goto(site('docs.example.test', '/notes'))
-  await expect(view().locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 30_000 })
+  await expect(view().getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
 })
 
 test('a tab another task acts in is said so, never offered to this one; Take it back', async () => {
@@ -379,7 +382,17 @@ test('the page script put in again (page-reach.ts, after an update) runs once an
   expect(await doc.evaluate(() => typeof (globalThis as { __walnutContentLive?: unknown }).__walnutContentLive)).toBe('undefined')
 })
 
-// ── the panel's tabs: Ask · Tasks · Passwords ──
+// ── the full views the drawer's foot opens: Tasks · Passwords ──
+
+/** The ≡ drawer's row for that view, over Ask, with Back (panel-ask.ts). */
+async function openView(v: 'tasks' | 'passwords'): Promise<void> {
+  // Another full view on show: Back to Ask first (Tasks has it in the panel's bar).
+  const shown = panel.locator('.panel-view:not([hidden])')
+  if (await shown.count()) await shown.locator('> .panel-view-bar').getByTestId('panel-view-back').click()
+  await view().getByTestId('ask-walnut-menu').click()
+  await view().getByTestId(`ext-drawer-${v}`).click()
+  await expect(panel.getByTestId(`panel-view-${v}`)).toBeVisible({ timeout: 15_000 })
+}
 
 const tasksView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-tasks')
 const pwView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-passwords')
@@ -388,7 +401,7 @@ async function vaultSession(): Promise<string> {
   return openVaultSession(doc, base, { password: MASTER })
 }
 
-test('Tasks tab: what needs the person with its status, a reply into its session, the page saved as a task', async () => {
+test('Tasks view: what needs the person with its status, a reply into its session, the page saved as a task', async () => {
   test.setTimeout(120_000)
   // The ask's own task, handed back to the person: it needs them, and it has a conversation.
   const rec = await (await doc.request.get(`${base}/api/v1/sessions/${askSession}`)).json() as Record<string, any>
@@ -397,9 +410,7 @@ test('Tasks tab: what needs the person with its status, a reply into its session
   const patched = await doc.request.patch(`${base}/api/v1/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })
   expect(patched.ok(), await patched.text()).toBe(true)
 
-  await panel.getByTestId('panel-tab-tasks').click()
-  await expect(panel.getByTestId('panel-tab-tasks')).toHaveAttribute('aria-selected', 'true')
-  await expect(panel.locator('iframe.panel-frame')).toBeHidden()
+  await openView('tasks')
   const row = tasksView().locator(`[data-testid="ext-task"][data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
   // An ask's task is born in Focus: Focus lists it (once), with what it needs on its row.
@@ -428,7 +439,7 @@ test('Tasks tab: what needs the person with its status, a reply into its session
   expect(saved.description).toContain(site('docs.example.test', '/notes'))
 })
 
-test('Passwords tab: unlock in place, the page\'s logins, show a password, fill the page; the tab is kept', async () => {
+test('Passwords view: unlock in place, the page\'s logins, show a password, fill the page; Back to Ask', async () => {
   test.setTimeout(120_000)
   const s = await vaultSession()
   const stamp = Date.now().toString(36)
@@ -449,10 +460,9 @@ test('Passwords tab: unlock in place, the page\'s logins, show a password, fill 
   })
   await doc.goto(site('docs.example.test', '/login'))
 
-  await panel.getByTestId('panel-tab-passwords').click()
-  await expect(panel.getByTestId('panel-tab-passwords')).toHaveAttribute('aria-selected', 'true')
+  await openView('passwords')
   const pw = pwView()
-  // No "Ask Walnut" button in the panel's own Passwords tab: Ask is a tab beside it.
+  // No "Ask Walnut" button in the panel's own Passwords view: Back goes to Ask.
   await expect(pw.getByTestId('popup-ask')).toHaveCount(0)
   // Locked: the master password is asked for right there, in the tab.
   const unlock = pw.getByTestId('popup-unlock')
@@ -461,7 +471,7 @@ test('Passwords tab: unlock in place, the page\'s logins, show a password, fill 
   await unlock.click()
   const item = pw.getByTestId('popup-item').filter({ hasText: `Docs ${stamp}` })
   await expect(item).toBeVisible({ timeout: 30_000 })
-  // One header: the panel's tabs. No second Walnut brand bar; its tools stay, over the search.
+  // One header: its own bar, Back, the title and the tools in one row. No second Walnut brand bar; its tools stay, over the search.
   await expect(pw.locator('.top:not(.top-sub) > h1')).toBeHidden()
   await expect(pw.locator('.top:not(.top-sub) > .logo')).toBeHidden()
   await expect(pw.getByTestId('popup-lock')).toBeVisible()
@@ -478,10 +488,10 @@ test('Passwords tab: unlock in place, the page\'s logins, show a password, fill 
   await expect.poll(() => doc.locator('#pass').inputValue(), { timeout: 15_000 }).toBe(`Panel-Fill-${stamp}`)
   expect(await doc.locator('#user').inputValue()).toBe('reader@example.test')
 
-  // Opened again, the panel shows the tab it was left on.
+  // Back to Ask; opened again, the panel opens on Ask.
+  await pwView().getByTestId('panel-view-back').click()
+  await expect(panel.getByTestId('panel-view-passwords')).toBeHidden()
   await panel.reload()
-  await expect(panel.getByTestId('panel-tab-passwords')).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
-  await expect(panel.locator('iframe.panel-frame-passwords')).toBeVisible()
-  await panel.getByTestId('panel-tab-ask').click()
-  await expect(view().getByTestId('ext-panel')).toBeVisible({ timeout: 60_000 })
+  await expect(view().getByTestId('ext-ask-head')).toBeVisible({ timeout: 60_000 })
+  await expect(panel.locator('.panel-view')).toHaveCount(0)
 })

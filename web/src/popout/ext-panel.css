@@ -157,3 +157,84 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .ext-panel { --accent: #a8733f; --accent-hover: #bb8650; --accent-subtle: rgba(216, 162, 106, 0.14); --accent-text: #d8a26a; }
 }
+
+/* ── Walnut's Ask in the side panel and the toolbar popup (PopoutExtPanel, ExtAskChrome) ── */
+/* The side panel's views reach the panel's edges, as the extension's own pages do: no window
+   padding around them (the pop-out root keeps it for its other views). */
+.popout-root:has(> .ext-panel) { padding: 0; overflow: hidden; }
+/* The extension's warm surfaces (packages/browser-extension/src/ui.css), so the frame and the key
+   popover the extension draws over it read as one page. */
+.ext-ask {
+  --walnut-accent: #8a5a2b;
+  --walnut-accent-strong: #74481f;
+  --border: #e8e3dc;
+  --border-strong: #ddd5cb;
+  --bg-secondary: #f8f5f1;
+  --hover-bg: #f4ece3;
+  position: relative;
+  overflow: hidden;
+}
+:root[data-theme="dark"] .ext-ask {
+  --walnut-accent: #d8a26a; --walnut-accent-strong: #e8b47e;
+  --bg: #1f1d1b; --card-bg: #1f1d1b; --bg-secondary: #2a2724; --border: #3a3530; --border-strong: #4a443e; --hover-bg: #3a2f24;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .ext-ask {
+    --walnut-accent: #d8a26a; --walnut-accent-strong: #e8b47e;
+    --bg: #1f1d1b; --card-bg: #1f1d1b; --bg-secondary: #2a2724; --border: #3a3530; --border-strong: #4a443e; --hover-bg: #3a2f24;
+  }
+}
+.ext-ask-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 52px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--border); }
+.ext-ask-head .ask-walnut-menu-btn { width: 30px; height: 30px; border-radius: 8px; color: var(--fg-secondary); }
+.ext-ask-head .ask-walnut-menu-btn svg { width: 18px; height: 18px; }
+.ext-ask-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-left: 4px; }
+.ext-ask-title { font-weight: 650; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-ask-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--fg-muted); cursor: pointer; border-radius: 5px; }
+.ext-ask-agent:hover { color: var(--fg); }
+.ext-ask-agent.is-plain { cursor: default; }
+.ext-ask-titles.is-popup .ext-ask-agent { font-size: 15px; color: var(--fg); font-weight: 650; }
+.ext-ask-icon { flex: none; position: relative; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--fg-secondary); cursor: pointer; }
+.ext-ask-icon:hover { background: var(--hover-bg); color: var(--walnut-accent); }
+.ext-ask-icon:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
+.ext-ask-key.is-pressed { background: var(--hover-bg); color: var(--walnut-accent); }
+.ext-key-glyph { position: relative; display: inline-grid; place-items: center; }
+.ext-key-badge { position: absolute; right: -6px; bottom: -5px; width: 13px; height: 13px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--border-strong); color: var(--fg-secondary); }
+
+/* The composer's chips, in its bottom row after "+" (SessionPanel / DraftSessionPanel `composerBar`). */
+.ext-chips { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.ext-chip { flex: 0 1 auto; min-width: 0; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-secondary); color: var(--fg-secondary); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+.ext-chip.is-on { border-color: color-mix(in srgb, var(--walnut-accent) 45%, transparent); background: var(--hover-bg); color: var(--walnut-accent); }
+.ext-chip-page { max-width: 180px; padding: 0 4px 0 0; overflow: hidden; }
+.ext-chip-page:not(.is-on) { opacity: .75; }
+.ext-chip-body { min-width: 0; height: 100%; display: inline-flex; align-items: center; gap: 5px; padding: 0 2px 0 5px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.ext-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ext-chip-fav { flex: none; width: 14px; height: 14px; border-radius: 4px; background: #2f6f8f; color: #fff; font-size: 8.5px; font-weight: 700; display: grid; place-items: center; }
+.ext-chip-x { flex: none; width: 16px; height: 16px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--fg-muted); font-size: 14px; line-height: 1; cursor: pointer; }
+.ext-chip-x:hover { color: var(--fg); background: var(--bg-secondary); }
+.ext-chip-act { flex: none; }
+.ext-chip:focus-visible, .ext-chip-body:focus-visible, .ext-chip-x:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
+
+/* What a message took from the page, in the person's bubble. */
+.ext-panel-attached-page { display: flex; align-items: center; gap: 5px; margin-top: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); font-size: 11.5px; line-height: 1.35; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* The drawer's foot rows (Tasks, Passwords, Open Walnut). */
+.ext-drawer-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 14px; border: 0; background: none; color: var(--fg); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.ext-drawer-row:hover { background: var(--hover-bg); }
+.ext-drawer-row-ic { flex: none; width: 18px; display: inline-grid; place-items: center; color: var(--fg-secondary); }
+.ext-drawer-row-label { flex: 1; min-width: 0; }
+.ext-drawer-count { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--danger, #d64545); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+.ext-drawer-meta { flex: none; font-size: 12px; color: var(--fg-muted); }
+
+/* The toolbar popup: the asks to continue over the composer. */
+.ext-ask.is-popup .ext-ask-head { min-height: 46px; }
+.ext-popup-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ext-continue { flex: 1; min-height: 0; overflow: auto; padding: 8px 0 4px; }
+.ext-continue-label { margin: 6px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.ext-continue-empty { margin: 8px 12px; font-size: 12px; color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
+.ext-continue-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 12px 7px 10px; border: 0; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.ext-continue-row:hover { background: var(--hover-bg); }
+.ext-continue.is-panel { flex: 0 1 auto; max-height: 45%; padding-top: 4px; }
+.ext-continue-row .ask-walnut-drawer-item-time { flex: none; margin-top: 2px; font-size: 11px; color: var(--fg-muted); }
+.ext-popup-composer { flex: none; display: flex; flex-direction: column; }
+.ext-popup-composer .draft-session-panel { flex: none; min-height: 0; }
+.ext-popup-composer .draft-session-body { display: none; }

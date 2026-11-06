@@ -27,18 +27,13 @@
  * Nothing here owns slot state; every choice is a callback.
  */
 
-import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { forwardRef, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
-import {
-  askActivityAt, askState, holdOrder, matchesAskQuery, nextHeldOrder, printedStamp,
-  type AskState, type HeldList, type HeldOrder,
-} from '@open-walnut/ask-list';
-import { useSessionStatus } from '@/hooks/useSessionStatus';
-import { resolveTaskSessionId } from '@/utils/session-status';
-import { timeAgo } from '@/utils/time';
+import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder } from '@open-walnut/ask-list';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { ICON_SLIDERS } from '@/components/common/Icons';
 import type { AskAgent } from './ask-walnut-slot-model';
+import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -51,6 +46,12 @@ export interface DrawerRow {
 const ICON_CHEVRON = (
   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <polyline points="4,6 8,10 12,6" />
+  </svg>
+);
+
+const ICON_PIN = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 17v5" /><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z" />
   </svg>
 );
 
@@ -112,17 +113,31 @@ interface DrawerProps {
   onNew: () => void;
   /** Absent hides the link (no Walnut checkout on this machine). */
   onFixWalnut?: () => void;
-  inspectorOpen: boolean;
-  onToggleInspector: () => void;
+  /** The Context link; absent (the browser side panel) hides it. */
+  inspectorOpen?: boolean;
+  onToggleInspector?: () => void;
   /** Walnut's list only: Main, the main agent, pinned above the other chats (it may not exist yet). */
   main?: { selected: boolean; task?: Task; onPick: () => void };
   /** The "Org" link (the Org page). Absent hides it. */
   onOpenOrg?: () => void;
+  /** Open with the agent list unfolded (the side panel's "Ask Walnut ⌄" under its title). */
+  agentsFirst?: boolean;
+  /**
+   * The browser side panel's shape (web/src/popout/PopoutExtPanel.tsx): New chat in the head, each
+   * row's one-line status under its title with a red dot only when it needs the person, Main with
+   * its own line, an "Asks" label over the rest, and the host's rows in the foot (Tasks, Passwords,
+   * Open Walnut) in place of New chat and the links. Home leaves it off.
+   */
+  panel?: {
+    rowDetail: (task: Task) => { line: string; needs: boolean };
+    mainLine: string;
+    foot: ReactNode;
+  };
 }
 
 export function AskWalnutDrawer({
   open, onClose, returnFocusRef, agents, agent, onPickAgent, rows, loading = false, selectedTaskId, onPick, onNew,
-  onFixWalnut, inspectorOpen, onToggleInspector, main, onOpenOrg,
+  onFixWalnut, inspectorOpen = false, onToggleInspector, main, onOpenOrg, agentsFirst = false, panel,
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -134,7 +149,7 @@ export function AskWalnutDrawer({
   // `open` ALONE: the effect below re-runs whenever its callbacks change
   // identity, and a reset living there would wipe a query mid-typing the first
   // time a caller passes a per-render closure.
-  useEffect(() => { if (open) { setQuery(''); setAgentsOpen(false); } }, [open]);
+  useEffect(() => { if (open) { setQuery(''); setAgentsOpen(agentsFirst && agents.length > 1); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Switching agents is a new list: the query that filtered the old one would
   // otherwise hide the new one behind "No asks match".
@@ -233,7 +248,7 @@ export function AskWalnutDrawer({
       <div className="ask-walnut-scrim" data-testid="ask-walnut-scrim" onClick={onClose} aria-hidden="true" />
       <div
         ref={panelRef}
-        className="ask-walnut-drawer"
+        className={`ask-walnut-drawer${panel ? ' is-panel' : ''}`}
         data-testid="ask-walnut-drawer"
         role="dialog"
         aria-modal="true"
@@ -257,15 +272,27 @@ export function AskWalnutDrawer({
           ) : (
             <span className="ask-walnut-drawer-title">{agent.project}</span>
           )}
-          <button
-            type="button"
-            className="task-action-btn ask-walnut-drawer-close"
-            onClick={onClose}
-            aria-label="Close the session list"
-            title="Close"
-          >
-            &times;
-          </button>
+          {panel ? (
+            <button
+              type="button"
+              className="ask-walnut-drawer-new is-head"
+              data-testid="ask-walnut-new"
+              onClick={act(onNew)}
+              title={`Start a new ${agent.project} session`}
+            >
+              <span aria-hidden="true">+</span> New chat
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="task-action-btn ask-walnut-drawer-close"
+              onClick={onClose}
+              aria-label="Close the session list"
+              title="Close"
+            >
+              &times;
+            </button>
+          )}
         </div>
 
         {/* The other agents, inline under the title (an accordion, not a
@@ -328,12 +355,27 @@ export function AskWalnutDrawer({
               onClick={() => { onClose(); main.onPick(); }}
               title="The CEO: your main agent, who sees all your work"
             >
-              {main.task ? <TaskDot task={main.task} /> : <span className="ask-walnut-drawer-dot task-circle-todo" aria-hidden="true" />}
-              <span className="ask-walnut-drawer-item-title">CEO</span>
-              <span className="ask-walnut-drawer-item-time">all your work</span>
+              {panel ? (
+                <>
+                  <span className="ask-walnut-drawer-logo" aria-hidden="true">W</span>
+                  <span className="ask-walnut-drawer-item-text">
+                    <span className="ask-walnut-drawer-item-title">CEO</span>
+                    <span className="ask-walnut-drawer-item-line" data-testid="ask-walnut-drawer-main-line">{panel.mainLine}</span>
+                  </span>
+                  <span className="ask-walnut-drawer-pin" aria-label="Pinned" title="Pinned">{ICON_PIN}</span>
+                </>
+              ) : (
+                <>
+                  {main.task ? <TaskDot task={main.task} /> : <span className="ask-walnut-drawer-dot task-circle-todo" aria-hidden="true" />}
+                  <span className="ask-walnut-drawer-item-title">CEO</span>
+                  <span className="ask-walnut-drawer-item-time">all your work</span>
+                </>
+              )}
             </button>
           )}
-          {main && rows.length > 0 && <div className="ask-walnut-drawer-sep" role="separator" aria-hidden="true" />}
+          {main && rows.length > 0 && (panel
+            ? <div className="ask-walnut-drawer-label" role="separator">Asks</div>
+            : <div className="ask-walnut-drawer-sep" role="separator" aria-hidden="true" />)}
           {rows.length === 0 && !loading && !main && (
             <p className="ask-walnut-drawer-empty">No {agent.project} sessions yet.</p>
           )}
@@ -349,6 +391,7 @@ export function AskWalnutDrawer({
               held={held}
               selected={row.id === selectedTaskId}
               onPick={() => { onClose(); onPick(row.id); }}
+              {...(panel ? { detail: row.task ? panel.rowDetail(row.task) : { line: '', needs: false } } : {})}
             />
           ))}
           {/* Until the board has loaded, an empty or short list is not the
@@ -361,6 +404,9 @@ export function AskWalnutDrawer({
           )}
         </div>
 
+        {panel ? (
+          <div className="ask-walnut-drawer-foot is-panel" data-testid="ask-walnut-drawer-foot">{panel.foot}</div>
+        ) : (
         <div className="ask-walnut-drawer-foot">
           <button
             type="button"
@@ -385,16 +431,18 @@ export function AskWalnutDrawer({
                 <span aria-hidden="true">{'⌗'}</span> Org
               </button>
             )}
-            <button
-              type="button"
-              className={`ask-walnut-drawer-link${inspectorOpen ? ' is-active' : ''}`}
-              data-testid="ask-walnut-inspector"
-              aria-pressed={inspectorOpen}
-              onClick={act(onToggleInspector)}
-              title={inspectorOpen ? 'Hide the launch context' : "Show the selected session's launch context"}
-            >
-              <span aria-hidden="true">{'◎'}</span> Context
-            </button>
+            {onToggleInspector && (
+              <button
+                type="button"
+                className={`ask-walnut-drawer-link${inspectorOpen ? ' is-active' : ''}`}
+                data-testid="ask-walnut-inspector"
+                aria-pressed={inspectorOpen}
+                onClick={act(onToggleInspector)}
+                title={inspectorOpen ? 'Hide the launch context' : "Show the selected session's launch context"}
+              >
+                <span aria-hidden="true">{'◎'}</span> Context
+              </button>
+            )}
             {onFixWalnut && (
               <button
                 type="button"
@@ -408,60 +456,8 @@ export function AskWalnutDrawer({
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );
-}
-
-/** A row as the shared snapshot reads it: the stamp the list SORTS by (the
- *  shared `askActivityAt`: the last message sent into the ask). */
-function heldRowView(row: DrawerRow): { id: string; activityAt?: string } {
-  const at = row.task ? askActivityAt(row.task) : undefined;
-  return at ? { id: row.id, activityAt: at } : { id: row.id };
-}
-
-function DrawerItem({ row, held, selected, onPick }: {
-  row: DrawerRow; held: HeldList | undefined; selected: boolean; onPick: () => void;
-}) {
-  // The stamp the row sorts by, so the times read in order down the list (it
-  // used to print `updated_at` over a birth-ordered list, which put a "1d ago"
-  // among the "1w ago" rows); while the order is held, the stamp it had then.
-  const stamp = printedStamp(held, heldRowView(row));
-  return (
-    <button
-      type="button"
-      className={`ask-walnut-drawer-item${selected ? ' is-selected' : ''}`}
-      data-testid="ask-walnut-drawer-item"
-      data-task-id={row.id}
-      aria-current={selected ? 'true' : undefined}
-      onClick={onPick}
-      title={row.title}
-    >
-      {row.task ? <TaskDot task={row.task} /> : <span className="ask-walnut-drawer-dot task-circle-session" aria-hidden="true" />}
-      <span className="ask-walnut-drawer-item-title">{row.title}</span>
-      {stamp.kind === 'time' && <span className="ask-walnut-drawer-item-time">{timeAgo(stamp.at)}</span>}
-      {stamp.kind === 'new' && (
-        <span className="ask-walnut-drawer-item-time is-new" data-testid="ask-walnut-drawer-item-new">New</span>
-      )}
-    </button>
-  );
-}
-
-/** The shared ask state as the board's circle classes (same colours): blue =
- *  a conversation that is not running, pulsing blue = running a turn, green =
- *  done, grey = no session yet. */
-const STATE_CLASS: Record<AskState, string> = {
-  idle: 'task-circle-session',
-  running: 'task-circle-running',
-  done: 'task-circle-done',
-  todo: 'task-circle-todo',
-};
-
-/** The row's state as a dot: the shared `askState` fed the live session status
- *  (the phone gets the same rule from GET /api/v1/asks). Its own component
- *  because the live status is a store subscription. */
-function TaskDot({ task }: { task: Task }) {
-  const live = useSessionStatus(resolveTaskSessionId(task));
-  const state = askState(task, live);
-  return <span className={`ask-walnut-drawer-dot ${STATE_CLASS[state]}`} data-ask-state={state} aria-hidden="true" />;
 }

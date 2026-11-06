@@ -2457,6 +2457,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if ((await import('../core/vault/sessions.js')).joinTestRouteAllowed({ ephemeral: IS_EPHEMERAL, cloudMode: isCompanion() })) {
     app.use('/api/test/vault-join', (await import('./routes/test-vault-join.js')).testVaultJoinRouter)
   }
+  // Test-only: the Playwright fixture gives a task the words its last turn ended with (its mock CLI keeps no transcript).
+  const taskFixture = await import('./routes/test-task-fixture.js')
+  if (taskFixture.taskFixtureRouteAllowed({ env: process.env, ephemeral: IS_EPHEMERAL, cloudMode: isCompanion() })) {
+    app.use('/api/test/task-fixture', taskFixture.testTaskFixtureRouter)
+  }
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
   // Whether the companion runs this Mac's build (the Mac drives it: core/companion-build/mac.ts).

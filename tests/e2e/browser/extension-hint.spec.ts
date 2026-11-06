@@ -1,6 +1,6 @@
 /**
  * The master password hint in the extension (packages/browser-extension/src/popup.ts): the
- * locked popup, its unlock window and the side panel's Passwords tab show "Show hint" once the
+ * locked popup, its unlock window and the side panel's Passwords view show "Show hint" once the
  * vault has a hint, and the hint at once after a wrong password. The hint is set and removed
  * through Walnut's API; the shared fixture vault keeps the other specs' master password.
  */
@@ -76,7 +76,7 @@ test('the locked popup shows the hint behind a link, and at once after a wrong p
   await again.close()
 })
 
-test('the unlock window and the side panel\'s Passwords tab show it too', async () => {
+test('the unlock window and the side panel\'s Passwords view show it too', async () => {
   const win = await popup('?window=1')
   await expect(win.getByTestId('popup-show-hint')).toBeVisible({ timeout: 20_000 })
   await win.close()

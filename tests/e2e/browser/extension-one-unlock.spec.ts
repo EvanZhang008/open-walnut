@@ -49,6 +49,9 @@ async function openPasswords(page: Page): Promise<void> {
 async function lockEverywhere(page: Page): Promise<void> {
   await openPasswords(page)
   if (await page.getByTestId('pw-app').isVisible()) await page.getByTestId('pw-lock').click()
+  // An unlock another spec left on the shared fixture (an API session, another extension's) ends too:
+  // this window being locked says nothing about the others.
+  else await page.evaluate(() => fetch('/api/v1/vault/lock', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ everywhere: true }) }))
   await expect(page.getByTestId('pw-unlock')).toBeVisible({ timeout: 20_000 })
 }
 
@@ -64,7 +67,8 @@ async function popup(): Promise<Page> {
   return p
 }
 
-const listOf = (v: Page | FrameLocator) => v.getByLabel('Search Walnut')
+// The toolbar popup's box, or the side panel Passwords view's (which says it searches logins).
+const listOf = (v: Page | FrameLocator) => v.getByLabel(/^Search (Walnut|logins)$/)
 const lockOf = (v: Page | FrameLocator) => v.getByTestId('popup-unlock')
 
 test.beforeAll(async ({}, info) => {

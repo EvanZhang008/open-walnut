@@ -30,7 +30,7 @@ import { initAutoLock, lockIfIdle, touch } from './bg-autolock'
 import { clearBadges, initBadge, setBadge } from './bg-badge'
 import { walletValues } from './bg-wallet'
 import { itemDetail, secretField } from './popup-item-data'
-import { pageFillOn } from './settings'
+import { getSettings, pageFillOn } from './settings'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -82,15 +82,21 @@ function senderKind(sender: Sender): SenderKind | null {
   const own = ext.runtime.getURL('')
   if (url.startsWith(own)) {
     const page = url.slice(own.length).split(/[?#]/)[0]
-    return page === 'popup.html' ? 'popup' : page === 'menu.html' ? 'menu' : page === 'savebar.html' ? 'savebar' : page === 'sidepanel.html' ? 'sidepanel' : null
+    // popup-ask.html is the toolbar popup on Ask: the side panel's own page in its popup form.
+    return page === 'popup.html' ? 'popup' : page === 'menu.html' ? 'menu' : page === 'savebar.html' ? 'savebar' : page === 'sidepanel.html' || page === 'popup-ask.html' ? 'sidepanel' : null
   }
   return sender.tab?.id !== undefined && /^https?:/.test(url) ? 'content' : null
 }
 
-const ALLOWED: Record<string, SenderKind> = {
-  state: 'popup', 'vault-watch': 'popup', 'start-connect': 'popup', 'pair-code': 'popup', disconnect: 'popup', 'vault-status': 'popup',
-  unlock: 'popup', lock: 'popup', 'site-items': 'popup', search: 'popup', 'copy-secret': 'popup', 'fill-tab': 'popup',
-  generate: 'popup', 'open-walnut': 'popup', 'totp-code': 'popup', copied: 'popup', 'wallet-items': 'popup', 'item-detail': 'popup',
+/**
+ * Which page may send what. The side panel draws the key popover (key-pop.ts) over Walnut's frame,
+ * so it unlocks, lists this site's logins and fills them as the popup does.
+ */
+const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
+  state: ['popup', 'sidepanel'], 'vault-watch': ['popup', 'sidepanel'], 'start-connect': 'popup', 'pair-code': 'popup', disconnect: 'popup', 'vault-status': ['popup', 'sidepanel'],
+  unlock: ['popup', 'sidepanel'], lock: 'popup', 'site-items': ['popup', 'sidepanel'], search: 'popup', 'copy-secret': 'popup', 'fill-tab': ['popup', 'sidepanel'],
+  generate: 'popup', 'open-walnut': ['popup', 'sidepanel'], 'totp-code': 'popup', copied: ['popup', 'sidepanel'], 'wallet-items': 'popup', 'item-detail': 'popup',
+  'site-count': 'sidepanel', 'unlock-for': 'sidepanel',
   'page-init': 'content', 'frame-ready': 'content', 'open-menu': 'content', 'menu-focus': 'content', 'seen-login': 'content', 'seen-username': 'content',
   'connect-hello': 'content', 'connect-code': 'content',
   'menu-data': 'menu', 'menu-codes': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-regenerate': 'menu', 'menu-copied': 'menu',
@@ -107,7 +113,8 @@ const USE = new Set(['unlock', 'site-items', 'search', 'item-detail', 'copy-secr
 
 async function handle(msg: { type: string; [k: string]: unknown }, sender: Sender): Promise<Reply> {
   const kind = senderKind(sender)
-  if (!kind || ALLOWED[msg.type] !== kind) return { ok: false, error: `Not for this page: ${msg.type}` }
+  const may = ALLOWED[msg.type]
+  if (!kind || !(Array.isArray(may) ? may.includes(kind) : may === kind)) return { ok: false, error: `Not for this page: ${msg.type}` }
   // The chosen time passed with no use: locked before anything is answered.
   await lockIfIdle(lockNow).catch(() => false)
   if (USE.has(msg.type)) void touch()
@@ -127,8 +134,26 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const conn = await connection()
       if (!conn) return { ok: true, connected: false }
       // An older Walnut has no side panel: the panel says to update it rather than show an error page.
-      const has = await call('GET', '/browser/panel', undefined, { noSession: true, quiet: true, timeoutMs: 8000 }).then(() => true, (err) => !(err instanceof ApiError && err.status === 404))
-      return { ok: true, connected: true, serverUrl: conn.serverUrl, panel: has }
+      // `askPanel`: it opens as Walnut's own Ask (browser-v1.ts); unknown while Walnut does not answer.
+      const r = await call<{ askPanel?: unknown }>('GET', '/browser/panel', undefined, { noSession: true, quiet: true, timeoutMs: 8000 })
+        .then((b) => ({ has: true, ask: typeof b.askPanel === 'number' && b.askPanel >= 2 }), (err) => ({ has: !(err instanceof ApiError && err.status === 404), ask: err instanceof ApiError && err.status === 404 ? false : undefined }))
+      return { ok: true, connected: true, serverUrl: conn.serverUrl, panel: r.has, ...(r.ask !== undefined ? { askPanel: r.ask } : {}) }
+    }
+    case 'site-count': {
+      // The key button's count of this site's logins: only while this browser holds an unlock, and
+      // never a use (the auto-lock waits for the person, not for the panel looking).
+      if (!(await vaultSession())) return { ok: true, count: null }
+      const tab = await activeTab(windowOf(msg))
+      const page = tab?.url ?? ''
+      if (!/^https?:/.test(page) || await isWalnutPage(page)) return { ok: true, count: null, site: '' }
+      return { ok: true, count: (await tiersOf(page)).first.length, site: displayHost(page) }
+    }
+    case 'unlock-for': {
+      // How long an unlock lasts, for the key popover's one line (Walnut's setting, when it is followed).
+      const s = await getSettings()
+      if (s.autoLock !== 'walnut') return { ok: true, autoLock: s.autoLock }
+      const st = await api.status().catch(() => null) as { unlockFor?: string } | null
+      return { ok: true, autoLock: s.autoLock, ...(st?.unlockFor ? { unlockFor: st.unlockFor } : {}) }
     }
     case 'panel-page': {
       // The page the person is on: its address, title and selection; its text only when a question
@@ -243,7 +268,9 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     case 'open-walnut': {
       const conn = await connection()
       // An item opens in Walnut's Passwords; `settings` is the Browser extension pane.
+      // `path`: a page of Walnut the side panel's Ask names (Open Walnut, a task).
       const where = msg.to === 'settings' ? '/settings#browser'
+        : typeof msg.path === 'string' && /^\/(?!\/)[\w\-./?=&%#]{0,300}$/.test(msg.path) ? msg.path
         : typeof msg.item === 'string' && /^[\w-]{1,80}$/.test(msg.item) ? `/passwords?item=${encodeURIComponent(msg.item)}` : '/passwords'
       await ext.tabs.create({ url: `${conn?.serverUrl ?? DEFAULT_SERVER}${where}` })
       return { ok: true }

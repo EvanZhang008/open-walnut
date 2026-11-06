@@ -587,6 +587,28 @@
 }
 .ask-walnut-drawer-new:hover { background: var(--walnut-accent-strong); }
 
+/* ── The browser side panel's drawer (AskWalnutDrawer `panel`): New chat in the head, two-line
+   rows with a red dot only for what needs the person, Main with its own line, the host's rows
+   in the foot. ── */
+.ask-walnut-drawer.is-panel { width: min(318px, 82%); }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-head { padding: 12px 10px 10px 12px; gap: 8px; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-title { color: var(--fg); font-size: 16px; }
+.ask-walnut-drawer-new.is-head { width: auto; padding: 5px 12px; border-radius: 8px; font-size: 12.5px; flex: none; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-search { height: 34px; margin: 0 10px 10px; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-list { padding: 0; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-item { align-items: flex-start; gap: 8px; padding: 8px 12px 8px 10px; border-radius: 0; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-item.is-selected { color: var(--fg); font-weight: 400; }
+.ask-walnut-drawer.is-panel .ask-walnut-drawer-item-time { margin-top: 2px; }
+.ask-walnut-drawer-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ask-walnut-drawer-item-text .ask-walnut-drawer-item-title { flex: none; font-size: 13.5px; }
+.ask-walnut-drawer-item-line { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask-walnut-drawer-needs { flex: none; width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; }
+.ask-walnut-drawer-needs.is-on { background: var(--danger, #d64545); }
+.ask-walnut-drawer-logo { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 5px; display: grid; place-items: center; background: linear-gradient(145deg, #c58a4f, #8a5a2b); color: #fff; font-size: 10px; font-weight: 700; }
+.ask-walnut-drawer-pin { flex: none; color: var(--fg-muted); margin-top: 2px; display: inline-flex; }
+.ask-walnut-drawer-label { margin: 10px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.ask-walnut-drawer-foot.is-panel { gap: 0; padding: 6px 0 8px; }
+
 /* ── Bodies ── */
 .ask-walnut-slot-body {
   flex: 1;
@@ -685,4 +707,9 @@
   position: absolute;
   top: 12px;
   right: 14px;
+}
+/* Dark: the amber fill is light, so its words are dark (the extension's dark buttons do the same). */
+:root[data-theme="dark"] .ask-walnut-drawer.is-panel .ask-walnut-drawer-new.is-head { color: #1f1d1b; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .ask-walnut-drawer.is-panel .ask-walnut-drawer-new.is-head { color: #1f1d1b; }
 }

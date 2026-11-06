@@ -33,6 +33,22 @@ if (embedded || inWindow) document.documentElement.classList.add('wide')
 // In the side panel the panel's own tab bar is the header: no second Walnut brand bar (ui.css).
 if (embedded) document.documentElement.classList.add('in-panel')
 const ctx: PopupCtx = { root, embedded, inWindow, panelWindow, back: () => void render() }
+/**
+ * The side panel's full Passwords view (panel-ask.ts, `view=1`): one bar of its own, Back to Ask,
+ * the title and the tools in a single row, as the Tasks view's bar reads. Back is the panel's to do.
+ */
+const inView = embedded && params.get('view') === '1'
+if (inView) document.documentElement.classList.add('in-view')
+const viewBack = (): HTMLElement => h('button', {
+  class: 'back-btn', type: 'button', 'data-testid': 'panel-view-back',
+  onclick: () => window.parent.postMessage({ walnut: 'panel-view', type: 'back' }, location.origin),
+}, popupIcon('back'), h('span', {}, 'Ask'))
+
+/** Opened from the popup on Ask (its key popover's "Search all logins"): a Back to it. */
+const fromAsk = params.get('from') === 'ask'
+const backToAsk = (): HTMLElement | null => fromAsk
+  ? h('button', { class: 'back-btn', type: 'button', 'data-testid': 'popup-back-ask', onclick: () => { location.href = 'popup-ask.html' } }, popupIcon('back'), h('span', {}, 'Ask'))
+  : null
 
 /** This popup's window, known before any click: opening the side panel must not wait on anything. */
 let windowId: number | undefined
@@ -41,8 +57,8 @@ if (!params.has('clipboard')) void ext.windows.getCurrent().then((w) => { window
 
 /** Walnut in the side panel, about the page this window shows. */
 function askButton(): HTMLElement | null {
-  // Already in the side panel: its Ask tab is right there.
-  if (embedded) return null
+  // Already in the side panel: its Ask tab is right there; opened from Ask, its Back goes there.
+  if (embedded || fromAsk) return null
   const b = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-ask', title: 'Ask Walnut about this page in the side panel' }, 'Ask Walnut')
   b.onclick = () => {
     if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)
@@ -152,6 +168,7 @@ async function unlockView(st: State): Promise<HTMLElement> {
   }
   setTimeout(() => pw.focus(), 30)
   return h('div', {},
+    fromAsk ? h('div', { class: 'top' }, backToAsk()) : null,
     h('div', { class: 'center', style: 'padding-bottom:6px' },
       h('span', { class: 'big-icon' }, icon('lockBig')),
       h('h2', {}, 'Walnut is locked'),
@@ -178,7 +195,9 @@ async function vaultView(st: State): Promise<HTMLElement> {
   if (!site.ok && site.code && DISCONNECTED.has(site.code)) return connectView({ connected: false, unlocked: false, serverUrl: st.serverUrl })
   const wallet = await ask<{ cards: Item[]; identities: Item[] }>({ type: 'wallet-items' })
   const pageFill = await pageFillOn()
-  const q = h('input', { class: 'input', type: 'search', id: 'q', placeholder: 'Search Walnut', 'aria-label': 'Search Walnut', autocomplete: 'off' })
+  // In the side panel's Passwords view the box searches logins only: it says so.
+  const searchLabel = inView ? 'Search logins' : 'Search Walnut'
+  const q = h('input', { class: 'input', type: 'search', id: 'q', placeholder: searchLabel, 'aria-label': searchLabel, autocomplete: 'off' })
   const list = h('div', { class: 'pane', style: 'padding-top:4px' })
   const siteItems = site.ok ? site.items : []
 
@@ -231,7 +250,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
 
   const lock = iconButton(icon('lock'), 'Lock Walnut', async () => { nextView(); await ask({ type: 'lock' }); void render() }, { 'data-testid': 'popup-lock' })
   return h('div', {},
-    h('div', { class: 'top' }, h('span', { class: 'logo' }, icon('key')), h('h1', {}, 'Walnut'),
+    h('div', { class: inView ? 'top top-sub view-bar' : 'top' }, inView ? viewBack() : backToAsk() ?? h('span', { class: 'logo' }, icon('key')), h('h1', {}, inView ? 'Passwords' : 'Walnut'),
       h('div', { class: 'top-tools' },
         iconButton(icon('dice'), 'Password generator', () => void generatorView(root, () => void render()), { 'data-testid': 'popup-generator' }),
         iconButton(popupIcon('gear'), 'Settings', () => void showSettings(st), { 'data-testid': 'popup-settings' }),

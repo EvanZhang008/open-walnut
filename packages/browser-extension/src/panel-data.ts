@@ -8,7 +8,9 @@ import { ext } from './ext'
 
 export const PANEL_SERVER_KEY = 'panelServer'
 export const PANEL_SNAPS_KEY = 'panelSnaps'
+/** That Walnut opens the panel as its own Ask (its panel answer's `askPanel`): the frame starts in that shape. */
+export const PANEL_ASK_KEY = 'panelAskUi'
 
 export async function clearPanelData(): Promise<void> {
-  await ext.storage.local.remove([PANEL_SERVER_KEY, PANEL_SNAPS_KEY])
+  await ext.storage.local.remove([PANEL_SERVER_KEY, PANEL_SNAPS_KEY, PANEL_ASK_KEY])
 }

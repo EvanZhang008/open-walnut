@@ -396,6 +396,9 @@ interface SessionPanelProps {
   /** A host's pill in the composer, above the text (the side panel's page selection that goes
    *  with the next message). A question thread's own target pill wins over it. */
   composerPill?: ReactNode;
+  /** In plain chat: the host's controls in the composer's bottom row, after its "+" (the side
+   *  panel's page and Act in tab chips). */
+  composerBar?: ReactNode;
 }
 
 /**
@@ -417,7 +420,7 @@ export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps)
   return <SessionPanelBody {...props} sessionId={shown} onSessionReplaced={replaced} />;
 });
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -3591,7 +3594,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onDictationInsert={holdDictationSelection}
             controlsSlot={session && !plainChat ? (
               <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
-            ) : undefined}
+            ) : plainChat ? composerBar : undefined}
             addMenuControls={plainChat ? undefined : { handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             contextPill={threads.composerTarget ? (
               <ComposerThreadPill target={threads.composerTarget} onOpen={openComposerTarget} onClear={clearComposerTarget} />

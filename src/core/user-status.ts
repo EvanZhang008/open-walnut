@@ -330,6 +330,16 @@ export type ToRead = 'result' | 'answer' | 'turn';
 export const RESULT_TO_READ = 'The result is ready';
 export const ANSWER_TO_READ = 'It answered your question';
 export const TURN_TO_READ = 'Its turn ended without asking you anything';
+const LAST_WORDS_LEAD = `${TURN_TO_READ}; its last words: "`;
+/** A hand-back's line with the words its last turn ended with (sessions/last-words.ts). Pure. */
+export function turnToReadLine(lastWords: string | null | undefined): string {
+  return lastWords ? `${LAST_WORDS_LEAD}${lastWords}"` : TURN_TO_READ;
+}
+/** The last words a hand-back's line carries ({@link turnToReadLine}), or '' for a line without them. Pure. */
+export function lastWordsOfStatus(s: Pick<UserStatus, 'toRead' | 'waitingOn'> | null | undefined): string {
+  const w = s?.toRead === 'turn' ? s.waitingOn ?? '' : '';
+  return w.startsWith(LAST_WORDS_LEAD) && w.endsWith('"') ? w.slice(LAST_WORDS_LEAD.length, -1).trim() : '';
+}
 /** A task with no session that a person or a lead set to NEED_ACTION by hand. */
 export const MARKED_ASK = 'It was set to need you by hand: open it.';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
@@ -1054,7 +1064,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // their word, not a turn's end.
     if (!input.hasSession) return strip({ state: 'needs', ask: MARKED_ASK, ...w });
     // Nothing asked: the words its turn ended with, once Walnut has read them, are there to read.
-    return toRead('turn', input.lastWords ? `${TURN_TO_READ}; its last words: "${input.lastWords}"` : TURN_TO_READ, w);
+    return toRead('turn', turnToReadLine(input.lastWords), w);
   }
 
   if (input.phase === 'IN_PROGRESS') {

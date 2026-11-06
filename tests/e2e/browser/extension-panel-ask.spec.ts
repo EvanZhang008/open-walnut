@@ -1,5 +1,5 @@
 /**
- * The side panel's Ask and Tasks tabs through the real extension (packages/browser-extension/src/
+ * The side panel's Ask and its Tasks view through the real extension (packages/browser-extension/src/
  * sidepanel.ts, web/src/popout/PopoutExtPanel.tsx and PopoutExtTasks.tsx), for what the first
  * review found:
  *
@@ -16,7 +16,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { askView, openPanel, selectText, startPanelLab, sw, tasksView, type PanelLab } from './extension-panel-harness'
+import { askView, openPanel, openView, pageChip, selectText, startPanelLab, sw, tasksView, type PanelLab } from './extension-panel-harness'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -60,7 +60,7 @@ test('Ask is a plain chat about the page, before and after the first question', 
   await expect(v.locator('.draft-session-panel .session-panel-header')).toHaveCount(0)
   await expect(v.locator('.draft-actions-bar')).toHaveCount(0)
   const composer = v.locator('[data-testid="ask-object-compose"] textarea')
-  await expect(composer).toHaveAttribute('placeholder', 'Ask about this page…')
+  await expect(composer).toHaveAttribute('placeholder', 'Ask Walnut, or ask it to do something here…')
   await shot(panel, 'd12-compose')
 
   await composer.fill('slow:2500 Summarize the selected text')
@@ -95,7 +95,7 @@ test('the person\'s question stays after acting in the tab goes on and off, and 
   await v.getByTestId('ext-panel-act').check()
   await expect(v.getByTestId('ext-panel-act')).toBeChecked()
   // Acting in the tab is that tab only: the note says so (the browser-wide agents switch stays as it was).
-  await expect(v.getByTestId('ext-panel-act-note')).toHaveText("Walnut's agents may act in this tab only, until you take it back.")
+  await expect(v.getByTestId('ext-panel-act')).toHaveAttribute('title', /^Walnut's agents may act in this tab only, until you take it back\./)
   await expect(bubble('Summarize the selected text').first()).toBeVisible()
   await v.getByTestId('ext-panel-act').uncheck()
   await expect(bubble('Summarize the selected text').first()).toBeVisible()
@@ -178,7 +178,7 @@ test('Tasks: Focus above Needs you; an open row shows what the task last said; a
   const made = await lab.doc.request.post(`${lab.base}/api/v1/tasks`, { data: { title: `Panel focus ${Date.now().toString(36)}`, pinned: true, focus_tier: 'focus' } })
   expect(made.ok(), await made.text()).toBe(true)
 
-  await panel.getByTestId('panel-tab-tasks').click()
+  await openView(panel, 'tasks')
   const t = tasksView(panel)
   const row = t.locator(`[data-testid="ext-task"][data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
@@ -255,13 +255,13 @@ test('the page is named at once even when it does not answer the panel', async (
     })
   })
   ;({ panel } = await openPanel(lab, 'ask'))
-  await expect(askView(panel).locator('.ext-panel-title')).toHaveText('Release notes 4.2', { timeout: 60_000 })
+  await expect(pageChip(panel)).toContainText('Release notes 4.2', { timeout: 60_000 })
   // The same tab moves to a new address while the view is up: the panel names it by its tab at
   // once, and the page's own answer (it never comes, so the background gives up after its wait)
   // follows seconds later. Measured between those two messages in the view's own clock, so a
   // loaded machine that starts the frame or the panel late does not change the result.
   await lab.doc.evaluate(() => { document.title = 'Release notes 4.3'; history.pushState({}, '', '/notes?v=2') })
-  await expect(askView(panel).locator('.ext-panel-title')).toHaveText('Release notes 4.3', { timeout: 30_000 })
+  await expect(pageChip(panel)).toContainText('Release notes 4.3', { timeout: 30_000 })
   const frame = panel.frames().find((f) => f.url().includes('view=ext-panel'))!
   const told = () => frame.evaluate(() => (window as unknown as { __told?: Array<{ at: number; title: string }> }).__told ?? [])
   const named = (await told()).find((m) => m.title === 'Release notes 4.3')

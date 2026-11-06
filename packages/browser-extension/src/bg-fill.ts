@@ -82,7 +82,13 @@ export async function afterLoginFill(tabId: number, frameId: number | undefined,
 /** Open the popup to unlock; where the browser refuses (no user gesture left), a small window. */
 export async function openUnlock(): Promise<void> {
   try {
-    if (ext.action.openPopup) { await ext.action.openPopup(); return }
+    if (ext.action.openPopup) {
+      // The toolbar popup opens on Ask (popup-ask.html); asked to unlock from a page, it opens on
+      // the vault popup's unlock screen, and the next click on the toolbar button is on Ask again.
+      await ext.action.setPopup?.({ popup: 'popup.html' })
+      try { await ext.action.openPopup() } finally { await ext.action.setPopup?.({ popup: 'popup-ask.html' })?.catch(() => undefined) }
+      return
+    }
   } catch { /* falls through */ }
   await ext.windows.create({ url: ext.runtime.getURL('popup.html?window=1'), type: 'popup', width: 380, height: 560, focused: true })
 }

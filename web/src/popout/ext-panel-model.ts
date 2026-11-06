@@ -12,6 +12,17 @@
  *   view → panel page   { walnut: 'ext-panel', type: 'release', tab }
  *   view → panel page   { walnut: 'ext-panel', type: 'page-text', id }
  *
+ * An extension that draws Walnut's Ask with its key button frames the view with `ext=2` (and
+ * `surface=popup` in the toolbar popup), and these go too:
+ *
+ *   panel page → view   { type: 'vault-state', locked, siteCount, host }  (the key's badge, the Passwords row)
+ *   panel page → view   { type: 'key-state', open }       (the key popover the panel page draws)
+ *   panel page → view   { type: 'hand', ask?: { text, page, act }, open?: { taskId, sessionId } }
+ *                                                         (what the toolbar popup handed to the panel)
+ *   view → panel page   { type: 'key-toggle', rect } | { type: 'key-close' } | { type: 'frame-pointer' }
+ *   view → panel page   { type: 'open-view', view: 'tasks' | 'passwords' } | { type: 'open-walnut', path? }
+ *   view → panel page   { type: 'open-side-panel', ask?, open?, view? }   (the popup only)
+ *
  * The page's text crosses only when a question is asked with it (`page-text`): the pages the
  * person only looks at stay in the browser. The view answers only the first extension page that
  * spoke to it, at its origin.
@@ -37,11 +48,20 @@ export interface PanelContext {
   owner?: string;
 }
 
+/** The vault as the extension sees it: the key button's badge and the drawer's Passwords row. */
+export interface VaultState { locked: boolean; siteCount: number | null; host: string }
+
+/** A question the toolbar popup handed to the panel (`page`: the page goes with it; `act`: the ask may act in the tab). */
+export interface HandedAsk { text: string; page: boolean; act: boolean }
+
 export type PanelInbound =
   | ({ type: 'context' } & PanelContext)
   | { type: 'ask-selection'; text: string }
   | { type: 'adopted'; ok: boolean; error?: string }
-  | { type: 'page-text'; id: string; url: string; text: string };
+  | { type: 'page-text'; id: string; url: string; text: string }
+  | ({ type: 'vault-state' } & VaultState)
+  | { type: 'key-state'; open: boolean }
+  | { type: 'hand'; ask?: HandedAsk; open?: { taskId: string; sessionId?: string } };
 
 const EXTENSION_ORIGIN = /^(chrome|moz|safari-web)-extension:\/\/[a-z0-9-]+$/i;
 
@@ -65,7 +85,81 @@ export function readInbound(data: unknown, origin: string, fromParent: boolean):
   if (d.type === 'adopted') {
     return { type: 'adopted', ok: d.ok === true, ...(typeof d.error === 'string' ? { error: d.error.slice(0, 300) } : {}) };
   }
+  if (d.type === 'vault-state') {
+    const n = typeof d.siteCount === 'number' && Number.isInteger(d.siteCount) && d.siteCount >= 0 ? d.siteCount : null;
+    return { type: 'vault-state', locked: d.locked !== false, siteCount: n, host: typeof d.host === 'string' ? d.host.slice(0, 200) : '' };
+  }
+  if (d.type === 'key-state') return { type: 'key-state', open: d.open === true };
+  if (d.type === 'hand') {
+    const a = d.ask as Record<string, unknown> | undefined;
+    const o = d.open as Record<string, unknown> | undefined;
+    const ask = a && typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, MAX_TEXT_ASK), page: a.page !== false, act: a.act === true } : undefined;
+    const open = o && typeof o.taskId === 'string' && ID.test(o.taskId)
+      ? { taskId: o.taskId, ...(typeof o.sessionId === 'string' && ID.test(o.sessionId) ? { sessionId: o.sessionId } : {}) }
+      : undefined;
+    if (!ask && !open) return null;
+    return { type: 'hand', ...(ask ? { ask } : {}), ...(open ? { open } : {}) };
+  }
   return null;
+}
+
+const ID = /^[\w.:-]{1,120}$/;
+const MAX_TEXT_ASK = 20_000;
+
+/** What the extension that frames this view can do, read from the view's address. */
+export interface PanelOptions {
+  /** It draws the key popover and the full Tasks and Passwords views (`ext=2`): the key button and the drawer's rows show. */
+  keyed: boolean;
+  /** The toolbar popup (`surface=popup`): the asks to continue and a composer that hands its question to the side panel. */
+  surface: 'panel' | 'popup';
+}
+
+export function panelOptions(search: string): PanelOptions {
+  const q = new URLSearchParams(search);
+  const keyed = Number(q.get('ext')) >= 2;
+  return { keyed, surface: keyed && q.get('surface') === 'popup' ? 'popup' : 'panel' };
+}
+
+/** The page a message went with, read back from its context (pageContextBlock), or null. */
+export function pageOfContext(text: string | undefined): { title: string; host: string } | null {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const title = lines.find((l) => l.startsWith('Page: '))?.slice(6).trim();
+  const url = lines.find((l) => l.startsWith('Address: '))?.slice(9).trim();
+  if (!url) return null;
+  return { title: title || hostOf(url), host: hostOf(url) };
+}
+
+/**
+ * Whether the page goes with the next message (the composer's page chip): before the first question
+ * always; in a conversation, when it has not had this page yet (an ask picked from the drawer, a
+ * page the tab moved on to). The person's × leaves it out, a click on the chip puts it back.
+ */
+export function pageChipOn(opts: { url: string; conversation: boolean; sentPage: string; leftOut: string; added: string }): boolean {
+  if (!opts.url) return false;
+  if (opts.leftOut === opts.url) return false;
+  if (opts.added === opts.url) return true;
+  return !opts.conversation || opts.sentPage !== opts.url;
+}
+
+const PAGE_SENT_KEY = 'walnut.ext-panel.page-sent';
+
+/** The page an ask last had from the panel, by its task: the chip is off for that page until it changes. */
+export function rememberSentPage(taskId: string, url: string, s: HandedStore | null = store(), now = Date.now()): void {
+  if (!taskId || !url) return;
+  let all: Record<string, { url: string; at: number }> = {};
+  try { const v = JSON.parse(s?.getItem(PAGE_SENT_KEY) ?? '{}'); if (v && typeof v === 'object') all = v; } catch { /* unreadable: start over */ }
+  all[taskId] = { url: url.slice(0, 4000), at: now };
+  const kept = Object.entries(all).filter(([, v]) => v && typeof v.at === 'number').sort((a, b) => b[1].at - a[1].at).slice(0, SENT_MAX);
+  try { s?.setItem(PAGE_SENT_KEY, JSON.stringify(Object.fromEntries(kept))); } catch { /* full or blocked: the chip offers it again */ }
+}
+
+export function sentPageOf(taskId: string, s: HandedStore | null = store()): string {
+  if (!taskId) return '';
+  try {
+    const v = (JSON.parse(s?.getItem(PAGE_SENT_KEY) ?? '{}') as Record<string, { url?: unknown }>)[taskId];
+    return typeof v?.url === 'string' ? v.url : '';
+  } catch { return ''; }
 }
 
 const MAX_SELECTION = 4000;

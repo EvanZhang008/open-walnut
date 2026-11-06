@@ -53,6 +53,15 @@ describe('the side panel', () => {
   })
 })
 
+describe('the toolbar popup', () => {
+  it('opens on Ask (popup-ask.html runs the side panel page); popup.html stays the vault popup it falls back to', () => {
+    for (const b of ['chrome', 'firefox']) expect(manifestFor(b).action.default_popup).toBe('popup-ask.html')
+    const src = fs.readFileSync(path.resolve(__dirname, '../../scripts/build-extension.mjs'), 'utf8')
+    expect(src).toMatch(/'popup-ask': \{ body: 'sidepanel askpop', html: 'panel askpop', script: 'sidepanel' \}/)
+    expect(src).toMatch(/\bpopup: \{/)
+  })
+})
+
 describe('writeZip', () => {
   it('writes a zip whose entries read back as the files', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zip-src-'))

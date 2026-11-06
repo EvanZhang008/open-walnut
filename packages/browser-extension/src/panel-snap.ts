@@ -106,13 +106,14 @@ export async function snapOf(view: SnapView, url?: string, now = Date.now()): Pr
 }
 
 /** The drawing: the same places as the view it stands for, in plain text. */
-export function drawSnap(view: SnapView, snap: AskSnap | TasksSnap): HTMLElement {
+export function drawSnap(view: SnapView, snap: AskSnap | TasksSnap, shape: 'tabs' | 'ask' = 'tabs'): HTMLElement {
   if (view === 'ask') {
     const s = snap as AskSnap
-    return h('div', { class: 'panel-snap panel-snap-ask', 'data-testid': 'panel-snap', 'aria-hidden': 'true' },
+    // `ask`: the panel that opens as Walnut's Ask (panel-ask.ts), whose header is ≡, the title, "Ask Walnut".
+    return h('div', { class: `panel-snap panel-snap-ask${shape === 'ask' ? ' is-ask' : ''}`, 'data-testid': 'panel-snap', 'aria-hidden': 'true' },
       h('div', { class: 'panel-snap-head' },
         h('div', { class: 'panel-snap-title' }, s.title || s.host),
-        h('div', { class: 'panel-snap-host' }, s.host)),
+        h('div', { class: 'panel-snap-host' }, shape === 'ask' ? 'Ask Walnut' : s.host)),
       h('div', { class: 'panel-snap-chat' },
         ...s.messages.map((m) => h('div', { class: `panel-snap-msg is-${m.role}` }, m.text))),
       h('div', { class: 'panel-snap-composer' }, s.messages.length ? 'Ask a follow-up…' : 'Ask about this page…'))

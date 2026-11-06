@@ -95,6 +95,10 @@ export interface AskObjectDrawerProps {
   composerPlaceholder?: string;
   /** In plain chat: a pill in the conversation's composer (SessionPanel `composerPill`). */
   composerPill?: ReactNode;
+  /** In plain chat: controls in the composer's bottom row, before the first question and after (`composerBar`). */
+  composerBar?: ReactNode;
+  /** In plain chat: no quote of the object over the first question (the host names it in the composer). */
+  noQuote?: boolean;
 }
 
 type View =
@@ -477,7 +481,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           focusComposer={!ask}
           {...(backButton ? { headerLeading: backButton } : {})}
           onClose={onClose}
-          {...(props.plainChat ? { plainChat: true, composerPill: props.composerPill } : {})}
+          {...(props.plainChat ? { plainChat: true, composerPill: props.composerPill, composerBar: props.composerBar } : {})}
         />
       </div>
     );
@@ -488,7 +492,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           draft={askDraft.draft}
           autoFocus
           {...(backButton ? { headerLeading: backButton } : {})}
-          intro={quoteCard}
+          {...(props.plainChat && props.noQuote ? {} : { intro: quoteCard })}
           onStart={onStart}
           onSaveAsTask={onSaveAsTask}
           onClose={onClose}
@@ -497,6 +501,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           onMetaChange={askDraft.onMetaChange}
           {...(props.plainChat ? {
             plainChat: true,
+            composerBar: props.composerBar,
             ...(props.composerPlaceholder ? { placeholder: props.composerPlaceholder } : {}),
           } : {
             onWalnutToggle: askDraft.onWalnutToggle,
@@ -532,7 +537,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
             {ICON_CLOSE}
           </button>
         </div>}
-        {quoteCard}
+        {props.plainChat && props.noQuote ? null : quoteCard}
         <div className="ask-walnut-pending">
           {failed ? (
             <>

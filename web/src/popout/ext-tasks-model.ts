@@ -5,7 +5,7 @@
  * read drawn with it, as everywhere); each task once.
  */
 import type { Task } from '@open-walnut/core';
-import { MARKED_ASK, NEEDS_CATEGORY_LABELS, needsLineOf, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
+import { MARKED_ASK, NEEDS_CATEGORY_LABELS, lastWordsOfStatus, needsLineOf, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
 import { taskUserState } from '@/utils/session-status';
 import { stateSectionNoNeeds } from '@/components/tasks/status-sections';
 
@@ -26,15 +26,25 @@ export function needsRowLine(task: Task): string {
   if (!s) return '';
   const line = needsLineOf(s);
   if (!line) return '';
-  const own = storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
-  const words = own || oneLine(task.last_words?.text);
-  return [NEEDS_CATEGORY_LABELS[line.category], words].filter(Boolean).join(': ');
+  return [NEEDS_CATEGORY_LABELS[line.category], ownWords(task)].filter(Boolean).join(': ');
+}
+
+/**
+ * What the task itself said, to tell its row apart: its own ask of the person; else the words its
+ * last turn ended with, which a hand-back's status carries (lastWordsOfStatus; a list's task has no
+ * `last_words`, a full task does); else ''.
+ */
+function ownWords(task: Task): string {
+  const s = task.user_status;
+  const own = s && storedUserState(s) === 'needs' && s.ask !== MARKED_ASK ? oneLine(s.ask) : '';
+  return own || oneLine(lastWordsOfStatus(s)) || oneLine(task.last_words?.text);
 }
 
 function rowOf(task: Task): ExtTaskRow {
   const state = shownState(taskUserState(task));
   const s = task.user_status;
-  const line = s ? (state === 'needs' ? needsRowLine(task) : (s.waitingOn ?? s.ask ?? '')) : '';
+  // A passing wait (its report on the turn that just ended, due in seconds) says nothing about the task.
+  const line = s ? (state === 'needs' ? needsRowLine(task) : s.transient ? '' : (s.waitingOn ?? s.ask ?? '')) : '';
   return { task, state, label: stateWord(state, !!s?.snoozed), line: oneLine(line) };
 }
 
@@ -122,4 +132,27 @@ export function askedOf(task: Task, line: string): string[] {
   const last = task.last_words?.text?.replace(/\s+/g, ' ').trim();
   if (last && !full.includes(last.slice(0, 60))) out.push(last);
   return out;
+}
+
+/**
+ * An ask's row in the side panel's drawer and the popup's Continue list: its one-line status and
+ * whether it needs the person (the red dot). The line is what tells the rows apart, as a Tasks row's
+ * is (needsRowLine): the ask's own question to the person; else the words its last turn ended with
+ * (task.last_words); else its status line (the category alone for one that needs the person, say
+ * "Take a look"). A passing wait (its report due in seconds) gives no line.
+ */
+export function askRowDetail(task: Task): { line: string; needs: boolean } {
+  const row = rowOf(task);
+  const needs = row.state === 'needs';
+  const words = ownWords(task);
+  if (words) return { line: words, needs };
+  // With no words of its own, a Needs you row's line is its category alone (needsRowLine).
+  if (needs) return { line: row.line, needs };
+  return { line: row.line || (row.state === 'working' ? row.label : ''), needs };
+}
+
+/** What needs the person, as the Tasks view counts it (Focus rows that need them, and Needs you). */
+export function needsCount(tasks: readonly Task[]): number {
+  const { needs, focus } = extTaskLists(tasks);
+  return needs.length + focus.filter((r) => r.state === 'needs').length;
 }
