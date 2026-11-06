@@ -38,6 +38,9 @@ export interface KeyedIdbAdapter<T> {
   /** One of `delete` / `deleteMany` is enough: each is emulated from the other. */
   delete?(key: string): Promise<void>;
   deleteMany?(keys: string[]): Promise<void>;
+  /** Read and delete in ONE readwrite transaction: deleted only if `keep` says
+   *  no for the record as it is at that moment (nothing can land in between). */
+  deleteUnless?(key: string, keep: (record: T | null) => boolean): Promise<void>;
   clear?(): Promise<void>;
 }
 
@@ -65,6 +68,8 @@ export interface KeyedIdbStore<T> {
   put(key: string, record: T): Promise<void>;
   delete(key: string): Promise<void>;
   deleteMany(keys: string[]): Promise<void>;
+  /** Delete `key` unless `keep(record)`, read and delete in one transaction. */
+  deleteUnless(key: string, keep: (record: T | null) => boolean): Promise<void>;
   keysWithPrefix(prefix: string): Promise<string[]>;
   clear(): Promise<void>;
   /**
@@ -178,6 +183,17 @@ export function createKeyedIdbStore<T>(opts: KeyedIdbStoreOptions): KeyedIdbStor
       if (keys.length === 0) return Promise.resolve();
       return tx('readwrite', undefined, (store) => { for (const k of keys) store.delete(k); });
     },
+    deleteUnless(key, keep) {
+      // The delete is issued from the get's success callback, inside the same
+      // readwrite transaction: IndexedDB runs overlapping readwrite transactions
+      // one at a time, so no put can land between the read and the delete.
+      return tx('readwrite', undefined, (store) => {
+        const req = store.get(key);
+        req.onsuccess = () => {
+          if (!keep((req.result as T | undefined) ?? null)) store.delete(key);
+        };
+      });
+    },
     keysWithPrefix(prefix) {
       return tx<string[]>('readonly', [], (store, done) => {
         const req = store.getAllKeys(IDBKeyRange.bound(prefix, prefix + AFTER_ANY_KEY));
@@ -260,6 +276,12 @@ export function createKeyedIdbStore<T>(opts: KeyedIdbStoreOptions): KeyedIdbStor
     },
     delete: deleteOne,
     deleteMany,
+    async deleteUnless(key, keep) {
+      const a = adapter();
+      if (a.deleteUnless) { await a.deleteUnless(key, keep); return; }
+      // An adapter without transactions (the in-memory test stand-in): read, then delete.
+      if (!keep(await a.get(key))) await deleteOne(key);
+    },
     keysWithPrefix(prefix) {
       return adapter().keysWithPrefix(prefix);
     },

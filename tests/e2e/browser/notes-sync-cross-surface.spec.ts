@@ -40,6 +40,8 @@ const HOLD_MS = 3000
 const INSTANT_MS = 700
 /** Budget for the server round trip (WS event → the other surface re-reads). */
 const PROPAGATE_MS = 2500
+/** The Files pane saves on its own this long after typing stops (saving is always live). */
+const LIVE_WRITE_MS = 600
 const SCREENSHOT_DIR = '/tmp/walnut-notes-sync/cross-surface'
 
 async function putNote(notePath: string, content: string) {
@@ -139,6 +141,7 @@ test.describe('the /notes editor and the session Files pane on one note', () => 
 
     await page.addInitScript(() => {
       try {
+        // An old browser's stored "Live off": ignored, the Files pane always saves live.
         localStorage.setItem('open-walnut-live-edit', '0')
         localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
         localStorage.removeItem('open-walnut-notes-cc-session')
@@ -190,14 +193,19 @@ test.describe('the /notes editor and the session Files pane on one note', () => 
     await noteNode.click()
     // The raw-bytes tab: a markdown file opens in the WYSIWYG editor, and this
     // test is about the bytes both surfaces agree on.
-    await panel.locator('.fv-html-tab', { hasText: 'Source' }).click()
+    // "Source" in a wide bar, one "Show source" icon in a tight one.
+    await panel.locator('.fv-doc-bar').getByRole('button', { name: /^(Source|Show source)$/ }).click()
     const fileEditor = panel.locator('.fv-source-editor .cm-content')
     // The held PUT means this pane is looking at the PRE-edit bytes.
     await expect(fileEditor).toContainText('seed line', { timeout: 15_000 })
     await expect(fileEditor).not.toContainText(fromNotes)
-    // "Open in Notes" appears only once the async vault check resolved, which is
-    // also when this pane started listening for the note (not just the file).
-    await expect(panel.locator('.fv-notes-btn')).toBeVisible()
+    // "Open in Notes" (in the bar's ⋯ menu) appears only once the async vault
+    // check resolved, which is also when this pane started listening for the note
+    // (not just the file).
+    await panel.locator('.fv-doc-bar').getByRole('button', { name: 'More file actions' }).click()
+    await expect(page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Open in Notes' })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('fv-more-menu')).toHaveCount(0)
     await page.screenshot({ path: `${SCREENSHOT_DIR}/1-both-surfaces.png` })
 
     // ── /notes editor → Files pane (the browser-local doc-saved signal). ──
@@ -221,9 +229,9 @@ test.describe('the /notes editor and the session Files pane on one note', () => 
     await fileEditor.locator('.cm-line').filter({ hasText: 'seed line' }).first().click()
     await page.keyboard.press('End')
     await page.keyboard.type(` ${fromFiles}`)
-    await panel.locator('.fv-save-btn').click()
+    // No button to press: the pane writes on its own once typing stops.
 
-    await expect(notesEditor(page)).toContainText(fromFiles, { timeout: PROPAGATE_MS })
+    await expect(notesEditor(page)).toContainText(fromFiles, { timeout: LIVE_WRITE_MS + PROPAGATE_MS })
     // A clean editor converges silently. The banner (and above all its .conflict
     // variant, the 409) means the surfaces fought instead of agreeing.
     await expect(page.locator('.notes-reload-banner')).toHaveCount(0)

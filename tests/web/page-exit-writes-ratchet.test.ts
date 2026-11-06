@@ -28,6 +28,7 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'components/chat/island-runtime.ts': 'local',
   'hooks/usePhoneRestore.ts': 'local',
   'popout/PopoutExtPanel.tsx': 'local', // its snapshot goes to the parent frame, its history to IndexedDB
+  'components/common/FileContentView.tsx': 'local', // the unsaved text goes to localStorage and the IndexedDB draft store
 }
 
 function walk(dir: string): string[] {

@@ -320,7 +320,7 @@ describe('a link failure is told by its kind, never by its words', () => {
       expect(res.status, kind).toBe(503)
       expect(res.body.code, kind).toBe('host_reconnecting')
       expect(String(res.body.error), kind).toBe(
-        'Cloud stopped answering during the save, so it may not have landed. Your text is still in the editor: press Save again. If it did land, you are asked before anything is overwritten.',
+        'Cloud stopped answering during the save, so it may not have landed. Your text is still in the editor: press Try again. If it did land, you are asked before anything is overwritten.',
       )
     }
   })

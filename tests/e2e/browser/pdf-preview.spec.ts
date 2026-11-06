@@ -76,8 +76,14 @@ test('PDF fills the available pane without dead space underneath', async ({ page
     const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
     return pixels.some((value, index) => index % 4 !== 3 && value < 200);
   })).toBe(true);
-  const raw = await explorer.locator('a.fv-download-btn').getAttribute('href');
-  expect((await page.request.get(raw!)).headers()['content-type']).toContain('application/pdf');
+  // ⋯ → Download hands the browser the file's attachment URL; the same URL
+  // serves the PDF bytes.
+  await explorer.locator('.fv-doc-bar').getByRole('button', { name: 'More file actions' }).click();
+  const download = page.waitForEvent('download');
+  await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Download' }).click();
+  const raw = (await download).url();
+  expect(raw).toContain('download=1');
+  expect((await page.request.get(raw)).headers()['content-type']).toContain('application/pdf');
 });
 
 test('trackpad pinch zooms only the PDF and normal scrolling still works', async ({ page, baseURL }) => {
@@ -143,7 +149,9 @@ test('PDF survives narrow and fullscreen layouts, file changes and failure retry
   await expect(explorer.locator('.fv-pdf-text')).toContainText('WALNUT PDF', { timeout: 20_000 });
   for (let round = 0; round < 3; round++) {
     await explorer.getByRole('button', { name: 'Zoom in', exact: true }).click();
-    await explorer.locator('.fv-fullscreen-btn').click();
+    // Fullscreen is entered from the document bar's ⋯ menu.
+    await explorer.locator('.fv-doc-bar').getByRole('button', { name: 'More file actions' }).click();
+    await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Fullscreen', exact: true }).click();
     await expect(explorer.locator('.file-content-view')).toHaveClass(/fv-fullscreen/);
     await page.keyboard.press('Escape');
     await expect(explorer.locator('.file-content-view')).not.toHaveClass(/fv-fullscreen/);
@@ -321,6 +329,10 @@ test('PDF links remain clickable and unsafe URLs are excluded', async ({ page, b
     + '<</Type/Annot/Subtype/Link/Rect[40 640 400 660]/A<</S/URI/URI(javascript:alert%281%29)>>>>]/Contents 4 0 R>>');
   await page.route(/api\/file-raw\/.*contract\.pdf/, (route) => route.fulfill({ contentType: 'application/pdf', body }));
   const explorer = await openPdf(page);
+  // A pane shorter than two pages, so the scroll has room to put page 2's
+  // 300pt mark at the top (the slim document bar left a 900px window's pane
+  // tall enough that the scroll ran out just short of it).
+  await page.setViewportSize({ width: 1280, height: 700 });
   const external = explorer.locator('.fv-pdf-link[href="https://example.com/"]');
   await expect(external).toBeVisible({ timeout: 20_000 });
   await expect(explorer.locator('.fv-pdf-link')).toHaveCount(2);

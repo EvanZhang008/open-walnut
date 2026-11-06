@@ -92,6 +92,12 @@ interface ContextMenuProps {
    * focus left the window. See the Escape handler for what that narrowness is protecting.
    */
   returnFocus?: HTMLElement | null;
+  /**
+   * Which edge of the box sits at `point`: 'left' (default, the right-click convention: it opens
+   * rightward from the cursor) or 'right' (it opens leftward, for a menu dropped from a button at
+   * the right end of a bar).
+   */
+  align?: 'left' | 'right';
 }
 
 /**
@@ -195,7 +201,7 @@ export function contextMenuReasonRows(rows: ContextMenuItem[]): Map<number, stri
 }
 
 export function ContextMenu({
-  point, items, onClose, ariaLabel, testId, className, returnFocus,
+  point, items, onClose, ariaLabel, testId, className, returnFocus, align = 'left',
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
@@ -207,7 +213,7 @@ export function ContextMenu({
   // align 'left' = the menu's LEFT edge sits at the cursor and it opens
   // rightward, which is the platform convention (and never covers the row the
   // click landed on). The hook still flips/clamps at the viewport edges.
-  const placement = useMenuPlacement(true, noTrigger, menuRef, { anchorPoint: point, align: 'left', gap: 2 });
+  const placement = useMenuPlacement(true, noTrigger, menuRef, { anchorPoint: point, align, gap: 2 });
 
   // Held in a ref so the Escape handler below does not have to be rebuilt when the prop identity moves.
   const back = useRef<HTMLElement | null>(returnFocus ?? null);

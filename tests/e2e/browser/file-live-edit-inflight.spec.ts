@@ -43,7 +43,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
   return explorer
@@ -72,16 +72,15 @@ async function onDisk(page: Page, abs: string): Promise<string> {
 async function openFileLive(page: Page, explorer: Locator, name: string, expectText: string): Promise<void> {
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText(expectText)
-  const toggle = page.locator('.fv-live-toggle')
-  await expect(toggle).toBeVisible()
-  if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  // Nothing to turn on: saving is always live.
+  await expect(page.getByTestId('fv-save-state')).toHaveText('Saved')
 }
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
+      // An old browser's stored "Live off": ignored, saving is always live.
       localStorage.setItem('open-walnut-live-edit', '0')
     } catch { /* storage off */ }
   })
@@ -129,7 +128,9 @@ test('a keystroke during an in-flight write does not break the NEXT write', asyn
 
   // And no conflict UI: nothing else touched this file, so a receipt or a banner
   // here would be a lie the user has to interpret.
-  await expect(page.locator('.fv-conflict-banner')).toHaveCount(0)
+  await expect(page.locator('.fv-save-error')).toHaveCount(0)
+  await expect(page.locator('.fv-live-receipt')).toHaveCount(0)
+  await expect(page.getByTestId('fv-save-state')).toHaveText('Saved')
   expect(conflicts, `PUT #${conflicts.join(',')} returned 409 with no other writer`).toEqual([])
   await page.screenshot({ path: `${SCREENSHOT_DIR}/1-inflight-both-bursts.png` })
 })

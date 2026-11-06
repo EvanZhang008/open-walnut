@@ -47,5 +47,8 @@ html .plugin-bounds .open-walnut-fullscreen.is-changed-open {
   left: calc(var(--plugin-box-left, 0px) + var(--fullscreen-gutter, 12px));
 }
 html .plugin-bounds .file-content-view.fv-fullscreen {
-  inset: var(--plugin-box-top, 0px) var(--plugin-box-right, 0px) var(--plugin-box-bottom, 0px) var(--plugin-box-left, 0px);
+  top: calc(var(--plugin-box-top, 0px) + var(--fullscreen-gutter, 12px));
+  right: calc(var(--plugin-box-right, 0px) + var(--fullscreen-gutter, 12px));
+  bottom: calc(var(--plugin-box-bottom, 0px) + var(--fullscreen-gutter, 12px));
+  left: calc(var(--plugin-box-left, 0px) + var(--fullscreen-gutter, 12px));
 }

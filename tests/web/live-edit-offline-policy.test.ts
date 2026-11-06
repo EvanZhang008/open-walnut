@@ -194,10 +194,12 @@ describe('what the user reads', () => {
     for (const text of [LIVE_UNREACHABLE_PAUSED_MESSAGE, SAVE_UNREACHABLE_MESSAGE]) {
       expect(text).toMatch(/Walnut/);
       expect(text).toMatch(/still in the editor/);
-      expect(text).toMatch(/Save/);
       expect(text).not.toMatch(/Failed to fetch|Load failed|NetworkError/);
     }
-    expect(LIVE_UNREACHABLE_PAUSED_MESSAGE).toMatch(/click Live to resume/);
+    // Saving is always live (2026-11-06): the way out is the banner's Try again,
+    // never a Save button or a Live switch that no longer exist.
+    expect(LIVE_UNREACHABLE_PAUSED_MESSAGE).toMatch(/Press Try again/);
+    expect(LIVE_UNREACHABLE_PAUSED_MESSAGE).not.toMatch(/click Live|Press Save/);
   });
 });
 
@@ -213,8 +215,8 @@ describe('the pause names the hop that did not answer', () => {
 
   it('says the host by name, with the same way out', () => {
     const text = liveUnreachablePausedMessage('Cloud');
-    expect(text).toBe('Live edit is paused for this file: Cloud did not answer for a minute. '
-      + 'Your text is still in the editor. Press Save once Cloud is back, or click Live to resume.');
+    expect(text).toBe('Saving is paused for this file: Cloud did not answer for a minute. '
+      + 'Your text is still in the editor. Press Try again once Cloud is back.');
     expect(text).not.toMatch(/Walnut/);
     expect(liveUnreachablePausedMessage()).toBe(LIVE_UNREACHABLE_PAUSED_MESSAGE);
   });

@@ -36,6 +36,9 @@ export interface FileHistoryPanelProps {
   onClose: () => void;
   /** Bump to re-fetch (e.g. after a save) without remounting the panel. */
   refreshToken?: number;
+  /** Bumped when the text in the editor changed (saved or not): an open
+   *  comparison's right side is the file as it is now, unsaved words included. */
+  bufferToken?: number;
 }
 
 /** One row of the merged timeline. */
@@ -61,9 +64,19 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** `timeAgo` takes a date string; the wire carries epoch ms. */
-function agoOf(at: number): string {
-  return at > 0 ? timeAgo(new Date(at).toISOString()) : '';
+/** When a version was made. Today's versions read as a clock time (seconds
+ *  within the last hour): live saving makes several a minute, and six rows of
+ *  "just now" could not be told apart (2026-11-07). Older ones read as an age.
+ *  `timeAgo` takes a date string; the wire carries epoch ms. */
+function agoOf(at: number, now = Date.now()): string {
+  if (!(at > 0)) return '';
+  const age = now - at;
+  if (age >= 0 && age < 24 * 60 * 60 * 1000) {
+    return new Date(at).toLocaleTimeString([], age < 60 * 60 * 1000
+      ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+      : { hour: '2-digit', minute: '2-digit' });
+  }
+  return timeAgo(new Date(at).toISOString());
 }
 
 function buildRows(data: FileHistoryResponse | null): Row[] {
@@ -90,7 +103,7 @@ interface LoadedVersion {
 }
 
 export function FileHistoryPanel({
-  path, host, currentText, onRestore, onClose, refreshToken,
+  path, host, currentText, onRestore, onClose, refreshToken, bufferToken,
 }: FileHistoryPanelProps) {
   const [data, setData] = useState<FileHistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,12 +119,28 @@ export function FileHistoryPanel({
   // Fetch on mount and when the file, host, or refreshToken changes — never per
   // render. `cancelled` keeps a slow answer for the PREVIOUS file from landing
   // in the panel after the user moved on.
+  // A new version of the SAME file (a save, a live write) only adds a row: the
+  // comparison being read stays open. Another file starts the panel over.
+  const shownForRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const forKey = `${host ?? ''}\0${path}`;
+    const sameFile = shownForRef.current === forKey;
+    shownForRef.current = forKey;
+    if (!sameFile) {
+      setLoading(true);
+      setLoaded(null);
+      setVersionError(null);
+    } else {
+      // The file moved on (a save, a live write, another writer adopted): the open
+      // comparison is against what the file is NOW, so its right side follows.
+      setLoaded((prev) => {
+        if (!prev) return prev;
+        const now = currentTextRef.current();
+        return now === prev.current ? prev : { ...prev, current: now };
+      });
+    }
     setError(null);
-    setLoaded(null);
-    setVersionError(null);
     fetchFileHistory(path, host)
       .then((res) => { if (!cancelled) setData(res); })
       .catch((err: unknown) => {
@@ -124,6 +153,17 @@ export function FileHistoryPanel({
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [path, host, refreshToken]);
+
+  // The editor's text moved (typing that is not on disk yet: a refused write, a
+  // config file waiting to parse): the comparison follows it, with no refetch.
+  useEffect(() => {
+    if (!bufferToken) return;
+    setLoaded((prev) => {
+      if (!prev) return prev;
+      const now = currentTextRef.current();
+      return now === prev.current ? prev : { ...prev, current: now };
+    });
+  }, [bufferToken]);
 
   const rows = useMemo(() => buildRows(data), [data]);
 
@@ -255,7 +295,7 @@ function FileHistoryDiff({
         <span className="fh-diff-label">{loaded.label} → now</span>
         <button type="button" className="fh-restore" onClick={onRestore}>Restore this version</button>
       </div>
-      <div className="fh-restore-hint">Loads into the editor; save when you’re happy.</div>
+      <div className="fh-restore-hint">Puts this version in the editor and saves it; the version it replaces stays in this list.</div>
       <div className="fh-diff-body">
         {file
           ? (

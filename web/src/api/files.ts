@@ -184,7 +184,7 @@ async function fetchOrUnreachable(input: string, init: RequestInit): Promise<Res
  *  Named here because it replaces the browser's own wording, which the 2026-09-24
  *  incident put in front of a user verbatim ("Failed to fetch"). */
 export const SAVE_UNREACHABLE_MESSAGE =
-  "Can't reach Walnut right now. Your text is still in the editor: check that Walnut is running, then press Save again.";
+  "Can't reach Walnut right now. Your text is still in the editor: check that Walnut is running, then press Try again.";
 
 /**
  * How long a save waits for its answer. The server bounds a remote save's checks
@@ -195,7 +195,7 @@ export const SAVE_UNREACHABLE_MESSAGE =
 export const SAVE_TIMEOUT_MS = 120_000;
 /** What a save that outlived SAVE_TIMEOUT_MS says (a 504: Live Edit retries it). */
 export const SAVE_TIMED_OUT_MESSAGE =
-  'The save got no answer in time. Your text is still in the editor: press Save again. If the first save landed, you are asked before anything is overwritten.';
+  'The save got no answer in time. Your text is still in the editor: press Try again. If the first save landed, you are asked before anything is overwritten.';
 /** How long a create, rename, copy or delete waits (the server answers "still working" by 20s). */
 export const FILE_OP_TIMEOUT_MS = 45_000;
 

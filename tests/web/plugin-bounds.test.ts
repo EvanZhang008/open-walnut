@@ -92,7 +92,7 @@ describe('every plugin App and page renders in a bounded box', () => {
     }
     // Walnut's own full-screen sheets inside a box cover the box.
     expect(rule('html .plugin-bounds .open-walnut-fullscreen.is-changed-open')).toMatch(/left: calc\(var\(--plugin-box-left, 0px\)/)
-    expect(rule('html .plugin-bounds .file-content-view.fv-fullscreen')).toMatch(/inset: var\(--plugin-box-top, 0px\)/)
+    expect(rule('html .plugin-bounds .file-content-view.fv-fullscreen')).toMatch(/left: calc\(var\(--plugin-box-left, 0px\)/)
   })
 
   it('the App host and the plugin page route both use it', () => {

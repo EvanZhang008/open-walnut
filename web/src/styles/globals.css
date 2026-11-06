@@ -20325,33 +20325,8 @@ td.usage-share-col {
   position: relative;
 }
 
-.session-file-explorer-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
-  font-size: 12px;
-  /* Shared bar height across Files/Changed/Terminal + the chat segment, so in
-     split view the two segments read as ONE full-width bar. */
-  min-height: var(--split-bar-h, 43px);
-}
-
-.session-file-explorer-toolbar .sfe-root-path {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-  color: var(--fg-muted);
-  font-family: var(--font-mono, monospace);
-  cursor: text;
-}
-.session-file-explorer-toolbar .sfe-root-path:hover { color: var(--fg); }
 /* The clicked file is opened from another host than the session's: name it. */
-.session-file-explorer-toolbar .sfe-host-chip {
+.sfe-host-chip {
   flex: none;
   padding: 1px 7px;
   border: 1px solid var(--border);
@@ -20362,7 +20337,7 @@ td.usage-share-col {
   white-space: nowrap;
 }
 
-.session-file-explorer-toolbar .sfe-root-path-input {
+.sfe-path-edit .sfe-root-path-input {
   flex: 1;
   width: 100%;
   color: var(--fg);
@@ -25384,7 +25359,7 @@ a.file-link:hover {
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
   flex-shrink: 0;
-  /* Shared bar height (see .session-file-explorer-toolbar). */
+  /* Shared bar height (see .fv-doc-bar in file-doc-bar.css). */
   min-height: var(--split-bar-h, 43px);
 }
 
@@ -25579,7 +25554,7 @@ a.file-link:hover {
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
   flex-shrink: 0;
-  /* Shared bar height (see .session-file-explorer-toolbar). */
+  /* Shared bar height (see .fv-doc-bar in file-doc-bar.css). */
   min-height: var(--split-bar-h, 43px);
 }
 
@@ -26567,7 +26542,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
      other left views — one continuous strip across the split. */
   background: var(--bg-secondary);
   flex: 0 0 auto;
-  /* Shared bar height (see .session-file-explorer-toolbar). */
+  /* Shared bar height (see .fv-doc-bar in file-doc-bar.css). */
   min-height: var(--split-bar-h, 43px);
 }
 .session-diff-toolbar-title {

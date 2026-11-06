@@ -92,13 +92,14 @@ async function externalWrite(page: Page, abs: string, content: string): Promise<
   expect(put.ok(), await put.text()).toBe(true)
 }
 
-async function bootConsole(page: Page, liveOn: boolean): Promise<void> {
-  await page.addInitScript((live) => {
+/** Saving is always live (no Live switch since 2026-11-06), so every boot is
+ *  armed to write; there is no preference to set. */
+async function bootConsole(page: Page): Promise<void> {
+  await page.addInitScript(() => {
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
-      localStorage.setItem('open-walnut-live-edit', live ? '1' : '0')
     } catch { /* off */ }
-  }, liveOn)
+  })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 }
@@ -110,11 +111,15 @@ test('a reload with unsaved text does not put the old copy back over someone els
   // 40 KB file): a size difference makes the clobber unmistakable.
   const NEWER = `# Doc\n\n${'a paragraph another writer added\n'.repeat(200)}`
 
-  await bootConsole(page, false)
+  await bootConsole(page)
   const abs = await makeScratchFile(page, name, ORIGINAL)
 
   // 1. The user opens the file and types, leaving UNSAVED text (a draft record,
-  //    which is what survives a page reload).
+  //    which is what survives a page reload). Saving is live, so the text only
+  //    stays unsaved while its writes cannot get through: this first tab's PUTs
+  //    fail as if the server were away (the request context below bypasses it).
+  await page.route('**/api/file-content', route =>
+    route.request().method() === 'PUT' ? route.abort('failed') : route.fallback())
   const explorer = await openFilesPanel(page)
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('the original body', { timeout: 15_000 })
@@ -130,11 +135,11 @@ test('a reload with unsaved text does not put the old copy back over someone els
   await externalWrite(page, abs, NEWER)
   expect(await onDisk(page, abs)).toContain('another writer added')
 
-  // 3. The user comes back: the console is reloaded (the incident's trigger) with
-  //    live mode ON, which is how it is left once used.
+  // 3. The user comes back: the console is reloaded (the incident's trigger), and
+  //    this time every write the pane makes gets through.
   await page.close()
   const page2 = await page.context().newPage()
-  await bootConsole(page2, true)
+  await bootConsole(page2)
   const explorer2 = await openFilesPanel(page2)
   await nodeByName(explorer2, name).click()
   await expect(page2.locator('.file-content-view')).toBeVisible({ timeout: 15_000 })
@@ -157,14 +162,14 @@ test('re-reading a file while the buffer holds older text does not write the old
   const ORIGINAL = `# Doc\n\nthe original body\n`
   const NEWER = `# Doc\n\n${'another writer was here\n'.repeat(120)}`
 
-  await bootConsole(page, true)
+  await bootConsole(page)
   const abs = await makeScratchFile(page, name, ORIGINAL)
 
   const explorer = await openFilesPanel(page)
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('the original body', { timeout: 15_000 })
 
-  // Live mode is on, so the pane is armed to write. Change the file underneath it
+  // Saving is live, so the pane is armed to write. Change the file underneath it
   // and make it re-read (Refresh is the deterministic stand-in for the refocus /
   // reopen read in the incident, and takes the same code path).
   await externalWrite(page, abs, NEWER)
@@ -189,7 +194,7 @@ test('a write armed around a re-read never shrinks the file back', async ({ page
   const ORIGINAL = `# Doc\n\nthe original body\n`
   const NEWER = `# Doc\n\n${'a paragraph another writer added\n'.repeat(150)}`
 
-  await bootConsole(page, true)
+  await bootConsole(page)
   const abs = await makeScratchFile(page, name, ORIGINAL)
 
   const writes: Array<{ bytes: number }> = []

@@ -12,13 +12,13 @@
  *
  *  1. Clicking a vault note (`.md` under the notes vault) used to NAVIGATE THE
  *     WHOLE APP to /notes — jarring mid-session, with no way back. It must now
- *     open in place like any other file, with an explicit "Open in Notes" button
- *     as the opt-in jump.
+ *     open in place like any other file, with an explicit "Open in Notes" item
+ *     in the document bar's ⋯ menu as the opt-in jump.
  *  2. PDFs and images must be viewable without a download.
  *  3. Right-clicking in the file tree must show WALNUT's menu (Reveal in Finder,
  *     Open in Notes, Copy path…), not the browser's "Back / Reload / View Source".
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -43,7 +43,7 @@ async function openFilesPanel(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return explorer
@@ -73,6 +73,25 @@ async function selectFileExact(explorer: ReturnType<Page['locator']>, name: stri
   return row
 }
 
+/**
+ * Open the document bar's ⋯ menu ("Document first", 2026-11-06): the rare
+ * actions (Download, Open in Notes, Copy path…) live there now, not as buttons.
+ */
+async function openMoreMenu(page: Page, scope: Locator): Promise<Locator> {
+  await scope.locator('.fv-doc-bar').getByRole('button', { name: 'More file actions' }).click()
+  const menu = page.getByTestId('fv-more-menu')
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+/** ⋯ → Download is offered for the open file; the menu is closed again after. */
+async function expectDownloadOffered(page: Page, scope: Locator) {
+  const menu = await openMoreMenu(page, scope)
+  await expect(menu.getByRole('menuitem', { name: 'Download' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+}
+
 // This file's first navigation is the most expensive in the browser tier: the
 // fixture server is vite DEV, and the office renderers it now pre-bundles
 // (xlsx / docx-preview / pptx-preview, see web/vite.config.ts optimizeDeps) are
@@ -91,8 +110,14 @@ test('PDF renders with document zoom controls, not a download dead-end', async (
   await expect(explorer.locator('.fv-pdf-text')).toContainText('WALNUT PDF', { timeout: 20_000 })
   await expect(explorer.getByRole('button', { name: 'Zoom in', exact: true })).toBeEnabled()
   await expect(explorer.locator('.file-viewer-error, .fv-pdf-error')).toHaveCount(0)
-  const src = await explorer.locator('a.fv-download-btn').getAttribute('href')
-  const res = await page.request.get(src!)
+  // ⋯ → Download hands the browser the attachment URL; fetch the same URL to
+  // prove the server labels the bytes as a PDF.
+  const menu = await openMoreMenu(page, explorer)
+  const download = page.waitForEvent('download')
+  await menu.getByRole('menuitem', { name: 'Download' }).click()
+  const src = (await download).url()
+  expect(src).toContain('download=1')
+  const res = await page.request.get(src)
   expect(res.ok()).toBe(true)
   expect(res.headers()['content-type']).toBe('application/pdf')
   await page.screenshot({ path: '/tmp/pdf-viewer-fix/pdf-preview.png', fullPage: false })
@@ -107,7 +132,7 @@ test('PNG renders as an inline image with Download available', async ({ page }) 
   // Decoded by the browser — a broken/errored <img> has naturalWidth 0.
   await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth))
     .toBeGreaterThan(0)
-  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+  await expectDownloadOffered(page, explorer)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/image-preview.png`, fullPage: false })
 })
@@ -117,7 +142,9 @@ test('DOCX renders as a readable document (docx-preview), not a binary dead-end'
   // The preview itself fetches the raw bytes — capture that request to prove
   // the server labels them with the real OOXML type.
   const rawRes = page.waitForResponse(
-    (r) => r.url().includes('office-doc.docx') && r.url().includes('raw=1'),
+    // Raw bytes come from /api/file-raw/<host>/<path> (older builds: ?raw=1).
+    // The leading slash keeps the `~$office-doc.docx` lock stub from matching.
+    (r) => r.url().includes('/office-doc.docx') && (r.url().includes('/api/file-raw/') || r.url().includes('raw=1')),
     { timeout: 20_000 },
   )
   await selectFileExact(explorer, 'office-doc.docx')
@@ -126,7 +153,7 @@ test('DOCX renders as a readable document (docx-preview), not a binary dead-end'
   // The old code fell through to "Binary file — cannot display".
   await expect(explorer.locator('.fv-office-word')).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
   await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
-  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+  await expectDownloadOffered(page, explorer)
 
   const res = await rawRes
   expect(res.ok()).toBe(true)
@@ -178,7 +205,7 @@ test('a corrupt .docx degrades to a readable error, not a blank pane', async ({ 
   const err = explorer.locator('.fv-office-word .file-viewer-error')
   await expect(err).toBeVisible({ timeout: 20_000 })
   await expect(err).toContainText('Download')
-  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+  await expectDownloadOffered(page, explorer)
 
   // And the app is still alive: the next file previews normally.
   await selectFileExact(explorer, 'office-doc.docx')
@@ -241,7 +268,7 @@ test('a missing office chunk degrades the PANE, never the session panel', async 
   await expect(fallback).toBeVisible({ timeout: 20_000 })
   await expect(fallback).toContainText('older version of the app')
   await expect(fallback.getByRole('button', { name: 'Reload the page' })).toBeVisible()
-  await expect(explorer.locator('a.fv-download-btn')).toBeVisible()
+  await expectDownloadOffered(page, explorer)
 
   // …and the SESSION PANEL is still alive: no boundary screen, tree still works,
   // and a non-office file still previews normally.
@@ -278,7 +305,8 @@ test('office preview opened from a CHAT file link keeps the session usable', asy
 test('clicking a vault note previews IN PLACE — no jump to /notes', async ({ page }) => {
   const explorer = await openFilesPanel(page)
 
-  // Root the explorer at the notes vault via the toolbar path field.
+  // Root the explorer at the notes vault via the path field (the crumbs in the
+  // document bar's lead open it).
   const notesDir = await page.request.get('/api/config')
     .then((r) => r.json())
     .then((b) => b.notesDir as string)
@@ -298,13 +326,14 @@ test('clicking a vault note previews IN PLACE — no jump to /notes', async ({ p
   expect(page.url()).toBe(urlBefore)
   await expect(page.locator('.notes-page, .notes-layout')).toHaveCount(0)
 
-  // The jump is still ONE click, just opt-in.
-  await expect(explorer.locator('button.fv-notes-btn')).toBeVisible()
+  // The jump is still one menu away, just opt-in: ⋯ → Open in Notes.
+  const menu = await openMoreMenu(page, explorer)
+  await expect(menu.getByRole('menuitem', { name: 'Open in Notes' })).toBeVisible()
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/vault-note-in-place.png`, fullPage: false })
 })
 
-test('"Open in Notes" button navigates to the note on /notes', async ({ page }) => {
+test('"Open in Notes" (⋯ menu) navigates to the note on /notes', async ({ page }) => {
   const explorer = await openFilesPanel(page)
   const notesDir = await page.request.get('/api/config')
     .then((r) => r.json())
@@ -315,7 +344,9 @@ test('"Open in Notes" button navigates to the note on /notes', async ({ page }) 
   await explorer.locator('.sfe-root-path-input').press('Enter')
   await selectFile(explorer, 'vault-note.md')
 
-  await explorer.locator('button.fv-notes-btn').click()
+  await expect(explorer.locator('.fv-wysiwyg-editor')).toContainText('VAULT_NOTE_MARKER', { timeout: 10_000 })
+  const menu = await openMoreMenu(page, explorer)
+  await menu.getByRole('menuitem', { name: 'Open in Notes' }).click()
   await expect.poll(() => page.url()).toContain('/notes')
   expect(decodeURIComponent(page.url())).toContain('vault-note.md')
 
@@ -365,13 +396,16 @@ test('any route change out of a fullscreen split view drops the backdrop', async
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
 })
 
-test('a non-note .md shows NO "Open in Notes" button', async ({ page }) => {
+test('a non-note .md offers NO "Open in Notes"', async ({ page }) => {
   const explorer = await openFilesPanel(page)
   // nested-fence.md lives in the project fixture dir, outside the vault.
   // (Plain md's Preview tab is the WYSIWYG editor since e46b8f00.)
   await selectFile(explorer, 'nested-fence.md')
   await expect(explorer.locator('.fv-wysiwyg-editor')).toBeVisible({ timeout: 10_000 })
-  await expect(explorer.locator('button.fv-notes-btn')).toHaveCount(0)
+  // The ⋯ menu is open and populated (Copy path), and Open in Notes is not in it.
+  const menu = await openMoreMenu(page, explorer)
+  await expect(menu.getByRole('menuitem', { name: 'Copy path' })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Open in Notes' })).toHaveCount(0)
 })
 
 test('right-click in the tree opens Walnut’s own menu (not the browser’s)', async ({ page }) => {

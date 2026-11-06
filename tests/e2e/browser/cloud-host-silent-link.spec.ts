@@ -385,7 +385,7 @@ test('a file still arriving on a slow link: the viewer says it is loading from C
 /** The browser's own words for a request it gave up on (WebKit says "Fetch is aborted"). */
 const BROWSER_ABORT_WORDS = /abort|signal|DOMException|TimeoutError|AbortError/i
 
-test('a Save and a new folder nobody answers: plain words when the browser gives up, in every engine', async ({ page, browserName }) => {
+test('a ⌘S save and a new folder nobody answers: plain words when the browser gives up, in every engine', async ({ page, browserName }) => {
   // The client deadlines (120s for a save, 45s for a new folder) are the timing
   // under test, so they run in full. WebKit rejects a fetch whose deadline fired
   // with AbortError "Fetch is aborted"; the editor and the tree showed exactly
@@ -411,29 +411,29 @@ test('a Save and a new folder nobody answers: plain words when the browser gives
   await row.click()
   const editor = page.locator('.cm-content').first()
   await expect(editor).toBeVisible({ timeout: 90_000 })
-  // A save by hand: Live edit retries its own writes quietly.
-  const live = page.locator('.fv-live-toggle').first()
-  await expect(live).toBeVisible({ timeout: 30_000 })
-  if ((await live.getAttribute('aria-pressed')) === 'true') await live.click()
-  await expect(live).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('fv-save-state').first()).toHaveAttribute('data-state', 'saved', { timeout: 30_000 })
+
+  // 1. A save by hand (⌘S) reaches nobody: held until the browser's deadline
+  // fires. Saving is always live, and live writes retry quietly, so the
+  // explicit save is the path with words to show. Every write is held from
+  // before the first keystroke, and ⌘S follows the typing at once, which also
+  // cancels the queued live write (an explicit save is the flush).
+  await page.route('**/api/file-content', (route) => { if (route.request().method() !== 'PUT') return route.continue() })
   await editor.click()
   await page.keyboard.press('End')
   await page.keyboard.type(' edited')
-  const save = page.locator('.fv-save-btn').first()
-  await expect(save).toBeEnabled({ timeout: 15_000 })
-
-  // 1. The save reaches nobody: held until the browser's deadline fires.
-  await page.route('**/api/file-content', (route) => { if (route.request().method() !== 'PUT') return route.continue() })
   let t0 = Date.now()
-  await save.click()
+  await page.keyboard.press('ControlOrMeta+s')
   const saveError = page.locator('.fv-save-error').first()
   await expect(saveError).toBeVisible({ timeout: 200_000 })
-  const saveText = await saveError.innerText()
+  const saveText = await saveError.locator('.fv-save-error-text').innerText()
   const saveMs = Date.now() - t0
+  // The way out is a button in the banner, not a Save button that no longer exists.
+  await expect(saveError.getByRole('button', { name: 'Try again' })).toBeVisible()
   await page.screenshot({ path: path.join(SHOTS, `silent-link-save-held-${browserName}.png`), clip: { x: 0, y: 0, width: 1280, height: 800 } })
   await page.unroute('**/api/file-content')
   expect(saveText).not.toMatch(BROWSER_ABORT_WORDS)
-  expect(saveText).toMatch(/^The save got no answer in time\. Your text is still in the editor: press Save again\./)
+  expect(saveText).toMatch(/^The save got no answer in time\. Your text is still in the editor/)
   expect(saveMs).toBeGreaterThan(100_000)
 
   // 2. A new folder reaches nobody: the tree says it is still waiting, not an error.

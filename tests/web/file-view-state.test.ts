@@ -83,7 +83,7 @@ describe('scope normalization (the 2026-08-09 root cause)', () => {
     const { saveSelectedFile, loadSelectedFile } = await load();
     // What used to happen: the chat file-path click rooted the explorer at the
     // clicked file's PARENT dir and saved under that; the Files chip rooted at the
-    // session cwd and read a different key → empty "Select a file to preview".
+    // session cwd and read a different key → the empty pane ("No file open").
     const sessionCwd = '/repo';
     const clickRoot = '/repo/src/web';
     saveSelectedFile(undefined, clickRoot, '/repo/src/web/App.tsx');

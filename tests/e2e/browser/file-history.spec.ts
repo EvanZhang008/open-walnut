@@ -4,14 +4,18 @@
  * The user asked for a simple history of the file they have open, working with or
  * without git. Walnut records a version when the editor opens a file ("Opened")
  * and on every save ("You" / "Live" / "Merged"), and the panel lets them look at
- * any version as a diff against the current buffer and restore it as UNSAVED work.
+ * any version as a diff against the current buffer and restore it.
  *
  * What this pins:
  *   - the file's pre-edit bytes are a version to go back to (identical bytes are
  *     one row, however many opens and saves found them),
  *   - a save shows up in the open panel without closing/reopening it,
- *   - Restore puts the old text in the editor as an unsaved edit (Save armed,
- *     nothing written yet), and Save then really writes it.
+ *   - Restore puts the old text in the editor and, saving being live, writes it
+ *     to disk on its own like typing would (the chip goes Saving… then Saved),
+ *     which is a new version on the timeline.
+ *
+ * Saving is always live (no Save button since 2026-11-06); the first save here
+ * is ⌘S, the explicit save, which records a "You" version at once.
  *
  * The git half has its own route tests; the fixture dir here is not a repo, so
  * the panel shows the snapshot timeline alone — which is the "must work without
@@ -22,6 +26,10 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
 const SCREENSHOT_DIR = '/tmp/walnut-files-panel/history'
+
+// Wide enough that the document bar keeps History as its own button (a narrow
+// pane moves it into ⋯).
+test.use({ viewport: { width: 1600, height: 900 } })
 
 async function fixtureCwd(page: Page): Promise<string> {
   const res = await page.request.get(`/api/sessions/${SESSION_ID}`)
@@ -40,7 +48,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
   return explorer
@@ -74,6 +82,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
+      // An old browser's stored "Live off": ignored, saving is always live.
       localStorage.setItem('open-walnut-live-edit', '0')
     } catch { /* off */ }
   })
@@ -104,8 +113,9 @@ test('the open file has a history: opened, saved, and restorable as unsaved work
   await editor(page).locator('.cm-line').first().click()
   await page.keyboard.press('End')
   await page.keyboard.type(' plus two')
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.keyboard.press('ControlOrMeta+s')
   await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
+  await expect.poll(() => onDisk(page, abs)).toBe('version one plus two\n')
   await expect(rows).toHaveCount(2, { timeout: 10_000 })
   // Newest first: the save is on top, the original beneath it.
   await expect(rows.nth(0).locator('.fh-pill')).toHaveText('You')
@@ -119,22 +129,21 @@ test('the open file has a history: opened, saved, and restorable as unsaved work
   await expect(diff.locator('.fh-diff-table')).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/3-diff-against-now.png` })
 
-  // Restore: the old text lands in the editor as UNSAVED work — nothing written.
+  // Restore: the old text lands in the editor and is saved on its own, as typed
+  // text would be. No ⌘S: the chip settles on Saved and the disk has it.
   await diff.getByRole('button', { name: 'Restore this version' }).click()
   await expect(editor(page)).toContainText('version one')
   await expect(editor(page)).not.toContainText('plus two')
-  await expect(page.locator('.fv-dirty-dot')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
-  expect(await onDisk(page, abs)).toBe('version one plus two\n')
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/4-restored-unsaved.png` })
-
-  // Save makes it real, and that is a third version on the timeline.
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
   await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toBe('version one\n')
+  await expect(page.getByTestId('fv-save-state')).toHaveText('Saved', { timeout: 10_000 })
+  await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/4-restored-and-saved.png` })
+  // That write is a third version on the timeline.
+  // It shows up in the panel that is still open, as the ⌘S above did.
   await expect(rows).toHaveCount(3, { timeout: 10_000 })
+  await expect(rows.nth(0).locator('.fh-pill')).toHaveText('Live')
 
-  // The panel's own close works, and the toolbar button reflects it.
+  // The panel's own close works, and the bar's History button reflects it.
   await flyout.getByRole('button', { name: 'Close history' }).click()
   await expect(flyout).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'History', exact: true })).toHaveAttribute('aria-pressed', 'false')

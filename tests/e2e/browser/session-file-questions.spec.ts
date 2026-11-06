@@ -47,7 +47,7 @@ async function openSession(page: Page): Promise<Locator> {
 
 async function openFile(page: Page, panel: Locator, name: string): Promise<Locator> {
   if (!(await panel.locator('.session-file-explorer').isVisible())) {
-    await panel.getByRole('button', { name: 'Files' }).click()
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
   }
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
@@ -149,12 +149,12 @@ test.describe('Questions about a file passage (Files tab)', () => {
     expect(cb.y - (passage.top + passage.height)).toBeLessThan(40)
     expect(cb.x).toBeGreaterThanOrEqual(vb.x)
     expect(cb.x + cb.width).toBeLessThanOrEqual(vb.x + vb.width + 1)
-    // The rail appears with the draft: one dashed mark, under the toolbar at the left edge.
+    // The rail appears with the draft: one dashed mark, under the document bar at the left edge.
     const rail = fileRail(view)
     await expect(rail.locator('.thread-map-mark')).toHaveCount(1)
     await expect(rail.locator('.thread-map-mark')).toHaveAttribute('data-kind', 'pending')
     const rb = (await rail.boundingBox())!
-    const tb = (await view.locator('.fv-html-toolbar').first().boundingBox())!
+    const tb = (await view.locator('.fv-doc-bar').first().boundingBox())!
     expect(rb.y).toBeGreaterThanOrEqual(tb.y + tb.height)
     expect(rb.y - (tb.y + tb.height)).toBeLessThan(12)
     expect(rb.x - vb.x).toBeLessThan(10)
@@ -254,7 +254,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(composer).not.toHaveAttribute('placeholder', /Reply in/)
     await card.getByRole('button', { name: 'Quote in chat' }).click()
     await expect(card).toHaveCount(0)
-    await panel.getByRole('button', { name: 'Files' }).click()
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
     await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
     await expect(composer).toHaveAttribute('placeholder', /Reply in/)
     // A send from the main composer goes INTO the question (prefix routing).
@@ -399,7 +399,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     // the toolbar slid over it.
     await expect.poll(async () => {
       const rb = (await rail.boundingBox())!
-      const tb = (await view.locator('.fv-html-toolbar').first().boundingBox())!
+      const tb = (await view.locator('.fv-doc-bar').first().boundingBox())!
       return rb.y - (tb.y + tb.height)
     }).toBeGreaterThanOrEqual(0)
     await rail.locator('.thread-map-rail').click()

@@ -15,11 +15,13 @@
  *    key has to separate two hosts that happen to use the same absolute path.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   decideAfterConflict, agentPathMatches, MAX_MERGE_ATTEMPTS, agentToolMayChangeFile,
   liveSuspensionKey, isLiveSuspended, suspendLiveEdit, resumeLiveEdit, clearLiveSuspensions,
   noteFileDeleted, isRecentlyDeleted, noteWritten, freshestBase,
-  loadLiveEditPref, LIVE_EDIT_PREF_KEY, LIVE_WRITE_DEBOUNCE_MS,
+  LIVE_WRITE_DEBOUNCE_MS,
   planLiveWrite,
 } from '../../web/src/hooks/useLiveEdit';
 import { threeWayMerge } from '../../src/lib/three-way-merge';
@@ -243,28 +245,25 @@ describe('freshestBase', () => {
   });
 });
 
-describe('preference', () => {
-  afterEach(() => { vi.unstubAllGlobals(); });
+describe('saving is always live', () => {
+  // 2026-11-06: the Save button and the Live switch are gone; a file saves as it
+  // is typed. Nothing may bring back a per-browser off switch (a stored "off"
+  // would leave a user typing into a file that never reaches disk, with no
+  // control left on screen to turn saving back on).
+  const read = (rel: string) => readFileSync(path.join(import.meta.dirname, '..', '..', rel), 'utf8');
 
-  it('is OFF when nothing was ever stored', () => {
-    vi.stubGlobal('localStorage', { getItem: () => null });
-    expect(loadLiveEditPref()).toBe(false);
+  it('the hook keeps no on/off preference', () => {
+    const src = read('web/src/hooks/useLiveEdit.ts');
+    expect(src).not.toMatch(/localStorage/);
+    expect(src).not.toMatch(/open-walnut-live-edit/);
+    expect(src).toMatch(/const on = !suspended && canEdit;/);
   });
 
-  it("is ON only for '1'", () => {
-    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === LIVE_EDIT_PREF_KEY ? '1' : null) });
-    expect(loadLiveEditPref()).toBe(true);
-    vi.stubGlobal('localStorage', { getItem: () => '0' });
-    expect(loadLiveEditPref()).toBe(false);
-    vi.stubGlobal('localStorage', { getItem: () => 'true' });
-    expect(loadLiveEditPref()).toBe(false);
-  });
-
-  it('degrades to OFF when storage throws', () => {
-    // Private browsing / blocked storage must not turn auto-writing on by
-    // accident, and must not throw during a render.
-    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); } });
-    expect(loadLiveEditPref()).toBe(false);
+  it('the file view offers no Save button, Discard button or Live switch', () => {
+    const src = read('web/src/components/common/FileContentView.tsx');
+    for (const gone of ['fv-save-btn', 'fv-live-toggle', 'fv-cancel-edit-btn', 'live.toggle']) {
+      expect(src).not.toContain(gone);
+    }
   });
 });
 

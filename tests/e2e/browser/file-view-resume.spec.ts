@@ -11,7 +11,7 @@
  *    singleton (the note renderer already did this locally).
  *
  * 2. RESUME — the preview pane kept no memory: reopening the Files panel showed
- *    the empty "Select a file to preview" pane, so the user had to hunt for and
+ *    the empty pane (then "Select a file to preview", now "No file open"), so the user had to hunt for and
  *    re-click the file every time, and it always reopened scrolled to the top.
  */
 import { test, expect, type Page } from '@playwright/test'
@@ -34,7 +34,8 @@ async function openSessionPanel(page: Page) {
 
 /** Toggle the Files tab on and wait for the explorer. */
 async function openFiles(panel: ReturnType<Page['locator']>) {
-  await panel.getByRole('button', { name: 'Files' }).click()
+  // exact: the tree head's "Show hidden files" button also contains the word.
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return explorer
@@ -42,7 +43,8 @@ async function openFiles(panel: ReturnType<Page['locator']>) {
 
 /** Toggle the Files tab back off (same button — it's a toggle). */
 async function closeFiles(panel: ReturnType<Page['locator']>) {
-  await panel.getByRole('button', { name: 'Files' }).click()
+  // exact: the tree head's "Show hidden files" button also contains the word.
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
 }
 
@@ -115,11 +117,12 @@ test('reopening the Files panel restores the file AND the reading position', asy
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step2-panel-closed.png` })
 
   explorer = await openFiles(panel)
-  // THE regression #1: this used to be "Select a file to preview" — the file had
-  // to be found in the tree and clicked again on every single open.
+  // THE regression #1: this used to be the empty pane (now "No file open") — the
+  // file had to be found in the tree and clicked again on every single open.
   preview = mdPreview(explorer)
   await expect(preview).toBeVisible({ timeout: 10_000 })
   await expect(explorer.locator('.sfe-preview-empty')).toHaveCount(0)
+  await expect(explorer.getByText('No file open')).toHaveCount(0)
   // The tree row is shown as selected too, not just the pane content.
   await expect(
     explorer.locator('.session-file-explorer-node.selected .sfe-name', { hasText: 'incident-report.md' }),

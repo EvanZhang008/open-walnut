@@ -23,7 +23,7 @@ import {
   FileSaveConflictError, FileSaveHttpError, isNetworkFetchError,
 } from '@/api/files';
 import { READ_ONLY_TOOLS } from '@/utils/embedded-image-freshness';
-import { deleteFileDraft } from '@/utils/file-drafts';
+import { deleteFileDraftIfText } from '@/utils/file-drafts';
 import { threeWayMerge, type MergeResult } from '@open-walnut/three-way-merge';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
@@ -31,11 +31,15 @@ import { getHostStatus } from '@/hooks/useHostStatus';
 import { hostDisplayLabel } from '@/utils/host-display-label';
 import { computeContentHashClient } from '@/utils/content-hash';
 
-/** Global on/off preference ('1'/'0'); absent = off. */
-export const LIVE_EDIT_PREF_KEY = 'open-walnut-live-edit';
 /** Keystroke → disk settle window. Long enough that a typing burst is one write,
  *  short enough that "it saved itself" is believable. */
 export const LIVE_WRITE_DEBOUNCE_MS = 600;
+/** The pause before a config-like file (YAML, JSON, TOML...) is written. Such a
+ *  file is often loaded the moment it changes (Walnut's own config.yaml is
+ *  applied ~2.5 s after a write), and a half-typed one can still parse
+ *  (`enabled: f` is a string): the write waits for a real pause instead. Blur
+ *  and ⌘S still write at once. */
+export const CONFIG_WRITE_DEBOUNCE_MS = 2500;
 /** A write that finds the file busy re-checks this soon (not the full debounce —
  *  the user already waited it out once). */
 const BUSY_RECHECK_MS = 150;
@@ -96,8 +100,8 @@ export function offlineGivesUp(outageSince: number, now: number): boolean {
   return now - outageSince >= LIVE_OFFLINE_GIVE_UP_MS;
 }
 export const LIVE_UNREACHABLE_PAUSED_MESSAGE =
-  "Live edit is paused for this file: Walnut couldn't be reached for a minute. "
-  + 'Your text is still in the editor. Press Save once Walnut is back, or click Live to resume.';
+  "Saving is paused for this file: Walnut couldn't be reached for a minute. "
+  + 'Your text is still in the editor. Press Try again once Walnut is back.';
 
 /**
  * Which hop a write that did not arrive failed at: the file's HOST (Walnut
@@ -115,8 +119,8 @@ export function failedHop(err: unknown): 'host' | 'walnut' {
  */
 export function liveUnreachablePausedMessage(hostLabel?: string): string {
   if (!hostLabel) return LIVE_UNREACHABLE_PAUSED_MESSAGE;
-  return `Live edit is paused for this file: ${hostLabel} did not answer for a minute. `
-    + `Your text is still in the editor. Press Save once ${hostLabel} is back, or click Live to resume.`;
+  return `Saving is paused for this file: ${hostLabel} did not answer for a minute. `
+    + `Your text is still in the editor. Press Try again once ${hostLabel} is back.`;
 }
 
 // ── Per-file suspension ──────────────────────────────────────────────────────
@@ -124,7 +128,10 @@ export function liveUnreachablePausedMessage(hostLabel?: string): string {
 // never the global preference, which the user set deliberately and which still
 // applies to every other file. In-memory on purpose: the pause is about the
 // current collision, not a lasting property of the file.
-export type LiveSuspendReason = 'conflict' | 'unreachable';
+// The reason picks the way out the page offers: only a real collision asks which
+// version to keep; a refused write offers Try again; a tab too old to prove its
+// base offers a reload. Kept apart so a reopened file still says the true thing.
+export type LiveSuspendReason = 'conflict' | 'unreachable' | 'refused' | 'reload';
 const suspendedFiles = new Map<string, LiveSuspendReason>();
 
 export function liveSuspensionKey(host: string | undefined, path: string): string {
@@ -216,19 +223,6 @@ export function freshestBase(
 ): string | null {
   const w = lastWritten.get(liveSuspensionKey(host, path));
   return w && w.at > capturedAt ? w.text : captured;
-}
-
-export function loadLiveEditPref(): boolean {
-  try {
-    return localStorage.getItem(LIVE_EDIT_PREF_KEY) === '1';
-  } catch {
-    return false; // storage blocked (private mode) — off is the safe default
-  }
-}
-function saveLiveEditPref(on: boolean): void {
-  try {
-    localStorage.setItem(LIVE_EDIT_PREF_KEY, on ? '1' : '0');
-  } catch { /* storage blocked — the toggle still works for this page */ }
 }
 
 /**
@@ -395,6 +389,12 @@ export interface UseLiveEditOptions {
    *  a ref the pane keeps, is what an automatic write's token is derived from —
    *  see PendingWrite.baseText. */
   getBaseText: () => string | null;
+  /** Why this text must not reach disk yet (a config file that does not parse,
+   *  which a watcher would load half-typed), or null when it may. Live writes
+   *  wait for valid text; ⌘S still writes what is there. */
+  validate?: (text: string, path: string, base: string | null) => string | null;
+  /** The typing pause before an automatic write; LIVE_WRITE_DEBOUNCE_MS when unset. */
+  debounceMs?: number;
   /** The optimistic-lock token. The hook advances it on every write and read.
    *
    *  INVARIANT (2026-09-05 data-loss incident): this token describes the bytes
@@ -427,15 +427,17 @@ export interface UseLiveEditOptions {
 }
 
 export interface LiveEdit {
-  /** Armed for this file: preference on, not suspended, file editable. */
+  /** Armed for this file: not paused, file editable. */
   on: boolean;
-  /** This file was paused (the toggle title explains it). */
+  /** This file was paused (the save banner explains it). */
   suspended: boolean;
   /** Why, when `suspended`: an unmergeable conflict, or a minute of not reaching
    *  the server. */
   suspendedReason: LiveSuspendReason | null;
   /** An auto-write (or its merge cycle) is in flight. */
   writing: boolean;
+  /** Set while the text is held back by `validate`: the reason it gave. */
+  heldInvalid: string | null;
   /** The last auto-write did not reach the server and is being retried. Live
    *  mode is still ON; this is a status, not an error. */
   unreachable: boolean;
@@ -445,7 +447,11 @@ export interface LiveEdit {
   unreachableHost: string | null;
   /** Transient toolbar note, or null. */
   receipt: string | null;
-  toggle: () => void;
+  /** Resume this file after a pause. */
+  resume: () => void;
+  /** Pause this file's live saving on purpose (text whose base is unknown, a
+   *  stale draft put back): nothing is written until the user picks a way out. */
+  pause: (reason: LiveSuspendReason) => void;
   /** Call from the editor's per-keystroke change callback. */
   noteUserEdit: () => void;
   /**
@@ -502,12 +508,12 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     return () => { mountedRef.current = false; };
   }, []);
 
-  const [prefOn, setPrefOn] = useState(loadLiveEditPref);
-  const prefOnRef = useRef(prefOn);
-  prefOnRef.current = prefOn;
   const [suspendedFor, setSuspendedFor] = useState<LiveSuspendReason | null>(() => liveSuspensionReason(host, path));
   const suspended = suspendedFor != null;
   const [writing, setWriting] = useState(false);
+  const [heldInvalid, setHeldInvalid] = useState<string | null>(null);
+  // Another file starts unheld: its own first write decides.
+  useEffect(() => { setHeldInvalid(null); }, [host, path]);
   // The outage the file on screen is riding out: when it began and how many
   // writes have failed since (the latter picks the backoff). Null = reachable.
   const outageRef = useRef<{ since: number; failures: number } | null>(null);
@@ -517,7 +523,9 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   const [receipt, setReceipt] = useState<{ text: string; n: number } | null>(null);
   const receiptNRef = useRef(0);
 
-  const on = prefOn && !suspended && canEdit;
+  // Saving is always live (2026-11-06: the Save button and the Live toggle are
+  // gone). The only thing that stops automatic writes is a per-file pause.
+  const on = !suspended && canEdit;
   const onRef = useRef(on);
   onRef.current = on;
 
@@ -634,6 +642,16 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // record for the outgoing one was armed while live was on for it. Dropping it
     // because the next file happens to be an image would lose the last burst.
     if (isCurrent(rec) && !onRef.current) { pendingRef.current = null; clearOutage(); return; }
+    // Text that must not land yet (half-typed JSON/YAML) waits: on screen the
+    // record stays armed and the next keystroke checks again; for a file just
+    // left it is dropped (its draft keeps the words). Nothing reaches disk.
+    const invalid = optsRef.current.validate?.(rec.text, rec.path, rec.baseText) ?? null;
+    if (invalid) {
+      if (isCurrent(rec)) setHeldInvalid(invalid);
+      else pendingRef.current = null;
+      return;
+    }
+    if (isCurrent(rec)) setHeldInvalid(null);
     if (inFlightRef.current) {
       // Re-check shortly rather than queueing a second write against the same
       // base, which would 409 by construction.
@@ -699,9 +717,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         ? 'The agent in this session changed this file'
         : 'This file changed on disk';
       o.onConflict(
-        `${who} since you opened it, and the changes overlap yours — Live edit is paused for this file. `
-        + 'Your version is still in the editor: Save will warn you before it replaces the other one, '
-        + 'or Discard and reopen the file to get it.',
+        `${who} in the same lines you edited, so saving is paused for this file. Your text is safe: pick which version to keep.`,
       );
       log.warn('file-editor', 'live edit gave up on a conflict', { path: rec.path, host: rec.host, attempt });
     };
@@ -721,7 +737,8 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     const base = o.getBaseText();
     // No known base ⇒ our lock refers to bytes we never held (a restored stale
     // draft). A merge would be a guess, and a guessed merge is data loss.
-    if (base == null || attempt >= MAX_MERGE_ATTEMPTS) { giveUp(); return; }
+    // (baseContentRef null is the same marker, set by the restore itself.)
+    if (base == null || o.baseContentRef.current == null || attempt >= MAX_MERGE_ATTEMPTS) { giveUp(); return; }
 
     let disk;
     try {
@@ -738,19 +755,27 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // against the base we captured would apply that pull's hunks a second time.
     // Nothing is lost — the buffer is the merged text — so just write it again
     // under the lock the pull established.
+    // A merged write is still a write: text that does not parse waits like typing
+    // does (the buffer already holds it; the next keystroke checks again).
+    const holdIfInvalid = (next: PendingWrite): boolean => {
+      const invalid = o.validate?.(next.text, next.path, next.baseText) ?? null;
+      if (!invalid) return false;
+      pendingRef.current = next;
+      setHeldInvalid(invalid);
+      return true;
+    };
     if (o.getBaseText() !== base) {
       const text = o.getText() ?? rec.text;
       log.info('file-editor', 'live edit base moved mid-conflict; rewriting the merged buffer', {
         path: rec.path, host: rec.host, attempt,
       });
-      await writeOnceRef.current?.(
-        {
-          ...rec, text, capturedAt: Date.now(), bufferGen: o.bufferGenRef.current,
-          // The pull that moved the base is what this text now sits on top of.
-          baseText: o.getBaseText(),
-        },
-        'merge', attempt + 1, true,
-      );
+      const next: PendingWrite = {
+        ...rec, text, capturedAt: Date.now(), bufferGen: o.bufferGenRef.current,
+        // The pull that moved the base is what this text now sits on top of.
+        baseText: o.getBaseText(),
+      };
+      if (holdIfInvalid(next)) return;
+      await writeOnceRef.current?.(next, 'merge', attempt + 1, true);
       return;
     }
 
@@ -773,16 +798,13 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     o.baseContentRef.current = disk.content;
     showReceipt(agentActive() ? 'Merged agent changes' : 'Merged disk changes');
     log.info('file-editor', 'live edit merged a conflict', { path: rec.path, host: rec.host, attempt });
-    await writeOnceRef.current?.(
-      {
-        ...rec, text: decision.merged, capturedAt: Date.now(), bufferGen: o.bufferGenRef.current,
-        // Merged ON TOP OF the disk bytes just read, so those are the base.
-        baseText: disk.content,
-      },
-      'merge',
-      attempt + 1,
-      true,
-    );
+    const mergedRec: PendingWrite = {
+      ...rec, text: decision.merged, capturedAt: Date.now(), bufferGen: o.bufferGenRef.current,
+      // Merged ON TOP OF the disk bytes just read, so those are the base.
+      baseText: disk.content,
+    };
+    if (holdIfInvalid(mergedRec)) return;
+    await writeOnceRef.current?.(mergedRec, 'merge', attempt + 1, true);
   }, [agentActive, isCurrent, showReceipt, suspendHere]);
 
   const writeOnce = useCallback(async (
@@ -885,11 +907,15 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         baseFrom: 'content',
       });
       noteWritten(rec.host, rec.path, res.contentHash, text);
-      // The bytes are on disk, so the unsaved-draft side record is obsolete —
-      // even for a file we have already navigated away from, whose parent
-      // callbacks we must not touch (it would delete the NEW file's draft).
-      void deleteFileDraft(rec.host, rec.path);
-      if (!isCurrent(rec)) return;
+      // The bytes are on disk, so the unsaved-draft side record OF THESE BYTES is
+      // obsolete — even for a file we have already navigated away from, whose
+      // parent callbacks we must not touch (it would delete the NEW file's draft).
+      // A newer draft (words typed while this write was on its way) stays: if the
+      // next write is refused, it is all a reload has of them. For the file on
+      // screen the parent owns the record (onWrote drops it when clean, records
+      // the newer words when not): a delete from here would race that put, as a
+      // read and a delete in two transactions can land after it.
+      if (!isCurrent(rec)) { void deleteFileDraftIfText(rec.host, rec.path, text); return; }
       const o = optsRef.current;
       o.lockHashRef.current = res.contentHash;
       o.baseContentRef.current = text;
@@ -917,7 +943,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         // banner blaming an agent that never touched the file. Say the true thing
         // once instead.
         if (err.reason !== 'stale-lock') {
-          suspendHere(rec);
+          suspendHere(rec, err.reason === 'unverified-base' ? 'reload' : 'refused');
           log.error('file-editor', 'live write rejected by the server, not by a collision', {
             path: rec.path, host: rec.host, reason: err.reason,
           });
@@ -925,9 +951,9 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
             optsRef.current.onError(
               err.reason === 'unverified-base'
                 ? 'This tab is running an older version of Walnut, so it can no longer save automatically. '
-                  + 'Reload the page to resume Live edit — your text is kept.'
-                : 'Live edit could not save this file (the server refused the request). '
-                  + 'Your text is still in the editor: press Save, or reload the page.',
+                  + 'Reload the page to save again; your text is kept.'
+                : 'Walnut could not save this file (the server refused the request). '
+                  + 'Your text is still in the editor: press Try again.',
             );
           }
           return;
@@ -992,7 +1018,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       log.error('file-editor', 'live write failed', { path: rec.path, host: rec.host, error: msg });
       // A refusal is not retried: at one write per typing pause it would send the
       // same rejected request over and over and bury the message the user needs.
-      suspendHere(rec);
+      suspendHere(rec, 'refused');
       if (isCurrent(rec)) optsRef.current.onError(msg);
     } finally {
       inFlightRef.current = false;
@@ -1020,7 +1046,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       // token is derived from, and the only reason the token cannot drift.
       baseText: optsRef.current.getBaseText(),
     };
-    schedule(LIVE_WRITE_DEBOUNCE_MS);
+    schedule(optsRef.current.debounceMs ?? LIVE_WRITE_DEBOUNCE_MS);
   }, [schedule]);
 
   const flushNow = useCallback(() => { void flush(true); }, [flush]);
@@ -1028,27 +1054,41 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   const cancelPending = useCallback(() => {
     clearTimer();
     pendingRef.current = null;
+    setHeldInvalid(null);
     // An explicit Save or Live turned off takes over from the retry; the strip
     // must not keep promising an automatic write nobody is going to make.
     clearOutage();
   }, [clearTimer, clearOutage]);
 
-  const toggle = useCallback(() => {
+  /** Resume a file that was paused (a conflict it could not merge, or a minute
+   *  without reaching the server). A no-op on a file that is not paused. */
+  const resume = useCallback(() => {
     const p = pathRef.current;
     const h = hostRef.current;
-    // Clicking the toggle on a paused file means "resume it", not "flip the
-    // global preference" — the preference was never what turned it off.
-    if (isLiveSuspended(h, p)) {
-      resumeLiveEdit(h, p);
-      setSuspendedFor(null);
-      if (!prefOnRef.current) { setPrefOn(true); saveLiveEditPref(true); }
-      return;
+    if (!isLiveSuspended(h, p)) return;
+    resumeLiveEdit(h, p);
+    setSuspendedFor(null);
+    // What was typed while paused (or while the write that ended the pause was
+    // still on its way) armed nothing: noteUserEdit returns while paused. Arm it
+    // now, from the editor's text and its own base, or the line says Saving…
+    // with no write coming.
+    const text = optsRef.current.getText();
+    const base = optsRef.current.getBaseText();
+    if (text != null && text !== base) {
+      pendingRef.current = {
+        path: p, host: h, text, capturedAt: Date.now(),
+        bufferGen: optsRef.current.bufferGenRef.current, baseText: base,
+      };
+      schedule(optsRef.current.debounceMs ?? LIVE_WRITE_DEBOUNCE_MS);
     }
-    const next = !prefOnRef.current;
-    setPrefOn(next);
-    saveLiveEditPref(next);
-    if (!next) cancelPending();
-  }, [cancelPending]);
+  }, [schedule]);
+
+  const pause = useCallback((reason: LiveSuspendReason) => {
+    clearTimer();
+    pendingRef.current = null;
+    suspendLiveEdit(hostRef.current, pathRef.current, reason);
+    setSuspendedFor(reason);
+  }, [clearTimer]);
 
   const pullFromDisk = useCallback(async (reason: PullReason = 'agent') => {
     const adopted = reason === 'agent' ? 'Updated from agent'
@@ -1091,6 +1131,14 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
         return;
       }
 
+      // No trusted base (a restored stale draft) or a conflict already waiting on
+      // the person: a merge would be a guess, and merging the draft against itself
+      // hands back the disk bytes, which then replace the draft. Note the disk and
+      // leave the choice where it is.
+      if (cur.baseContentRef.current == null || liveSuspensionReason(rec.host, rec.path) === 'conflict') {
+        cur.onDiskContent(disk.content, disk.contentHash, disk.size);
+        return;
+      }
       // The editor's base, for the same reason resolveConflict uses it: `ours`
       // comes from the editor, so the base must too.
       const base = cur.getBaseText();
@@ -1114,9 +1162,8 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
           });
         }
         cur.onConflict(
-          `${reason === 'agent' ? 'The agent in this session' : reason === 'disk' ? 'Another writer' : 'Another view of this file'} changed this `
-          + 'file, and those changes overlap yours. Your unsaved version is still in the editor — Save will '
-          + 'warn you before it replaces the other one, or Discard and reopen the file to get it.',
+          `${reason === 'agent' ? 'The agent in this session' : reason === 'disk' ? 'Another writer' : 'Another view of this file'} changed `
+          + 'the same lines you edited, so saving is paused for this file. Your text is safe: pick which version to keep.',
         );
         return;
       }
@@ -1199,10 +1246,12 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     suspended,
     suspendedReason: suspendedFor,
     writing,
+    heldInvalid,
     unreachable,
     unreachableHost,
     receipt: receipt?.text ?? null,
-    toggle,
+    resume,
+    pause,
     noteUserEdit,
     flushNow,
     cancelPending,

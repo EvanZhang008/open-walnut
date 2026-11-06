@@ -1,3 +1,16 @@
+/**
+ * Live edit of Markdown in the Files panel, through the WYSIWYG editor.
+ *
+ * Saving is always live (no Save button, no Live switch): an edit reaches disk
+ * about 600 ms after typing stops, and a write from someone else is merged in or,
+ * when it overlaps, pauses saving for the file with both versions kept. The
+ * save chip (`fv-save-state`) says Saved / Saving… / Not saved, and the banner
+ * offers "Keep my version" and "Use the version on disk".
+ *
+ * Tests about an UNSAVED buffer (a merge into it, a failed read beside it) keep
+ * the writes off disk on purpose with `keepWritesOffDisk`; otherwise the buffer
+ * would be clean before the event under test arrives.
+ */
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
 
@@ -7,9 +20,9 @@ const SID = 'pw-vscode-session'
 const TASK = 'pw-task-vscode'
 const preview = (p: Page) => p.locator('.fv-wysiwyg-editor .ProseMirror')
 const source = (p: Page) => p.locator('.fv-source-editor .cm-content')
-const save = (p: Page) => p.locator('.fv-save-btn')
-const live = (p: Page) => p.locator('.fv-live-toggle')
+const state = (p: Page) => p.getByTestId('fv-save-state')
 const error = (p: Page) => p.locator('.fv-save-error')
+const dirty = (p: Page) => p.locator('.fv-dirty-dot')
 const body = (dense = false) => `---
 title: Sample design
 revision: 1
@@ -63,12 +76,19 @@ async function open(p: Page, text: string, ext = 'md') {
   const explorer = panel.locator('.session-file-explorer')
   await explorer.locator('.sfe-name', { hasText: name }).locator('xpath=..').click()
   await expect(preview(p)).toContainText('Design review')
-  await expect(save(p)).toBeDisabled()
+  await expect(state(p)).toHaveText('Saved')
   return { abs, name, explorer, panel }
 }
-async function setLive(p: Page, on: boolean) {
-  if ((await live(p).getAttribute('aria-pressed')) !== String(on)) await live(p).click()
-  await expect(live(p)).toHaveAttribute('aria-pressed', String(on))
+/** Every write fails as if the server could not be reached, so typed text stays
+ *  unsaved in the editor (live mode retries it; nothing reaches disk). */
+async function keepWritesOffDisk(p: Page) {
+  await p.route('**/api/file-content', route =>
+    route.request().method() === 'PUT' ? route.abort('failed') : route.fallback())
+}
+/** ⌘S in the WYSIWYG editor: the explicit save, at once. */
+async function pressSave(p: Page) {
+  await preview(p).focus()
+  await p.keyboard.press('ControlOrMeta+s')
 }
 async function replace(p: Page, locator: Locator, needle: string, replacement: string) {
   await locator.click()
@@ -100,14 +120,16 @@ async function settled(p: Page, abs: string, ours: string, theirs: string) {
   await expect.poll(() => readFile(abs, 'utf8')).toContain(theirs)
   await expect(preview(p)).toContainText(ours)
   await expect(preview(p)).toContainText(theirs)
-  await expect(save(p)).toBeDisabled()
+  // Saved, not paused: the chip reads "Not saved" while a pause holds the file.
+  await expect(state(p)).toHaveText('Saved')
+  await expect(dirty(p)).toHaveCount(0)
   await expect(error(p)).toHaveCount(0)
-  await expect(live(p)).not.toHaveClass(/suspended/)
 }
 
 test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
+    // An old browser's stored "Live off": ignored, saving is always live.
     localStorage.setItem('open-walnut-live-edit', '0')
     const Native = window.WebSocket
     window.WebSocket = class extends Native {
@@ -119,14 +141,14 @@ test.beforeEach(async ({ page, baseURL }) => {
   })
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
-  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 15000 })
+  // A cold fixture server's first page load can take longer than 15 s.
+  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 45_000 })
 })
 
 test('dense Markdown stays clean through five script updates and selection', async ({ page }) => {
   const initial = body(true)
   expect(initial.length).toBeGreaterThan(40000)
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   const puts: string[] = []
   page.on('request', r => { if (r.method() === 'PUT' && r.url().includes('/api/file-content')) puts.push(r.postData() ?? '') })
   for (let i = 1; i <= 5; i++) {
@@ -135,7 +157,7 @@ test('dense Markdown stays clean through five script updates and selection', asy
     await expect(preview(page)).toContainText(`script-${i}`)
     await preview(page).getByRole('heading', { name: 'Design review', exact: true }).dblclick()
     await page.keyboard.press('ArrowRight')
-    await expect(save(page)).toBeDisabled()
+    await expect(state(page)).toHaveText('Saved')
     await expect(error(page)).toHaveCount(0)
     expect(await readFile(abs, 'utf8')).toBe(text)
   }
@@ -146,7 +168,6 @@ test('dense Markdown stays clean through five script updates and selection', asy
 test('Markdown user paragraph and external table edit merge without false conflict', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   await writeFile(abs, initial.replace('| Beta | 24 ms | pending |', '| Beta | 18 ms | approved |'))
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'human-edit')
   await tool(page)
@@ -157,7 +178,6 @@ test('Markdown user paragraph and external table edit merge without false confli
 test('different table cells in one row merge without blocking either edit', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   await writeFile(abs, initial.replace('| Alpha | 12 ms | pending |', '| Alpha | 12 ms | approved |'))
   await replace(page, preview(page).locator('td').filter({ hasText: '12 ms' }), '12', '10')
   await tool(page)
@@ -168,7 +188,6 @@ test('a long table row preserves separated edits without losing surrounding text
   const detail = 'Long cell with repeated design context. '.repeat(140)
   const initial = body().replace('| Alpha | 12 ms | pending |', `| Alpha ${detail} | 12 ms | pending |`)
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   await writeFile(abs, initial.replace('| 12 ms | pending |', '| 12 ms | approved |'))
   await replace(page, preview(page).locator('td').filter({ hasText: '12 ms' }), '12', '10')
   await tool(page)
@@ -179,7 +198,6 @@ test('a long table row preserves separated edits without losing surrounding text
 test('different words in one paragraph merge without a false overlap', async ({ page }) => {
   const initial = body().replace('Editable introduction: original.', 'Editable introduction: latency 12 ms and retry limit 3.')
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   await writeFile(abs, initial.replace('retry limit 3', 'retry limit 5'))
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), '12', '10')
   await tool(page)
@@ -188,7 +206,6 @@ test('different words in one paragraph merge without a false overlap', async ({ 
 
 test('ten alternating Markdown typing bursts and script updates stay writable', async ({ page }) => {
   const { abs } = await open(page, body())
-  await setLive(page, true)
   for (let i = 1; i <= 10; i++) {
     const disk = await readFile(abs, 'utf8')
     await writeFile(abs, disk.replace(/External paragraph: [^.]+\./, `External paragraph: script-${i}.`))
@@ -198,17 +215,20 @@ test('ten alternating Markdown typing bursts and script updates stay writable', 
   }
 })
 
-test('Live off merges Markdown in memory without saving and survives file switch', async ({ page }) => {
+test('a merge into unsaved Markdown stays in memory and survives a file switch', async ({ page }) => {
   const initial = body()
   const { abs, explorer } = await open(page, initial)
   const other = abs.replace('.md', '-other.md')
   await writeFile(other, '# Other file\n\nOther content.\n')
+  // The edit must still be unsaved when the script's change arrives, and through
+  // the switch: what is under test is the in-memory merge and the draft.
+  await keepWritesOffDisk(page)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'unsaved-human')
   const updated = initial.replace('External paragraph: original.', 'External paragraph: script-edit.')
   await writeFile(abs, updated); await tool(page)
   await expect(preview(page)).toContainText('unsaved-human')
   await expect(preview(page)).toContainText('script-edit')
-  await expect(save(page)).toBeEnabled()
+  await expect(dirty(page)).toBeVisible()
   expect(await readFile(abs, 'utf8')).toBe(updated)
   await explorer.getByRole('button', { name: 'Refresh file panel', exact: true }).click()
   await explorer.locator('.sfe-name', { hasText: other.split('/').pop()! }).locator('xpath=..').click()
@@ -217,70 +237,74 @@ test('Live off merges Markdown in memory without saving and survives file switch
   await expect(preview(page)).toContainText('unsaved-human')
   await expect(preview(page)).toContainText('script-edit')
   await expect(error(page)).toHaveCount(0)
+  expect(await readFile(abs, 'utf8')).toBe(updated)
 })
 
-test('true Markdown conflict preserves both versions and Discard resumes clean editing', async ({ page }) => {
+test('true Markdown conflict preserves both versions and Use the version on disk resumes clean editing', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   const theirs = initial.replace('Editable introduction: original.', 'Editable introduction: external-choice.')
   await writeFile(abs, theirs)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'human-choice')
   await tool(page)
-  await expect(error(page)).toContainText('overlap')
-  await expect(live(page)).toHaveClass(/suspended/)
+  await expect(error(page)).toContainText('saving is paused for this file')
+  await expect(state(page)).toHaveAttribute('data-state', 'held')
   await expect(preview(page)).toContainText('human-choice')
   expect(await readFile(abs, 'utf8')).toBe(theirs)
   for (let i = 0; i < 3; i++) await tool(page)
   await page.waitForTimeout(800)
   expect(await readFile(abs, 'utf8')).toBe(theirs)
-  await page.getByRole('button', { name: 'Discard', exact: true }).click()
-  await page.locator('.app-modal').getByRole('button', { name: 'Discard', exact: true }).click()
+  await error(page).getByRole('button', { name: 'Use the version on disk', exact: true }).click()
+  await page.locator('.app-modal').getByRole('button', { name: 'Use the version on disk', exact: true }).click()
   await expect(preview(page)).toContainText('external-choice')
   await expect(error(page)).toHaveCount(0)
-  await expect(save(page)).toBeDisabled()
-  if ((await live(page).getAttribute('class'))?.includes('suspended')) await live(page).click()
+  // Saving resumed on its own: the next edit goes to disk with no switch to flip.
+  await expect(state(page)).toHaveText('Saved')
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'external-choice', 'after-resolution')
   await settled(page, abs, 'after-resolution', 'External paragraph: original.')
 })
 
-test('cancelling Discard keeps both conflicting versions untouched', async ({ page }) => {
+test('cancelling Use the version on disk keeps both conflicting versions untouched', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   const theirs = initial.replace('Editable introduction: original.', 'Editable introduction: external-choice.')
   await writeFile(abs, theirs)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'human-choice')
   await tool(page)
-  await expect(error(page)).toContainText('overlap')
-  await page.getByRole('button', { name: 'Discard', exact: true }).click()
+  await expect(error(page)).toContainText('saving is paused for this file')
+  await error(page).getByRole('button', { name: 'Use the version on disk', exact: true }).click()
   await page.locator('.app-modal').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(preview(page)).toContainText('human-choice')
-  await expect(live(page)).toHaveClass(/suspended/)
-  await expect(save(page)).toBeEnabled()
+  // Still paused, still unsaved, both ways out still offered.
+  await expect(state(page)).toHaveAttribute('data-state', 'held')
+  await expect(dirty(page)).toBeVisible()
+  await expect(error(page).getByRole('button', { name: 'Keep my version', exact: true })).toBeVisible()
   expect(await readFile(abs, 'utf8')).toBe(theirs)
 })
 
-test('true conflict requires an explicit second Save before replacing disk', async ({ page }) => {
+test('true conflict: a first ⌘S warns, and only a second one replaces disk', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   const theirs = initial.replace('Editable introduction: original.', 'Editable introduction: external-choice.')
   await writeFile(abs, theirs)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'human-choice')
   await tool(page)
-  await expect(error(page)).toContainText('overlap')
-  await save(page).click()
-  await expect(error(page)).toContainText('Press Save again')
-  // A later check that finds the same disk bytes has nothing new: it keeps Save's warning
+  await expect(error(page)).toContainText('saving is paused for this file')
+  // The live conflict did not pre-arm an overwrite: a ⌘S still meets the
+  // optimistic lock and is told the file changed on disk.
+  await pressSave(page)
+  const warning = 'This file changed on disk since you opened it.'
+  await expect(error(page)).toContainText(warning)
+  // A later check that finds the same disk bytes has nothing new: it keeps the save's warning
   // (2026-11-04 CI: a pull behind the conflict put the overlap banner back over it).
   await recheck(page)
-  await expect(error(page)).toContainText('Press Save again')
+  await expect(error(page)).toContainText(warning)
   expect(await readFile(abs, 'utf8')).toBe(theirs)
   await expect(preview(page)).toContainText('human-choice')
-  await save(page).click()
-  await expect(save(page)).toBeDisabled()
-  expect(await readFile(abs, 'utf8')).toContain('human-choice')
+  // The second ⌘S is the user's deliberate overwrite.
+  await pressSave(page)
+  await expect.poll(() => readFile(abs, 'utf8')).toContain('human-choice')
+  await expect(state(page)).toHaveText('Saved')
   await expect(error(page)).toHaveCount(0)
   await recheck(page)
   await expect(error(page)).toHaveCount(0)
@@ -288,7 +312,6 @@ test('true conflict requires an explicit second Save before replacing disk', asy
 
 test('Markdown keystrokes during a delayed write reach disk without self-conflict', async ({ page }) => {
   const { abs } = await open(page, body())
-  await setLive(page, true)
   let release!: () => void
   const held = new Promise<void>(r => release = r)
   let count = 0
@@ -311,15 +334,21 @@ test('Markdown keystrokes during a delayed write reach disk without self-conflic
   } finally { release() }
 })
 
-test('Preview and Source switches preserve unsaved Markdown and save once', async ({ page }) => {
+test('Preview and Source switches preserve unsaved Markdown, and it then saves', async ({ page }) => {
   const { abs } = await open(page, body())
+  // Unsaved through both switches: the text has to ride the mode change itself,
+  // not come back from disk.
+  await keepWritesOffDisk(page)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'cross-mode-edit')
-  await page.getByRole('button', { name: 'Source', exact: true }).click()
+  // "Source" in a wide bar, one "Show source" icon in a tight one.
+  await page.locator('.fv-doc-bar').getByRole('button', { name: /^(Source|Show source)$/ }).click()
   await expect(source(page)).toContainText('cross-mode-edit')
-  await page.getByRole('button', { name: 'Preview', exact: true }).click()
+  await page.locator('.fv-doc-bar').getByRole('button', { name: /^(Preview|Show preview)$/ }).click()
   await expect(preview(page)).toContainText('cross-mode-edit')
-  await save(page).click()
-  await expect(save(page)).toBeDisabled()
+  expect(await readFile(abs, 'utf8')).not.toContain('cross-mode-edit')
+  await page.unroute('**/api/file-content')
+  await pressSave(page)
+  await expect(state(page)).toHaveText('Saved')
   expect(await readFile(abs, 'utf8')).toContain('cross-mode-edit')
   await expect(error(page)).toHaveCount(0)
 })
@@ -327,6 +356,7 @@ test('Preview and Source switches preserve unsaved Markdown and save once', asyn
 test('failed disk read recovers on the next event without replacing unsaved Markdown', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
+  await keepWritesOffDisk(page)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'unsaved-human')
   let rejected = 0
   await page.route('**/api/file-content?**', async route => {
@@ -351,15 +381,13 @@ test('a visible Markdown file follows terminal writes with no tool event', async
   const { abs } = await open(page, initial)
   await writeFile(abs, initial.replace('External paragraph: original.', 'External paragraph: terminal-update.'))
   await expect(preview(page)).toContainText('terminal-update', { timeout: 35000 })
-  await expect(save(page)).toBeDisabled()
+  await expect(state(page)).toHaveText('Saved')
   await expect(error(page)).toHaveCount(0)
-  await expect(live(page)).toHaveAttribute('aria-pressed', 'false')
 })
 
 test('matching edits on both sides do not stop Live or duplicate the text', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   await writeFile(abs, initial.replace('Editable introduction: original.', 'Editable introduction: same-edit.'))
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'same-edit')
   await tool(page)
@@ -369,28 +397,26 @@ test('matching edits on both sides do not stop Live or duplicate the text', asyn
 
 test('editing again after a clean external adoption uses the new Markdown base', async ({ page }) => {
   const { abs } = await open(page, body())
-  await setLive(page, true)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'first-save')
   await settled(page, abs, 'first-save', 'External paragraph: original.')
   const disk = await readFile(abs, 'utf8')
   await writeFile(abs, disk.replace('External paragraph: original.', 'External paragraph: adopted.'))
   await tool(page)
   await expect(preview(page)).toContainText('adopted')
-  await expect(save(page)).toBeDisabled()
+  await expect(state(page)).toHaveText('Saved')
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'first-save', 'second-save')
   await settled(page, abs, 'second-save', 'adopted')
 })
 
 test('an external formatting change after editing does not make the next edit self-conflict', async ({ page }) => {
   const { abs } = await open(page, body())
-  await setLive(page, true)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'first-save')
   await settled(page, abs, 'first-save', 'External paragraph: original.')
   const disk = await readFile(abs, 'utf8')
   const formatted = disk.replace('| Alpha | 12 ms | pending |', '| Alpha    | 12 ms  | pending  |').replace('External paragraph: original.', 'External paragraph: formatted.') + '\n'
   await writeFile(abs, formatted); await tool(page)
   await expect(preview(page)).toContainText('formatted')
-  await expect(save(page)).toBeDisabled()
+  await expect(state(page)).toHaveText('Saved')
   const rejected: number[] = []
   page.on('response', r => { if (r.request().method() === 'PUT' && r.url().includes('/api/file-content') && r.status() === 409) rejected.push(r.status()) })
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'first-save', 'second-save')
@@ -400,7 +426,6 @@ test('an external formatting change after editing does not make the next edit se
 
 test('a formatting change merged into dirty Markdown settles cleanly', async ({ page }) => {
   const { abs } = await open(page, body())
-  await setLive(page, true)
   const intro = preview(page).locator('p').filter({ hasText: 'Editable introduction:' })
   await replace(page, intro, 'original', 'first-save')
   await settled(page, abs, 'first-save', 'External paragraph: original.')
@@ -414,7 +439,6 @@ test('a formatting change merged into dirty Markdown settles cleanly', async ({ 
 
 test('typing during a delayed formatting merge remains unsaved until its own write lands', async ({ page }) => {
   const { abs } = await open(page, body())
-  await setLive(page, true)
   const intro = preview(page).locator('p').filter({ hasText: 'Editable introduction:' })
   await replace(page, intro, 'original', 'first-save')
   await settled(page, abs, 'first-save', 'External paragraph: original.')
@@ -434,27 +458,30 @@ test('typing during a delayed formatting merge remains unsaved until its own wri
     await tool(page)
     await expect.poll(() => holding).toBe(true)
     await replace(page, intro, 'second-save', 'third-save')
-    await expect(save(page)).toBeEnabled()
-    await expect(page.locator('.fv-dirty-dot')).toBeVisible()
+    await expect(state(page)).toHaveAttribute('data-state', 'saving')
+    await expect(dirty(page)).toBeVisible()
     expect(await readFile(abs, 'utf8')).not.toContain('third-save')
     release()
     await settled(page, abs, 'third-save', 'concurrent-format')
   } finally { release() }
 })
 
-test('Discard uses disk changes received while its confirmation is open', async ({ page }) => {
+test('Use the version on disk takes disk changes received while its confirmation is open', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
+  await writeFile(abs, initial.replace('Editable introduction: original.', 'Editable introduction: first-disk.'))
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'unsaved-human')
-  await page.getByRole('button', { name: 'Discard', exact: true }).click()
+  await tool(page)
+  await expect(error(page)).toContainText('saving is paused for this file')
+  await error(page).getByRole('button', { name: 'Use the version on disk', exact: true }).click()
+  await expect(page.locator('.app-modal')).toBeVisible()
+  // The disk moves again while the dialog is open; confirming must take THESE bytes.
   const changed = initial.replace('Editable introduction: original.', 'Editable introduction: latest-disk.')
   await writeFile(abs, changed)
-  await tool(page)
-  await expect(error(page)).toContainText('overlap')
-  await page.locator('.app-modal').getByRole('button', { name: 'Discard', exact: true }).click()
+  await recheck(page)
+  await page.locator('.app-modal').getByRole('button', { name: 'Use the version on disk', exact: true }).click()
   await expect(preview(page)).toContainText('latest-disk')
-  await expect(save(page)).toBeDisabled()
-  await setLive(page, true)
+  await expect(state(page)).toHaveText('Saved')
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'latest-disk', 'after-dialog')
   await settled(page, abs, 'after-dialog', 'External paragraph: original.')
 })
@@ -462,6 +489,7 @@ test('Discard uses disk changes received while its confirmation is open', async 
 test('a missing-file response never replaces the dirty Markdown buffer', async ({ page }) => {
   const initial = body()
   const { abs } = await open(page, initial)
+  await keepWritesOffDisk(page)
   await replace(page, preview(page).locator('p').filter({ hasText: 'Editable introduction:' }), 'original', 'unsaved-human')
   let missing = 0
   await page.route('**/api/file-content?**', async route => {
@@ -483,13 +511,12 @@ test('a missing-file response never replaces the dirty Markdown buffer', async (
 test('CRLF and frontmatter external updates do not create automatic dirty writes', async ({ page }) => {
   const initial = body().replace(/\n/g, '\r\n')
   const { abs } = await open(page, initial)
-  await setLive(page, true)
   const puts: string[] = []
   page.on('request', r => { if (r.method() === 'PUT' && r.url().includes('/api/file-content')) puts.push(r.url()) })
   const updated = initial.replace('revision: 1', 'revision: 2').replace('External paragraph: original.', 'External paragraph: fresh.')
   await writeFile(abs, updated); await tool(page)
   await expect(preview(page)).toContainText('External paragraph: fresh.')
-  await expect(save(page)).toBeDisabled()
+  await expect(state(page)).toHaveText('Saved')
   await page.waitForTimeout(900)
   expect(await readFile(abs, 'utf8')).toBe(updated)
   expect(puts).toEqual([])

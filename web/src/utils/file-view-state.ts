@@ -116,6 +116,8 @@ export function saveSelectedFile(host: string | undefined, scope: string, path: 
 export interface FileHistoryEntry {
   path: string;
   line?: number;
+  /** When it was opened (ms since epoch), for "Recent". Older stacks have none. */
+  at?: number;
 }
 
 /**
@@ -137,7 +139,8 @@ function sanitizeEntry(raw: unknown): FileHistoryEntry | null {
   const obj = raw as Partial<FileHistoryEntry>;
   if (typeof obj.path !== 'string' || obj.path.length === 0) return null;
   const line = typeof obj.line === 'number' && Number.isInteger(obj.line) && obj.line > 0 ? obj.line : undefined;
-  return line ? { path: obj.path, line } : { path: obj.path };
+  const at = typeof obj.at === 'number' && Number.isFinite(obj.at) && obj.at > 0 ? obj.at : undefined;
+  return { path: obj.path, ...(line ? { line } : {}), ...(at ? { at } : {}) };
 }
 
 function sanitizeHistory(raw: unknown): FileHistory {
@@ -176,10 +179,10 @@ export function saveFileHistory(host: string | undefined, scope: string, history
  *  - navigating after going Back TRUNCATES the forward tail (that future is gone);
  *  - the stack is capped, dropping oldest entries (index shifts with them).
  */
-export function pushFileHistory(history: FileHistory, path: string, line?: number): FileHistory {
+export function pushFileHistory(history: FileHistory, path: string, line?: number, at?: number): FileHistory {
   const cur = history.entries[history.index];
   if (cur?.path === path && (line === undefined || cur.line === line)) return history;
-  const entry: FileHistoryEntry = line ? { path, line } : { path };
+  const entry: FileHistoryEntry = { path, ...(line ? { line } : {}), ...(at ? { at } : {}) };
   const entries = [...history.entries.slice(0, history.index + 1), entry];
   const overflow = entries.length - HISTORY_MAX_ENTRIES;
   const trimmed = overflow > 0 ? entries.slice(overflow) : entries;
@@ -197,7 +200,7 @@ export function stampFileHistoryLine(history: FileHistory, path: string, line: n
   const cur = history.entries[history.index];
   if (!cur || cur.path !== path || cur.line === line) return history;
   const entries = [...history.entries];
-  entries[history.index] = { path, line };
+  entries[history.index] = { ...cur, line };
   return { entries, index: history.index };
 }
 

@@ -4,10 +4,11 @@
  * The behaviour here is already pinned by `file-explorer-mutations.spec.ts` and
  * `file-draft-persistence.spec.ts`; this file exists to produce the artifact those
  * two don't: one continuous video of the whole feature set in the order a person
- * would meet it (create a folder, create a file in it, edit and save, edit and
- * DON'T save, walk away, come back, turn on live edit and watch it write and merge
- * another writer's change, look back through the file's history, rename,
- * duplicate, delete).
+ * would meet it (create a folder, create a file in it, type and watch it save
+ * itself, type while the write cannot land, walk away, come back to the kept
+ * text, watch live saving merge another writer's change, look back through the
+ * file's history, rename, duplicate, delete). Saving is always live since the
+ * "Document first" file page (2026-11-06): there is no Save or Live button.
  *
  * Two deliberate choices:
  *   - It builds its OWN browser context instead of using the `page` fixture,
@@ -18,7 +19,7 @@
  *     video of a broken feature, which is worse than no video at all — every step
  *     below waits on the state it just caused.
  */
-import { test, expect, type Browser, type Locator, type Page } from '@playwright/test'
+import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -42,6 +43,8 @@ function nodeByName(explorer: Locator, name: string) {
   return rowByName(explorer, name).locator('xpath=..')
 }
 
+const saveState = (page: Page) => page.getByTestId('fv-save-state')
+
 async function rightClick(page: Page, target: Locator) {
   await target.click({ button: 'right' })
   const menu = page.getByTestId('file-ctx-menu')
@@ -56,7 +59,7 @@ async function rightClick(page: Page, target: Locator) {
 // `browserContext.close: Test ended`, which reads like a teardown bug).
 test.setTimeout(180_000)
 
-test('recorded walkthrough: create, edit, keep unsaved work, live edit + merge, history, rename, duplicate, delete', async ({ browser }, testInfo) => {
+test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, history, rename, duplicate, delete', async ({ browser }, testInfo) => {
   const baseURL = testInfo.project.use.baseURL
   expect(baseURL, 'baseURL must come from playwright.config.ts, never hardcoded').toBeTruthy()
 
@@ -97,7 +100,7 @@ test('recorded walkthrough: create, edit, keep unsaved work, live edit + merge, 
     await task.locator('.todo-item-title').click()
     const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
     await expect(panel).toBeVisible()
-    await panel.getByRole('button', { name: 'Files' }).click()
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 15_000 })
     await beat(page, 1200)
@@ -125,29 +128,43 @@ test('recorded walkthrough: create, edit, keep unsaved work, live edit + merge, 
     await expect(editor).toBeVisible({ timeout: 10_000 })
     await beat(page)
 
-    // ── Type and SAVE ────────────────────────────────────────────────────────
+    const filePath = `${cwd}/${dirName}/${fileName}`
+    const onDisk = async () => {
+      const r = await page.request.get(`/api/file-content?path=${encodeURIComponent(filePath)}`)
+      return (await r.json()).content as string
+    }
+
+    // ── Type: it saves itself ────────────────────────────────────────────────
     await editor.click()
     await page.keyboard.type('Files panel: right-click to create, rename, delete.', { delay: 22 })
-    await expect(page.locator('.fv-dirty-dot')).toBeVisible()
-    await beat(page)
-    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(saveState(page)).toHaveText('Saved', { timeout: 10_000 })
     await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
+    await expect.poll(onDisk, { timeout: 10_000 }).toContain('Files panel: right-click to create, rename, delete.')
     await beat(page)
 
-    // ── Type and DON'T save, then walk away ──────────────────────────────────
+    // ── Type while the write cannot land, then walk away ─────────────────────
+    // Every write is refused at the network, as when Walnut is unreachable: the
+    // text has nowhere to go but the editor and this browser's draft store.
+    const blockWrites = (route: Route) =>
+      route.request().method() === 'PUT' ? route.abort() : route.continue()
+    await page.route('**/api/file-content*', blockWrites)
     await editor.click()
     await page.keyboard.press('End')
     await page.keyboard.type('\nThis line was never saved.', { delay: 22 })
     await expect(page.locator('.fv-dirty-dot')).toBeVisible()
+    await expect(saveState(page)).not.toHaveAttribute('data-state', 'saved')
     // The tree marks which file is holding unsaved work.
     await expect(nodeByName(explorer, fileName).locator('.sfe-draft-dot')).toBeVisible({ timeout: 10_000 })
     await beat(page, 1000)
 
     await panel.getByRole('button', { name: 'Changed' }).click()
     await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
+    expect(await onDisk()).not.toContain('This line was never saved.')
     await beat(page, 1200)
 
-    await panel.getByRole('button', { name: 'Files' }).click()
+    // Walnut is back before the user returns.
+    await page.unroute('**/api/file-content*', blockWrites)
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
     await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 15_000 })
     // The unsaved line came back, and the app SAYS it restored it rather than
     // leaving the user to assume their save had worked.
@@ -156,21 +173,15 @@ test('recorded walkthrough: create, edit, keep unsaved work, live edit + merge, 
     await beat(page, 1500)
     await page.screenshot({ path: `${OUT_DIR}/tour-1-draft-restored.png` })
 
-    // Save it so the rest of the tour isn't fighting a dirty buffer.
-    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    // ⌘S writes the restored text now, so the rest of the tour starts clean.
+    await editor.click()
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveState(page)).toHaveText('Saved', { timeout: 10_000 })
     await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
+    await expect.poll(onDisk, { timeout: 10_000 }).toContain('This line was never saved.')
     await beat(page)
 
-    // ── Live edit: type, and it is on disk before you reach for Save ─────────
-    const filePath = `${cwd}/${dirName}/${fileName}`
-    const onDisk = async () => {
-      const r = await page.request.get(`/api/file-content?path=${encodeURIComponent(filePath)}`)
-      return (await r.json()).content as string
-    }
-    const liveToggle = page.locator('.fv-live-toggle')
-    await liveToggle.click()
-    await expect(liveToggle).toHaveClass(/active/)
-    await beat(page, 900)
+    // ── Live saving: type, and it is on disk with no button pressed ──────────
     await editor.locator('.cm-line').last().click()
     await page.keyboard.press('End')
     await page.keyboard.type('\nLive edit writes this line by itself.', { delay: 22 })
@@ -197,12 +208,16 @@ test('recorded walkthrough: create, edit, keep unsaved work, live edit + merge, 
     await expect.poll(onDisk, { timeout: 10_000 }).toContain('(and you kept typing)')
     await beat(page, 1800)
     await page.screenshot({ path: `${OUT_DIR}/tour-5-live-merged.png` })
-    // Back to explicit saves for the rest of the tour.
-    await liveToggle.click()
-    await expect(liveToggle).not.toHaveClass(/active/)
 
     // ── History: every open and save is a version; look back, restore ────────
-    await page.getByRole('button', { name: 'History', exact: true }).click()
+    // A narrow pane moves History from the bar into ⋯ (data-fit="tight").
+    const bar = page.locator('.file-content-view .fv-doc-bar')
+    if ((await bar.getAttribute('data-fit')) === 'tight') {
+      await bar.getByRole('button', { name: 'More file actions' }).click()
+      await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'History' }).click()
+    } else {
+      await bar.getByRole('button', { name: 'History', exact: true }).click()
+    }
     const flyout = page.getByTestId('file-history-flyout')
     await expect(flyout).toBeVisible()
     const rows = flyout.locator('.fh-row')
@@ -213,14 +228,12 @@ test('recorded walkthrough: create, edit, keep unsaved work, live edit + merge, 
     await beat(page, 2000)
     await page.screenshot({ path: `${OUT_DIR}/tour-6-history-diff.png` })
     await flyout.getByRole('button', { name: 'Restore this version' }).click()
-    // Restored as UNSAVED work: the dirty dot is back and nothing was written.
-    await expect(page.locator('.fv-dirty-dot')).toBeVisible()
+    // A restore is an edit: it lands in the editor and is saved like typing, so
+    // the oldest version (from before the merged line) is on disk again.
+    await expect.poll(onDisk, { timeout: 10_000 }).not.toContain('(and you kept typing)')
+    await expect(saveState(page)).toHaveText('Saved', { timeout: 10_000 })
+    await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
     await beat(page, 1200)
-    await page.getByRole('button', { name: 'Discard' }).click()
-    const discardModal = page.locator('.app-modal')
-    await expect(discardModal).toBeVisible()
-    await discardModal.getByRole('button', { name: 'Discard' }).click()
-    await expect(page.locator('.fv-dirty-dot')).toHaveCount(0, { timeout: 10_000 })
     await flyout.getByRole('button', { name: 'Close history' }).click()
     await expect(flyout).toHaveCount(0)
     await beat(page)

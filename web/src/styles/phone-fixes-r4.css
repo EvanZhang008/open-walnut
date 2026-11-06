@@ -238,6 +238,13 @@
     font-size: 13px;
     white-space: nowrap;
   }
+  /* The document bar's icon buttons and its path are touch targets too (C19). */
+  .app-shell-navigation .fv-doc-bar .fv-doc-icon,
+  .app-shell-navigation .fv-doc-bar .sfe-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .app-shell-navigation .fv-doc-bar .sfe-crumbs { min-height: 44px; }
   /* C28: an editable document is 16 px or more, or iOS zooms in on focus. */
   .app-shell-navigation .ProseMirror[contenteditable='true'] {
     font-size: max(16px, 1em);

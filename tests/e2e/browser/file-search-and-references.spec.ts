@@ -23,7 +23,7 @@ async function openFilesPanel(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return { panel, explorer }
@@ -107,13 +107,20 @@ test('search works in the markdown preview too (DOM surface)', async ({ page }) 
   const row = explorer.locator('.session-file-explorer-node', { hasText: 'incident-report.md' }).first()
   await expect(row).toBeVisible({ timeout: 10_000 })
   await row.click()
-  await expect(explorer.locator('.fv-html-toolbar')).toBeVisible({ timeout: 10_000 })
+  const docBar = explorer.locator('.fv-doc-bar')
+  await expect(docBar).toBeVisible({ timeout: 10_000 })
   // Wait for the WYSIWYG editor to actually hold the doc — TipTap fills after
   // mount, and a search fired against the empty surface would report 0.
   await expect(explorer.locator('.fv-wysiwyg-editor')).toContainText('timeline entry 1', { timeout: 10_000 })
 
-  // The Find button is the mouse path to the same bar (⌘F targeting is covered above).
-  await explorer.locator('.fv-find-btn').click()
+  // The Find button is the mouse path to the same bar (⌘F targeting is covered
+  // above). A narrow pane (data-fit="tight") keeps it in ⋯ as "Find in file".
+  if ((await docBar.getAttribute('data-fit')) === 'tight') {
+    await docBar.getByRole('button', { name: 'More file actions' }).click()
+    await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Find in file' }).click()
+  } else {
+    await docBar.getByRole('button', { name: 'Find in file' }).click()
+  }
   const bar = explorer.locator('.fv-search-bar')
   await expect(bar).toBeVisible()
   await bar.locator('.fv-search-input').fill('timeline entry')

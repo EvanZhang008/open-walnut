@@ -21,6 +21,9 @@ declare module '@tiptap/core' {
     markdown: {
       getMarkdown(): string;
       options: Record<string, unknown>;
+      /** Markdown to the HTML setContent loads (FileMarkdownEditor's untouched spelling). */
+      parser: { parse(content: string, options?: { inline?: boolean }): string };
+      serializer: { serialize(doc: import('@tiptap/pm/model').Node): string };
     };
     /**
      * WikiEmbedNode's own storage (wiki-embed-node.ts). `notePath` is the vault

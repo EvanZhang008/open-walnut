@@ -772,8 +772,8 @@ test('Files is the tree or one file (back returns to the tree); Changed is one c
   await expect(body.locator('.session-file-explorer-preview')).toBeHidden()
   // A file row has the page glyph; the fixture keeps its files in a folder,
   // so open folders until one shows.
-  const files = tree.locator('.session-file-explorer-node:not(.sfe-root-header)').filter({ has: page.locator('.sfe-icon', { hasText: '\u{1F4C4}' }) })
-  const closedDirs = tree.locator('.session-file-explorer-node:not(.sfe-root-header)').filter({ has: page.locator('.sfe-arrow', { hasText: '\u25B6' }) })
+  const files = tree.locator('.session-file-explorer-node:not(.sfe-root-header)').filter({ has: page.locator('.sfe-icon[data-kind="file"]') })
+  const closedDirs = tree.locator('.session-file-explorer-node:not(.sfe-root-header)').filter({ has: page.locator('.sfe-arrow[data-state="closed"]') })
   await expect(tree.locator('.session-file-explorer-node:not(.sfe-root-header)').first()).toBeVisible({ timeout: 15_000 })
   for (let i = 0; i < 4 && (await files.count()) === 0; i++) {
     if ((await closedDirs.count()) === 0) break

@@ -9,8 +9,9 @@
  * different roots for the SAME session — a chat file-path click roots at the
  * clicked file's parent dir, the Files chip roots at the session cwd. So the
  * click wrote one key and the chip read another: the chip always reopened on the
- * empty "Select a file to preview" pane. Both now key by a stable SCOPE (the
- * session cwd), and the tree expands to reveal the restored file.
+ * empty pane (then "Select a file to preview", now "No file open"). Both now
+ * key by a stable SCOPE (the session cwd), and the tree expands to reveal the
+ * restored file.
  *
  * The rest cover the browser-style ‹ › history: Back returns to the previous
  * file, Forward returns to the one you left, ⌘[ / ⌘] do the same from the
@@ -21,6 +22,11 @@ import { test, expect, type Page, type Locator } from '@playwright/test'
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
 const SCREENSHOT_DIR = 'test-results/file-view-history'
+
+// The ‹ › buttons sit in the document bar only while it has room; a narrow
+// pane (data-fit="tight") moves them into ⋯. A wide window keeps them in the
+// bar, which is what these tests click.
+test.use({ viewport: { width: 1440, height: 900 } })
 
 /**
  * Open the fixture session's panel from the homepage (real clicks, no page.goto).
@@ -42,7 +48,7 @@ async function openSessionPanel(page: Page): Promise<Locator> {
 }
 
 async function openFiles(panel: Locator): Promise<Locator> {
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return explorer
@@ -55,7 +61,7 @@ async function openFiles(panel: Locator): Promise<Locator> {
  * one click always closes.
  */
 async function closeFiles(panel: Locator) {
-  const chip = panel.getByRole('button', { name: 'Files' })
+  const chip = panel.getByRole('button', { name: 'Files', exact: true })
   await chip.click()
   const explorer = panel.locator('.session-file-explorer')
   if (await explorer.count() > 0) await chip.click()
@@ -127,7 +133,7 @@ test('a file opened from a chat link is remembered by the Files chip (the report
   //    stays open). THE REGRESSION, in its most direct form: the file used to
   //    vanish here, because the "last file read" was keyed by the tree root and
   //    the new root had no memory of it. It must stay open and stay revealed.
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
   await expect(
     explorer.locator('.session-file-explorer-node.selected .sfe-name', { hasText: 'linked-from-chat.md' }),

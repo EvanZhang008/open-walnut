@@ -30,7 +30,6 @@ test.beforeEach(async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
-    localStorage.setItem('open-walnut-live-edit', '0')
   })
   await page.evaluate(url => { window.location.href = url }, baseURL!)
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 30_000 })
@@ -47,6 +46,10 @@ test('external changes update the root and a deep expanded folder without Refres
   await fs.mkdir(deep, { recursive: true })
   await Promise.all(Array.from({ length: 100 }, (_, i) => fs.writeFile(path.join(deep, `item-${String(i).padStart(3, '0')}.txt`), `Item ${i}\n`)))
   await fs.writeFile(path.join(deep, 'draft.txt'), 'Preserve this draft\n')
+  // Saving is always live, so the typed draft would be on disk within a second.
+  // Refuse every write at the network (as when Walnut is unreachable) so the
+  // text stays an unsaved draft in the editor while the tree changes around it.
+  await page.route('**/api/file-content*', route => route.request().method() === 'PUT' ? route.abort() : route.continue())
   try {
     await expect(row(tree, rootName)).toBeVisible({ timeout: 15_000 })
     for (const name of [rootName, 'docs', 'designs', 'current']) await row(tree, name).click()
@@ -90,6 +93,7 @@ test('external changes update the root and a deep expanded folder without Refres
     await expect(editor).toContainText('UNSAVED')
     expect(errors).toEqual([])
   } finally {
+    await page.unroute('**/api/file-content*')
     await fs.rm(root, { recursive: true, force: true })
   }
 })

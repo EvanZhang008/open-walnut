@@ -3,11 +3,21 @@
  *
  * A reply of the chat content session (chat-content-helpers.ts) contains an .mp4
  * path. Clicking it must open the session's Files tab with a real <video> player
- * (src = the raw file URL) and a Download button, never a "Binary file, cannot
- * display" dead end.
+ * (src = the raw file URL) and Download in the document bar's ⋯ menu, never a
+ * "Binary file, cannot display" dead end.
  */
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openChatContent } from './chat-content-helpers'
+
+/** ⋯ → Download, returning the URL the browser was sent to download. */
+async function downloadFromMenu(page: Page, scope: Locator): Promise<string> {
+  await scope.locator('.file-content-view .fv-doc-bar').getByRole('button', { name: 'More file actions' }).click()
+  const item = page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Download' })
+  await expect(item).toBeVisible({ timeout: 5000 })
+  const download = page.waitForEvent('download')
+  await item.click()
+  return (await download).url()
+}
 
 const SCREENSHOT_DIR = 'test-results/video-preview-verify'
 
@@ -39,10 +49,8 @@ test.describe('video file preview in chat', () => {
     expect(src).toContain('walkthrough.mp4')
     await expect(video).toHaveAttribute('controls', '')
 
-    // Download button present, pointing at the attachment URL
-    const download = overlay.locator('a.fv-download-btn')
-    await expect(download).toBeVisible()
-    const href = await download.getAttribute('href')
+    // ⋯ → Download sends the browser to the attachment URL
+    const href = await downloadFromMenu(page, overlay)
     expect(href).toContain('download=1')
 
     // Playback speed selector: selecting 2× applies to the media element
@@ -81,9 +89,8 @@ test.describe('video file preview in chat', () => {
     await expect(link.first()).toBeVisible({ timeout: 5000 })
     await link.first().click()
 
-    const download = panel.locator('a.fv-download-btn')
-    await expect(download).toBeVisible({ timeout: 5000 })
-    const href = (await download.getAttribute('href'))!
+    await expect(panel.locator('.fv-media-preview')).toBeVisible({ timeout: 5000 })
+    const href = await downloadFromMenu(page, panel)
 
     const res = await page.request.get(href)
     expect(res.status()).toBe(200)

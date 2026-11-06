@@ -1,7 +1,8 @@
 /**
  * Playwright browser tests for LIVE EDIT in the session Files panel.
  *
- * Live mode writes the buffer to disk shortly after the user stops typing, and
+ * Saving is always live: the buffer goes to disk shortly after the user stops
+ * typing (there is no Save button and no Live switch any more), and the panel
  * answers the one thing that makes auto-save dangerous in a directory an agent
  * is also editing: a 409 from the optimistic lock. Instead of a banner, it
  * re-reads disk and three-way-merges; only an overlapping edit stops it.
@@ -11,9 +12,9 @@
  *   - a non-overlapping write from someone else is FOLDED IN, both edits land,
  *     and the user is told (a silent merge is indistinguishable from "nothing
  *     happened", which is how a user learns to distrust the mode),
- *   - an overlapping write PAUSES live mode for that file with the user's text
+ *   - an overlapping write PAUSES saving for that file with the user's text
  *     still in the editor and the other writer's bytes still on disk — neither
- *     side is thrown away by a guess,
+ *     side is thrown away by a guess — and "Keep my version" resumes it,
  *   - switching files lands the outgoing file's last burst under ITS path.
  *
  * The merge rule itself has 28 unit tests (tests/lib/three-way-merge.test.ts);
@@ -68,7 +69,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
   return explorer
@@ -82,8 +83,20 @@ function editor(page: Page): Locator {
   return page.locator('.fv-source-editor .cm-content')
 }
 
-function liveToggle(page: Page): Locator {
-  return page.locator('.fv-live-toggle')
+/** The document bar's save chip: Saved / Saving… / Waiting to save / Not saved. */
+function saveState(page: Page): Locator {
+  return page.getByTestId('fv-save-state')
+}
+
+/**
+ * Make every write fail as if the server could not be reached. Saving is live,
+ * so text typed in a test that is about an UNSAVED buffer would otherwise be on
+ * disk 600 ms later; an aborted PUT keeps it in the editor (live mode retries it
+ * on a backoff, and nothing reaches disk while this route stands).
+ */
+async function keepWritesOffDisk(page: Page): Promise<void> {
+  await page.route('**/api/file-content', route =>
+    route.request().method() === 'PUT' ? route.abort('failed') : route.fallback())
 }
 
 async function makeScratchFile(page: Page, name: string, body: string): Promise<string> {
@@ -121,11 +134,8 @@ async function caretToLineStart(page: Page, line: number): Promise<void> {
 async function openFileLive(page: Page, explorer: Locator, name: string, expectText: string): Promise<void> {
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText(expectText)
-  const toggle = liveToggle(page)
-  await expect(toggle).toBeVisible()
-  if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-  await expect(toggle).toHaveClass(/active/)
+  // Nothing to turn on: saving is live for every editable file.
+  await expect(saveState(page)).toHaveText('Saved')
 }
 
 test.beforeEach(async ({ page, baseURL }) => {
@@ -144,14 +154,15 @@ test.beforeEach(async ({ page, baseURL }) => {
     }
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
-      // Every test starts with live mode OFF and turns it on itself: the pref is
-      // global, and a previous test leaving it on would hide a broken toggle.
+      // An old browser's stored "Live off": it must not matter any more, saving
+      // is always live.
       localStorage.setItem('open-walnut-live-edit', '0')
     } catch { /* off */ }
   })
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
-  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 15_000 })
+  // A cold fixture server's first page load can take longer than 15 s.
+  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 45_000 })
 })
 
 test('Bash disk writes update the Markdown preview without Refresh or write-back', async ({ page }) => {
@@ -161,7 +172,6 @@ test('Bash disk writes update the Markdown preview without Refresh or write-back
   await nodeByName(explorer, name).click()
   const preview = page.locator('.fv-wysiwyg-editor .ProseMirror')
   await expect(preview).toContainText('Original disk version.')
-  await liveToggle(page).click()
   await preview.evaluate(el => { (el as HTMLElement).dataset.liveStamp = 'original' })
   const writes: string[] = []
   page.on('request', req => { if (req.method() === 'PUT' && req.url().includes('/api/file-content')) writes.push(req.url()) })
@@ -184,6 +194,9 @@ test('focus checks use 304 for unchanged text and merge unsaved edits without wr
   const explorer = await openFilesPanel(page)
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('middle')
+  // The typing below must stay unsaved for the whole test: the subject is a
+  // check that folds disk into a DIRTY buffer, not the write that follows it.
+  await keepWritesOffDisk(page)
   await caretToLineStart(page, 1)
   await page.keyboard.type('ours-')
   await expect(page.locator('.fv-dirty-dot')).toBeVisible()
@@ -207,11 +220,15 @@ test('script conflict keeps the unsaved buffer and the external disk version sep
   const explorer = await openFilesPanel(page)
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('middle')
+  // The buffer must still be unsaved when the agent's pull lands, so the
+  // conflict is the PULL's (a write that got there first would just be adopted).
+  await keepWritesOffDisk(page)
   await caretToLineStart(page, 1)
   await page.keyboard.type('ours-')
   await writeFile(abs, 'THEIRS\nmiddle\nbottom\n')
   await emitTool(page)
-  await expect(page.locator('.fv-save-error')).toContainText('overlap yours')
+  await expect(page.locator('.fv-save-error')).toContainText('saving is paused for this file')
+  await expect(saveState(page)).toHaveText('Not saved')
   await expect(editor(page)).toContainText('ours-top')
   expect(await onDisk(page, abs)).toBe('THEIRS\nmiddle\nbottom\n')
 })
@@ -247,7 +264,7 @@ test('a second disk update during a held pull is read after that pull settles', 
   } finally { release() }
 })
 
-test('a pull started before Save cannot replace the saved buffer', async ({ page }) => {
+test('a pull started before a save cannot replace the saved buffer', async ({ page }) => {
   const name = `live-save-race-${Date.now()}.txt`
   const abs = await makeScratchFile(page, name, 'original\n')
   const explorer = await openFilesPanel(page)
@@ -284,13 +301,15 @@ test('a pull started before Save cannot replace the saved buffer', async ({ page
     await page.waitForFunction(() => (window as EventWindow).heldFileResponse?.ready)
     await caretToLineStart(page, 1)
     await page.keyboard.type('saved-')
-    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    // ⌘S: the explicit save, at once (it also takes over the armed auto-write).
+    await page.keyboard.press('ControlOrMeta+s')
     await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
     expect(await readFile(abs, 'utf8')).toBe('saved-original\n')
     await page.evaluate(() => (window as EventWindow).heldFileResponse?.release())
     await page.waitForFunction(() => (window as EventWindow).heldFileResponse?.checks.length === 2)
     await expect(editor(page)).toContainText('saved-original')
-    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+    await expect(saveState(page)).toHaveText('Saved')
+    expect(await readFile(abs, 'utf8')).toBe('saved-original\n')
   } finally {
     await page.evaluate(() => (window as EventWindow).heldFileResponse?.release())
   }
@@ -354,7 +373,7 @@ test('visible idle checks recover writes without tool events and hidden views st
   await expect(editor(page)).toContainText('external terminal version', { timeout: 35_000 })
 })
 
-test('reconnect recovers a missed write even with Live auto-save off', async ({ page }) => {
+test('reconnect recovers a missed write in a file nobody typed into', async ({ page }) => {
   const name = `live-reconnect-${Date.now()}.txt`
   const abs = await makeScratchFile(page, name, 'original\n')
   const explorer = await openFilesPanel(page)
@@ -363,10 +382,11 @@ test('reconnect recovers a missed write even with Live auto-save off', async ({ 
   await writeFile(abs, 'written while disconnected\n')
   await emitEvent(page, '_ws:reconnected', {})
   await expect(editor(page)).toContainText('written while disconnected')
-  await expect(liveToggle(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(saveState(page)).toHaveText('Saved')
+  await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
 })
 
-test('live mode writes the buffer to disk after typing stops, and remembers being on', async ({ page }) => {
+test('typing reaches disk on its own after it stops, whatever an old preference said', async ({ page }) => {
   const name = `live-${Date.now()}.txt`
   const abs = await makeScratchFile(page, name, 'first line\n')
 
@@ -379,16 +399,16 @@ test('live mode writes the buffer to disk after typing stops, and remembers bein
   await page.keyboard.press('End')
   await page.keyboard.type(typed)
 
-  // No Save click. The bytes must reach disk on their own, and the dirty state
-  // must clear — a dirty dot that stays lit after an auto-write would teach the
-  // user to press Save anyway, which defeats the mode.
+  // No ⌘S. The bytes must reach disk on their own, and the dirty state must
+  // clear: a chip that stays on "Saving…" after the write landed would teach the
+  // user to distrust it.
   await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toContain(typed)
   await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  await expect(saveState(page)).toHaveText('Saved')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/2-auto-written.png` })
 
-  // The preference is global and survives the page: stored, not just in state.
-  expect(await page.evaluate(() => localStorage.getItem('open-walnut-live-edit'))).toBe('1')
+  // The init script stored the old "Live off" and nothing read it.
+  expect(await page.evaluate(() => localStorage.getItem('open-walnut-live-edit'))).toBe('0')
 })
 
 test('a non-overlapping change from disk is merged into the live buffer and written back', async ({ page }) => {
@@ -417,10 +437,12 @@ test('a non-overlapping change from disk is merged into the live buffer and writ
   await expect(editor(page)).toContainText('ours-top')
   await expect(editor(page)).toContainText('bottom-by-agent')
   await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
-  await expect(liveToggle(page)).toHaveClass(/active/)
+  // A merge is not a pause: saving is still live and nothing needs deciding.
+  await expect(saveState(page)).toHaveText('Saved')
+  await expect(page.locator('.fv-save-error')).toHaveCount(0)
 })
 
-test('an overlapping change pauses live mode for the file and keeps both versions', async ({ page }) => {
+test('an overlapping change pauses saving for the file and keeps both versions', async ({ page }) => {
   const name = `live-conflict-${Date.now()}.txt`
   const abs = await makeScratchFile(page, name, 'line one\nline two\nline three\n')
 
@@ -432,13 +454,12 @@ test('an overlapping change pauses live mode for the file and keeps both version
   await caretToLineStart(page, 1)
   await page.keyboard.type('ours-')
 
-  // Live mode pauses for THIS file (the pill is no longer active) and says why.
-  const toggle = liveToggle(page)
-  await expect(toggle).toHaveClass(/fv-live-suspended/, { timeout: 10_000 })
-  await expect(toggle).not.toHaveClass(/active/)
+  // Saving pauses for THIS file (the chip reads Not saved) and the banner says why.
   const notice = page.locator('.fv-save-error')
-  await expect(notice).toBeVisible()
-  await expect(notice).toContainText('Live edit is paused for this file')
+  await expect(notice).toBeVisible({ timeout: 10_000 })
+  await expect(notice).toContainText('saving is paused for this file')
+  await expect(saveState(page)).toHaveAttribute('data-state', 'held')
+  await expect(saveState(page)).toHaveText('Not saved')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/4-conflict-paused.png` })
 
   // Neither side was thrown away: our text is still in the editor (dirty), and
@@ -447,12 +468,16 @@ test('an overlapping change pauses live mode for the file and keeps both version
   await expect(page.locator('.fv-dirty-dot')).toBeVisible()
   expect(await onDisk(page, abs)).toBe('THEIRS one\nline two\nline three\n')
 
-  // Clicking the pill on a paused file resumes it (it does not flip the global
-  // preference off, which is what a naive toggle would do here).
-  await toggle.click()
-  await expect(toggle).toHaveClass(/active/)
-  await expect(toggle).not.toHaveClass(/fv-live-suspended/)
-  expect(await page.evaluate(() => localStorage.getItem('open-walnut-live-edit'))).toBe('1')
+  // "Keep my version" is the way out that keeps ours: it lands on disk, the
+  // banner goes, and saving is live again for the file.
+  await notice.getByRole('button', { name: 'Keep my version' }).click()
+  await expect(notice).toHaveCount(0)
+  await expect(saveState(page)).toHaveText('Saved')
+  expect(await onDisk(page, abs)).toBe('ours-line one\nline two\nline three\n')
+  await editor(page).locator('.cm-line').nth(1).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' resumed')
+  await expect.poll(() => onDisk(page, abs), { timeout: 10_000 }).toBe('ours-line one\nline two resumed\nline three\n')
 })
 
 test('switching files lands the outgoing file\'s last burst under its own path', async ({ page }) => {

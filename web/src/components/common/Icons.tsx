@@ -100,6 +100,18 @@ export const ICON_MAIL = <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 export const ICON_NOTES_EXPAND = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 2v12M2 6h12"/></svg>;
 /** ⧉ open in new tab: box with an arrow leaving the top-right corner */
 export const ICON_NEW_TAB = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V8"/><polyline points="10 2 14 2 14 6"/><line x1="7" y1="9" x2="14" y2="2"/></svg>;
+/** Clock with a back arrow: a file's version history. */
+export const ICON_HISTORY = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 8a6 6 0 1 0 1.8-4.3"/><polyline points="2 2 2 4.5 4.5 4.5"/><path d="M8 5v3.2l2.2 1.4"/></svg>;
+/** Three dots: more actions. */
+export const ICON_MORE = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="12.5" cy="8" r="1.25"/></svg>;
+/** Arrow into a tray: download. */
+export const ICON_DOWNLOAD = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v8.5M4.5 7L8 10.5 11.5 7"/><path d="M2.5 13.5h11"/></svg>;
+/** Arrow out of a square: open in another app. */
+export const ICON_OPEN_APP = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M6 10l4-4M6.5 6H10v3.5"/></svg>;
+/** Angle brackets: the source of a file. */
+export const ICON_CODE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5"/></svg>;
+/** Arrow up: the parent folder. */
+export const ICON_ARROW_UP = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 13V3.5M4 7.5l4-4 4 4"/></svg>;
 export const ICON_VSCODE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2.5v11l-3.2 1.2L5.5 9.8 2.7 12 1 10.7l3-2.7-3-2.7L2.7 4l2.8 2.2 5.3-4.9z"/><path d="M10.8 1.3v13.4M5.5 6.2L8 8l-2.5 1.8"/></svg>;
 export const ICON_ROBOT = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="10" height="8" rx="2"/><circle cx="6" cy="9" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="9" r="1" fill="currentColor" stroke="none"/><path d="M8 2v3"/><circle cx="8" cy="1.5" r="1"/></svg>;
 export const ICON_QUESTION = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6.5"/><path d="M6 6a2 2 0 013.5 1.5c0 1-1.5 1.5-1.5 2.5"/><circle cx="8" cy="12" r=".5" fill="currentColor" stroke="none"/></svg>;
@@ -207,3 +219,8 @@ export const ICON_SECTION_NOTES = <svg width="13" height="13" viewBox="0 0 24 24
 
 /** Side panel: shows / hides the home task panel (the rail toggle draws the same shape). */
 export const ICON_SIDE_PANEL = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>;
+
+/** Media skip: an arrow turning back (rewind a few seconds). */
+export const ICON_SKIP_BACK = <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.6"/><polyline points="2.5 2 2.5 5 5.5 5"/></svg>;
+/** Media skip: an arrow turning forward. */
+export const ICON_SKIP_FORWARD = <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"/><polyline points="13.5 2 13.5 5 10.5 5"/></svg>;

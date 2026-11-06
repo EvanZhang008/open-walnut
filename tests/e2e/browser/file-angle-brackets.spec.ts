@@ -11,7 +11,8 @@
  * serializer; the pure rule has its unit corpus in
  * tests/web/notes-roundtrip/angle-brackets.test.ts. This spec is the wiring
  * proof through the real editor, the browser's own copy and paste commands, the
- * real composer, and the bytes the save writes.
+ * real composer, and the bytes the save writes (saving is always live: the
+ * edit reaches disk on its own, with no Save button).
  */
 import { test, expect, type Page } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -34,7 +35,8 @@ Editable line: original.
 `
 
 const preview = (p: Page) => p.locator('.fv-wysiwyg-editor .ProseMirror')
-const save = (p: Page) => p.locator('.fv-save-btn')
+/** The document bar's save chip: Saved / Saving… / Not saved. */
+const saveState = (p: Page) => p.getByTestId('fv-save-state')
 
 /** Seed a fresh file into the fixture session's cwd and open it in the Files tab. */
 async function open(p: Page, text: string) {
@@ -54,7 +56,7 @@ async function open(p: Page, text: string) {
   const explorer = panel.locator('.session-file-explorer')
   await explorer.locator('.sfe-name', { hasText: name }).locator('xpath=..').click()
   await expect(preview(p)).toContainText('Traffic control')
-  await expect(save(p)).toBeDisabled()
+  await expect(saveState(p)).toHaveText('Saved')
   return { abs, name, panel }
 }
 
@@ -97,11 +99,13 @@ test.describe.configure({ timeout: 120_000 })
 test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
+    // An old browser's stored "Live off": ignored, saving is always live.
     localStorage.setItem('open-walnut-live-edit', '0')
   })
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
-  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 15_000 })
+  // A cold fixture server's first page load can take longer than 15 s.
+  await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 45_000 })
 })
 
 test('copying an arrow sentence and pasting it into the composer keeps the arrows', async ({ page }) => {
@@ -126,15 +130,15 @@ test('copying an arrow sentence and pasting it into the composer keeps the arrow
   expect(await copySelection(page)).toBe('Rev1 -> Rev2')
 })
 
-test('typing an arrow in the editor and saving writes the arrow to disk', async ({ page }) => {
+test('typing an arrow in the editor writes the arrow to disk', async ({ page }) => {
   const { abs } = await open(page, DOC)
 
   await select(page, 'original.')
   await page.keyboard.insertText('A -> B, x < y.')
   await expect(preview(page)).toContainText('Editable line: A -> B, x < y.')
-  await expect(save(page)).toBeEnabled()
-  await save(page).click()
-  await expect(save(page)).toBeDisabled({ timeout: 15_000 })
+  // No Save to press: the edit is written on its own once typing stops.
+  await expect(saveState(page)).toHaveText('Saved', { timeout: 15_000 })
+  await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
 
   await expect.poll(() => readFile(abs, 'utf8'), { timeout: 12_000 }).toContain('Editable line: A -> B, x < y.')
   const saved = await readFile(abs, 'utf8')

@@ -45,7 +45,30 @@ html .open-walnut-fullscreen-away,
 html .open-walnut-fullscreen-away * {
   visibility: hidden !important;
 }
-/* The Files view's own full screen takes the same area. */
+/* The Files view's own full screen is the same sheet: the same area, gutters,
+   corners and shadow, over the same backdrop (a click on it leaves full screen),
+   rather than a page-sized white box with nothing around it. */
 html .file-content-view.fv-fullscreen {
+  --fullscreen-gutter: 12px;
+  --fullscreen-area: calc(100vw - var(--fullscreen-left, 0px));
+  --fullscreen-side: max(var(--fullscreen-gutter), min(calc(var(--fullscreen-area) * 0.1), calc((var(--fullscreen-area) - 960px) / 2)));
+  top: var(--fullscreen-gutter);
+  bottom: var(--fullscreen-gutter);
+  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-side));
+  right: var(--fullscreen-side);
+  /* The pane's own height:100% would win over top + bottom and run the sheet
+     off the bottom of the window. */
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+  background: var(--card-bg, var(--bg));
+  /* Above the page and its backdrop (9000) but under what opens FROM it: the
+     confirm dialog (9300) and menus (9999). At 10000 both were painted under
+     the document in a pop-out tab, where nothing else lifts them. */
+  z-index: 9290;
+}
+html .fv-fullscreen-backdrop {
   left: var(--fullscreen-left, 0px);
 }

@@ -1,0 +1,541 @@
+/* The file page, "Document first" (2026-11-06).
+ *
+ * The page used to open with two bars of mismatched buttons (path, Refresh,
+ * Hidden; then Preview, Source, Live, History, Save, Find, Open in Notes, Copy
+ * Path, Download, Finder, Default app, Fullscreen) whose labels wrapped onto two
+ * and three lines in a normal pane. Now:
+ *   - the tree has a head: its folder, ↑, Refresh and hidden files;
+ *   - the file has ONE quiet line: where it is, the save state, Preview/Source,
+ *     Find and History as icons, and ⋯ for everything rarer.
+ * The line has no rule under it and the page's own background, so it reads as
+ * part of the document rather than as a toolbar. Every control is one height and
+ * nothing in it wraps; the lead (the path) is what gives way when space runs out.
+ */
+
+/* ── The document bar ─────────────────────────────────────────────────────── */
+.fv-html-toolbar.fv-doc-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  /* The shared bar height, so the bar lines up with the tree head beside it and
+     the chat segment at its end. */
+  min-height: var(--split-bar-h, 43px);
+  padding: 0 8px 0 12px;
+  border-bottom: none;
+  background: var(--bg);
+}
+
+.fv-doc-bar-lead {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.fv-doc-bar-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The file's own folder and name, when the host gives no lead of its own
+   (pop-out, Changed tab, @-mention preview). */
+.fv-doc-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.fv-doc-crumb-dir { flex: 0 100 auto; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; }
+.fv-doc-crumb-sep { flex: none; opacity: 0.6; }
+.fv-doc-crumb-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-secondary);
+  font-weight: 500;
+}
+
+/* Ghost icon buttons: Find, History, ⋯, Exit fullscreen. */
+.fv-doc-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.fv-doc-icon svg { width: 15px; height: 15px; display: block; }
+.fv-doc-icon:hover { background: var(--bg-hover); color: var(--fg); }
+.fv-doc-icon.active { background: var(--bg-tertiary); color: var(--fg); }
+.fv-doc-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Preview · Source: two words, the current one in the text colour. */
+.fv-mode-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 6px 0 2px;
+}
+.fv-doc-bar .fv-html-tab.fv-mode-tab {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+}
+.fv-doc-bar .fv-html-tab.fv-mode-tab:hover { color: var(--fg); background: var(--bg-hover); }
+.fv-doc-bar .fv-html-tab.fv-mode-tab.active { color: var(--fg); font-weight: 600; background: none; }
+
+/* Media controls keep their words, at the bar's height. */
+.fv-doc-bar .fv-skip-btn,
+.fv-doc-bar .fv-speed-select {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--fg-muted);
+}
+.fv-doc-bar .fv-skip-btn svg { width: 14px; height: 14px; }
+/* The speed is a quiet pick-one like the rest of the line, not a native box. */
+.fv-doc-bar .fv-speed-select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 20px;
+  background: no-repeat right 6px center / 10px 10px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23888' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 6 8 10.5 13 6'/%3E%3C/svg%3E");
+  cursor: pointer;
+}
+.fv-doc-bar .fv-speed-select:hover { background-color: var(--bg-hover); color: var(--fg); }
+.fv-doc-bar .fv-skip-btn:hover { color: var(--fg); background: var(--bg-hover); }
+
+/* Transient notes (Draft restored, Merged agent changes, Path copied). */
+.fv-doc-bar .fv-draft-note { margin-right: 6px; }
+
+/* ── Save state: Saved / Saving… / Not saved ──────────────────────────────── */
+.fv-save-state {
+  flex: none;
+  /* One width for Saved and Saving…, so the name beside it does not jump at
+     every save; the room left over sits before it, so it stays with the tools. */
+  min-width: 78px;
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 5px;
+  margin-right: 6px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.fv-save-state-mark { display: inline-flex; color: var(--success); }
+.fv-save-state-mark svg { width: 12px; height: 12px; }
+.fv-save-state-spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: fv-save-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fv-save-state-spin { animation: none; border-color: var(--accent); }
+}
+@keyframes fv-save-spin { to { transform: rotate(360deg); } }
+.fv-save-state-ring {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--warning);
+  box-sizing: border-box;
+}
+.fv-save-state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+.fv-save-state[data-state='held'] { color: var(--priority-important-text, var(--warning)); }
+
+/* ── The save banner: why a file is not saving, and its choices ───────────── */
+.fv-save-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  cursor: default;
+}
+.fv-save-error-text { flex: 1 1 260px; min-width: 0; }
+/* The choices wrap inside a narrow pane rather than running past its edge. */
+.fv-save-error-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.fv-save-error-actions .fv-html-tab { max-width: 100%; white-space: normal; text-align: left; }
+.fv-save-error-actions .fv-html-tab {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.fv-save-error-actions .fv-html-tab:hover:not(:disabled) { background: var(--bg-secondary); }
+.fv-save-error-actions .fv-html-tab:disabled { opacity: 0.55; cursor: default; }
+.fv-save-error-actions .fv-keep-mine-btn,
+.fv-save-error-actions .fv-retry-save-btn {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.fv-save-error-actions .fv-keep-mine-btn:hover:not(:disabled),
+.fv-save-error-actions .fv-retry-save-btn:hover:not(:disabled) { background: var(--accent-hover); }
+.fv-save-error-dismiss {
+  flex: none;
+  display: inline-flex;
+  padding: 3px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.fv-save-error-dismiss:hover { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
+
+/* ── Explorer: the lead of the document bar ───────────────────────────────── */
+.sfe-nav-lead {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sfe-nav-lead .sfe-btn,
+.sfe-tree-head .sfe-btn,
+.fv-doc-bar > .sfe-btn {
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  border-radius: 7px;
+  min-width: 28px;
+  height: 28px;
+  justify-content: center;
+  padding: 0 4px;
+}
+.sfe-nav-lead .sfe-btn:hover:not(:disabled),
+.sfe-tree-head .sfe-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.sfe-nav-lead .sfe-btn:disabled:hover { background: none; }
+.sfe-nav-lead .sfe-nav-group .sfe-nav-btn { font-size: 17px; line-height: 1; padding: 0 4px; border-radius: 7px; }
+.sfe-nav-lead .sfe-nav-group .sfe-nav-btn:last-child { border-left-width: 0; }
+
+/* The path of what is open, as breadcrumbs; click to type a path instead. */
+.sfe-crumbs {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: text;
+}
+.sfe-crumbs:hover { background: var(--bg-hover); }
+.sfe-crumb { display: inline-flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+.sfe-crumb-text { overflow: hidden; text-overflow: ellipsis; }
+.sfe-crumb.is-last { color: var(--fg); font-weight: 600; }
+.sfe-crumb-sep { display: inline-flex; margin: 0 3px; opacity: 0.55; }
+.sfe-crumb-sep svg { width: 10px; height: 10px; }
+.sfe-nav-lead .sfe-path-edit { margin-left: 6px; flex: 1 1 auto; min-width: 0; }
+/* Typing a path takes the whole bar: the file's tools come back on Enter/Escape. */
+.fv-doc-bar:has(.sfe-nav-lead .sfe-path-edit) .fv-doc-bar-tools { display: none; }
+.sfe-nav-lead .sfe-host-chip { margin-left: 6px; }
+
+/* ── Explorer: the tree's head ────────────────────────────────────────────── */
+.sfe-tree-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--split-bar-h, 43px);
+  margin-top: -4px; /* the tree's own top padding */
+  padding: 0 6px 0 8px;
+  background: var(--bg);
+}
+.sfe-tree-head-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+.sfe-tree-head-name:hover { background: var(--bg-hover); }
+.sfe-tree-head-in { margin-right: 4px; font-weight: 400; opacity: 0.7; }
+.sfe-tree-head-tools { flex: none; display: inline-flex; gap: 1px; }
+.sfe-tree-head .sfe-btn svg { width: 14px; height: 14px; display: block; }
+.sfe-tree-head .sfe-hidden-toggle.active,
+.sfe-tree-head .sfe-hidden-toggle.active:hover { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.sfe-tree-head .sfe-path-edit { flex: 1 1 auto; }
+/* The multi-root section headers stick below the head, not under it. */
+.session-file-explorer-tree:has(> .sfe-tree-head) .sfe-root-header { top: var(--split-bar-h, 43px); }
+
+/* ── Explorer: nothing open ───────────────────────────────────────────────── */
+.sfe-preview-empty-wrap {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+/* One left-aligned column, centred in the pane, starting a third of the way down
+   (the picked design): title, hint, then the recent files. */
+.sfe-preview-empty-wrap .sfe-preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: clamp(28px, 22%, 180px) 24px 24px max(24px, calc(50% - 190px));
+  text-align: left;
+}
+.sfe-preview-empty-title { font-size: 20px; font-weight: 600; color: var(--fg); }
+.sfe-preview-empty-hint { font-size: 13px; color: var(--fg-muted); }
+
+/* ── Fitting a narrow pane (data-fit, measured by FileContentView) ────────── */
+/* The lead gives way first, and never to nothing: the tree toggle and ‹ › keep
+   their size, the path keeps at least the file's name. */
+.sfe-nav-lead > .sfe-tree-toggle,
+.sfe-nav-lead > .sfe-nav-group { flex-shrink: 0; }
+/* Folders keep their words; when the name would be cut they drop out from the
+   start instead (SessionFileExplorer marks them data-dropped). */
+.sfe-crumb:not(.is-last) { flex: 0 0 auto; max-width: 10em; }
+.sfe-crumb[data-dropped='true'] { display: none; }
+.sfe-crumb:not(.is-last) .sfe-crumb-text { overflow: hidden; text-overflow: ellipsis; }
+.sfe-crumb.is-last { flex: 0 1 auto; min-width: 8ch; }
+/* compact and tight: the path is the file's name alone (measured in WebKit: at
+   a 480px pane a folder crumb left the name four letters); the full path is the
+   first row of ⋯ and the crumbs' tooltip. tight also drops the save word, and
+   ‹ › wait in the keyboard (⌘[ ⌘]) so the name keeps its room. */
+.fv-doc-bar:not([data-fit='full']) .sfe-crumb:not(.is-last),
+.fv-doc-bar:not([data-fit='full']) .sfe-crumb.is-last .sfe-crumb-sep,
+.fv-doc-bar:not([data-fit='full']) .fv-doc-crumb-dir,
+.fv-doc-bar:not([data-fit='full']) .fv-doc-crumb-sep,
+.fv-doc-bar[data-fit='tight'] .sfe-nav-group { display: none; }
+/* Below full width, saved and saving are a mark alone (✓, the spinner; the word
+   is the tooltip); only a file that is NOT saving spells it out. */
+.fv-doc-bar:not([data-fit='full']) .fv-save-state:is([data-state='saved'], [data-state='saving']) .fv-save-state-word { display: none; }
+.fv-doc-bar:not([data-fit='full']) .fv-save-state:is([data-state='saved'], [data-state='saving']) { min-width: 0; }
+.fv-doc-bar[data-fit='tight'] .fv-save-state-word { display: none; }
+/* ...but a file that is NOT saving keeps its words even there. */
+.fv-doc-bar[data-fit='tight'] .fv-save-state:is([data-state='held'], [data-state='waiting']) .fv-save-state-word { display: inline; }
+.fv-doc-bar[data-fit='tight'] .fv-save-state { min-width: 0; }
+.fv-doc-bar:not([data-fit='full']) .fv-save-state { margin-right: 4px; }
+/* Below full width a short note (Path copied, Draft restored, a merge receipt)
+   takes the save state's place for its few seconds, at most a few words wide
+   (the whole text is its tooltip): the file's name keeps its room. */
+.fv-doc-bar:not([data-fit='full']) .fv-draft-note { max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (Only saved/saving give way: a file that is not saving keeps saying so.) */
+.fv-doc-bar:not([data-fit='full']) .fv-doc-bar-tools:has(.fv-draft-note) .fv-save-state:is([data-state='saved'], [data-state='saving']) { display: none; }
+
+/* ⋯'s first row: where the file is, on one quiet line. The start of the path
+   is cut first; the file's own folder and name stay whole (the whole path is
+   the tooltip and Copy path). */
+.fv-more-path {
+  display: flex;
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: text;
+}
+.fv-more-path-dir {
+  display: flex; flex-direction: row-reverse; justify-content: flex-start;
+  flex: 0 1 auto; min-width: 0; overflow: hidden;
+}
+.fv-more-path-dir > span { flex: 0 0 auto; }
+.fv-more-path-cut { flex: 0 0 auto; }
+.fv-more-path-folder { flex: 0 0 auto; }
+.fv-more-path-name { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--fg-secondary); }
+
+/* ── Fullscreen: the document alone, centred at a reading width ───────────── */
+.file-content-view.fv-fullscreen .sfe-tree-toggle,
+.file-content-view.fv-fullscreen .sfe-nav-group,
+.file-content-view.fv-fullscreen .session-chat-collapse-btn { display: none; }
+.file-content-view.fv-fullscreen .fv-wysiwyg-editor .ProseMirror,
+.file-content-view.fv-fullscreen .fv-md-preview {
+  max-width: 780px;
+  margin-left: auto;
+  margin-right: auto;
+}
+/* The line above a centred document spans its text column: the name starts
+   where the text starts and the tools end where it ends (code and source run edge
+   to edge, so their line does too). Only Exit fullscreen stays at the sheet's
+   corner: with the tools there too, they sat 1,000 px from the name on a wide
+   screen (2026-11-07). */
+.file-content-view.fv-fullscreen:has(.fv-wysiwyg-editor .ProseMirror, .fv-md-preview) .fv-doc-bar {
+  position: relative;
+  padding-left: max(12px, calc((100% - 780px) / 2));
+  padding-right: max(48px, calc((100% - 780px) / 2));
+}
+.file-content-view.fv-fullscreen:has(.fv-wysiwyg-editor .ProseMirror, .fv-md-preview) .fv-fullscreen-btn {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* A file held back from saving (a conflict to decide, a write to retry) is not
+   an error: the text is safe in the editor. Amber, not red; text and background
+   set together so both themes stay readable. */
+.fv-save-error.fv-save-held {
+  border-bottom-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+  color: var(--fg);
+}
+
+/* ── Explorer: tree glyphs (line icons, one colour, not emoji) ────────────── */
+.session-file-explorer-node .sfe-arrow { display: inline-flex; align-items: center; justify-content: center; }
+.session-file-explorer-node .sfe-arrow svg { width: 10px; height: 10px; }
+.session-file-explorer-node .sfe-icon { display: inline-flex; align-items: center; color: var(--fg-muted); }
+.session-file-explorer-node .sfe-icon svg { width: 14px; height: 14px; }
+.session-file-explorer-node .sfe-icon[data-kind='dir'] { color: var(--accent-text, var(--fg-muted)); }
+.session-file-explorer-node.selected .sfe-icon { color: inherit; }
+
+/* Nothing open: the last few files, one click back in. */
+.sfe-recent {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: min(360px, 100%);
+  margin-top: 22px;
+  text-align: left;
+}
+.sfe-recent-label { padding: 0 2px 6px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.sfe-recent-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.sfe-recent-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+.sfe-recent-file + .sfe-recent-file { border-top: 1px solid var(--border); }
+.sfe-recent-file:hover { background: var(--bg-hover); }
+.sfe-recent-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sfe-recent-file .sfe-icon { display: inline-flex; color: var(--fg-muted); }
+.sfe-recent-file .sfe-icon svg { width: 15px; height: 15px; }
+.sfe-recent-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.sfe-recent-name { font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfe-recent-dir { font-size: 11.5px; color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The path suggestions float in a portal (SessionFileExplorer PathSuggestions):
+   placed by useMenuPlacement, so the old in-flow offsets must not apply. */
+.sfe-path-suggest.sfe-path-suggest-floating { left: auto; margin-top: 0; overflow-y: auto; }
+
+/* compact: Preview / Source as two icons, a small segmented pair. */
+.fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+}
+.fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab svg { width: 15px; height: 15px; display: block; }
+.fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab.active { background: var(--bg-tertiary); color: var(--fg); }
+
+/* Menus here are solid (border, solid background, shadow), not the app's glass:
+   a see-through menu over the file tree read as the tree's words under it in
+   WebKit. */
+html body .wn-context-menu.fv-more-menu,
+html body .sfe-path-suggest.sfe-path-suggest-floating {
+  background: var(--card-bg, var(--bg));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Tree rows: the name has the row; a file's size shows when you point at it.
+   The open file's row keeps its whole width for the name (its size is in ⋯'s
+   title and on hover): "W… 60.4 KB" read as nothing (2026-11-07). */
+.session-file-explorer-node .sfe-size:not(.sfe-changed-badge) { display: none; }
+.session-file-explorer-node:hover .sfe-size:not(.sfe-changed-badge) { display: inline; }
+
+
+/* compact: the arrows and gaps tighten so a usual file name stays whole. */
+.fv-doc-bar[data-fit='compact'] { gap: 4px; padding-right: 6px; }
+.fv-doc-bar[data-fit='compact'] .sfe-nav-group .sfe-nav-btn { min-width: 22px; padding: 0 2px; }
+.fv-doc-bar[data-fit='compact'] .sfe-crumbs { margin-left: 2px; }
+.fv-doc-bar[data-fit='compact'] .fv-mode-toggle { margin: 0 2px; }
+
+/* The document starts right under its line: the first block drops the top
+   margin a heading has inside a page (it read as the old toolbar's empty slot). */
+.file-content-view .fv-wysiwyg-editor .notes-editor .tiptap > :first-child,
+.file-content-view .fv-md-preview > :first-child { margin-top: 0; }
+.file-content-view .fv-wysiwyg-editor { padding-top: 20px; }
+
+/* ── The page's reading width: prose at a comfortable measure ─────────────── */
+/* On a wide screen the text pane is 1,200 px across and a paragraph ran the
+   whole width (2026-11-07 review). Prose stops at the Notes page's reading width,
+   left-aligned so it starts under the file name; tables and code blocks keep the
+   full pane and scroll sideways on their own when wider still. Fullscreen has
+   its own centred column above. */
+.file-content-view:not(.fv-fullscreen) .fv-wysiwyg-editor .ProseMirror > :not(.tableWrapper, table, pre),
+.file-content-view:not(.fv-fullscreen) .fv-md-preview > :not(table, pre) {
+  max-width: 880px;
+}

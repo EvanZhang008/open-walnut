@@ -12,11 +12,18 @@
  *     Tab-switching away is the cheap version of this test; unmounting the whole
  *     explorer is the one that actually failed.
  *   - The restore is announced. A silently restored draft is indistinguishable
- *     from "my save worked", which would make the user stop pressing Save.
+ *     from "my save worked", which would make the user trust a save that never
+ *     happened.
  *   - The tree marks which files hold unsaved work, because a draft you cannot
  *     find is only marginally better than a draft that was dropped.
- *   - Save clears the draft: a stale draft resurrecting over saved bytes would
- *     turn this safety net into a corruption source.
+ *   - A save that lands clears the draft: a stale draft resurrecting over saved
+ *     bytes would turn this safety net into a corruption source.
+ *
+ * Saving is always live (no Save button since 2026-11-06), so typed text is on
+ * disk about 600 ms after the last keystroke and no draft would be left to test.
+ * Each test therefore keeps its writes OFF disk on purpose (`keepWritesOffDisk`:
+ * every PUT fails as if the server were down, which is exactly when a draft is
+ * what saves the user), and lets them through only where a save is the point.
  *
  * The last three tests are the WIRING tests, added after a review found that the
  * rules had unit tests but nothing proved the components called them. They also
@@ -56,7 +63,7 @@ async function openFilesPanel(page: Page): Promise<Locator> {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
   return explorer
@@ -78,7 +85,7 @@ async function leaveFilesPanel(page: Page): Promise<void> {
  */
 async function returnToFilesPanel(page: Page): Promise<Locator> {
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 15_000 })
   return explorer
@@ -91,6 +98,16 @@ function nodeByName(explorer: Locator, name: string) {
 /** The CodeMirror editing surface in the preview pane. */
 function editor(page: Page): Locator {
   return page.locator('.fv-source-editor .cm-content')
+}
+
+/** Every write from the page fails as if the server were unreachable, so typed
+ *  text stays unsaved (live mode keeps retrying it; nothing reaches disk). The
+ *  Playwright request context bypasses page routes, so the tests' own PUTs still
+ *  work. */
+const WRITE_ROUTE = '**/api/file-content'
+async function keepWritesOffDisk(page: Page): Promise<void> {
+  await page.route(WRITE_ROUTE, route =>
+    route.request().method() === 'PUT' ? route.abort('failed') : route.fallback())
 }
 
 /** Create a file through the API so the test owns a scratch target of its own. */
@@ -111,6 +128,7 @@ test.beforeEach(async ({ page, baseURL }) => {
   await page.addInitScript(() => {
     try {
       localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0')
+      // An old browser's stored "Live off": ignored, saving is always live.
       localStorage.setItem('open-walnut-live-edit', '0')
     } catch { /* off */ }
   })
@@ -127,7 +145,8 @@ test('unsaved edits survive leaving the Files panel, and say so on return', asyn
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('original contents')
 
-  // Type an edit and do NOT save.
+  // Type an edit that does NOT reach disk (the server is away).
+  await keepWritesOffDisk(page)
   const typed = `edited-but-never-saved-${Date.now()}`
   await editor(page).click()
   await page.keyboard.press('End')
@@ -163,6 +182,7 @@ test('saving clears the draft and the tree marker', async ({ page }) => {
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('before')
 
+  await keepWritesOffDisk(page)
   await editor(page).click()
   await page.keyboard.press('End')
   await page.keyboard.type('-then-saved')
@@ -170,7 +190,10 @@ test('saving clears the draft and the tree marker', async ({ page }) => {
   await page.waitForTimeout(900)
   await expect(nodeByName(explorer, name).locator('.sfe-draft-dot')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  // The server is back and ⌘S saves at once (focus is still in the editor).
+  await page.unroute(WRITE_ROUTE)
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect(page.getByTestId('fv-save-state')).toHaveText('Saved')
   // Dirty state and the tree marker both clear — the draft record is gone, so a
   // later reopen cannot resurrect pre-save text over the saved bytes.
   await expect(page.locator('.fv-dirty-dot')).toHaveCount(0)
@@ -197,7 +220,7 @@ test('saving clears the draft and the tree marker', async ({ page }) => {
  *   - deleting a drafted file RESURRECTED the draft, so creating that filename
  *     again offered to restore the deleted file's body,
  *   - restoring a draft over bytes that changed on disk disarmed the save lock, so
- *     the next Save silently replaced newer content (an agent's edit, typically).
+ *     the next save silently replaced newer content (an agent's edit, typically).
  */
 test('a rename carries the unsaved draft to the new name', async ({ page }) => {
   const name = `draft-ren-${Date.now()}.txt`
@@ -208,6 +231,7 @@ test('a rename carries the unsaved draft to the new name', async ({ page }) => {
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('before rename')
 
+  await keepWritesOffDisk(page)
   const typed = `carried-${Date.now()}`
   await editor(page).click()
   await page.keyboard.press('End')
@@ -238,6 +262,7 @@ test('deleting a drafted file does not leave a draft behind for that name', asyn
   const explorer = await openFilesPanel(page)
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('original')
+  await keepWritesOffDisk(page)
   await editor(page).click()
   await page.keyboard.press('End')
   await page.keyboard.type('never-saved-and-then-deleted')
@@ -256,7 +281,9 @@ test('deleting a drafted file does not leave a draft behind for that name', asyn
   const res = await page.request.post('/api/files/create', { data: { path: abs } })
   expect(res.status(), await res.text()).toBe(200)
   await page.request.put('/api/file-content', { data: { path: abs, content: 'brand new\n' } })
-  await explorer.getByRole('button', { name: 'Refresh' }).click()
+  await explorer.getByRole('button', { name: 'Refresh file panel', exact: true }).click()
+  // While the re-list lands the old and the new row can both be there for a moment.
+  await expect(nodeByName(explorer, name)).toHaveCount(1, { timeout: 10_000 })
   await nodeByName(explorer, name).click()
 
   await expect(editor(page)).toContainText('brand new', { timeout: 15_000 })
@@ -273,6 +300,7 @@ test('restoring a draft over changed bytes warns on save instead of overwriting'
   const explorer = await openFilesPanel(page)
   await nodeByName(explorer, name).click()
   await expect(editor(page)).toContainText('v1 from disk')
+  await keepWritesOffDisk(page)
 
   await editor(page).click()
   await page.keyboard.press('End')
@@ -287,7 +315,7 @@ test('restoring a draft over changed bytes warns on save instead of overwriting'
   expect(put.ok(), await put.text()).toBe(true)
 
   // Re-reading now finds a draft whose base bytes are stale → the choice banner.
-  await explorer.getByRole('button', { name: 'Refresh' }).click()
+  await explorer.getByRole('button', { name: 'Refresh file panel', exact: true }).click()
   const banner = page.locator('.fv-draft-banner')
   await expect(banner).toBeVisible({ timeout: 15_000 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/6-stale-draft-banner.png` })
@@ -296,15 +324,22 @@ test('restoring a draft over changed bytes warns on save instead of overwriting'
   await expect(editor(page)).toContainText('my-unsaved-line')
 
   // THE POINT: saving must not silently replace v2. The lock stays armed at the
-  // draft's own base, so the first Save conflicts and asks.
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  // draft's own base, so the first save (⌘S, or the automatic write once the
+  // server answers again) conflicts and asks.
+  await page.unroute(WRITE_ROUTE)
+  await editor(page).click()
+  await page.keyboard.press('ControlOrMeta+s')
   const conflict = page.locator('.fv-save-error')
   await expect(conflict).toBeVisible({ timeout: 15_000 })
-  await expect(conflict).toContainText('changed on disk since you opened it')
+  // ⌘S's 409 ("changed on disk since you opened it") or, if the automatic write
+  // got there first, live mode's pause ("changed on disk in the same lines").
+  await expect(conflict).toContainText(/This file changed on disk/)
   // The buffer survives the refusal — a conflict that also ate the typing would
   // be a worse bug than the silent overwrite it replaced.
   await expect(editor(page)).toContainText('my-unsaved-line')
   await expect(page.locator('.fv-dirty-dot')).toBeVisible()
+  await expect(page.getByTestId('fv-save-state')).toHaveText('Not saved')
+  await expect(conflict.getByRole('button', { name: 'Keep my version' })).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/7-save-conflict-warned.png` })
 
   // And the file on disk is still what the other writer put there.

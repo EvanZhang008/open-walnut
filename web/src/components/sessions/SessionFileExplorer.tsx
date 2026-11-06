@@ -18,8 +18,11 @@
  * network fetch always still runs and overwrites them.
  */
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { timeAgo } from '@/utils/time';
 import { usePhoneLayerWithBar } from './phone-session-layer';
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -36,7 +39,10 @@ import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeConte
 import { FileTreeEditRow } from './FileTreeEditRow';
 import { useFileTreeMutations, judgeRestoredSelection } from './useFileTreeMutations';
 import { parentPath, revealAncestors } from './reveal-ancestors';
-import { ICON_REFRESH, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
+import {
+  ICON_REFRESH, ICON_CLOSE, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED, ICON_ARROW_UP, ICON_EYE, ICON_CHEVRON_RIGHT, ICON_CHEVRON_DOWN, ICON_CHEVRON_LEFT, ICON_FOLDER, ICON_FILE,
+} from '@/components/common/Icons';
+import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { formatSize } from '@/utils/format';
 import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import {
@@ -136,6 +142,9 @@ const ROOT_RECONNECT_RETRY_MS = 5_000;
 const TREE_WIDTH_DEFAULT = 200;
 const TREE_WIDTH_MIN = 140;
 const TREE_WIDTH_MAX = 600;
+/** The tree's share of the explorer while the user has not sized it, and its cap. */
+const TREE_AUTO_SHARE = 0.16;
+const TREE_AUTO_MAX = 360;
 
 function lsKeyFor(host: string | undefined, root: string): string {
   return `${LS_EXPANDED}:${host ?? 'local'}:${root}`;
@@ -161,16 +170,73 @@ function loadOpenRoots(host: string | undefined, root: string): Set<string> | nu
   return null;
 }
 
-function loadTreeWidth(): number {
+/** The width the user dragged the tree to, or null when they never did. */
+function loadTreeWidth(): number | null {
   try {
-    const n = Number(localStorage.getItem(LS_TREE_WIDTH));
+    const raw = localStorage.getItem(LS_TREE_WIDTH);
+    const n = raw == null ? NaN : Number(raw);
     if (Number.isFinite(n) && n >= TREE_WIDTH_MIN && n <= TREE_WIDTH_MAX) return n;
   } catch { /* denied */ }
-  return TREE_WIDTH_DEFAULT;
+  return null;
+}
+
+/** Until the user drags it, the tree takes a share of the explorer: a fixed
+ *  200 px left a 2,000 px wide explorer (his 2560-wide window) with names cut to
+ *  one letter (2026-11-07). */
+function autoTreeWidth(explorerWidth: number): number {
+  if (!(explorerWidth > 0)) return TREE_WIDTH_DEFAULT;
+  return Math.round(Math.min(TREE_AUTO_MAX, Math.max(TREE_WIDTH_DEFAULT, explorerWidth * TREE_AUTO_SHARE)));
 }
 
 function joinPath(dir: string, name: string): string {
   return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
+}
+
+/** The path as breadcrumb segments: the last three, after an ellipsis when longer. */
+function crumbSegments(p: string): string[] {
+  const segs = p.split('/').filter(Boolean);
+  if (segs.length === 0) return [p || '/'];
+  return segs.length > 3 ? ['…', ...segs.slice(-3)] : segs;
+}
+
+/**
+ * The recent-folder suggestions under the path input, as a floating list in a
+ * portal. The input sits in the document bar, whose lead clips its overflow so a
+ * long path gives way; a list nested inside it was cut off at the bar's bottom
+ * edge, so it is placed against the viewport instead (useMenuPlacement).
+ */
+function PathSuggestions({ anchorRef, paths, active, onPick }: {
+  anchorRef: RefObject<HTMLDivElement | null>;
+  paths: string[];
+  active: number;
+  onPick: (path: string) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const placement = useMenuPlacement(true, anchorRef, listRef, { align: 'start', edgeOverflow: 'clamp', gap: 2, minHeight: 80 });
+  const width = Math.max(anchorRef.current?.getBoundingClientRect().width ?? 0, 280);
+  return createPortal(
+    <div
+      ref={listRef}
+      className="sfe-path-suggest sfe-path-suggest-floating"
+      role="listbox"
+      style={{ ...menuPlacementStyle(placement), width }}
+    >
+      {paths.map((p, i) => (
+        <div
+          key={p}
+          role="option"
+          aria-selected={i === active}
+          className={`sfe-path-suggest-item${i === active ? ' active' : ''}`}
+          // mousedown, not click: the input's blur-commit must not win the race.
+          onMouseDown={(e) => { e.preventDefault(); onPick(p); }}
+          title={p}
+        >
+          {p}
+        </div>
+      ))}
+    </div>,
+    document.body,
+  );
 }
 
 function lastSegment(p: string): string {
@@ -204,7 +270,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   const phone = usePhoneLayout();
   usePhoneLayerWithBar({
     id: `file:${selectedFile ?? ''}`, kind: 'file', active: phone && !!selectedFile,
-    title: selectedFile ? (selectedFile.split('/').pop() || selectedFile) : '', withAction: false,
+    // The folder: the file's own name is the doc bar's, once on screen.
+    title: selectedFile ? (lastSegment(parentPath(selectedFile)) || selectedFile) : '', withAction: false,
     onClose: () => setSelectedFile(null),
   });
   const selectedFileRef = useRef(selectedFile);
@@ -258,7 +325,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // HTML files, which is why this drag used to stick: a raw document mouseup
   // listener never fires once the cursor is over the iframe. useDragGesture
   // captures the pointer so every move/up comes back to the handle.
-  const [treeWidth, setTreeWidth] = useState<number>(loadTreeWidth);
+  const userTreeWidth = useMemo(loadTreeWidth, []);
+  const userSizedRef = useRef(userTreeWidth != null);
+  const [treeWidth, setTreeWidth] = useState<number>(userTreeWidth ?? TREE_WIDTH_DEFAULT);
   const treeWidthRef = useRef(treeWidth);
   treeWidthRef.current = treeWidth;
   const startWidthRef = useRef(treeWidth);
@@ -271,6 +340,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       setTreeWidth(treeWidthRef.current);
     },
     onEnd: () => {
+      userSizedRef.current = true;
       try { localStorage.setItem(LS_TREE_WIDTH, String(treeWidthRef.current)); } catch { /* denied */ }
     },
   });
@@ -334,7 +404,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     // restore (or a re-click on the open file) can't duplicate or truncate.
     // A positioned jump (opts.line — reference panel) records the line so
     // Back/Forward return to the exact spot, editor-style.
-    const next = pushFileHistory(historyRef.current, filePath, opts.line);
+    const next = pushFileHistory(historyRef.current, filePath, opts.line, Date.now());
     if (next === historyRef.current) return;
     historyRef.current = next;
     setHistory(next);
@@ -1169,6 +1239,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // tree row is visible/selected when you land there, exactly like a tree click.
   const canGoBack = history.index > 0;
   const canGoForward = history.index >= 0 && history.index < history.entries.length - 1;
+  // Nothing open: the last few files read here, newest first, one click back in.
+  const recentFiles = useMemo(() => {
+    const out: { path: string; at?: number }[] = [];
+    for (let i = history.entries.length - 1; i >= 0 && out.length < 3; i--) {
+      const e = history.entries[i]!;
+      if (!out.some((r) => r.path === e.path)) out.push({ path: e.path, at: e.at });
+    }
+    return out;
+  }, [history.entries]);
 
   const navigateHistory = useCallback((delta: -1 | 1) => {
     const cur = historyRef.current;
@@ -1259,6 +1338,17 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // simply never fire. Guards: text fields keep their brackets, and when more
   // than one explorer is mounted the keys only drive the focused one.
   const explorerRef = useRef<HTMLDivElement | null>(null);
+  // The tree follows the explorer's width (autoTreeWidth) until the user drags it.
+  useLayoutEffect(() => {
+    const el = explorerRef.current;
+    if (!el || userSizedRef.current) return;
+    const fit = () => { if (!userSizedRef.current) setTreeWidth(autoTreeWidth(el.clientWidth)); };
+    fit();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
@@ -1276,122 +1366,208 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     return () => window.removeEventListener('keydown', onKey);
   }, [navigateHistory]);
 
-  return (
-    <div className="session-file-explorer" ref={explorerRef}>
-      <div className="session-file-explorer-toolbar">
-        {/* VS Code-style layout toggle: window glyph, left compartment filled
-            while the tree shows. Lives HERE (toolbar, fixed spot) — the
-            floating chevron + collapsed rail were unfindable/unreadable. */}
+  // The path, the folder's tools and the ‹ › used to be one full-width bar over
+  // both columns. "Document first" (2026-11-06) splits it by what each part acts
+  // on: the tree gets a head with its folder, ↑, Refresh and hidden files; the
+  // file side gets the document bar (FileContentView), which starts with the
+  // tree toggle, ‹ › and the path of what is open.
+  const shownPath = selectedFile ?? focusedDir ?? root;
+  const pathEditRef = useRef<HTMLDivElement>(null);
+  // The crumbs give the file's name the room first: folders drop from the start
+  // (the "…" crumb stands for them) while the name would be cut, rather than
+  // every segment squeezing down to a letter (measured at a 700px window:
+  // "… › p › e › doc-bar-na…").
+  const crumbsRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const el = crumbsRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const fit = () => {
+      const folders = Array.from(el.querySelectorAll<HTMLElement>('.sfe-crumb:not(.is-last)'));
+      const name = el.querySelector<HTMLElement>('.sfe-crumb.is-last .sfe-crumb-text');
+      for (const f of folders) delete f.dataset.dropped;
+      const cut = () => (name ? name.scrollWidth > name.clientWidth + 1 : false) || el.scrollWidth > el.clientWidth + 1;
+      for (const f of folders) {
+        if (!cut()) break;
+        if (f.textContent === '…') continue;
+        f.dataset.dropped = 'true';
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    if (el.parentElement) ro.observe(el.parentElement);
+    return () => ro.disconnect();
+  }, [shownPath, editingPath, selectedFile]);
+  const pathEditor = (
+    <>
+      {editingPath ? (
+        <div className="sfe-path-edit" ref={pathEditRef}>
+          <input data-no-draft="picker"
+            className="sfe-root-path-input"
+            defaultValue={focusedDir ?? root}
+            autoFocus
+            spellCheck={false}
+            placeholder="Absolute path, or type to fuzzy-match recent folders"
+            onChange={(e) => { setPathQuery(e.target.value); setSuggestIdx(0); }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown' && suggestions.length) { e.preventDefault(); setSuggestIdx((i) => Math.min(i + 1, suggestions.length - 1)); }
+              else if (e.key === 'ArrowUp' && suggestions.length) { e.preventDefault(); setSuggestIdx((i) => Math.max(i - 1, 0)); }
+              else if (e.key === 'Enter') {
+                e.preventDefault();
+                const picked = suggestions[suggestIdx];
+                commitPath(picked ? picked.path : (e.target as HTMLInputElement).value);
+              }
+              else if (e.key === 'Escape') { e.preventDefault(); setEditingPath(false); setPathQuery(''); }
+            }}
+            onBlur={(e) => {
+              // Let a suggestion mousedown win over blur-commit.
+              const val = (e.target as HTMLInputElement).value;
+              setTimeout(() => { if (editingPath) commitPath(val); }, 150);
+            }}
+          />
+          {suggestions.length > 0 && (
+            <PathSuggestions
+              anchorRef={pathEditRef}
+              paths={suggestions.map((s) => s.path)}
+              active={suggestIdx}
+              onPick={commitPath}
+            />
+          )}
+        </div>
+      ) : (
         <button
           type="button"
-          className="sfe-btn sfe-tree-toggle"
-          onClick={toggleTreeCollapsed}
-          title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-          aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-          aria-expanded={!treeCollapsed}
+          ref={crumbsRef}
+          className="sfe-root-path sfe-crumbs"
+          title={`${shownPath}: click to type a path (fuzzy-matches recent folders)`}
+          onClick={() => setEditingPath(true)}
         >
-          {treeCollapsed ? ICON_PANEL_LEFT : ICON_PANEL_LEFT_FILLED}
+          {crumbSegments(shownPath).map((seg, idx, all) => (
+            <span key={idx} className={`sfe-crumb${idx === all.length - 1 ? ' is-last' : ''}`}>
+              {idx > 0 && <span className="sfe-crumb-sep" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}
+              <span className="sfe-crumb-text">{seg}</span>
+            </span>
+          ))}
         </button>
-        <div className="sfe-nav-group">
-          <button
-            type="button"
-            className="sfe-btn sfe-nav-btn"
-            onClick={() => navigateHistory(-1)}
-            disabled={!canGoBack}
-            title={canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1]!.path)} (⌘[)` : 'Back (no earlier file)'}
-            aria-label="Back to the previously viewed file"
-          >‹</button>
-          <button
-            type="button"
-            className="sfe-btn sfe-nav-btn"
-            onClick={() => navigateHistory(1)}
-            disabled={!canGoForward}
-            title={canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1]!.path)} (⌘])` : 'Forward (no later file)'}
-            aria-label="Forward to the next viewed file"
-          >›</button>
-        </div>
-        <button type="button" className="sfe-btn sfe-up-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">↑</button>
-        {editingPath ? (
-          <div className="sfe-path-edit">
-            <input data-no-draft="picker"
-              className="sfe-root-path-input"
-              defaultValue={focusedDir ?? root}
-              autoFocus
-              spellCheck={false}
-              placeholder="Absolute path, or type to fuzzy-match recent folders"
-              onChange={(e) => { setPathQuery(e.target.value); setSuggestIdx(0); }}
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowDown' && suggestions.length) { e.preventDefault(); setSuggestIdx((i) => Math.min(i + 1, suggestions.length - 1)); }
-                else if (e.key === 'ArrowUp' && suggestions.length) { e.preventDefault(); setSuggestIdx((i) => Math.max(i - 1, 0)); }
-                else if (e.key === 'Enter') {
-                  e.preventDefault();
-                  const picked = suggestions[suggestIdx];
-                  commitPath(picked ? picked.path : (e.target as HTMLInputElement).value);
-                }
-                else if (e.key === 'Escape') { e.preventDefault(); setEditingPath(false); setPathQuery(''); }
-              }}
-              onBlur={(e) => {
-                // Let a suggestion mousedown win over blur-commit.
-                const val = (e.target as HTMLInputElement).value;
-                setTimeout(() => { if (editingPath) commitPath(val); }, 150);
-              }}
-            />
-            {suggestions.length > 0 && (
-              <div className="sfe-path-suggest">
-                {suggestions.map((s, i) => (
-                  <div
-                    key={s.path}
-                    className={`sfe-path-suggest-item${i === suggestIdx ? ' active' : ''}`}
-                    onMouseDown={(e) => { e.preventDefault(); commitPath(s.path); }}
-                    title={s.path}
-                  >
-                    {s.path}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <span
-            className="sfe-root-path"
-            title={`${focusedDir ?? root} — click to edit (fuzzy-matches recent folders)`}
-            onClick={() => setEditingPath(true)}
-          >
-            {focusedDir ?? root}
-          </span>
-        )}
-        {onHostNote && (
-          <span
-            className="sfe-host-chip"
-            data-testid="sfe-host-chip"
-            title={`This file is on ${fileHostName}; the session runs on ${sessionHostName}.`}
-          >
-            on {fileHostName}
-          </span>
-        )}
-        <div className="sfe-toolbar-actions">
-          <button
-            type="button"
-            className={`sfe-btn sfe-refresh-btn${refreshing ? ' is-refreshing' : ''}`}
-            onClick={handleRefresh}
-            title="Refresh — re-list folders and reload the open file"
-            aria-label="Refresh file panel"
-          >
-            {ICON_REFRESH}
-            <span className="sfe-btn-label">Refresh</span>
-          </button>
-          <label className="sfe-hidden-toggle" title="Show hidden files">
-            <input
-              type="checkbox"
-              checked={showHidden}
-              onChange={(e) => setShowHidden(e.target.checked)}
-            />
-            <span>Hidden</span>
-          </label>
-        </div>
-        {barRightSlot}
-      </div>
+      )}
+    </>
+  );
+  const navLead = (
+    <div className="sfe-nav-lead">
+      {/* VS Code-style layout toggle: window glyph, left compartment filled
+          while the tree shows. A fixed spot at the start of the bar: the
+          floating chevron + collapsed rail were unfindable/unreadable. */}
+      <button
+        type="button"
+        className="sfe-btn sfe-tree-toggle"
+        onClick={toggleTreeCollapsed}
+        title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
+        aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
+        aria-expanded={!treeCollapsed}
+      >
+        {treeCollapsed ? ICON_PANEL_LEFT : ICON_PANEL_LEFT_FILLED}
+      </button>
+      {/* ‹ › only once there is somewhere to go: two greyed arrows on every
+          first open took the room the file's name needs. */}
+      {(canGoBack || canGoForward) && <div className="sfe-nav-group">
+        <button
+          type="button"
+          className="sfe-btn sfe-nav-btn"
+          onClick={() => navigateHistory(-1)}
+          disabled={!canGoBack}
+          title={canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1]!.path)} (⌘[)` : 'Back (no earlier file)'}
+          aria-label="Back to the previously viewed file"
+        >‹</button>
+        <button
+          type="button"
+          className="sfe-btn sfe-nav-btn"
+          onClick={() => navigateHistory(1)}
+          disabled={!canGoForward}
+          title={canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1]!.path)} (⌘])` : 'Forward (no later file)'}
+          aria-label="Forward to the next viewed file"
+        >›</button>
+      </div>}
+      {/* On a phone the tree and the file take turns: with no file open the
+          tree's head holds the path instead (one editor on screen, never two). */}
+      {!(phone && !selectedFile) && pathEditor}
+      {onHostNote && (
+        <span
+          className="sfe-host-chip"
+          data-testid="sfe-host-chip"
+          title={`This file is on ${fileHostName}; the session runs on ${sessionHostName}.`}
+        >
+          on {fileHostName}
+        </span>
+      )}
+    </div>
+  );
+  const treeHead = (
+    <div className="sfe-tree-head">
+      {phone && !selectedFile && editingPath ? pathEditor : (
+        <button
+          type="button"
+          className="sfe-tree-head-name"
+          onClick={() => setEditingPath(true)}
+          title={`In ${parentPath(focusedDir ?? root)}: click to type a path`}
+        >
+          {/* Where the folder below lives (its parent's name); the folder itself
+              is the tree's first row. */}
+          <span className="sfe-tree-head-in">in</span>{lastSegment(parentPath(focusedDir ?? root)) || '/'}
+        </button>
+      )}
+      <span className="sfe-tree-head-tools">
+        <button type="button" className="sfe-btn sfe-up-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">
+          {ICON_ARROW_UP}
+        </button>
+        <button
+          type="button"
+          className={`sfe-btn sfe-refresh-btn${refreshing ? ' is-refreshing' : ''}`}
+          onClick={handleRefresh}
+          title="Refresh: re-list folders and reload the open file"
+          aria-label="Refresh file panel"
+        >
+          {ICON_REFRESH}
+        </button>
+        <button
+          type="button"
+          className={`sfe-btn sfe-hidden-toggle${showHidden ? ' active' : ''}`}
+          onClick={() => setShowHidden((v) => !v)}
+          aria-pressed={showHidden}
+          aria-label="Show hidden files"
+          title={showHidden ? 'Hidden files are shown: click to hide them' : 'Show hidden files'}
+        >
+          {ICON_EYE}
+        </button>
+      </span>
+    </div>
+  );
+  // A tight bar has no room for ‹ ›; they lead its ⋯ instead (keyboard ⌘[ ⌘]
+  // does not reach a touch screen, nor an editor that has the focus).
+  const navMenuItems: ContextMenuItem[] = !(canGoBack || canGoForward) ? [] : [
+    {
+      key: 'back',
+      label: canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1]!.path)}` : 'Back',
+      icon: ICON_CHEVRON_LEFT,
+      disabled: !canGoBack,
+      onSelect: () => navigateHistory(-1),
+    },
+    {
+      key: 'forward',
+      label: canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1]!.path)}` : 'Forward',
+      icon: ICON_CHEVRON_RIGHT,
+      disabled: !canGoForward,
+      onSelect: () => navigateHistory(1),
+    },
+  ];
+  const refreshItem: ContextMenuItem[] = [
+    { key: 'refresh', label: 'Refresh', icon: ICON_REFRESH, title: 'Re-list folders and reload the open file', onSelect: handleRefresh },
+    // The only way back to "No file open" (and its Recent list) on the desktop.
+    // Unsaved text is safe: the view flushes its draft and its pending write on unmount.
+    { key: 'close-file', label: 'Close file', icon: ICON_CLOSE, onSelect: () => commitSelection(null) },
+  ];
 
+  return (
+    <div className="session-file-explorer" ref={explorerRef}>
       <div className={`session-file-explorer-body${phone ? (selectedFile ? ' is-phone-file' : ' is-phone-tree') : ''}`}>
         {!treeCollapsed && (
         <div
@@ -1403,6 +1579,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           // ROOT, which is what makes "New File… at the cwd" reachable with no row.
           onContextMenu={(e) => openContextMenu(e, { path: root, type: 'dir', isRoot: true, relativeRoot: root })}
         >
+          {treeHead}
           {rootError && <div className="sfe-error">{rootError}</div>}
           {/* A delete/duplicate the server answered 202 for: still running on the
               host. Muted, not red — nothing failed, the tree re-lists on its own. */}
@@ -1464,8 +1641,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                   })}
                   title={section.path}
                 >
-                  <span className="sfe-arrow">{isRootLoading ? '…' : isOpen ? '▼' : '▶︎'}</span>
-                  <span className="sfe-icon">{section.kind === 'cwd' ? '🏠' : '📦'}</span>
+                  <span className="sfe-arrow" data-state={isRootLoading ? 'loading' : isOpen ? 'open' : 'closed'}>
+                    {isRootLoading ? '…' : isOpen ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT}
+                  </span>
+                  <span className="sfe-icon" data-kind="dir">{ICON_FOLDER}</span>
                   <span className={`sfe-name${section.prefix ? ' sfe-name-ctx' : ''}`}>
                     {section.prefix && <span className="sfe-name-prefix">{section.prefix}/</span>}
                     <span className="sfe-name-base">{section.label}</span>
@@ -1515,10 +1694,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                         onMouseLeave={node.type === 'file' ? prefetch.cancel : undefined}
                         title={node.path}
                       >
-                        <span className="sfe-arrow">
-                          {node.type === 'dir' ? (isLoading ? '…' : isExpanded ? '▼' : '▶︎') : ''}
+                        <span
+                          className="sfe-arrow"
+                          data-state={node.type !== 'dir' ? undefined : isLoading ? 'loading' : isExpanded ? 'open' : 'closed'}
+                        >
+                          {node.type === 'dir' ? (isLoading ? '…' : isExpanded ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT) : null}
                         </span>
-                        <span className="sfe-icon">{node.type === 'dir' ? '📁' : '📄'}</span>
+                        <span className="sfe-icon" data-kind={node.type}>{node.type === 'dir' ? ICON_FOLDER : ICON_FILE}</span>
                         <span className="sfe-name">{node.name}</span>
                         {/* Unsaved edits live in the draft store, not in this pane, so a
                             file can hold work while its editor is closed — the dot is the
@@ -1589,9 +1771,44 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
               // is now stale — re-list just that file's directory (not the whole
               // tree: a full Refresh would also reload the file we just wrote).
               onSaved={(saved) => { void loadDir(parentPath(saved), { noCache: true }); }}
+              barLeading={navLead}
+              barTrailing={barRightSlot}
+              extraMenuItems={refreshItem}
+              tightMenuItems={navMenuItems}
             />
           ) : (
-            <div className="sfe-preview-empty">Select a file to preview</div>
+            <div className="sfe-preview-empty-wrap">
+              <div className="fv-html-toolbar fv-doc-bar sfe-empty-bar">
+                <div className="fv-doc-bar-lead">{navLead}</div>
+                <div className="fv-doc-bar-tools" />
+                {barRightSlot}
+              </div>
+              <div className="sfe-preview-empty">
+                <span className="sfe-preview-empty-title">No file open</span>
+                <span className="sfe-preview-empty-hint">Choose a file from the folder on the left.</span>
+                {recentFiles.length > 0 && (
+                  <div className="sfe-recent" data-testid="sfe-recent">
+                    <span className="sfe-recent-label">Recent</span>
+                    <div className="sfe-recent-list">
+                    {recentFiles.map(({ path: p, at }) => (
+                      <button key={p} type="button" className="sfe-recent-file" title={p} onClick={() => selectFile(p)}>
+                        <span className="sfe-icon" data-kind="file">{ICON_FILE}</span>
+                        <span className="sfe-recent-text">
+                          <span className="sfe-recent-name">{lastSegment(p)}</span>
+                          {/* Its folder, so two README.md stay two different rows; the
+                              time only when the visit was recorded with one. */}
+                          <span className="sfe-recent-dir">
+                            {parentPath(p).split('/').filter(Boolean).slice(-2).join('/') || '/'}
+                            {at ? ` · ${timeAgo(new Date(at).toISOString(), { long: true })}` : ''}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
 

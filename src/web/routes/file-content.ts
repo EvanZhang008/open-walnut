@@ -776,7 +776,7 @@ export async function remoteSaveFailure(err: unknown, host: string | null | unde
   if (link) {
     return {
       status: 503, code: HOST_RECONNECTING,
-      message: `${name} stopped answering during the save, so it may not have landed. Your text is still in the editor: press Save again. If it did land, you are asked before anything is overwritten.`,
+      message: `${name} stopped answering during the save, so it may not have landed. Your text is still in the editor: press Try again. If it did land, you are asked before anything is overwritten.`,
     }
   }
   const msg = err instanceof Error ? err.message : String(err)

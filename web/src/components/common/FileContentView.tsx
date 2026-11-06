@@ -21,13 +21,14 @@
  *    same buildSelectionPrefill composer as the Changed tab). In the WYSIWYG
  *    editor the same action lives in the selection bubble menu ("Ask").
  */
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
 import {
-  fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
-  FileSaveConflictError, isNetworkFetchError, SAVE_UNREACHABLE_MESSAGE, HOST_RECONNECTING_CODE, type FileContentResponse,
+  fetchFileContent, fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
+  FileSaveConflictError, isNetworkFetchError, HOST_RECONNECTING_CODE, type FileContentResponse,
 } from '@/api/files';
 import { visibleInterval } from '@/utils/page-visibility';
 import {
@@ -45,7 +46,7 @@ import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { loadFileScroll, saveFileScroll } from '@/utils/file-view-state';
 import {
-  saveFileDraft, loadFileDraft, deleteFileDraft, planDraftReplay, planStaleDraftRestore,
+  saveFileDraft, loadFileDraft, deleteFileDraft, planDraftReplay, planStaleDraftRestore, stashFileDraftSync,
 } from '@/utils/file-drafts';
 import { highlightLines } from '@/utils/code-highlight';
 import { computeContentHashClient } from '@/utils/content-hash';
@@ -53,11 +54,15 @@ import { vaultRelativeNotePath } from '@/utils/notes-link';
 import { useRevealFile } from '@/hooks/useRevealFile';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useConfirm } from '@/hooks/useConfirm';
-import { useLiveEdit, type LiveEdit } from '@/hooks/useLiveEdit';
+import { useLiveEdit, liveUnreachablePausedMessage, CONFIG_WRITE_DEBOUNCE_MS, type LiveEdit } from '@/hooks/useLiveEdit';
 import { useEmbeddedImageFreshness, type EmbeddedImageFreshness } from '@/hooks/useEmbeddedImageFreshness';
 import { FileHistoryPanel } from '@/components/common/FileHistoryPanel';
 import { PdfPreview } from '@/components/common/PdfPreview';
-import { ICON_NEW_TAB } from '@/components/common/Icons';
+import {
+  ICON_NEW_TAB, ICON_NOTE, ICON_COPY, ICON_DOWNLOAD, ICON_FOLDER, ICON_OPEN_APP, ICON_EXPAND, ICON_COLLAPSE,
+  ICON_SEARCH, ICON_HISTORY, ICON_MORE, ICON_CHECK, ICON_CLOSE, ICON_CODE, ICON_FILE, ICON_SKIP_BACK, ICON_SKIP_FORWARD,
+} from '@/components/common/Icons';
+import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
 import { SelectionAskPill, selectionClientRect } from '@/components/common/SelectionAskPill';
@@ -78,6 +83,10 @@ import { createPressSelectionKeeper } from '@/plugins/link-menu-selection';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import '@/styles/live-edit.css';
+import '@/styles/file-doc-bar.css';
+
+/** A ⌘S (or the banner's Try again) that never reached the server. */
+const SAVE_RETRY_MESSAGE = "Can't reach Walnut right now. Your text is still in the editor: press Try again once Walnut is running.";
 
 interface FileContentViewProps {
   path: string;
@@ -129,6 +138,59 @@ interface FileContentViewProps {
    * offers the way back.
    */
   onOpenPath?: (path: string) => void;
+  /** The start of the document bar: where the file is. The explorer puts its
+   *  ‹ › and the path here; absent → the file's folder and name. */
+  barLeading?: ReactNode;
+  /** The end of the document bar (the explorer's chat segment). */
+  barTrailing?: ReactNode;
+  /** Extra rows at the end of the ⋯ menu (the explorer's Refresh). */
+  extraMenuItems?: ContextMenuItem[];
+  /** Rows that lead the ⋯ menu only when the bar is tight, for the controls the
+   *  lead drops to make room (the explorer's Back and Forward). */
+  tightMenuItems?: ContextMenuItem[];
+}
+
+/** A path split for one line: the head (cut first), the file's own folder, the name. */
+function splitPathRow(p: string): { head: string; folder: string; name: string } {
+  const cut = p.lastIndexOf('/');
+  const name = p.slice(cut + 1);
+  const dir = cut >= 0 ? p.slice(0, cut + 1) : '';
+  const prev = dir.lastIndexOf('/', dir.length - 2);
+  return { head: dir.slice(0, prev + 1), folder: dir.slice(prev + 1), name };
+}
+
+/**
+ * The start of a path in ⋯'s first row, cut by whole folders: the folders nearest
+ * the file stay, the ones that do not fit go, and a leading "…/" says some did.
+ * Cutting the text instead split a folder name in the middle ("itor-fixture/").
+ */
+function PathHead({ head }: { head: string }) {
+  const segs = useMemo(() => head.split('/').slice(0, -1).map((s) => `${s}/`), [head]);
+  const boxRef = useRef<HTMLSpanElement>(null);
+  // How many folders, nearest first, fit whole. Measured once the row is laid out
+  // (the menu mounts fresh each time it opens, so once is enough).
+  const [shown, setShown] = useState(segs.length);
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const left = box.getBoundingClientRect().left - 0.5;
+    const kids = Array.from(box.children) as HTMLElement[];
+    let fit = 0;
+    while (fit < kids.length && kids[fit]!.getBoundingClientRect().left >= left) fit++;
+    if (fit < shown) setShown(fit);
+  }, [shown]);
+  if (segs.length === 0) return null;
+  const nearest = segs.slice().reverse().slice(0, shown);
+  return (
+    <>
+      {shown < segs.length && <span className="fv-more-path-cut" aria-hidden="true">…/</span>}
+      {/* Nearest folder first in a right-to-left row; what overflows its left edge
+          is measured above and left out. */}
+      <span className="fv-more-path-dir" ref={boxRef}>
+        {nearest.map((seg, i) => <span key={i}>{seg}</span>)}
+      </span>
+    </>
+  );
 }
 
 /** Build line-numbered HTML from raw file content. Lines get Prism syntax
@@ -205,7 +267,7 @@ function findScroller(start: HTMLElement | null): HTMLElement | null {
 
 export function FileContentView({
   path: filePath, line, lineTerm, lineEnd, host, sessionId, hidePopout, reloadToken = 0,
-  onSelectCode, onSaved, onSymbolLookup, onOpenPath,
+  onSelectCode, onSaved, onSymbolLookup, onOpenPath, barLeading, barTrailing, extraMenuItems, tightMenuItems,
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const dataRef = useRef(data);
@@ -271,11 +333,23 @@ export function FileContentView({
   // App-wide themed dialog (never window.confirm — see handleDiscard).
   const confirm = useConfirm();
   const draftRef = useRef<string | null>(null);
+  // The disk bytes the carried draft is a modification of: the other half of the
+  // pair an editor keeps as getValue/getBase. Set with draftRef whenever it seeds
+  // an editor, moved by our own write landing and by a merge, and never by a
+  // read on its own (the 2026-09-08 rule: text and base come from one owner).
+  const draftBaseRef = useRef<string | null>(null);
   // Bumped by Discard to force a remount back onto the on-disk bytes.
   const [seedNonce, setSeedNonce] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [savedFlash, setSavedFlash] = useState(false);
+  // What the save banner offers besides its words: the conflict choice (keep mine /
+  // use the version on disk) after a ⌘S that 409'd, or Try again after one that
+  // never arrived. Live Edit's own pauses are read from `live.suspendedReason`.
+  const [saveConflict, setSaveConflict] = useState(false);
+  const [saveRetry, setSaveRetry] = useState(false);
+  useEffect(() => {
+    if (saveError == null) { setSaveConflict(false); setSaveRetry(false); }
+  }, [saveError]);
   // ── File history ───────────────────────────────────────────────────────────
   // The version timeline for THIS file (Walnut snapshots + git). Stays open across
   // file switches on purpose — the panel refetches for the new path — and
@@ -283,6 +357,14 @@ export function FileContentView({
   // up the version just recorded without a remount.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [versionsSeen, setVersionsSeen] = useState(0);
+  const historyOpenRef = useRef(false);
+  historyOpenRef.current = historyOpen;
+  const liveVersionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // An open History comparison follows the editor's text a beat after typing stops.
+  const [bufferToken, setBufferToken] = useState(0);
+  const bufferTokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (bufferTokenTimerRef.current) clearTimeout(bufferTokenTimerRef.current); }, []);
+  useEffect(() => () => { if (liveVersionTimerRef.current) clearTimeout(liveVersionTimerRef.current); }, []);
   // Version folded into every embedded image URL (`&r=`). A byte-identical
   // <img src> is answered from the browser's per-document memory cache with no
   // request (WebKit never re-asks for a URL it already loaded), so a diagram the
@@ -312,6 +394,18 @@ export function FileContentView({
   // writer, and on any fresh read / successful save.
   const conflictHashRef = useRef<string | undefined>(undefined);
   const editorRef = useRef<FileSourceEditorHandle>(null);
+  // The buffer and its base, whichever surface holds them: the editor when one is
+  // mounted, otherwise (an HTML or MDX preview, which renders and does not edit)
+  // the carried draft. Saving reads these, so a write, a Try again or a landed
+  // write never mistakes "no editor on screen" for "nothing unsaved".
+  const bufferText = (): string | null => {
+    if (editorRef.current) return editorRef.current.getValue();
+    return dirtyRef.current ? draftRef.current : null;
+  };
+  const bufferBase = (): string | null => {
+    if (editorRef.current) return editorRef.current.getBase();
+    return dirtyRef.current && draftRef.current != null ? draftBaseRef.current : null;
+  };
 
   // ── Unsaved-draft persistence ──────────────────────────────────────────────
   // The dirty buffer used to live ONLY in React state, so leaving the Files
@@ -439,7 +533,8 @@ export function FileContentView({
     noteBufferInstalled('apply-editor-text');
     applyingRef.current = true;
     try {
-      editorRef.current?.setValue(text, base);
+      if (editorRef.current) editorRef.current.setValue(text, base);
+      else { draftRef.current = text; draftBaseRef.current = base ?? text; }
     } finally {
       if (wysiwygRef.current) {
         // TipTap's setContent({emitUpdate:false}) emits nothing now, but a late
@@ -459,10 +554,37 @@ export function FileContentView({
     captureDraft(text);
   }, [captureDraft]);
 
+  // Text put in the editor by Walnut rather than typed (a restored version, a
+  // replayed draft) is unsaved but arms no write by itself: only a user edit
+  // does. Without this the chip said Saving… with nothing on its way, and with
+  // no Save button nothing would ever write it. Armed by the restore, fired once
+  // the remounted editor can hand over its text (it may still be loading).
+  const armOnMountRef = useRef(false);
+  useEffect(() => {
+    if (!armOnMountRef.current) return;
+    let tries = 0;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const fire = () => {
+      if (!armOnMountRef.current) return;
+      if (bufferText() == null) {
+        if (++tries < 50) t = setTimeout(fire, 100);
+        return;
+      }
+      armOnMountRef.current = false;
+      liveRef.current?.noteUserEdit();
+    };
+    fire();
+    return () => { if (t) clearTimeout(t); };
+  });
+
   const handleDocChange = useCallback(() => {
     const text = editorRef.current?.getValue();
     if (text == null) return;
     captureDraft(text);
+    if (historyOpenRef.current) {
+      if (bufferTokenTimerRef.current) clearTimeout(bufferTokenTimerRef.current);
+      bufferTokenTimerRef.current = setTimeout(() => setBufferToken((n) => n + 1), 400);
+    }
     // Only a USER edit arms the auto-write (see applyingRef). The draft capture
     // above still runs for a programmatic apply — the record then matches disk,
     // which is how the obsolete draft gets deleted.
@@ -472,6 +594,28 @@ export function FileContentView({
   // Unmount is the reported failure mode ("left the panel, came back, gone"), so
   // the last keystrokes are flushed rather than dropped with the timer.
   useEffect(() => () => { void flushDraft(); }, [flushDraft]);
+
+  // Leaving the page (reload, closed window, the Mac app quitting): an IndexedDB
+  // write started now may never land, so the pending draft is stashed
+  // synchronously as well (stashFileDraftSync). Typed-then-reloaded text came back
+  // only when the reload waited out the draft timer (2026-11-07 review).
+  useEffect(() => {
+    const stash = () => {
+      const p = pendingDraftRef.current;
+      if (!p || (p.disk != null && p.text === p.disk)) return;
+      stashFileDraftSync(p.host, p.path, { text: p.text, baseHash: p.baseHash });
+      void flushDraft();
+    };
+    const onHidden = () => { if (document.visibilityState === 'hidden') stash(); };
+    window.addEventListener('pagehide', stash);
+    window.addEventListener('beforeunload', stash);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', stash);
+      window.removeEventListener('beforeunload', stash);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, [flushDraft]);
 
   useEffect(() => {
     if (!draftRestored) return;
@@ -604,6 +748,7 @@ export function FileContentView({
       // `d.content` is right in both branches.
       baseContentRef.current = d.content;
       draftRef.current = plan.seed;
+      draftBaseRef.current = d.content;
       // Edited back to the original ⇒ nothing unsaved left to remember.
       if (plan.drop && !opts.provisional) void deleteFileDraft(host, filePath);
       // Passing the SAME payload object on the confirming pass is deliberate:
@@ -613,6 +758,9 @@ export function FileContentView({
       setEditorDirty(false);
       setStaleDraft(plan.stale);
       setDraftRestored(plan.seed != null);
+      // A replayed draft is unsaved work on the bytes now on disk: saving is
+      // always live, so it goes out like the keystrokes that made it would have.
+      if (plan.seed != null && !opts.provisional) armOnMountRef.current = true;
       setBaseHash(d.contentHash);
       setLoading(false);
       if (!opts.provisional) setReloading(false);
@@ -885,11 +1033,35 @@ export function FileContentView({
   useEffect(() => {
     if (!fullscreen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); setFullscreen(false); }
+      if (e.key !== 'Escape') return;
+      // One layer per Escape: an open menu closes first (its own handler), the
+      // full screen on the next press.
+      if (document.querySelector('.wn-context-menu, .app-modal-overlay')) return;
+      if (historyOpenRef.current) return; // History's own handler takes this press
+      e.stopPropagation();
+      setFullscreen(false);
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
   }, [fullscreen]);
+
+  // Escape closes History and only History: claimed in the capture phase so the
+  // Files panel (and full screen) see a consumed key and stay open. One layer per
+  // press, same as above: a menu or a confirm closes first.
+  useEffect(() => {
+    if (!historyOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      if (document.querySelector('.wn-context-menu, .app-modal-overlay')) return;
+      // The find bar closes itself on Escape first.
+      if (e.target instanceof Element && e.target.closest('.fv-search-bar')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHistoryOpen(false);
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [historyOpen]);
 
   const isHtml = data?.content != null && isHtmlExt(data.extension, filePath);
   const isMarkdown = data?.content != null && isMarkdownExt(data.extension, filePath);
@@ -957,7 +1129,11 @@ export function FileContentView({
    * this, every write would leave the cached copy stale and the next open would
    * flash the pre-write text before correcting itself.
    */
+  // Bumped whenever new bytes are on disk (our write, another writer's adopted):
+  // the HTML preview loads the file by URL, so it must be told to load again.
+  const [diskVersion, setDiskVersion] = useState(0);
   const noteBytesOnDisk = useCallback((content: string, contentHash: string, size: number) => {
+    setDiskVersion((n) => n + 1);
     const base = filePath.slice(filePath.lastIndexOf('/') + 1);
     const dot = base.lastIndexOf('.');
     void setCachedFileContent(host, filePath, {
@@ -986,8 +1162,13 @@ export function FileContentView({
     setStaleDraft(null);
     setDraftRestored(false);
     // History refetches per version; a live burst is one coalesced version on the
-    // server, so refetching (two git spawns) per typing pause would be noise.
+    // server, so refetching (two git spawns) per typing pause would be noise. An
+    // OPEN panel still has to show it: one refetch once the burst has settled.
     if (!opts.live) setVersionsSeen((n) => n + 1);
+    else if (historyOpenRef.current) {
+      if (liveVersionTimerRef.current) clearTimeout(liveVersionTimerRef.current);
+      liveVersionTimerRef.current = setTimeout(() => setVersionsSeen((n) => n + 1), 1500);
+    }
     // What is on disk is `text`. If the buffer has ALREADY moved on (a keystroke
     // landed while the write was in flight — routine in live mode, where every
     // pause is a write), the file is still dirty by exactly that much, and the
@@ -995,7 +1176,7 @@ export function FileContentView({
     // here would re-baseline the editor onto the NEWER text (dirty dot off, Save
     // disabled, beforeunload guard off) and dropDraft would delete that backup —
     // the characters would then exist only in the buffer, invisibly unsaved.
-    const buffer = editorRef.current?.getValue();
+    const buffer = bufferText();
     if (buffer != null && buffer !== text) {
       // Dirty tracking stays where it is (see above), but "what is on disk" moved,
       // so the editor's BASE has to move even though "clean" does not. Skipping
@@ -1003,7 +1184,15 @@ export function FileContentView({
       // write derives its token from the base, every following typing pause 409s
       // by construction and runs a pointless merge cycle (found in review,
       // 2026-09-08). Ordering matters: this must run BEFORE the return.
-      editorRef.current?.setBase(text);
+      if (editorRef.current) editorRef.current.setBase(text);
+      else draftBaseRef.current = text;
+      // Re-record the newer words on top of the bytes now on disk, so a reload
+      // replays them as a draft of THIS version (not a stale one of the last).
+      diskContentRef.current = text;
+      captureDraft(buffer);
+      // At once, not after the draft debounce: a reload in that window would
+      // find only the record of the last version and call the words stale.
+      void flushDraft();
       return;
     }
     editorRef.current?.markClean(text);
@@ -1014,7 +1203,7 @@ export function FileContentView({
     dropDraft(filePath, host);
     setDraftDirty(false);
     setEditorDirty(false);
-  }, [dropDraft, filePath, host, noteBytesOnDisk]);
+  }, [captureDraft, dropDraft, filePath, flushDraft, host, noteBytesOnDisk]);
 
   /** New disk bytes were read while the buffer stays dirty (a merge, or a
    *  collision we could not fold in). The pane's idea of "what is on disk" must
@@ -1052,7 +1241,13 @@ export function FileContentView({
    */
   const restoreHistoryVersion = useCallback((content: string, label: string) => {
     liveRef.current?.cancelPending();
+    // A version picked from History is a deliberate write: a pause for a refused
+    // or unreachable write is retried by it. A real conflict stays paused: the
+    // other writer's change still waits on Keep mine / Use disk.
+    if (liveRef.current?.suspendedReason && liveRef.current.suspendedReason !== 'conflict') liveRef.current.resume();
+    armOnMountRef.current = true;
     draftRef.current = content;
+    draftBaseRef.current = baseContentRef.current;
     setDraftDirty(true);
     setSaveError(null);
     setSeedNonce((n) => n + 1);
@@ -1077,6 +1272,37 @@ export function FileContentView({
   });
   imageFreshnessRef.current = imageFreshness;
 
+  // Config-like files are often watched and loaded the moment they change, so a
+  // half-typed one must not land: JSON and YAML are parsed first (the YAML
+  // parser is loaded only for a YAML file).
+  const isYaml = /\.ya?ml$/i.test(filePath);
+  const yamlRef = useRef<{ parseAllDocuments: (s: string) => unknown } | null>(null);
+  useEffect(() => {
+    if (!isYaml || yamlRef.current) return;
+    let gone = false;
+    void import('yaml').then((m) => { if (!gone) yamlRef.current = m; }).catch(() => { /* no parser: no hold */ });
+    return () => { gone = true; };
+  }, [isYaml]);
+  const validateForLiveWrite = useCallback((text: string, path: string, base: string | null): string | null => {
+    const check = (t: string): string | null => {
+      try {
+        if (/\.json$/i.test(path)) JSON.parse(t.replace(/^\uFEFF/, ''));
+        else if (/\.ya?ml$/i.test(path) && yamlRef.current) {
+          const docs = yamlRef.current.parseAllDocuments(t);
+          const list = Array.isArray(docs) ? (docs as Array<{ errors: Array<{ message: string }> }>) : [];
+          const bad = list.flatMap((d) => d.errors)[0];
+          if (bad) return bad.message.split('\n')[0];
+        }
+        return null;
+      } catch (err) {
+        return err instanceof Error ? err.message.split('\n')[0] : String(err);
+      }
+    };
+    const invalid = check(text);
+    // Only a file that parsed before is held: one that never did (JSON with
+    // comments, a tsconfig, YAML the parser is stricter about) saves as before.
+    return invalid && (base == null || check(base) == null) ? invalid : null;
+  }, []);
   const live = useLiveEdit({
     path: filePath,
     host,
@@ -1084,13 +1310,16 @@ export function FileContentView({
     sessionId,
     canEdit,
     isVisible: () => !document.hidden && !!contentRef.current?.getClientRects().length,
-    getText: () => editorRef.current?.getValue() ?? null,
+    getText: bufferText,
     // The bytes the EDITOR says its text is based on. Deliberately not
     // `baseContentRef`: that one moves when a read lands, which is a render before
     // the editor is reseeded, and writing under a base the editor never held is
-    // the 2026-09-08 data loss. Null when no editor is mounted, which stops an
-    // automatic write rather than guessing.
-    getBaseText: () => editorRef.current?.getBase() ?? null,
+    // the 2026-09-08 data loss. With no editor mounted (an HTML/MDX preview) it
+    // is the carried draft's own base, recorded with it; null when nothing is
+    // unsaved, which stops an automatic write rather than guessing.
+    getBaseText: bufferBase,
+    validate: validateForLiveWrite,
+    debounceMs: /\.(ya?ml|json|jsonc|toml|ini|conf|cfg|env)$/i.test(filePath) || /\/\.env(\.[^/]*)?$/.test(filePath) ? CONFIG_WRITE_DEBOUNCE_MS : undefined,
     applyText: applyEditorText,
     lockHashRef,
     bufferGenRef,
@@ -1119,14 +1348,23 @@ export function FileContentView({
   });
   liveRef.current = live;
 
-  const handleSave = useCallback(async () => {
-    const text = editorRef.current?.getValue();
-    if (text == null) return;
+  /**
+   * Write the buffer now. ⌘S, and the save banner's buttons: saving is otherwise
+   * automatic (Live Edit), so there is no Save button. `overwrite` is the banner's
+   * "Keep my version": the user has read that the file changed under them and chose
+   * theirs, so a 409 is answered by writing again against the hash the server just
+   * named, once. Resolves true when the bytes landed.
+   */
+  const handleSave = useCallback(async (opts?: { overwrite?: boolean }): Promise<boolean> => {
+    const text = bufferText();
+    if (text == null) return false;
     // An explicit Save IS the flush — a queued auto-write would otherwise fire
     // right behind it against a lock token this save has already spent.
     liveRef.current?.cancelPending();
     setSaving(true);
     setSaveError(null);
+    setSaveConflict(false);
+    setSaveRetry(false);
     try {
       // A pending conflict hash wins: pressing Save after a conflict IS the
       // user's "overwrite it with mine" decision, so send the hash the server
@@ -1141,17 +1379,27 @@ export function FileContentView({
       // mechanism with a human hand on it. Hashing the editor's base cannot do
       // that: if the editor is behind, the save 409s and the user gets the
       // conflict dialog, which is the whole point of the dialog.
-      const editorBase = editorRef.current?.getBase();
+      const editorBase = bufferBase();
       const expectedHash = conflictHashRef.current
         ?? (editorBase != null ? computeContentHashClient(editorBase) : lockHashRef.current);
-      const res = await saveFileContent(filePath, text, {
-        host, expectedHash, writer: 'user', origin: viewIdRef.current,
-      });
+      let res;
+      try {
+        res = await saveFileContent(filePath, text, {
+          host, expectedHash, writer: 'user', origin: viewIdRef.current,
+        });
+      } catch (first) {
+        if (!(opts?.overwrite && first instanceof FileSaveConflictError)) throw first;
+        res = await saveFileContent(filePath, text, {
+          host, expectedHash: first.currentHash, writer: 'user', origin: viewIdRef.current,
+        });
+      }
       applySaved(text, res);
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 1800);
       log.info('file-editor', 'file saved', { path: filePath, host, size: res.size });
       onSaved?.(filePath);
+      // A save that landed settles whatever paused live saving for this file (a
+      // second ⌘S over a conflict, a Try again): saving is live again from here.
+      liveRef.current?.resume();
+      return true;
     } catch (err) {
       if (err instanceof FileSaveConflictError) {
         // Do NOT auto-resolve: the user's text and the on-disk text are both real
@@ -1165,21 +1413,25 @@ export function FileContentView({
         // outcome this branch exists to prevent (caught in UI verification).
         // conflictHashRef is read by handleSave but is NOT part of the key.
         conflictHashRef.current = err.currentHash;
-        setSaveError('This file changed on disk since you opened it. Press Save again to overwrite it with your version, or Discard and reopen the file to get the new one.');
+        setSaveError('This file changed on disk since you opened it. Keep your version to replace it, or use the version on disk.');
+        setSaveConflict(true);
         log.warn('file-editor', 'save conflict', { path: filePath, host });
       } else if (isNetworkFetchError(err)) {
         // The request never arrived (server restarting, tunnel down). The
         // browser's own words for this ("Failed to fetch", "Load failed") name
         // no cause and no way out, so say what happened and what to do.
-        setSaveError(SAVE_UNREACHABLE_MESSAGE);
+        setSaveError(SAVE_RETRY_MESSAGE);
+        setSaveRetry(true);
         log.warn('file-editor', 'save did not reach the server', {
           path: filePath, host, error: err instanceof Error ? err.message : String(err),
         });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         setSaveError(msg);
+        setSaveRetry(true);
         log.error('file-editor', 'save failed', { path: filePath, host, error: msg });
       }
+      return false;
     } finally {
       setSaving(false);
     }
@@ -1192,16 +1444,28 @@ export function FileContentView({
   // site to prompt you again", after which window.confirm silently returns false
   // and Discard becomes a permanently dead button. That is why the app-wide dialog
   // layer exists; every sibling destructive action already uses it.
-  const handleDiscard = useCallback(async () => {
+  const handleDiscard = useCallback(async (): Promise<boolean> => {
     const editor = editorRef.current;
     const ok = await confirm({
-      title: 'Discard your unsaved changes to this file?',
-      confirmLabel: 'Discard',
+      title: 'Use the version on disk?',
+      message: 'Your changes to this file that are not saved will be thrown away.',
+      confirmLabel: 'Use the version on disk',
       danger: true,
     });
-    const disk = dataRef.current;
-    if (!ok || editorRef.current !== editor || disk?.content == null) return;
+    if (!ok || editorRef.current !== editor) return false;
+    // The version on disk NOW, read fresh: the copy from when the file was opened
+    // may be older than the write that caused this choice.
+    let disk: FileContentResponse;
+    try {
+      disk = await fetchFileContent(filePath, host);
+    } catch (err) {
+      setSaveError(`Couldn't read the version on disk (${err instanceof Error ? err.message : String(err)}). Your text is still in the editor: try again.`);
+      return false;
+    }
+    if (editorRef.current !== editor || disk.content == null) return false;
     liveRef.current?.cancelPending();
+    setData(disk);
+    setBaseHash(disk.contentHash);
     noteBufferInstalled('discard', disk.contentHash);
     baseContentRef.current = disk.content;
     lockHashRef.current = disk.contentHash;
@@ -1216,6 +1480,7 @@ export function FileContentView({
     setDraftRestored(false);
     conflictHashRef.current = undefined;
     setSeedNonce((n) => n + 1);
+    return true;
   }, [confirm, dropDraft, filePath, host, noteBufferInstalled]);
 
   // Stale-draft banner, "Restore my changes": seed the editor from the draft and
@@ -1230,6 +1495,9 @@ export function FileContentView({
     const { seed, lockHash } = planStaleDraftRestore(staleDraft);
     noteBufferInstalled('stale-draft-restore', lockHash);
     draftRef.current = seed;
+    // No base we still hold (see below): like the editor it seeds, the draft is
+    // its own base, so no automatic write can match the disk.
+    draftBaseRef.current = seed;
     lockHashRef.current = lockHash;
     // The lock now points at bytes we no longer hold, so there is no trustworthy
     // merge BASE any more. Live Edit reads null as "don't merge, ask the human"
@@ -1237,6 +1505,12 @@ export function FileContentView({
     baseContentRef.current = null;
     conflictHashRef.current = undefined;
     setDraftDirty(true);
+    // Nothing is written on its own: the draft was made on bytes that are no
+    // longer on disk, and with no base to merge against a write would either
+    // replace the other writer's work or (merging against the draft itself)
+    // quietly throw the draft away. The file waits on the person's choice.
+    liveRef.current?.pause('conflict');
+    setSaveError('These are your changes to an older version of this file, and the file has changed since. Keep your version to replace what is on disk now, or use the version on disk.');
     setSeedNonce((n) => n + 1);
     setStaleDraft(null);
   }, [staleDraft, noteBufferInstalled]);
@@ -1254,6 +1528,7 @@ export function FileContentView({
     if (editorRef.current) {
       if (dirty) {
         draftRef.current = editorRef.current.getValue();
+        draftBaseRef.current = editorRef.current.getBase();
         setDraftDirty(true);
       }
       setEditorDirty(false);
@@ -1527,6 +1802,10 @@ export function FileContentView({
   // open that file in the panel. Deliberately NOT automatic — two pages that
   // redirect to each other would otherwise ping-pong the panel forever.
   const [strayed, setStrayed] = useState<{ path?: string } | null>(null);
+  // The preview's URL version. Frozen while the reader has followed a link away
+  // from the file: a write to the file must not pull them back on its own.
+  const previewRevRef = useRef(0);
+  if (!strayed) previewRevRef.current = reloadToken + diskVersion;
   const onOpenPathRef = useRef(onOpenPath);
   onOpenPathRef.current = onOpenPath;
   useEffect(() => {
@@ -1629,9 +1908,9 @@ export function FileContentView({
    *  same `src` re-navigates (unlike React's prop diff, which would see no change). */
   const returnToFile = useCallback(() => {
     const frame = htmlFrameRef.current;
-    if (frame) frame.src = rawFileContentUrl(filePath, host, reloadToken);
+    if (frame) frame.src = rawFileContentUrl(filePath, host, reloadToken + diskVersion);
     setStrayed(null);
-  }, [filePath, host, reloadToken]);
+  }, [filePath, host, reloadToken, diskVersion]);
 
   // Live selection rect for the pill, translated to top-viewport coords when
   // the selection lives inside the HTML preview iframe.
@@ -1874,110 +2153,6 @@ export function FileContentView({
     }).catch(() => {});
   }, [filePath]);
 
-  const copyPathBtn = (
-    <button
-      type="button"
-      className="fv-html-tab fv-copy-path-btn"
-      onClick={handleCopyPath}
-      title={`Copy path: ${filePath}`}
-    >
-      {pathCopied ? '✓ Copied' : 'Copy Path'}
-    </button>
-  );
-
-  const downloadBtn = (
-    <a
-      className="fv-html-tab fv-download-btn"
-      href={downloadFileUrl(filePath, host)}
-      download
-      title="Download file"
-    >
-      ⬇ Download
-    </a>
-  );
-
-  /** Live Edit toggle. A pill with a dot rather than a labelled checkbox: it sits
-   *  in a dense toolbar, and the dot is what makes its state readable at a
-   *  glance. Preference is global; a conflict pauses it per FILE, which is why
-   *  the paused title says "click to resume" instead of "turn on". */
-  const liveToggle = !canEdit || !editing ? null : (
-    <button
-      type="button"
-      className={`fv-html-tab fv-live-toggle${live.on ? ' active' : ''}${live.suspended ? ' fv-live-suspended' : ''}`}
-      onClick={live.toggle}
-      aria-pressed={live.on}
-      title={live.suspended
-        ? (live.suspendedReason === 'unreachable'
-          ? `Live edit paused for this file: ${live.unreachableHost ?? 'Walnut'} couldn't be reached for a minute. Click to resume.`
-          : 'Live edit paused for this file after a conflict — click to resume')
-        : live.on
-          ? 'Live edit is ON — your changes are written to disk shortly after you stop typing. Click to turn it off.'
-          : 'Live edit is off — changes are written only when you press Save. Click to write as you type.'}
-    >
-      <span className="fv-live-dot" aria-hidden="true">●</span>
-      Live
-    </button>
-  );
-
-  /** Versions of THIS file. Sits with the edit controls because restoring one is
-   *  an edit (it lands in the buffer unsaved), not a navigation. */
-  const historyBtn = !canEdit || !editing ? null : (
-    <button
-      type="button"
-      className={`fv-html-tab fv-history-btn${historyOpen ? ' active' : ''}`}
-      onClick={() => setHistoryOpen((o) => !o)}
-      aria-pressed={historyOpen}
-      title="Versions of this file — Walnut's snapshots of your opens and saves, plus git commits"
-    >
-      History
-    </button>
-  );
-
-  /** Save / Discard cluster. The editor is always live for editable files, so
-   *  these are always present there — Save disabled until something changed. */
-  const editBtns = !canEdit || !editing ? null : (
-    <>
-      {liveToggle}
-      {historyBtn}
-      <button
-        type="button"
-        className="fv-html-tab fv-save-btn"
-        onClick={() => { void handleSave(); }}
-        disabled={saving || !dirty}
-        title={dirty ? 'Save changes (⌘S)' : 'No changes to save'}
-      >
-        {/* An auto-write borrows this slot: the user should see that a write is
-            happening in the place they already look for save state. */}
-        {saving || live.writing ? 'Saving…' : savedFlash ? '✓ Saved' : 'Save'}
-      </button>
-      {dirty && (
-        <button
-          type="button"
-          className="fv-html-tab fv-cancel-edit-btn"
-          onClick={() => void handleDiscard()}
-          title="Throw away unsaved changes and reload from disk"
-        >
-          Discard
-        </button>
-      )}
-      {dirty && <span className="fv-dirty-dot" title="Unsaved changes">●</span>}
-      {draftRestored && (
-        <span
-          className="fv-draft-note"
-          role="status"
-          title="Your unsaved changes were restored from this browser's draft store. They are still unsaved."
-        >
-          Draft restored
-        </span>
-      )}
-      {/* Live Edit receipt: something arrived from another writer and was folded
-          in. Transient (4s) and one line — it reports, it doesn't ask. */}
-      {live.receipt && (
-        <span className="fv-draft-note fv-live-receipt" role="status">{live.receipt}</span>
-      )}
-    </>
-  );
-
   const labelsVersion = useEntityLabelsVersion();
   const markdownHtml = useMemo(() => {
     if (!isMarkdown || !data?.content) return '';
@@ -2063,79 +2238,386 @@ export function FileContentView({
     adoptOtherWriter();
   });
 
-  const openInNotesBtn = notePath ? (
-    <button
-      type="button"
-      className="fv-html-tab fv-notes-btn"
-      onClick={() => navigate(`/notes?path=${encodeURIComponent(notePath)}`)}
-      title="Open this note on the Notes page (tabs, backlinks, editing)"
-    >
-      Open in Notes
-    </button>
-  ) : null;
-
   // ── Desktop hand-off (macOS console only) ──────────────────────────────────
   const { canReveal, reveal, error: revealError, clearError: clearRevealError } = useRevealFile(host);
-  const revealBtns = canReveal ? (
-    <>
-      <button
-        type="button"
-        className="fv-html-tab fv-reveal-btn"
-        onClick={() => reveal(filePath, 'finder')}
-        title="Reveal this file in Finder"
-      >
-        Finder
-      </button>
-      <button
-        type="button"
-        className="fv-html-tab fv-reveal-btn"
-        onClick={() => reveal(filePath, 'app')}
-        title="Open in the macOS default application for this file type"
-      >
-        Default app
-      </button>
-    </>
-  ) : null;
+  // Finder and the default app open on the Mac, not on a phone holding the page.
+  // (The pointer, not the width: a narrow Mac window still reveals in Finder.)
+  const coarsePointer = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
 
-  /** Find button — same affordance as ⌘F, for mouse-first users. */
-  const findBtn = !raw && !data?.binary && !data?.error ? (
-    <button
-      type="button"
-      className={`fv-html-tab fv-find-btn${searchOpen ? ' active' : ''}`}
-      onClick={() => (searchOpen ? closeSearch() : openSearch())}
-      title="Find in file (⌘F)"
+  // ── The document bar ("Document first", 2026-11-06) ────────────────────────
+  // One quiet line above the file instead of a row of a dozen buttons: where the
+  // file is (the container's lead, or its own name), the save state, the view
+  // switch, Find and History as icons, and every rarer action behind ⋯. It is the
+  // same line for every kind of file, so nothing appears and disappears in a
+  // different place per file type. Saving is always live, so there is no Save
+  // button, no Discard and no Live switch: the state reads Saving… / Saved, and a
+  // file that could not be saved says why in the banner below, with its choices.
+  const canFullscreen = isRenderable || raw === 'doc' || raw === 'image' || !!office || !!media;
+  const canFind = !raw && !data?.binary && !data?.error;
+  const moreBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [moreAt, setMoreAt] = useState<{ x: number; y: number } | null>(null);
+  // How much fits: the bar never wraps and never pushes a control off its end.
+  // 'full' shows everything; 'compact' (a pane under ~560px) keeps only the
+  // file's name in the path and draws Preview / Source as two icons; 'tight'
+  // (under ~440px) also drops the save word, makes Preview / Source one switch,
+  // and moves Find, History and the lead's ‹ › into ⋯. Measured, not guessed from the
+  // window, because the pane's width depends on the tree and the chat beside it.
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const [barFit, setBarFit] = useState<'full' | 'compact' | 'tight'>('full');
+  const fitRef = useRef(barFit);
+  const measureFitRef = useRef<((fresh?: boolean) => void) | null>(null);
+  fitRef.current = barFit;
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    // Width picks the tier, and the name has the last word: a full bar that cuts
+    // the file's name steps down to compact (icons instead of words), and stays
+    // there until the bar is clearly wider than where the name was cut.
+    let cutAt = 0;
+    const measure = (fresh?: boolean) => {
+      if (fresh) cutAt = 0;
+      const w = el.getBoundingClientRect().width;
+      let fit: 'full' | 'compact' | 'tight' = w >= 560 ? 'full' : w >= 440 ? 'compact' : 'tight';
+      if (fit === 'full') {
+        if (cutAt && w < cutAt + 48) fit = 'compact';
+        else if (fitRef.current === 'full') {
+          const name = el.querySelector<HTMLElement>('.sfe-crumb.is-last .sfe-crumb-text, .fv-doc-crumb-file');
+          if (name && name.scrollWidth > name.clientWidth + 1) { cutAt = w; fit = 'compact'; }
+          else cutAt = 0;
+        } else cutAt = 0;
+      }
+      if (fit !== fitRef.current) { fitRef.current = fit; setBarFit(fit); }
+    };
+    measureFitRef.current = measure;
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(el);
+    const lead = el.querySelector('.fv-doc-bar-lead');
+    if (lead) ro.observe(lead);
+    return () => { ro.disconnect(); measureFitRef.current = null; };
+  }, []);
+  // Entering or leaving full screen changes the bar's width in one frame:
+  // measure then, not when a later resize happens to come.
+  useLayoutEffect(() => { measureFitRef.current?.(true); }, [fullscreen]);
+  // Another file is another name: measure it afresh, from the full bar.
+  useLayoutEffect(() => {
+    if (!measureFitRef.current) return;
+    fitRef.current = 'full';
+    setBarFit('full');
+    const id = requestAnimationFrame(() => measureFitRef.current?.(true));
+    return () => cancelAnimationFrame(id);
+  }, [filePath]);
+  const tight = barFit === 'tight';
+  const openMore = () => {
+    const r = moreBtnRef.current?.getBoundingClientRect();
+    if (r) setMoreAt((cur) => (cur ? null : { x: r.right, y: r.bottom }));
+  };
+  const pathRow = splitPathRow(filePath);
+  const moreItems: ContextMenuItem[] = [
+    // Where the file is, in full: the bar shows only its last folders.
+    {
+      key: 'where', info: true, title: filePath,
+      // The start of the path gives way; the file's own folder and its name never.
+      label: (
+        <span className="fv-more-path" title={filePath}>
+          {/* Cut from its start, whole folders at a time (PathHead). */}
+          {pathRow.head && <PathHead head={pathRow.head} />}
+          {pathRow.folder && <span className="fv-more-path-folder">{pathRow.folder}</span>}
+          <span className="fv-more-path-name">{pathRow.name}</span>
+        </span>
+      ),
+    },
+    // (No divider: the title block draws its own rule above the first action.)
+    ...(tight && tightMenuItems?.length ? [...tightMenuItems, { divider: true }] : []),
+    ...(tight && media ? [
+      { key: 'back3', label: 'Back 3 seconds', icon: ICON_SKIP_BACK, keepOpen: true, onSelect: () => skipBy(-3) },
+      { key: 'fwd10', label: 'Forward 10 seconds', icon: ICON_SKIP_FORWARD, keepOpen: true, onSelect: () => skipBy(10) },
+      ...PLAYBACK_RATES.map((r) => ({
+        key: `rate-${r}`, label: `Speed ${r}×`, checked: playbackRate === r, keepOpen: true,
+        onSelect: () => { setPlaybackRate(r); if (mediaRef.current) mediaRef.current.playbackRate = r; },
+      })),
+      { divider: true },
+    ] : []),
+    ...(tight && canFind ? [{
+      key: 'find', label: 'Find in file', icon: ICON_SEARCH, onSelect: () => (searchOpen ? closeSearch() : openSearch()),
+    }] : []),
+    ...(tight && canEdit && editing ? [{
+      key: 'history', label: 'History', icon: ICON_HISTORY, onSelect: () => setHistoryOpen((o) => !o),
+    }] : []),
+    ...(tight && (canFind || (canEdit && editing)) ? [{ divider: true }] : []),
+    ...(notePath ? [{
+      key: 'notes', label: 'Open in Notes', icon: ICON_NOTE,
+      title: 'Open this note on the Notes page (tabs, backlinks, editing)',
+      onSelect: () => navigate(`/notes?path=${encodeURIComponent(notePath)}`),
+    }] : []),
+    ...(!hidePopout && !fullscreen ? [{
+      key: 'tab', label: 'Open in new tab', icon: ICON_NEW_TAB,
+      onSelect: () => openPopout('file', { path: filePath, host, line }),
+    }] : []),
+    ...(canFullscreen ? [{
+      key: 'fullscreen', label: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
+      icon: fullscreen ? ICON_COLLAPSE : ICON_EXPAND,
+      onSelect: () => setFullscreen((f) => !f),
+    }] : []),
+    { divider: true },
+    { key: 'copy-path', label: 'Copy path', icon: ICON_COPY, title: filePath, onSelect: handleCopyPath },
+    {
+      key: 'download', label: 'Download', icon: ICON_DOWNLOAD,
+      onSelect: () => { window.location.href = downloadFileUrl(filePath, host); },
+    },
+    ...(canReveal && !coarsePointer ? [
+      { key: 'finder', label: 'Reveal in Finder', icon: ICON_FOLDER, onSelect: () => reveal(filePath, 'finder') },
+      {
+        key: 'app', label: 'Open in default app', icon: ICON_OPEN_APP,
+        title: 'Open in the macOS default application for this file type',
+        onSelect: () => reveal(filePath, 'app'),
+      },
+    ] : []),
+    ...(extraMenuItems?.length ? [{ divider: true }, ...extraMenuItems] : []),
+  ];
+
+  const fileName = filePath.split('/').pop() || filePath;
+  const parentName = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')).split('/').pop() : '';
+  const defaultLead = (
+    <span className="fv-doc-crumbs" title={filePath}>
+      {parentName && <span className="fv-doc-crumb-dir">{parentName}</span>}
+      {parentName && <span className="fv-doc-crumb-sep" aria-hidden="true">/</span>}
+      <span className="fv-doc-crumb-file">{fileName}</span>
+    </span>
+  );
+
+  // Saving is live, so the state is mostly "Saved". It reads "Saving…" from the
+  // first keystroke until the write lands, and "Not saved" while a pause or a
+  // failed write holds the text back (the banner then says why).
+  const saveHeld = live.suspended || saveConflict || saveRetry;
+  const saveState: 'saved' | 'saving' | 'held' | 'waiting' =
+    saveHeld ? 'held'
+      : live.unreachable || (live.heldInvalid && dirty) ? 'waiting'
+        : saving || live.writing || dirty ? 'saving'
+          : 'saved';
+  // The state belongs to the file, not to the surface on show: an HTML or MDX
+  // preview of an editable file says Saved / Saving / Not saved too.
+  const saveStateEl = !canEdit ? null : (
+    <span
+      className="fv-save-state"
+      data-state={saveState}
+      data-testid="fv-save-state"
+      role="status"
+      title={saveState === 'saved' ? 'Every change is saved to disk as you type'
+        : saveState === 'saving' ? 'Saving your changes to disk'
+          : saveState === 'waiting' ? (live.heldInvalid
+            ? `Saves once the file is valid again: ${live.heldInvalid}`
+            : 'Waiting to reach the file to save your changes')
+            : 'Your changes are not saved yet: see the note below'}
     >
-      Find
-    </button>
-  ) : null;
+      {/* `fv-dirty-dot` marks text typed but not on disk yet: the page-wide
+          unsaved-work check (utils/unsaved-work.ts) looks for it before a
+          reload or an update. */}
+      {saveState === 'saved' && !dirty ? <span className="fv-save-state-mark" aria-hidden="true">{ICON_CHECK}</span>
+        : saveState === 'held'
+          ? <span className={`fv-save-state-dot${dirty ? ' fv-dirty-dot' : ''}`} aria-hidden="true" />
+          // Waiting writes nothing (text to become valid, the file to be
+          // reachable): a still ring, not the spinner of a write on its way.
+          : saveState === 'waiting'
+            ? <span className={`fv-save-state-ring${dirty ? ' fv-dirty-dot' : ''}`} aria-hidden="true" />
+            : <span className={`fv-save-state-spin${dirty ? ' fv-dirty-dot' : ''}`} aria-hidden="true" />}
+      <span className="fv-save-state-word">
+        {saveState === 'saved' ? 'Saved' : saveState === 'saving' ? 'Saving…' : saveState === 'waiting' ? (live.heldInvalid ? 'Saving when valid' : 'Waiting to save') : 'Not saved'}
+      </span>
+    </span>
+  );
 
-  /** Toolbar tail every render mode shares. */
-  const commonBtns = (
+  const docBar = (extra?: ReactNode) => (
+    <div className="fv-html-toolbar fv-doc-bar" data-testid="fv-doc-bar" data-fit={barFit} ref={barRef}>
+      <div className="fv-doc-bar-lead">{barLeading ?? defaultLead}</div>
+      <div className="fv-doc-bar-tools">
+        {draftRestored && (
+          <span
+            className="fv-draft-note"
+            role="status"
+            title="Your unsaved changes were restored from this browser's draft store."
+          >
+            Draft restored
+          </span>
+        )}
+        {/* Live Edit receipt: something arrived from another writer and was folded
+            in. Transient (4s) and one line: it reports, it doesn't ask. */}
+        {live.receipt && <span className="fv-draft-note fv-live-receipt" role="status" title={live.receipt}>{live.receipt}</span>}
+        {pathCopied && <span className="fv-draft-note" role="status">Path copied</span>}
+        {saveStateEl}
+        {isRenderable && tight && (
+          /* No room for two words: one switch to the other view. */
+          <button
+            type="button"
+            className="fv-doc-icon fv-mode-switch"
+            onClick={() => switchTab(!showSource)}
+            aria-label={showSource ? 'Show preview' : 'Show source'}
+            title={showSource ? 'Show preview' : 'Show source'}
+          >
+            {showSource ? ICON_FILE : ICON_CODE}
+          </button>
+        )}
+        {isRenderable && !tight && (
+          <span className="fv-mode-toggle" role="group" aria-label="View">
+            {/* Both tabs are LIVE EDITORS of the same file (rendered doc vs raw
+                bytes), so switching carries the unsaved buffer across: the
+                draft captured here seeds the next editor. No confirm needed. */}
+            <button
+              type="button"
+              className={`fv-html-tab fv-mode-tab${!showSource ? ' active' : ''}`}
+              aria-pressed={!showSource}
+              aria-label={barFit === 'compact' ? 'Preview' : undefined}
+              title={barFit === 'compact' ? 'Preview' : undefined}
+              onClick={() => switchTab(false)}
+            >
+              {barFit === 'compact' ? ICON_FILE : 'Preview'}
+            </button>
+            <button
+              type="button"
+              className={`fv-html-tab fv-mode-tab${showSource ? ' active' : ''}`}
+              aria-pressed={showSource}
+              aria-label={barFit === 'compact' ? 'Source' : undefined}
+              title={barFit === 'compact' ? 'Source' : undefined}
+              onClick={() => switchTab(true)}
+            >
+              {barFit === 'compact' ? ICON_CODE : 'Source'}
+            </button>
+          </span>
+        )}
+        {extra}
+        {canFind && !tight && (
+          <button
+            type="button"
+            className={`fv-doc-icon fv-find-btn${searchOpen ? ' active' : ''}`}
+            onClick={() => (searchOpen ? closeSearch() : openSearch())}
+            aria-pressed={searchOpen}
+            aria-label="Find in file"
+            title="Find in file (⌘F)"
+          >
+            {ICON_SEARCH}
+          </button>
+        )}
+        {canEdit && editing && !tight && (
+          /* Versions of THIS file. Sits with the edit state because restoring one
+             is an edit (it lands in the buffer and is saved like typing). */
+          <button
+            type="button"
+            className={`fv-doc-icon fv-history-btn${historyOpen ? ' active' : ''}`}
+            onClick={() => setHistoryOpen((o) => !o)}
+            aria-pressed={historyOpen}
+            aria-label="History"
+            title="Versions of this file: Walnut's snapshots of your opens and saves, plus git commits"
+          >
+            {ICON_HISTORY}
+          </button>
+        )}
+        <button
+          type="button"
+          ref={moreBtnRef}
+          className={`fv-doc-icon fv-more-btn${moreAt ? ' active' : ''}`}
+          onClick={openMore}
+          aria-haspopup="menu"
+          aria-expanded={!!moreAt}
+          aria-label="More file actions"
+          title="More: open elsewhere, copy path, download"
+        >
+          {ICON_MORE}
+        </button>
+        {fullscreen && (
+          <button
+            type="button"
+            className="fv-doc-icon fv-fullscreen-btn"
+            onClick={() => setFullscreen(false)}
+            aria-label="Exit fullscreen"
+            title="Exit fullscreen (Esc)"
+          >
+            {ICON_COLLAPSE}
+          </button>
+        )}
+      </div>
+      {barTrailing}
+      {moreAt && (
+        <ContextMenu
+          point={moreAt}
+          align="right"
+          items={moreItems}
+          onClose={() => setMoreAt(null)}
+          ariaLabel="File actions"
+          testId="fv-more-menu"
+          className="fv-more-menu"
+          returnFocus={moreBtnRef.current}
+        />
+      )}
+    </div>
+  );
+
+  const mediaControls = !media ? null : (
     <>
-      {findBtn}
-      {openInNotesBtn}
-      {copyPathBtn}
-      {downloadBtn}
-      {revealBtns}
+      <button
+        type="button"
+        className="fv-html-tab fv-skip-btn"
+        onClick={() => skipBy(-3)}
+        title="Back 3 seconds (←)"
+        aria-label="Back 3 seconds"
+      >
+        {ICON_SKIP_BACK}<span>3s</span>
+      </button>
+      <button
+        type="button"
+        className="fv-html-tab fv-skip-btn"
+        onClick={() => skipBy(10)}
+        title="Forward 10 seconds (→)"
+        aria-label="Forward 10 seconds"
+      >
+        <span>10s</span>{ICON_SKIP_FORWARD}
+      </button>
+      <select
+        className="fv-html-tab fv-speed-select"
+        value={playbackRate}
+        onChange={(e) => {
+          const rate = Number(e.target.value);
+          setPlaybackRate(rate);
+          if (mediaRef.current) mediaRef.current.playbackRate = rate;
+        }}
+        title="Playback speed"
+        aria-label="Playback speed"
+      >
+        {PLAYBACK_RATES.map((r) => (
+          <option key={r} value={r}>{r}×</option>
+        ))}
+      </select>
     </>
   );
 
-  // Open the file in its own standalone browser TAB (zero-WS, one-shot fetch).
-  // Hidden in fullscreen (fullscreen is the in-app expand) and when already popped out.
-  const popoutBtn =
-    !hidePopout && !fullscreen ? (
-      <button
-        type="button"
-        className="fv-html-tab fv-popout-btn"
-        onClick={() => openPopout('file', { path: filePath, host, line })}
-        title="Open in new tab"
-        aria-label="Open in new tab"
-      >
-        {ICON_NEW_TAB}
-      </button>
-    ) : null;
+  // Why the file is not saving, and the way out. Shown while a pause holds the
+  // file even if the words were dismissed: the state chip says "Not saved" and
+  // this is where it points.
+  // A way out that worked hands the keyboard back to the text: the button it was
+  // pressed on is gone, and the next keystroke belongs in the editor.
+  // (After a frame: "use the disk version" remounts the editor first.)
+  const backToText = () => { requestAnimationFrame(() => requestAnimationFrame(() => editorRef.current?.focus())); };
+  const keepMine = async () => { if (await handleSave({ overwrite: true })) { live.resume(); backToText(); } };
+  const useDisk = async () => { if (await handleDiscard()) { live.resume(); backToText(); } };
+  const retrySave = async () => { if (await handleSave()) { live.resume(); backToText(); } };
+  const conflictOpen = saveConflict || live.suspendedReason === 'conflict';
+  const retryOpen = !conflictOpen && (saveRetry || live.suspendedReason === 'unreachable' || live.suspendedReason === 'refused');
+  const reloadOpen = !conflictOpen && !retryOpen && live.suspendedReason === 'reload';
+  const bannerText = saveError
+    ?? (live.suspendedReason === 'conflict'
+      ? 'This file changed somewhere else while you were editing, so saving is paused for it. Keep your version to replace it, or use the version on disk.'
+      : live.suspendedReason === 'unreachable' ? liveUnreachablePausedMessage(live.unreachableHost ?? undefined)
+      : live.suspendedReason === 'refused' ? 'Walnut could not save this file, so saving is paused for it. Your text is still in the editor: press Try again.'
+      : live.suspendedReason === 'reload' ? 'This tab is running an older version of Walnut, so it can no longer save automatically. Reload the page to save again; your text is kept.'
+      : null);
 
   return (
+    <>
+    {/* The sheet's backdrop, as every full screen has: a click on it leaves. In a
+        portal because the view's own box is the sheet. */}
+    {fullscreen && createPortal(
+      <div className="open-walnut-fullscreen-backdrop fv-fullscreen-backdrop" onClick={() => setFullscreen(false)} />,
+      document.body,
+    )}
     <div
       className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}`}
       ref={contentRef}
@@ -2159,47 +2641,23 @@ export function FileContentView({
       // "Save image as…" / the PDF viewer's own items, which ours can't offer.
       onContextMenu={!raw && !data?.binary ? handleContextMenu : undefined}
     >
+      {docBar(tight ? null : mediaControls)}
       {loading && <div className="file-viewer-loading">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Loading file...'}</div>}
       {reloading && <div className="fv-reloading-badge">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Reloading…'}</div>}
       {!loading && !reloading && loadingFrom && <div className="fv-reloading-badge">Still loading from {loadingFrom}…</div>}
       {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
       {!loading && !raw && data?.binary && (
-        <>
-          <div className="fv-html-toolbar fv-toolbar-popout-only">{commonBtns}{popoutBtn}</div>
-          <div className="file-viewer-error">
-            Binary file ({formatSize(data.size)}) — cannot display. Use Download to save it.
-          </div>
-        </>
+        <div className="file-viewer-error">
+          Binary file ({formatSize(data.size)}) cannot be shown here. Download it from the ⋯ menu.
+        </div>
       )}
       {!loading && raw === 'doc' && (
         <>
-          <div className="fv-html-toolbar">
-            {commonBtns}
-            <button
-              className="fv-html-tab fv-fullscreen-btn"
-              onClick={() => setFullscreen((f) => !f)}
-              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
-            >
-              {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
-            </button>
-            {popoutBtn}
-          </div>
           <PdfPreview key={`${host ?? ''}:${filePath}`} path={filePath} host={host} reloadToken={reloadToken} />
         </>
       )}
       {!loading && raw === 'image' && (
         <>
-          <div className="fv-html-toolbar">
-            {commonBtns}
-            <button
-              className="fv-html-tab fv-fullscreen-btn"
-              onClick={() => setFullscreen((f) => !f)}
-              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
-            >
-              {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
-            </button>
-            {popoutBtn}
-          </div>
           <div className="fv-image-preview">
             <img src={rawFileContentUrl(filePath, host, reloadToken)} alt={filePath} />
           </div>
@@ -2209,17 +2667,6 @@ export function FileContentView({
           lazy-loaded open-source libs, fed from the same raw-bytes URL. */}
       {!loading && office && (
         <>
-          <div className="fv-html-toolbar">
-            {commonBtns}
-            <button
-              className="fv-html-tab fv-fullscreen-btn"
-              onClick={() => setFullscreen((f) => !f)}
-              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
-            >
-              {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
-            </button>
-            {popoutBtn}
-          </div>
           {officeChunkFailed ? (
             <div className="fv-office-preview" data-testid="office-chunk-error">
               <div className="file-viewer-error">
@@ -2242,50 +2689,6 @@ export function FileContentView({
       )}
       {!loading && media && (
         <>
-          <div className="fv-html-toolbar">
-            {commonBtns}
-            <button
-              type="button"
-              className="fv-html-tab fv-skip-btn"
-              onClick={() => skipBy(-3)}
-              title="Back 3 seconds (←)"
-              aria-label="Back 3 seconds"
-            >
-              ↺ 3s
-            </button>
-            <button
-              type="button"
-              className="fv-html-tab fv-skip-btn"
-              onClick={() => skipBy(10)}
-              title="Forward 10 seconds (→)"
-              aria-label="Forward 10 seconds"
-            >
-              10s ↻
-            </button>
-            <select
-              className="fv-html-tab fv-speed-select"
-              value={playbackRate}
-              onChange={(e) => {
-                const rate = Number(e.target.value);
-                setPlaybackRate(rate);
-                if (mediaRef.current) mediaRef.current.playbackRate = rate;
-              }}
-              title="Playback speed"
-              aria-label="Playback speed"
-            >
-              {PLAYBACK_RATES.map((r) => (
-                <option key={r} value={r}>{r}×</option>
-              ))}
-            </select>
-            <button
-              className="fv-html-tab fv-fullscreen-btn"
-              onClick={() => setFullscreen((f) => !f)}
-              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
-            >
-              {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
-            </button>
-            {popoutBtn}
-          </div>
           <div className="fv-media-preview">
             {media === 'video' ? (
               <video
@@ -2308,40 +2711,6 @@ export function FileContentView({
           </div>
         </>
       )}
-      {!loading && isRenderable && (
-        <div className="fv-html-toolbar">
-          <button
-            className={`fv-html-tab${!showSource ? ' active' : ''}`}
-            // Both tabs are LIVE EDITORS of the same file (rendered doc vs raw
-            // bytes), so switching carries the unsaved buffer across — the
-            // draft captured here seeds the next editor. No confirm needed.
-            onClick={() => switchTab(false)}
-          >
-            Preview
-          </button>
-          <button
-            className={`fv-html-tab${showSource ? ' active' : ''}`}
-            onClick={() => switchTab(true)}
-          >
-            Source
-          </button>
-          {editBtns}
-          {commonBtns}
-          <button
-            className="fv-html-tab fv-fullscreen-btn"
-            onClick={() => setFullscreen((f) => !f)}
-            title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
-          >
-            {fullscreen ? '✕ Exit' : '⛶ Fullscreen'}
-          </button>
-          {popoutBtn}
-        </div>
-      )}
-      {/* Non-renderable files (plain code) have no preview/source toolbar — give them
-          a minimal one for Save + Download + pop-out. raw kinds/binary render their own. */}
-      {!loading && !isRenderable && !raw && !data?.binary && !data?.error && (
-        <div className="fv-html-toolbar fv-toolbar-popout-only">{editBtns}{commonBtns}{popoutBtn}</div>
-      )}
       {/* Deliberately NOT .file-viewer-error: that class is the whole-pane empty
           state (height:100%, centered), which as a sibling of the editor grew to
           swallow the pane. A save error is a one-line BANNER above the editor. */}
@@ -2360,9 +2729,50 @@ export function FileContentView({
           Can't reach {live.unreachableHost ?? 'Walnut'} right now. Your edits are kept in the editor and will be saved on their own once it is back.
         </div>
       )}
-      {saveError && (
-        <div className="fv-save-error" role="alert" onClick={() => setSaveError(null)} title="Click to dismiss">
-          {saveError}
+      {bannerText && (
+        <div className={`fv-save-error${conflictOpen || retryOpen || reloadOpen ? ' fv-save-held' : ''}`} role="alert">
+          <span className="fv-save-error-text">{bannerText}</span>
+          {conflictOpen && (
+            <span className="fv-save-error-actions">
+              <button type="button" className="fv-html-tab fv-keep-mine-btn" onClick={() => { void keepMine(); }} disabled={saving}>
+                Keep my version
+              </button>
+              <button type="button" className="fv-html-tab fv-use-disk-btn" onClick={() => { void useDisk(); }} disabled={saving}>
+                Use the version on disk
+              </button>
+            </span>
+          )}
+          {retryOpen && (
+            <span className="fv-save-error-actions">
+              <button type="button" className="fv-html-tab fv-retry-save-btn" onClick={() => { void retrySave(); }} disabled={saving}>
+                {saving ? 'Saving…' : 'Try again'}
+              </button>
+            </span>
+          )}
+          {reloadOpen && (
+            <span className="fv-save-error-actions">
+              <button
+                type="button"
+                className="fv-html-tab fv-retry-save-btn fv-reload-btn"
+                // The draft store already holds the text (every edit is captured),
+                // so the reloaded tab replays it and saves it on its own.
+                onClick={() => { void flushDraft().finally(() => window.location.reload()); }}
+              >
+                Reload the page
+              </button>
+            </span>
+          )}
+          {!conflictOpen && !retryOpen && !reloadOpen && saveError && (
+            <button
+              type="button"
+              className="fv-save-error-dismiss"
+              onClick={() => setSaveError(null)}
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              {ICON_CLOSE}
+            </button>
+          )}
         </div>
       )}
       {/* A draft written against OLDER bytes. Non-transient on purpose: both the
@@ -2375,7 +2785,7 @@ export function FileContentView({
             type="button"
             className="fv-html-tab"
             onClick={restoreStaleDraft}
-            title="Put your unsaved text back in the editor. The copy on disk is newer, so Save will warn you before it replaces that version."
+            title="Put your unsaved text back in the editor. The copy on disk is newer, so you will be asked before it replaces that version."
           >
             Restore my changes
           </button>
@@ -2426,8 +2836,9 @@ export function FileContentView({
           // are trusted; allow scripts/forms/popups so the page is interactive.
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
           // reloadToken rides the URL: same-src iframes are never re-navigated,
-          // which made Refresh a silent no-op on the rendered HTML preview.
-          src={rawFileContentUrl(filePath, host, reloadToken)}
+          // which made Refresh a silent no-op on the rendered HTML preview. So
+          // does the disk version: a save shows in the page it saved.
+          src={rawFileContentUrl(filePath, host, previewRevRef.current)}
           title={filePath}
         />
       )}
@@ -2458,7 +2869,7 @@ export function FileContentView({
             // longer hold — the editor then reports its own text as its base, so
             // an automatic write cannot match disk and is refused instead of
             // silently replacing someone else's newer file.
-            baseValue={baseContentRef.current ?? undefined}
+            baseValue={(draftRef.current != null ? draftBaseRef.current : baseContentRef.current) ?? undefined}
             path={filePath}
             host={host}
             imageVersion={imageVersion}
@@ -2474,7 +2885,7 @@ export function FileContentView({
             key={`src:${filePath}:${baseHash ?? ''}:${seedNonce}`}
             ref={editorRef}
             initialValue={draftRef.current ?? data.content}
-            baseValue={baseContentRef.current ?? undefined}
+            baseValue={(draftRef.current != null ? draftBaseRef.current : baseContentRef.current) ?? undefined}
             path={filePath}
             onDirtyChange={setEditorDirty}
             onDocChange={handleDocChange}
@@ -2512,10 +2923,11 @@ export function FileContentView({
           <FileHistoryPanel
             path={filePath}
             host={host}
-            currentText={() => editorRef.current?.getValue() ?? data?.content ?? ''}
+            currentText={() => bufferText() ?? data?.content ?? ''}
             onRestore={restoreHistoryVersion}
             onClose={() => setHistoryOpen(false)}
             refreshToken={versionsSeen}
+            bufferToken={bufferToken}
           />
         </div>
       )}
@@ -2566,5 +2978,6 @@ export function FileContentView({
         />
       )}
     </div>
+    </>
   );
 }

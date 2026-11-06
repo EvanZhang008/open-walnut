@@ -81,3 +81,15 @@ describe('positioned history entries', () => {
     ]);
   });
 });
+
+describe('when a file was read', () => {
+  it('a visit keeps its time through storage and a line stamp; older stacks have none', async () => {
+    const { pushFileHistory, stampFileHistoryLine, saveFileHistory, loadFileHistory } = await load();
+    const h = pushFileHistory(pushFileHistory({ entries: [], index: -1 }, '/repo/a.md', undefined, 1_000), '/repo/b.md')
+    expect(h.entries).toEqual([{ path: '/repo/a.md', at: 1_000 }, { path: '/repo/b.md' }])
+    const stamped = stampFileHistoryLine({ entries: h.entries, index: 0 }, '/repo/a.md', 7)
+    expect(stamped.entries[0]).toEqual({ path: '/repo/a.md', line: 7, at: 1_000 })
+    saveFileHistory(undefined, 'at-scope', stamped)
+    expect(loadFileHistory(undefined, 'at-scope').entries[0]).toEqual({ path: '/repo/a.md', line: 7, at: 1_000 })
+  })
+})

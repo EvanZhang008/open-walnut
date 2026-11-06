@@ -99,9 +99,18 @@ export function FileTreeContextMenu({
   }, [target.point.x, target.point.y]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
+    // The menu is the top layer, so it claims Escape before anything else hears it
+    // (same rule as ContextMenu): the Files popup's own Escape (a `document`
+    // listener, which runs before this `window` one) skips a key someone took.
+    // Without it one Esc closed the menu AND the whole Files popup (2026-11-07).
+    const claimEscape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing) e.preventDefault(); };
+    window.addEventListener('keydown', claimEscape, true);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', claimEscape, true);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [onClose]);
 
   const isFile = target.type === 'file';

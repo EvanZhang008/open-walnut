@@ -84,6 +84,7 @@ const store = createKeyedIdbStore<FileDraft>({
 /** Test seam: swap the storage layer (and re-arm the one-shot housekeeping). */
 export function setFileDraftAdapter(next: FileDraftAdapter | null): void {
   store.setAdapter(next);
+  adopting = null;
   pathRules = [];
 }
 
@@ -95,7 +96,81 @@ export function setFileDraftAdapter(next: FileDraftAdapter | null): void {
  * delete had just removed.
  */
 function housekeep(): Promise<void> {
-  return store.housekeep();
+  return adoptStashedDrafts().then(() => store.housekeep());
+}
+
+// ── Page-leave stash ────────────────────────────────────────────────────────
+// IndexedDB writes are async, so the text typed in the last moments before a
+// reload or a closed window never reached them (2026-11-07 review: typed, reloaded
+// at once, the words were gone). Leaving the page writes the pending draft to
+// localStorage SYNCHRONOUSLY; the next page load moves it into the store before
+// anything reads drafts.
+const STASH_PREFIX = 'walnut-file-draft-stash:';
+let adopting: Promise<void> | null = null;
+
+function stashKeys(): string[] {
+  const out: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(STASH_PREFIX)) out.push(k);
+    }
+  } catch { /* storage blocked */ }
+  return out;
+}
+
+function dropStash(key: string, unlessText?: string): void {
+  try {
+    if (unlessText !== undefined) {
+      const raw = localStorage.getItem(STASH_PREFIX + key);
+      const rec = raw ? JSON.parse(raw) as Partial<FileDraft> : null;
+      if (rec && typeof rec.text === 'string' && rec.text !== unlessText) return;
+    }
+    localStorage.removeItem(STASH_PREFIX + key);
+  } catch { /* storage blocked */ }
+}
+
+/** Synchronous, for pagehide / beforeunload: the only write that surely lands. */
+export function stashFileDraftSync(
+  host: string | null | undefined,
+  path: string,
+  entry: { text: string; baseHash: string },
+): void {
+  const target = resolveDraftPath(host, path);
+  if (target === null) return;
+  const rec: FileDraft = { host: host ?? null, path: target, text: entry.text, baseHash: entry.baseHash, updatedAt: Date.now() };
+  try { localStorage.setItem(STASH_PREFIX + fileDraftKey(host, target), JSON.stringify(rec)); } catch { /* storage full or blocked */ }
+}
+
+/** Move stashed drafts into the store, once per page load (and again after a
+ *  page comes back from the back-forward cache). A stash older than the stored
+ *  record loses. */
+function adoptStashedDrafts(): Promise<void> {
+  if (adopting) return adopting;
+  adopting = (async () => {
+    const keys = stashKeys();
+    let moved = 0;
+    for (const k of keys) {
+      try {
+        const raw = localStorage.getItem(k);
+        const rec = raw ? JSON.parse(raw) as FileDraft : null;
+        const key = k.slice(STASH_PREFIX.length);
+        if (rec && typeof rec.text === 'string' && typeof rec.path === 'string') {
+          const cur = await store.get(key);
+          if (!cur || (cur.updatedAt ?? 0) <= rec.updatedAt) { await store.put(key, rec); moved++; }
+        }
+        localStorage.removeItem(k);
+      } catch (err) {
+        log.warn('file-drafts', 'a draft stashed on page leave could not be restored', { key: k, error: String(err) });
+      }
+    }
+    if (moved > 0) notify();
+  })();
+  return adopting;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pageshow', (e) => { if (e.persisted) { adopting = null; void adoptStashedDrafts(); } });
 }
 
 /**
@@ -341,6 +416,7 @@ export async function saveFileDraft(
     await store.put(fileDraftKey(host, target), {
       host: host ?? null, path: target, text: entry.text, baseHash: entry.baseHash, updatedAt: Date.now(),
     });
+    dropStash(fileDraftKey(host, target), entry.text);
     notify();
   } catch (err) {
     // Losing the persisted copy is survivable (the live buffer is still on
@@ -378,8 +454,27 @@ export async function deleteFileDraft(host: string | null | undefined, path: str
     // Awaited for the ORDERING, not the sweep: a delete issued after a save must
     // queue behind that save's put, or the parked put lands last and brings the
     // draft back (a Save then leaves an "unsaved" marker on a saved file).
+    dropStash(fileDraftKey(host, target));
     await housekeep();
     await store.delete(fileDraftKey(host, target));
+    notify();
+  } catch { /* best effort */ }
+}
+
+/**
+ * Delete the draft only if it holds exactly `text`: a write that landed makes
+ * ITS text's draft obsolete, never a newer one typed while it was on its way
+ * (that draft is then the only copy of those words that survives a reload).
+ */
+export async function deleteFileDraftIfText(host: string | null | undefined, path: string, text: string): Promise<void> {
+  try {
+    const target = resolveDraftPath(host, path);
+    if (target === null) return;
+    dropStash(fileDraftKey(host, target), text);
+    await housekeep();
+    // One transaction for the read and the delete: as two, a draft put between
+    // them (the file reopened and typed into) was the record deleted.
+    await store.deleteUnless(fileDraftKey(host, target), (rec) => !!rec && typeof rec.text === 'string' && rec.text !== text);
     notify();
   } catch { /* best effort */ }
 }

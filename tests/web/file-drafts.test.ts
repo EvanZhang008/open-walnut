@@ -25,9 +25,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  saveFileDraft, loadFileDraft, deleteFileDraft, listFileDraftPaths,
+  saveFileDraft, loadFileDraft, deleteFileDraft, deleteFileDraftIfText, listFileDraftPaths,
   subscribeFileDrafts, setFileDraftAdapter, fileDraftKey,
-  moveFileDraftsUnder, deleteFileDraftsUnder, planDraftReplay, planStaleDraftRestore,
+  moveFileDraftsUnder, deleteFileDraftsUnder, planDraftReplay, planStaleDraftRestore, stashFileDraftSync,
   type FileDraft, type FileDraftAdapter,
 } from '../../web/src/utils/file-drafts';
 
@@ -97,6 +97,16 @@ describe('file drafts: roundtrip', () => {
   it('delete removes it', async () => {
     await saveFileDraft(null, '/repo/a.ts', { text: 'x', baseHash: 'h1' });
     await deleteFileDraft(null, '/repo/a.ts');
+    expect(await loadFileDraft(null, '/repo/a.ts')).toBeNull();
+  });
+
+  it('a write that landed drops only the draft of ITS text, never a newer one', async () => {
+    // Typed "ab" while the write of "a" was on its way: "ab" is the only copy a
+    // reload has if the next write is refused.
+    await saveFileDraft(null, '/repo/a.ts', { text: 'ab', baseHash: 'h1' });
+    await deleteFileDraftIfText(null, '/repo/a.ts', 'a');
+    expect((await loadFileDraft(null, '/repo/a.ts'))?.text).toBe('ab');
+    await deleteFileDraftIfText(null, '/repo/a.ts', 'ab');
     expect(await loadFileDraft(null, '/repo/a.ts')).toBeNull();
   });
 });
@@ -447,5 +457,69 @@ describe('file drafts: a broken store never reaches a render', () => {
 
   it('a delete\'s draft cleanup resolves instead of rejecting', async () => {
     await expect(deleteFileDraftsUnder(null, '/a.ts')).resolves.toBeUndefined();
+  });
+});
+
+/** A Map behind the Storage API: node has no localStorage. */
+function memoryStorage(): Storage {
+  const m = new Map<string, string>();
+  return {
+    get length() { return m.size; },
+    key: (i: number) => [...m.keys()][i] ?? null,
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    setItem: (k: string, v: string) => { m.set(k, String(v)); },
+    removeItem: (k: string) => { m.delete(k); },
+    clear: () => m.clear(),
+  };
+}
+
+describe('file drafts: the page-leave stash', () => {
+  // The 2026-11-07 loss: typed, reloaded at once, the words were gone. The
+  // IndexedDB write the reload interrupted never landed; the stash is the
+  // synchronous copy written while the page leaves.
+  beforeEach(() => { vi.stubGlobal('localStorage', memoryStorage()); setFileDraftAdapter(store); });
+
+  it('a draft stashed on leave is there on the next load, and the stash is used up', async () => {
+    stashFileDraftSync(null, '/repo/a.md', { text: 'typed just before the reload', baseHash: 'h1' });
+    setFileDraftAdapter(store); // the next page load
+    const draft = await loadFileDraft(null, '/repo/a.md');
+    expect(draft?.text).toBe('typed just before the reload');
+    expect(draft?.baseHash).toBe('h1');
+    expect(localStorage.length).toBe(0);
+    expect(await listFileDraftPaths(null)).toEqual(new Set(['/repo/a.md']));
+  });
+
+  it('a stash older than the stored draft loses', async () => {
+    stashFileDraftSync(null, '/repo/a.md', { text: 'older', baseHash: 'h1' });
+    await new Promise((r) => setTimeout(r, 5));
+    store.rows.set(fileDraftKey(null, '/repo/a.md'), { host: null, path: '/repo/a.md', text: 'newer', baseHash: 'h1', updatedAt: Date.now() });
+    setFileDraftAdapter(store);
+    expect((await loadFileDraft(null, '/repo/a.md'))?.text).toBe('newer');
+  });
+
+  it('the draft written after the stash takes it over; a save or a delete clears it', async () => {
+    stashFileDraftSync(null, '/repo/a.md', { text: 'words', baseHash: 'h1' });
+    await saveFileDraft(null, '/repo/a.md', { text: 'words', baseHash: 'h1' });
+    expect(localStorage.length).toBe(0);
+    stashFileDraftSync(null, '/repo/b.md', { text: 'b words', baseHash: 'h2' });
+    await deleteFileDraft(null, '/repo/b.md');
+    expect(localStorage.length).toBe(0);
+    setFileDraftAdapter(store);
+    expect(await loadFileDraft(null, '/repo/b.md')).toBeNull();
+  });
+
+  it('a landed write clears only a stash of its own text', async () => {
+    stashFileDraftSync(null, '/repo/a.md', { text: 'newer words', baseHash: 'h1' });
+    await deleteFileDraftIfText(null, '/repo/a.md', 'older words');
+    expect((await loadFileDraft(null, '/repo/a.md'))?.text).toBe('newer words');
+    await deleteFileDraftIfText(null, '/repo/a.md', 'newer words');
+    expect(localStorage.length).toBe(0);
+    setFileDraftAdapter(store);
+    expect(await loadFileDraft(null, '/repo/a.md')).toBeNull();
+  });
+
+  it('blocked storage is no error', () => {
+    vi.stubGlobal('localStorage', { get length(): number { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } });
+    expect(() => stashFileDraftSync(null, '/repo/a.md', { text: 'x', baseHash: 'h' })).not.toThrow();
   });
 });

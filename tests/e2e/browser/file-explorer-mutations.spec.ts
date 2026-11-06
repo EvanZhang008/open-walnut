@@ -181,7 +181,7 @@ test('New Folder… adds a folder row to the tree', async ({ page }) => {
 
     await expect(rowByName(explorer, dirName)).toBeVisible({ timeout: 10_000 })
     // A folder, not a file: the row carries the folder glyph.
-    await expect(nodeByName(explorer, dirName).locator('.sfe-icon')).toHaveText('📁')
+    await expect(nodeByName(explorer, dirName).locator('.sfe-icon')).toHaveAttribute('data-kind', 'dir')
     await page.screenshot({ path: `${SCREENSHOT_DIR}/5-created-folder.png` })
   } finally {
     await fs.rm(path.join(cwd, dirName), { recursive: true, force: true })
