@@ -47,6 +47,7 @@ import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
+import { setDaemonFileFence } from './daemon-file-fence.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
@@ -3856,6 +3857,7 @@ export class DaemonConnection {
       // trip is a second chance to get no answer. It may be minutes old after a
       // long upload, which is safe: the stop itself signals only this dir's
       // `--start` daemon, never an OS service's.
+      this.countForcedTry(expected)
       this.beginHandover()
       try {
         await this.stopUnmanagedDaemon(verdict)
@@ -4031,6 +4033,15 @@ export class DaemonConnection {
   private _overdueMs = 0
   private _overdueNoted: string | null = null
 
+  /** Swaps of one build that went over the host's work (noteOverdue caps them at MAX_FORCED_TRIES). */
+  private _forcedTries: { expected: string; n: number } | null = null
+  private _forcedSpentNoted: string | null = null
+  static MAX_FORCED_TRIES = 3
+  private countForcedTry(expected: string): void {
+    if (!this._overdueMs) return
+    this._forcedTries = { expected, n: this._forcedTries?.expected === expected ? this._forcedTries.n + 1 : 1 }
+  }
+
   /** Overdue: the update goes over the daemon's own work (`--over-busy`). */
   private forceable(): boolean {
     return this._overdueMs > 0
@@ -4042,8 +4053,19 @@ export class DaemonConnection {
    * prepare in a minute is restarted by its service, its sessions kept.
    */
   private noteOverdue(expected: string, remoteVersion: string, verdict: { overdue: boolean; behindMs: number }): void {
-    this._overdueMs = verdict.overdue ? Math.max(1, verdict.behindMs) : 0
-    if (!verdict.overdue) { this._overdueNoted = null; return }
+    if (!remoteVersion || remoteVersion === expected) this._forcedTries = null
+    // A host that still runs another build after MAX_FORCED_TRIES swaps over its work (a broken
+    // version stamp, a wrapper that starts the old file) is not forced again for this build: the
+    // holds wait for a quiet moment as before, instead of ending its work every cooldown for good.
+    const spent = !!verdict.overdue && this._forcedTries?.expected === expected && this._forcedTries.n >= DaemonConnection.MAX_FORCED_TRIES
+    if (spent && this._forcedSpentNoted !== expected) {
+      this._forcedSpentNoted = expected
+      log.session.warn('DaemonConnection: overdue daemon update went over the host\'s work and it still runs another build; it waits for a quiet moment again', {
+        host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', tries: this._forcedTries!.n,
+      })
+    }
+    this._overdueMs = verdict.overdue && !spent ? Math.max(1, verdict.behindMs) : 0
+    if (!verdict.overdue || spent) { this._overdueNoted = null; return }
     if (this._overdueNoted === expected) return
     this._overdueNoted = expected
     log.session.warn('DaemonConnection: daemon update overdue; it goes ahead over the work that held it', {
@@ -4352,6 +4374,7 @@ export class DaemonConnection {
           this._stageFail = null
           this._lastUpgradeAttempt = { expected, at: Date.now() }
           swapping = true
+          this.countForcedTry(expected)
           this.beginHandover()
           return true
         },
@@ -7594,12 +7617,14 @@ const releasedFromPool = new WeakSet<DaemonConnection>()
 function poolSet(key: string, conn: DaemonConnection): void {
   const prev = connectionPool.get(key)
   connectionPool.set(key, conn)
+  setDaemonFileFence(key, () => conn.fenceFileChanges())
   releasedFromPool.delete(conn)
   if (prev && prev !== conn && !isPooledConnection(prev)) releasedFromPool.add(prev)
 }
 function poolDelete(key: string): void {
   const prev = connectionPool.get(key)
   connectionPool.delete(key)
+  setDaemonFileFence(key, null)
   if (prev && !isPooledConnection(prev)) releasedFromPool.add(prev)
 }
 /** Pending connection promises — prevents concurrent connect() races. */

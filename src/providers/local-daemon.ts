@@ -32,6 +32,7 @@ import { log } from '../logging/index.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { daemonBusyRefusal, execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
+import { fenceDaemonFileChanges } from './daemon-file-fence.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
 import { DAEMON_BINARIES_DIR, WALNUT_HOME } from '../constants.js'
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
@@ -660,7 +661,13 @@ export class LocalDaemon {
     this._lastManagedUpdate = { expected, at: Date.now() }
     const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
     // Overdue (daemon-update-behind.ts): the CLI goes over the daemon's own work, in at most a minute.
-    const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath, ...(this._forceable ? [OVER_BUSY_FLAG] : [])])
+    // Overdue, the old daemon may be restarted unprepared, and an older one's shutdown does not wait
+    // for a file write: this server's file changes to it wait for the swap (daemon-file-fence.ts).
+    const release = this._forceable ? fenceDaemonFileChanges('__local__') : () => {}
+    let result: Awaited<ReturnType<typeof runDaemonServiceCommand>>
+    try {
+      result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath, ...(this._forceable ? [OVER_BUSY_FLAG] : [])])
+    } finally { release() }
     if (result.code !== 0 && daemonBusyRefusal(`${result.stdout}\n${result.stderr}`)) {
       // Refused before anything changed: asked again on the upgrade clock, not held off 10 minutes.
       this._lastManagedUpdate = null

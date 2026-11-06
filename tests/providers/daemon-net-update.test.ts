@@ -353,16 +353,30 @@ describe('NetDaemonUpdater', () => {
             return base.send(cmd, params)
           },
         })
-        // The swap holds this server's file changes to the host until it ends (daemon-over-busy.ts).
+        // From the launch on (after the upload), this server's file changes to the host wait for the
+        // swap (daemon-over-busy.ts); the upload itself is not held.
         const order: string[] = []
         const fence = vi.fn(() => { order.push('fence'); return () => { order.push('release') } })
-        const update = vi.fn(async () => { order.push('update') })
-        const { u } = updater({ fence, update }, conn)
+        const host = conn.send.bind(conn)
+        conn.send = async (cmd, params) => {
+          if (cmd === 'fs.writePart') return { ok: true, done: true, sha256: (params as { sha256: string }).sha256 }
+          if (cmd === 'fs.read') return { ok: true, data: String((params as { path: string }).path).endsWith('update.done') ? 'done' : '{"ok":true}' }
+          if (cmd === 'exec.run' && String((params as { argv?: string[] }).argv?.[2] ?? (params as { command?: string }).command).includes('setsid')) {
+            order.push('launch')
+            return { ok: true, exitCode: 0, output: 'walnut-update-started' }
+          }
+          return host(cmd, params)
+        }
+        const update = vi.fn(async (_s: unknown, _v: unknown, io: { serviceUpdate?: (o: { command: string; directory: string; executable: string }) => Promise<string> }) => {
+          order.push('upload')
+          await io.serviceUpdate!({ command: 'walnut daemon update', directory: '/tmp/open-walnut-update.abc123', executable: '/x/walnut' })
+        })
+        const { u } = updater({ fence, update: update as never, io: { pollMs: 5, waitMs: 2_000, holdWaitMs: 50 } }, conn)
         u.schedule(0)
         await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
         expect(update).toHaveBeenCalledTimes(1)
         expect((update.mock.calls[0] as unknown[])[4]).toEqual({ overBusy })
-        expect(order).toEqual(['fence', 'update', 'release'])
+        expect(order).toEqual(['upload', 'fence', 'launch', 'release'])
         u.stop()
       }
     } finally {
@@ -391,6 +405,24 @@ describe('NetDaemonUpdater', () => {
       setAcpUpgradeHoldFileForTest(null)
       await fs.rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('a skip that ends by itself is decided again when it ends, with no reconnect: an unknown system, the cooldown', async () => {
+    vi.useFakeTimers()
+    let probes = 0
+    const { u, update } = updater({ cooldownMs: 1_000, target: async () => (++probes === 1 ? null : 'darwin-arm64') })
+    u.schedule(0)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(u.state).toMatchObject({ phase: 'skipped', skip: 'platform-unknown' })
+    // A reconnect inside the cooldown is a cooldown skip, which keeps the timer to its end.
+    u.schedule(0)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(u.state).toMatchObject({ phase: 'skipped', skip: 'cooldown' })
+    expect(update).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(7_000)
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(u.state.phase).toBe('updated')
+    u.stop()
   })
 
   it('a hold that outlasted its wait before the detached start is a postponement by a cooldown, not a failure', async () => {

@@ -136,13 +136,15 @@ export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
     return no('gave-up', `${f.failedTries} automatic updates to ${f.expected} failed; it is tried again on request (host_daemon_update ${f.host}) or with the next build`)
   }
   if (!f.requested && f.lastAttempt?.expected === f.expected && f.now - f.lastAttempt.at < f.cooldownMs) {
-    return no('cooldown', `an update to ${f.expected} was tried ${Math.round((f.now - f.lastAttempt.at) / 1000)} s ago`)
+    return no('cooldown', `an update to ${f.expected} was tried ${Math.round((f.now - f.lastAttempt.at) / 1000)} s ago`,
+      f.cooldownMs - (f.now - f.lastAttempt.at))
   }
   const gapWait = f.requested ? 0 : daemonUpdateWaitMs(f.daemonAgeMs, f.minGapMs ?? 0, f.gapHeldForMs ?? 0)
   if (gapWait > 0) return no('recent', daemonUpdateGapWhy(f.daemonAgeMs!, gapWait), gapWait)
   if (f.target === undefined || f.source === undefined) return { go: 'lookup' }
-  if (!f.target) return no('platform-unknown', 'Walnut does not know which system and processor that machine has')
-  if ('missing' in f.source) return no('no-binary', f.source.missing)
+  // Both may pass (a probe that timed out, a download that failed): asked again after a cooldown.
+  if (!f.target) return no('platform-unknown', 'Walnut does not know which system and processor that machine has', f.cooldownMs)
+  if ('missing' in f.source) return no('no-binary', f.source.missing, f.cooldownMs)
   return { go: true, source: f.source, target: f.target }
 }
 
@@ -393,9 +395,17 @@ export class NetDaemonUpdater {
       while (this.d.hold() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 1_000))
       return null
     }
+    // Overdue, the old daemon may be restarted unprepared, and an older one's shutdown does not
+    // wait for a file write: from the launch on (after the upload), this server's file changes
+    // wait for the swap (daemon-over-busy.ts).
+    let release: (() => void) | undefined
     const io = createNetUpdateIo(c, {
       ...this.d.io,
-      beforeLaunch: async () => (!c.connected ? 'the link dropped' : refused() ?? await holds()),
+      beforeLaunch: async () => {
+        const no = !c.connected ? 'the link dropped' : refused() ?? await holds()
+        if (no === null && goesOver && !release) release = this.d.fence?.()
+        return no
+      },
       cancelled: () => this.stopped,
     })
     const held = await holds()
@@ -419,9 +429,6 @@ export class NetDaemonUpdater {
       host: c.host, from, expected, scope: scope.scope, target: decision.target, source: 'file' in src ? 'daemon binary' : `walnut file ${src.id}`, trigger,
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
-    // Overdue, the old daemon may be restarted unprepared, and an older one's shutdown does not
-    // wait for a file write: this server's file changes wait for the swap (daemon-over-busy.ts).
-    const release = goesOver ? this.d.fence?.() : undefined
     try {
       await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, { overBusy: goesOver })
     } catch (err) {
@@ -466,10 +473,11 @@ export class NetDaemonUpdater {
       }
       return this.set('held', d.why, { skip: d.skip })
     }
-    // A daemon that started within the gap: decided again when it ends.
-    if (d.skip === 'recent' && d.retryInMs && !this.stopped) {
+    // A skip that ends by itself (the gap after a daemon started, the cooldown, a lookup that may
+    // pass) is decided again when it ends, not at the next reconnect, which a steady link never makes.
+    if (d.retryInMs && !this.stopped) {
       const expected = this.d.expectedVersion()
-      if (expected && this.gapHeld?.expected !== expected) this.gapHeld = { expected, since: (this.d.now ?? Date.now)() }
+      if (d.skip === 'recent' && expected && this.gapHeld?.expected !== expected) this.gapHeld = { expected, since: (this.d.now ?? Date.now)() }
       this.later(d.retryInMs + 5_000)
     }
     // Said once per reason and build: a link that comes back every few minutes would say it every time.

@@ -123,5 +123,5 @@ export const DAEMON_UPDATE_STOPS: readonly { file: string; near: string; why: st
   { file: LD, near: 'local daemon: deferred upgrade check failed', why: 'the recheck itself failed: a failed managed update has already set the next recheck (ensureRunningInner), and any other failure is a start that every caller of ensureRunning retries' },
   { file: LD, near: 'upgrade DEFERRED (preparing fold checkpoints)', why: 'the prewarm runs at most REMOTE_FOLD_PREWARM_MAX_MS and calls ensureRunning itself when it ends (deferUpgradeForFoldPrewarm)' },
   { file: NU, near: 'daemon update held by the host setting', why: "the host's own setting (autofix: false) or the user's: updated on request" },
-  { file: NU, near: 'host network daemon not updated', why: 'each skip names its reason; the gap and a failure ask again on their own clock (later), the rest wait for a request, a setting or the next build' },
+  { file: NU, near: 'host network daemon not updated', why: 'each skip names its reason; the gap, the cooldown, an unknown system, a missing walnut file and a failure ask again on their own clock (later), the rest wait for a request, a setting or the next build' },
 ]

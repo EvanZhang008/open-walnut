@@ -304,6 +304,7 @@ describe('the background update of a service-managed daemon', () => {
       await priv(c).recheckPostponedUpgrade()
       expect(managedUpdate).toHaveBeenCalledTimes(1)
       expect(over).toBe(true)
+      expect(state(c)._forcedTries).toEqual({ expected: EXPECTED, n: 1 })
       expect(warn.mock.calls.map(([m]) => m)).toEqual(expect.arrayContaining([
         'DaemonConnection: daemon update overdue; it goes ahead over the work that held it',
         'DaemonConnection: overdue daemon update goes ahead over commands in flight',
@@ -332,6 +333,18 @@ describe('the background update of a service-managed daemon', () => {
         expect(await busyTry(caps)).toBe(5 * 60_000)
         expect(over).toBe(true)
       }
+
+      // Still another build after MAX_FORCED_TRIES swaps over its work (a broken version stamp):
+      // not forced again for this build; the host_exec run holds it as before the bound.
+      state(c)._forcedTries = { expected: EXPECTED, n: DaemonConnection.MAX_FORCED_TRIES }
+      state(c)._lastUpgradeAttempt = null
+      managedUpdate.mockReset().mockResolvedValue('applied')
+      clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
+      state(c).upgradeRecheckTimer = null
+      live(c)
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).not.toHaveBeenCalled()
+      expect(warn.mock.calls.map(([m]) => m)).toContain("DaemonConnection: overdue daemon update went over the host's work and it still runs another build; it waits for a quiet moment again")
     } finally {
       DaemonConnection.OVERDUE_GATE_POLL_MS = gate.poll
       DaemonConnection.OVERDUE_GATE_WAIT_MS = gate.wait

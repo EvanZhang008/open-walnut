@@ -23,6 +23,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { setDaemonFileFence } from '../../src/providers/daemon-file-fence.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -342,10 +343,16 @@ describe('LocalDaemon overdue managed update (daemon-over-busy.ts)', () => {
     vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
     vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
     vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(1234)
-    updateCommand.mockResolvedValue({ code: 0, stderr: '', stdout: '{"ok":true}' })
-    await expect(internals.ensureRunningInner()).resolves.toBe(32200)
+    // Overdue, this server's file changes to the local daemon wait for the swap (daemon-file-fence.ts).
+    const steps: string[] = []
+    setDaemonFileFence('__local__', () => { steps.push('fence'); return () => steps.push('release') })
+    updateCommand.mockImplementation(async () => { steps.push('update'); return { code: 0, stderr: '', stdout: '{"ok":true}' } })
+    try {
+      await expect(internals.ensureRunningInner()).resolves.toBe(32200)
+    } finally { setDaemonFileFence('__local__', null) }
     const args = ['walnut', 'daemon', 'update', '--yes', '--scope', 'user', '--executable', '/fixture/daemon']
     expect(updateCommand).toHaveBeenCalledWith('/fixture/daemon', late ? [...args, '--over-busy'] : args)
+    expect(steps).toEqual(late ? ['fence', 'update', 'release'] : ['update'])
   })
 })
 

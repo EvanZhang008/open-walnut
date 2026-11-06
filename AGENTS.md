@@ -668,9 +668,10 @@ That restart's SIGTERM shutdown drains for at most 45 s, then ends by SIGKILL to
 supervisor SIGKILLs the daemon pid alone after 60 s (systemd and launchd have their own stop
 timeouts). The CLI sessions are their own process groups and keep running; an ACP turn or a
 host_exec run open at that moment ends. An older daemon's shutdown does not wait for file writes, so
-while such a swap runs (the SSH path and the host network path alike) this server holds its file
-changes back, at most 3 minutes in all (`SWAP_FILE_HOLD_MAX_MS`); writes from another client of that
-daemon are not covered. 3 hours is when the waiting stops, not a bound on the whole update, and on a
+from the swap's start (after the upload, on the SSH path, the host network path and this Mac's own
+managed daemon alike: `daemon-file-fence.ts`) this server holds its file changes back, at most 3 minutes in all (`SWAP_FILE_HOLD_MAX_MS`); writes from
+another client of that daemon are not covered. A host that still runs another build after 3 such
+swaps (a broken version stamp) is not forced again for that build (`MAX_FORCED_TRIES`). 3 hours is when the waiting stops, not a bound on the whole update, and on a
 host that is never quiet a forced swap can come about every 3 hours while builds keep landing. An
 update not done with no clock to ask again is listed in `DAEMON_UPDATE_STOPS` with why. `DAEMON_UPDATE_HOLDS` lists every place an update is put off;
 `tests/providers/daemon-update-holds-ratchet.test.ts` fails on one not listed.
