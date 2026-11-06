@@ -934,6 +934,13 @@ jobs:
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
           echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+      # A booted simulator xcodebuild does not list yet fails the whole leg before a test runs.
+      - name: Wait until xcodebuild sees the simulator
+        shell: bash
+        working-directory: ios-native
+        run: |
+          xcodegen generate
+          bash tests/wait-sim-visible.sh "$SIM_UDID"
       - name: Unit tests (WalnutTests)
         if: matrix.layer == 'unit'
         shell: bash
