@@ -235,6 +235,8 @@ export interface EngineCompareRow {
   reviewsPerTask: number | null;
   reviewCostPerTask: number | null;
   reviewPartialCost?: number;
+  /** Share of finished tasks a reviewer on another company's model checked (0..1); absent from an older server. */
+  crossReviewedShare?: number | null;
   followUpsPerTask: number | null;
   reopens: number;
   errored: number;
@@ -255,6 +257,8 @@ export interface EngineCompareTask {
   reviews: number;
   reviewCostUsd: number;
   reviewPartialCost?: boolean;
+  /** A reviewer on another company's model checked it. */
+  crossReviewed?: boolean;
   followUps: number;
   reopens: number;
   errored: boolean;

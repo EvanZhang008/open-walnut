@@ -14,6 +14,9 @@ describe('splitBuilders', () => {
     expect(splitBuilders({ defaults: {} })).toEqual([]);
     expect(splitBuilders({ defaults: { engine_split: [{ engine: 'codex' }] } })).toEqual([]);
     expect(splitBuilders({ defaults: { engine_split: [{ engine: 'codex' }, { engine: 'nope' }] } })).toEqual([]);
+    // Switched off in Settings: the entries are kept, nothing is shared.
+    expect(splitBuilders({ defaults: { engine_split: ["claude", "codex"], engine_split_off: true } })).toEqual([]);
+    expect(splitBuilders({ defaults: { engine_split: ["claude", "codex"], engine_split_off: false } })).toHaveLength(2);
   });
 
   it('reads entries, strings, weights and Claude models, and drops duplicates', () => {

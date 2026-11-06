@@ -10,6 +10,17 @@ import type { Config, EngineSplitEntry, SessionEngine } from '@open-walnut/core'
 
 type Defaults = Pick<Config, 'defaults'>;
 
+/** The split's switch is off: its entries are kept, nothing is shared (`defaults.engine_split_off`). */
+export function splitIsOff(config: Defaults | undefined): boolean {
+  return (config?.defaults as { engine_split_off?: unknown } | undefined)?.engine_split_off === true;
+}
+
+/** The write for the switch: off keeps every entry, on clears the flag. */
+export function engineSplitSwitchSave(config: Defaults, on: boolean): Partial<Config> {
+  const { engine_split_off: _off, ...rest } = config.defaults as Config['defaults'] & { engine_split_off?: boolean };
+  return { defaults: on ? rest : { ...rest, engine_split_off: true } } as Partial<Config>;
+}
+
 function entries(config: Defaults | undefined): EngineSplitEntry[] {
   const raw = (config?.defaults as { engine_split?: unknown } | undefined)?.engine_split;
   if (!Array.isArray(raw)) return [];
@@ -50,7 +61,15 @@ export function engineSplitSave(config: Defaults, checked: string, _order: reado
   return { defaults: { ...config.defaults, engine_split: next } } as Partial<Config>;
 }
 
-/** How many entries the split would have: two or more turn it on. */
-export function splitSize(checked: string): number {
-  return checked ? checked.split(',').length : 0;
+/**
+ * How many entries the split would really have: two or more turn it on. As the server reads them
+ * (core/agents/engine-split.ts): a model on an engine in `noModel` (an ACP engine) is ignored, so
+ * "Codex" and "Codex on gpt-x" are one entry.
+ */
+export function splitSize(checked: string, noModel: ReadonlySet<string> = new Set()): number {
+  if (!checked) return 0;
+  return new Set(checked.split(',').map((k) => {
+    const e = entryOfKey(k);
+    return e.model && !noModel.has(e.engine) ? k : e.engine;
+  })).size;
 }

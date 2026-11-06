@@ -18,28 +18,9 @@ import { resolveEngine } from '../agents/engine-registry.js';
 import type { CostRollup } from './cost-rollup.js';
 import { CostPricer } from './cost-report.js';
 import { ensurePriceBook, priceThresholds, type UserPriceRates } from './price-book.js';
+import { columnLabelOf, ENGINE_FAMILY, modelFamily, modelLineLabel, modelTier, type ModelFamily } from './model-line.js';
 
-/** Which company's model a model id is. */
-export type ModelFamily = 'Claude' | 'GPT' | 'Gemini' | 'Other';
-
-/** Model ids that name no model (the usage scanner's placeholders): no evidence of a family. */
-const NO_MODEL = /^(?:unknown|<synthetic>|synthetic|none|default|null|undefined)$/i;
-
-export function modelFamily(model: string | undefined | null): ModelFamily | null {
-  const m = (model ?? '').trim().toLowerCase();
-  if (!m || NO_MODEL.test(m)) return null;
-  if (/claude|anthropic|opus|sonnet|haiku|fable/.test(m)) return 'Claude';
-  if (/gpt|openai|(^|[^a-z])o[1-9]|codex/.test(m)) return 'GPT';
-  if (/gemini/.test(m)) return 'Gemini';
-  return 'Other';
-}
-
-/** A model line within a family, from its id ("claude-sonnet-5-5" is Sonnet, "gpt-6.1-sol" is Sol); null when it names none. */
-const TIER = /(?:^|[^a-z])(opus|sonnet|haiku|fable|sol|astra|luna|flash|pro|mini|nano)(?=[^a-z]|$)/;
-export function modelTier(model: string | undefined | null): string | null {
-  const hit = TIER.exec((model ?? '').trim().toLowerCase());
-  return hit ? hit[1][0].toUpperCase() + hit[1].slice(1) : null;
-}
+export { modelFamily, modelTier, type ModelFamily } from './model-line.js';
 
 /** What one task's usage summed to. */
 export interface TaskSpend {
@@ -75,6 +56,8 @@ export interface EngineCompareTask {
   reviewCostUsd: number;
   /** A reviewer used a model with no price, so reviewCostUsd is a floor. */
   reviewPartialCost: boolean;
+  /** At least one reviewer subtask ran on another company's model than the one that did the work. */
+  crossReviewed?: boolean;
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -123,6 +106,8 @@ export interface EngineCompareRow {
   reviewCostPerTask: number | null;
   /** Finished tasks whose review cost leaves out unpriced requests (the per-task review cost is of finished tasks). */
   reviewPartialCost: number;
+  /** Share of finished tasks a reviewer on another company's model checked (0..1). */
+  crossReviewedShare: number | null;
   /** The user's messages per finished task. */
   followUpsPerTask: number | null;
   reopens: number;
@@ -157,8 +142,6 @@ export const TASKS_MAX = 60;
 /** Of those, at most this many open or never-started ones, always shown even when finished ones would fill the list. */
 export const TASKS_OTHERS_MAX = 20;
 
-/** The model family an engine runs when nothing says otherwise. */
-const ENGINE_FAMILY: Record<string, ModelFamily> = { claude: 'Claude', codex: 'GPT', gemini: 'Gemini' };
 
 export interface CompareInput {
   tasks: readonly Task[];
@@ -173,7 +156,7 @@ export interface CompareInput {
   project?: string;
   /** Count only tasks the engine split assigned (a fair test: no engine was picked by hand); 'auto' decides. */
   splitOnly?: boolean | 'auto';
-  config?: { defaults?: { engine_split?: unknown } } | null;
+  config?: { defaults?: { engine_split?: unknown; engine_split_off?: unknown } } | null;
   /** YYYY-MM-DD of an ISO time in the report's time zone. */
   dayOf: (iso: string) => string;
 }
@@ -188,20 +171,12 @@ function usageUnknown(spend: TaskSpend | undefined): boolean {
  * line when one is known ("Claude Code · Sonnet"), and the company when it is another's ("Claude Code · GPT Sol").
  */
 function columnLabel(engine: string, family: ModelFamily, tier: string | null): string {
-  const name = builderLabel({ engine: engine as SessionEngine });
-  const own = ENGINE_FAMILY[engine] === family;
-  if (tier) return `${name} · ${own ? '' : `${family} `}${tier}`;
-  return own ? name : `${name} · ${family}`;
+  return columnLabelOf(builderLabel({ engine: engine as SessionEngine }), engine, family, tier);
 }
 
 /** A split entry's name, as its column is named in the fair view: "Claude Code", "Claude Code · Sonnet". */
 function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
-  const engine = resolveEngine(b.engine);
-  const fam = modelFamily(b.model) ?? ENGINE_FAMILY[engine] ?? 'Other';
-  const tier = modelTier(b.model);
-  // A model id of no known line (an alias) is named as it is.
-  if (b.model && !tier) return `${builderLabel({ engine: b.engine })} · ${b.model}`;
-  return columnLabel(engine, fam, tier);
+  return modelLineLabel(builderLabel({ engine: b.engine }), resolveEngine(b.engine), b.model);
 }
 
 type SessionFacts = CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R : never;
@@ -291,9 +266,19 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const reviewsOf = new Map<string, number>();
   const reviewCostOf = new Map<string, number>();
   const reviewPartial = new Set<string>();
+  // The model families each task's reviewers ran on: their usage, else their session's model.
+  const reviewFamiliesOf = new Map<string, Set<ModelFamily>>();
   for (const t of input.tasks) {
     if (!t.parent_task_id || !REVIEW_RE.test(t.title)) continue;
     const spend = input.spend.get(t.id);
+    const rsid = taskSessionId(t);
+    const rs = rsid ? input.sessions.get(rsid) : undefined;
+    const rfam = [spend?.model, rs?.acpModel ?? rs?.cliModel ?? rs?.model].map(modelFamily).find((f) => !!f && f !== 'Other')
+      ?? ENGINE_FAMILY[resolveEngine(spend?.engine ?? rs?.engine ?? t.last_start?.engine)];
+    if (rfam) {
+      if (!reviewFamiliesOf.has(t.parent_task_id)) reviewFamiliesOf.set(t.parent_task_id, new Set());
+      reviewFamiliesOf.get(t.parent_task_id)!.add(rfam);
+    }
     reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
     reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
     if (!spend || spend.unpriced > 0 || spend.unknown > 0) reviewPartial.add(t.parent_task_id);
@@ -348,14 +333,17 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const byCost: Group = { key: lineKey, familyKey: lineKey, engine, family, label: columnLabel(engine, family, tier) };
     // Where the split put it: the fair test keeps a task in that column even when it was rescued elsewhere.
     let byPick: Group | null = null;
+    const pickTier = modelTier(t.engine_pick?.model);
     if (t.engine_pick) {
       const pe = resolveEngine(t.engine_pick.engine);
       // Fixed at assignment: the model the entry names, else the engine's own default family, never
       // read back from where the cost went (a task moved to another model in the same engine is a move).
-      const pf = modelFamily(t.engine_pick.model) ?? ENGINE_FAMILY[pe] ?? (pe === engine ? family : 'Other');
+      // A model id of no known family (an alias) says nothing: the engine's own family stands.
+      const pickFam = modelFamily(t.engine_pick.model);
+      const pf = (pickFam && pickFam !== 'Other' ? pickFam : null) ?? ENGINE_FAMILY[pe] ?? (pe === engine ? family : 'Other');
       // One column per split entry: two entries of one engine and family (Claude Code and Claude Code
       // on Sonnet) are what the fair test compares, so they never merge.
-      byPick = { key: `split:${t.engine_pick.key}`, familyKey: `${pe}|${pf}|${modelTier(t.engine_pick.model) ?? ''}`, engine: pe, family: pf,
+      byPick = { key: `split:${t.engine_pick.key}`, familyKey: `${pe}|${pf}|${pickTier ?? ''}`, engine: pe, family: pf,
         label: entryLabel.get(t.engine_pick.key) ?? entryLabelOf({ engine: pe as SessionEngine, model: t.engine_pick.model }) };
     }
     const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
@@ -367,9 +355,12 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // A task that never ran cost nothing: a known $0, not an unknown.
       costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
       partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
+      crossReviewed: family !== 'Other' && [...(reviewFamiliesOf.get(t.id) ?? [])].some((f) => f !== family),
       followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - unrunCloses), errored, split: !!t.engine_pick,
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
-      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!firstDone), notStarted, sortAt: done ? t.completed_at! : startedAt,
+      // An entry that names a model line (Claude Code on Sonnet) whose work ran on another known line moved too.
+      switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)
+        || (!!pickTier && !!tier && pickTier !== tier)), everDone: !notStarted && (done || !!firstDone), notStarted, sortAt: done ? t.completed_at! : startedAt,
     });
   }
   // A task whose signals name no model line (no usage yet, an alias) joins its engine and family's one
@@ -437,7 +428,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // Medians of the tasks whose usage is known: an unknown is not a zero (none known reads "-").
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
-      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: done.filter((p) => p.reviewPartialCost).length, followUpsPerTask: per((p) => p.followUps),
+      reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: done.filter((p) => p.reviewPartialCost).length,
+      crossReviewedShare: done.length ? done.filter((p) => p.crossReviewed).length / done.length : null, followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
       // Of the tasks ever finished, a reopened one still being worked on included (it is not "done" now).
       reopenedShare: everDone.length ? everDone.filter((p) => p.reopens > 0).length / everDone.length : null,
@@ -483,7 +475,8 @@ export async function taskSpend(rollup: CostRollup, overrides: Record<string, Us
   rollup.setThresholds(thresholds);
   const pricer = new CostPricer(thresholds, overrides);
   const out = new Map<string, TaskSpend>();
-  // Per task, what each engine + model family carried (the columns: Opus and Sonnet are one Claude column).
+  // Per task, what each engine, model family and model line carried (the All view's columns: Opus and
+  // Sonnet apart), so a task counts under the line that cost the most, never the first model by name.
   const groups = new Map<string, Map<string, { engine: string; model: string; cost: number; tokens: number }>>();
   for (const r of rollup.query({ sources: ['session'], by: ['engine', 'session', 'task'] })) {
     const taskId = (r.taskId as string | null) ?? sessionTask(r.sessionId as string);
@@ -495,7 +488,7 @@ export async function taskSpend(rollup: CostRollup, overrides: Record<string, Us
     acc.unknown += Number(r.unknown) || 0;
     out.set(taskId, acc);
     const byGroup = groups.get(taskId) ?? new Map();
-    const gk = `${r.engine}\u0000${modelFamily(r.model) ?? 'Other'}`;
+    const gk = `${r.engine}\u0000${modelFamily(r.model) ?? 'Other'}\u0000${modelTier(r.model) ?? ''}`;
     const g = byGroup.get(gk) ?? { engine: r.engine, model: r.model, cost: 0, tokens: 0 };
     g.cost += p.costUsd; g.tokens += tokens;
     byGroup.set(gk, g);

@@ -1441,6 +1441,8 @@ export interface Config {
      * the last 14 days' picks, among those its host can run. Two or more entries turn it on.
      */
     engine_split?: EngineSplitEntry[];
+    /** The split's switch: true keeps `engine_split` as it is but shares nothing (Settings' off switch). */
+    engine_split_off?: boolean;
   };
   provider: {
     type: string;

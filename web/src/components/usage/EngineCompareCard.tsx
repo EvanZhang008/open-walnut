@@ -101,6 +101,9 @@ const METRICS: Metric[] = [
     value: (r) => (r.reviewsPerTask === 0 || (r.reviewCostPerTask === 0 && r.done > 0 && reviewPartial(r) >= r.done) ? null : r.reviewCostPerTask),
     show: (n) => (n === null ? '-' : money(n)), lower: true, partial: reviewPartial,
     partialNote: (n) => `${finishedWord(n)} had reviewers whose cost leaves out ${LEFT_OUT}` },
+  { id: 'crossreview', label: 'Checked by another company', help: 'Share of the tasks it finished that a reviewer subtask on another company\'s model checked (Claude work reviewed by a GPT model, or the other way round).',
+    // No reviews: nothing to show, as Review cost reads.
+    value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of the tasks it finished that were reopened, those being worked on again included.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },

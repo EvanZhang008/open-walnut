@@ -1,7 +1,8 @@
 /**
  * The engine split, as a person uses it:
  *   - Settings → Sessions, "Share new tasks": checking two engines turns it on and writes
- *     `defaults.engine_split` with the other `defaults` keys kept; unchecking one turns it off.
+ *     `defaults.engine_split` with the other `defaults` keys kept; unchecking one turns it off, and the switch
+ *     turns it off and on again with the entries kept.
  *   - Settings → Usage & Costs, "Engines compared": engines are columns, metrics are rows, the
  *     best value of a ranked row is marked, a column with few finished tasks says so, the
  *     project filter asks the server again, and the tasks behind the numbers open their task.
@@ -27,7 +28,7 @@ async function serverDefaults(request: APIRequestContext): Promise<Record<string
 
 function row(key: string, label: string, done: number, extra: Record<string, unknown> = {}) {
   return { key, engine: key.split('|')[0], family: key.split('|')[1], label, done, open: 2, split: 0, medianHours: 3.2, costUsd: done * 40,
-    medianCostUsd: 38, tokens: done * 9e7, medianTokens: 8.5e7, reviewsPerTask: 2.4, reviewCostPerTask: 9, followUpsPerTask: 1.1, reopens: 2, errored: 1,
+    medianCostUsd: 38, tokens: done * 9e7, medianTokens: 8.5e7, reviewsPerTask: 2.4, reviewCostPerTask: 9, crossReviewedShare: 0.5, followUpsPerTask: 1.1, reopens: 2, errored: 1,
     reopenedShare: 0.06, erroredShare: 0.03, partialCost: 0, ...extra }
 }
 
@@ -35,7 +36,7 @@ function engines(project: string | null) {
   const rows: Record<string, unknown>[] = [
     row('claude|Claude', 'Claude Code · Claude', project ? 20 : 34, { split: 5 }),
     row('codex|GPT', 'Codex · GPT', 6, { partialCost: 0,  medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, reviewCostPerTask: 6.5, followUpsPerTask: 0.6, split: 6, switched: 2, errored: 3, erroredShare: 0.38, noUsageDone: 2 }),
-    row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 1.5, followUpsPerTask: 2 }),
+    row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 0, followUpsPerTask: 2 }),
     // A fourth engine whose model has no price: its cost is a floor and never "cheapest".
     row('opencode|Other', 'OpenCode · Other', 7, { medianCostUsd: null, medianTokens: null, partialCost: 7, noUsage: 7, medianHours: 2.5, reviewsPerTask: 2.9, erroredShare: 0.1 }),
   ]
@@ -84,11 +85,25 @@ test('Share new tasks: two engines turn it on, the other defaults stay, one turn
   const added = section.locator('input[type="checkbox"][data-testid$=":sonnet"]')
   await expect(added).toBeChecked()
   await expect(section.getByTestId('engine-split-add-button')).toBeDisabled()
-  // The switch turns the whole split off in one step.
+  // Named as its column on Usage & Costs is.
+  await expect(section.getByText('Claude Code · Sonnet', { exact: true })).toBeVisible()
+  // The switch turns the split off in one step and keeps every entry; switched on, it is back as it was.
+  const flag = async () => (await serverDefaults(request)).engine_split_off ?? false
   await section.getByTestId('engine-split-switch').click()
   await expect(state).toHaveText('Off')
+  await expect.poll(flag).toBe(true)
+  expect(((await serverDefaults(request)).engine_split as unknown[]).length).toBe(2)
+  await expect(added).toBeChecked()
+  await expect(section.getByTestId('engine-split-row')).toContainText('The entries below are kept')
+  await section.getByTestId('engine-split-switch').click()
+  await expect(state).toHaveText('On')
+  await expect.poll(flag).toBe(false)
+  // Clean up: no entries left for the next test.
+  await added.uncheck()
+  // Unchecked here, it stays listed (unchecked) so it can be checked again.
+  await expect(added).not.toBeChecked()
+  await boxes.nth(0).uncheck()
   await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(0)
-  await expect(added).toHaveCount(0)
   await expect(section.getByTestId('engine-split-switch')).toBeDisabled()
 })
 
@@ -139,7 +154,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('tokens', 4)).toHaveAttribute('title', '7 finished tasks had requests with no token counts recorded: the median leaves those out')
   await expect(cell('tokens', 4)).not.toHaveAttribute('data-best', 'true')
   await expect(cell('switched', 2)).toHaveText('2')
-  // "Claude Code · GPT" has 3 finished (few): it is never ranked, though its 1.5 reviews is lowest.
+  // "Claude Code · GPT" has 3 finished (few): it is never ranked, though its 0 reviews is lowest.
   await expect(cell('reviews', 1)).toHaveAttribute('data-best', 'true')
   await expect(table.locator('tr td:nth-child(4)[data-best]')).toHaveCount(0)
   await expect(cell('followups', 2)).toHaveAttribute('data-best', 'true')
@@ -147,6 +162,12 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('errored', 1)).toHaveAttribute('data-best', 'true')
   // Unranked rows (counts) mark nothing.
   await expect(table.locator('tr[data-metric="done"] td[data-best]')).toHaveCount(0)
+  // Checked by another company: a share, shown, never a contest.
+  await expect(cell('crossreview', 1)).toHaveText('50%')
+  // With no reviews there is nothing to show.
+  const gptCol = (await table.locator('thead th').allTextContents()).findIndex((h) => h.startsWith('Claude Code · GPT'))
+  await expect(cell('crossreview', gptCol)).toHaveText('-')
+  await expect(table.locator('tr[data-metric="crossreview"] td[data-best]')).toHaveCount(0)
   // One line on who is ahead where, from the same marks.
   const verdict = card.getByTestId('usage-engines-verdict')
   await expect(verdict).toContainText('Fastest: Codex · GPT')

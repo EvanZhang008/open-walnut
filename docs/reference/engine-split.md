@@ -2,8 +2,8 @@
 
 New task work can take turns between coding engines instead of all running on one. Turn it
 on in Settings, Sessions, "Share new tasks" (check two or more entries: an engine, or an engine on a
-model added there, such as Claude Code on sonnet; its switch turns the split off in one step), or in
-`config.yaml`:
+model added there, such as Claude Code on sonnet; its switch turns the split off in one step and back
+on with the entries kept, `engine_split_off: true`), or in `config.yaml`:
 
 ```yaml
 defaults:
@@ -33,7 +33,9 @@ alternate; 2 and 1 give the first two of every three. No entry runs more than tw
 behind or ahead, so an entry added later, or one a host could not run for a while, catches
 up with a short run of a few starts and then takes turns. Only entries that can run where
 the start goes are offered: an ACP engine the launch host has not reported installed is
-skipped (Claude Code always can). Reviewer subtasks (a subtask whose title starts with
+skipped (Claude Code always can). Settings offers a model only on an engine that takes one per
+entry (Claude Code), with the models Claude Code lists as suggestions; a model outside that list (one
+your proxy serves) is kept as typed, with a note to check the name. Reviewer subtasks (a subtask whose title starts with
 "Review" or "Reviewer") take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
 
 The pick is kept on the task (`engine_pick`) and in `WALNUT_HOME/cache/engine-split.json`,
@@ -48,11 +50,16 @@ Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&p
 per engine and model line (Claude Code on Opus and on Sonnet apart; a task whose usage names no
 line joins its engine's one line when there is only one), the tasks finished in the period, still open, assigned by the
 split, median time to done, median and total cost, median tokens, review subtasks per task
-(subtasks whose title starts with "Review" or "Reviewer"; a top-level task so named is work of its own), the
+(subtasks whose title starts with "Review" or "Reviewer"; a top-level task so named is work of its own),
+the share of finished tasks a reviewer on another company's model checked (Claude work reviewed by a
+GPT model or the other way round: its usage's model, else its session's), the
 user's messages per task, reopens after completion, and tasks whose session had an error. A
 task counts under the engine and model that carried most of its cost (dollars first,
 tokens only for a tie); counting only the split's tasks, it counts under the engine the split
-assigned it, and "Moved to another engine" counts those whose cost mostly ran elsewhere. A
+assigned it, and "Moved to another engine" counts those whose cost mostly ran elsewhere (another
+engine, another company's model, or for an entry naming a model line, another known line). Per task,
+the model line that carried the most cost names its column, never the first model by name (an Opus
+task with a small Haiku subagent is Opus work). A
 task with no usage recorded (or only requests with no token counts) has an unknown cost and
 tokens, never a zero, and a start that failed counts as an error even after a later start
 succeeded. A task counts in the period of the day it first finished, reopened or not, so its rework

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Config } from '@open-walnut/core';
-import { engineSplitSave, entryKey, entryOfKey, splitChecked, splitModelEntries, splitSize } from '@/components/settings/sections/engine-split-select';
+import { engineSplitSave, engineSplitSwitchSave, entryKey, entryOfKey, splitChecked, splitIsOff, splitModelEntries, splitSize } from '@/components/settings/sections/engine-split-select';
 
 const ORDER = ['claude', 'codex', 'opencode'];
 const cfg = (engine_split?: unknown): Pick<Config, 'defaults'> =>
@@ -22,7 +22,7 @@ describe('engine split settings', () => {
     const out = engineSplitSave(before, 'claude,codex,claude:gpt-6.1-sol', ORDER) as Pick<Config, 'defaults'>;
     expect(out.defaults).toMatchObject({ priority: 'high', project: 'Marina', engine: 'codex' });
     expect(out.defaults.engine_split).toEqual([{ engine: 'claude', weight: 2 }, { engine: 'codex' }, { engine: 'claude', model: 'gpt-6.1-sol' }]);
-    // Unchecking a model entry removes it; turning the split off clears every entry.
+    // Unchecking a model entry removes it; unchecking all clears the list.
     expect((engineSplitSave(before, 'claude', ORDER) as Pick<Config, 'defaults'>).defaults.engine_split).toEqual([{ engine: 'claude', weight: 2 }]);
     expect((engineSplitSave(before, '', ORDER) as Pick<Config, 'defaults'>).defaults.engine_split).toEqual([]);
   });
@@ -39,5 +39,28 @@ describe('engine split settings', () => {
     expect(splitSize('claude,claude:gpt-6.1-sol')).toBe(2);
     expect(splitSize('claude')).toBe(1);
     expect(splitSize('')).toBe(0);
+  });
+
+  it('counts entries as the server reads them: a model on an ACP engine is no entry of its own', () => {
+    const acp = new Set(['codex']);
+    expect(splitSize('codex,codex:gpt-6.1-sol', acp)).toBe(1);
+    expect(splitSize('claude,codex:gpt-6.1-sol', acp)).toBe(2);
+    expect(splitSize('claude,claude:sonnet', acp)).toBe(2);
+  });
+
+  it('the switch turns the split off and on again with every entry kept', () => {
+    const before = cfg([{ engine: 'claude', weight: 2 }, { engine: 'claude', model: 'gpt-6.1-sol' }]);
+    expect(splitIsOff(before)).toBe(false);
+    const off = engineSplitSwitchSave(before, false) as Pick<Config, 'defaults'>;
+    expect(splitIsOff(off)).toBe(true);
+    expect(off.defaults).toMatchObject({ priority: 'high', project: 'Marina', engine: 'codex' });
+    expect(off.defaults.engine_split).toEqual([{ engine: 'claude', weight: 2 }, { engine: 'claude', model: 'gpt-6.1-sol' }]);
+    expect(splitChecked(off, ORDER)).toBe('claude,claude:gpt-6.1-sol');
+    // Editing the entries while off keeps it off.
+    expect(splitIsOff(engineSplitSave(off, 'claude', ORDER) as Pick<Config, 'defaults'>)).toBe(true);
+    const on = engineSplitSwitchSave(off, true) as Pick<Config, 'defaults'>;
+    expect(splitIsOff(on)).toBe(false);
+    expect('engine_split_off' in on.defaults).toBe(false);
+    expect(on.defaults.engine_split).toEqual(off.defaults.engine_split);
   });
 });

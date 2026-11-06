@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateEngineCompare, modelFamily, type CompareInput, type TaskSpend } from '../../../src/core/usage/engine-compare.js';
+import { aggregateEngineCompare, modelFamily, modelTier, type CompareInput, type TaskSpend } from '../../../src/core/usage/engine-compare.js';
 import type { Task } from '../../../src/core/types.js';
 
 function task(over: Partial<Task> & { id: string }): Task {
@@ -593,5 +593,44 @@ describe('taskSpend', () => {
     expect(dearTokens).toBeLessThan(1_000_000);
     const spend = await priced([row('codex', 'claude-haiku-4-5', 2_000_000), row('claude', 'claude-opus-4-1', dearTokens)]);
     expect(spend.engine).toBe('claude');
+  });
+
+  it('names the model line that carried the cost, not the first model by name (Opus with a small Haiku subagent)', async () => {
+    const { taskSpend } = await import('../../../src/core/usage/engine-compare.js');
+    const row = (model: string, input: number, agent = '') => ({
+      date: '2026-11-02', host: '', source: 'session', engine: 'claude', sessionId: 's1', taskId: 't1', model, agent, band: '',
+      calls: 1, input, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, unknown: 0,
+    });
+    // The rollup returns rows sorted by model: haiku before opus.
+    const rows = [row('claude-haiku-4-5', 1_000, 'subagent'), row('claude-opus-4-1', 2_000_000)];
+    const rollup = { setThresholds: () => {}, query: () => rows } as unknown as Parameters<typeof taskSpend>[0];
+    const spend = (await taskSpend(rollup, undefined, () => undefined)).get('t1')!;
+    expect(modelTier(spend.model)).toBe('Opus');
+  });
+});
+
+describe('final round', () => {
+  const at = '2026-11-02T00:00:00.000Z';
+  it('an entry naming a model line whose work ran on another known line moved; a plain entry or an alias did not', () => {
+    const sonnet = { key: 'claude:claude-sonnet-5-5', engine: 'claude' as const, model: 'claude-sonnet-5-5', at };
+    const alias = { key: 'claude:my-alias', engine: 'claude' as const, model: 'my-alias', at };
+    const plain = { key: 'claude', engine: 'claude' as const, at };
+    const inp = input([done('sn', 1, { engine_pick: sonnet }), done('al', 1, { engine_pick: alias }), done('pl', 1, { engine_pick: plain })],
+      { sn: { costUsd: 2, model: 'claude-opus-5-5' }, al: { costUsd: 2, model: 'claude-opus-5-5' }, pl: { costUsd: 2, model: 'claude-sonnet-5-5' } });
+    const out = aggregateEngineCompare({ ...inp, splitOnly: true });
+    expect(Object.fromEntries(out.tasks.map((t) => [t.taskId, t.switched]))).toEqual({ sn: true, al: false, pl: false });
+  });
+
+  it('counts the finished tasks a reviewer on another company\'s model checked', () => {
+    const tasks = [
+      done('w1', 1), done('w2', 1), done('w3', 1),
+      task({ id: 'r1', title: 'Review: w1', parent_task_id: 'w1', session_id: 's-r1', phase: 'COMPLETE', completed_at: at }),
+      task({ id: 'r2', title: 'Review: w2', parent_task_id: 'w2', session_id: 's-r2', phase: 'COMPLETE', completed_at: at }),
+    ];
+    const inp = input(tasks, { w1: { costUsd: 1 }, w2: { costUsd: 1 }, w3: { costUsd: 1 }, r1: { costUsd: 1, model: 'gpt-6.1-sol' }, r2: { costUsd: 1 } });
+    const out = aggregateEngineCompare(inp);
+    expect(out.rows).toHaveLength(1);
+    expect(out.rows[0].crossReviewedShare).toBeCloseTo(1 / 3);
+    expect(Object.fromEntries(out.tasks.map((t) => [t.taskId, t.crossReviewed]))).toEqual({ w1: true, w2: false, w3: false });
   });
 });

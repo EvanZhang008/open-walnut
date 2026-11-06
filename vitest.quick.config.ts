@@ -36,6 +36,7 @@ const config = mergeConfig(
         '@open-walnut/compaction-notice': path.resolve(import.meta.dirname, 'src/core/stream/compaction-notice.ts'),
         '@open-walnut/hint-format': path.resolve(import.meta.dirname, 'src/core/hints/hint-format.ts'),
         '@open-walnut/budget-engines': path.resolve(import.meta.dirname, 'src/core/usage/budget-engines.ts'),
+        '@open-walnut/model-line': path.resolve(import.meta.dirname, 'src/core/usage/model-line.ts'),
         '@open-walnut/search-transcript': path.resolve(import.meta.dirname, 'src/core/task-search-transcript.ts'),
         '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
         '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),

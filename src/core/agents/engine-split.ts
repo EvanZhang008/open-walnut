@@ -50,9 +50,10 @@ export const SPLIT_WINDOW_MS = 14 * 24 * 3600_000;
 const KEEP_PICKS = 2000;
 
 /** The split's entries, or [] when it is off. Bad entries are skipped, never fatal. */
-export function splitBuilders(config: { defaults?: { engine_split?: unknown } } | null | undefined): SplitBuilder[] {
+export function splitBuilders(config: { defaults?: { engine_split?: unknown; engine_split_off?: unknown } } | null | undefined): SplitBuilder[] {
   const raw = config?.defaults?.engine_split;
-  if (!Array.isArray(raw)) return [];
+  // Switched off: the entries are kept for when it is switched on again.
+  if (!Array.isArray(raw) || config?.defaults?.engine_split_off === true) return [];
   const out: SplitBuilder[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
