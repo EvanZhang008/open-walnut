@@ -24,6 +24,9 @@
  * drop the note), starts again from the whole object. The session can always
  * read all of it with the `app_state` op (GET /api/v1/me/app-state).
  *
+ * A plugin's AI-only brief (app-brief.ts) rides the same note, ahead of the
+ * state: told whole once per session and boundary, never shown to the person.
+ *
  * In memory on purpose: it is what an App shows right now, and an App publishes
  * it again when it opens. A restart loses it and the next note is a full one.
  * Only the leader keeps it (it owns the queue); a replica's publish is a no-op.
@@ -33,6 +36,9 @@
 import { log } from '../../logging/index.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { renderChanges, renderFull, type JsonObject } from './app-state-render.js';
+import {
+  anyAppBrief, briefsOf, disposeAppBriefOwner, dueBriefNotes, rememberBriefsTold, resetAppBriefsForTesting, type AppBriefView,
+} from './app-brief.js';
 
 const kit = createEnvelopeKit();
 
@@ -212,6 +218,7 @@ export function clearAppState(owner: string, taskId: string): void {
  * were told stays: it is only what they read, so a later diff is still right.
  */
 export function disposeAppStateOwner(owner: string, generation?: string): void {
+  disposeAppBriefOwner(owner, generation);
   for (const [taskId, byOwner] of [...published]) {
     const entry = byOwner.get(owner);
     if (entry && (generation === undefined || !entry.generation || entry.generation === generation)) dropPublished(owner, taskId);
@@ -278,34 +285,37 @@ export interface PendingAppState {
 export async function pendingAppState(
   sessionId: string, body: string, nowMs = Date.now(), options: { proactive?: boolean } = {},
 ): Promise<PendingAppState | null> {
-  // Every send into every session passes here: free unless some plugin shares state.
-  if (published.size === 0) return null;
+  // Every send into every session passes here: free unless some plugin shares state or a brief.
+  if (published.size === 0 && !anyAppBrief()) return null;
   try {
     if (body.trimStart().startsWith('/')) return null;
     const claimedAt = claims.get(sessionId);
     if (claimedAt !== undefined && nowMs - claimedAt < CLAIM_MS) return null;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const record = await getSessionByClaudeId(sessionId);
-    const byOwner = record?.taskId ? published.get(record.taskId) : undefined;
-    if (!record || !byOwner || byOwner.size === 0) return null;
+    if (!record?.taskId) return null;
+    const byOwner = published.get(record.taskId);
+    const compactUuid = record.lastCompactUuid ?? '';
+    // The AI-only briefs go first: what the AI must hold, then what the App shows (app-brief.ts).
+    const briefNotes = dueBriefNotes(sessionId, record.taskId, compactUuid);
+    if ((!byOwner || byOwner.size === 0) && briefNotes.length === 0) return null;
     // Re-checked after the await: a racing send may have claimed meanwhile.
     const raced = claims.get(sessionId);
     if (raced !== undefined && nowMs - raced < CLAIM_MS) return null;
-    const compactUuid = record.lastCompactUuid ?? '';
     const known = told.get(sessionId);
     const notes: Note[] = [];
-    for (const entry of byOwner.values()) {
+    for (const entry of byOwner?.values() ?? []) {
       const before = known?.get(entry.owner);
       const valid = before && before.taskId === entry.taskId && before.compactUuid === compactUuid ? before : undefined;
       if (valid && valid.version === entry.version) continue;
       const note = buildNote(entry, valid, options.proactive === true);
       if (note) notes.push(note);
     }
-    if (notes.length === 0) return null;
+    if (notes.length === 0 && briefNotes.length === 0) return null;
     claims.set(sessionId, nowMs);
     let settled = false;
     return {
-      text: notes.map((n) => n.text).join('\n\n'),
+      text: [...briefNotes.map((n) => n.body), ...notes.map((n) => n.text)].join('\n\n'),
       markTold: () => {
         if (settled) return;
         settled = true;
@@ -313,7 +323,10 @@ export async function pendingAppState(
         for (const n of notes) {
           rememberTold(sessionId, n.owner, { taskId: n.entry.taskId, state: n.entry.state, version: n.entry.version, compactUuid });
         }
-        log.session.info('app state queued', { sessionId, taskId: record.taskId, plugins: notes.map((n) => n.owner) });
+        rememberBriefsTold(sessionId, briefNotes, compactUuid);
+        log.session.info('app state queued', {
+          sessionId, taskId: record.taskId, plugins: notes.map((n) => n.owner), briefs: briefNotes.map((n) => n.owner),
+        });
       },
       release: () => {
         if (settled) return;
@@ -340,11 +353,13 @@ export interface AppStateView {
  * Everything shared for the caller's task, whole: the `app_state` op. The
  * session has now read all of it, so the next note starts from here.
  */
-export async function readAppState(sessionId: string | undefined): Promise<{ taskId: string | null; states: AppStateView[] }> {
-  if (!sessionId) return { taskId: null, states: [] };
+export async function readAppState(
+  sessionId: string | undefined,
+): Promise<{ taskId: string | null; states: AppStateView[]; briefs: AppBriefView[] }> {
+  if (!sessionId) return { taskId: null, states: [], briefs: [] };
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
-  if (!record?.taskId) return { taskId: null, states: [] };
+  if (!record?.taskId) return { taskId: null, states: [], briefs: [] };
   const byOwner = published.get(record.taskId);
   const states: AppStateView[] = [];
   for (const entry of byOwner?.values() ?? []) {
@@ -360,7 +375,10 @@ export async function readAppState(sessionId: string | undefined): Promise<{ tas
       taskId: entry.taskId, state: entry.state, version: entry.version, compactUuid: record.lastCompactUuid ?? '',
     });
   }
-  return { taskId: record.taskId, states };
+  // The session read every brief whole: the next note starts from here (app-brief.ts).
+  const briefs = briefsOf(record.taskId);
+  rememberBriefsTold(sessionId, briefs.map((b) => ({ owner: b.plugin, taskId: record.taskId!, text: b.text, version: b.version })), record.lastCompactUuid ?? '');
+  return { taskId: record.taskId, states, briefs };
 }
 
 function scheduleProactive(taskId: string, owner: string, nowMs: number): void {
@@ -408,6 +426,7 @@ export async function deliverProactive(taskId: string, owner: string, nowMs = Da
 
 /** Test seam: forget everything. */
 export function resetAppStateForTesting(): void {
+  resetAppBriefsForTesting();
   for (const slot of proactive.values()) if (slot.timer) clearTimeout(slot.timer);
   published.clear();
   told.clear();

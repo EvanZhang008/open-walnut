@@ -1439,6 +1439,20 @@ export interface AppStateService {
   publish(taskId: string, state: Record<string, unknown>, options?: AppStatePublishOptions): Promise<{ version: number; kept: boolean }>
   /** Stop sharing with that task. */
   clear(taskId: string): Promise<void>
+  /**
+   * Give the AI on `taskId` background that is for it only (the rubric it grades by, notes behind
+   * the task, a reference to guide toward): Walnut tells the text whole, once per session, ahead
+   * of the next message, and again after each compaction (the compaction hook says it is coming);
+   * a new text is told again, only its added part when it extends the old one; the same text is
+   * never told twice. Every view a person reads (the session timeline on the web and the phone)
+   * shows a fold, never the text, so show the person what you decide, when you decide. At most
+   * 48 KB, always told whole; an empty text clears it. Server side only: the App in the browser
+   * can neither set nor read it. In memory on the primary Walnut, like `publish`: set it again
+   * when your App opens. Absent on a Walnut older than this API.
+   */
+  setBrief?(taskId: string, text: string, options?: { label?: string }): Promise<{ version: number; kept: boolean }>
+  /** Stop briefing that task. */
+  clearBrief?(taskId: string): Promise<void>
 }
 
 /**

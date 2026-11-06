@@ -159,7 +159,7 @@ describe('passive app state rides the next message', () => {
     await publish(task.id, { level: 2, files: { 'a.py': 'x = 1' } })
     await sendMessageToSession(sid, 'and?', { source: 'ui' })
     expect((await rows(sid))[1]).toContain('level: 1 → 2')
-    expect(await readAppState(undefined)).toEqual({ taskId: null, states: [] })
+    expect(await readAppState(undefined)).toEqual({ taskId: null, states: [], briefs: [] })
   })
 
   it('clear, and a plugin generation going away, stop it; a newer generation keeps its own', async () => {

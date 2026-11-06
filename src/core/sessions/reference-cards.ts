@@ -34,6 +34,7 @@ import { log } from '../../logging/index.js';
 import { listEntityRefs } from '../../utils/entity-refs.js';
 import { stripLegacyHintLines } from './output-mode.js';
 import { parseHinted, type CarriedHint } from '../hints/hint-format.js';
+import { redactAiOnly } from '../../lib/ai-only-envelope.js';
 
 /** Block markers, each on its OWN line. Line-anchored like the output-mode
  *  markers so a human sentence quoting one survives the stripper. */
@@ -452,7 +453,8 @@ export function stripReferenceCards(text: string): string {
  */
 export function projectUserText(text: string, at?: number | string | null): { text: string; hints: CarriedHint[] } {
   const parsed = parseHinted(text);
-  return { text: stripReferenceCards(stripLegacyHintLines(parsed.text, at)), hints: parsed.hints };
+  // An App's AI-only brief keeps its fold and loses its body (lib/ai-only-envelope.ts).
+  return { text: redactAiOnly(stripReferenceCards(stripLegacyHintLines(parsed.text, at))), hints: parsed.hints };
 }
 
 export function toDisplayedUserText(text: string, at?: number | string | null): string {
@@ -472,5 +474,5 @@ export function displayQueueRow<T extends { message: string }>(row: T): T & { ra
   if (typeof row.message !== 'string') return row;
   const { text, hints } = projectUserText(row.message);
   if (text === row.message && !hints.length) return row;
-  return { ...row, message: text, rawMessage: row.message, ...(hints.length ? { hints } : {}) };
+  return { ...row, message: text, rawMessage: redactAiOnly(row.message), ...(hints.length ? { hints } : {}) };
 }

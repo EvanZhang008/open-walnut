@@ -58,6 +58,7 @@ import { usageRouter } from './routes/usage.js'
 import { timeRouter, startTimeTracking, stopTimeTracking } from './routes/time.js'
 import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
+import { redactAiOnly } from '../lib/ai-only-envelope.js'
 import { fileContentRouter } from './routes/file-content.js'
 import { createCalendarAliasRouter } from './routes/calendar-alias.js'
 import { permissionsRouter } from './routes/permissions.js'
@@ -5053,6 +5054,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       || event.name === 'session:message-queued' || event.name === 'session:messages-delivered'
       || event.name === 'session:delivery-held')) {
       const enrichedData = { ...(event.data as Record<string, unknown>) }
+      // The browser shows a queued row as stored: an App's AI-only brief keeps its fold, not its body.
+      if (event.name === 'session:message-queued') {
+        for (const key of ['queuedText', 'rowText', 'message'] as const) {
+          if (typeof enrichedData[key] === 'string') enrichedData[key] = redactAiOnly(enrichedData[key] as string)
+        }
+      }
       if ((event.name === 'session:result' || event.name === 'session:error') && enrichedData.taskId) {
         try {
           const task = await getTask(enrichedData.taskId as string)

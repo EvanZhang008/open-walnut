@@ -10,6 +10,7 @@
  * SessionFileReader (session-file-reader.ts).
  */
 
+import { redactAiOnly } from '../lib/ai-only-envelope.js';
 import { hookContextText } from '../lib/walnut-added.js';
 import { NATIVE_PEER_TAGS, nonHumanOrigin } from '../lib/history-session-envelope.js';
 import { log } from '../logging/index.js';
@@ -1970,7 +1971,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
       ...(msg.cliError ? { cliError: true as const } : {}),
       ...(hints.length ? { hints } : {}),
-      ...(receivedText && receivedText !== text ? { rawText: receivedText } : {}),
+      // The raw view is a person's view too: an AI-only brief shows its fold (lib/ai-only-envelope.ts).
+      ...(receivedText && receivedText !== text ? { rawText: redactAiOnly(receivedText) } : {}),
     });
     resultParentIds.push(msg.parentToolUseId);
   }

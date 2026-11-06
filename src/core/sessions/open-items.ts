@@ -212,6 +212,10 @@ export async function collectOpenItems(
       const { stateHintsAfterCompaction } = await import('../hints/hint-send.js');
       const hints = await stateHintsAfterCompaction(caller.record, task);
       if (hints) items.text = [items.text, hints].filter(Boolean).join('\n\n');
+      // A plugin's AI-only brief comes back whole with the next message; here only that it comes (app-brief.ts).
+      const { briefAfterCompactionLine } = await import('./app-brief.js');
+      const brief = briefAfterCompactionLine(task.id);
+      if (brief) items.text = [items.text, brief].filter(Boolean).join('\n\n');
       // A lead reads its teams back in full: the summary drops what earlier notes told it (org/team-note.ts).
       if (task.org_role === 'lead' && task.phase !== 'COMPLETE') {
         const { teamSnapshotText } = await import('../org/team-note.js');

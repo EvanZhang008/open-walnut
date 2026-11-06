@@ -48,6 +48,7 @@ import { frameForSource } from './sessions/send-frame.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
+import { keepAiOnly } from '../lib/ai-only-envelope.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -594,7 +595,8 @@ export async function editMessage(
 
     // Its hint blocks stay (their state is already recorded); the new words are escaped.
     // A slash command stays byte-exact (the CLI reads a command only at the start).
-    msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, newText);
+    // An App's AI-only brief on the row stays as it was: the editor saw its fold (lib/ai-only-envelope.ts).
+    msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, newText));
     stored = msg.message;
     return true;
   });

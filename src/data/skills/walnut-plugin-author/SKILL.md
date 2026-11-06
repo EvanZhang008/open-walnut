@@ -17,6 +17,7 @@ Decide what the plugin contributes before scaffolding, because the answer picks 
 |---|---|---|
 | Any AI session (the Personal AI, a coding session) to call something | `registry.op` (read-only ops reach every session through `walnut tools call <plugin>_<name>`) | `server` |
 | The AI beside your App to see what the App shows (an editor, a test run, a timer) | `appState.publish`, see step 4a | either |
+| The AI to hold something the person must not see yet (a rubric, a reference) | `appState.setBrief`, see step 4a | server |
 | An AI that watches the person's work and draws conclusions | an event log plus an observer session, see step 4b | `both` |
 | AI sessions that exist only inside the App (a practice partner, an observer), not work the person follows on the board | `"taskVisibility": "plugin"` in the manifest: their tasks show only in the plugin's own view; leave it out when the work is useful elsewhere (tickets, notes, lookups) | `both` |
 | Files a person wants on every machine and in the backup (a review, a rules file) | `storage.files`, declared in the manifest, see step 5 | `server` |
@@ -83,11 +84,12 @@ Bridge the App to the server with one `registry.wsMethod` that takes a named act
 
 ## 4a. Connect the App to its AI
 
-When the App embeds a session (`SessionView` beside an editor, a board, a form), that session should see what the person sees without being told. Do not build an MCP server for it; Walnut already gives the session three channels, and a good App uses all three:
+When the App embeds a session (`SessionView` beside an editor, a board, a form), that session should see what the person sees without being told. Do not build an MCP server for it; Walnut already gives the session four channels, and a good App uses each it needs:
 
 1. **Files.** Start the session with `walnut.ops.call('task_create', { cwd, engine, message, ... })` in a folder that holds the work, so it reads code and runs commands there. Keep what it must not read (an answer key) outside that folder.
 2. **App state, pushed.** `walnut.appState.publish(taskId, state, { mode, note })` from the server or the browser. Passive (default): the next message into the session carries what changed since it last read the state, in the same turn, as a diff (one line per value, a line patch for text). Proactive: it also starts a turn, debounced and at most one a minute; keep it for events the AI should react to unasked. Publish on every change (the browser side folds bursts); keep it under 64 KB; leave out spoilers and secrets. The session can read all of it with `walnut tools call app_state`.
-3. **Ops, pulled.** `registry.op({ readonly: true, ... })` for anything the AI should fetch or check on demand (history, a recomputed summary). An op the AI calls must not change the person's record unless that is its job: a test run through your own runner that counts as the person's attempt is a write, not a read.
+3. **A brief, for the AI only.** `walnut.appState.setBrief(taskId, text, { label })`, server side only. For what the AI must hold and the person must not see yet: the rubric an interviewer grades by, the notes behind a quiz, a reference to guide toward. Walnut tells the text whole once per session, ahead of the next message, and again after each compaction; a changed text is told again (only the added part when it extends the old one). Every view a person reads shows a fold, never the text, so show the person what you decide, when you decide (after the round, say). At most 48 KB, always whole; an empty text clears it. Check `walnut.appState.setBrief` exists first: an older Walnut has none.
+4. **Ops, pulled.** `registry.op({ readonly: true, ... })` for anything the AI should fetch or check on demand (history, a recomputed summary). An op the AI calls must not change the person's record unless that is its job: a test run through your own runner that counts as the person's attempt is a write, not a read.
 
 Tell the session these exist: name the ops and what the app state holds in its opening message, and ship the how-to as an `agent-skills/` skill you `registry.skill` while the plugin has something to say, so other sessions do not pay for it in every prompt.
 

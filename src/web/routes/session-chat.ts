@@ -29,6 +29,7 @@ import { readTeamConfig, findTeammateJsonlPaths, writeToInbox, extractTeamsFromL
 import { ActiveTabPoller, readFullFile, parseJsonlLines } from '../../providers/subagent-poller.js'
 import { refuseRealHomeWrite } from '../../providers/ephemeral-session-gate.js'
 import { broadcastEvent } from '../ws/handler.js'
+import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_SESSION_IMAGES = 5
@@ -483,7 +484,9 @@ export function registerSessionChatRpc(): void {
     const messages = (await withoutWalnutRows(await getQueue(data.sessionId))).map(presentAfterTurn).map((m) => {
       const why = held?.get(m.id)
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
-      return holds ? { ...m, heldReason: why } : m
+      // An App's AI-only brief riding the row shows its fold (lib/ai-only-envelope.ts); an edit keeps the real one (editMessage).
+      const shown = hasAiOnly(m.message) ? { ...m, message: redactAiOnly(m.message) } : m
+      return holds ? { ...shown, heldReason: why } : shown
     })
     return { messages, ...(launchPrompt ? { launchPrompt } : {}) }
   })

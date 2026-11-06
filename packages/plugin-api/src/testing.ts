@@ -150,6 +150,8 @@ export interface FakeWalnutResult {
    * how many times it was published. A `clear` removes the task.
    */
   appStates: Map<string, { state: Record<string, unknown>; options: AppStatePublishOptions; version: number }>
+  /** The AI-only brief per task (`appState.setBrief`): its text, label and version. A `clearBrief` or an empty text removes it. */
+  appBriefs: Map<string, { text: string; label?: string; version: number }>
   /** The plugin's live `macos.useFullDiskAccess` declarations. */
   fullDiskAccessUses: FullDiskAccessUse[]
   /** Every path `macos.readProtectedFile` was asked for, in order. */
@@ -225,6 +227,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const services = new Map<string, ServiceApi>()
   let database: PluginDatabase | undefined
   const appStates: FakeWalnutResult['appStates'] = new Map()
+  const appBriefs: FakeWalnutResult['appBriefs'] = new Map()
   const letters: LetterState[] = []
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
@@ -808,6 +811,24 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       async clear(taskId) {
         appStates.delete(taskId)
       },
+      async setBrief(taskId, text, briefOptions = {}) {
+        if (typeof taskId !== 'string' || !taskId.trim()) throw new TypeError('An App brief needs the id of the task whose session reads it')
+        if (typeof text !== 'string') throw new TypeError('An App brief is text')
+        const trimmed = text.trim()
+        if (new TextEncoder().encode(trimmed).length > 48 * 1024) throw new RangeError('App brief is over 48 KB')
+        if (!trimmed) {
+          appBriefs.delete(taskId)
+          return { version: 0, kept: true }
+        }
+        const current = appBriefs.get(taskId)
+        const same = current && current.text === trimmed && current.label === briefOptions.label
+        const version = same ? current.version : (current?.version ?? 0) + 1
+        appBriefs.set(taskId, { text: trimmed, ...(briefOptions.label ? { label: briefOptions.label } : {}), version })
+        return { version, kept: true }
+      },
+      async clearBrief(taskId) {
+        appBriefs.delete(taskId)
+      },
     },
     // In-memory inbox: `send` records the letter, `answerLetter` on the result plays the human.
     letters: {
@@ -917,5 +938,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, appStates, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
 }

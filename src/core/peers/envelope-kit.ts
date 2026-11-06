@@ -146,6 +146,8 @@ export function createEnvelopeKit(): EnvelopeKit {
     'from', 'from-session', 'from-task', 'host', 'title',
     'about', 'about-session', 'about-task',
     'request', 'asked', 'outcome', 'anonymous', 'note',
+    // A body for the model only: every view a person reads shows the fold (lib/ai-only-envelope.ts).
+    'ai-only',
   ] as const;
   const TAG = 'walnut-message';
   /** Sender titles are attacker-controlled (any session can task_update one). */

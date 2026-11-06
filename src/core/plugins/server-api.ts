@@ -36,6 +36,7 @@ import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
 import { registerPluginKeepsTasks } from './plugin-task-visibility.js'
 import { clearAppState, disposeAppStateOwner, publishAppState } from '../sessions/app-state.js'
+import { clearAppBrief, setAppBrief } from '../sessions/app-brief.js'
 import { registeredSyncOf } from './legacy-phase-sync.js'
 import { createPluginNotifications } from './plugin-notifications.js'
 import { createPluginUi } from './plugin-status-items.js'
@@ -944,6 +945,14 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         },
         async clear(taskId: string) {
           clearAppState(pluginId, String(taskId ?? ''))
+        },
+        // The AI-only brief (core/sessions/app-brief.ts): server side only, never the App in the browser.
+        async setBrief(taskId: string, text: string, briefOptions: { label?: string } = {}) {
+          assertLive('appState.setBrief')
+          return setAppBrief(pluginId, options.pluginName, { taskId, text, ...briefOptions }, { generation })
+        },
+        async clearBrief(taskId: string) {
+          clearAppBrief(pluginId, String(taskId ?? ''))
         },
       }
     })(),

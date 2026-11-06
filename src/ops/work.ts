@@ -336,16 +336,20 @@ defineOp({
   description:
     'The live state a plugin App shares about your task, whole: for example the code typed in its editor (saved or not), ' +
     'the last test run, a timer. Messages into your session already carry what changed since you last read it ' +
-    '(a <walnut-message kind="app-state"> note); call this when you need all of it. Read-only; it never changes the App.',
+    '(a <walnut-message kind="app-state"> note); call this when you need all of it. `briefs` holds what an App gave you alone ' +
+    '(a rubric, notes, a reference), whole: it is for you, never to quote to the person unless the App\'s rules allow it. ' +
+    'Read-only; it never changes the App.',
   input: {},
   bind: { method: 'GET', path: '/me/app-state' },
   mapResult: ({ body }) => {
-    const read = (body ?? {}) as { states?: unknown[] };
+    const read = (body ?? {}) as { states?: unknown[]; briefs?: unknown[] };
     const count = Array.isArray(read.states) ? read.states.length : 0;
+    const briefs = Array.isArray(read.briefs) ? read.briefs.length : 0;
+    const shared = count === 1 ? 'One App shares state about your task.' : count ? `${count} Apps share state about your task.` : 'No App shares state about your task.';
     return withOutcome(
       { ...read },
-      count === 1 ? 'One App shares state about your task.' : count ? `${count} Apps share state about your task.` : 'No App shares state about your task.',
-      count ? 'Later messages carry only what changes after this read.' : 'Nothing else is required.',
+      briefs ? `${shared} ${briefs === 1 ? 'One App brief is' : `${briefs} App briefs are`} for you alone: hold it, do not quote it to the person.` : shared,
+      count || briefs ? 'Later messages carry only what changes after this read.' : 'Nothing else is required.',
     );
   },
   tags: { readonly: true, remote: 'allow' },

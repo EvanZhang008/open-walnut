@@ -1,5 +1,6 @@
 import { CONTROL_PROMPT_GUARD, type JournalRecord } from './acp-worker/protocol.js'
 import { projectUserText } from '../core/sessions/reference-cards.js'
+import { redactAiOnly } from '../lib/ai-only-envelope.js'
 import type {
   SessionHistoryMessage,
   SessionHistoryTool,
@@ -534,7 +535,7 @@ export class AcpHistoryFold {
             msgId: event.msgId,
             walnutMessageId: event.walnutMessageId,
             ...(shown.hints.length ? { hints: shown.hints } : {}),
-            ...(shown.text !== event.text ? { rawText: event.text } : {}),
+            ...(shown.text !== event.text ? { rawText: redactAiOnly(event.text) } : {}),
           }
           this.messages.push(message)
           this.byMessageId.set(event.msgId, message)

@@ -60,8 +60,11 @@ import type { SessionHistoryMessage } from './session-history.js';
  *
  * 10 (2026-11-06): Claude Code's own error reply ("Prompt is too long", an API error) is an error
  * row (`cliError`), no longer an assistant answer.
+ *
+ * 11 (2026-11-06): an App's AI-only brief (sessions/app-brief.ts) is stored as its fold, never its
+ * body, in `text` and `rawText` (lib/ai-only-envelope.ts).
  */
-export const HISTORY_CACHE_SCHEMA = 10;
+export const HISTORY_CACHE_SCHEMA = 11;
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a
