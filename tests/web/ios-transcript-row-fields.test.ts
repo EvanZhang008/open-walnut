@@ -43,10 +43,18 @@ describe('a transcript field reaches the timeline row', () => {
     expect(carried).toEqual(expect.arrayContaining(['detail', 'resultPreview', 'sentBy', 'injectedAfter', 'sentTo']))
   })
 
-  for (const fn of ['private static func row(from m: SessionTranscript.Message', 'private static func assignStableIDs(']) {
+  // `row(from:)` reads a transcript row, so it uses every field (a flag such as `cliError` may
+  // become the row's shape there). `assignStableIDs` copies a built ChatMessage, so it carries
+  // every field the row type has.
+  const chatFields = storedProps(block(MODELS, 'struct ChatMessage: Codable, Identifiable, Equatable {', ''), '    ')
+  const copies: [string, string[]][] = [
+    ['private static func row(from m: SessionTranscript.Message', carried],
+    ['private static func assignStableIDs(', carried.filter((f) => chatFields.includes(f))],
+  ]
+  for (const [fn, need] of copies) {
     it(`${fn.split('(')[0].replace('private static func ', '')} copies every one`, () => {
       const body = block(STORE, fn, '    ')
-      const missing = carried.filter((f) => !body.includes(`m.${f}`))
+      const missing = need.filter((f) => !body.includes(`m.${f}`))
       expect(missing, fn).toEqual([])
     })
   }
