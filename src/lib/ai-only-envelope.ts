@@ -72,6 +72,25 @@ export function aiOnlyEnvelopes(text: string): string[] {
   return aiOnlyLeads(text).map((b) => text.slice(b.start, b.end));
 }
 
+/** The text with the AI-only envelopes at its head taken off. */
+export function withoutAiOnly(text: string): string {
+  let out = text;
+  for (const b of [...aiOnlyLeads(text)].reverse()) out = out.slice(0, b.start) + out.slice(b.end);
+  return out.replace(/^\s+/, '');
+}
+
+/**
+ * Queued rows that go to the model as ONE line (a batch): only the head of a line is
+ * trusted, so the AI-only envelopes at the head of every row lead the joined line, in
+ * row order, and the rows follow. Rows with none (or only the first) join as before.
+ */
+export function joinQueuedRows(rows: string[]): string {
+  const briefs = rows.slice(1).flatMap((r) => aiOnlyEnvelopes(r));
+  if (briefs.length === 0) return rows.join('\n\n');
+  const head = [...aiOnlyEnvelopes(rows[0] ?? ''), ...briefs];
+  return [...head, ...rows.map((r) => withoutAiOnly(r)).filter((r) => r.length > 0)].join('\n\n');
+}
+
 /**
  * A queued row edited by a person: what they sent back holds the placeholder (or
  * nothing) where the brief was. The row keeps its real AI-only envelopes ahead of
@@ -81,7 +100,5 @@ export function keepAiOnly(previous: string, edited: string): string {
   const kept = aiOnlyEnvelopes(previous);
   if (kept.length === 0) return edited;
   // The fold the editor saw (or a stale copy of the brief) leaves the words.
-  let words = edited;
-  for (const b of [...aiOnlyLeads(edited)].reverse()) words = words.slice(0, b.start) + words.slice(b.end);
-  return `${kept.join('\n\n')}\n\n${words.replace(/^\s+/, '')}`;
+  return `${kept.join('\n\n')}\n\n${withoutAiOnly(edited)}`;
 }

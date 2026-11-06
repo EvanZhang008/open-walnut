@@ -20,7 +20,7 @@ import { createSessionRecord, updateSessionRecord } from '../../../src/core/sess
 import { sendMessageToSession, getQueue, editMessage, deleteMessage, resetCache } from '../../../src/core/session-message-queue.js'
 import { publishAppState, readAppState, disposeAppStateOwner, resetAppStateForTesting } from '../../../src/core/sessions/app-state.js'
 import { setAppBrief, clearAppBrief, briefAfterCompactionLine, MAX_BRIEF_BYTES } from '../../../src/core/sessions/app-brief.js'
-import { AI_ONLY_PLACEHOLDER, redactAiOnly, keepAiOnly } from '../../../src/lib/ai-only-envelope.js'
+import { AI_ONLY_PLACEHOLDER, redactAiOnly, keepAiOnly, joinQueuedRows } from '../../../src/lib/ai-only-envelope.js'
 import { projectUserText, displayQueueRow } from '../../../src/core/sessions/reference-cards.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { parseSessionEnvelopes } from '../../../src/lib/history-session-envelope.js'
@@ -150,6 +150,16 @@ describe('an App brief rides the next message once', () => {
     const all = await rows(sid)
     expect(all[0]).toBe('/help')
     expect(all[1]).toContain('def answer():')
+    // A later queued row takes it at its head when the row that carried it goes.
+    await sendMessageToSession(sid, 'later', { source: 'ui' })
+    const third = (await getQueue(sid)).find((m) => m.message.endsWith('third'))!
+    expect(await deleteMessage(sid, third.id)).toBe(true)
+    const later = (await getQueue(sid)).find((m) => m.message.endsWith('later'))!
+    expect(later.message.startsWith('<walnut-message kind="app-state"')).toBe(true)
+    expect(later.message).toContain('def answer():')
+    expect(await editMessage(sid, later.id, '/compact')).toBe(true)
+    await sendMessageToSession(sid, 'after the command', { source: 'ui' })
+    expect((await rows(sid)).at(-1)).toContain('def answer():')
     // A plain row deleted after it gives nothing back.
     await sendMessageToSession(sid, 'fourth', { source: 'ui' })
     const fourth = (await getQueue(sid)).at(-1)!
@@ -244,6 +254,25 @@ describe('no view a person reads shows its body', () => {
     expect(redactAiOnly(`${hint}\n\n${plain}\n\n${fake}\n\nhi`)).not.toContain('MY OWN WORDS')
     // An edit keeps only the real head envelopes; a pasted one in the words stays words.
     expect(keepAiOnly(`${fake}\n\nhi`, `new words ${fake}`)).toMatch(/^<walnut-message[\s\S]*MY OWN WORDS[\s\S]*\n\nnew words <walnut-message/)
+  })
+
+  it('rows sent as one line (a batch): every row\'s brief leads the line, so no view shows it', async () => {
+    const { task, sid } = await spawned()
+    await sendMessageToSession(sid, 'plain first', { source: 'ui' })
+    await brief(task.id, RUBRIC)
+    await sendMessageToSession(sid, 'second', { source: 'ui' })
+    await brief(task.id, `${RUBRIC}\n\n## Part 2\n- SECRET_PART_TWO`)
+    await sendMessageToSession(sid, 'third', { source: 'ui' })
+    const line = joinQueuedRows(await rows(sid))
+    expect(line.startsWith('<walnut-message kind="app-state"')).toBe(true)
+    const shown = projectUserText(line).text
+    expect(shown).not.toContain('def answer')
+    expect(shown).not.toContain('SECRET_PART_TWO')
+    expect(shown).toMatch(/plain first[\s\S]*second[\s\S]*third/)
+    // Rows with no brief past the first join exactly as before.
+    expect(joinQueuedRows(['a', 'b'])).toBe('a\n\nb')
+    const [first] = await rows(sid)
+    expect(joinQueuedRows([first, 'x'])).toBe(`${first}\n\nx`)
   })
 
   it('redaction leaves other text alone and handles several envelopes', () => {

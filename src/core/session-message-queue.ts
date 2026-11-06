@@ -48,7 +48,7 @@ import { frameForSource } from './sessions/send-frame.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
-import { hasAiOnly, keepAiOnly } from '../lib/ai-only-envelope.js';
+import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly } from '../lib/ai-only-envelope.js';
 import { forgetBriefsTold } from './sessions/app-brief.js';
 
 // ── Types and store (session-queue-store.ts) ──
@@ -579,6 +579,19 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
 }
 
 /**
+ * An App's AI-only brief on a row that will not reach the model (removed, or edited into a
+ * command, which goes raw): the next queued row that will takes it, at its head, as the engine
+ * switch's context is handed on. False when no such row: the next send carries it again.
+ */
+function handOnBrief(queue: QueuedMessage[], from: QueuedMessage): boolean {
+  const next = queue.find((m) => m !== from && m.status === 'pending' && !m.message.trimStart().startsWith('/'));
+  const briefs = aiOnlyEnvelopes(from.message).filter((b) => !next?.message.includes(b));
+  if (!next) return false;
+  if (briefs.length > 0) next.message = `${briefs.join('\n\n')}\n\n${next.message}`;
+  return true;
+}
+
+/**
  * Edit a pending or parked message's text (a parked one is waiting for its owner to send
  * it, so its words are his to change). Returns true on success.
  * Returns false if message not found or already processing.
@@ -599,7 +612,7 @@ export async function editMessage(
     // Its hint blocks stay (their state is already recorded); the new words are escaped.
     // A slash command stays byte-exact (the CLI reads a command only at the start).
     // An App's AI-only brief on the row stays as it was: the editor saw its fold (lib/ai-only-envelope.ts).
-    if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = true;
+    if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = !handOnBrief(queue, msg);
     msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, newText));
     stored = msg.message;
     return true;
@@ -640,7 +653,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (queue[idx].status === 'processing') return false;
 
     const [removed] = queue.splice(idx, 1);
-    if (hasAiOnly(removed.message)) droppedBrief = true;
+    if (hasAiOnly(removed.message)) droppedBrief = !handOnBrief(queue, removed);
     // The engine switch's carried context rode this row: the next queued row takes it, else the
     // session record keeps it for the next send (engine-switch-io.ts).
     const carried = switchContextIn(removed.message);

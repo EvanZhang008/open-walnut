@@ -55,6 +55,21 @@ describe('the first message of a started session', () => {
     expect(mocks.markTold).not.toHaveBeenCalled();
   });
 
+  it('an ACP engine, whose id comes from the provider: the brief leads, told under the id it got', async () => {
+    mocks.startSession.mockImplementation(async () => ({ claudeSessionId: 'provider-sid-1' }));
+    await startSessionForTask({ ...params, engine: 'codex' });
+    expect(String(mocks.startSession.mock.calls[0][0].message).startsWith(`${BRIEF}\n\n`)).toBe(true);
+    expect(mocks.pendingAppState.mock.calls[0][3]).toEqual({ taskId: 'task-1' });
+    expect(mocks.markTold).toHaveBeenCalledWith('provider-sid-1');
+  });
+
+  it('a start with no message (an idle engine switch) runs no turn for the brief', async () => {
+    mocks.startSession.mockImplementation(async (data) => ({ claudeSessionId: data.preassignedSessionId }));
+    await startSessionForTask({ ...params, message: '', idle: true });
+    expect(mocks.pendingAppState).not.toHaveBeenCalled();
+    expect(String(mocks.startSession.mock.calls[0]?.[0]?.message ?? '')).not.toContain('rubric');
+  });
+
   it('nothing to carry leaves the message as it was', async () => {
     mocks.pendingAppState.mockResolvedValue(null);
     mocks.startSession.mockImplementation(async (data) => ({ claudeSessionId: data.preassignedSessionId }));

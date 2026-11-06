@@ -271,8 +271,11 @@ function buildNote(entry: Published, before: Told | undefined, proactive: boolea
 
 export interface PendingAppState {
   text: string;
-  /** The row that holds the text was queued: the session now knows this state. */
-  markTold(): void;
+  /**
+   * The row that holds the text was queued: the session now knows this state. `as` names the
+   * session when the note was made before it had an id (a provider-issued one, task-start.ts).
+   */
+  markTold(as?: string): void;
   /** The text did not go out: the next message carries it again. */
   release(): void;
 }
@@ -283,7 +286,7 @@ export interface PendingAppState {
  * Claimed before it returns, so two racing sends carry the note once.
  */
 export async function pendingAppState(
-  sessionId: string, body: string, nowMs = Date.now(), options: { proactive?: boolean } = {},
+  sessionId: string, body: string, nowMs = Date.now(), options: { proactive?: boolean; taskId?: string } = {},
 ): Promise<PendingAppState | null> {
   // Every send into every session passes here: free unless some plugin shares state or a brief.
   if (published.size === 0 && !anyAppBrief()) return null;
@@ -292,7 +295,8 @@ export async function pendingAppState(
     const claimedAt = claims.get(sessionId);
     if (claimedAt !== undefined && nowMs - claimedAt < CLAIM_MS) return null;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
-    const record = await getSessionByClaudeId(sessionId);
+    // A session not yet recorded (its id comes from the provider) starts from nothing told.
+    const record = (await getSessionByClaudeId(sessionId)) ?? (options.taskId ? { taskId: options.taskId, lastCompactUuid: undefined } : null);
     if (!record?.taskId) return null;
     const byOwner = published.get(record.taskId);
     const compactUuid = record.lastCompactUuid ?? '';
@@ -316,14 +320,15 @@ export async function pendingAppState(
     let settled = false;
     return {
       text: [...briefNotes.map((n) => n.body), ...notes.map((n) => n.text)].join('\n\n'),
-      markTold: () => {
+      markTold: (as?: string) => {
         if (settled) return;
         settled = true;
         claims.delete(sessionId);
+        const toldSid = as ?? sessionId;
         for (const n of notes) {
-          rememberTold(sessionId, n.owner, { taskId: n.entry.taskId, state: n.entry.state, version: n.entry.version, compactUuid });
+          rememberTold(toldSid, n.owner, { taskId: n.entry.taskId, state: n.entry.state, version: n.entry.version, compactUuid });
         }
-        rememberBriefsTold(sessionId, briefNotes, compactUuid);
+        rememberBriefsTold(toldSid, briefNotes, compactUuid);
         log.session.info('app state queued', {
           sessionId, taskId: record.taskId, plugins: notes.map((n) => n.owner), briefs: briefNotes.map((n) => n.owner),
         });

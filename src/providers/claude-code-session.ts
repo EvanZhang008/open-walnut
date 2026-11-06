@@ -95,6 +95,7 @@ import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
+import { joinQueuedRows } from '../lib/ai-only-envelope.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
 import { orgRoleOfPrompt } from '../core/org/org-prompt-role.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
@@ -13301,7 +13302,8 @@ export class SessionRunner {
       if (newMsgs.length === 0) return
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
 
-      const combined = newMsgs.map((m) => m.message).join('\n\n')
+      // An App's AI-only brief must lead the line to stay out of every view (lib/ai-only-envelope.ts).
+      const combined = joinQueuedRows(newMsgs.map((m) => m.message))
       const uuid = newMsgs[0].lineUuid
       const stops = targetSession.stopEpoch
       let known: { fate: string } | undefined
@@ -13479,7 +13481,7 @@ export class SessionRunner {
     // start() ran prepareOutbound on the payload (image paths rewritten to the
     // remote host), so the claim must hold THAT text (inc-1787704938224).
     registerEchoClaims(sessionId, ids,
-      session.lastPreparedOutbound ?? msgs.map((m) => m.message).join('\n\n'))
+      session.lastPreparedOutbound ?? joinQueuedRows(msgs.map((m) => m.message)))
     if (first.line?.cut && first.lineUuid) {
       // Behind a cut copy of itself: the CLI may exit on that copy without running the
       // line. Kept for this process (its exit hands it to the next), and not reported
@@ -14431,7 +14433,8 @@ export class SessionRunner {
     }
     this.setActiveProcessing(sessionId, msgs.length, msgs.map((m) => m.id))
 
-    let combined = msgs.map((m) => m.message).join('\n\n')
+    // An App's AI-only brief must lead the line to stay out of every view (lib/ai-only-envelope.ts).
+    let combined = joinQueuedRows(msgs.map((m) => m.message))
     // ONE user line per batch ⇒ ONE uuid survives; the CLI's own rule is findLast
     // (batch-uuid.ts).
     const batchUuid = pickBatchUuid(msgs)
