@@ -25882,6 +25882,7 @@ a.file-link:hover {
   color: var(--fg);
 }
 .side-question-popover-hint { font-size: 11px; color: var(--fg-muted); }
+.side-question-fullscreen { margin-left: auto; align-self: center; }
 
 /* Scrolling stack of independent Q&A cards (oldest → newest). */
 .side-question-stack {
@@ -25970,6 +25971,32 @@ a.file-link:hover {
      card inside the viewport on any column layout — this is only a belt. */
   max-width: calc(100vw - 24px);
   overflow: hidden;
+}
+/* Full screen: the shared pop-up sheet (fullscreen-tab.css places it). The sheet's
+   own z-index must win over the popover's 40, it is solid like every sheet (the
+   popover's glass would show the page through it, and a full-window blur is the
+   layer cost fullscreen-backdrop-layer-cost.test.ts guards), and the transcript
+   takes the height (the phone's cap included). */
+html body .side-question-popover--threads.open-walnut-fullscreen {
+  z-index: 9001;
+  max-height: none;
+  background: var(--card-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* The composer row is a stacking context (z-index 40), so a sheet inside it would
+   stay under the body-level backdrop (9000): while it holds the sheet the row rises
+   above the backdrop, and everything of it but the sheet is hidden, as the dim had it. */
+.session-panel-input:has(.side-question-popover.open-walnut-fullscreen) {
+  z-index: 9001;
+  visibility: hidden;
+}
+.session-panel-input .side-question-popover.open-walnut-fullscreen {
+  visibility: visible;
+}
+.side-question-popover--threads.open-walnut-fullscreen > .side-thread-body {
+  flex: 1 1 auto;
+  max-height: none;
 }
 /* The composer's own overlays (the "@" palette, the recents popup, the "+" menu)
    grow UPWARD from the composer, so the bounded column above would clip their

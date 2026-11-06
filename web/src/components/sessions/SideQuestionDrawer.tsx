@@ -41,6 +41,9 @@ import { OutputModePill } from '@/components/sessions/OutputModePill';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { SessionNotesBar, SessionNotesPill, useSessionNote } from '@/components/sessions/SessionNotes';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
+import { useFullscreen } from '@/hooks/useFullscreen';
+import { useHidesHighlights } from '@/hooks/useHidesHighlights';
+import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -109,6 +112,8 @@ interface SideQuestionDrawerProps {
   parentOutputMode?: SessionOutputMode;
   /** Drop text into the MAIN composer (SessionPanel's prefill driver). */
   onInjectToComposer?: (text: string) => void;
+  /** The panel's own sheet place (useSheetPlace): the drawer's full screen is kept as a place inside it. */
+  sheetAt?: string;
 }
 
 /** How much of a thread transcript "Inject full" pulls. */
@@ -162,7 +167,7 @@ function ThreadStatusDot({ threadSessionId }: { threadSessionId: string }) {
 
 export function SideQuestionDrawer({
   sessionId, engine, cwd, host, parentMode,
-  parentModel, parentEffort, parentOutputMode, onInjectToComposer,
+  parentModel, parentEffort, parentOutputMode, onInjectToComposer, sheetAt,
 }: SideQuestionDrawerProps) {
   const instanceId = useId();
   const getState = useCallback(() => getSideThreadsState(sessionId), [sessionId]);
@@ -294,6 +299,24 @@ export function SideQuestionDrawer({
 
   const closeDrawer = useCallback(() => { setOpenDrawerInstance(null); }, []);
 
+  // Full screen as the same pop-up sheet the session panel opens into (2026-11-05,
+  // the user: "can also full screen like the outside"): the tab's one full-screen
+  // state, kept across a reload as a place inside the panel's own.
+  const fullscreenPlace = sheetAt && sessionId ? `side-threads|${sheetAt}` : undefined;
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: fullscreenPlace });
+  // Closing the drawer ends its full screen; a full screen that comes back with no
+  // drawer open (a reload, a return to the page) opens it.
+  // Full screen hides the rest of the composer row (globals.css): marks painted there re-check.
+  useHidesHighlights(isFullscreen && expanded);
+  const wasExpandedRef = useRef(expanded);
+  useEffect(() => {
+    const was = wasExpandedRef.current;
+    wasExpandedRef.current = expanded;
+    if (!isFullscreen || expanded) return;
+    if (was) exitFullscreen();
+    else setOpenDrawerInstance(instanceId);
+  }, [expanded, isFullscreen, exitFullscreen, instanceId]);
+
   const toggleDrawer = useCallback(() => {
     setOpenDrawerInstance(expanded ? null : instanceId);
   }, [expanded, instanceId]);
@@ -370,10 +393,13 @@ export function SideQuestionDrawer({
       // Popups the thread body opens (Bash output, plan, quote pins) portal to
       // document.body: a click inside them must not read as "outside".
       if (target.closest?.('.plan-popup-overlay, .quote-pin-popover, .quote-pin-pill')) return;
+      // Full screen: the backdrop click leaves full screen only (useFullscreen), as the panel's does.
+      if (isFullscreen && target.closest?.('.open-walnut-fullscreen-backdrop')) return;
       closeDrawer();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) closeDrawer();
+      // Full screen: Escape leaves it first (useFullscreen), the next one closes the drawer.
+      if (e.key === 'Escape' && !e.defaultPrevented && !isFullscreen) closeDrawer();
     };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
@@ -381,7 +407,7 @@ export function SideQuestionDrawer({
       document.removeEventListener('mousedown', onDoc);
       document.removeEventListener('keydown', onKey);
     };
-  }, [expanded, closeDrawer]);
+  }, [expanded, closeDrawer, isFullscreen]);
 
   // ChatInput's contract: resolve false and it puts the text (and images) back in
   // the box. That is the whole failure story here — a failed create rolls its
@@ -644,9 +670,10 @@ export function SideQuestionDrawer({
         {badgeCount > 0 && <span className="side-question-count">{badgeCount}</span>}
       </button>
 
+      {expanded && FullscreenBackdrop}
       {expanded && (
         <div
-          className="side-question-popover side-question-popover--threads"
+          className={`side-question-popover side-question-popover--threads${fullscreenClass}`}
           // The popover lives INSIDE the main composer's controls row, so a file
           // dropped on the drawer's composer would keep bubbling and attach to the
           // MAIN composer as well. The inner ChatInput has already handled it here.
@@ -657,6 +684,17 @@ export function SideQuestionDrawer({
           <div className="side-question-popover-header">
             <span className="side-question-popover-title">Side threads</span>
             <span className="side-question-popover-hint">multi-turn · kept out of the chat</span>
+            <button
+              type="button"
+              className="task-action-btn side-question-fullscreen"
+              onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+              disabled={!fullscreenPlace}
+              title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
+              aria-label={isFullscreen ? 'Collapse side threads' : 'Expand side threads to full screen'}
+              aria-pressed={isFullscreen}
+            >
+              {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
+            </button>
           </div>
 
           {/* Thread chips — one per LIVE thread, plus "+ New". Filed ones move to

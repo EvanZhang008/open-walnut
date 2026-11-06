@@ -49,7 +49,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 
-const SCREENSHOT_DIR = '/tmp/side-threads'
+const SCREENSHOT_DIR = process.env.SIDE_THREADS_SHOTS ?? '/tmp/side-threads'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
 /** Seeded session record that owns the column the drawer hangs off. */
@@ -269,7 +269,11 @@ async function openParentColumn(page: Page): Promise<Locator> {
   return panel
 }
 
-/** `.side-question-pill` is shared with the Notes pill — filter on the label. */
+/** `.side-question-pill` is shared with the Notes pill — filter on the label. It sits
+ *  in the add menu now (visually hidden), so it is read for its count, never clicked. */
+const btwPill = (panel: Locator): Locator =>
+  panel.locator('.side-question-pill', { hasText: 'btw' }).first()
+
 async function openDrawer(panel: Locator): Promise<Locator> {
   await panel.locator('.session-panel-input .chat-plus-btn').click()
   await panel.locator('.session-panel-input [data-add-control="btw"]').click()
@@ -629,7 +633,7 @@ test('the chip × files a thread away, and it stays retrievable', async ({ page,
   // does, and it is the only way the client sees the server's record-level `archived`
   // flag — which is exactly where a restore that only cleared the stamp left the chip
   // back in the row with a permanently locked composer.
-  await btwPill(panel).click()
+  await page.keyboard.press('Escape')
   await expect(popover).toHaveCount(0)
   const reopened = await openDrawer(panel)
   await expect(reopened.locator('.side-thread-chip-archived-toggle')).toContainText('Archived (1)')
@@ -751,4 +755,64 @@ test('an engine that cannot fork shows an inline notice, not a dead drawer', asy
   // The composer is still usable (the drawer did not lock up).
   await expect(drawerInput(popover)).toBeEnabled()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/fork-unsupported.png`, fullPage: true })
+})
+
+test('the drawer goes full screen like the panel: one Escape leaves it, a reload keeps it', async ({ page, request }) => {
+  // 2026-11-05, the user on the Side threads pop-up: "can also full screen like the outside".
+  test.setTimeout(120_000)
+  const backing = await startThreadSession(request, FIRST_Q)
+  const stub = freshStub([{ id: 'st-1', title: FIRST_Q, threadSessionId: backing, createdAt: new Date().toISOString() }])
+  await installSideThreadRoutes(page, request, stub)
+
+  const panel = await openParentColumn(page)
+  let popover = await openDrawer(panel)
+  const button = popover.locator('.side-question-fullscreen')
+  const sheet = async () => popover.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    return { full: el.classList.contains('open-walnut-fullscreen'), left: r.left, right: innerWidth - r.right, top: r.top, bottom: innerHeight - r.bottom, height: r.height }
+  })
+
+  await button.click()
+  await expect(popover).toHaveClass(/open-walnut-fullscreen/)
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toBeVisible()
+  // The sheet is on top: its middle is the sheet, not the backdrop (the composer
+  // row it lives in is a stacking context under the backdrop).
+  expect(await popover.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2))
+  })).toBe(true)
+  // The shared pop-up sheet: nearly the full height, a margin on every side.
+  const big = await sheet()
+  expect(big.height).toBeGreaterThan(900)
+  for (const edge of [big.left, big.right, big.top, big.bottom]) expect(edge).toBeGreaterThan(4)
+  // The panel's own Escape and button lead out of it; the drawer stays open.
+  await page.keyboard.press('Escape')
+  await expect(popover).not.toHaveClass(/open-walnut-fullscreen/)
+  await expect(popover).toBeVisible()
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+
+  // A reload brings the drawer back full screen, until the user leaves it.
+  await button.click()
+  await expect(popover).toHaveClass(/open-walnut-fullscreen/)
+  await page.reload()
+  popover = panel.locator('.side-question-popover').first()
+  await expect(popover).toBeVisible({ timeout: 20_000 })
+  await expect(popover).toHaveClass(/open-walnut-fullscreen/)
+  await page.waitForTimeout(400) // the sheet's fade-in, before the screenshot
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/drawer-fullscreen.png` })
+
+  // A click on the backdrop leaves full screen only, as the panel's does.
+  const after = await sheet()
+  await page.mouse.click(after.left - 6, 500)
+  await expect(popover).not.toHaveClass(/open-walnut-fullscreen/)
+  await expect(popover).toBeVisible()
+  // Closing the drawer while full screen ends it: it opens in its normal place next time.
+  await popover.locator('.side-question-fullscreen').click()
+  await expect(popover).toHaveClass(/open-walnut-fullscreen/)
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(popover).toHaveCount(0)
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+  popover = await openDrawer(panel)
+  await expect(popover).not.toHaveClass(/open-walnut-fullscreen/)
 })

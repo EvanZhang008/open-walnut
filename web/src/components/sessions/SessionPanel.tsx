@@ -2281,6 +2281,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             parentEffort={session.effectiveEffort ?? session.effort}
             parentOutputMode={session.output_mode}
             onInjectToComposer={handleInjectFromThread}
+            sheetAt={sheetAt}
           />
         ),
       },
