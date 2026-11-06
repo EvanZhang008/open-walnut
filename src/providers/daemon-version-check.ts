@@ -198,6 +198,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-manager.ts',
   'src/providers/daemon-service-artifact.ts',
   'src/providers/daemon-service-cli.ts',
+  'src/providers/daemon-over-busy.ts',
   'src/providers/daemon-service-boot-script.ts',
   'src/providers/daemon-service-cron.ts',
   'src/providers/daemon-service-cron-host.ts',
