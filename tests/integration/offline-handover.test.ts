@@ -466,6 +466,17 @@ describe('runOfflineHandover over journal v2', () => {
     const after = await task(t1)
     expect(after.phase).toBe('COMPLETE')
     expect(after.review_score).toMatchObject({ function: 9, ux: 8.5, ui: 9, at: scoredAt, via: 'complete' })
+
+    // A close the task no longer needs (it was closed here meanwhile) still keeps the score it carried.
+    const t2 = await newTask('Review: closed here before the replay')
+    const b2 = await task(t2)
+    await api('POST', `/api/v1/tasks/${t2}/complete`, {})
+    expect((await task(t2)).phase).toBe('COMPLETE')
+    const d2 = v2Daemon([
+      v2(1, t2, { phase: { base: String(b2.phase), value: 'COMPLETE' } }, { op: 'task_complete', score: { function: 7, ux: 8, ui: 9, at: scoredAt, taskId: t2 } }),
+    ])
+    await runOfflineHandover(d2.conn)
+    expect((await task(t2)).review_score).toMatchObject({ function: 7, ux: 8, ui: 9, at: scoredAt })
   })
 
   it('v2 records apply beside old v1 records, the drain names its kinds, and acks by exact seqs', async () => {

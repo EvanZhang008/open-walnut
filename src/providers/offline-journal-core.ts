@@ -812,7 +812,9 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
       const fields: Fields = {}
       for (const k of Object.keys(prev)) fields[k] = { ...prev[k], at: typeof prev[k].at === 'number' ? prev[k].at : last.at }
       for (const k of Object.keys(next)) fields[k] = k in prev ? { base: prev[k].base, value: next[k].value, at } : { ...next[k], at }
-      return { kind: 'fold', target: last, body: { ...body, fields } }
+      // A close's review score (offline-host-core.ts) is no field: the newest one given survives the fold.
+      const score = body.score ?? last.score
+      return { kind: 'fold', target: last, body: { ...body, fields, ...(score !== undefined ? { score } : {}) } }
     }
     const later = String(body.mode ?? 'put')
     if (frozen) {

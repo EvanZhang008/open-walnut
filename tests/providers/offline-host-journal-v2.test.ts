@@ -241,6 +241,11 @@ describe('journal v2: the kinds gate (old Mac) and the gateway', () => {
       kind: 'task-fields', op: 'task_complete', fields: { phase: { value: 'COMPLETE' } },
       score: { function: 10, ux: 9, ui: 9, taskId: TASK_A },
     })
+    // A second close with no score folds into the first and keeps its score.
+    expect((await gatewayCall(fresh.host, SID_A, 'task_complete', { id: TASK_A })).ok).toBe(true)
+    const recs = fresh.journal.records(JHOME)
+    expect(recs).toHaveLength(1)
+    expect(recs[0]).toMatchObject({ op: 'task_complete', score: { function: 10, ux: 9, ui: 9 } })
   })
 
   it('one field outside the queueable set refuses the whole write (needs_leader, nothing journaled)', async () => {

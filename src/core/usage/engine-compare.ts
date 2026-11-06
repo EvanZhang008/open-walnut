@@ -330,9 +330,11 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const rsid = taskSessionId(t);
     const rs = rsid ? input.sessions.get(rsid) : undefined;
     // Only evidence names the company: a model, else the engine a session or start recorded (never a default).
+    // A model of no known company (Claude Code running a Qwen model) is an unknown company, never the engine's.
     const rEngine = spend?.engine ?? rs?.engine ?? t.last_start?.engine;
-    const rfam = [spend?.model, rs?.acpModel ?? rs?.cliModel ?? rs?.model].map(modelFamily).find((f) => !!f && f !== 'Other')
-      ?? (rEngine ? ENGINE_FAMILY[resolveEngine(rEngine)] : undefined);
+    const named = [spend?.model, rs?.acpModel ?? rs?.cliModel ?? rs?.model].map(modelFamily).filter((f): f is ModelFamily => !!f);
+    const rfam = named.length ? named.find((f) => f !== 'Other')
+      : (rEngine ? ENGINE_FAMILY[resolveEngine(rEngine)] : undefined);
     // Checked means a verdict came back: a score, a result, or a finished review that ran a turn.
     // A reviewer whose start failed before any turn tried; it checked nothing.
     const ranTurn = !!spend || sessionsOf(t).some((id) => sessionRanTurn(input.sessions.get(id)));

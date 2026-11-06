@@ -651,6 +651,18 @@ describe('final round', () => {
     expect(aggregateEngineCompare(scored).tasks.find((t) => t.taskId === 'w1')?.crossReviewed).toBe(true);
   });
 
+  it('a reviewer on Claude Code running a model of no known company is an unknown company, never Claude', () => {
+    const tasks = [
+      done('w1', 1),
+      task({ id: 'r1', title: 'Review: w1', parent_task_id: 'w1', session_id: 's-r1', phase: 'COMPLETE', completed_at: at,
+        review_score: { function: 9, ux: 9, ui: 9, at, via: 'reply' } }),
+    ];
+    const out = aggregateEngineCompare(input(tasks, { w1: { costUsd: 1 }, r1: { costUsd: 1, engine: 'claude', model: 'qwen3-coder-480b' } }));
+    const w1 = out.tasks.find((t) => t.taskId === 'w1')!;
+    expect(w1.crossReviewed).toBeUndefined();
+    expect(w1.scoredFamilies).toEqual(['unknown']);
+  });
+
   it('reviewers of no known company make the share unknown, never 0%; review cost of all-unknown reviewers is counted only over reviewed tasks', () => {
     const tasks = [
       done('w1', 1), done('w2', 1), done('w3', 1),
