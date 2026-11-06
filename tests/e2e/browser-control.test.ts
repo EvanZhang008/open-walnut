@@ -426,7 +426,7 @@ describe('setting the extension up from Walnut, and keeping it current', () => {
 
   it('names the build Walnut ships, sets the folder up (never in a test run), and brings it up to a newer build', async () => {
     process.env.WALNUT_WEB_STATIC_DIR = await staticFor('aaaaaa111111')
-    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1, extension: { version: '0.6.25', build: 'aaaaaa111111' } })
+    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1, askPanel: 2, extension: { version: '0.6.25', build: 'aaaaaa111111' } })
     const refused = await http('POST', '/browser/extension/setup', { browser: 'chrome' }, { 'x-walnut-test-run': 'probe' })
     expect(refused.status).toBe(409)
     expect(refused.body.code).toBe('test_run')
@@ -450,7 +450,7 @@ describe('setting the extension up from Walnut, and keeping it current', () => {
     expect(fs.existsSync(path.join(WALNUT_HOME, 'browser-extension', 'firefox'))).toBe(false)
     // A Walnut built without the extension says so.
     process.env.WALNUT_WEB_STATIC_DIR = path.join(os.tmpdir(), 'walnut-no-such-static')
-    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1 })
+    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1, askPanel: 2 })
     expect((await http('POST', '/browser/extension/setup', { browser: 'chrome' })).body.code).toBe('no_extension_build')
   })
 })
