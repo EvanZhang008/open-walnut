@@ -38,7 +38,7 @@ function persistMockTurn(sessionId, prompt, answer, root = process.env.MOCK_CLAU
     // The real CLI files the API message id it streamed; the stream→archive
     // convergence check (src/core/observability/stream-convergence.ts) compares
     // exactly those, so a made-up id here raised a false "never saved" alarm.
-    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, message: { ...answer.message, id: answer.message?.id ?? assistantId } },
+    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, ...(answer.lineFields ?? {}), message: { ...answer.message, id: answer.message?.id ?? assistantId } },
   ].map(row => JSON.stringify(row)).join('\n') + '\n');
   transcriptParent = assistantId;
 }
@@ -1247,7 +1247,8 @@ if (outputFormat === 'stream-json') {
           content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } };
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, isApiErrorMessage: true, error: 'invalid_request', message: refused });
         // The real CLI files the refused line and its error in the transcript (2026-11-05, a real one).
-        persistMockTurn(sid, effectiveMessage, { message: refused }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+        // Its transcript line carries the CLI's own marks (utils/messages.ts createAssistantAPIErrorMessage).
+        persistMockTurn(sid, effectiveMessage, { message: refused, lineFields: { isApiErrorMessage: true, error: 'invalid_request' } }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
         emit({ type: 'result', subtype: 'success', is_error: true, duration_ms: 60, num_turns: 1, result: 'Prompt is too long', session_id: sid,
           total_cost_usd: nextSnapshotCost(0.0001), usage: { input_tokens: 0, output_tokens: 0 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });

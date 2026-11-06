@@ -17,6 +17,7 @@ import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { disclosureIds } from './row-disclosure';
 import { SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, SystemLineCollapsible, ReplyImageStrip } from './SessionMessage';
+import { CLI_ERROR_VARIANT } from './fold-steps';
 import { PermissionRequestCard } from './PromptCards';
 import { MessageMetaRow } from './MessageMetaRow';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -133,7 +134,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
   if (block.type === 'system') {
     return (
       <SystemLineCollapsible
-        variant={block.variant}
+        variant={block.cliError ? CLI_ERROR_VARIANT : block.variant}
         message={block.message}
         detail={block.detail}
         noticeId={block.uuid ?? block.replacesMsgId}

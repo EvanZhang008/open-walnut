@@ -75,6 +75,8 @@ export interface StreamingSystemBlock {
   variant: 'compact' | 'error' | 'info';
   message: string;
   detail?: string;
+  /** Claude Code's own error reply ("Prompt is too long"): drawn as its error line, never an answer. */
+  cliError?: true;
   /** Placeholder for work still running; the outcome replaces it in place rather
    *  than stacking a second row. See `@open-walnut/compaction-notice`. */
   progress?: boolean;
@@ -444,10 +446,11 @@ export function backfillToolResult(
  */
 export function appendSystemBlock(
   blocks: readonly StreamingBlock[],
-  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean; uuid?: string; replacesMsgId?: string },
+  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean; uuid?: string; replacesMsgId?: string; cliError?: true },
 ): StreamingBlock[] {
   const row: StreamingSystemBlock = {
     type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail,
+    ...(ev.cliError ? { cliError: true as const } : {}),
     ...(ev.progress !== undefined ? { progress: ev.progress } : {}),
     ...(ev.uuid ? { uuid: ev.uuid } : {}),
     ...(ev.replacesMsgId ? { replacesMsgId: ev.replacesMsgId } : {}),

@@ -3088,9 +3088,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         flushHistoryRun(true);
         flushSystemRun();
       }
-      if (m.role === 'system') {
+      if (m.role === 'system' && !m.cliError) {
         flushHistoryRun(true);
         systemRun.push({ m, globalIndex });
+        continue;
+      }
+      // Claude Code's own error reply is how its turn ended: a row of its own, never one notice
+      // among the compaction's (2026-11-06: it took the compaction's row into a fold with it).
+      if (m.cliError) {
+        flushHistoryRun(true);
+        flushSystemRun();
+        parts.push({ kind: 'msg', m, globalIndex });
         continue;
       }
       flushSystemRun();
@@ -3480,7 +3488,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         || (item.kind === 'block' && consumedBlockIndices.has(item.index))) {
         continue;
       }
-      if (item.kind === 'block' && item.block.type === 'system') {
+      if (item.kind === 'block' && item.block.type === 'system' && !item.block.cliError) {
         cur.push(i);
       } else {
         flushRun();
@@ -4820,7 +4828,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const rowRoleOf = ({ part, i }: Item): RowRole => {
     if (askedAfter.has(i)) return 'reads';
     const kind = msgKindOf(part);
-    if (kind === 'system') return rowsOf(part).every((m) => SYSTEM_VARIANT_ROLE[m.systemVariant ?? 'none'] === 'step') ? 'step' : 'reads';
+    // Claude Code's own error reply is how a turn ended: it reads, never one step folded away.
+    if (kind === 'system') return rowsOf(part).every((m) => !m.cliError && SYSTEM_VARIANT_ROLE[m.systemVariant ?? 'none'] === 'step') ? 'step' : 'reads';
     return MSG_KIND_ROLE[kind];
   };
   // Each row's turn (turn-shape.ts); a turn an Asked-from list hangs off renders open.

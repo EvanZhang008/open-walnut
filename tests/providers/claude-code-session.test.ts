@@ -4542,3 +4542,37 @@ describe('CLI startup advisories are classified as noise, not failure', () => {
     expect(isBenignSshStderr('claude: command not found')).toBe(false);
   });
 });
+
+// 2026-11-06: Claude Code's own error reply ("Prompt is too long") streamed as answer text and drew
+// as the assistant's bubble. It is the CLI's error line, the same one its history row reads as.
+describe("Claude Code's own error reply streams as its error line", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+  const reply = (text: string, extra: Record<string, unknown>) => ({
+    type: 'assistant', parent_tool_use_id: null, uuid: `u-${text.length}-${Object.keys(extra).length}`,
+    message: { id: `m-${text.length}`, type: 'message', role: 'assistant', content: [{ type: 'text', text }], ...extra.message as object },
+    ...Object.fromEntries(Object.entries(extra).filter(([k]) => k !== 'message')),
+  });
+
+  it('a refused line is an error line with no answer text; a model reply naming the phrase is an answer', () => {
+    const session = useDaemon(new ClaudeCodeSession('task-cli-error', 'proj', MOCK_CLI));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sess-cli-error';
+    const seen: BusEvent[] = [];
+    bus.subscribe('main-ai', (e: BusEvent) => { seen.push(e); });
+    try {
+      feed(session, reply('Prompt is too long', { error: 'invalid_request', message: { model: '<synthetic>' } }));
+      const lines = seen.filter((e) => e.name === EventNames.SESSION_SYSTEM_EVENT).map((e) => e.data);
+      expect(lines).toEqual([expect.objectContaining({ variant: 'error', message: 'Claude Code: Prompt is too long', cliError: true })]);
+      expect(seen.some((e) => e.name === EventNames.SESSION_TEXT_DELTA)).toBe(false);
+      expect(session.fullText).not.toContain('Prompt is too long');
+
+      seen.length = 0;
+      feed(session, reply('Your prompt is too long for one message, so I split it.', { message: { model: 'claude-opus-5-5' } }));
+      expect(seen.some((e) => e.name === EventNames.SESSION_SYSTEM_EVENT)).toBe(false);
+      expect(session.fullText).toContain('so I split it');
+    } finally {
+      bus.unsubscribe('main-ai');
+    }
+  });
+});

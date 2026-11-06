@@ -193,7 +193,8 @@ const HOST_CLOCK_SKEW_MS = 10 * 60_000;
 export function compactedAtOrAfter(rows: ReadonlyArray<{ role: string; systemVariant?: string; text: string; timestamp: string }>, since: string): boolean {
   const compacted = (r: (typeof rows)[number]) => r.role === 'system' && r.systemVariant === 'compact' && r.text.startsWith('Context compacted');
   let overflow = -1;
-  rows.forEach((r, i) => { if (r.role === 'assistant' && isContextFullText(r.text)) overflow = i; });
+  // The CLI's reply reads as an error row (session-history.ts cliError), an older parse's as an answer.
+  rows.forEach((r, i) => { if (r.role !== 'user' && r.systemVariant !== 'compact' && isContextFullText(r.text)) overflow = i; });
   if (overflow >= 0) return rows.slice(overflow + 1).some(compacted);
   const from = Date.parse(since) - HOST_CLOCK_SKEW_MS;
   return rows.some((r) => compacted(r) && Date.parse(r.timestamp) >= from);

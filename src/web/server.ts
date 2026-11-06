@@ -4770,9 +4770,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:system-event') {
-      const { sessionId, variant, message, detail, progress, uuid, replacesMsgId } = eventData<'session:system-event'>(event)
+      const { sessionId, variant, message, detail, progress, uuid, replacesMsgId, cliError } = eventData<'session:system-event'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendSystem(sessionId, variant, message, detail, progress, uuid, replacesMsgId)
+        sessionStreamBuffer.appendSystem(sessionId, variant, message, detail, progress, uuid, replacesMsgId, cliError)
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:user-line') {

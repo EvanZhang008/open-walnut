@@ -57,8 +57,11 @@ import type { SessionHistoryMessage } from './session-history.js';
  * compaction that failed read as done).
  *
  * 9 (2026-11-05): that notice says the cause alone; its compaction's line says what it was for.
+ *
+ * 10 (2026-11-06): Claude Code's own error reply ("Prompt is too long", an API error) is an error
+ * row (`cliError`), no longer an assistant answer.
  */
-export const HISTORY_CACHE_SCHEMA = 9;
+export const HISTORY_CACHE_SCHEMA = 10;
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a

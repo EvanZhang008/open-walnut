@@ -97,6 +97,8 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
 
   // Live, while it ran: the working line said which compaction, and no /compact bubble came.
   await expect(history.locator('.session-msg-user', { hasText: '/compact' })).toHaveCount(0)
+  // Claude Code's refusal is its error line, never an answer bubble (2026-11-06).
+  await expect(history.locator('.session-msg-assistant', { hasText: /^\s*Prompt is too long\s*$/ })).toHaveCount(0)
   await expect(history.locator('.session-msg-user', { hasText: 'hi, where does the review stand?' })).toHaveCount(1)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-live.png` })
   await hold(page)
@@ -122,6 +124,19 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   // The user's own message stays his bubble, once, after the reload as before it.
   await expect(history.locator('.session-msg-user', { hasText: 'hi, where does the review stand?' })).toHaveCount(1)
   await expect(history).not.toContainText('rich-output')
+  // Read back, the refusal is still the CLI's error line: grey, its "!" in the error colour.
+  await expect(history.locator('.session-msg-assistant', { hasText: /^\s*Prompt is too long\s*$/ })).toHaveCount(0)
+  const refusal = history.locator('.session-system-line--cli-error', { hasText: 'Claude Code: Prompt is too long' })
+  await expect(refusal.first()).toBeVisible({ timeout: 10_000 })
+  const look = await refusal.first().evaluate((el) => {
+    const s = getComputedStyle(el)
+    return { size: s.fontSize, color: s.color, icon: getComputedStyle(el.querySelector('.session-system-icon')!).color }
+  })
+  expect(look.size).toBe('13px')
+  expect(look.color).not.toBe(look.icon)
+  // Every notice line is 13px in the notice grey (#6E6E73 on the light theme: 5:1 on white).
+  const noticeLook = await history.locator('.session-system-line').first().evaluate((el) => getComputedStyle(el).fontSize)
+  expect(noticeLook).toBe('13px')
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-notice.png` })
   await hold(page)
   expect(errors).toEqual([])

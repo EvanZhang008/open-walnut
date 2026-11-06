@@ -339,7 +339,7 @@ function registerGlobalListeners(): void {
 
   // ── system-event ──
   onSessionEvent('session:system-event', (data: unknown) => {
-    const { sessionId: sid, variant, message, detail, progress, uuid, replacesMsgId } = data as {
+    const { sessionId: sid, variant, message, detail, progress, uuid, replacesMsgId, cliError } = data as {
       sessionId: string;
       variant: 'compact' | 'error' | 'info';
       message: string;
@@ -347,6 +347,7 @@ function registerGlobalListeners(): void {
       progress?: boolean;
       uuid?: string;
       replacesMsgId?: string;
+      cliError?: true;
     };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
@@ -356,7 +357,7 @@ function registerGlobalListeners(): void {
     } else {
       interruptText(state);
     }
-    state.blocks = appendSystemBlock(state.blocks, { variant, message, detail, progress, uuid, replacesMsgId });
+    state.blocks = appendSystemBlock(state.blocks, { variant, message, detail, progress, uuid, replacesMsgId, ...(cliError ? { cliError } : {}) });
   });
 
   // ── permission request/resolved ──

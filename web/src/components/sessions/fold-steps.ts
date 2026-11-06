@@ -19,6 +19,14 @@ import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { walnutNoticeKind } from '../../../../src/core/sessions/walnut-commands';
 import type { ToolRunMember } from './tool-run-phrase';
 
+/** The variant a row of Claude Code's own error reply ("Prompt is too long") draws with: an error line in the notice grey. */
+export const CLI_ERROR_VARIANT = 'cli-error';
+
+/** The variant a saved system row draws with. */
+export function systemRowVariant(m: { systemVariant?: string; cliError?: true }): string {
+  return m.cliError ? CLI_ERROR_VARIANT : m.systemVariant ?? 'info';
+}
+
 export type ReceivedKind = 'peer-note' | 'reply' | 'notification' | 'trigger' | 'other';
 
 export type FoldStep =
@@ -160,7 +168,7 @@ export function systemRunLabel(members: readonly { variant: string; message: str
   if (last === COMPACTION_STOPPED_MESSAGE) return `Compaction stopped${more(compacts.length)}`;
   if (last === COMPACTION_FAILED_MESSAGE) return `Compaction failed${more(compacts.length)}`;
   // Walnut asked for a compaction and an error came instead of its boundary.
-  const errors = members.filter((m) => m.variant === 'error').length;
+  const errors = members.filter((m) => m.variant === 'error' || m.variant === CLI_ERROR_VARIANT).length;
   if (lines.size > 0 && errors > 0) return `Compaction failed${more(errors)}`;
   return `${members.length} system messages`;
 }

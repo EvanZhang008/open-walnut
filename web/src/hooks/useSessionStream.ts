@@ -707,9 +707,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle system events (compact, error, info notifications)
   useEvent('session:system-event', (data) => {
-    const { sessionId: sid, variant, message, detail, progress, uuid, replacesMsgId } = data as {
+    const { sessionId: sid, variant, message, detail, progress, uuid, replacesMsgId, cliError } = data as {
       sessionId: string; variant: 'compact' | 'error' | 'info'; message: string;
-      detail?: string; progress?: boolean; uuid?: string; replacesMsgId?: string;
+      detail?: string; progress?: boolean; uuid?: string; replacesMsgId?: string; cliError?: true;
     };
     if (!sessionId || sid !== sessionId) return;
 
@@ -724,7 +724,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     }
     flushPendingThinking();
 
-    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress, uuid, replacesMsgId }));
+    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress, uuid, replacesMsgId, ...(cliError ? { cliError } : {}) }));
   });
 
   // Claude Code took a user line here: a marker block (renders nothing; the chat

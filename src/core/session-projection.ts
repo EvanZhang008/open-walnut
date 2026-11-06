@@ -772,7 +772,10 @@ export async function buildSessionTranscript(
   const wantRich = opts?.rich === true || opts?.full === true
   const messages: ProjectedTranscriptMessage[] = []
   const injected = new InjectedLines(opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail'))
-  for (const m of tail) {
+  for (const row of tail) {
+    // Claude Code's own error reply ("Prompt is too long") is how its turn ended: it stays the
+    // turn's last words here, as the CLI wrote it (a notice says it answered nothing: noticeText).
+    const m = row.role === 'system' && row.cliError ? { ...row, role: 'assistant' as const } : row
     if (m.role === 'system') continue
     // CLI-injected user lines (a skill's text, a hook's added context, a
     // compaction summary) are not something the human typed: they ride the row

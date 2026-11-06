@@ -157,6 +157,14 @@ interface HistoryIncrementalState {
 }
 
 /** Tail segment re-parsed on every delta; rolled into the prefix past this. */
+/** How a Claude Code error reply reads as a row: whose words they are, then its own. */
+export const CLI_ERROR_PREFIX = 'Claude Code: ';
+
+/** Claude Code's own error reply: its transcript marks it, its stream-json output names the error on its synthetic message. */
+function isCliErrorReply(raw: { isApiErrorMessage?: boolean; error?: unknown; message?: { model?: string } }): boolean {
+  return raw.isApiErrorMessage === true || (typeof raw.error === 'string' && raw.message?.model === '<synthetic>');
+}
+
 const TAIL_SEGMENT_ROLL_BYTES = 4 * 1024 * 1024;
 /** After a roll, keep this much as the new tail (fresh lookbehind window). */
 const TAIL_SEGMENT_KEEP_BYTES = 1 * 1024 * 1024;
@@ -657,6 +665,8 @@ export interface SessionHistoryMessage {
    *  one — the same headline plus the same muted detail — instead of folding
    *  everything into one parenthesised string. */
   systemDetail?: string;
+  /** For role='system': Claude Code's own error reply ("Prompt is too long", an API error), not the model's answer. */
+  cliError?: true;
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;
@@ -749,6 +759,9 @@ interface RawJsonlLine {
   commandOutcome?: { kind?: string };
   local_command_outcome?: { kind?: string };
   local_command_source?: string;
+  /** Claude Code's own error reply (transcript: isApiErrorMessage; stream capture: `error` with the synthetic model). */
+  isApiErrorMessage?: boolean;
+  error?: unknown;
   // queue-operation fields (FIFO-injected user messages)
   operation?: string;
   content?: string;
@@ -1097,6 +1110,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     agentOrigin?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
     systemDetail?: string;
+    cliError?: true;
     contentBlocks: Array<{
       type: string;
       text?: string;
@@ -1624,6 +1638,21 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     if (raw.type !== undefined && raw.type !== 'user' && raw.type !== 'assistant') continue;
     noteMessageBlockTypes(raw.message.content, raw, cliVersion);
 
+    // Claude Code's own error reply ("Prompt is too long", "API Error: ..."): the model never answered,
+    // so it is a runtime error line, never the assistant's answer (2026-11-06: it read as one).
+    if (raw.message.role === 'assistant' && !raw.parent_tool_use_id && isCliErrorReply(raw)) {
+      const text = typeof raw.message.content === 'string' ? raw.message.content.trim()
+        : (raw.message.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('\n').trim();
+      if (text) messageMap.set(raw.uuid ?? raw.message.id ?? `cli-error-${raw.timestamp ?? i}`, {
+        role: 'system',
+        timestamp: raw.timestamp ?? new Date().toISOString(),
+        systemVariant: 'error',
+        cliError: true,
+        contentBlocks: [{ type: 'text' as const, text: `${CLI_ERROR_PREFIX}${text}` }],
+      });
+      continue;
+    }
+
     const msgId = raw.message.id ?? raw.uuid ?? `${raw.timestamp}-${rawMessages.indexOf(raw)}`;
     const existing = messageMap.get(msgId);
 
@@ -1943,6 +1972,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...((msg.agentOrigin || peerMail) && msg.role === 'user' ? { agentOrigin: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
+      ...(msg.cliError ? { cliError: true as const } : {}),
       ...(hints.length ? { hints } : {}),
       ...(receivedText && receivedText !== text ? { rawText: receivedText } : {}),
     });

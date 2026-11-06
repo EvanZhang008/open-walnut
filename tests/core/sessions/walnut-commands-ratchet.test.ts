@@ -183,7 +183,7 @@ describe('every listed command reads as Walnut\'s notice', () => {
     // text here: bump HISTORY_CACHE_SCHEMA (history-disk-cache.ts), move the old text to
     // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, then update this pin.
     expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
-      schema: 9,
+      schema: 10,
       notices: [
         'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.',
         'Claude Code answered "Prompt is too long", so Walnut asked it to compact this conversation.',

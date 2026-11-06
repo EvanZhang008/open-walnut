@@ -53,6 +53,8 @@ export interface StreamingSystemBlock {
   variant: 'compact' | 'error' | 'info'
   message: string
   detail?: string
+  /** Claude Code's own error reply ("Prompt is too long"), drawn as its error line. */
+  cliError?: true
   /** Placeholder for work still running; the outcome replaces it in place.
    *  See `src/core/stream/compaction-notice.ts`. */
   progress?: boolean
@@ -369,11 +371,13 @@ class SessionStreamBuffer {
     }
   }
 
-  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean, uuid?: string, replacesMsgId?: string): void {
+  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean, uuid?: string, replacesMsgId?: string, cliError?: true): void {
     const entry = this.getOrCreate(sessionId)
     this.resetIfTurnEnded(entry, sessionId)
     const row: StreamingSystemBlock = {
       type: 'system', variant, message,
+      // Claude Code's own error reply: a reconnecting client draws it as the live one does.
+      ...(cliError ? { cliError } : {}),
       ...(detail ? { detail } : {}), ...(progress !== undefined ? { progress } : {}),
       ...(uuid ? { uuid } : {}),
       ...(replacesMsgId ? { replacesMsgId } : {}),

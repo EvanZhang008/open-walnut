@@ -84,7 +84,7 @@ import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaem
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
-import { extractImageFilePathFromInput } from '../core/session-history.js'
+import { CLI_ERROR_PREFIX, extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
 import { classifyInjectedLine, interruptingLine, noteInjectedLine, strongerLine, type InjectedLineClass } from '../core/task-wait-resume.js'
@@ -282,6 +282,8 @@ interface StreamMessageEvent {
   /** Local command output uses the canonical system row's uuid, not message.id. */
   uuid?: string
   local_command_outcome?: { kind?: string }
+  /** Set on Claude Code's own error reply (its synthetic message): "Prompt is too long", an API error. */
+  error?: string
   local_command_run?: { command?: string }
   /** Non-null when this event belongs to a subagent Task */
   parent_tool_use_id?: string | null
@@ -7007,6 +7009,19 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId, taskId: this.taskId,
               variant: 'error' as const, message,
               ...(msg.local_command_run?.command === 'compact' && this._isReplayedByOffset() !== true ? { progress: false } : {}),
+              ...(msg.uuid ? { uuid: msg.uuid } : {}),
+            }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+          }
+          break
+        }
+        if (!msg.parent_tool_use_id && typeof msg.error === 'string' && msg.message?.model === '<synthetic>') {
+          // Claude Code's own error reply: an error line, as its history row reads (session-history.ts
+          // cliError), never the model's answer (2026-11-06: "Prompt is too long" read as one).
+          const text = msg.message.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n').trim()
+          if (text && firstSightingOfLine(this._seenCompactionLineUuids, msg.uuid)) {
+            bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+              sessionId: this.claudeSessionId, taskId: this.taskId,
+              variant: 'error' as const, message: `${CLI_ERROR_PREFIX}${text}`, cliError: true,
               ...(msg.uuid ? { uuid: msg.uuid } : {}),
             }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
           }

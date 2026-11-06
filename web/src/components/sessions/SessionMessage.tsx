@@ -36,7 +36,7 @@ import { injectedContextLabel } from '@open-walnut/walnut-added';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
-import { envelopeSteps, foldStepsPhrase, systemRunLabel, systemRunShows } from './fold-steps';
+import { CLI_ERROR_VARIANT, envelopeSteps, foldStepsPhrase, systemRowVariant, systemRunLabel, systemRunShows } from './fold-steps';
 import { IdleCompactLine } from './IdleCompactLine';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
@@ -425,7 +425,7 @@ export function ToolRunShell({ phrase, failCount, running, count, disclosureId, 
 /** Error lines carry a "!" prefix; everything else has NO icon — matching the
  *  bare "Ran 3 commands ›" tool-run rows for one unified visual language. */
 function systemLineIcon(variant: string): string {
-  return variant === 'error' ? '!' : '';
+  return variant === 'error' || variant === CLI_ERROR_VARIANT ? '!' : '';
 }
 
 /** System notice that keeps compact lines inline and collapses verbose payloads. */
@@ -488,7 +488,7 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
   // Only unsplit rows fall back to truncating a long single string.
   const isVerbose = !message.systemDetail && text.length > 160;
   return {
-    variant: message.systemVariant ?? 'info',
+    variant: systemRowVariant(message),
     message: isVerbose ? `${text.slice(0, 80)}…` : text,
     detail: message.systemDetail ?? (isVerbose ? text : undefined),
     time: formatTime(message.timestamp),
@@ -499,7 +499,7 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 /** Collapsed run of consecutive system notices from history or the live stream. */
 export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
   const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
-  const allErrors = members.length > 0 && members.every((member) => member.variant === 'error');
+  const allErrors = members.length > 0 && members.every((member) => member.variant === 'error' || member.variant === CLI_ERROR_VARIANT);
   // A compaction's run says so (its explanation and numbers are inside).
   const label = allErrors ? `${members.length} errors` : systemRunLabel(members);
   // A line that names Walnut's compaction already says its size: the compaction's own row under it

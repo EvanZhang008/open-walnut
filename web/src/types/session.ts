@@ -301,6 +301,8 @@ export interface SessionHistoryMessage {
   /** For role='system': the row's muted second half (a compaction's numbers).
    *  Present so a reloaded row renders identically to the live one. */
   systemDetail?: string;
+  /** For role='system': Claude Code's own error reply ("Prompt is too long", an API error), not an answer. */
+  cliError?: true;
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;

@@ -571,6 +571,8 @@ export interface SessionSystemEventPayload {
   variant: 'compact' | 'error' | 'info';
   message: string;
   detail?: string;
+  /** An error line that is Claude Code's own error reply ("Prompt is too long"), drawn as such. */
+  cliError?: true;
   /** This notice is a PLACEHOLDER for work still running, not an outcome. The
    *  outcome that follows replaces it in place instead of stacking a second row
    *  (`src/core/stream/compaction-notice.ts`). Only compaction uses it today. */
