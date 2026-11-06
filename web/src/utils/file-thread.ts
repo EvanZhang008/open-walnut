@@ -149,16 +149,25 @@ export const FILE_CARD_MIN_HEIGHT = 180;
  * surface does), so a passage scrolled past an edge keeps its card docked at
  * that edge, the way a comment stays reachable in a document.
  */
-export function placeFileCard(anchor: HostRect, host: { width: number; height: number }, preferred = CARD_WIDTH): ThreadCardPlace {
-  const width = Math.max(Math.min(preferred, host.width - 2 * CARD_GAP), Math.min(CARD_MIN_WIDTH, host.width));
-  const left = Math.max(CARD_GAP, Math.min(anchor.right - width, host.width - width - CARD_GAP));
+export function placeFileCard(
+  anchor: HostRect, host: { width: number; height: number }, preferred = CARD_WIDTH, minLeft?: number,
+): ThreadCardPlace {
+  // `minLeft`: where the text column starts (a code view's line-number gutter
+  // ends there). The card stays right of it, narrowed down to its minimum width
+  // to fit; a view too narrow even for that lets it go back over the gutter.
+  const floorAt = Math.max(CARD_GAP, Math.round(minLeft ?? 0));
+  const fits = (w: number) => host.width - floorAt - CARD_GAP >= w;
+  const floor = fits(CARD_MIN_WIDTH) ? floorAt : CARD_GAP;
+  const band = host.width - floor - CARD_GAP;
+  const width = Math.max(Math.min(preferred, band), Math.min(CARD_MIN_WIDTH, host.width));
+  const left = Math.max(floor, Math.min(anchor.right - width, host.width - width - CARD_GAP));
   const lowest = Math.max(CARD_GAP, host.height - FILE_CARD_MIN_HEIGHT - CARD_GAP);
   const top = Math.max(CARD_GAP, Math.min(anchor.bottom + CARD_GAP, lowest));
   const room = host.height - top - CARD_GAP;
   const maxHeight = Math.max(Math.min(FILE_CARD_MIN_HEIGHT, room), Math.min(Math.round(host.height * 0.6), room));
   // Expanded: the same top, as wide as the view allows, all the room below it.
-  const wide = Math.max(Math.min(CARD_GROWN_WIDTH, host.width - 2 * CARD_GAP), width);
-  const wideLeft = Math.max(CARD_GAP, Math.min(anchor.right - wide, host.width - wide - CARD_GAP));
+  const wide = Math.max(Math.min(CARD_GROWN_WIDTH, band), width);
+  const wideLeft = Math.max(floor, Math.min(anchor.right - wide, host.width - wide - CARD_GAP));
   return {
     top: Math.round(top), left: Math.round(left), width: Math.round(width), maxHeight: Math.round(maxHeight),
     grown: { left: Math.round(wideLeft), width: Math.round(wide), maxHeight: Math.round(Math.max(maxHeight, room)) },

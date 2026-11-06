@@ -687,7 +687,15 @@ show inline after the open ones, other completed hits that show the query fold i
   `onFileOpen(path, line)` to open the Files tab first (a sidebar row, a turn label, the quote
   head's back arrow in Tree Mode). The host box does not scroll, so `placeFileCard`
   (`utils/file-thread.ts`) works in host coordinates and re-measures on scroll, resize and
-  mutation; a passage scrolled off keeps its card docked at the edge. Marks on asked passages use
+  mutation; a passage scrolled off keeps its card docked at the edge. **The Changed tab mounts the
+  same layer over the open file's diff (surface `diff`, 2026-11-06)**, on a non-scrolling
+  `.session-diff-main-wrap` around the scroller: same pill (Ask here / Quote in chat), same card, same
+  `file:` record. Its index is the CURRENT file's text only (`utils/diff-passage.ts`: no gutters or
+  chrome, no removed lines, one copy of a split view's unchanged line), so a selection that takes a
+  removed line, or joins lines across an unfold bar, gets no Ask here, only Quote in chat (titled with
+  why): its passage is not in the file, so no view could show its card. A mark there paints only the
+  passage's text pieces (`ThreadMark.pieces`), not the gutters between its lines. On code surfaces the card keeps
+  right of the line-number gutter (`placeFileCard`'s `minLeft`). Marks on asked passages use
   the neutral style; in the HTML preview they are painted into the IFRAME's own document and
   highlight registry (its own `<style>`, its own `pointerdown` closer, since the top document's
   outside-click never sees a press inside the frame). The mock CLI answers these like a model

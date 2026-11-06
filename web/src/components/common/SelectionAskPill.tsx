@@ -47,6 +47,10 @@ interface SelectionAskPillProps {
   /** `Ask here`: the selection becomes a question whose card opens beside it
    *  (the Files tab). With it the pill has two actions; without, one. */
   onAskHere?: () => void;
+  /** Why this selection has no `Ask here` on a surface that offers it (the
+   *  Changed tab, a removed line): the pill then holds only `Quote in chat`,
+   *  titled with the reason, so it reads as the same toolbar with one action. */
+  askHereOff?: string;
   /** `Comment`: a comment on the doc, its box opening at the words (the Files tab, DocCommentsLayer). */
   onComment?: () => void;
   /** Called when the tracked selection disappears (pill should unmount). */
@@ -67,7 +71,7 @@ interface SelectionAskPillProps {
 
 const GAP = 8;
 
-export function SelectionAskPill({ anchor, onCommit, onAskHere, onComment, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
+export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onComment, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
   const btnRef = useRef<HTMLElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; below: boolean } | null>(null);
 
@@ -139,7 +143,7 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, onComment, onDis
     onMouseDown: (e: ReactMouseEvent) => { e.preventDefault(); },
     onMouseUp: (e: ReactMouseEvent) => { e.stopPropagation(); },
   };
-  if (onAskHere) {
+  if (onAskHere || askHereOff) {
     return createPortal(
       <div
         ref={btnRef as RefObject<HTMLDivElement>}
@@ -149,8 +153,8 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, onComment, onDis
         data-testid="file-ask-pill"
       >
         {onComment && <button type="button" onClick={onComment} data-testid="file-comment" title="Comment on this passage, right at its words">Comment</button>}
-        <button type="button" onClick={onAskHere} data-testid="file-ask-here" title="A question about this passage, answered beside it">Ask here</button>
-        <button type="button" onClick={onCommit} data-testid="file-ask-quote" title="Quote this passage in the chat">Quote in chat</button>
+        {onAskHere && <button type="button" onClick={onAskHere} data-testid="file-ask-here" title="A question about this passage, answered beside it">Ask here</button>}
+        <button type="button" onClick={onCommit} data-testid="file-ask-quote" title={onAskHere ? 'Quote this passage in the chat' : askHereOff}>Quote in chat</button>
       </div>,
       document.body,
     );

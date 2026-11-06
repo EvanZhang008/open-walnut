@@ -136,7 +136,7 @@ function setPanelMarks(panelKey: string, marks: ThreadMark[]) {
   for (const m of marks) {
     const name = markHighlightName(m.hue, m.resolved, m.neutral, m.live, m.state);
     if (m.neutral && m.state) namePriority.set(name, markPriority(m.state));
-    byName.set(name, [...(byName.get(name) ?? []), m.range]);
+    byName.set(name, [...(byName.get(name) ?? []), ...(m.pieces ?? [m.range])]);
   }
   if (byName.size === 0) panelMarks.delete(panelKey); else panelMarks.set(panelKey, byName);
   repaintMarks();
@@ -151,6 +151,8 @@ export interface UseThreadMarksArgs {
   /** Changes when the rendered rows change (history refetch, page switch). */
   renderNonce: unknown;
   locatePassage: (p: { msgId: string; quote?: SessionPinnedQuote }) => Range | null;
+  /** The located range's text pieces, where it spans chrome (ThreadMark.pieces). */
+  piecesOf?: (range: Range) => Range[] | null;
   onOpen: (key: string) => void;
   /** A right-click on a mark (its own menu instead of the row's). */
   onMenu?: (key: string, at: { x: number; y: number }) => void;
@@ -196,7 +198,7 @@ export function liveBarsFor(marks: readonly ThreadMark[], layer: HTMLElement, wi
     if (!m.live && !m.wait) continue;
     origin ??= layer.getBoundingClientRect();
     const clip = intersect(overflowClipOf(m.range, within), extraClip);
-    for (const b of liveLineBars(textRectsOf(m.range), origin, clip)) {
+    for (const b of liveLineBars((m.pieces ?? [m.range]).flatMap(textRectsOf), origin, clip)) {
       out.push(m.wait && !m.live ? { ...b, kind: 'wait' } : m.neutral ? b : { ...b, hue: m.hue });
     }
   }
@@ -268,8 +270,9 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
         const range = argsRef.current.locatePassage({ msgId: s.parentMsgId, quote: s.quote });
         if (range) {
           const { live, wait } = markFlagsOf(s, liveKeys);
+          const pieces = argsRef.current.piecesOf?.(range);
           out.push({
-            key: s.key, ...(s.headId ? { headId: s.headId } : {}), range, hue: s.hue, resolved: s.resolved, title: s.title,
+            key: s.key, ...(s.headId ? { headId: s.headId } : {}), range, ...(pieces ? { pieces } : {}), hue: s.hue, resolved: s.resolved, title: s.title,
             ...(s.neutral ? { neutral: true } : {}), ...(s.neutral && s.state ? { state: s.state } : {}),
             ...(live ? { live: true } : {}), ...(wait ? { wait: true } : {}), ...(s.draft ? { draft: true } : {}),
           });

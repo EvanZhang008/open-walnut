@@ -62,6 +62,10 @@ export interface ThreadMark<R extends MarkRangeLike = Range> {
   /** The question's head row id, for logs (the key carries the quote). */
   headId?: string;
   range: R;
+  /** The text the passage is made of, where its range also spans chrome that is
+   *  not (a diff's gutters and removed lines between two of its lines): what is
+   *  painted. Absent: the range itself. */
+  pieces?: R[];
   hue: number;
   resolved: boolean;
   title: string;

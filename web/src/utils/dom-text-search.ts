@@ -63,7 +63,7 @@ export interface DomTextIndex {
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA']);
 
-export function buildDomTextIndex(root: Element, skipSelector?: string): DomTextIndex {
+export function buildDomTextIndex(root: Element, skipSelector?: string, skipText?: (t: Text) => boolean): DomTextIndex {
   const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
@@ -76,6 +76,7 @@ export function buildDomTextIndex(root: Element, skipSelector?: string): DomText
       // this filter, so REJECT behaves exactly like SKIP — no subtree pruning;
       // closest() runs per text node.)
       if (skipSelector && parent?.closest(skipSelector)) return NodeFilter.FILTER_REJECT;
+      if (skipText?.(n as Text)) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     },
   });

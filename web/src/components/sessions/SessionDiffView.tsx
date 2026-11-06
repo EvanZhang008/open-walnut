@@ -34,6 +34,9 @@ import { hiddenFunctionContext, splitSourceLines, type StickyDef } from '@/compo
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
+import { FileThreadLayer, type FileThreadLayerHandle } from '@/components/common/FileThreadLayer';
+import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
+import { DIFF_ASK_OFF_REASON, DIFF_CHROME_SKIP, diffPassageOf, type DiffPassage } from '@/utils/diff-passage';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { FileContentView } from '@/components/common/FileContentView';
 import { ReferencePanel } from '@/components/common/ReferencePanel';
@@ -1712,8 +1715,9 @@ function CompareHelp({ base }: { base: SessionDiffBase }) {
  *  cmd+click / right-click handlers (an action offered on chrome text is
  *  guaranteed to fail, because search can never find it). Add new chrome
  *  classes HERE, not at the call sites. The last two are the rendered-markdown
- *  mode's gutter and the recorded-comment cards. */
-const DIFF_SEARCH_SKIP = '.diff-gutter, .diff-widget, .session-diff-expander, .session-diff-filepane-head, .session-diff-ai-summary, .session-diff-rendered-lineno, .session-diff-pending-card';
+ *  mode's gutter and the recorded-comment cards. One list with the question
+ *  layer's index (diff-passage.ts), so Ask here and search agree on what text is. */
+const DIFF_SEARCH_SKIP = DIFF_CHROME_SKIP;
 
 // Last result per session|base, module-level so it SURVIVES the tab switch
 // (the panel unmounts this view). Re-entering paints the previous list
@@ -1827,7 +1831,17 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const tree = useResizablePanel('open-walnut-diff-tree-w', 22, 'left');
 
   // Floating "Ask about this" affordance, positioned at the current text selection.
-  const [selection, setSelection] = useState<{ x: number; y: number; text: string; filePath: string; line?: number } | null>(null);
+  // `ask`: the selection as a passage of the current file (the pill's Ask here),
+  // or why it is not one; absent where no question can be asked (no session panel).
+  const [selection, setSelection] = useState<{ x: number; y: number; text: string; filePath: string; line?: number; ask?: DiffPassage | { ok: false; reason: 'deleted' } } | null>(null);
+  // Ask here on a selection: the same question layer as the Files tab, over the
+  // file's diff (FileThreadLayer, surface `diff`), so the card opens beside the
+  // passage and the question is the same `file:` record either tab shows.
+  const threadsApi = useSessionThreadsApi();
+  const canAskHere = threadsApi.canAsk;
+  const diffWrapRef = useRef<HTMLDivElement>(null);
+  const noFrameRef = useRef<HTMLIFrameElement>(null);
+  const diffLayerRef = useRef<FileThreadLayerHandle>(null);
 
   // Session-base lists ship LIGHT (no before/after) + SWR (cached list paints
   // instantly, recompute runs behind) — per-file diffs load lazily below. The
@@ -2766,6 +2780,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // upward one (SelectionAskPill decides the side from this point).
   const handleMouseUp = useCallback((e: ReactMouseEvent) => {
     if (e.button !== 0) return; // right-click must not raise the Ask pill under the menu
+    // The question layer's own rows and card are not the diff.
+    if ((e.target as Element | null)?.closest?.('.fv-thread-layer')) return;
     refreshDiffSelectionMatches();
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { setSelection(null); return; }
@@ -2783,8 +2799,26 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     const filePath = fileEl?.getAttribute('data-file-path') ?? (selectedChange?.filePath ?? '');
     const line = lineFromNode(range.startContainer);
 
-    setSelection({ x: e.clientX, y: e.clientY, text, filePath, line });
-  }, [selectedChange, refreshDiffSelectionMatches, lineFromNode]);
+    // Read at mouseup, not at the pill's click: by then WebKit has dropped the
+    // selection (the Files tab's Ask here did nothing for that, 2026-11-06).
+    let ask: DiffPassage | { ok: false; reason: 'deleted' } | undefined;
+    if (canAskHere && fileEl && selectedChange && selectedChange.filePath === filePath) {
+      // The rendered markdown view draws the whole new file and nothing removed.
+      const renderedView = !!fileEl.querySelector('.session-diff-rendered');
+      ask = selectedChange.status === 'deleted'
+        ? { ok: false, reason: 'deleted' }
+        : diffPassageOf(fileEl, range, renderedView ? null : selectedChange.after);
+    }
+    setSelection({ x: e.clientX, y: e.clientY, text, filePath, line, ...(ask ? { ask } : {}) });
+  }, [selectedChange, refreshDiffSelectionMatches, lineFromNode, canAskHere]);
+
+  const askHereSelection = useCallback(() => {
+    const ask = selection?.ask;
+    if (!ask?.ok) return;
+    diffLayerRef.current?.askPassage({ quote: ask.quote, ...(ask.line ? { line: ask.line } : {}) });
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }, [selection]);
 
   const commitSelection = useCallback(() => {
     if (!selection) return;
@@ -3137,6 +3171,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               />
             </>
           )}
+          {/* A box that does not scroll around the one that does: the question
+              layer over it stays put while the diff scrolls (FileThreadLayer). */}
+          <div className="session-diff-main-wrap" ref={diffWrapRef}>
           <div className="session-diff-main">
             {ghost ? (
               <div className="session-diff-ghost">
@@ -3199,6 +3236,18 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               <div className="session-diff-file-empty">Select a file from the tree.</div>
             )}
           </div>
+          {canAskHere && !ghost && !selectedContentLoading && selectedChange && selectedChange.status !== 'deleted' && (
+            <FileThreadLayer
+              ref={diffLayerRef}
+              filePath={selectedChange.filePath}
+              sessionId={sessionId}
+              rootRef={diffWrapRef}
+              frameRef={noFrameRef}
+              surface="diff"
+              surfaceNonce={`${selectedChange.filePath}:${phoneDiff ? 'unified' : viewType}:${rendered}:${selectedChange.after.length}`}
+            />
+          )}
+          </div>
           {refState && (
             <ReferencePanel
               result={refState.result}
@@ -3229,6 +3278,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <SelectionAskPill
           anchor={selection}
           onCommit={commitSelection}
+          onAskHere={selection.ask?.ok ? askHereSelection : undefined}
+          askHereOff={selection.ask && !selection.ask.ok ? DIFF_ASK_OFF_REASON[selection.ask.reason] : undefined}
           onDismiss={() => setSelection(null)}
         />
       )}

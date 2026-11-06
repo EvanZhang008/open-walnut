@@ -72,6 +72,24 @@ describe('placeFileCard', () => {
     const narrow = placeFileCard({ top: 0, bottom: 10, left: 0, right: 300 }, { width: 320, height: 700 });
     expect(narrow.grown!.width).toBe(narrow.width);
   });
+
+  it('a code view: the card stays right of the line-number gutter, narrowed to fit, and gives up only when it cannot', () => {
+    // A short passage near the left: right-aligned it would start over the gutter.
+    const place = placeFileCard({ top: 100, bottom: 120, left: 70, right: 160 }, host, undefined, 56);
+    expect(place.left).toBe(56);
+    expect(place.width).toBe(CARD_WIDTH);
+    expect(place.grown!.left).toBeGreaterThanOrEqual(56);
+    expect(place.grown!.left + place.grown!.width).toBeLessThanOrEqual(host.width - CARD_GAP);
+    // A box with little room right of the gutter: a narrower card, still right of it.
+    const tight = placeFileCard({ top: 0, bottom: 10, left: 70, right: 160 }, { width: 420, height: 700 }, undefined, 56);
+    expect(tight.left).toBe(56);
+    expect(tight.left + tight.width).toBeLessThanOrEqual(420 - CARD_GAP);
+    // Too narrow even for the smallest card: it may cover the gutter, never leave the box.
+    const none = placeFileCard({ top: 0, bottom: 10, left: 70, right: 160 }, { width: 240, height: 700 }, undefined, 56);
+    expect(none.left).toBe(CARD_GAP);
+    // No column given (prose): unchanged.
+    expect(placeFileCard({ top: 0, bottom: 10, left: 0, right: 100 }, host).left).toBe(CARD_GAP);
+  });
 });
 
 describe('toHostRect / rectInHost', () => {

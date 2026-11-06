@@ -35,6 +35,10 @@ export interface TextQuote {
   suffix?: string;
 }
 
+/** Chrome of a body's own that is not its text: a selector, and optionally a
+ *  test for single text nodes no selector can name (a diff's blank-line filler). */
+export type QuoteSkip = string | { selector: string; text?: (t: Text) => boolean };
+
 /** The message body's plain text plus the map back to its text nodes. */
 export interface QuoteTextIndex {
   text: string;
@@ -44,10 +48,15 @@ export interface QuoteTextIndex {
 /**
  * Index one message body. No separator is inserted between block elements: the
  * index is the raw concatenation of text nodes, which is all the anchor needs —
- * it is built the same way at pin time and at locate time.
+ * it is built the same way at pin time and at locate time. `skip` adds chrome of
+ * the body's own that is not its text (a code view's line numbers, a diff's
+ * gutters and removed lines); pass the same one at both times.
  */
-export function buildTextIndex(root: Element): QuoteTextIndex {
-  const raw = buildDomTextIndex(root, SKIP_INSIDE_MESSAGE);
+export function buildTextIndex(root: Element, skip?: QuoteSkip): QuoteTextIndex {
+  const selector = typeof skip === 'string' ? skip : skip?.selector;
+  const raw = buildDomTextIndex(
+    root, selector ? `${SKIP_INSIDE_MESSAGE}, ${selector}` : SKIP_INSIDE_MESSAGE, typeof skip === 'object' ? skip.text : undefined,
+  );
   return {
     text: raw.text,
     nodes: raw.nodes.map((node, i) => ({ node, start: raw.starts[i] })),
@@ -292,9 +301,28 @@ export function rangeIsLive(range: Range): boolean {
     && range.endContainer.nodeType === Node.TEXT_NODE;
 }
 
+/** The parts of `range` that are indexed text: a range from one diff line to
+ *  another also spans the gutters (and removed lines) between them, which a
+ *  paint of the whole range would color. */
+export function rangePieces(index: QuoteTextIndex, range: Range): Range[] {
+  const out: Range[] = [];
+  for (const { node } of index.nodes) {
+    if (!range.intersectsNode(node)) continue;
+    const doc = node.ownerDocument;
+    const r = doc.createRange();
+    r.selectNodeContents(node);
+    try {
+      if (node === range.startContainer) r.setStart(node, range.startOffset);
+      if (node === range.endContainer) r.setEnd(node, range.endOffset);
+    } catch { continue; }
+    if (!r.collapsed) out.push(r);
+  }
+  return out;
+}
+
 /** Locate a quote inside a message body in one call (index → locate → Range). */
-export function rangeForQuote(body: Element, quote: TextQuote): Range | null {
-  const index = buildTextIndex(body);
+export function rangeForQuote(body: Element, quote: TextQuote, skip?: QuoteSkip): Range | null {
+  const index = buildTextIndex(body, skip);
   const at = locateQuote(index.text, quote);
   if (!at) return null;
   return rangeFromOffsets(index, at.start, at.end);

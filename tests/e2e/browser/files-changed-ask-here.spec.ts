@@ -12,8 +12,12 @@
  * screen:
  *  - a question card: opaque (computed opacity 1, and it stays so), inside the
  *    viewport, the topmost thing at its center, its box focused;
- *  - the Changed tab's one button (Ask about this: no card has a place beside a
- *    diff line): the composer focused, on screen, holding the quote.
+ *  - `Quote in chat`: the composer focused, on screen, holding the quote.
+ *
+ * The Changed tab has the Files tab's toolbar and card (the same question layer
+ * over the diff): a question asked there is the same `file:` record, its line the
+ * new side's. A selection that takes a removed line has no Ask here (the line is
+ * not in the file, so no card can sit beside it): only Quote in chat.
  *
  * The root cause it guards: the pill's Ask here read the LIVE selection at click
  * time, which is gone by then (CodeMirror drops it; WebKit drops any top-document
@@ -29,7 +33,7 @@
  * WebKit (the Mac app) and Chromium. Fixtures: test-server.ts (the editor-fixture
  * cwd: cache-design.md, cache-report.html, nested-fence.mdx, sync-*.go).
  */
-import { expect, type Locator, type Page, type Route } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { mainComposer, openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
@@ -63,26 +67,42 @@ async function openFile(panel: Locator, name: string): Promise<Locator> {
   return view
 }
 
-/** Viewport rects of `phrase` inside `root` (top document), the passage scrolled into view first. */
-async function textRects(root: Locator, phrase: string): Promise<Rect[]> {
-  const rects = await root.evaluate((el, needle) => {
+/** Viewport rects of `phrase` inside `root` (top document), the passage scrolled
+ *  into view first. The phrase may cross text nodes (a diff's syntax tokens and
+ *  intra-line edit marks split a line into many). */
+async function textRects(root: Locator, phrase: string, nth = 0): Promise<Rect[]> {
+  const rects = await root.evaluate((el, [needle, which]) => {
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    const nodes: Array<{ n: Text; start: number }> = []
+    let text = ''
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const at = (n as Text).data.indexOf(needle)
-      if (at === -1) continue
-      const r = document.createRange()
-      r.setStart(n, at)
-      r.setEnd(n, at + needle.length)
-      // Off screen only: a scroll of an editor's line from outside moves the box
-      // CodeMirror measures from, and it draws its lines over its gutter.
-      const box = r.getBoundingClientRect()
-      if (box.top < 0 || box.bottom > window.innerHeight) {
-        ;(n as Text).parentElement?.scrollIntoView({ block: 'nearest' })
-      }
-      return Array.from(r.getClientRects()).map((b) => ({ left: b.left, right: b.right, top: b.top, height: b.height }))
+      nodes.push({ n: n as Text, start: text.length })
+      text += (n as Text).data
     }
-    return null
-  }, phrase)
+    let at = text.indexOf(needle)
+    for (let k = 0; k < which && at !== -1; k++) at = text.indexOf(needle, at + 1)
+    if (at === -1) return null
+    const pointAt = (off: number, end: boolean) => {
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const e = nodes[i]
+        if (end ? e.start < off : e.start <= off) return { node: e.n, offset: off - e.start }
+      }
+      return { node: nodes[0].n, offset: 0 }
+    }
+    const a = pointAt(at, false)
+    const b = pointAt(at + needle.length, true)
+    const r = document.createRange()
+    r.setStart(a.node, a.offset)
+    r.setEnd(b.node, b.offset)
+    // Off screen only: a scroll of an editor's line from outside moves the box
+    // CodeMirror measures from, and it draws its lines over its gutter.
+    const box = r.getBoundingClientRect()
+    if (box.top < 0 || box.bottom > window.innerHeight) {
+      a.node.parentElement?.scrollIntoView({ block: 'nearest' })
+    }
+    return Array.from(r.getClientRects()).filter((x) => x.width > 0)
+      .map((x) => ({ left: x.left, right: x.right, top: x.top, height: x.height }))
+  }, [phrase, nth] as const)
   expect(rects, `"${phrase}" is not rendered`).not.toBeNull()
   return rects!
 }
@@ -140,8 +160,17 @@ async function seen(el: Locator): Promise<{ inViewport: boolean; topmost: boolea
   })
 }
 
-/** The Ask landed: a draft card in the file view, opaque and staying so, on screen, its box focused. */
-async function expectCardLanded(page: Page, view: Locator, name: string): Promise<void> {
+/** The Ask landed: a draft card in the file view, opaque and staying so, on screen,
+ *  its box focused. `whileOpen` runs with the card open, before Esc closes it. */
+async function expectCardLanded(page: Page, view: Locator, name: string, whileOpen?: (card: Locator) => Promise<void>): Promise<void> {
+  const card = await expectCardShown(page, view, name)
+  if (whileOpen) await whileOpen(card)
+  // Nothing written: Esc leaves no card behind.
+  await card.locator('.thread-card-input').press('Escape')
+  await expect(card).toHaveCount(0)
+}
+
+async function expectCardShown(page: Page, view: Locator, name: string): Promise<Locator> {
   const card = view.locator('.fv-thread-layer .thread-card')
   await expect(card, `${name}: a card opened`).toBeVisible({ timeout: 5_000 })
   await expect(card).toHaveAttribute('data-draft', 'true')
@@ -156,9 +185,37 @@ async function expectCardLanded(page: Page, view: Locator, name: string): Promis
   expect(await seen(card), `${name}: the card is on screen and on top`).toEqual({ inViewport: true, topmost: true })
   await expect(card.locator('.thread-card-input'), `${name}: the card's box takes the keyboard`).toBeFocused()
   await shot(page, name)
-  // Nothing written: Esc leaves no card behind.
-  await card.locator('.thread-card-input').press('Escape')
+  return card
+}
+
+/** The card's left edge is right of the code view's line-number gutter. */
+async function expectCardRightOfGutter(card: Locator, column: Locator, name: string): Promise<void> {
+  const cb = (await card.boundingBox())!
+  const col = (await column.first().boundingBox())!
+  expect(cb.x, `${name}: the card does not cover the line numbers`).toBeGreaterThanOrEqual(col.x - 1)
+}
+
+type FileAnchor = { msgId: string; parent: string; line?: number; quote?: { exact: string } }
+
+/** A question typed into the open draft card and sent: the record gains a `file:` anchor for `path`. */
+async function sendAndCheckRecord(
+  request: APIRequestContext, card: Locator, question: string, path: string, exact: string,
+): Promise<FileAnchor> {
+  const input = card.locator('.thread-card-input')
+  await input.fill(question)
+  await input.press('Enter')
+  await expect(card).not.toHaveAttribute('data-draft', 'true', { timeout: 30_000 })
+  await expect(card.locator('.thread-card-q').first()).toHaveText(question)
+  let anchor: FileAnchor | undefined
+  await expect(async () => {
+    const rec = await readRecord(request, TAGGED_SESSION)
+    // The newest such anchor: an earlier question in the test may quote the same words.
+    anchor = (rec.threadAnchors as FileAnchor[]).filter((a) => a.parent === `file:${path}` && a.quote?.exact.includes(exact)).at(-1)
+    expect(anchor, `a file anchor for ${path} quoting "${exact}"`).toBeTruthy()
+  }).toPass({ timeout: 15_000 })
+  await input.press('Escape')
   await expect(card).toHaveCount(0)
+  return anchor!
 }
 
 /** The quote landed in the composer: focused, on screen, holding the words. */
@@ -204,8 +261,11 @@ async function openChanged(panel: Locator, rel: string): Promise<Locator> {
   await panel.getByRole('button', { name: /^Changed/ }).first().click()
   const diff = panel.locator('.session-diff-view')
   await expect(diff).toBeVisible({ timeout: 10_000 })
+  // The list loads after the view: wait for the row (the view may reopen on
+  // another file it remembers), then pick it.
   const row = diff.locator('.session-diff-tree-file', { hasText: rel.split('/').pop()! }).first()
-  if (await row.count()) await row.click()
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await row.click()
   const pane = diff.locator(`.session-diff-filepane[data-file-path$="${rel}"]`)
   await expect(pane).toBeVisible({ timeout: 15_000 })
   return diff
@@ -222,6 +282,10 @@ const RO_FILE = 'sync-caller.go'
 const RO_LINE = 'timed out'
 const HTML_FILE = 'cache-report.html'
 const HTML_PASSAGE = 'The p99 rose to 180 ms on Thursday'
+/** sync-controller.go in the Changed tab: line 3 changed in place, line 4 unchanged. */
+const GO_NEW = 'wires the informers.'
+const GO_REMOVED = 'wires informers.'
+const GO_CONTEXT = 'HasSyncedForItems'
 
 test.describe('Ask here on every Files and Changed selection toolbar responds, and is seen', () => {
   // In order on one worker (one fixture session, its server-side view memory),
@@ -242,10 +306,24 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const view = await openFile(panel, MD_FILE)
     const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(MD_PASSAGE)
+    // The hovered block's inline Ask shows (so its absence below means something).
+    const chip = view.locator('.fv-ask-block')
+    const hoverPassage = async () => {
+      const r = (await textRects(editor, MD_PASSAGE))[0]
+      await page.mouse.move(r.left + 4, r.top + r.height / 2)
+      await page.mouse.move(r.left + 12, r.top + r.height / 2, { steps: 3 })
+    }
+    await hoverPassage()
+    await expect(chip, 'the inline Ask shows on the hovered block').toBeVisible({ timeout: 5_000 })
     const askHere = page.locator('[data-testid="bubble-ask-here"]')
     await selectUntil(page, () => textRects(editor, MD_PASSAGE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-md-wysiwyg')
+    await expectCardLanded(page, view, 'files-md-wysiwyg', async () => {
+      // While this file's card is open the chip stays away: it covered a word.
+      await hoverPassage()
+      await page.waitForTimeout(300)
+      await expect(chip, 'no inline Ask over the passage while its card is open').toHaveCount(0)
+    })
   })
 
   test('Files: the markdown Source tab (pill)', async ({ page }) => {
@@ -299,7 +377,9 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const askHere = page.locator('[data-testid="file-ask-here"]')
     await selectUntil(page, () => textRects(pre, RO_LINE), askHere)
     await askHere.click()
-    await expectCardLanded(page, view, 'files-code-readonly')
+    await expectCardLanded(page, view, 'files-code-readonly', async (card) => {
+      await expectCardRightOfGutter(card, pre.locator('.fv-line-text'), 'files-code-readonly')
+    })
   })
 
   test('Files: the HTML preview (an iframe, pill)', async ({ page }) => {
@@ -330,40 +410,120 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       ])
     })
 
-    /** Select `phrase` in the diff and press the pill's one button. The Changed
-     *  tab has no Ask here: the diff lends no card a place beside its lines, so
-     *  its pill quotes the passage into the composer, which must then be seen. */
-    async function askInDiff(page: Page, diff: Locator, phrase: string): Promise<void> {
-      const pill = page.locator('.session-diff-ask-pill')
-      await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), phrase), pill)
-      await expect(pill).toHaveText('Ask about this')
-      await pill.click()
+    const askHereBtn = (page: Page) => page.locator('[data-testid="file-ask-here"]')
+    const quoteBtn = (page: Page) => page.locator('[data-testid="file-ask-quote"]')
+
+    /** Select `phrase` in the diff and press the pill's Ask here: the card must land. */
+    async function askHereInDiff(page: Page, diff: Locator, phrase: string, name: string): Promise<Locator> {
+      await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), phrase), askHereBtn(page))
+      await expect(quoteBtn(page)).toBeVisible()
+      await askHereBtn(page).click()
+      return expectCardShown(page, diff, name)
     }
 
-    test('Changed: a unified diff (an added file)', async ({ page }) => {
+    /** Select `phrase` in the diff and press Quote in chat. */
+    async function quoteInDiff(page: Page, diff: Locator, phrase: string): Promise<void> {
+      await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), phrase), quoteBtn(page))
+      await quoteBtn(page).click()
+    }
+
+    test('Changed: a unified diff (an added file): Ask here records a file question; another file closes an unwritten one', async ({ page, request }) => {
       const panel = await openSession(page)
       const diff = await openChanged(panel, RO_FILE)
-      await askInDiff(page, diff, RO_LINE)
-      await expectComposerQuoted(page, panel, RO_LINE, 'changed-unified')
+      const card = await askHereInDiff(page, diff, RO_LINE, 'changed-unified')
+      await expectCardRightOfGutter(card, diff.locator('td.diff-code'), 'changed-unified')
+      // The new side's line, the same record as the Files tab's.
+      const anchor = await sendAndCheckRecord(request, card, 'Why print instead of returning an error?', `${cwd}/${RO_FILE}`, RO_LINE)
+      expect(anchor.quote!.exact).toBe(RO_LINE)
+      expect(anchor.line).toBe(5)
+
+      // An unwritten Ask, then another file of the diff list: the card closes.
+      await askHereInDiff(page, diff, 'func wait', 'changed-unified-again')
+      await diff.locator('.session-diff-tree-file', { hasText: GO_FILE }).first().click()
+      await expect(diff.locator(`.session-diff-filepane[data-file-path$="${GO_FILE}"]`)).toBeVisible({ timeout: 15_000 })
+      await expect(diff.locator('.thread-card')).toHaveCount(0)
     })
 
-    test('Changed: a split diff (a line changed in place)', async ({ page }) => {
+    test('Changed: a unified diff: Quote in chat', async ({ page }) => {
+      const panel = await openSession(page)
+      const diff = await openChanged(panel, RO_FILE)
+      await quoteInDiff(page, diff, RO_LINE)
+      await expectComposerQuoted(page, panel, RO_LINE, 'changed-unified-quote')
+    })
+
+    test('Changed: a split diff: the new side and the left copy of an unchanged line are asked about; a removed line only quoted', async ({ page, request }) => {
       const panel = await openSession(page)
       const diff = await openChanged(panel, GO_FILE)
       await diff.getByRole('button', { name: 'Split', exact: true }).click()
-      await expect(diff.locator('.diff-split, table.diff-split, .diff.diff-split').first()).toBeVisible({ timeout: 10_000 })
-      await askInDiff(page, diff, GO_LINE)
-      await expectComposerQuoted(page, panel, GO_LINE, 'changed-split')
+      await expect(diff.locator('.diff-split').first()).toBeVisible({ timeout: 10_000 })
+
+      // The changed line's new side.
+      let card = await askHereInDiff(page, diff, GO_NEW, 'changed-split-new')
+      let anchor = await sendAndCheckRecord(request, card, 'Which informers?', `${cwd}/${GO_FILE}`, GO_NEW)
+      expect(anchor.quote!.exact).toBe(GO_NEW)
+      expect(anchor.line).toBe(3)
+
+      // An unchanged line, selected in its LEFT copy: the question is about the file's line.
+      card = await askHereInDiff(page, diff, GO_CONTEXT, 'changed-split-context')
+      anchor = await sendAndCheckRecord(request, card, 'Who calls this?', `${cwd}/${GO_FILE}`, GO_CONTEXT)
+      expect(anchor.quote!.exact).toBe(GO_CONTEXT)
+      expect(anchor.line).toBe(4)
+
+      // Down the right side over three lines: through the left column's removed
+      // line (DOM order) and a blank line. The quote is the file's text, as the
+      // Files tab indexes it: lines joined, no filler for the blank one.
+      const main = diff.locator('.session-diff-main')
+      await selectUntil(page, async () => [
+        (await textRects(main, 'package marina', 1))[0], ...(await textRects(main, GO_NEW)).slice(-1),
+      ], askHereBtn(page))
+      await askHereBtn(page).click()
+      card = await expectCardShown(page, diff, 'changed-split-multiline')
+      // Its mark paints the file's text only: no gutter number, no removed line.
+      const painted = await diff.locator('.session-diff-filepane').evaluate((pane) => {
+        const reg = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights
+        let total = 0
+        let chrome = 0
+        const skip = Array.from(pane.querySelectorAll('.diff-gutter, .diff-code-delete'))
+        reg.forEach((h, name) => {
+          if (!String(name).startsWith('thread-mark')) return
+          h.forEach((r) => {
+            if (!pane.contains(r.commonAncestorContainer)) return
+            total++
+            if (skip.some((el) => r.intersectsNode(el))) chrome++
+          })
+        })
+        return { total, chrome }
+      })
+      expect(painted.total, 'the passage is marked').toBeGreaterThan(0)
+      expect(painted.chrome, 'no mark paints a gutter or a removed line').toBe(0)
+      anchor = await sendAndCheckRecord(request, card, 'Why this comment here?', `${cwd}/${GO_FILE}`, GO_NEW)
+      expect(anchor.quote!.exact).toBe(`package marina// registerResources ${GO_NEW}`)
+      expect(anchor.line).toBe(1)
+
+      // The removed line: no Ask here, Quote in chat says why and quotes it.
+      await selectUntil(page, () => textRects(diff.locator('.session-diff-main'), GO_REMOVED), quoteBtn(page))
+      await expect(askHereBtn(page)).toHaveCount(0)
+      await expect(quoteBtn(page)).toHaveAttribute('title', /Removed lines are not in the file/)
+      await quoteBtn(page).click()
+      await expectComposerQuoted(page, panel, GO_REMOVED, 'changed-split-removed-quote')
       await diff.getByRole('button', { name: 'Auto', exact: true }).click().catch(() => undefined)
     })
 
-    test('Changed: a rendered markdown diff', async ({ page }) => {
+    test('Changed: a rendered markdown diff: Ask here, the card stays on screen while the diff scrolls, Quote in chat', async ({ page, request }) => {
       const panel = await openSession(page)
       const diff = await openChanged(panel, MD_FILE)
       await diff.getByRole('button', { name: 'Rendered', exact: true }).click()
       await expect(diff.locator('.session-diff-rendered')).toContainText(MD_PASSAGE, { timeout: 10_000 })
-      await askInDiff(page, diff, MD_PASSAGE)
-      await expectComposerQuoted(page, panel, MD_PASSAGE, 'changed-rendered-md')
+      const card = await askHereInDiff(page, diff, MD_PASSAGE, 'changed-rendered-md')
+      // The passage scrolled away: the card stays docked inside the diff, on screen.
+      await diff.locator('.session-diff-main').evaluate((el) => { el.scrollTop = el.scrollHeight })
+      await page.waitForTimeout(200)
+      expect(await seen(card), 'the card stays on screen with the passage scrolled off').toEqual({ inViewport: true, topmost: true })
+      await diff.locator('.session-diff-main').evaluate((el) => { el.scrollTop = 0 })
+      await sendAndCheckRecord(request, card, 'What does the ledger keep?', `${cwd}/${MD_FILE}`, MD_PASSAGE)
+
+      await quoteInDiff(page, diff, MD_SOURCE_LINE)
+      await expectComposerQuoted(page, panel, MD_SOURCE_LINE, 'changed-rendered-md-quote')
     })
   })
 })

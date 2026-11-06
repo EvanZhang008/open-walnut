@@ -10,6 +10,11 @@
  * here`). The HTML preview lives in an iframe, so marks and hits there run in
  * the frame's own document.
  *
+ * The Changed tab mounts the same layer over a file's diff (surface `diff`): its
+ * index holds only the current file's text (diff-passage.ts: no gutters, no
+ * removed lines, one copy of a split line), so a question asked there is the
+ * same record as one asked in the Files tab, and each view finds the other's.
+ *
  * The box does not scroll: the file's own surface does (editor scroller, the
  * frame's document), so placement is re-measured on scroll, resize and DOM
  * change, and a passage scrolled past an edge keeps its card docked there.
@@ -29,7 +34,8 @@ import { ThreadMarkTipLayer } from '@/components/sessions/ThreadStackFrame';
 import { fileOfParent, fileParentOf, findSamePassageThread } from '@/utils/thread-tree';
 import { pendingPageKey } from '@/utils/thread-stack-state';
 import type { SessionPinnedQuote } from '@/types/session';
-import { buildTextIndex, quoteFromRange, rangeForQuote } from '@/utils/text-quote-anchor';
+import { buildTextIndex, quoteFromRange, rangeForQuote, rangePieces, type QuoteSkip } from '@/utils/text-quote-anchor';
+import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
   askableBlockOf, blockQuoteOf, fileQuestionMarks, fileQuestionRows, placeFileCard, rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
@@ -39,13 +45,16 @@ import { log } from '@/utils/log';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import '@/styles/file-thread.css';
 
-export type FileThreadSurface = 'html' | 'wysiwyg' | 'source' | 'preview' | 'pre' | 'none';
+export type FileThreadSurface = 'html' | 'wysiwyg' | 'source' | 'preview' | 'pre' | 'diff' | 'none';
 
 export interface FileThreadLayerHandle {
   /** The pill's `Ask here`: the selection (the live one, in the frame's document
    *  for the HTML preview; or `range`, the editor's own, from the WYSIWYG bubble
    *  menu) becomes a draft question with its card beside it. */
   askSelection: (opts: { inFrame: boolean; line?: number; range?: Range }) => void;
+  /** A quote taken already (the Changed tab reads it at mouseup: diffPassageOf)
+   *  becomes a draft question with its card beside it. */
+  askPassage: (opts: { quote: SessionPinnedQuote; line?: number }) => void;
 }
 
 interface FileThreadLayerProps {
@@ -63,7 +72,30 @@ function bodyOf(root: HTMLElement | null, frame: HTMLIFrameElement | null, surfa
   if (surface === 'html') {
     try { return frame?.contentDocument?.body ?? null; } catch { return null; }
   }
+  if (surface === 'diff') return root?.querySelector('.session-diff-filepane') ?? null;
   return root?.querySelector('.ProseMirror, .fv-md-preview, .file-viewer-code, .cm-content') ?? null;
+}
+
+/** Chrome inside a surface's body that is not the file's text: the read-only
+ *  code view's line numbers, a diff's gutters and removed lines. Without it a
+ *  passage over two lines quoted the number between them. */
+const TEXT_SKIP: Partial<Record<FileThreadSurface, QuoteSkip>> = {
+  pre: '.fv-line-num',
+  diff: DIFF_FILE_TEXT_SKIP,
+};
+
+/** Where a code surface's text column starts (its line-number gutter ends
+ *  there): the card never covers the gutter (2026-11-06: in the read-only code
+ *  view it sat over the numbers with a highlighted glyph peeking past its edge). */
+const CODE_COLUMN: Partial<Record<FileThreadSurface, string>> = {
+  pre: '.fv-line-text',
+  source: '.cm-content',
+  diff: 'td.diff-code, .session-diff-rendered-main',
+};
+
+/** The sticky bar at the top of the surface (the rail sits under it). */
+function stickyBarOf(root: HTMLElement, surface: FileThreadSurface): HTMLElement | null {
+  return root.querySelector<HTMLElement>(surface === 'diff' ? '.session-diff-filepane-sticky' : ':scope > .fv-html-toolbar');
 }
 
 const FRAME_STYLE_ID = 'walnut-file-marks';
@@ -102,6 +134,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const parent = fileParentOf(filePath);
 
   const body = useCallback(() => bodyOf(rootRef.current, frameRef.current, argsRef.current.surface), [rootRef, frameRef]);
+  const skip = TEXT_SKIP[surface];
 
   // Another file (or none) takes the view while an Ask about this one is open
   // and unwritten: the card closes, which leaves nothing of it behind.
@@ -141,7 +174,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const root = rootRef.current;
     if (!root) return;
     const measure = () => {
-      const bar = root.querySelector<HTMLElement>(':scope > .fv-html-toolbar');
+      const bar = stickyBarOf(root, argsRef.current.surface);
       const rootBox = root.getBoundingClientRect();
       // A toolbar scrolled away (static in fullscreen) leaves the rail at the view's top.
       const barBottom = Math.max(bar ? bar.getBoundingClientRect().bottom : 0, rootBox.top);
@@ -171,8 +204,13 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const openCard = useCallback((key: string, via: string) => argsRef.current.threads.requestCard(key, via), []);
   const locatePassage = useCallback((p: { msgId: string; quote?: SessionPinnedQuote }) => {
     const b = body();
-    return b && p.quote ? rangeForQuote(b, p.quote) : null;
-  }, [body]);
+    return b && p.quote ? rangeForQuote(b, p.quote, skip) : null;
+  }, [body, skip]);
+  // Where the surface has chrome between its lines, a mark paints only the text.
+  const piecesOf = useCallback((range: Range) => {
+    const b = body();
+    return b && skip ? rangePieces(buildTextIndex(b, skip), range) : null;
+  }, [body, skip]);
   // A question being answered: its passage's line scans (the overlay is re-placed
   // on scroll; in the HTML frame the lines live in the frame's own document).
   const liveKeys = useAnsweringKeys(threads.derived.live);
@@ -182,13 +220,13 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const root = rootRef.current;
     if (!root) return null;
     const r = root.getBoundingClientRect();
-    const bar = root.querySelector<HTMLElement>(':scope > .fv-html-toolbar');
+    const bar = stickyBarOf(root, argsRef.current.surface);
     const top = Math.max(r.top, bar ? bar.getBoundingClientRect().bottom : r.top, 0);
     return { left: r.left, top, right: r.right, bottom: Math.min(r.bottom, window.innerHeight) };
   }, [rootRef]);
   const tips = useThreadMarks({
     sessionId, panelKey: `file:${sessionId}:${filePath}`, enabled: surface !== 'html' && surface !== 'none',
-    containerRef: rootRef, specs, renderNonce: surfaceNonce, locatePassage, onOpen: (key) => openCard(key, 'file-mark'),
+    containerRef: rootRef, specs, renderNonce: surfaceNonce, locatePassage, ...(skip ? { piecesOf } : {}), onOpen: (key) => openCard(key, 'file-mark'),
     // The mark's own menu quotes into the chat, which only Conversation Mode does.
     ...(threads.viewMode === 'linear' ? { onMenu: (key: string, at: { x: number; y: number }) => setMarkMenu({ key, point: at }) } : {}),
     live: { keys: liveKeys, layerRef: liveRef, overlay: true, clip: visibleBox },
@@ -353,7 +391,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const hostBox = root.getBoundingClientRect();
       const host = { width: hostBox.width, height: hostBox.height };
       const b = body();
-      const range = b && mine.quote ? rangeForQuote(b, mine.quote) : null;
+      const range = b && mine.quote ? rangeForQuote(b, mine.quote, skip) : null;
       let anchor: HostRect;
       if (range) {
         const rects = range.getClientRects();
@@ -373,7 +411,10 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       } else {
         anchor = { top: 8, bottom: 8, left: 0, right: host.width };
       }
-      set({ path: filePath, el: layer, place: placeFileCard(anchor, host) });
+      const col = CODE_COLUMN[argsRef.current.surface];
+      const colEl = col ? root.querySelector(col) : null;
+      const minLeft = colEl ? colEl.getBoundingClientRect().left - hostBox.left : undefined;
+      set({ path: filePath, el: layer, place: placeFileCard(anchor, host, undefined, minLeft) });
     };
     let raf = 0;
     const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measure(); }); };
@@ -395,7 +436,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       fdoc?.removeEventListener('scroll', later, true);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, rootRef, frameRef]);
+  }, [openKey, mine?.quote?.exact, filePath, surfaceNonce, body, skip, rootRef, frameRef]);
   useEffect(() => () => { argsRef.current.threads.setFileCardHost(null); }, []);
   useEffect(() => { scrolledForRef.current = null; }, [filePath]);
 
@@ -417,12 +458,16 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const b = body();
       const range = given ?? (sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null);
       if (!range || range.collapsed || !b || !b.contains(range.commonAncestorContainer)) return;
-      const quote = quoteFromRange(buildTextIndex(b), range);
+      const quote = quoteFromRange(buildTextIndex(b, skip), range);
       if (!quote) return;
       sel?.removeAllRanges();
       askQuote(quote, line, 'file-selection');
     },
-  }), [askQuote, body, frameRef]);
+    askPassage: ({ quote, line }) => {
+      document.getSelection()?.removeAllRanges();
+      askQuote(quote, line, argsRef.current.surface === 'diff' ? 'diff-selection' : 'file-selection');
+    },
+  }), [askQuote, body, frameRef, skip]);
 
   // ── The inline Ask on the block under the pointer ──
   const [hover, setHover] = useState<{ el: Element; rect: HostRect } | null>(null);
@@ -430,7 +475,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   hoverRef.current = hover;
   useEffect(() => {
     const root = rootRef.current;
-    if (!root || !threads.canAsk || surface === 'none') return;
+    // Not over a diff: its table cells are removed lines as often as file text,
+    // and the selection's Ask here already says which passage it means.
+    if (!root || !threads.canAsk || surface === 'none' || surface === 'diff') return;
     const frameDoc = (): Document | null => {
       if (argsRef.current.surface !== 'html') return null;
       try { return frameRef.current?.contentDocument ?? null; } catch { return null; }
@@ -479,18 +526,20 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     };
   }, [rootRef, frameRef, surface, surfaceNonce, threads.canAsk, body]);
   useEffect(() => { setHover(null); }, [filePath, surfaceNonce]);
+  const cardHere = !!mine;
+  useEffect(() => { if (cardHere) setHover(null); }, [cardHere]);
 
   const askBlock = useCallback(() => {
     const h = hoverRef.current;
     const b = body();
     if (!h || !b || !b.contains(h.el)) return;
-    const quote = blockQuoteOf(buildTextIndex(b), h.el);
+    const quote = blockQuoteOf(buildTextIndex(b, skip), h.el);
     if (!quote) return;
     const ln = h.el.closest('[data-line]')?.getAttribute('data-line');
     const line = ln ? Number(ln) : undefined;
     setHover(null);
     askQuote(quote, Number.isFinite(line) ? line : undefined, 'file-block');
-  }, [askQuote, body]);
+  }, [askQuote, body, skip]);
 
   if (!threads.canAsk) return null;
   const hostW = rootRef.current?.clientWidth ?? 0;
@@ -512,7 +561,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
           ]}
         />
       )}
-      {hover && (
+      {/* Hidden while this file's card is open: it sat over a word of the
+          passage the card is about (2026-11-06). */}
+      {hover && !mine && (
         <button
           type="button"
           className="fv-ask-block"
