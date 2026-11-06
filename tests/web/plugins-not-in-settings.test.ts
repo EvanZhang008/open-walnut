@@ -20,7 +20,8 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry'
 import { NAV_GROUPS } from '../../web/src/components/settings/SettingsNav'
-import { legacyPluginTarget, resolvePane, settingsHashMovedTo } from '../../web/src/components/settings/settings-routing'
+import { legacyPluginTarget, NAV_OWNER, resolvePane, RETIRED_PANES, ROW_TARGETS, settingsHashMovedTo } from '../../web/src/components/settings/settings-routing'
+import * as legacyLinks from '../../web/src/components/settings/settings-legacy-links'
 import { PLUGIN_SLOT_TARGETS } from '../../web/src/plugins/types'
 import { panelHeading } from '../../web/src/components/apps-page/PluginSettingsPanels'
 
@@ -112,6 +113,35 @@ describe('plugins are never in Settings', () => {
     expect(settingsHashMovedTo('#general')).toBeNull()
     // And a plugin key is no Settings pane any more.
     expect(resolvePane('#walnut-demo:demo', { silent: true })).toMatchObject({ paneId: 'general', known: false })
+  })
+})
+
+describe("Walnut's own Settings anchors are never taken for an old plugin link", () => {
+  // The sidebar's memory (utils/last-location) and the Settings page judge a hash with the one
+  // test, legacyPluginTarget; a Walnut row anchor whose free-form part has a colon
+  // (`#rh-host-box:2222`) was read as a plugin key and dropped from the memory.
+  it('every free-form row prefix resolvePane accepts is shared with the legacy-link test', () => {
+    const src = read('web/src/components/settings/settings-routing.ts')
+    const body = src.slice(src.indexOf('export function resolvePane'), src.indexOf('\n}\n', src.indexOf('export function resolvePane')))
+    const names = [...body.matchAll(/id\.startsWith\((\w+)\)/g)].map((m) => m[1]!)
+    expect(names.length).toBeGreaterThan(0)
+    for (const name of names) {
+      const value = (legacyLinks as Record<string, unknown>)[name]
+      expect(typeof value, `${name} must be exported by settings-legacy-links.ts`).toBe('string')
+      const sample = `${value as string}box:2222`
+      expect(resolvePane(`#${encodeURIComponent(sample)}`, { silent: true }).known, sample).toBe(true)
+      expect(legacyPluginTarget(`#${encodeURIComponent(sample)}`), sample).toBeNull()
+    }
+    // The other free-form branches: the Phones & Cloud ways and their rows.
+    for (const sample of ['devices-way-panel-cloud', 'companion-keep-a:b', 'remote-access-x:1']) {
+      expect(legacyPluginTarget(`#${sample}`), sample).toBeNull()
+    }
+  })
+
+  it('no fixed Settings id reads as a plugin key', () => {
+    for (const id of [...Object.keys(NAV_OWNER), ...Object.keys(ROW_TARGETS), ...Object.keys(RETIRED_PANES)]) {
+      expect(legacyPluginTarget(`#${id}`), id).toBeNull()
+    }
   })
 })
 

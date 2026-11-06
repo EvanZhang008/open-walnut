@@ -129,7 +129,7 @@ export const DEMO_CSS = `
 .wd-facts dt { color: var(--fg-muted); }
 .wd-facts dt { flex: none; }
 .wd-facts dd { margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
-.wd-facts .wd-chip { white-space: normal; }
+.wd-facts .wd-chip { display: inline-block; max-width: 100%; white-space: normal; border-radius: 8px; text-align: left; }
 
 .wd-tokens { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin: 0; padding: 0; list-style: none; }
 .wd-tokens li { display: flex; gap: 8px; align-items: center; min-width: 0; }

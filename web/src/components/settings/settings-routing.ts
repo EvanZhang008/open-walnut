@@ -11,7 +11,7 @@ import { log } from '@/utils/log'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import type { FilterEntry } from './settings-filter'
 import { WAY_PANES, wayPaneForRow } from './settings-way-panes'
-import { legacyPluginTarget } from './settings-legacy-links'
+import { HINT_ROW_PREFIX, HOST_ROW_PREFIX, legacyPluginTarget } from './settings-legacy-links'
 
 export { WAY_PANES, wayPaneForRow } from './settings-way-panes'
 export { legacyPluginTarget } from './settings-legacy-links'
@@ -27,10 +27,6 @@ export function settingsHashMovedTo(hash: string): string | null {
 }
 
 export const DEFAULT_PANE_ID = 'general'
-/** Mirrors HOST_ROW_ID_PREFIX in utils/host-settings-nav.ts (kept local: this file stays import-light). */
-const HOST_ROW_PREFIX = 'rh-host-'
-/** One message hint's row in Sessions, Message hints (MessageHintsGroup). */
-const HINT_ROW_PREFIX = 'message-hint-'
 
 /** Section id -> the visible entry it renders under (itself when visible). */
 export const NAV_OWNER: Readonly<Record<string, string>> = (() => {

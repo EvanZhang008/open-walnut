@@ -23,6 +23,8 @@ import { formatAbsoluteTime } from '@/components/settings/sections/addons-format
 import { homeDirFor, type PluginStore } from './usePluginStore'
 import { AutoUpdateRows } from './AutoUpdateRows'
 import { supportsAutoUpdate } from '@/components/settings/plugin-auto-update-view'
+import { usePluginUi } from '@/plugins/hooks'
+import { PluginSettingsPanels } from './PluginSettingsPanels'
 import { isLinkedRow, isRunning, isUpdatableRow, originKind, sourceFacts, updateNote, type PlainNote, type RegistryRow } from './plugin-store-model'
 
 function CopyFact({ value, label }: { value: string; label: string }) {
@@ -175,8 +177,11 @@ function PartState({ part }: { part: RegistryRow }) {
 
 /**
  * The plugins that are parts of this one, each with its own switch, what it runs (an MCP
- * server, an account) and a way into its own settings. A part's settings stay on its own
- * page, so a form never has two homes.
+ * server, an account) and a way into its own settings. A part's manifest form stays on its
+ * own page, so a form never has two homes; the panels a part draws itself (its sign-in or
+ * token, `walnut.ui.settings`) show under its row here too, as its connection does, so the
+ * parent's page is where the person finds them (2026-11-05: the Slack MCP server's sign-in
+ * was three clicks deep under Slack).
  */
 export function PartsSection({ store, row, parts, tints, onOpen }: {
   store: PluginStore
@@ -185,6 +190,7 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
   tints: Map<string, string>
   onOpen: (pluginId: string) => void
 }) {
+  const pluginUi = usePluginUi()
   if (parts.length === 0) return null
   return (
     <SettingsGroup heading={`Parts of ${row.name}`} className="apps-detail-group" data-testid={`plugin-parts-${row.id}`}>
@@ -192,6 +198,7 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
         const on = isRunning(part)
         const switchOn = store.cascadeAsk?.target.id === part.id ? true : (store.pendingToggle[part.id] ?? on)
         const connection = store.connections[part.id]
+        const partPanels = pluginUi.settings.filter((entry) => entry.pluginId === part.id)
         return (
           <div key={part.id} className="apps-part" data-testid={`plugin-part-${part.id}`} data-plugin-status={part.status}>
             <SettingsRow
@@ -214,7 +221,7 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
               control={
                 <>
                   <SettingsButton onClick={() => onOpen(part.id)} data-testid={`plugin-part-open-${part.id}`}>
-                    {part.configurable ? 'Settings' : 'Details'}
+                    {part.configurable || partPanels.length > 0 ? 'Settings' : 'Details'}
                   </SettingsButton>
                   {part.toggleable ? (
                     <ToggleSwitch
@@ -240,6 +247,7 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
             )}
             {on && <PluginMcpControls pluginId={part.id} />}
             {on && connection && <PluginConnectionPanel pluginId={part.id} initial={connection} onReport={store.onConnectionReport} />}
+            {partPanels.length > 0 && <PluginSettingsPanels panels={partPanels} pluginName={part.name} />}
           </div>
         )
       })}

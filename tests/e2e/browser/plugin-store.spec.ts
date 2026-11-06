@@ -456,6 +456,15 @@ test('a part has no card: its parent names it, lists it with its switch, and its
   // Its settings have one home, its own page, so the parent's page draws no copy.
   await expect(page.getByTestId(`plugin-config-${part}`)).toHaveCount(0)
   await expect(page.getByTestId(`plugin-part-open-${part}`)).toHaveText('Settings')
+  // A panel the part draws itself (its sign-in, `walnut.ui.settings`) shows under its row
+  // here, so the parent's page is where the person finds it (the Slack MCP server's case).
+  await page.evaluate((id) => {
+    const w = window as unknown as { __walnutSettingsTestHooks?: { pluginUiRegistry: { registerSettings: (p: string, n: string, c: { id: string; label: string; component: () => string }) => { dispose(): void } } }; __partPanelOff?: { dispose(): void } }
+    w.__partPanelOff = w.__walnutSettingsTestHooks!.pluginUiRegistry.registerSettings(id, 'Kappa Tools', { id: 'signin', label: 'Sign-in', component: () => 'Signed in as fixture@example.invalid' })
+  }, part)
+  await expect(partRow.getByTestId(`plugin-panel-${part}:signin`)).toContainText('Signed in as fixture@example.invalid')
+  await page.evaluate(() => (window as unknown as { __partPanelOff?: { dispose(): void } }).__partPanelOff?.dispose())
+  await expect(page.getByTestId(`plugin-panel-${part}:signin`)).toHaveCount(0)
 
   // The part's switch works from here, and off persists like any other switch.
   const partToggle = page.locator(`#plugin-toggle-${part}`)

@@ -70,6 +70,14 @@ describe('rememberLocation + linkTargetFor', () => {
     expect(linkTargetFor('/settings', s)).toBe('/settings#sessions');
   });
 
+  it("a remembered Walnut row whose id has a colon (a host alias with a port) is kept", () => {
+    const s = fakeStore();
+    rememberLocation(at('/settings', '', `#rh-host-${encodeURIComponent('box:2222')}`), s);
+    expect(linkTargetFor('/settings', s)).toBe('/settings#rh-host-box%3A2222');
+    rememberLocation(at('/settings', '', '#rh-host-box:2222'), s);
+    expect(linkTargetFor('/settings', s)).toBe('/settings#rh-host-box:2222');
+  });
+
   it('a later visit with NO state overwrites the remembered one (the user cleared it)', () => {
     const s = fakeStore();
     rememberLocation(at('/calendar', '?view=month'), s);
