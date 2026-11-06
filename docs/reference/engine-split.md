@@ -51,12 +51,15 @@ per engine and model line (Claude Code on Opus and on Sonnet apart; a task whose
 line joins its engine's one line when there is only one), the tasks finished in the period, still open, assigned by the
 split, median time to done, median and total cost, median tokens, review subtasks per task and their cost (counts, never ranked: fewer reviews is not better work)
 (subtasks whose title starts with "Review", "Reviewer", "Verifier", "Verify:" or "Verification:"; a top-level task so named is work of its own),
-the share of finished tasks a reviewer on another company's model checked (Claude work reviewed by a
-GPT model or the other way round: its usage's model, else its session's), the reviewer score
+the share of finished tasks a reviewer on another company's model checked and gave a verdict on (Claude
+work reviewed by a GPT model or the other way round: its usage's model, else its session's; only tasks
+with a reviewer of a known company count, and none reads "-", never 0%), the reviewer score
 (function, UX and UI out of 10: a reviewer gives it as `score` on its reply or its `task_complete`,
-kept on its task as `review_score`, also when the host answered it while the server was away (the
-host journals it with the reply); a score out of 0 to 10 is refused with 400, never dropped; per task,
-each company's latest score, the lower on each, a reviewer of no known company counting on its own;
+kept on its task as `review_score`, also when the host answered or closed it while the server was
+away (the host journals it with the reply or the close); a score out of 0 to 10 is refused with 400, never dropped; per task,
+each company's latest score, the lower on each, a reviewer of no known company counting on its own,
+and only companies that scored all three making a full verdict (parts from two companies are shown as
+partial and left out of the medians); a text score needs exactly three valid parts;
 per column, the median of each over the finished tasks scored on all three, with how many those are,
 ranked by the lowest of the three; the verdict says when too few are scored to rank;
 each task in the list shows its own and which companies gave it), the

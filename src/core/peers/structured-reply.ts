@@ -121,8 +121,10 @@ function scoreValue(v: unknown): number | undefined {
 export function readScore(v: unknown): ReviewScore | undefined {
   let raw: Record<string, unknown> = {};
   if (typeof v === 'string') {
-    const parts = v.split(/\s*[/,|]\s*/).filter(Boolean);
-    if (parts.length === 3) raw = { function: parts[0], ux: parts[1], ui: parts[2] };
+    const parts = v.trim().split(/\s*[/,|]\s*/);
+    // All three valid, or none: "10/9/11" is no score, never function 10 and UX 9.
+    if (parts.length !== 3 || parts.some((p) => scoreValue(p) === undefined)) return undefined;
+    raw = { function: parts[0], ux: parts[1], ui: parts[2] };
   } else if (v && typeof v === 'object' && !Array.isArray(v)) {
     for (const [k, x] of Object.entries(v as Record<string, unknown>)) raw[k.toLowerCase()] = x;
   }
@@ -143,7 +145,7 @@ export function scoreProblem(v: unknown): string | null {
   const why = 'score must be {"function": n, "ux": n, "ui": n} (any of them, each 0..10) or "n/n/n"';
   if (typeof v === 'string') {
     // All three, each valid: "10/9/11" is refused, never read as function 10 and UX 9.
-    const parts = v.split(/\s*[/,|]\s*/).filter(Boolean);
+    const parts = v.trim().split(/\s*[/,|]\s*/);
     const bad = parts.length === 3 ? SCORE_DIMENSIONS.filter((_, i) => scoreValue(parts[i]) === undefined) : [];
     if (parts.length !== 3) return why;
     return bad.length ? `${why}; not 0..10: ${bad.join(', ')}` : null;

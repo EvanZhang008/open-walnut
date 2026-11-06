@@ -30,6 +30,13 @@ describe('review score', () => {
 
   it('refuses a score with any part out of range, in text as in an object, and accepts a good one', () => {
     expect(scoreProblem('10/9/11')).toContain('not 0..10: ui');
+    // The reader itself takes all three or none.
+    expect(readScore('10/9/11')).toBeUndefined();
+    expect(readScore('10 | 9 | 9')).toEqual({ function: 10, ux: 9, ui: 9 });
+    // An empty part is no part: "10//9/9" and "10/9/9/" are not three scores.
+    expect(readScore('10//9/9')).toBeUndefined();
+    expect(scoreProblem('10//9/9')).toContain('score must be');
+    expect(scoreProblem('10/9/9/')).toContain('score must be');
     expect(scoreProblem('10/9')).toContain('score must be');
     expect(scoreProblem({ function: 10, ui: 11 })).toContain('not 0..10: ui');
     expect(scoreProblem({ fun: 9 })).toContain('unknown: fun');

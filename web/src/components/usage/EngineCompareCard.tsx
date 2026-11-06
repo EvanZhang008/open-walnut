@@ -110,16 +110,18 @@ const METRICS: Metric[] = [
     partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
     partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian, samples: knownDone },
-  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review", "Reviewer", "Verifier", "Verify:" or "Verification:"). A count, never a contest: more rounds can mean more fixes, and it can mean more care.', value: (r) => r.reviewsPerTask, show: ratio },
+  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review", "Reviewer", "Verifier", "Verify:" or "Verification:", maybe after a word like Code, UI or Final). A count, never a contest: more rounds can mean more fixes, and it can mean more care.', value: (r) => r.reviewsPerTask, show: ratio },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself. Not ranked: a cheaper review is often just a review that was not done.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
     // No reviews: nothing to show, as a cost with no usage recorded reads.
-    value: (r) => (r.reviewsPerTask === 0 || (r.reviewCostPerTask === 0 && r.done > 0 && reviewPartial(r) >= r.done) ? null : r.reviewCostPerTask),
+    // Of the finished tasks that had reviewers (an older server sends no count: all finished).
+    value: (r) => (r.reviewsPerTask === 0 || (r.reviewCostPerTask === 0 && (r.reviewedDone ?? r.done) > 0 && reviewPartial(r) >= (r.reviewedDone ?? r.done)) ? null : r.reviewCostPerTask),
     show: (n) => (n === null ? '-' : money(n)), partial: reviewPartial,
     partialNote: (n) => `${finishedWord(n)} had reviewers whose cost leaves out ${LEFT_OUT}` },
-  { id: 'crossreview', label: 'Checked by another company', help: 'Share of the tasks it finished that a reviewer subtask on another company\'s model checked (Claude work reviewed by a GPT model, or the other way round).',
-    // No reviews: nothing to show, as Review cost reads.
-    value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share },
+  { id: 'crossreview', label: 'Checked by another company', help: 'Of the tasks it finished whose reviewers\' model is known, the share that a reviewer on another company\'s model checked and gave a verdict on (Claude work reviewed by a GPT model, or the other way round). "-" when no reviewer\'s model is known.',
+    // No reviews, or none of a known company: nothing to show, never a 0%.
+    value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share,
+    sub: (r) => (r.crossReviewedShare != null && r.crossKnownDone !== undefined && r.crossKnownDone < r.done ? `of ${r.crossKnownDone} with a known reviewer` : null) },
   { id: 'score', label: 'Reviewer score (function · UX · UI)', help: 'Function · UX · UI, out of 10. Per finished task, its reviewers\' latest verdict (each company\'s latest, the lower of them on each), then the median. Ranked by the lowest of the three. Reviewers give it as `score` on their reply.',
     // Ranked only on all three: a missing UI score is unknown, never a 10.
     value: (r) => (r.reviewScore && SCORE_DIMS.every((d) => r.reviewScore![d] !== undefined) ? Math.min(...SCORE_DIMS.map((d) => r.reviewScore![d]!)) : null),
@@ -289,7 +291,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                       <td><button type="button" className="usage-ec-open" title={t.title} onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',
-                          t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}` : '', t.followUps ? `${t.followUps} of your messages` : '',
+                          t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}${t.scorePartial ? ' (partial, not in the median)' : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>
                       <td className="num usage-line-cost" title={taskCostNote(t)}>
                         {t.noUsage ? 'unknown' : money(t.costUsd)}{!t.noUsage && (t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}

@@ -230,6 +230,19 @@ describe('journal v2: the kinds gate (old Mac) and the gateway', () => {
     expect(fresh.journal.records(JHOME)[1]).toMatchObject({ kind: 'task-fields', op: 'task_complete', fields: { phase: { base: 'IN_PROGRESS', value: 'COMPLETE' } } })
   })
 
+  it('a close carrying a review score journals the score with it, and an unusable score is refused before anything is queued', async () => {
+    const fresh = journalHost(journalTmpDir(), { now: T0 })
+    fresh.host.configure(jslice())
+    const bad = await gatewayCall(fresh.host, SID_A, 'task_complete', { id: TASK_A, score: '10/9/11' })
+    expect(bad).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+    expect(fresh.journal.records(JHOME)).toEqual([])
+    expect((await gatewayCall(fresh.host, SID_A, 'task_complete', { id: TASK_A, score: '10/9/9' })).ok).toBe(true)
+    expect(fresh.journal.records(JHOME)[0]).toMatchObject({
+      kind: 'task-fields', op: 'task_complete', fields: { phase: { value: 'COMPLETE' } },
+      score: { function: 10, ux: 9, ui: 9, taskId: TASK_A },
+    })
+  })
+
   it('one field outside the queueable set refuses the whole write (needs_leader, nothing journaled)', async () => {
     const fresh = journalHost(journalTmpDir(), { now: T0 })
     fresh.host.configure(jslice())

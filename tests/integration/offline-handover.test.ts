@@ -455,6 +455,19 @@ describe('runOfflineHandover over journal v2', () => {
     while (!cond()) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) }
   }
 
+  it('a close the host queued with a review score lands with the score kept on the task, as an online close keeps it', async () => {
+    const t1 = await newTask('Review: queued close with a score')
+    const before = await task(t1)
+    const scoredAt = new Date(Date.now() - 5_000).toISOString()
+    const d = v2Daemon([
+      v2(1, t1, { phase: { base: String(before.phase), value: 'COMPLETE' } }, { op: 'task_complete', score: { function: 9, ux: 8.5, ui: 9, at: scoredAt, taskId: t1 } }),
+    ])
+    await runOfflineHandover(d.conn)
+    const after = await task(t1)
+    expect(after.phase).toBe('COMPLETE')
+    expect(after.review_score).toMatchObject({ function: 9, ux: 8.5, ui: 9, at: scoredAt, via: 'complete' })
+  })
+
   it('v2 records apply beside old v1 records, the drain names its kinds, and acks by exact seqs', async () => {
     const t1 = await newTask('v1 and v2 together')
     const before = await task(t1)

@@ -163,6 +163,16 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
     ctx.conflicts.addDurable(entries);
     log.session.info('offline handover: queued fields dropped, the task was deleted', { host: ctx.hostKey, taskId, seq: record.seq, opId: record.opId });
   }
+  // A review's score given on that close (offline-host-core.ts): kept as an online close keeps it.
+  if (outcome === 'applied' && record.score && typeof record.score === 'object') {
+    const s = record.score as { at?: unknown };
+    const { readScore } = await import('../peers/structured-reply.js');
+    const score = readScore(record.score);
+    if (score) {
+      const { noteReviewScore } = await import('../sessions/session-send-core.js');
+      await noteReviewScore(taskId, score, 'complete', { at: typeof s.at === 'string' ? s.at : undefined });
+    }
+  }
   if (outcome === 'applied') ctx.result.replayed++; else ctx.result.skipped++;
 }
 

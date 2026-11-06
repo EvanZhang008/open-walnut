@@ -240,6 +240,10 @@ export interface EngineCompareRow {
   reviewPartialCost?: number;
   /** Share of finished tasks a reviewer on another company's model checked (0..1); absent from an older server. */
   crossReviewedShare?: number | null;
+  /** The share's samples: finished tasks with a reviewer of a known company. */
+  crossKnownDone?: number;
+  /** Finished tasks with at least one reviewer subtask. */
+  reviewedDone?: number;
   /** Median reviewer score of its finished tasks (function / UX / UI out of 10); absent from an older server. */
   reviewScore?: ReviewScore | null;
   /** Finished tasks with a reviewer score. */
@@ -271,6 +275,8 @@ export interface EngineCompareTask {
   scoredBy?: number;
   /** The companies whose reviewers scored it ('Claude', 'GPT', 'unknown'). */
   scoredFamilies?: string[];
+  /** No reviewer scored all three: the parts given, left out of the medians. */
+  scorePartial?: boolean;
   followUps: number;
   reopens: number;
   errored: boolean;

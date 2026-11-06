@@ -57,7 +57,8 @@ export interface EngineCompareTask {
   reviewCostUsd: number;
   /** A reviewer used a model with no price, so reviewCostUsd is a floor. */
   reviewPartialCost: boolean;
-  /** At least one reviewer subtask ran on another company's model than the one that did the work. */
+  /** A reviewer subtask on another company's model than the one that did the work gave a verdict;
+   *  absent when none of its reviewers ran on a known company's model (or its own is unknown). */
   crossReviewed?: boolean;
   /** Its reviewers' latest verdict out of 10: each company's latest score, the lower on each of
    *  function / UX / UI (the bar both must clear); absent when no reviewer gave one. */
@@ -66,6 +67,8 @@ export interface EngineCompareTask {
   scoredBy?: number;
   /** Their companies ("Claude", "GPT"; "unknown" for a reviewer whose model is not known). */
   scoredFamilies?: string[];
+  /** No reviewer scored all three: `score` holds the parts given, and the engine's medians leave it out. */
+  scorePartial?: boolean;
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -114,8 +117,13 @@ export interface EngineCompareRow {
   reviewCostPerTask: number | null;
   /** Finished tasks whose review cost leaves out unpriced requests (the per-task review cost is of finished tasks). */
   reviewPartialCost: number;
-  /** Share of finished tasks a reviewer on another company's model checked (0..1). */
+  /** Share of the finished tasks whose reviewers' companies are known that a reviewer on another
+   *  company's model checked (0..1); null when no finished task has such a reviewer. */
   crossReviewedShare: number | null;
+  /** Its share's samples: finished tasks with a reviewer of a known company. */
+  crossKnownDone: number;
+  /** Finished tasks with at least one reviewer subtask (the review cost's samples). */
+  reviewedDone: number;
   /** Median reviewer score of its finished tasks, per dimension (out of 10); null when none was scored. */
   reviewScore: ReviewScore | null;
   /** Finished tasks with a reviewer score (the medians' samples). */
@@ -269,22 +277,29 @@ function firstStart(t: Task, sessions: CompareInput['sessions']): string | undef
   return firstWork ?? first;
 }
 
-/** A task's verdict: each company's latest score, the lower on each dimension. */
-function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { score?: ReviewScore; scoredBy?: number; scoredFamilies?: string[] } {
+/**
+ * A task's verdict: each company's latest score, the lower on each dimension. Only companies that
+ * scored all three make a full verdict; when none did, the parts are shown but marked partial, so
+ * one company's function score and another's UX and UI never add up to a full one.
+ */
+function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { score?: ReviewScore; scoredBy?: number; scoredFamilies?: string[]; scorePartial?: boolean } {
   if (!byFam?.size) return {};
+  const full = (x: ReviewScore) => SCORE_DIMENSIONS.every((d) => typeof x[d] === 'number');
+  const fullOnes = [...byFam].filter(([, x]) => full(x));
+  const used = fullOnes.length ? fullOnes : [...byFam];
   const score: ReviewScore = {};
   for (const d of SCORE_DIMENSIONS) {
-    const vals = [...byFam.values()].map((x) => x[d]).filter((v): v is number => typeof v === 'number');
+    const vals = used.map(([, x]) => x[d]).filter((v): v is number => typeof v === 'number');
     if (vals.length) score[d] = Math.min(...vals);
   }
-  const families = [...byFam.keys()].map((k) => (k.startsWith('?') ? 'unknown' : k)).sort();
-  return Object.keys(score).length ? { score, scoredBy: byFam.size, scoredFamilies: families } : {};
+  const families = used.map(([k]) => (k.startsWith('?') ? 'unknown' : k)).sort();
+  return Object.keys(score).length ? { score, scoredBy: used.length, scoredFamilies: families, ...(fullOnes.length ? {} : { scorePartial: true }) } : {};
 }
 
 /** The median of each dimension over the finished tasks that carry a score. */
 function scoreMedians(done: readonly EngineCompareTask[]): { reviewScore: ReviewScore | null; scoredDone: number } {
   // Only tasks scored on all three: a UI median from one task of six would read as six.
-  const scored = done.filter((p) => p.score && SCORE_DIMENSIONS.every((d) => typeof p.score![d] === 'number'));
+  const scored = done.filter((p) => p.score && !p.scorePartial && SCORE_DIMENSIONS.every((d) => typeof p.score![d] === 'number'));
   if (!scored.length) return { reviewScore: null, scoredDone: 0 };
   const out: ReviewScore = {};
   for (const d of SCORE_DIMENSIONS) {
@@ -305,6 +320,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const reviewPartial = new Set<string>();
   // The model families each task's reviewers ran on: their usage, else their session's model.
   const reviewFamiliesOf = new Map<string, Set<ModelFamily>>();
+  // Tasks with a reviewer of a known company, verdict or not: whether another company checked them is known.
+  const reviewKnownOf = new Set<string>();
   // Each company's latest reviewer score per task.
   const scoresOf = new Map<string, Map<string, TaskReviewScore>>();
   for (const t of input.tasks) {
@@ -320,6 +337,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     // A reviewer whose start failed before any turn tried; it checked nothing.
     const ranTurn = !!spend || sessionsOf(t).some((id) => sessionRanTurn(input.sessions.get(id)));
     const verdict = !!t.review_score || !!t.result_report || (t.phase === 'COMPLETE' && ranTurn);
+    if (rfam) reviewKnownOf.add(t.parent_task_id);
     if (rfam && verdict) {
       if (!reviewFamiliesOf.has(t.parent_task_id)) reviewFamiliesOf.set(t.parent_task_id, new Set());
       reviewFamiliesOf.get(t.parent_task_id)!.add(rfam);
@@ -408,7 +426,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       // A task that never ran cost nothing: a known $0, not an unknown.
       costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
       partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
-      crossReviewed: family !== 'Other' && [...(reviewFamiliesOf.get(t.id) ?? [])].some((f) => f !== family),
+      ...(family !== 'Other' && reviewKnownOf.has(t.id) ? { crossReviewed: [...(reviewFamiliesOf.get(t.id) ?? [])].some((f) => f !== family) } : {}),
       ...verdictOf(scoresOf.get(t.id)),
       followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - unrunCloses), errored, split: !!t.engine_pick,
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
@@ -483,7 +501,11 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
       reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: done.filter((p) => p.reviewPartialCost).length,
-      crossReviewedShare: done.length ? done.filter((p) => p.crossReviewed).length / done.length : null,
+      ...(() => {
+        const known = done.filter((p) => p.crossReviewed !== undefined);
+        return { crossReviewedShare: known.length ? known.filter((p) => p.crossReviewed).length / known.length : null, crossKnownDone: known.length };
+      })(),
+      reviewedDone: done.filter((p) => p.reviews > 0).length,
       ...scoreMedians(done), followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
       // Of the tasks ever finished, a reopened one still being worked on included (it is not "done" now).

@@ -372,9 +372,13 @@ describe('offline host: messages between sessions on this host', () => {
     h.host.configure(slice())
     const sent = await call(h, A, 'task_send', { to: B, text: 'Review it' })
     const requestId = sent.ok ? String(sent.result.requestId) : ''
-    const reply = await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Reviewed.', score: { Function: 8.04, ux: 7.5, ui: 11 } })
+    // An out-of-range part is refused, as the server refuses it (400): nothing is delivered.
+    const bad = await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Reviewed.', score: { Function: 8, ux: 7.5, ui: 11 } })
+    expect(!bad.ok && bad.error.code).toBe('bad_request')
+    expect(!(await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Reviewed.', score: '10/9/11' })).ok).toBe(true)
+    expect(h.delivered).toHaveLength(1)
+    const reply = await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Reviewed.', score: { Function: 8.04, ux: 7.5 } })
     expect(reply.ok).toBe(true)
-    // An out-of-range dimension is left out of the text and the journal alike.
     expect(h.delivered[1].text).toContain('Score: function 8/10, UX 7.5/10')
     expect(h.delivered[1].text).not.toContain('UI')
     const rec = [...h.host.drain(HOME).records].reverse().find((r): r is Extract<OfflineRecord, { kind: 'row' }> => r.kind === 'row')!

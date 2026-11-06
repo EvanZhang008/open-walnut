@@ -630,8 +630,9 @@ describe('final round', () => {
     const inp = input(tasks, { w1: { costUsd: 1 }, w2: { costUsd: 1 }, w3: { costUsd: 1 }, r1: { costUsd: 1, model: 'gpt-6.1-sol' }, r2: { costUsd: 1 } });
     const out = aggregateEngineCompare(inp);
     expect(out.rows).toHaveLength(1);
-    expect(out.rows[0].crossReviewedShare).toBeCloseTo(1 / 3);
-    expect(Object.fromEntries(out.tasks.map((t) => [t.taskId, t.crossReviewed]))).toEqual({ w1: true, w2: false, w3: false });
+    // Of the two with a reviewer of a known company; w3 had none, so whether it was checked is unknown.
+    expect(out.rows[0]).toMatchObject({ crossReviewedShare: 0.5, crossKnownDone: 2 });
+    expect(Object.fromEntries(out.tasks.map((t) => [t.taskId, t.crossReviewed]))).toEqual({ w1: true, w2: false, w3: undefined });
   });
 
   it('a reviewer of another company whose start failed before any turn checked nothing', () => {
@@ -648,6 +649,18 @@ describe('final round', () => {
     // Once it gives a verdict (here a score), it checked.
     const scored = input([tasks[0], { ...tasks[1], review_score: { function: 9, ux: 9, ui: 9, at, via: 'reply' } }], { w1: { costUsd: 1 } });
     expect(aggregateEngineCompare(scored).tasks.find((t) => t.taskId === 'w1')?.crossReviewed).toBe(true);
+  });
+
+  it('reviewers of no known company make the share unknown, never 0%; review cost of all-unknown reviewers is counted only over reviewed tasks', () => {
+    const tasks = [
+      done('w1', 1), done('w2', 1), done('w3', 1),
+      task({ id: 'r1', title: 'Review: w1', parent_task_id: 'w1', session_id: 's-r1', phase: 'COMPLETE', completed_at: at,
+        review_score: { function: 9, ux: 9, ui: 9, at, via: 'reply' } }),
+    ];
+    // The reviewer has no usage and its session names no model: its company is not known.
+    const out = aggregateEngineCompare(input(tasks, { w1: { costUsd: 1 }, w2: { costUsd: 1 }, w3: { costUsd: 1 } }, { sessions: new Map() }));
+    expect(out.tasks.find((t) => t.taskId === 'w1')?.crossReviewed).toBeUndefined();
+    expect(out.rows[0]).toMatchObject({ crossReviewedShare: null, crossKnownDone: 0, reviewedDone: 1, reviewPartialCost: 1 });
   });
 });
 
@@ -703,6 +716,23 @@ describe('reviewer scores', () => {
     expect(out.rows[0]).toMatchObject({ scoredDone: 1, reviewScore: { function: 6, ux: 6, ui: 6 } });
     // Each task still shows its own, partial or not.
     expect(out.tasks.find((t) => t.taskId === 'w1')?.score).toEqual({ function: 9 });
+  });
+
+  it('one company\'s function score and another\'s UX and UI never make a full verdict', () => {
+    const rs = [
+      reviewer('c1', 'w1', { function: 10 }, 1, 'claude-opus-5-5'),
+      reviewer('g1', 'w1', { ux: 9, ui: 9 }, 1, 'gpt-6.1-sol'),
+      reviewer('c2', 'w2', { function: 6 }, 1, 'claude-opus-5-5'),
+      reviewer('g2', 'w2', { function: 8, ux: 8, ui: 8 }, 1, 'gpt-6.1-sol'),
+    ];
+    const tasks = [done('w1', 1), done('w2', 1), ...rs.map((r) => r.t)];
+    const out = aggregateEngineCompare(input(tasks, Object.assign({ w1: { costUsd: 1 }, w2: { costUsd: 1 } }, ...rs.map((r) => r.spend))));
+    const byId = Object.fromEntries(out.tasks.map((t) => [t.taskId, t]));
+    expect(byId.w1).toMatchObject({ score: { function: 10, ux: 9, ui: 9 }, scorePartial: true });
+    // A full verdict from one company is the verdict; a part from another does not lower it.
+    expect(byId.w2).toMatchObject({ score: { function: 8, ux: 8, ui: 8 }, scoredFamilies: ['GPT'] });
+    expect(byId.w2.scorePartial).toBeUndefined();
+    expect(out.rows[0]).toMatchObject({ scoredDone: 1, reviewScore: { function: 8, ux: 8, ui: 8 } });
   });
 
   it('no reviewer score anywhere reads none, never a zero', () => {

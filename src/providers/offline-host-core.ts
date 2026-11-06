@@ -422,14 +422,32 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   /** The score dimensions a reply's `score` carries (peers/structured-reply.ts SCORE_DIMENSIONS). */
   const OFFLINE_SCORE_DIMS = ['function', 'ux', 'ui'] as const
 
-  /** `score` of a reply as the server would read it from an object: numbers 0..10, one decimal. */
-  function offlineScoreOf(v: unknown): Partial<Record<(typeof OFFLINE_SCORE_DIMS)[number], number>> | null {
-    if (!v || typeof v !== 'object' || Array.isArray(v)) return null
-    const raw = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.toLowerCase(), x]))
+  /**
+   * `score` of a reply as the server reads it (structured-reply.ts readScore / scoreProblem): an
+   * object of function / ux / ui (any key case) or the text "n/n/n", each 0..10, one decimal.
+   * undefined when none was given; null when it is unusable (the server answers 400 for it).
+   */
+  function offlineScoreOf(v: unknown): Partial<Record<(typeof OFFLINE_SCORE_DIMS)[number], number>> | null | undefined {
+    if (v === undefined || v === null) return undefined
+    const num = (x: unknown): number | undefined => {
+      const n = typeof x === 'number' ? x : typeof x === 'string' && x.trim() ? Number(x.trim().replace(/\s*\/\s*10$/, '')) : NaN
+      return Number.isFinite(n) && n >= 0 && n <= 10 ? Math.round(n * 10) / 10 : undefined
+    }
+    let raw: Record<string, unknown>
+    if (typeof v === 'string') {
+      const parts = v.trim().split(/\s*[/,|]\s*/)
+      if (parts.length !== 3) return null
+      raw = { function: parts[0], ux: parts[1], ui: parts[2] }
+    } else if (typeof v === 'object' && !Array.isArray(v)) {
+      raw = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.toLowerCase(), x]))
+      if (Object.keys(raw).some((k) => !(OFFLINE_SCORE_DIMS as readonly string[]).includes(k))) return null
+    } else return null
     const out: Partial<Record<(typeof OFFLINE_SCORE_DIMS)[number], number>> = {}
     for (const d of OFFLINE_SCORE_DIMS) {
-      const n = raw[d]
-      if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 10) out[d] = Math.round(n * 10) / 10
+      if (raw[d] === undefined) continue
+      const n = num(raw[d])
+      if (n === undefined) return null
+      out[d] = n
     }
     return Object.keys(out).length ? out : null
   }
@@ -1430,7 +1448,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const evidence = args.in_reply_to !== undefined ? list(args.evidence) : []
     const notDone = args.in_reply_to !== undefined ? list(args.not_done) : []
     // A review's score (function / UX / UI out of 10) rides as a line of the text too.
-    const sc = args.in_reply_to !== undefined ? offlineScoreOf(args.score) : null
+    const sc = args.in_reply_to !== undefined ? offlineScoreOf(args.score) : undefined
+    if (sc === null) return fail('bad_request', 'score must be {"function": n, "ux": n, "ui": n} (any of them, each 0..10) or "n/n/n"')
     const score = sc ? OFFLINE_SCORE_DIMS.filter((d) => sc[d] !== undefined)
       .map((d) => `${d === 'function' ? 'function' : d.toUpperCase()} ${sc[d]}/10`).join(', ') : ''
     const text = [own, result && result !== own ? `Result: ${result}` : '',
@@ -1751,6 +1770,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (name === 'task_update' && rawArgs.wait_until !== undefined && rawArgs.wait_until !== null && drainsKind(home, 'task-fields')) {
       try { args = { ...rawArgs, wait_until: waitClock(rawArgs.wait_until) } } catch (err) { return fail('bad_request', (err as Error).message) }
     }
+    // A review's score on a close is checked as the server checks it, before anything is queued.
+    const closeScore = name === 'task_complete' ? offlineScoreOf(args.score) : undefined
+    if (closeScore === null) return fail('bad_request', 'score must be {"function": n, "ux": n, "ui": n} (any of them, each 0..10) or "n/n/n"')
     const { task, error } = resolveTask(home, ref)
     if (error) return error
     if (!task) return needsServer(`Task ${ref} is not in this host's offline copy; changing it`)
@@ -1761,6 +1783,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       // Journal v2: per-field bases from the copy plus what is queued here (section 7).
       const built = taskFieldsRecord(home, task, name, args, null)
       if ('error' in built) return built.error
+      // The close's score rides the record (no task field: the server keeps it as review_score).
+      if (closeScore) built.record.score = { ...closeScore, at: new Date(deps.now()).toISOString(), taskId: task.id }
       const saved = append(home, built.record, false, { actor: { kind: 'session', sid: callerSid }, coalesce: true, admit: () => admitWrite(callerSid) ?? roomFor(home) })
       const no = refusal(saved)
       if (no) return no
