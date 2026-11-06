@@ -24,24 +24,63 @@ const MAX_FRAMES = 8
 
 export interface Frame { frameId: number; href: string }
 
-/** The tab's frames other than the top one that a person could see: web pages, not tiny or hidden. */
-export async function framesOf(tabId: number): Promise<Frame[]> {
+/** A frame's own answer: its address and size, and how many frames it shows itself (web pages a person could see). */
+type FrameSeen = { frameId: number; href?: string; w?: number; h?: number; kids?: number }
+
+/** One look at every frame of the tab, or null when the browser could not look (a frame between two documents). */
+async function lookAtFrames(tabId: number): Promise<FrameSeen[] | null> {
   if (!more.scripting) return []
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const found = await Promise.race([
-      // A plain function in the default (isolated) world: it reads only the frame's address and size.
-      more.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => ({ href: location.href, w: innerWidth, h: innerHeight }) }).catch(() => []),
-      new Promise<[]>((resolve) => { timer = setTimeout(() => resolve([]), 3000) }),
+      // A plain function in the default (isolated) world: it reads only the frame's address, its
+      // size and how many frames it holds that a person could see.
+      more.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => ({
+          href: location.href, w: innerWidth, h: innerHeight,
+          kids: Array.from(document.querySelectorAll('iframe, frame')).filter((el) => {
+            const r = el.getBoundingClientRect()
+            const src = (el as HTMLIFrameElement).src || ''
+            return r.width >= 2 && r.height >= 2 && /^https?:/i.test(src) && !(el as HTMLIFrameElement).srcdoc
+          }).length,
+        }),
+      }).then((rs) => rs.map((r) => ({ frameId: r.frameId, ...(r.result as Omit<FrameSeen, 'frameId'> | undefined) })), () => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 3000) }),
     ])
     return found
-      .map((r) => ({ frameId: r.frameId, ...(r.result as { href?: string; w?: number; h?: number } | undefined) }))
-      .filter((f) => f.frameId !== 0 && /^https?:/i.test(f.href ?? '') && (f.w ?? 0) >= 2 && (f.h ?? 0) >= 2)
-      .sort((a, b) => a.frameId - b.frameId)
-      .slice(0, MAX_FRAMES)
-      .map((f) => ({ frameId: f.frameId, href: f.href! }))
   } finally {
     clearTimeout(timer)
+  }
+}
+
+const visibleFrames = (all: FrameSeen[]): Frame[] => all
+  .filter((f) => f.frameId !== 0 && /^https?:/i.test(f.href ?? '') && (f.w ?? 0) >= 2 && (f.h ?? 0) >= 2)
+  .sort((a, b) => a.frameId - b.frameId)
+  .slice(0, MAX_FRAMES)
+  .map((f) => ({ frameId: f.frameId, href: f.href! }))
+
+/** How long a read waits for the frames a page shows to be reachable (right after a load they attach a moment later). */
+const FRAMES_SETTLE_MS = 1200
+
+/**
+ * The tab's frames other than the top one that a person could see: web pages, not tiny or hidden.
+ * Right after a navigation a frame the page shows may not be reachable yet (review R1-15: a
+ * snapshot after navigate listed none): while the frames reached show more frames than were
+ * reached, it looks again, for at most FRAMES_SETTLE_MS.
+ */
+export async function framesOf(tabId: number): Promise<Frame[]> {
+  const until = Date.now() + FRAMES_SETTLE_MS
+  let last: Frame[] = []
+  for (;;) {
+    const all = await lookAtFrames(tabId)
+    if (all) {
+      last = visibleFrames(all)
+      const shown = all.reduce((n, f) => n + (f.kids ?? 0), 0)
+      if (last.length >= Math.min(shown, MAX_FRAMES)) return last
+    }
+    if (Date.now() >= until) return last
+    await sleep(150)
   }
 }
 

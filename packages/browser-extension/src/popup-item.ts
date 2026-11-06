@@ -15,7 +15,11 @@ import { webUrl, type DetailField, type ItemDetail } from './popup-item-data'
 export interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string; sub?: string }
 
 /** Where the popup runs: the toolbar, the side panel's Passwords tab, or a window of its own. */
-export interface PopupCtx { root: HTMLElement; embedded: boolean; inWindow: boolean; panelWindow?: number; back: () => void }
+export interface PopupCtx {
+  root: HTMLElement; embedded: boolean; inWindow: boolean; panelWindow?: number; back: () => void
+  /** Where this view says a fill's error (the key popover's own line); else a toast. A success says nothing then. */
+  say?: (text: string) => void
+}
 
 /** How long a shown secret stays on show. */
 export const REVEAL_MS = 20_000
@@ -35,15 +39,17 @@ async function copy(id: string, field: string, what: string): Promise<void> {
   await copySecret(r.value, what)
 }
 
-export async function fillTab(it: { id: string }, ctx: PopupCtx): Promise<void> {
+/** Fill the page with `it`; true when it was filled. */
+export async function fillTab(it: { id: string }, ctx: PopupCtx): Promise<boolean> {
   const g = currentView()
   const r = await ask<{ code?: string }>({ type: 'fill-tab', id: it.id, ...(ctx.panelWindow ? { windowId: ctx.panelWindow } : {}) })
-  if (!isCurrent(g)) return
-  if (lockedReply(r)) { ctx.back(); return }
-  if (!r.ok) { toast(r.error ?? 'Could not fill.'); return }
+  if (!isCurrent(g)) return false
+  if (lockedReply(r)) { ctx.back(); return false }
+  if (!r.ok) { (ctx.say ?? toast)(r.error ?? 'Could not fill.'); return false }
   // Its one-time code goes on the clipboard (the background had no clipboard of its own here).
   if (r.code) await copySecret(r.code, 'Code')
-  if (ctx.embedded) { if (!r.code) toast('Filled') } else if (!ctx.inWindow) setTimeout(() => window.close(), r.code ? 700 : 0)
+  if (ctx.embedded) { if (!r.code && !ctx.say) toast('Filled') } else if (!ctx.inWindow) setTimeout(() => window.close(), r.code ? 700 : 0)
+  return true
 }
 
 /** A login's current one-time code with its countdown; a click copies it. */

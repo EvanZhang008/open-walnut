@@ -6,7 +6,7 @@
  * Settings shows it) are consolidated into the kebab dropdown.
  */
 
-import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
@@ -22,10 +22,12 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
-import { OutsideTaskDetail } from '@/components/tasks/OutsideTaskDetail';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
 import { KebabIcon } from '@/components/tasks/KebabIcon';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
+
+/** The task's detail, loaded when it opens: it brings the notes editor, and every composer has these actions. */
+const OutsideTaskDetail = lazy(() => import('@/components/tasks/OutsideTaskDetail').then((m) => ({ default: m.OutsideTaskDetail })));
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -449,7 +451,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         document.body,
       )}
       {memoryOpen && task && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
-      {detailOpen && task && <OutsideTaskDetail task={task} onClose={() => setDetailOpen(false)} />}
+      {detailOpen && task && <Suspense fallback={null}><OutsideTaskDetail task={task} onClose={() => setDetailOpen(false)} /></Suspense>}
     </div>
   );
 }

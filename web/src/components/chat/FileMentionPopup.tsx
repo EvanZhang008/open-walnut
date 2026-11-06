@@ -22,16 +22,23 @@ import {
   useMemo,
   useImperativeHandle,
   forwardRef,
+  lazy,
+  Suspense,
 } from 'react';
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { apiGet } from '@/api/client';
 import { getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
-import { FileContentView } from '@/components/common/FileContentView';
 import { formatSize } from '@/utils/format';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { recordRecentFolder, getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import { joinPath, parentPath, relativeTo, normalizePath, parseQuery } from './mention-path';
+
+/**
+ * The preview, loaded the first time a file is previewed: it brings the editors and the highlighter,
+ * and every composer imports this popup (the browser side panel's included, popout/popout-views.ts).
+ */
+const FileContentView = lazy(() => import('@/components/common/FileContentView').then((m) => ({ default: m.FileContentView })));
 
 export interface FileMentionHandle {
   /** Move selection by delta (wraps). */
@@ -523,7 +530,9 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
 
               <div className="file-mention-preview">
                 {previewFile ? (
-                  <FileContentView key={previewFile} path={previewFile} host={host} />
+                  <Suspense fallback={<div className="fmp-preview-empty">Loading…</div>}>
+                    <FileContentView key={previewFile} path={previewFile} host={host} />
+                  </Suspense>
                 ) : (
                   <div className="fmp-preview-empty">
                     {filtered[selectedIndex]?.type === 'dir'

@@ -9,11 +9,17 @@
    9.75 px. The body takes the type scale itself: 13 px text, 12 px secondary, nothing smaller. */
 /* Walnut's own stack (web/src/styles/globals.css), so these pages read as one with the Walnut frame beside them. */
 html body { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+/* Dark: the system's, unless Walnut's own theme (General, Light or Dark) says otherwise. The Ask
+   frame tells the extension page that theme (panel-theme.ts), which marks <html> theme-light or
+   theme-dark, so the key popover and the Passwords view match the frame beside them. */
 @media (prefers-color-scheme: dark) {
-  :root { --fg: #f5f5f7; --fg2: #d1d1d6; --muted: #98989d; --line: #3a3530; --bg: #1f1d1b; --bg2: #2a2724; --accent: #d8a26a; --accent-hover: #e8b47e; --accent-soft: #3a2f24; }
+  :root:not(.theme-light) { --fg: #f5f5f7; --fg2: #d1d1d6; --muted: #98989d; --line: #3a3530; --bg: #1f1d1b; --bg2: #2a2724; --accent: #d8a26a; --accent-hover: #e8b47e; --accent-soft: #3a2f24; }
   /* Dark text on the light brown: white on it is too faint to read. */
-  .btn-primary, .fill-pill { color: #1f1d1b !important; }
+  :root:not(.theme-light) .btn-primary, :root:not(.theme-light) .fill-pill { color: #1f1d1b !important; }
 }
+:root.theme-dark { --fg: #f5f5f7; --fg2: #d1d1d6; --muted: #98989d; --line: #3a3530; --bg: #1f1d1b; --bg2: #2a2724; --accent: #d8a26a; --accent-hover: #e8b47e; --accent-soft: #3a2f24; color-scheme: dark; }
+:root.theme-dark .btn-primary, :root.theme-dark .fill-pill { color: #1f1d1b !important; }
+:root.theme-light { color-scheme: light; }
 * { box-sizing: border-box; }
 html, body { margin: 0; color: var(--fg); background: var(--bg); }
 html.frame { background: transparent; }
@@ -145,7 +151,7 @@ body.popup .item [data-tip]::after { top: auto; bottom: calc(100% + 4px); }
 .foot { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); position: sticky; bottom: 0; background: var(--bg); }
 .foot .btn { flex: 1; }
 .gen-out { font-size: 16px; padding: 12px; border-radius: 10px; background: var(--bg2); word-break: break-all; min-height: 48px; }
-.toast { position: fixed; left: 50%; bottom: 58px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 12px; border-radius: 8px; font-size: 12px; opacity: 0; transition: opacity .15s; pointer-events: none; }
+.toast { position: fixed; z-index: 30; left: 50%; bottom: 58px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 6px 12px; border-radius: 8px; font-size: 12px; opacity: 0; transition: opacity .15s; pointer-events: none; }
 .toast.on { opacity: 1; }
 body.popup .toast { white-space: nowrap; }
 .empty { text-align: center; color: var(--muted); padding: 20px 16px; line-height: 1.5; }
@@ -334,5 +340,53 @@ html.askpop.wide, html.askpop.wide body.sidepanel, html.askpop.wide body.sidepan
 .key-pop-fill { flex: none; }
 .key-pop-foot { flex: none; display: flex; justify-content: space-between; padding: 9px 12px; border-top: 1px solid var(--line); }
 .key-pop-foot .link-btn { font-size: 12.5px; }
+.key-pop-foot-end { display: inline-flex; gap: 14px; }
+.key-pop-said { margin: 6px 4px 0; }
 .key-pop-all { color: var(--fg) !important; }
-.panel-snap.is-ask .panel-snap-head { padding: 10px 12px 9px 48px; min-height: 52px; }
+/* ── Ask, drawn by the panel page while Walnut's view starts (panel-look.ts): the view's own places ── */
+.panel-snap.is-look { pointer-events: none; }
+.look-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 52px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--line); }
+.look-head.is-popup { min-height: 46px; }
+.look-btn { flex: none; width: 32px; height: 32px; display: grid; place-items: center; color: var(--fg2); }
+.look-menu { width: 30px; height: 30px; }
+.look-ico { display: inline-grid; place-items: center; }
+.look-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-left: 4px; }
+.look-title { font-weight: 650; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.look-titles.is-popup .look-agent { font-size: 15px; font-weight: 650; color: var(--fg); }
+.look-key-glyph { position: relative; display: inline-grid; place-items: center; }
+.look-key-badge { position: absolute; right: -6px; bottom: -5px; width: 13px; height: 13px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--line); color: var(--fg2); }
+.look-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.look-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; overflow: hidden; }
+.look-chat .panel-snap-msg.is-user { padding: 12px 14px; border-radius: 18px; }
+.look-cont { flex: none; padding: 8px 0 4px; overflow: hidden; }
+.look-cont.is-panel { max-height: 45%; padding-top: 4px; }
+.look-cont.is-popup { flex: 1; min-height: 0; }
+.look-cont-label { margin: 6px 12px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.look-cont-row { display: flex; align-items: flex-start; gap: 8px; padding: 7px 12px 7px 10px; }
+.look-dot { flex: 0 0 7px; height: 7px; margin-top: 6px; border-radius: 50%; }
+.look-dot.is-needs { background: #d64545; }
+.look-cont-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.look-cont-top { display: flex; align-items: baseline; gap: 8px; }
+.look-cont-title { flex: 1; min-width: 0; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-cont-time { flex: none; font-size: 11px; color: var(--muted); }
+.look-cont-line { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-sugg { flex: none; display: flex; justify-content: center; gap: 6px; padding: 0 12px 24px; overflow: hidden; }
+.look-sugg-chip { flex: 0 1 auto; min-width: 0; height: 26px; display: inline-flex; align-items: center; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 11.5px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-foot { flex: none; padding: 0 8px 12px; }
+.look-composer { min-height: 82px; padding: 11px 6px 6px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }
+.look-placeholder { font-size: 14px; line-height: 20px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px; }
+.look-bar { display: flex; align-items: center; gap: 4px; margin-top: 9px; }
+.look-plus { flex: none; width: 28px; height: 28px; margin-left: -2px; color: var(--fg2); }
+.look-chips { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px; overflow: hidden; }
+.look-chip { flex: 0 1 auto; min-width: 0; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg2); color: var(--fg2); font-size: 11.5px; white-space: nowrap; }
+.look-chip.is-on { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); color: var(--accent); }
+.look-chip-page { max-width: 180px; overflow: hidden; }
+.look-chip-page:not(.is-on) { opacity: .75; }
+.look-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.look-fav { flex: none; width: 14px; height: 14px; border-radius: 4px; background: #2f6f8f; color: #fff; font-size: 8.5px; font-weight: 700; display: grid; place-items: center; }
+.look-chip-x { flex: none; width: 16px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1; }
+.look-chip-act { flex: none; }
+.look-end { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; }
+.look-mic { width: 30px; height: 30px; color: var(--muted); }
+.look-send { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 40%, var(--bg)); color: #fff; }

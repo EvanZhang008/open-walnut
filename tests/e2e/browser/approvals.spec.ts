@@ -19,6 +19,7 @@
 import { expect, test, type APIRequestContext, type Page, type WebSocketRoute } from '@playwright/test'
 import crypto from 'node:crypto'
 import { holdApprovalsLock } from './approvals-lock'
+import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
 
 test.use({ video: process.env.APR_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
@@ -444,4 +445,132 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await card3.locator('.approval-line-open').click()
   await dialog.getByRole('button', { name: 'Deny' }).click()
   expect((await waitFor(request, third.id, thirdToken)).approval.status).toBe('denied')
+})
+
+test('a narrow corner (a page\'s left column): the card reads the whole action and who asks, the buttons on their own row', async ({ page, request }) => {
+  // Review 2026-11-06: over the Passwords page's left rail (~190px) the card read "Let a Walnut
+  // agent cli…" and "A..". Where there is room it stays the one-line card.
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto('/')
+  await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+  await offHome(page)
+  const what = `Place an order on shop.example.test (${stamp()})`
+  const made = await ask(request, { what })
+  const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  const text = card.locator('.approval-what-text')
+  await expect(text).toHaveText(what)
+  // A corner with room (Settings keeps the corner over its own nav, so it is set here): one line.
+  const width = (px: number) => page.evaluate((w) => {
+    let el = document.getElementById('pw-corner-width')
+    if (!el) { el = document.createElement('style'); el.id = 'pw-corner-width'; document.head.append(el) }
+    el.textContent = `.corner-stack { width: ${w}px !important; }`
+  }, px)
+  await width(380)
+  await expect.poll(() => text.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('nowrap')
+
+  await width(190)
+  await expect.poll(() => text.evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('normal')
+  // The whole action, on more than one line, and who asks in full.
+  expect(await text.evaluate((e) => e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+  expect((await text.boundingBox())!.height).toBeGreaterThan(24)
+  const who = card.locator('.approval-who')
+  expect(await who.evaluate((e) => e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight <= e.clientHeight + 1)).toBe(true)
+  // Deny and Approve on their own row, under who asks, inside the card.
+  const whoBox = (await who.boundingBox())!
+  const cardBox = (await card.boundingBox())!
+  for (const name of ['Deny', 'Approve']) {
+    const b = (await card.getByRole('button', { name, exact: true }).boundingBox())!
+    expect(b.y, `${name} under who asks`).toBeGreaterThanOrEqual(whoBox.y + whoBox.height - 1)
+    expect(b.x + b.width, `${name} inside the card`).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
+  }
+  if (process.env.APR_SHOTS) await card.screenshot({ path: `${process.env.APR_SHOTS}/approval-narrow-card.png` })
+
+  // Made smaller by the person, it stays its two short lines, buttons kept.
+  await card.getByTestId('approval-minimize').click()
+  await expect(card).toHaveClass(/approval-card-line/)
+  await expect.poll(async () => Math.round((await card.boundingBox())!.height)).toBeLessThanOrEqual(64)
+  await expect(card.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
+  const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
+  expect(res.ok()).toBe(true)
+})
+
+/**
+ * The controls of the page under the corner it can reach: a button, link or field whose middle
+ * the corner stack covers, outside a list that scrolls (that one scrolls its end clear above
+ * the stack: corner-stack.tsx syncRoom).
+ */
+async function coveredByCorner(page: Page): Promise<string[]> {
+  return await page.evaluate(() => {
+    const stack = document.querySelector('[data-testid="corner-stack"]')
+    const main = document.querySelector('.main-content')
+    if (!stack || !main) return []
+    const scrolls = (el: Element) => {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        const oy = getComputedStyle(p).overflowY
+        if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight + 1) return true
+      }
+      return false
+    }
+    const out: string[] = []
+    for (const el of main.querySelectorAll('button, a[href], input, textarea, select, [role="button"]')) {
+      const r = el.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0 || scrolls(el)) continue
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      if (hit && stack.contains(hit)) out.push((el.textContent || el.getAttribute('aria-label') || el.tagName).trim().slice(0, 40))
+    }
+    return out
+  })
+}
+
+test('the corner never lies over a page\'s own controls: the Passwords rail\'s Import and Lock move up clear of a tall card', async ({ page, request }) => {
+  // 2026-11-06: in the rail's narrow corner the card wraps to its whole action (three lines,
+  // who asks, the buttons on their own row) and lay over the rail's foot, its Import… and Lock.
+  // The rail does not scroll, so it takes the room at its end instead (corner-stack.tsx columnUnder).
+  test.setTimeout(120_000)
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('/')
+  await expect(page.locator('.app-shell > .sidebar')).toBeVisible({ timeout: 20_000 })
+  await ensureVaultSetUp(page, new URL(page.url()).origin)
+  const made = await ask(request, { what: `Let a Walnut agent press Enter in the feedback box on shop.example.test (${stamp()})` })
+  const card = page.locator(`[data-testid="corner-stack"] [data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+
+  // Settings first: its nav is a left column too.
+  await offHome(page)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => coveredByCorner(page), { timeout: 5_000 }).toEqual([])
+
+  if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
+  await page.locator('.sidebar-nav a[href="/passwords"]').first().click()
+  const form = page.getByTestId('pw-unlock')
+  await expect(form.or(page.getByTestId('pw-app'))).toBeVisible({ timeout: 20_000 })
+  if (await form.isVisible()) {
+    await page.getByLabel('Master password').fill(VAULT_MASTER)
+    await page.getByRole('button', { name: 'Unlock', exact: true }).click()
+  }
+  await expect(page.getByTestId('pw-app')).toBeVisible({ timeout: 30_000 })
+  await expect(card).toBeVisible()
+  // The narrow corner's tall card (approvals.css, max-width 260px).
+  await expect.poll(async () => (await card.boundingBox())?.height ?? 0).toBeGreaterThan(110)
+  await expect.poll(() => coveredByCorner(page), { timeout: 5_000 }).toEqual([])
+  const stackTop = (await page.getByTestId('corner-stack').boundingBox())!.y
+  for (const name of ['Import…', 'Lock']) {
+    const b = (await page.locator('.pw-side-foot').getByRole('button', { name, exact: true }).boundingBox())!
+    expect(b.y + b.height, `${name} ends above the corner`).toBeLessThanOrEqual(stackTop)
+  }
+  if (process.env.APR_SHOTS) await page.screenshot({ path: `${process.env.APR_SHOTS}/approval-over-rail.png` })
+  // Clickable where it is: Import opens its dialog.
+  await page.locator('.pw-side-foot').getByRole('button', { name: 'Import…', exact: true }).click({ timeout: 5_000 })
+  await expect(page.getByTestId('pw-import')).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  // Answered, the rail's foot goes back down to the bottom.
+  const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
+  expect(res.ok()).toBe(true)
+  await expect(card).toHaveCount(0, { timeout: 10_000 })
+  await expect.poll(async () => {
+    const side = (await page.locator('.pw-side').boundingBox())!
+    const lock = (await page.getByTestId('pw-lock').boundingBox())!
+    return Math.round(side.y + side.height - (lock.y + lock.height))
+  }, { timeout: 10_000 }).toBeLessThan(40)
 })

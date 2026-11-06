@@ -15,7 +15,10 @@ import { h } from './dom'
 import { PANEL_ASK_KEY, PANEL_SERVER_KEY, clearPanelData } from './panel-data'
 import { startTabs } from './panel-tabs'
 import { startAsk } from './panel-ask'
+import { followTheme } from './panel-theme'
 
+// Walnut's theme as its Ask said it last time, before anything is drawn (panel-theme.ts).
+followTheme()
 const root = document.getElementById('root')!
 /** The toolbar popup's form of this page (popup-ask.html). */
 const surface: 'panel' | 'popup' = document.documentElement.classList.contains('askpop') ? 'popup' : 'panel'

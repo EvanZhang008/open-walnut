@@ -36,7 +36,7 @@ import { askLaunchBody, askTaskForLater } from './ask-object-draft';
 import { useAskObjectDraft } from './useAskObjectDraft';
 import {
   askSessionAsked, objectContextHints, storeObjectContext, firstAskView, forgetAskSession, launchAskSession, readAskSession,
-  withAsked, writeAskSession, type AskSessionRecord, type AskSessionScope,
+  withAsked, writeAskSession, type AskSessionLaunch, type AskSessionRecord, type AskSessionScope,
 } from './ask-object-session';
 import '@/styles/ask-object-drawer.css';
 import '@/styles/walnut-agent.css';
@@ -99,6 +99,13 @@ export interface AskObjectDrawerProps {
   composerBar?: ReactNode;
   /** In plain chat: no quote of the object over the first question (the host names it in the composer). */
   noQuote?: boolean;
+  /** The quote's own ×: the host leaves what it quotes out of the first question (the side panel's selection). */
+  onDropQuote?: () => void;
+  /**
+   * The host's last word on the first question's launch (the browser side panel: its asks are not
+   * pinned to the board, and Main's composer launches on Main's own task). Absent: the draft's launch.
+   */
+  adjustLaunch?: (body: AskSessionLaunch) => AskSessionLaunch | Promise<AskSessionLaunch>;
 }
 
 type View =
@@ -123,7 +130,7 @@ const OVERLAY = '[role="menu"], [role="listbox"], [role="dialog"], .wn-context-m
  * Escape later than this drawer does, so without this check one Escape closed the menu AND the whole
  * drawer under it. An input being edited (the session title) takes Escape as "cancel the edit".
  */
-function escapeBelongsToAnOverlay(e: KeyboardEvent, drawer: HTMLElement | null): boolean {
+export function escapeBelongsToAnOverlay(e: KeyboardEvent, drawer: HTMLElement | null): boolean {
   const target = e.target instanceof Element ? e.target : null;
   if (target instanceof HTMLInputElement) return true;
   if (target && isDrawn(target.closest(OVERLAY))) return true;
@@ -183,6 +190,8 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
 
   const prepareRef = useRef(props.prepareContext);
   prepareRef.current = props.prepareContext;
+  const adjustRef = useRef(props.adjustLaunch);
+  adjustRef.current = props.adjustLaunch;
   const launch = useCallback(async (question: string, fromPreset?: string, images?: ImageAttachment[]): Promise<boolean> => {
     const { contextName: name } = contextRef.current;
     let block = contextRef.current.contextBlock;
@@ -208,7 +217,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       return false;
     }
     if (scopeRef.current !== scope) return false;
-    const body = {
+    let body: AskSessionLaunch = {
       ...askLaunchBody({
         draft: askDraft.draftRef.current,
         agentId,
@@ -220,6 +229,8 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       ...(contextId ? { hints: objectContextHints(contextId) } : {}),
     };
     try {
+      if (adjustRef.current) body = await adjustRef.current(body);
+      if (scopeRef.current !== scope) return false;
       const { record, joined } = await launchAskSession(scope, body, fromPreset);
       log.info('ask-object', 'ask session launched', { objectKey: scope.key, taskId: record.taskId, sessionId: record.sessionId ?? null, joined });
       if (scopeRef.current !== scope) return true;
@@ -397,6 +408,18 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     <blockquote className="ask-object-quote" data-testid="ask-object-quote">
       <span className="ask-object-who">{[quote.who, quote.when, quote.where].filter(Boolean).join(' · ')}</span>
       <span className="ask-object-preview">{quote.preview || '(no text)'}</span>
+      {props.onDropQuote && (
+        <button
+          type="button"
+          className="ask-object-quote-drop"
+          data-testid="ask-object-quote-drop"
+          aria-label="Leave the selection out"
+          title="Leave the selection out of the message"
+          onClick={props.onDropQuote}
+        >
+          &times;
+        </button>
+      )}
     </blockquote>
   );
 

@@ -363,20 +363,47 @@ must come over this computer's own network path (a loopback connection with no p
 addressed to a loopback name, off the tunnel's port) with no session's header, and the unlock it
 shares must have been made the same way, in a browser (it sends an Origin; a script or the CLI is
 no window and shares nothing), marked `here` on the session and kept by `sessions.json`. So a
-phone, a browser elsewhere, the companion and an unlock made through Walnut's tunnel share nothing, nor
-does a Walnut window share the extension's unlock (a page and a local process look the same to
-Walnut; only the extension carries a secret of its own). Known limit: a forward to Walnut's port
+phone, a browser elsewhere, the companion and an unlock made through Walnut's tunnel share nothing.
+
+The other way round works too: a locked Walnut window on this computer (the `/passwords` page,
+Settings, an approval's "Unlock to approve", the Mac app's page) shares an unlock the person made in
+the extension or in another window, with no password, by the same rules. A page and a local process
+(an agent's `curl` with Walnut's Origin) look the same to Walnut, so a window needs a secret of its
+own, as the extension has its device token: its browser key. When the person types the master
+password in a Walnut window here (setup, unlock, recovery: Walnut's own Origin over this computer's
+own path, no device token, no session's header), the answer carries a `browserKey`, which the page
+keeps in localStorage (`walnut.vault.browser`, never mirrored) and sends in `x-walnut-vault-browser`.
+`browsers.json` beside the vault holds only the sha256 of each key, sealed with the vault key like
+the other side files (a file written by anything that cannot open the vault counts for nothing; a key
+change reseals it), and forgets a browser unseen for 90 days, and all but the newest 20
+(`src/core/vault/browser-keys.ts`). A key alone opens nothing: with it, the status says `canJoin`
+only while an unlock made here is live, and `POST /vault/join` (with the window's Origin) gives the
+window a session of its own on that unlock's clocks, held by its token as a window's own unlock is
+(`joinSession(..., 'window')`). So each browser on this computer types the master password once;
+after that, one unlock anywhere here opens it. `vaultApi.status()` joins by itself, and a locked
+Passwords page and an open "Unlock to approve" form look every 3 s, so an open page follows an
+extension unlock within seconds, with no reload. A window that locked only itself (its own idle
+lock, `POST /vault/lock` with no body) is recorded under its key's id (`window:<id>`) and shares
+nothing until the person unlocks again; a person's Lock ends every shared window with the rest.
+A new master password or a recovery ends every browser key (the window making the change gets a
+new one) and shares no unlock made before it with any window or extension: only an unlock typed
+with the new password is (`sessions.endJoinsBefore`, kept with the self-locks in `sessions.json`).
+So a browser that was let in before types the new password once, and the window that changed it
+keeps its own unlock without sharing it.
+
+Known limit: a forward to Walnut's port
 that adds no proxy header (`ssh -L`, socat, a bare `proxy_pass`) makes a request from elsewhere
 look like this computer's, the same limit `src/web/middleware/local-trust.ts` names, which trusts
 such a request with no credential at all (more than sharing gives; sharing also needs the
-extension's device token). Walnut's own tunnels connect to its tunnel port, where loopback is
+extension's device token or a window's browser key). Walnut's own tunnels connect to its tunnel port, where loopback is
 never trusted, so through them nothing is shared. A Lock ends the shared sessions with the rest,
 and an extension that locked only itself (its own timer) shares nothing until the person unlocks
 again, after a Walnut restart too (`sessions.json` keeps that record, signed with the sessions). Every other auto-lock choice in the popup locks at browser start and after
 its own time, which sharing would undo, so with those the extension unlocks with the password.
 The Playwright fixture's one vault serves specs side by side, so there (`WALNUT_TEST_VAULT_JOIN=named`)
-only the extension a spec names through `POST /api/test/vault-join` shares an unlock. Tests:
-`tests/e2e/vault-join.test.ts`, `tests/core/vault/session-join.test.ts`,
+only the extension (`device`) or window (`browserKey`) a spec names through `POST /api/test/vault-join`
+shares an unlock. Tests: `tests/e2e/vault-join.test.ts`, `tests/e2e/vault-window-join.test.ts`,
+`tests/core/vault/session-join.test.ts`,
 `tests/core/browser-control/extension-popup-race.test.ts` (a late answer never draws over the lock
 screen: `popup-view.ts`), `tests/e2e/browser/extension-one-unlock.spec.ts`.
 
@@ -435,7 +462,7 @@ Tests: `tests/e2e/browser/extension-passwords.spec.ts` (Chromium with the extens
 sites on `*.example.test`, the attacks above included), `tests/e2e/browser/extension-form-detect.spec.ts`
 (the form shapes), `tests/scripts/build-extension.test.ts`, and the server side in `tests/e2e/vault.test.ts`.
 
-**Agents in the browser.** The same extension can let Walnut agents work in tabs of their own, on sites the person approves; it is off until they turn it on in the popup. See [Agents in your browser](browser-control.md).
+**Agents in the browser.** The same extension can let Walnut agents work in tabs of their own, on sites the person approves; the connect page asks once (a checkbox, on by default), and the extension's Settings change it later. See [Agents in your browser](browser-control.md).
 
 ## iPhone
 

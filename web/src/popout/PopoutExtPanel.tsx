@@ -15,7 +15,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiPost } from '@/api/client';
 import { askTitle } from '@open-walnut/ask-list';
-import { AskObjectDrawer, type AskObjectQuote } from '@/components/chat/AskObjectDrawer';
+import { AskObjectDrawer, escapeBelongsToAnOverlay, type AskObjectQuote } from '@/components/chat/AskObjectDrawer';
+import type { AskSessionLaunch } from '@/components/chat/ask-object-session';
+import { ensureMainTask } from '@/api/org';
 import { forgetAskSession, objectContextHints, readAskSession, storeObjectContext, writeAskSession } from '@/components/chat/ask-object-session';
 import { setPendingHintsSource } from '@/utils/pending-hints';
 import { UserRowAttachmentsContext, type UserRowHints } from '@/components/sessions/user-row-attachments';
@@ -33,9 +35,10 @@ import { log } from '@/utils/log';
 import {
   ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, conversationKey, handedOf, hostOf, otherOwnerOf, pageChipOn, pageContextBlock, panelOptions,
   rememberHanded, rememberSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
-  type HandedAsk, type PanelContext, type VaultState,
+  MAIN_OPEN, type HandedAsk, type PanelContext, type VaultState,
 } from './ext-panel-model';
 import { fromParent, toParent } from './ext-frame';
+import { useFrameTheme } from './ext-theme';
 import { useAskSnapshots } from './useAskSnapshots';
 import { attachedView, type Attached } from './ext-attached';
 import { ExtAskHeader, ExtAsksDrawer, ExtComposerChips } from './ExtAskChrome';
@@ -66,8 +69,14 @@ function insertInto(sessionId: string, text: string): void {
   window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail }));
 }
 
+function blurComposer(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) active.blur();
+}
+
 function ExtPanel() {
   const opts = useMemo(() => panelOptions(window.location.search), []);
+  useFrameTheme();
   const [ctx, setCtx] = useState<PanelContext | null>(null);
   const [orphan, setOrphan] = useState(false);
   const [agentId, setAgentId] = usePageView('ext-panel', 'agent', GENERAL_AGENT_ID, isAgentId);
@@ -85,8 +94,17 @@ function ExtPanel() {
   const [chat, setChat] = useState(0);
   const chatNo = useRef(chat);
   chatNo.current = chat;
-  /** A question the popup handed over, sent once by the conversation it starts (`chat` is its number). */
-  const [preset, setPreset] = useState<{ chat: number; text: string } | null>(null);
+  /** The chat (by its number) that is Main's composer: its first question goes to Main's own task. */
+  const [mainChat, setMainChat] = useState<number | null>(null);
+  const forMain = mainChat === chat;
+  const forMainRef = useRef(forMain);
+  forMainRef.current = forMain;
+  /**
+   * A question the popup handed over, sent once by the conversation it starts (`chat` is its
+   * number) on the page it was asked about (`key`): moving to another page must not ask it again
+   * there (2026-11-06: it was re-sent on every page the person moved to until a new chat).
+   */
+  const [preset, setPreset] = useState<{ chat: number; key: string; text: string } | null>(null);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
   const recordRef = useRef(record);
@@ -104,8 +122,13 @@ function ExtPanel() {
   /** The page (its address) left out of the next message with the chip's ×, or put back with a click. */
   const [pageLeftOut, setPageLeftOut] = useState('');
   const [pageAdded, setPageAdded] = useState('');
-  /** A handed question's own choices, read by the launch it starts (the conversation's first effect, before this view's run). */
-  const handChoice = useRef<{ page: boolean; act: boolean } | null>(null);
+  /**
+   * A handed question's own choices, read by the launch it starts (the conversation's first effect,
+   * before this view's run). Kept for that conversation (`chat`), not taken by the first read: the
+   * drawer's open effect may start the launch twice (one joins the other after this context is
+   * read), and a second read finding nothing sent the question without its quote (review F2).
+   */
+  const handChoice = useRef<{ chat: number; key: string; page: boolean; act: boolean; sel: string } | null>(null);
   /** The tab turned over in a conversation already going: its note rides the next message. */
   const actNote = useRef<number | undefined>(undefined);
   /** What each sent message attached from the page, by its context id (the bubble before it is saved). */
@@ -139,9 +162,32 @@ function ExtPanel() {
     if (record?.taskId && firstPage.current) { rememberSentPage(record.taskId, firstPage.current); firstPage.current = ''; }
   }, [record?.taskId]);
 
+  const mainIdRef = useRef(asks.mainTask?.id);
+  mainIdRef.current = asks.mainTask?.id;
+  /**
+   * Main before its first message: its composer, as on Home, in this panel (never a Walnut tab:
+   * the review of 2026-11-06 lost the page to the tab that opened). The question goes to Main's
+   * own task (adjustLaunch).
+   */
+  const startMain = useCallback(() => {
+    const k = keyRef.current;
+    if (!k) return;
+    forgetAskSession({ agentId: GENERAL_AGENT_ID, key: k });
+    carryAct.current = false;
+    handChoice.current = null;
+    if (agent.id !== GENERAL_AGENT_ID) setAgentId(GENERAL_AGENT_ID);
+    const next = chatNo.current + 1;
+    setMainChat(next);
+    setChat(next);
+  }, [agent.id, setAgentId]);
+
   /** Show an ask (picked in the drawer, or handed over by the popup) as this page's conversation. */
   const pickAsk = useCallback((taskId: string, sessionId: string | undefined, forAgent?: string) => {
-    if (!sessionId) { toParent({ type: 'open-walnut', path: taskPath(taskId) }); return; }
+    if (!sessionId) {
+      if (taskId === MAIN_OPEN || taskId === mainIdRef.current) { startMain(); return; }
+      toParent({ type: 'open-walnut', path: taskPath(taskId) });
+      return;
+    }
     const k = keyRef.current;
     if (!k) return;
     writeAskSession({ agentId: forAgent ?? agent.id, key: k }, { taskId, sessionId, asked: [], at: Date.now() });
@@ -149,16 +195,17 @@ function ExtPanel() {
     handChoice.current = null;
     if (forAgent && forAgent !== agent.id) setAgentId(forAgent);
     setChat((n) => n + 1);
-  }, [agent.id, setAgentId]);
+  }, [agent.id, setAgentId, startMain]);
 
   const applyHand = useCallback((h: { ask?: HandedAsk; open?: { taskId: string; sessionId?: string } }) => {
     if (h.open) { pickAsk(h.open.taskId, h.open.sessionId); return; }
     if (!h.ask || !keyRef.current) return;
     forgetAskSession({ agentId: agent.id, key: keyRef.current });
-    handChoice.current = { page: h.ask.page, act: h.ask.act };
-    carryAct.current = h.ask.act;
     const next = chatNo.current + 1;
-    setPreset({ chat: next, text: h.ask.text });
+    handChoice.current = { chat: next, key: keyRef.current, page: h.ask.page, act: h.ask.act, sel: h.ask.sel ?? '' };
+    log.info('ext-panel', 'question handed over', { page: h.ask.page, act: h.ask.act, selChars: h.ask.sel?.length ?? 0 });
+    carryAct.current = h.ask.act;
+    setPreset({ chat: next, key: keyRef.current, text: h.ask.text });
     setChat(next);
   }, [agent.id, pickAsk]);
   const applyHandRef = useRef(applyHand);
@@ -201,6 +248,9 @@ function ExtPanel() {
     return () => { window.removeEventListener('message', on); window.removeEventListener('focus', refresh); clearTimeout(t); };
   }, []);
 
+  // Main's composer is that page's: another page opens on its own conversation.
+  useEffect(() => { setMainChat(null); }, [key]);
+
   // What the popup handed over before the page was known goes once it is.
   useEffect(() => {
     if (key && heldHand.current) { const h = heldHand.current; heldHand.current = null; applyHand(h); }
@@ -223,6 +273,21 @@ function ExtPanel() {
     window.addEventListener('keydown', key, true);
     return () => { window.removeEventListener('pointerdown', down, true); window.removeEventListener('keydown', key, true); };
   }, [keyPressed]);
+
+  // Escape closes the toolbar popup, never the side panel (the panel's Escape only leaves the
+  // composer: AskObjectDrawer's onClose below). A key a menu, the drawer or the key popover takes
+  // is theirs.
+  useEffect(() => {
+    if (opts.surface !== 'popup') return;
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      if (escapeBelongsToAnOverlay(e, document.body)) return;
+      e.preventDefault();
+      toParent({ type: 'close' });
+    };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [opts.surface]);
 
   useEffect(() => { document.title = page?.title ? `${page.title} · Walnut` : 'Walnut'; }, [page?.title]);
 
@@ -286,6 +351,11 @@ function ExtPanel() {
   const attach = !!record?.sessionId && !!selection && selection !== leftOut && selection !== sentSelection ? selection : '';
   const attachRef = useRef(attach);
   attachRef.current = attach;
+  // Before the first question the selection shows as the quote over the composer, with its own ×,
+  // apart from the page chip: what shows is what goes (review 2026-11-06).
+  const draftQuote = !record?.taskId && !!selection && selection !== leftOut ? selection : '';
+  const draftQuoteRef = useRef(draftQuote);
+  draftQuoteRef.current = draftQuote;
   // The page chip: on before the first question, and in a conversation that has not had this page.
   const shown = useMemo(() => (key ? readAskSession(scope) : null), [scope, key, chat, record]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownTaskId = record?.taskId ?? shown?.taskId ?? '';
@@ -325,13 +395,14 @@ function ExtPanel() {
     let text: { file?: string; inline?: string } = {};
     if (withPage) text = await pageText(p, false).catch(() => ({}));
     const block = sel || withPage
-      ? pageContextBlock({ url: p.url, ...(p.title ? { title: p.title } : {}), ...(sel ? { selection: sel } : {}) }, { ...text, ...(tab !== undefined ? { tab } : {}) })
+      ? pageContextBlock({ url: p.url, ...(p.title ? { title: p.title } : {}), ...(sel ? { selection: sel } : {}) }, { ...text, ...(tab !== undefined ? { tab } : {}), ...(withPage ? {} : { selectionOnly: true }) })
       : actLine(tab!);
     const id = await storeObjectContext(sel || withPage ? CONTEXT_NAME : ACT_CONTEXT_NAME, block, (path, b) => apiPost<{ id: string }>(path, b))
       .catch((err) => { log.warn('ext-panel', 'note for the next message not stored', { error: err instanceof Error ? err.message : String(err) }); return ''; });
     if (!id) return undefined;
     actNote.current = undefined;
-    const att: Attached = { ...(sel || withPage ? { page: { title: p.title ?? hostOf(p.url), host: hostOf(p.url) } } : {}), ...(sel ? { sel } : {}) };
+    // The page chip in the bubble says the page went; a selection alone names its page in its quote.
+    const att: Attached = { ...(withPage ? { page: { title: p.title ?? hostOf(p.url), host: hostOf(p.url) } } : {}), ...(sel ? { sel, from: p.title ?? hostOf(p.url) } : {}) };
     attachedById.current.set(id, att);
     if (message.trim()) attachedByWords.current.set(message.trim(), att);
     if (sel) { setSentSelection(sel); rememberSent(keyRef.current, sel); }
@@ -359,32 +430,41 @@ function ExtPanel() {
     </div>
   ) : undefined;
 
-  // What the chat shows, for the panel page to draw the next time this view loads, and the word
+  // What the view shows, for the panel page to draw the next time this view loads, and the word
   // that this view's own content is up (ext-snapshot.ts).
-  const chatRef = useRef<HTMLDivElement>(null);
-  useAskSnapshots(chatRef, page, key);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useAskSnapshots(rootRef, page, key, opts.surface);
 
   const prepareContext = useCallback(async (draft: { walnut?: boolean; host?: string | null }, question: string): Promise<string> => {
     const now = ctxRef.current;
     const p = now?.page;
     // A handed question carries the popup's choices: this launch runs before this view's effects do.
-    const hand = handChoice.current;
-    handChoice.current = null;
+    const held = handChoice.current;
+    const hand = held && held.chat === chatNo.current && held.key === keyRef.current ? held : null;
     const include = hand ? hand.page : pageOnRef.current;
     const acting = (hand ? hand.act : actChoice === true) && now?.tab !== undefined;
     if (!p) return acting ? actLine(now!.tab!) : '';
-    // Left out with the chip's ×: only the tab note, when the ask may act there.
-    if (!include) return acting ? actLine(now!.tab!) : '';
-    // The first question takes the selection along: its bubble shows it, and it is not offered again.
-    const sel = p.selection?.trim();
+    // The first question takes the selection its quote shows over the composer (a question the
+    // popup handed over, the one the popup's quote showed): its bubble shows it, and it is not
+    // offered again. A selection no quote showed never goes (review 2026-11-06).
+    const sel = (hand ? hand.sel : draftQuoteRef.current)?.trim();
+    // Left out with the chip's ×: the selection alone, and the tab note when the ask may act there.
+    if (!include) {
+      if (!sel) return acting ? actLine(now!.tab!) : '';
+      setSentSelection(sel); rememberSent(keyRef.current, sel);
+      attachedByWords.current.set(question.trim(), { sel, from: p.title ?? hostOf(p.url) });
+      return pageContextBlock({ url: p.url, ...(p.title ? { title: p.title } : {}), selection: sel }, { selectionOnly: true, ...(acting ? { tab: now!.tab } : {}) });
+    }
     if (sel) { setSentSelection(sel); rememberSent(keyRef.current, sel); }
     attachedByWords.current.set(question.trim(), { page: { title: p.title ?? hostOf(p.url), host: hostOf(p.url) }, ...(sel ? { sel } : {}) });
     // A task on another machine cannot read this one's file: it gets the text itself.
     const text = await pageText(p, !draft.walnut && !!draft.host && draft.host !== '__local__');
     firstPage.current = p.url;
     log.info('ext-panel', 'asking about a page', { host: hostOf(p.url), withText: !!(text.file || text.inline), acting });
-    return pageContextBlock(p, { ...text, ...(acting ? { tab: now!.tab } : {}) });
+    return pageContextBlock({ url: p.url, ...(p.title ? { title: p.title } : {}), ...(sel ? { selection: sel } : {}) }, { ...text, ...(acting ? { tab: now!.tab } : {}) });
   }, [actChoice, pageText]);
+
+  const dropQuote = useCallback(() => setLeftOut(ctxRef.current?.page?.selection?.trim() ?? ''), []);
 
   const newChat = useCallback(() => {
     if (!key) return;
@@ -393,6 +473,18 @@ function ExtPanel() {
     handChoice.current = null;
     setChat((n) => n + 1);
   }, [key, scope, ownTab]);
+
+  /**
+   * A question asked here is a conversation, not work for the board: its task is not pinned (as
+   * Main's composer launches on Home), so the panel's quick asks never fill Focus (review
+   * 2026-11-06). Main's composer launches on Main's own task, made by the server on first use.
+   */
+  const adjustLaunch = useCallback(async (body: AskSessionLaunch): Promise<AskSessionLaunch> => {
+    const unpinned: AskSessionLaunch = { ...body, taskMeta: { ...body.taskMeta, pinTier: null } };
+    if (!forMainRef.current) return unpinned;
+    const main = await ensureMainTask();
+    return main ? { ...unpinned, taskId: main.id } : unpinned;
+  }, []);
 
   const pickAgent = useCallback((id: string) => { setAgentId(id); }, [setAgentId]);
   const closeDrawer = useCallback(() => setAsksDrawer(false), []);
@@ -406,7 +498,7 @@ function ExtPanel() {
       agentsFirst={asksDrawer === 'agents'}
       onPickAgent={pickAgent}
       selectedTaskId={shownTaskId && shownTaskId !== asks.mainTask?.id ? shownTaskId : null}
-      mainSelected={!!shownTaskId && shownTaskId === asks.mainTask?.id}
+      mainSelected={shownTaskId ? shownTaskId === asks.mainTask?.id : forMain}
       onPick={(id) => {
         const t = asks.rows.find((r) => r.id === id)?.task;
         const sid = sessionOfTask(t) ?? undefined;
@@ -415,13 +507,14 @@ function ExtPanel() {
       }}
       onPickMain={() => {
         const main = asks.mainTask;
-        // Main before its first message is made on Home, where its composer is.
-        if (!main || !mainSession) { toParent({ type: 'open-walnut', path: '/' }); return; }
-        if (opts.surface === 'popup') toParent({ type: 'open-side-panel', open: { taskId: main.id, sessionId: mainSession } });
-        else pickAsk(main.id, mainSession, GENERAL_AGENT_ID);
+        // Main's conversation, in the panel like any ask; before its first message, its composer.
+        if (opts.surface === 'popup') toParent({ type: 'open-side-panel', open: main && mainSession ? { taskId: main.id, sessionId: mainSession } : { taskId: MAIN_OPEN } });
+        else if (main && mainSession) pickAsk(main.id, mainSession, GENERAL_AGENT_ID);
+        else startMain();
       }}
       onNew={() => { if (opts.surface === 'panel') newChat(); }}
       keyed={opts.keyed}
+      settings={opts.settings}
       vault={vault}
       onView={(view) => (opts.surface === 'popup' && view === 'tasks' ? toParent({ type: 'open-side-panel', view }) : toParent({ type: 'open-view', view }))}
     />
@@ -430,7 +523,7 @@ function ExtPanel() {
   const header = (
     <ExtAskHeader
       surface={opts.surface}
-      title={shownTask ? askTitle(shownTask, agent) : shownTaskId ? (page?.title ?? (page ? hostOf(page.url) : agent.project)) : 'New chat'}
+      title={shownTask ? askTitle(shownTask, agent) : shownTaskId ? (page?.title ?? (page ? hostOf(page.url) : agent.project)) : forMain ? 'CEO' : 'New chat'}
       agent={agent}
       canSwitch={asks.agents.length > 1}
       menuRef={menuRef}
@@ -445,7 +538,7 @@ function ExtPanel() {
   );
 
   if (!ctx) {
-    return <div className="ext-panel ext-panel-empty" data-testid="ext-panel">
+    return <div ref={rootRef} className="ext-panel ext-panel-empty" data-testid="ext-panel">
       {orphan
         ? <p>This is Walnut&apos;s browser side panel. Open it from the Walnut extension, next to a web page.</p>
         : <p className="muted"><span className="spinner" /> Connecting to the page…</p>}
@@ -454,7 +547,7 @@ function ExtPanel() {
 
   const canAct = !!page && tab !== undefined && !otherOwner;
   if (opts.surface === 'popup') {
-    return <div className="ext-panel ext-ask is-popup" data-testid="ext-panel" data-surface="popup">
+    return <div ref={rootRef} className="ext-panel ext-ask is-popup" data-testid="ext-panel" data-surface="popup">
       {header}
       <ExtPopupBody rows={asks.rows} page={page} canAct={canAct && !owner} loading={asks.loading} />
       {drawer}
@@ -468,11 +561,11 @@ function ExtPanel() {
     who: page ? hostOf(page.url) : '',
     when: '',
     where: page?.title ?? '',
-    preview: page?.selection ?? '',
+    preview: draftQuote,
   };
-  const askPreset = preset && preset.chat === chat ? preset.text : '';
+  const askPreset = preset && preset.chat === chat && preset.key === key ? preset.text : '';
 
-  return <div className="ext-panel ext-ask" data-testid="ext-panel" data-page-key={key}>
+  return <div ref={rootRef} className="ext-panel ext-ask" data-testid="ext-panel" data-page-key={key}>
     {header}
     {otherOwner && (
       <p className="ext-panel-note" data-testid="ext-panel-other-owner">
@@ -482,8 +575,8 @@ function ExtPanel() {
     )}
     {actError && <p className="ext-panel-note ext-panel-error" role="alert">{actError}</p>}
     {/* A new chat opens as the popup does: the asks to continue over the composer. */}
-    {!shownTaskId && <ContinueList className="is-panel" rows={asks.rows} max={4} loading={asks.loading} onPick={(row) => pickAsk(row.id, sessionOfTask(row.task) ?? undefined)} />}
-    <div className="ext-panel-chat" ref={chatRef}>
+    {!shownTaskId && !forMain && <ContinueList className="is-panel" rows={asks.rows} max={4} loading={asks.loading} onPick={(row) => pickAsk(row.id, sessionOfTask(row.task) ?? undefined)} />}
+    <div className="ext-panel-chat">
       <UserRowAttachmentsContext.Provider value={attachmentsOf}>
       <AskObjectDrawer
         key={`${agent.id}:${key}:${chat}:${tab ?? ''}`}
@@ -495,11 +588,15 @@ function ExtPanel() {
         contextName={CONTEXT_NAME}
         prepareContext={prepareContext}
         onRecord={setRecord}
-        onClose={() => toParent({ type: 'close' })}
+        // Escape here never closes the side panel (it holds the conversation and the draft): it
+        // only leaves the composer. The toolbar popup closes on Escape (above).
+        onClose={blurComposer}
+        adjustLaunch={adjustLaunch}
         plainChat
-        noQuote={!page?.selection}
+        noQuote={!draftQuote}
+        onDropQuote={dropQuote}
         {...(askPreset ? { preset: askPreset, autoSend: true } : {})}
-        composerPlaceholder={page ? 'Ask Walnut, or ask it to do something here…' : 'Ask Walnut anything…'}
+        composerPlaceholder={forMain ? 'Ask the CEO, or hand it something to do…' : page ? 'Ask Walnut, or ask it to do something here…' : 'Ask Walnut anything…'}
         composerPill={selectionPill}
         composerBar={chips}
       />

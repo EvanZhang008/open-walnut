@@ -60,6 +60,27 @@ async function startConnect(serverUrl: string): Promise<Reply> {
   return { ok: true }
 }
 
+/**
+ * Walnut's Passwords goes to the tab already showing it (review R1-13d: Open vault opened a second
+ * one), the person's own window first; any other page of Walnut opens in a new tab.
+ */
+async function openWalnutTab(url: string): Promise<void> {
+  const want = new URL(url)
+  if (want.pathname === '/passwords') {
+    const all = await ext.tabs.query({}).catch(() => [])
+    const onIt = all.filter((t) => { try { const u = new URL(t.url ?? ''); return u.origin === want.origin && u.pathname === '/passwords' } catch { return false } })
+    const [mine] = await ext.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => [])
+    const t = onIt.find((x) => x.windowId === mine?.windowId) ?? onIt[0]
+    if (t?.id !== undefined) {
+      // An item to show: that tab goes to it; the list itself stays as the person left it.
+      await ext.tabs.update(t.id, { active: true, ...(want.search && t.url !== url ? { url } : {}) })
+      if (t.windowId !== undefined) await ext.windows.update?.(t.windowId, { focused: true }).catch(() => undefined)
+      return
+    }
+  }
+  await ext.tabs.create({ url })
+}
+
 /** Lock this browser's unlock (the auto-lock; the popup's Lock with `everywhere`, every window of Walnut too): the badges go with it. */
 async function lockNow(opts: { everywhere?: boolean } = {}): Promise<void> {
   await api.lock(opts)
@@ -104,7 +125,25 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'savebar-data': 'savebar', 'savebar-action': 'savebar', 'savebar-size': 'savebar',
   'agent-get': 'popup', 'agent-on': 'popup', 'agent-off': 'popup', 'agent-stop': 'content',
   'page-selection': 'content',
-  'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel',
+  'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel', 'panel-hand': 'sidepanel',
+}
+
+/**
+ * Something left for the panel of one window (a selection the context menu asked about, the
+ * popup's question) is taken by one panel only: two takes run one after the other, so the second
+ * finds it gone (R1-16: two panels of one window both read the popup's question, and it made two asks).
+ */
+let taking: Promise<unknown> = Promise.resolve()
+function takeOnce<T>(key: 'panelAsk' | 'panelHand', windowId: unknown): Promise<T | undefined> {
+  const run = async (): Promise<T | undefined> => {
+    const v = (await ext.storage.session.get(key))[key] as ({ windowId?: number; at?: number } & T) | undefined
+    if (!v || v.windowId !== windowId || Date.now() - (v.at ?? 0) > 60_000) return undefined
+    await ext.storage.session.remove(key)
+    return v
+  }
+  const p = taking.then(run, run)
+  taking = p.catch(() => undefined)
+  return p
 }
 /** What a person does with Walnut (not a page loading by itself): it keeps the auto-lock away. */
 const USE = new Set(['unlock', 'site-items', 'search', 'item-detail', 'copy-secret', 'fill-tab', 'totp-code', 'wallet-items', 'open-menu', 'menu-fill', 'menu-generate', 'savebar-action'])
@@ -145,7 +184,8 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       if (!(await vaultSession())) return { ok: true, count: null }
       const tab = await activeTab(windowOf(msg))
       const page = tab?.url ?? ''
-      if (!/^https?:/.test(page) || await isWalnutPage(page)) return { ok: true, count: null, site: '' }
+      // No site here (a Walnut page, a new tab): none of its logins, so the drawer says so (R1-13b).
+      if (!/^https?:/.test(page) || await isWalnutPage(page)) return { ok: true, count: 0, site: '' }
       return { ok: true, count: (await tiersOf(page)).first.length, site: displayHost(page) }
     }
     case 'unlock-for': {
@@ -185,11 +225,13 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     }
     case 'panel-pending': {
       // A selection the context menu asked about, for the panel of that window (taken once).
-      const { panelAsk } = await ext.storage.session.get('panelAsk')
-      const a = panelAsk as { windowId?: number; text?: string; at?: number } | undefined
-      if (!a || a.windowId !== msg.windowId || Date.now() - (a.at ?? 0) > 60_000) return { ok: true }
-      await ext.storage.session.remove('panelAsk')
-      return { ok: true, text: a.text ?? '' }
+      const a = await takeOnce<{ text?: string }>('panelAsk', msg.windowId)
+      return a ? { ok: true, text: a.text ?? '' } : { ok: true }
+    }
+    case 'panel-hand': {
+      // The popup's question (or ask to show) for the side panel of that window (taken once).
+      const hand = await takeOnce<{ ask?: unknown; open?: unknown; view?: unknown }>('panelHand', msg.windowId)
+      return hand ? { ok: true, hand: { ask: hand.ask, open: hand.open, view: hand.view } } : { ok: true }
     }
     case 'state': {
       // The popup opening is when to find out the person removed this extension in Settings
@@ -272,7 +314,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const where = msg.to === 'settings' ? '/settings#browser'
         : typeof msg.path === 'string' && /^\/(?!\/)[\w\-./?=&%#]{0,300}$/.test(msg.path) ? msg.path
         : typeof msg.item === 'string' && /^[\w-]{1,80}$/.test(msg.item) ? `/passwords?item=${encodeURIComponent(msg.item)}` : '/passwords'
-      await ext.tabs.create({ url: `${conn?.serverUrl ?? DEFAULT_SERVER}${where}` })
+      await openWalnutTab(`${conn?.serverUrl ?? DEFAULT_SERVER}${where}`)
       return { ok: true }
     }
 
@@ -349,7 +391,10 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const conn = await pair(origin, String(msg.code ?? ''))
       await connecting.delete(tabId)
       forget()
-      return { ok: true, device: conn.device }
+      // The person's choice on the connect page (on by default there): agents may use this
+      // browser. Asked only here, at a connect: an install already connected keeps its own (R1-7).
+      if (typeof msg.agents === 'boolean') await agentMessage(msg.agents ? 'agent-on' : 'agent-off', sender)
+      return { ok: true, device: conn.device, agents: typeof msg.agents === 'boolean' ? msg.agents : undefined }
     }
   }
   return { ok: false, error: `Unknown message ${msg.type}` }

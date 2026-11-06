@@ -128,3 +128,46 @@ test('Tasks, opened again: the list', async () => {
   }
   expect.soft(median(results['tasks-again:shown'])).toBeLessThan(1000)
 })
+
+/**
+ * Open time as the person sees it (review R1-4): `look` is the first moment the panel shows the
+ * view's shape (its header with ≡, key and New chat, and the composer), whether the extension
+ * page's own placeholder draws it or Walnut's frame; `real` is Walnut's own view up (its header
+ * and composer). Cold is the first open after the browser started; warm the ones after.
+ */
+const LOOK_PANEL = '[data-testid="panel-snap"] [data-testid="panel-snap-menu"]'
+const REAL_HEAD = '[data-testid="ext-ask-head"]'
+/** Either composer: a new chat's, or the conversation's when the page has one (its follow-up). */
+const REAL_COMPOSER = '[data-testid="ask-object-compose"] textarea, .session-panel.is-plain-chat textarea'
+const REAL_POPUP_COMPOSER = '.ext-popup-composer textarea'
+
+async function openPopupAsk(): Promise<{ pop: Page; t0: number }> {
+  const opened = lab.ctx.waitForEvent('page')
+  const t0 = Date.now()
+  await lab.ctx.serviceWorkers()[0].evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`popup-ask.html?window=${w}`), type: 'popup', width: 380, height: 560 }), lab.docWindow)
+  return { pop: await opened, t0 }
+}
+
+async function lookAndReal(p: Page, view: string, t0: number, name: string, realSel: string): Promise<void> {
+  const look = firstShown(p, view, REAL_HEAD, LOOK_PANEL, t0)
+  const real = (async () => { await until(p, view, REAL_HEAD, t0); return until(p, view, realSel, t0) })()
+  record(`${name}:look`, await look)
+  record(`${name}:real`, await real)
+}
+
+test('open time, as seen: the side panel and the popup, cold and warm', async () => {
+  test.setTimeout(300_000)
+  for (let i = 0; i < 4; i++) {
+    const { panel, t0 } = await openPanel(lab, 'ask')
+    await lookAndReal(panel, 'ext-panel', t0, i === 0 ? 'panel-open-1st' : 'panel-open-again', REAL_COMPOSER)
+    await panel.waitForTimeout(1200)
+    if (process.env.PANEL_SPEED_TRACE) await trace(panel, t0)
+    await panel.close()
+  }
+  for (let i = 0; i < 4; i++) {
+    const { pop, t0 } = await openPopupAsk()
+    await lookAndReal(pop, 'ext-panel', t0, i === 0 ? 'popup-open-1st' : 'popup-open-again', REAL_POPUP_COMPOSER)
+    await pop.waitForTimeout(1200)
+    await pop.close()
+  }
+})

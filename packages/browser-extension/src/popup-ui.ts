@@ -5,7 +5,7 @@ import { CLEAR_MS } from './bg-clipboard'
 
 const S = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
 /** The popup's own icons (the shared ones are in dom.ts). */
-const POPUP_ICONS = {
+export const POPUP_ICONS = {
   back: `<svg ${S}><path d="m15 18-6-6 6-6"/></svg>`,
   next: `<svg ${S}><path d="m9 18 6-6-6-6"/></svg>`,
   eyeOff: `<svg ${S}><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.2"/><path d="M6.6 6.6C3.9 8.3 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>`,

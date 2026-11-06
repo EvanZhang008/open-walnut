@@ -26,6 +26,7 @@ const ICON_SIDE = <svg {...S}><rect x="3" y="4" width="18" height="16" rx="2" />
 const ICON_CARET = <svg {...S} width={11} height={11}><path d="m6 9 6 6 6-6" /></svg>;
 const ICON_POINTER = <svg {...S} width={13} height={13}><path d="m4 4 7 17 2.5-7.5L21 11z" /></svg>;
 const ICON_TASKS = <svg {...S}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8.5 12 2.5 2.5 4.5-5" /></svg>;
+const ICON_GEAR = <svg {...S}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
 const ICON_OUT = <svg {...S}><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>;
 
 /** The key with its padlock badge while Passwords is locked. */
@@ -157,15 +158,17 @@ interface DrawerProps {
   onPickMain: () => void;
   onNew: () => void;
   keyed: boolean;
+  /** The extension opens its own Settings as a view (`ext=3`), where "Let Walnut agents use this browser" is. */
+  settings: boolean;
   vault: VaultState | null;
-  onView: (view: 'tasks' | 'passwords') => void;
+  onView: (view: 'tasks' | 'passwords' | 'settings') => void;
 }
 
 /** Home's drawer of asks, with the side panel's foot: Tasks, Passwords, Open Walnut. */
 export function ExtAsksDrawer(p: DrawerProps) {
   const locked = p.vault?.locked !== false;
   const count = p.vault?.siteCount;
-  const pwMeta = locked ? 'Locked' : typeof count === 'number' ? (count === 1 ? '1 login here' : `${count} logins here`) : '';
+  const pwMeta = locked ? 'Locked' : typeof count === 'number' ? (count === 0 ? 'No logins here' : count === 1 ? '1 login here' : `${count} logins here`) : '';
   const foot = (
     <>
       {p.keyed && (
@@ -175,6 +178,9 @@ export function ExtAsksDrawer(p: DrawerProps) {
       {p.keyed && (
         <FootRow testid="ext-drawer-passwords" icon={<KeyGlyph locked={locked} />} label="Passwords" onClick={() => { p.onClose(); p.onView('passwords'); }}
           end={pwMeta ? <span className="ext-drawer-meta" data-testid="ext-drawer-passwords-meta">{pwMeta}</span> : null} />
+      )}
+      {p.keyed && p.settings && (
+        <FootRow testid="ext-drawer-settings" icon={ICON_GEAR} label="Settings" onClick={() => { p.onClose(); p.onView('settings'); }} />
       )}
       <FootRow testid="ext-drawer-open-walnut" icon={ICON_OUT} label="Open Walnut" onClick={() => { p.onClose(); toParent({ type: 'open-walnut', path: '/' }); }} />
     </>

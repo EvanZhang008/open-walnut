@@ -10,6 +10,7 @@ import { useAskObjectDraft } from '@/components/chat/useAskObjectDraft';
 import type { DrawerRow } from '@/components/chat/AskWalnutDrawer';
 import { ContinueRow, ExtComposerChips } from './ExtAskChrome';
 import { toParent } from './ext-frame';
+import { log } from '@/utils/log';
 import type { PanelPage } from './ext-panel-model';
 import { sessionOfTask } from './useExtAsks';
 
@@ -39,13 +40,26 @@ export function ExtPopupBody({ rows, page, canAct, loading }: { rows: DrawerRow[
   const draft = useAskObjectDraft('ext-popup');
   const [pageOn, setPageOn] = useState(true);
   const [actOn, setActOn] = useState(false);
+  // The page's selection shows as a quote over the composer, with its own ×, apart from the page
+  // chip: what shows is what goes, and a selection that does not show never goes (review 2026-11-06).
+  const selection = page?.selection?.trim() ?? '';
+  const [leftOut, setLeftOut] = useState('');
+  const quote = selection && selection !== leftOut ? selection : '';
 
   const onStart = useCallback(async (_id: string, text: string): Promise<boolean> => {
     const question = text.trim();
     if (!question) return false;
-    toParent({ type: 'open-side-panel', ask: { text: question, page: !!page && pageOn, act: canAct && actOn } });
+    log.info('ext-panel', 'question handed to the side panel', { page: !!page && pageOn, act: canAct && actOn, selChars: quote.length });
+    toParent({ type: 'open-side-panel', ask: { text: question, page: !!page && pageOn, act: canAct && actOn, ...(quote ? { sel: quote } : {}) } });
     return true;
-  }, [page, pageOn, canAct, actOn]);
+  }, [page, pageOn, canAct, actOn, quote]);
+
+  const quotePill = quote ? (
+    <div className="ext-panel-selection" data-testid="ext-panel-selection">
+      <span className="ext-panel-selection-text" title={quote}><span className="ext-panel-selection-label">Selected on the page:</span> {quote}</span>
+      <button type="button" className="ext-panel-selection-drop" data-testid="ext-panel-selection-drop" aria-label="Leave the selection out" title="Leave the selection out of the message" onClick={() => setLeftOut(quote)}>&times;</button>
+    </div>
+  ) : undefined;
 
   return (
     <div className="ext-popup-body" data-testid="ext-popup-body">
@@ -66,6 +80,7 @@ export function ExtPopupBody({ rows, page, canAct, loading }: { rows: DrawerRow[
           isKnownProject={known}
           plainChat
           placeholder="Ask Walnut, or ask it to do something here…"
+          composerPill={quotePill}
           composerBar={<ExtComposerChips page={page} pageOn={pageOn} onPage={setPageOn} {...(canAct ? { act: { on: actOn, onToggle: setActOn } } : {})} />}
         />
       </div>

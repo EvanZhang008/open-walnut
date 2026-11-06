@@ -48,6 +48,32 @@ const PAGES: Record<string, { title: string; body: string }> = {
       <label>Password <input name="password" type="password" id="new1" autocomplete="new-password"></label>
       <button type="submit" id="go">Create account</button></form>` },
   '/welcome': { title: 'Welcome back', body: '<h1 id="welcome">Signed in</h1>' },
+  // A site whose account box is type=email but takes a plain account name, and signs in by script
+  // on Enter in the password (no native submit): the browser's checks never run, the login goes.
+  '/script-enter': { title: 'Sign in to SB Script', body: `<form id="f">
+      <input name="login" type="email" id="user" autocomplete="username">
+      <input name="password" type="password" id="pass" autocomplete="current-password">
+      <button type="button" id="go">Sign in</button></form><p id="done" hidden>Signed in</p>
+      <script>
+        const send = () => fetch('/api/sign-in', { method: 'POST', body: 'x' }).then(() => { document.getElementById('done').hidden = false })
+        document.getElementById('pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send() } })
+        document.getElementById('go').addEventListener('click', send)
+      </script>` },
+  // The same box left to the browser, but the page also sends the login itself on Enter: the
+  // browser stops its own submit, the page's request went anyway.
+  '/held-but-sent': { title: 'Sign in to SB Both', body: `<form method="post" action="/welcome">
+      <input name="login" type="email" id="user" autocomplete="username">
+      <input name="password" type="password" id="pass" autocomplete="current-password">
+      <button type="submit" id="go">Sign in</button></form><p id="done" hidden>Signed in</p>
+      <script>
+        document.getElementById('pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') fetch('/api/sign-in', { method: 'POST', body: 'x' }).then(() => { document.getElementById('done').hidden = false }) })
+      </script>` },
+  // novalidate: the browser checks nothing and the form goes.
+  '/novalidate': { title: 'Sign in to SB Loose', body: `<form method="post" action="/welcome" novalidate>
+      <input name="login" type="email" id="user" autocomplete="username">
+      <input name="password" type="password" id="pass" autocomplete="current-password">
+      <button type="submit" id="go">Sign in</button></form>` },
+  '/api/sign-in': { title: 'ok', body: 'ok' },
 }
 
 function startSites(): Promise<void> {
@@ -144,6 +170,9 @@ test.beforeAll(async ({}, info) => {
   await p.getByTestId('popup-connect').click()
   const connect = await opened
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  // Agents in this browser stay off here, as the person may choose on this page (on by default):
+  // a browser of this spec must not join the fixture Walnut's agents beside the agent specs' own.
+  await connect.getByTestId('connect-extension-agents').uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   await connect.close()
@@ -223,6 +252,75 @@ test('the same login sent twice keeps its bar; a different one sent next is the 
   await expect(bar.getByText(/Saved to Walnut/)).toBeVisible()
   const item = await saved(page, `Twice ${stamp}`)
   expect((await api(page, 'GET', `/vault/items/${item.id}`)).item.password).toBe('Twice-pw-2')
+  await page.close()
+})
+
+test('a send the browser blocked (its own check of the email failed) offers no save; the send that goes does', async () => {
+  test.setTimeout(90_000)
+  const { page, tab } = await pageInWindow(site('shop.sb.test', '/signup'))
+  await page.locator('#user').fill('not-an-email')
+  await page.locator('#new1').fill(`Blocked-pw-${stamp}`)
+  // The browser's validation stops the send (R1-14): no login went, so nothing is offered.
+  await page.locator('#go').click()
+  await page.waitForTimeout(1500)
+  expect(await page.locator('#user').evaluate((e) => (e as HTMLInputElement).validity.valid)).toBe(false)
+  expect(await pending(tab)).toBeUndefined()
+  expect(page.frames().some((f) => f.url().includes('/savebar.html') && !f.isDetached())).toBe(false)
+  // Enter in the field is the same send, stopped the same way.
+  await page.locator('#new1').press('Enter')
+  await page.waitForTimeout(1500)
+  expect(await pending(tab)).toBeUndefined()
+  // Fixed, it goes, and the bar offers it.
+  await page.locator('#user').fill(`valid-${stamp}@sb.test`)
+  await page.locator('#go').click()
+  await expect(page.locator('#welcome')).toBeVisible()
+  const bar = await frameOf(page, 'savebar.html')
+  await expect(bar.getByText('Save this login to Walnut?')).toBeVisible()
+  await page.close()
+})
+
+test('a login the page sends by script on Enter is offered, even with an account box the browser would refuse (R1-14)', async () => {
+  test.setTimeout(90_000)
+  // Enter: the page's handler stops the native submit and signs in by fetch.
+  let { page } = await pageInWindow(site('script.sb.test', '/script-enter'))
+  await page.locator('#user').fill(`plainname${stamp}`)
+  await page.locator('#pass').fill(`Script-pw-${stamp}`)
+  expect(await page.locator('#user').evaluate((e) => (e as HTMLInputElement).validity.valid)).toBe(false)
+  await page.locator('#pass').press('Enter')
+  await expect(page.locator('#done')).toBeVisible()
+  let bar = await frameOf(page, 'savebar.html')
+  await expect(bar.getByText('Save this login to Walnut?')).toBeVisible()
+  await expect(bar.locator('#username')).toHaveValue(`plainname${stamp}`)
+  await page.close()
+
+  // The same page by its button (type=button, a script send).
+  ;({ page } = await pageInWindow(site('script2.sb.test', '/script-enter')))
+  await page.locator('#user').fill(`other${stamp}`)
+  await page.locator('#pass').fill(`Script-pw2-${stamp}`)
+  await page.locator('#go').click()
+  await expect(page.locator('#done')).toBeVisible()
+  bar = await frameOf(page, 'savebar.html')
+  await expect(bar.getByText('Save this login to Walnut?')).toBeVisible()
+  await page.close()
+
+  // The browser stops its own submit, but the page sent the login itself: offered.
+  ;({ page } = await pageInWindow(site('both.sb.test', '/held-but-sent')))
+  await page.locator('#user').fill(`both${stamp}`)
+  await page.locator('#pass').fill(`Both-pw-${stamp}`)
+  await page.locator('#pass').press('Enter')
+  await expect(page.locator('#done')).toBeVisible()
+  bar = await frameOf(page, 'savebar.html')
+  await expect(bar.getByText('Save this login to Walnut?')).toBeVisible()
+  await page.close()
+
+  // novalidate: nothing is checked and the form goes; offered on the next page.
+  ;({ page } = await pageInWindow(site('loose.sb.test', '/novalidate')))
+  await page.locator('#user').fill(`loose${stamp}`)
+  await page.locator('#pass').fill(`Loose-pw-${stamp}`)
+  await page.locator('#pass').press('Enter')
+  await expect(page.locator('#welcome')).toBeVisible()
+  bar = await frameOf(page, 'savebar.html')
+  await expect(bar.getByText('Save this login to Walnut?')).toBeVisible()
   await page.close()
 })
 

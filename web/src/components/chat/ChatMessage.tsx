@@ -8,7 +8,7 @@ import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContex
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { Lightbox } from '@/components/common/Lightbox';
-import { FileViewer } from '@/components/common/FileViewer';
+import { LazyFileViewer as FileViewer } from '@/components/common/LazyFileViewer';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs, linkTaskMentions, renderUserMessage, absorbWrittenTaskTitles } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';

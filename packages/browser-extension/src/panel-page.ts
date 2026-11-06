@@ -37,8 +37,10 @@ export function startPagePlumbing(o: {
   onAskSelection?: () => void
   /** A view said it is ready (after it was told the page). */
   onReady?: (w: Window) => void
-  /** Everything else a view says (`shown`, `snapshot`, the Ask view's own requests). */
+  /** Everything else a view says (`shown`, `snapshot`, `theme`, the Ask view's own requests). */
   onMessage?: (d: FrameMessage, from: Window) => void
+  /** The Ask view asked to close (Escape): the shell decides; with none, the page closes. */
+  onClose?: () => void
 }): PagePlumbing {
   const { server, win, askFrame: frame } = o
   const ready = new Set<Window>()
@@ -104,11 +106,11 @@ export function startPagePlumbing(o: {
       return
     }
     if (d.type === 'refresh') { soon(); return }
-    if (d.type === 'shown' || d.type === 'snapshot') { o.onMessage?.(d, from); return }
+    if (d.type === 'shown' || d.type === 'snapshot' || d.type === 'theme') { o.onMessage?.(d, from); return }
     // Acting in the tab, the page's text and closing are the Ask view's alone.
     if (from !== frame.contentWindow) return
     switch (d.type) {
-      case 'close': window.close(); return
+      case 'close': if (o.onClose) o.onClose(); else window.close(); return
       case 'adopt':
         // Only the tab this panel named, for the ask the panel shows.
         if (typeof d.tab !== 'number' || d.tab !== tabId || typeof d.task !== 'string') return

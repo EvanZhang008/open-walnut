@@ -183,6 +183,9 @@ test('connect the extension from its popup and the connect page', async () => {
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 20_000 })
   const extensionDevices = async () => ((await (await connect.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string }>).map((d) => d.name).filter((n) => n.startsWith('extension-'))
   const earlier = new Set(await extensionDevices())
+  // Agents in this browser stay off here, as the person may choose on this page (on by default):
+  // a browser of this spec must not join the fixture Walnut's agents beside the agent specs' own.
+  await connect.getByTestId('connect-extension-agents').uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   ownDevice = (await extensionDevices()).find((n) => !earlier.has(n)) ?? ''

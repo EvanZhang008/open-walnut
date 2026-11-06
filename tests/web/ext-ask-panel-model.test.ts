@@ -16,11 +16,11 @@ const msg = (type: string, extra: Record<string, unknown> = {}) => ({ walnut: 'e
 
 describe('panelOptions', () => {
   it('the key and the drawer rows only for an extension that draws the popover (ext=2)', () => {
-    expect(panelOptions('?view=ext-panel')).toEqual({ keyed: false, surface: 'panel' })
-    expect(panelOptions('?view=ext-panel&ext=2')).toEqual({ keyed: true, surface: 'panel' })
-    expect(panelOptions('?view=ext-panel&ext=3&surface=popup')).toEqual({ keyed: true, surface: 'popup' })
+    expect(panelOptions('?view=ext-panel')).toEqual({ keyed: false, surface: 'panel', settings: false })
+    expect(panelOptions('?view=ext-panel&ext=2')).toEqual({ keyed: true, surface: 'panel', settings: false })
+    expect(panelOptions('?view=ext-panel&ext=3&surface=popup')).toEqual({ keyed: true, surface: 'popup', settings: true })
     // An old extension cannot have the popup shape: it never framed one.
-    expect(panelOptions('?view=ext-panel&surface=popup')).toEqual({ keyed: false, surface: 'panel' })
+    expect(panelOptions('?view=ext-panel&surface=popup')).toEqual({ keyed: false, surface: 'panel', settings: false })
   })
 })
 
@@ -40,6 +40,9 @@ describe('readInbound: the new messages', () => {
   it('hand: a question with its choices, or an ask to show; nothing else', () => {
     expect(readInbound(msg('hand', { ask: { text: 'What is this?', act: true } }), EXT, true)).toEqual({ type: 'hand', ask: { text: 'What is this?', page: true, act: true } })
     expect(readInbound(msg('hand', { ask: { text: 'Hi', page: false } }), EXT, true)).toEqual({ type: 'hand', ask: { text: 'Hi', page: false, act: false } })
+    // The selection the popup's quote showed goes with the hand-over; none when no quote showed.
+    expect(readInbound(msg('hand', { ask: { text: 'Hi', page: false, sel: ' the words ' } }), EXT, true)).toEqual({ type: 'hand', ask: { text: 'Hi', page: false, act: false, sel: 'the words' } })
+    expect(readInbound(msg('hand', { ask: { text: 'Hi', page: false, sel: 42 } }), EXT, true)).toEqual({ type: 'hand', ask: { text: 'Hi', page: false, act: false } })
     expect(readInbound(msg('hand', { open: { taskId: 't-1', sessionId: 's:2' } }), EXT, true)).toEqual({ type: 'hand', open: { taskId: 't-1', sessionId: 's:2' } })
     expect(readInbound(msg('hand', { open: { taskId: 't 1' } }), EXT, true)).toBeNull()
     expect(readInbound(msg('hand', { open: { taskId: 't1', sessionId: '<x>' } }), EXT, true)).toEqual({ type: 'hand', open: { taskId: 't1' } })
@@ -85,17 +88,28 @@ describe('the page an ask last had', () => {
 describe('pageOfContext', () => {
   it('reads the page back from the context a message went with', () => {
     const block = pageContextBlock({ url: 'https://docs.example.test/notes', title: 'Release notes' }, {})
-    expect(pageOfContext(block)).toEqual({ title: 'Release notes', host: 'docs.example.test' })
+    expect(pageOfContext(block)).toEqual({ title: 'Release notes', host: 'docs.example.test', sent: true })
     expect(pageOfContext('nothing here')).toBeNull()
     expect(pageOfContext(undefined)).toBeNull()
+  })
+  it('a selection sent with the page left out names the page only as its source', () => {
+    const page = { url: 'https://docs.example.test/notes', title: 'Release notes', selection: 'Uploads retry three times.' }
+    const alone = pageContextBlock(page, { selectionOnly: true })
+    // The ask still hears where the quote is from, and that the page itself did not come.
+    expect(alone).toContain('Address: https://docs.example.test/notes')
+    expect(alone).toContain('only the text they selected goes with it')
+    expect(alone).toContain('> Uploads retry three times.')
+    expect(pageOfContext(alone)).toEqual({ title: 'Release notes', host: 'docs.example.test', sent: false })
+    expect(pageOfContext(pageContextBlock(page, {}))?.sent).toBe(true)
   })
 })
 
 describe('the words around the drawer and the key', () => {
   it("Main's line counts what needs the person", () => {
-    expect(mainLineOf(0)).toBe('Your main agent: nothing needs you')
-    expect(mainLineOf(1)).toBe('Your main agent: 1 thing needs you')
-    expect(mainLineOf(2)).toBe('Your main agent: 2 things need you')
+    // Never "your main agent": the agent list calls Walnut the main AI, and the CEO row is Main.
+    expect(mainLineOf(0)).toBe('Sees all your work: nothing needs you')
+    expect(mainLineOf(1)).toBe('Sees all your work: 1 thing needs you')
+    expect(mainLineOf(2)).toBe('Sees all your work: 2 things need you')
   })
   it("an ask's row line: its last words, never a passing wait", () => {
     const base = { id: 't1', title: 'Ask Walnut', phase: 'IN_PROGRESS', created_at: '2026-11-06T00:00:00Z', updated_at: '2026-11-06T00:00:00Z' }

@@ -151,6 +151,8 @@
   font-size: 11px;
   color: var(--fg);
 }
+/* A stem's blank, where the person's words go ("Which task is ___"). */
+.draft-walnut-suggests .session-action-chip-blank { display: inline-block; width: 1.6em; height: 0.85em; margin-left: 1px; border-bottom: 1px solid currentColor; opacity: 0.55; }
 /* The chip's line icon: muted until hover, when it takes the chip's accent. */
 .draft-walnut-suggests .session-action-chip-ic { display: inline-flex; color: var(--fg-muted); }
 .draft-walnut-suggests .session-action-chip-ic svg { width: 12px; height: 12px; }

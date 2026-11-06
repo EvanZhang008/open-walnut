@@ -62,7 +62,7 @@ export function manifestFor(browser, build) {
     short_name: 'Walnut',
     version,
     ...(build ? { version_name: `${version} build ${build}` } : {}),
-    description: 'Your own Walnut in the browser: fill and save passwords, and ask Walnut about the page you are on.',
+    description: 'Your own Walnut in the browser: ask Walnut about the page you are on, let your agents work here, and fill passwords from your vault.',
     icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
     action: { default_title: 'Walnut', default_popup: 'popup-ask.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
     background: browser === 'chrome' ? { service_worker: 'background.js' } : { scripts: ['background.js'] },

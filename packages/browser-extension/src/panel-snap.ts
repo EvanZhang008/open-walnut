@@ -15,10 +15,22 @@ import { PANEL_SERVER_KEY, PANEL_SNAPS_KEY } from './panel-data'
 
 export type SnapView = 'ask' | 'tasks'
 type Msg = { role: 'user' | 'assistant'; text: string }
-export interface AskSnap { at: number; title: string; host: string; messages: Msg[] }
+/** An ask to continue, as the view's Continue list showed it. */
+export type ContRow = { title: string; line: string; time: string; needs: boolean }
+/**
+ * One page's conversation as the Ask view showed it. `askTitle`, `agent`, `placeholder`,
+ * `continue`, `suggestions` and `pageOn` come from a Walnut whose view says them; an older one's
+ * snapshot has the messages alone.
+ */
+export interface AskSnap {
+  at: number; title: string; host: string; messages: Msg[]
+  askTitle?: string; agent?: string; placeholder?: string; cont?: ContRow[]; suggestions?: string[]; pageOn?: boolean
+}
 type Row = { title: string; line: string; state: string }
 export interface TasksSnap { at: number; sections: Array<{ title: string; count: number; rows: Row[] }> }
-interface Snaps { ask?: Record<string, AskSnap>; tasks?: TasksSnap }
+/** The last Continue list and suggestions any page showed: a page seen for the first time, and the popup, draw these. */
+export interface AskShell { at: number; agent?: string; cont?: ContRow[]; suggestions?: string[] }
+interface Snaps { ask?: Record<string, AskSnap>; tasks?: TasksSnap; shell?: AskShell }
 
 const STORE = PANEL_SNAPS_KEY
 const ASK_KEEP = 30
@@ -45,7 +57,21 @@ function cleanAsk(raw: unknown, now: number): AskSnap | null {
     const text = str(o?.text, 800)
     return text ? [{ role: o?.role === 'user' ? 'user' : 'assistant', text }] : []
   })
-  return { at: now, title: str(r.title, 300), host: str(r.host, 200), messages }
+  const cont = Array.isArray(r.continue) ? r.continue.slice(0, 6).flatMap((x): ContRow[] => {
+    const o = x as Record<string, unknown> | null
+    const title = str(o?.title, 200)
+    return title ? [{ title, line: str(o?.line, 200), time: str(o?.time, 30), needs: o?.needs === true }] : []
+  }) : undefined
+  const suggestions = Array.isArray(r.suggestions) ? r.suggestions.slice(0, 3).map((x) => str(x, 60)).filter(Boolean) : undefined
+  return {
+    at: now, title: str(r.title, 300), host: str(r.host, 200), messages,
+    ...(str(r.askTitle, 200) ? { askTitle: str(r.askTitle, 200) } : {}),
+    ...(str(r.agent, 60) ? { agent: str(r.agent, 60) } : {}),
+    ...(str(r.placeholder, 120) ? { placeholder: str(r.placeholder, 120) } : {}),
+    ...(cont ? { cont } : {}),
+    ...(suggestions ? { suggestions } : {}),
+    ...(typeof r.pageOn === 'boolean' ? { pageOn: r.pageOn } : {}),
+  }
 }
 
 function cleanTasks(raw: unknown, counts: unknown, now: number): TasksSnap | null {
@@ -91,12 +117,22 @@ async function write(view: SnapView, snap: unknown, opts: { key?: unknown; count
     const ask = { ...(all.ask ?? {}), [key]: clean }
     const kept = Object.entries(ask).sort((a, b) => b[1].at - a[1].at).slice(0, ASK_KEEP)
     all.ask = Object.fromEntries(kept)
+    if (clean.cont || clean.suggestions || clean.agent) {
+      all.shell = { at: now, ...(all.shell ?? {}), ...(clean.agent ? { agent: clean.agent } : {}), ...(clean.cont ? { cont: clean.cont } : {}), ...(clean.suggestions ? { suggestions: clean.suggestions } : {}) }
+      all.shell.at = now
+    }
   } else {
     const clean = cleanTasks(snap, opts.counts, now)
     if (!clean) return
     all.tasks = clean
   }
   await ext.storage.local.set({ [STORE]: all })
+}
+
+/** The Ask view's shell of last time (its Continue list, suggestions, agent), or null. */
+export async function shellOf(now = Date.now()): Promise<AskShell | null> {
+  const s = (await readAll()).shell
+  return s && now - s.at < MAX_AGE_MS ? s : null
 }
 
 export async function snapOf(view: SnapView, url?: string, now = Date.now()): Promise<AskSnap | TasksSnap | null> {
@@ -106,14 +142,14 @@ export async function snapOf(view: SnapView, url?: string, now = Date.now()): Pr
 }
 
 /** The drawing: the same places as the view it stands for, in plain text. */
-export function drawSnap(view: SnapView, snap: AskSnap | TasksSnap, shape: 'tabs' | 'ask' = 'tabs'): HTMLElement {
+/** The three-tab panel's drawing (panel-tabs.ts); the Ask panel draws its own (panel-look.ts). */
+export function drawSnap(view: SnapView, snap: AskSnap | TasksSnap): HTMLElement {
   if (view === 'ask') {
     const s = snap as AskSnap
-    // `ask`: the panel that opens as Walnut's Ask (panel-ask.ts), whose header is ≡, the title, "Ask Walnut".
-    return h('div', { class: `panel-snap panel-snap-ask${shape === 'ask' ? ' is-ask' : ''}`, 'data-testid': 'panel-snap', 'aria-hidden': 'true' },
+    return h('div', { class: 'panel-snap panel-snap-ask', 'data-testid': 'panel-snap', 'aria-hidden': 'true' },
       h('div', { class: 'panel-snap-head' },
         h('div', { class: 'panel-snap-title' }, s.title || s.host),
-        h('div', { class: 'panel-snap-host' }, shape === 'ask' ? 'Ask Walnut' : s.host)),
+        h('div', { class: 'panel-snap-host' }, s.host)),
       h('div', { class: 'panel-snap-chat' },
         ...s.messages.map((m) => h('div', { class: `panel-snap-msg is-${m.role}` }, m.text))),
       h('div', { class: 'panel-snap-composer' }, s.messages.length ? 'Ask a follow-up…' : 'Ask about this page…'))

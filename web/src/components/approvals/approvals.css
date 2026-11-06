@@ -6,6 +6,8 @@
   /* Tighter than the stack's gap between kinds: the "N more" line belongs to this card. */
   gap: 6px;
   pointer-events: none;
+  /* Its width is the corner's (corner-stack.tsx), never its content's: the card reads it below. */
+  container: approvals / inline-size;
 }
 
 .approval-card {
@@ -542,3 +544,28 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
   font-size: 13px;
 }
 .approval-unlock .approval-actions { margin-top: 0; }
+
+/* A narrow corner (a page's left column, ~190px: the Passwords rail): the whole card reads the
+   action and who asks at first sight, never cut to "Let a Walnut agent cli…" and "A.." (review
+   2026-11-06). Its title wraps to three lines, who asks wraps, the buttons get their own row.
+   Where there is room it keeps its one-line form, and the two short lines the person made it
+   smaller to (approval-card-line) stay that short. */
+@container approvals (max-width: 260px) {
+  .corner-stack .approval-card:not(.approval-card-line) .approval-what-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
+  .corner-stack .approval-card:not(.approval-card-line) .approval-who {
+    flex: 1 0 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .corner-stack .approval-card:not(.approval-card-line) .approval-actions {
+    flex: 1 0 100%;
+    justify-content: flex-end;
+  }
+}

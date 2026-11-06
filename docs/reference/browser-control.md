@@ -4,8 +4,9 @@ The Walnut browser extension (see [Passwords](passwords.md), Browser extension) 
 your Walnut agents use your own browser, the one signed in to your sites: open a page, read
 it, find things on it, fill forms, click, type, hover, scroll, upload files, follow downloads,
 sign in with your saved logins without seeing them, and take screenshots of the screen or the
-whole page. It is off until you turn it on in the extension's popup (Settings, "Let Walnut
-agents use this browser").
+whole page. The connect page asks once, as a checkbox on by default ("Let Walnut agents use
+this browser"); an extension already connected keeps its own choice. The switch lives in the
+extension's Settings, reached from the key's popover in the side panel or the toolbar popup.
 
 ## What an agent can reach
 
@@ -126,6 +127,13 @@ selection, **Ask Walnut about ...**.
 - The panel is Walnut's own page (`/popout?view=ext-panel`) framed by the extension's panel page,
   which hears only that frame, on your Walnut's address. It reaches a Walnut on this machine
   directly; a Walnut on another machine needs that browser signed in to it.
+- That frame loads only its own view, never the whole console: a `/popout` address boots
+  `web/src/popout/PopoutShell.tsx` and the one view it names (`popout-views.ts`) instead of App,
+  the plugins' web modules load once the view has drawn, and the editors, the terminal and the
+  Board load the first time one opens. `tests/web/popout-light-entry-guard.test.ts` fails on a
+  static import that pulls the console back in. While it loads, the extension draws the view's
+  words of last time, which the view sends again whenever what it shows changes (a side panel
+  conversation per page; the toolbar popup only the Continue list, under a key of its own).
 
 ## For agents
 

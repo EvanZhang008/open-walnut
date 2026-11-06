@@ -122,3 +122,73 @@ describe('the web app\'s Passwords unlock', () => {
     expect(sent.at(-1)?.quiet).toBeUndefined()
   })
 })
+
+describe('one unlock on this computer, in a Walnut window', () => {
+  const BKEY = 'walnut.vault.browser'
+  const fakeKey = 'k'.repeat(43)
+
+  /** Answers by path, recording the browser key each request carried. */
+  function serve(routes: Record<string, { status: number; body: unknown }>): Array<{ path: string; key?: string }> {
+    const seen: Array<{ path: string; key?: string }> = []
+    globalThis.fetch = (async (url: string, init: { method: string; headers: Record<string, string> }) => {
+      const p = String(url).replace('/api/v1', '')
+      seen.push({ path: `${init.method} ${p}`, key: init.headers['x-walnut-vault-browser'] })
+      const a = routes[`${init.method} ${p}`] ?? { status: 404, body: {} }
+      return { ok: a.status < 400, status: a.status, json: async () => a.body } as Response
+    }) as typeof fetch
+    return seen
+  }
+
+  it('keeps the browser key an unlock typed here gets, under a key ui-prefs never sends', async () => {
+    expect(syncable(BKEY)).toBe(false)
+    serve({
+      'GET /vault/status': { status: 200, body: { unlocked: false, privateLink: true } },
+      'POST /vault/unlock': { status: 200, body: { session: { token: 'tok-typed' }, browserKey: fakeKey } },
+    })
+    await vaultApi.unlock('a fake master', undefined)
+    expect(local.getItem(BKEY)).toBe(fakeKey)
+    expect(local.getItem(KEY)).toBe('tok-typed')
+  })
+
+  it('a locked window that may share (canJoin) takes the unlock with no password, sending its key', async () => {
+    local.setItem(BKEY, fakeKey)
+    let joined = false
+    const seen = serve({ 'POST /vault/join': { status: 200, body: { session: { token: 'tok-shared' } } } })
+    // The status says canJoin until the join, then unlocked.
+    const base = globalThis.fetch
+    globalThis.fetch = (async (url: string, init: { method: string; headers: Record<string, string> }) => {
+      if (String(url).endsWith('/vault/status')) {
+        seen.push({ path: 'GET /vault/status', key: init.headers['x-walnut-vault-browser'] })
+        return { ok: true, status: 200, json: async () => (joined ? { unlocked: true } : { unlocked: false, canJoin: true }) } as Response
+      }
+      joined = true
+      return base(url, init as RequestInit)
+    }) as typeof fetch
+    let calls = 0
+    const off = onVaultSessionChange(() => { calls++ })
+    const st = await vaultApi.status({ quiet: true })
+    off()
+    expect(st.unlocked).toBe(true)
+    expect(local.getItem(KEY)).toBe('tok-shared')
+    expect(calls).toBeGreaterThan(0)
+    expect(seen.map((s) => s.path)).toEqual(['GET /vault/status', 'POST /vault/join', 'GET /vault/status'])
+    expect(seen.every((s) => s.key === fakeKey)).toBe(true)
+  })
+
+  it('a share refused (the unlock ended meanwhile) leaves the lock screen, with no unlock kept', async () => {
+    local.setItem(BKEY, fakeKey)
+    serve({
+      'GET /vault/status': { status: 200, body: { unlocked: false, canJoin: true } },
+      'POST /vault/join': { status: 409, body: { code: 'nothing_to_join', error: 'locked' } },
+    })
+    const st = await vaultApi.status()
+    expect(st).toMatchObject({ unlocked: false, canJoin: false })
+    expect(local.getItem(KEY)).toBeNull()
+  })
+
+  it('never shares while this browser already holds an unlock, nor when the server says nothing to share', async () => {
+    const seen = serve({ 'GET /vault/status': { status: 200, body: { unlocked: false } } })
+    await vaultApi.status()
+    expect(seen.map((s) => s.path)).toEqual(['GET /vault/status'])
+  })
+})

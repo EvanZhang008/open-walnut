@@ -51,8 +51,9 @@ function startSites(): Promise<{ server: http.Server; port: number }> {
 
 /** Build the extension, start Chromium with it, connect it to the fixture Walnut, open a page. */
 export async function startPanelLab(base: string, label: string): Promise<PanelLab> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-ext-${label}-`))
-  execFileSync(bunRuntime(), ['scripts/build-extension.mjs', '--out', dir, '--no-zip'], { stdio: 'pipe' })
+  // PW_EXTENSION_DIR: a build made earlier (an A/B of two builds on one fixture); else this tree's, now.
+  const dir = process.env.PW_EXTENSION_DIR || fs.mkdtempSync(path.join(os.tmpdir(), `walnut-ext-${label}-`))
+  if (!process.env.PW_EXTENSION_DIR) execFileSync(bunRuntime(), ['scripts/build-extension.mjs', '--out', dir, '--no-zip'], { stdio: 'pipe' })
   const { server, port } = await startSites()
   const ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), `walnut-ext-profile-${label}-`)), {
     channel: 'chromium',
@@ -76,6 +77,11 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
   await p.getByTestId('popup-connect').click()
   const connect = await opened
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  // Agents in this browser stay off here, as the person may choose on this page (on by default):
+  // a browser of this spec must not join the fixture Walnut's agents beside the agent specs' own.
+  // (A build from before that choice, PW_EXTENSION_DIR's, has no such box.)
+  const agents = connect.getByTestId('connect-extension-agents')
+  if (await agents.count()) await agents.uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   await connect.close()

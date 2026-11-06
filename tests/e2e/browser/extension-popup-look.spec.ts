@@ -132,6 +132,8 @@ test('every view, connected and unlocked, as screenshots', async () => {
   // Not connected yet.
   const fresh = await popup()
   await expect(fresh.getByRole('heading', { name: 'Connect to Walnut' })).toBeVisible()
+  // Walnut first, passwords as the side feature (R1-6).
+  await expect(fresh.locator('.center > p').first()).toHaveText(/^Ask Walnut about the page you are on, and let your Walnut agents work in this browser\. Passwords/)
   await shot(fresh, '01-connect')
   await fresh.locator('#server').fill(base)
   const opened = ctx.waitForEvent('page')
@@ -139,11 +141,19 @@ test('every view, connected and unlocked, as screenshots', async () => {
   const connect = await opened
   await connect.setViewportSize({ width: 1100, height: 700 })
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  await expect(connect.getByTestId('connect-extension').locator('h1 + p')).toContainText('Ask Walnut about the page you are on')
+  await expect(connect.getByTestId('connect-extension-agents')).toBeChecked()
   await shot(connect, '02-connect-page')
+  // This spec's browser stays out of the fixture Walnut's agents until the last test.
+  await connect.getByTestId('connect-extension-agents').uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
+  await expect(connect.getByTestId('connect-extension')).not.toContainText('to unlock it, then sign in')
+  await expect(connect.getByTestId('connect-extension')).toContainText('ask Walnut about any page')
   await shot(connect, '03-connect-page-done')
   await connect.close()
+  // Said no on the connect page: agents stay off.
+  expect((await sw().evaluate(() => chrome.storage.local.get('agentControl'))).agentControl).not.toBe(true)
 
   const locked = await popup()
   await expect(locked.getByRole('heading', { name: 'Walnut is locked' })).toBeVisible({ timeout: 20_000 })
@@ -452,8 +462,9 @@ test('the connect page wears the extension\'s colour and key; disconnected, the 
   await p.getByTestId('popup-disconnect').click()
   await p.getByTestId('popup-disconnect-confirm').click()
   await expect(p.getByRole('heading', { name: 'Connect to Walnut' })).toBeVisible({ timeout: 20_000 })
-  // The same key tile as the connect page, not a plug.
-  await expect(p.locator('.big-icon svg path[d="M10.85 12.15 19 4"]')).toHaveCount(1)
+  // The same Ask tile as the connect page (Walnut first, R1-6), not a plug or a key.
+  await expect(p.locator('.big-icon svg path[d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"]')).toHaveCount(1)
+  await expect(p.locator('.big-icon svg path[d="M10.85 12.15 19 4"]')).toHaveCount(0)
   const found = p.getByTestId('popup-found')
   await expect(found).toHaveText(`Found Walnut at ${new URL(base).host}`, { timeout: 10_000 })
   await expect(p.locator('#server')).toHaveValue(base)
@@ -479,8 +490,17 @@ test('the connect page wears the extension\'s colour and key; disconnected, the 
   const go = connect.getByTestId('connect-extension-go')
   await expect(go).toBeVisible({ timeout: 60_000 })
   expect(await go.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe('rgb(138, 90, 43)')
+  // Left on (its default), the connect turns agents on in this browser (R1-7).
+  await expect(connect.getByTestId('connect-extension-agents')).toBeChecked({ timeout: 20_000 })
   await go.click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
+  await expect(connect.getByTestId('connect-extension')).toContainText('your agents can now use this browser')
   await connect.close()
-  await p.close()
+  await expect.poll(async () => (await sw().evaluate(() => chrome.storage.local.get('agentControl'))).agentControl, { timeout: 10_000 }).toBe(true)
+  // Off again at once: this spec's browser does not stay among the fixture Walnut's agents.
+  // (The popup closed itself when Connect opened the connect page, as the toolbar popup does.)
+  const q = await popup()
+  await q.evaluate(() => chrome.runtime.sendMessage({ type: 'agent-off' }))
+  await expect.poll(async () => (await sw().evaluate(() => chrome.storage.local.get('agentControl'))).agentControl, { timeout: 10_000 }).not.toBe(true)
+  await q.close()
 })

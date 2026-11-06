@@ -3,7 +3,8 @@
  * ask) that this window cannot approve while Passwords is locked here. The card offers the unlock
  * in place: the master password (and the Secret Key when this device needs it), and once this
  * window is unlocked the store draws Approve (approvals-store.ts follows the vault session), so
- * the person never leaves the card or opens Passwords first.
+ * the person never leaves the card or opens Passwords first. An unlock made elsewhere on this
+ * computer (the extension, another window) is shared with no password while the form is open.
  */
 import { useEffect, useRef, useState } from 'react';
 import { vaultApi, VaultApiError } from '@/api/vault';
@@ -17,6 +18,14 @@ export function ApprovalUnlock({ onCancel }: { onCancel: () => void }) {
   const input = useRef<HTMLInputElement>(null);
   // The Secret Key field shows only when Walnut asks for it (`secret_key_needed`): most unlocks need the password alone.
   useEffect(() => { input.current?.focus(); }, []);
+  // Passwords unlocked elsewhere on this computer (the extension, another window): this window
+  // shares it with no password (vaultApi.status joins), and the store then draws Approve.
+  useEffect(() => {
+    const look = () => { if (document.visibilityState === 'visible') void vaultApi.status({ quiet: true }).catch(() => {}); };
+    look();
+    const t = window.setInterval(look, 3_000);
+    return () => window.clearInterval(t);
+  }, []);
   const unlock = async () => {
     if (!pw || busy) return;
     setBusy(true); setError('');

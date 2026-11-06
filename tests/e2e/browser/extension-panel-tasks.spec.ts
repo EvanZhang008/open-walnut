@@ -116,9 +116,11 @@ test('Tasks: Add to Focus from the row; a reply leaves the row in place with wha
   expect(tk.pinned).toBe(true)
   expect(tk.focus_tier).toBe('focus')
 
-  // The ask's task is born in Focus, so it is listed there.
-  const row = t.locator(`[data-testid="ext-tasks-focus"] [data-testid="ext-task"][data-task-id="${taskId}"]`)
+  // A panel ask is a conversation, never pinned to Focus (review 2026-11-06): it needs the person,
+  // so Needs you lists it, and Focus does not.
+  const row = t.locator(`[data-testid="ext-tasks-needs"] [data-testid="ext-task"][data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
+  await expect(focus.locator(`[data-task-id="${taskId}"]`)).toHaveCount(0)
 
   await row.locator('.ext-task-head').click()
   const input = row.getByTestId('ext-task-input')

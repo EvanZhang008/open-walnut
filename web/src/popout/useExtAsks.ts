@@ -51,7 +51,11 @@ export function sessionOfTask(task: Task | null | undefined): string | null {
   return task ? resolveTaskSessionId(task) : null;
 }
 
-/** Main's line under its row: what needs the person across their work. */
+/**
+ * Main's line under its CEO row: what needs the person across their work. It never says "main
+ * agent": the agent list calls Walnut "Your main AI", and two "main" things read as one agent with
+ * two names (review 2026-11-06).
+ */
 export function mainLineOf(needs: number): string {
-  return `Your main agent: ${needs === 0 ? 'nothing needs you' : needs === 1 ? '1 thing needs you' : `${needs} things need you`}`;
+  return `Sees all your work: ${needs === 0 ? 'nothing needs you' : needs === 1 ? '1 thing needs you' : `${needs} things need you`}`;
 }

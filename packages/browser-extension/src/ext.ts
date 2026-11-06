@@ -47,6 +47,7 @@ export interface ExtApi {
     create(o: { url: string; type?: string; width?: number; height?: number; focused?: boolean }): Promise<Win>
     get(id: number, o?: { populate?: boolean }): Promise<Win>
     getCurrent(): Promise<Win>
+    update?(windowId: number, o: { focused?: boolean }): Promise<Win>
     onRemoved: Event<(windowId: number) => void>
   }
   permissions: {

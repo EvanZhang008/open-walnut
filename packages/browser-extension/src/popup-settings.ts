@@ -7,7 +7,7 @@ import { ask, ext } from './ext'
 import { nextView, paint } from './popup-view'
 import { h, icon } from './dom'
 import { AUTO_LOCKS, getSettings, setSettings, type AutoLock } from './settings'
-import { errLine, iconButton, switchRow, topBar } from './popup-ui'
+import { errLine, iconButton, popupIcon, switchRow, topBar } from './popup-ui'
 import { disconnectControl } from './popup-disconnect'
 import { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -84,7 +84,8 @@ async function neverSection(): Promise<HTMLElement> {
   return wrap
 }
 
-export async function settingsView(root: HTMLElement, st: { serverUrl?: string; device?: string }, back: () => void): Promise<void> {
+/** `backLabel`: where Back goes, when it is not the view this one was opened from ("Ask"). */
+export async function settingsView(root: HTMLElement, st: { serverUrl?: string; device?: string }, back: () => void, backLabel?: string): Promise<void> {
   const g = nextView()
   const settings = await getSettings()
   const off = disconnectControl(st, back)
@@ -102,7 +103,9 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
   // What a person changes comes first (lock, filling, agents), so it fits the popup's first
   // screen; the sites never offered for saving, the connection and Disconnect close the page.
   paint(root, h('div', {},
-    topBar('Settings', back),
+    backLabel
+      ? h('div', { class: 'top top-sub view-bar' }, h('button', { class: 'back-btn', type: 'button', 'data-testid': 'panel-view-back', onclick: back }, popupIcon('back'), h('span', {}, backLabel)), h('h1', {}, 'Settings'))
+      : topBar('Settings', back),
     h('div', { class: 'pane settings' },
       h('div', { class: 'section-label' }, 'Lock'),
       // The choice on one line with its select, its help under both at full width.

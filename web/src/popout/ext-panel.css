@@ -142,7 +142,9 @@
 .ext-task-asked .ext-task-last { color: var(--fg); }
 
 /* ── the page's selection in a conversation already going (Ask) ── */
-.ext-panel-selection { display: flex; align-items: flex-start; gap: 6px; width: 100%; box-sizing: border-box; padding: 4px 6px 4px 8px; border-left: 3px solid var(--accent, #8a5a2b); border-radius: 4px; background: var(--bg-secondary); font-size: 12px; color: var(--fg); }
+/* Inset in the composer's card (radius 14px), so its accent bar sits inside the rounded corner
+   instead of crossing it (review 2026-11-06). */
+.ext-panel-selection { display: flex; align-items: flex-start; gap: 6px; width: auto; margin: 6px 6px 0; box-sizing: border-box; padding: 4px 6px 4px 8px; border-left: 3px solid var(--accent, #8a5a2b); border-radius: 8px; background: var(--bg-secondary); font-size: 12px; color: var(--fg); }
 .ext-panel-selection-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ext-panel-selection-label { color: var(--fg-muted); }
 .ext-panel-selection-drop { flex: 0 0 auto; border: 0; background: none; color: var(--fg-muted); font-size: 15px; line-height: 1; padding: 0 2px; cursor: pointer; border-radius: 4px; }

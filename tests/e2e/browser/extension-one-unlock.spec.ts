@@ -3,8 +3,11 @@
  * unlocking in a Walnut window unlocks an extension side panel that is already open, with no input
  * there, and a popup opened afterwards; Lock all in Walnut's Settings replaces an open popup's list
  * with the lock screen and its password field at once, with no reload, and a search made after
- * Walnut ended the unlock shows that lock screen, never a bare error.
- * (packages/browser-extension/src/bg-vault.ts liveState, popup.ts followVault; POST /vault/join.)
+ * Walnut ended the unlock shows that lock screen, never a bare error. And the other way round
+ * (review D02 round 1, R1-1): an unlock in the extension's popup opens a Walnut window's locked
+ * Passwords page that is already open, with no input and no reload there.
+ * (packages/browser-extension/src/bg-vault.ts liveState, popup.ts followVault; POST /vault/join;
+ * web/src/api/vault.ts status() and the browser key, src/core/vault/browser-keys.ts.)
  * Shares the fixture's vault (the same master password as the other specs). Fake data only.
  */
 import { expect, test, type FrameLocator, type Page } from '@playwright/test'
@@ -17,6 +20,7 @@ const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/extension-one-unlock'
 let lab: PanelLab
 let web: Page
 let device = ''
+let windowKey = ''
 
 /** This lab's extension device (its record in the background's IndexedDB, secret-store.ts). */
 async function extensionDevice(): Promise<string> {
@@ -83,6 +87,7 @@ test.beforeAll(async ({}, info) => {
 })
 test.afterAll(async () => {
   if (device) await nameForJoin(false).catch(() => undefined)
+  if (windowKey) await web.request.post(`${lab.base}/api/test/vault-join`, { data: { browserKey: windowKey, on: false } }).catch(() => undefined)
   await lab?.close()
 })
 
@@ -143,5 +148,35 @@ test('a search after Walnut ended the unlock shows the lock screen, never a bare
   await listOf(p).fill('example')
   await expect(lockOf(p)).toBeVisible({ timeout: 10_000 })
   await expect(p.getByText('The vault is locked in this window')).toHaveCount(0)
+  await p.close()
+})
+
+test('an unlock in the extension popup opens the Walnut window\'s locked Passwords page, with no input there', async () => {
+  test.setTimeout(180_000)
+  // This browser typed the master password in a Walnut window once (the browser key it keeps),
+  // then the person locked everything.
+  await openPasswords(web)
+  if (await web.getByTestId('pw-unlock').isVisible()) await unlockWeb(web)
+  await web.getByTestId('pw-lock').click()
+  await expect(web.getByTestId('pw-unlock')).toBeVisible({ timeout: 20_000 })
+  windowKey = String(await web.evaluate(() => localStorage.getItem('walnut.vault.browser')) ?? '')
+  expect(windowKey).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  const named = await web.request.post(`${lab.base}/api/test/vault-join`, { data: { browserKey: windowKey, on: true } })
+  expect(named.ok()).toBe(true)
+
+  const p = await popup()
+  await expect(lockOf(p)).toBeVisible({ timeout: 20_000 })
+  await p.getByLabel('Master password').fill(VAULT_MASTER)
+  await lockOf(p).click()
+  await expect(listOf(p)).toBeVisible({ timeout: 30_000 })
+
+  // The open page follows by itself: no click, no typing, no reload there.
+  await expect(web.getByTestId('pw-app')).toBeVisible({ timeout: 15_000 })
+  await expect(web.getByTestId('pw-unlock')).toHaveCount(0)
+  await web.screenshot({ path: `${SHOTS}/web-after-popup-unlock.png` })
+
+  // The person's Lock in the window locks the popup too.
+  await web.getByTestId('pw-lock').click()
+  await expect(lockOf(p)).toBeVisible({ timeout: 10_000 })
   await p.close()
 })

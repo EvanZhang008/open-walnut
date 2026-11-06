@@ -353,7 +353,7 @@ export function AskWalnutDrawer({
               data-testid="ask-walnut-drawer-main"
               aria-current={main.selected ? 'true' : undefined}
               onClick={() => { onClose(); main.onPick(); }}
-              title="The CEO: your main agent, who sees all your work"
+              title="The CEO, who sees all your work"
             >
               {panel ? (
                 <>

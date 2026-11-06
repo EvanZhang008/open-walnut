@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { ContextFullBanner } from './ContextFullBanner';
@@ -35,21 +35,28 @@ import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionR
 import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionBudgetStatus, SessionUsageDialog } from './SessionUsageDialog';
 import { SessionUsageOpenContext, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
-import { SessionFileExplorer } from './SessionFileExplorer';
 import { useClickedPathOpener, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 import { sessionScope } from '@/utils/file-view-state';
-import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
 import { SessionWebView, type WebViewRequest } from './SessionWebView';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
-import { SessionChangedTab } from './SessionChangedTab';
 import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store';
 import { changedChipTitle } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
-import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
-import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { KANBAN_COLLAPSE_CHAT_BELOW } from '@/components/board/kanban/kanban-contract';
 import { BoardTaskPeek } from '@/components/board/BoardTaskPeek';
+
+/**
+ * The split view's panes, each loaded the first time it opens: the editors, the terminal and the
+ * Board weigh about 1.5 MB, and a session panel that only chats (the browser side panel, a
+ * pop-out) never opens most of them (popout/popout-views.ts). The console has most of them loaded
+ * by its other pages already.
+ */
+const SessionFileExplorer = lazy(() => import('./SessionFileExplorer').then((m) => ({ default: m.SessionFileExplorer })));
+const SessionTerminal = lazy(() => import('./SessionTerminal').then((m) => ({ default: m.SessionTerminal })));
+const SessionChangedTab = lazy(() => import('./SessionChangedTab').then((m) => ({ default: m.SessionChangedTab })));
+const SessionInboxPane = lazy(() => import('@/components/inbox/SessionInboxPane').then((m) => ({ default: m.SessionInboxPane })));
+const TaskBoardPane = lazy(() => import('@/components/board/TaskBoardPane').then((m) => ({ default: m.TaskBoardPane })));
 import { PeekTabBar } from '@/components/board/PeekTabBar';
 import { usePeekTabs } from '@/components/board/usePeekTabs';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
@@ -3163,6 +3170,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           // notice says that and offers no button that would say something else
           // (2026-11-04, the user's screenshot: a Reconnect button beside "Send a
           // message to resume it", two different answers to one fact).
+          // A plain chat (the browser side panel's Ask) shows no notice of the process being
+          // stopped or of the check itself: its composer resumes it, and the words are Walnut's
+          // internals there (review 2026-11-06). A real error still shows, with Retry.
+          if (plainChat && (checking || provedReachable)) return null;
           const reachableText = (
             <>
               {isRemote && <><NoticeToken text={hostLabel} /> is reachable, and </>}
@@ -3266,6 +3277,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 {splitOpen && sessionId && activeView !== 'code' && (
                   // data-time-view: which part of the panel had the input (time tracking).
                   <div className="session-panel-diff-col" data-time-view={activeView ?? undefined}>
+                    <Suspense fallback={null}>
                     {activeView === 'changed' && (
                       <SessionChangedTab sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} onOpenFile={handleFileOpen} />
                     )}
@@ -3354,6 +3366,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         )}
                       />
                     )}
+                    </Suspense>
                   </div>
                 )}
                 {/* Code view keep-alive: once opened it stays MOUNTED for the

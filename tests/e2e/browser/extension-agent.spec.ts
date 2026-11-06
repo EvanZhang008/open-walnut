@@ -70,7 +70,10 @@ const PAGES: Record<string, () => string> = {
   '/framed': () => `<h1>Framed</h1>
     <iframe src="/inner-same" width="420" height="140"></iframe>
     <iframe src="${site('widget.example.test', '/inner-cross')}" width="420" height="140"></iframe>
-    <iframe src="${site('ads.other.test', '/inner-other')}" width="420" height="140"></iframe>`,
+    <iframe src="${site('ads.other.test', '/inner-other')}" width="420" height="140"></iframe>
+    <script>addEventListener('load', () => { const f = document.createElement('iframe'); f.src = '/inner-late'; f.width = '420'; f.height = '80'; document.body.append(f) })</script>`,
+  // A frame the page adds once it has loaded, its page slow to answer: there when the page is, not yet reachable.
+  '/inner-late': () => `<button>Late button</button>`,
   '/inner-same': () => `<button onclick="document.getElementById('o').textContent = 'same clicked'">Same button</button><p id="o"></p>`,
   '/inner-cross': () => `<button onclick="document.getElementById('o').textContent = 'cross clicked: ' + document.getElementById('cf').value">Cross button</button>
     <input aria-label="Cross field" id="cf"><p id="o"></p>`,
@@ -93,9 +96,14 @@ function startSites(): Promise<void> {
       res.end('downloaded notes\n')
       return
     }
-    const page = PAGES[new URL(req.url ?? '/', 'http://x').pathname]
-    res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' })
-    res.end(page ? `<!doctype html><html><head><title>Test shop</title></head><body>${page()}</body></html>` : 'not found')
+    const path = new URL(req.url ?? '/', 'http://x').pathname
+    const page = PAGES[path]
+    const send = () => {
+      res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(page ? `<!doctype html><html><head><title>Test shop</title></head><body>${page()}</body></html>` : 'not found')
+    }
+    if (path === '/inner-late') setTimeout(send, 400)
+    else send()
   })
   return new Promise((resolve) => sites.listen(0, '127.0.0.1', () => { port = (sites.address() as AddressInfo).port; resolve() }))
 }
@@ -184,6 +192,10 @@ test('connect, and turn agents on in the popup', async () => {
   await connect.waitForLoadState('domcontentloaded')
   // The fixture serves the app through Vite: a cold first load can take a while on a busy machine.
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  // The connect page asks once whether agents may use this browser, on by default (R1-7); this
+  // spec turns them on in the popup itself, so it says no here.
+  await expect(connect.getByTestId('connect-extension-agents')).toBeChecked()
+  await connect.getByTestId('connect-extension-agents').uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   await connect.close()
@@ -379,11 +391,13 @@ test('scroll to the bottom and top, by pixels, and sideways; each says where the
 test('frames: the snapshot reads same-origin and cross-origin frames, a frame ref acts there, a frame on a site not allowed is left out', async () => {
   const page = ctx.pages()[0]
   expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/framed') })).status).toBe(200)
-  await expect.poll(() => agentPage()!.frames().length, { timeout: 10_000 }).toBeGreaterThanOrEqual(4)
+  // Right after navigate, with no wait of its own: the snapshot waits for the frames the page
+  // shows to be reachable (R1-15: it listed none until a 1.5 s wait).
   const snap = await act(page, { action: 'snapshot' })
   expect(snap.status).toBe(200)
   const s = snap.body.snapshot as string
   expect(s).toContain('h1 Framed')
+  expect(s).toMatch(/button "Late button"/)
   const same = frameRef(s, /button "Same button"/)
   const cross = frameRef(s, /button "Cross button"/)
   const field = frameRef(s, /textbox "Cross field"/)

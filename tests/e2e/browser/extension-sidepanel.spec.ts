@@ -108,6 +108,9 @@ test('connect the extension, then open the panel beside a page with a selection'
   await p.getByTestId('popup-connect').click()
   const connect = await opened
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  // Agents in this browser stay off here, as the person may choose on this page (on by default):
+  // a browser of this spec must not join the fixture Walnut's agents beside the agent specs' own.
+  await connect.getByTestId('connect-extension-agents').uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   await connect.close()
@@ -413,9 +416,10 @@ test('Tasks view: what needs the person with its status, a reply into its sessio
   await openView('tasks')
   const row = tasksView().locator(`[data-testid="ext-task"][data-task-id="${taskId}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
-  // An ask's task is born in Focus: Focus lists it (once), with what it needs on its row.
-  await expect(tasksView().getByTestId('ext-tasks-focus').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
-  await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(0)
+  // A panel ask is never pinned to Focus (review 2026-11-06): Needs you lists it (once), with what
+  // it needs on its row, and Focus does not.
+  await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
+  await expect(tasksView().getByTestId('ext-tasks-focus').locator(`[data-task-id="${taskId}"]`)).toHaveCount(0)
   await expect(row).toHaveAttribute('data-state', /needs|read/)
   // The row leads with what to do (Take a look, Decide...), never a bare "Needs you" again.
   await expect(row.locator('.ext-task-line')).not.toContainText(/^Needs you/)

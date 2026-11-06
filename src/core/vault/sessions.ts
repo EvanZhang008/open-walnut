@@ -25,7 +25,7 @@ const FREE_FAILURES = 5
  * `device`: the paired device whose token opened it (the browser extension, a paired browser); it holds only for that device.
  * `choice`: the unlock length it was made under; `keep`: a Walnut restart keeps it (session-store.ts).
  * `here`: the person unlocked it on the computer Walnut runs on (a typed master password, or the
- * keychain at start), so this computer's browser extension may share it (joinSession).
+ * keychain at start), so this computer's browser extension and Walnut windows may share it (joinSession).
  * `source`: the hash of the unlock a shared session shares; it is part of that one unlock and
  * holds only while that one does.
  */
@@ -157,24 +157,44 @@ export function useSession(token: string | undefined, touch: boolean, device: st
   return { client: s.client }
 }
 
-export function endSession(token: string | undefined, device?: string): void {
+/**
+ * One window's or device's Lock of itself. `joiner`: the extension device, or a Walnut window's
+ * joiner id (browser-keys.ts windowJoiner), that locked only itself.
+ */
+export function endSession(token: string | undefined, joiner?: string): void {
   // The sessions sharing it end with it (one unlock).
   if (token && sessions.delete(hashOf(token))) { sweep(); changed() }
-  // A device that locked only itself (its own auto-lock) stays locked until the person unlocks
-  // again, after a restart too (session-store.ts keeps the record), also when it held no session.
-  if (device) { selfLocked.set(device, Date.now()); changed() }
+  // A device or window that locked only itself (its own auto-lock) stays locked until the person
+  // unlocks again, after a restart too (session-store.ts keeps the record), also when it held no session.
+  if (joiner) { selfLocked.set(joiner, Date.now()); changed() }
   schedule()
 }
 
-// ── one unlock for this computer's extension (joinSession) ──
+// ── one unlock for this computer's extension and Walnut windows (joinSession) ──
 
-/** When each device last locked only itself: an unlock older than that is not shared with it. */
+/**
+ * When each joiner (an extension device, or a Walnut window's `window:<id>`) last locked only
+ * itself: an unlock older than that is not shared with it.
+ */
 const selfLocked = new Map<string, number>()
 
 /**
- * The Playwright fixture's one vault serves specs running side by side, each with an extension of
- * its own, so there (WALNUT_TEST_VAULT_JOIN=named) only the devices a spec names share an unlock
- * (routes/test-vault-join.ts); one spec's unlock never unlocks another's extension.
+ * The record under this name holds against every joiner: a new master password (or a recovery)
+ * means no unlock made before it is shared with any window or extension, only one typed with the
+ * new password (endJoinsBefore). It rides the self-lock list, so a restart keeps it.
+ */
+const EVERY_JOINER = '*'
+
+/** No unlock made up to now is shared any more (a master password change, a recovery). */
+export function endJoinsBefore(now = Date.now()): void {
+  selfLocked.set(EVERY_JOINER, now)
+  changed()
+}
+
+/**
+ * The Playwright fixture's one vault serves specs running side by side, each with an extension
+ * and windows of its own, so there (WALNUT_TEST_VAULT_JOIN=named) only the devices and windows a
+ * spec names share an unlock (routes/test-vault-join.ts); one spec's unlock never unlocks another's.
  */
 const joinOnlyNamed = process.env.WALNUT_TEST_VAULT_JOIN === 'named'
 const joinNamed = new Set<string>()
@@ -183,17 +203,18 @@ export function joinTestRouteAllowed(opts: { ephemeral: boolean; cloudMode: bool
   return joinOnlyNamed && opts.ephemeral && !opts.cloudMode
 }
 
-export function nameJoinDeviceForTest(device: string, on: boolean): void {
-  if (on) joinNamed.add(device); else joinNamed.delete(device)
+export function nameJoinDeviceForTest(joiner: string, on: boolean): void {
+  if (on) joinNamed.add(joiner); else joinNamed.delete(joiner)
 }
 
 /**
- * The unlock this computer's extension `device` may share: a live one the person made on this
- * computer after the device last locked only itself, the one that lasts longest.
+ * The unlock `joiner` may share (this computer's extension device, or a Walnut window here by its
+ * `window:<id>`): a live one the person made on this computer after the joiner last locked only
+ * itself, the one that lasts longest.
  */
-export function joinSource(device: string, now = Date.now()): Session | null {
-  if (joinOnlyNamed && !joinNamed.has(device)) return null
-  const since = selfLocked.get(device) ?? 0
+export function joinSource(joiner: string, now = Date.now()): Session | null {
+  if (joinOnlyNamed && !joinNamed.has(joiner)) return null
+  const since = Math.max(selfLocked.get(joiner) ?? 0, selfLocked.get(EVERY_JOINER) ?? 0)
   let best: Session | null = null
   for (const s of sessions.values()) {
     if (!s.here || s.source || s.createdAt <= since || !alive(s, now)) continue
@@ -203,19 +224,20 @@ export function joinSource(device: string, now = Date.now()): Session | null {
 }
 
 /**
- * A session for `device` sharing the person's unlock on this computer: a token of its own, held
- * only by that device, and part of that one unlock (`source`): it starts on the same clocks, holds
- * only while that unlock does (its expiry, a Lock of it, Lock all end both), and a use of it renews
- * that unlock, as a use in any window does. So sharing never makes an unlock last longer. Null when
- * there is nothing to share.
+ * A session for `joiner` sharing the person's unlock on this computer: a token of its own and part
+ * of that one unlock (`source`): it starts on the same clocks, holds only while that unlock does
+ * (its expiry, a Lock of it, Lock all end both), and a use of it renews that unlock, as a use in
+ * any window does. So sharing never makes an unlock last longer. `kind` 'device': the extension's,
+ * held only with that device's token; 'window': a Walnut window's, held as a window's own unlock
+ * is (its token, which only that browser keeps). Null when there is nothing to share.
  */
-export function joinSession(device: string, client: string): { token: string; expiresAt: string | null } | null {
-  const src = joinSource(device)
+export function joinSession(joiner: string, client: string, kind: 'device' | 'window' = 'device'): { token: string; expiresAt: string | null } | null {
+  const src = joinSource(joiner)
   if (!src) return null
   const token = crypto.randomBytes(32).toString('base64url')
   const hash = hashOf(token)
   sessions.set(hash, {
-    hash, client: client.slice(0, 80), createdAt: src.createdAt, lastUsedAt: src.lastUsedAt, idleMs: src.idleMs, maxMs: src.maxMs, device,
+    hash, client: client.slice(0, 80), createdAt: src.createdAt, lastUsedAt: src.lastUsedAt, idleMs: src.idleMs, maxMs: src.maxMs, ...(kind === 'device' ? { device: joiner } : {}),
     ...(src.choice ? { choice: src.choice } : {}), keep: src.keep !== false, source: src.hash,
   })
   changed()

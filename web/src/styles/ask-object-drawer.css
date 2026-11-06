@@ -68,6 +68,28 @@
   font-size: 11px;
 }
 
+/* The quote's own ×, when the host lets it be left out (the browser side panel's selection). */
+.ask-object-quote:has(> .ask-object-quote-drop) { position: relative; padding-right: 28px; }
+.ask-object-quote-drop {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ask-object-quote-drop:hover { color: var(--fg); background: var(--bg-secondary); }
+.ask-object-quote-drop:focus-visible { outline: 2px solid var(--walnut-accent, var(--accent)); outline-offset: 1px; }
+
 /* Three lines of preview at most: the quote is a reminder of what Walnut is being
    told, not a second reader. Integer line-height in px — WebKit floors a ratio
    line box, so a ratio here shows half a fourth line in the Mac app. */

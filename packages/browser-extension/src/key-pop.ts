@@ -5,8 +5,10 @@
  *
  * Locked, it is one row: the master password and Unlock, the unlock this extension already has
  * (Walnut's setting decides how long it lasts, 48 hours after the last use by default), then this
- * site's logins once unlocked, each with Fill. Its foot opens the full Passwords view and Walnut's
- * vault. It follows the vault as the popup does: a Lock all elsewhere brings the row back.
+ * site's logins once unlocked, each with Fill. Locked, the row shows on every page, a Walnut page
+ * or one with no logins too (R1-9). Its foot opens the full Passwords view, the extension's
+ * Settings (where agents in this browser are turned on, R1-7) and Walnut's vault. It follows the
+ * vault as the popup does: a Lock all elsewhere brings the row back.
  */
 import { ask, ext } from './ext'
 import { displayHost } from '../../../src/core/vault/url-match'
@@ -62,6 +64,7 @@ export function keyPopover(o: {
   surface: 'panel' | 'popup'
   inTab: boolean
   onSearchAll: () => void
+  onSettings: () => void
   onOpenVault: () => void
   /** Opened or closed: the frame's key shows it pressed. */
   onChange: (open: boolean) => void
@@ -90,15 +93,21 @@ export function keyPopover(o: {
     o.onChange(false)
   }
 
-  const ctx = (): PopupCtx => ({ root: o.host, embedded: o.surface === 'panel', inWindow: o.inTab, panelWindow: o.windowId, back: () => void render() })
+  /** A fill's word: the filled page says it worked; an error stays in the popover (no toast over Ask's composer, R1-10). */
+  let said: HTMLElement | null = null
+  const ctx = (): PopupCtx => ({
+    root: o.host, embedded: o.surface === 'panel', inWindow: o.inTab, panelWindow: o.windowId, back: () => void render(),
+    say: (text) => { if (said) said.textContent = text },
+  })
 
   const row = (it: Item) => {
     const fill = h('button', { class: 'btn btn-sm key-pop-fill', type: 'button', 'data-testid': 'key-pop-fill', 'aria-label': `Fill ${it.title}` }, 'Fill') as HTMLButtonElement
     fill.onclick = async () => {
       fill.disabled = true
-      await fillTab(it, ctx())
+      if (said) said.textContent = ''
+      const ok = await fillTab(it, ctx())
       fill.disabled = false
-      if (o.surface === 'panel') close()
+      if (ok && o.surface === 'panel') close()
     }
     return h('div', { class: 'key-pop-row', 'data-testid': 'key-pop-row' },
       avatar(it.site ?? it.title),
@@ -106,7 +115,7 @@ export function keyPopover(o: {
       fill)
   }
 
-  async function lockedBody(err?: string): Promise<HTMLElement[]> {
+  async function lockedBody(host: string, err?: string): Promise<HTMLElement[]> {
     const g = currentView()
     const [status, length] = await Promise.all([
       ask<{ status: { setUp: boolean; hasSecretKey: boolean } }>({ type: 'vault-status' }),
@@ -142,7 +151,7 @@ export function keyPopover(o: {
     setTimeout(() => pw.focus(), 20)
     const note = unlockLine(length.ok ? length : {})
     return [form, skWrap, line, note ? h('p', { class: 'key-pop-note' }, note) : null,
-      h('p', { class: 'key-pop-empty', 'data-testid': 'key-pop-locked-empty' }, "Unlock to see this site's logins.")].filter((x): x is HTMLElement => !!x)
+      h('p', { class: 'key-pop-empty', 'data-testid': 'key-pop-locked-empty' }, host ? "Unlock to see this site's logins." : 'Open a site to see its logins here.')].filter((x): x is HTMLElement => !!x)
   }
 
   async function render(): Promise<void> {
@@ -150,11 +159,13 @@ export function keyPopover(o: {
     const g = nextView()
     const site = await ask<{ site: string; items: Item[]; insecure?: number }>({ type: 'site-items', ...(o.windowId !== undefined ? { windowId: o.windowId } : {}) })
     if (!isCurrent(g) || !el) return
-    const locked = !site.ok && !!site.code && LOCKED.has(site.code)
+    // No site here (a Walnut page, a new tab): the vault was not asked, so its state is asked now.
+    const locked = (!site.ok && !!site.code && LOCKED.has(site.code))
+      || (site.ok && !site.site && await ask<{ unlocked: boolean }>({ type: 'vault-watch' }).then((v) => v.ok && !v.unlocked))
     const host = site.ok ? site.site : await tabHost(o.windowId)
     if (!isCurrent(g) || !el) return
     let body: HTMLElement[]
-    if (locked) body = await lockedBody()
+    if (locked) body = await lockedBody(host)
     else if (!site.ok) body = [errLine(site.error ?? 'Walnut did not answer.')]
     else if (!site.site) body = [h('p', { class: 'key-pop-empty' }, 'Open a site to see its logins here.')]
     else if (!site.items.length) {
@@ -166,8 +177,11 @@ export function keyPopover(o: {
     const head = h('div', { class: 'key-pop-head' }, host ? `Passwords for ${host}` : 'Passwords')
     const foot = h('div', { class: 'key-pop-foot' },
       h('button', { class: 'link-btn key-pop-all', type: 'button', 'data-testid': 'key-pop-search-all', onclick: () => { close(); o.onSearchAll() } }, 'Search all logins'),
-      h('button', { class: 'link-btn key-pop-vault', type: 'button', 'data-testid': 'key-pop-open-vault', onclick: () => { close(); o.onOpenVault() } }, 'Open vault'))
-    el.replaceChildren(head, h('div', { class: 'key-pop-body' }, ...body), foot)
+      h('span', { class: 'key-pop-foot-end' },
+        h('button', { class: 'link-btn key-pop-settings', type: 'button', 'data-testid': 'key-pop-settings', title: 'Passwords and agents in this browser', onclick: () => { close(); o.onSettings() } }, 'Settings'),
+        h('button', { class: 'link-btn key-pop-vault', type: 'button', 'data-testid': 'key-pop-open-vault', onclick: () => { close(); o.onOpenVault() } }, 'Open vault')))
+    said = h('p', { class: 'err key-pop-said', role: 'alert', 'data-testid': 'key-pop-said' })
+    el.replaceChildren(head, h('div', { class: 'key-pop-body' }, ...body, said), foot)
     el.dataset.shows = locked ? 'locked' : 'unlocked'
     el.setAttribute('aria-label', host ? `Passwords for ${host}` : 'Passwords')
     // The focus stays on the popover itself (Tab reaches the first Fill, Escape closes): a Fill

@@ -4,7 +4,7 @@
  * Mounted once in App.tsx; a newer open replaces the one on screen.
  */
 import { useEffect, useState } from 'react';
-import { FileViewer } from './FileViewer';
+import { LazyFileViewer } from './LazyFileViewer';
 import { OPEN_FILE_EVENT, type OpenFileRequest } from '@/utils/open-anywhere';
 import { log } from '@/utils/log';
 import '@/styles/agent-links.css';
@@ -22,8 +22,9 @@ export function AnywhereFileViewer() {
     return () => window.removeEventListener(OPEN_FILE_EVENT, onOpen);
   }, []);
   if (!req) return null;
+  // Loaded on the first open (LazyFileViewer): every window mounts this viewer.
   return (
-    <FileViewer
+    <LazyFileViewer
       path={req.path}
       {...(req.line ? { line: req.line } : {})}
       {...(req.host ? { host: req.host } : {})}

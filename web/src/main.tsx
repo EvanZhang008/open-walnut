@@ -3,10 +3,12 @@
 // React's scheduler creates its MessageChannel at react-dom module init, so
 // any later install misses it.
 import './utils/trace-dispatchers';
-import { StrictMode } from 'react';
+// Second: starts loading the app this window shows (App, or a pop-out's own view) while the
+// rest of this entry evaluates (boot-shell.ts).
+import { isPopoutWindow, loadPluginLoader, shellReady } from './boot-shell';
+import { StrictMode, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { App } from './App';
 import { AppErrorBoundary } from './components/common/AppErrorBoundary';
 import { ConfirmProvider } from './hooks/useConfirm';
 import { initAppInfo } from './utils/app-info';
@@ -27,7 +29,6 @@ import { installImageSizeHold } from './utils/image-size-hold';
 import { installHighlightRules } from './utils/highlight-rules';
 import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
-import { initWebPlugins } from './plugins/loader';
 import { installPluginHostRuntime } from './plugins/runtime';
 import { installAuthFetch } from './api/auth-fetch';
 import { STORAGE_KEY as DEVICE_TOKEN_KEY, startSignInRenewal, syncDeviceCookie } from './api/device-token';
@@ -38,10 +39,7 @@ import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { installOpenLinks } from './utils/open-link';
 import { installOpIdFetch } from './api/op-id';
 import { installLeaderPresence } from './hooks/useLeaderPresence';
-import './styles/globals.css';
-import './styles/home-navigation.css';
-import './styles/overlay-glass.css';
-import './styles/fullscreen-tab.css';
+
 
 // Every same-origin fetch write carries an op id (api/op-id.ts), the raw ones too,
 // before anything below sends one.
@@ -57,6 +55,7 @@ syncDeviceCookie();
 // pasted address): taken out of the address bar now and on every hash change.
 installOpenLinks();
 
+
 // Sign-in first (api/sign-in-gate.ts): a `#pair=` code is traded before the
 // console mounts, and a browser that is not signed in gets the sign-in screen
 // alone instead of a console whose every request is refused.
@@ -64,7 +63,8 @@ installOpenLinks();
 // state, until the reload that follows a right one.
 // A code kept from a trade that got no answer before a reload counts too.
 const signInRoot = hasPendingPairCode() ? createRoot(document.getElementById('root')!) : null;
-signInRoot?.render(<StrictMode><UnpairedNotice /></StrictMode>);
+// Drawn once the stylesheets are in (they load with the app, shellReady), as before the split.
+if (signInRoot) void shellReady.catch(() => undefined).then(() => { if (!booted && gateRoot === signInRoot) signInRoot.render(<StrictMode><UnpairedNotice /></StrictMode>); });
 // A probe that got no answer (D5) shows the sign-in screen with its error line
 // and Try again, and probes again by itself every few seconds: the first answer
 // boots the console (or turns the screen into the plain sign-in).
@@ -84,7 +84,11 @@ function applyGate(gate: SignInGate): void {
   }
   gateRoot ??= createRoot(document.getElementById('root')!);
   const failed = gate === 'probe-failed';
-  gateRoot.render(<StrictMode><UnpairedNotice probeFailed={failed} onRetryProbe={failed ? retryProbe : undefined} /></StrictMode>);
+  const root = gateRoot;
+  void shellReady.catch(() => undefined).then(() => {
+    if (booted || gateRoot !== root) return;
+    root.render(<StrictMode><UnpairedNotice probeFailed={failed} onRetryProbe={failed ? retryProbe : undefined} /></StrictMode>);
+  });
   if (failed) reprobe = setTimeout(() => { void retryProbe(); }, 4_000);
 }
 async function retryProbe(): Promise<void> {
@@ -121,13 +125,28 @@ window.addEventListener('storage', (e) => {
   if (e.key === DEVICE_TOKEN_KEY && e.newValue && (!booted || getUnpairedState() !== 'ok')) window.location.reload();
 });
 
+/**
+ * The installed plugins' web modules. Their loader reaches every view a plugin may mount (Notes,
+ * Calendar, the session panel…), so it is its own chunk: the console loads it at once, a pop-out
+ * once its view has drawn (the side panel must not wait on code it does not show first).
+ */
+function startWebPlugins(): void {
+  const start = () => { void loadPluginLoader().then((m) => m.initWebPlugins()); };
+  if (!isPopoutWindow) { start(); return; }
+  const idle = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  void shellReady.catch(() => undefined).then(() => {
+    if (idle) idle(start, { timeout: 2_000 });
+    else setTimeout(start, 500);
+  });
+}
+
 function bootApp(): void {
   // A browser signed in with a code renews its sign-in before it runs out (api/device-token.ts).
   startSignInRenewal();
   // Persist browser console logs to disk (view with: open-walnut logs -s browser)
   initBrowserLogger();
   installPluginHostRuntime();
-  void initWebPlugins();
+  startWebPlugins();
   // Subscribe before React mounts so the first WS status event cannot race ahead
   // of component hooks.
   tracePhase('boot:session-status-store', initSessionStatusStore);
@@ -200,7 +219,14 @@ function bootApp(): void {
   // Never throws; offline just falls back to plain localStorage.
   startPhase('boot:ui-prefs-sync');
   // Unsent drafts too (utils/drafts.ts): every box reads its words in a useState initializer.
-  Promise.all([initUiPrefsSync(), initDraftSync()]).finally(() => {
+  // The app's own code too (shellReady, asked at the top of this file, so it is mostly in by now).
+  const shown = shellReady.then((one) => one, (error: unknown) => {
+    console.error('[boot] the app failed to load', { error: String((error as Error)?.stack ?? error) });
+    // Thrown at render, so the error boundary shows its recovery (and the stale-asset
+    // recovery reloads a page whose chunks went away with a deploy).
+    return (() => { throw error; }) as ComponentType;
+  });
+  Promise.all([initUiPrefsSync().catch(() => undefined), initDraftSync().catch(() => undefined), shown]).then(([, , Shell]) => {
     endPhase('boot:ui-prefs-sync');
     startPhase('boot:react-mount');
     // react-mount phase ends on the first post-render macrotask — everything
@@ -224,7 +250,7 @@ function bootApp(): void {
         <BrowserRouter>
           <ConfirmProvider>
             <AppErrorBoundary>
-              <App />
+              <Shell />
             </AppErrorBoundary>
           </ConfirmProvider>
         </BrowserRouter>

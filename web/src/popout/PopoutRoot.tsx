@@ -1,13 +1,7 @@
-import { useLayoutEffect } from 'react';
-import type { ReactNode } from 'react';
+import { lazy, Suspense, useLayoutEffect } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { PopoutExtPanel } from './PopoutExtPanel';
-import { PopoutExtTasks } from './PopoutExtTasks';
-import { PopoutFileView } from './PopoutFileView';
-import { PopoutGlobalNotes } from './PopoutGlobalNotes';
-import { PopoutNote } from './PopoutNote';
-import { PopoutSession } from './PopoutSession';
-import { PopoutTask } from './PopoutTask';
+import { isPopoutView, loadPopoutView, loadedPopoutView } from './popout-views';
 import { setUpdateNoticeDock, useUpdateNoticeOccupied } from '@/components/common/update-notice-dock';
 
 /**
@@ -35,10 +29,26 @@ function applyStoredTheme() {
 }
 
 /**
- * Root of a pop-out window. Mounted by App.tsx when the path starts with
- * `/popout`, BEFORE <AppShell>: no sidebar or MainPage. Each leaf mounts the
+ * The component a view renders with, picked once per view so it never changes type (a change
+ * would remount the view): the loaded component when main.tsx's import has landed (the usual
+ * case, drawn in the first render), else a lazy one that suspends until it does.
+ */
+const viewComponents = new Map<string, ComponentType>();
+function viewComponent(view: string): ComponentType {
+  let c = viewComponents.get(view);
+  if (!c) {
+    c = loadedPopoutView(view) ?? lazy(() => loadPopoutView(view)!.then((one) => ({ default: one })));
+    viewComponents.set(view, c);
+  }
+  return c;
+}
+
+/**
+ * Root of a pop-out window. Mounted by PopoutShell.tsx (main.tsx loads it instead
+ * of App for a `/popout` address; App mounts it too for a window that navigated
+ * there), BEFORE any <AppShell>: no sidebar or MainPage. Each leaf mounts the
  * providers its interactions need. Restores the saved theme, then dispatches
- * to the requested leaf view by `?view=`.
+ * to the requested leaf view by `?view=`, each its own chunk (popout-views.ts).
  */
 export function PopoutRoot() {
   const [params] = useSearchParams();
@@ -51,35 +61,16 @@ export function PopoutRoot() {
   }, []);
 
   let content: ReactNode;
-  switch (view) {
-    case 'ext-panel':
-      content = <PopoutExtPanel />;
-      break;
-    case 'ext-tasks':
-      content = <PopoutExtTasks />;
-      break;
-    case 'file':
-      content = <PopoutFileView />;
-      break;
-    case 'global-notes':
-      content = <PopoutGlobalNotes />;
-      break;
-    case 'note':
-      content = <PopoutNote />;
-      break;
-    case 'session':
-      content = <PopoutSession />;
-      break;
-    case 'task':
-      content = <PopoutTask />;
-      break;
-    default:
-      content = (
-        <div className="popout-stub">
-          <h2>Unknown view</h2>
-          <code>{view || '(none)'}</code>
-        </div>
-      );
+  if (isPopoutView(view)) {
+    const View = viewComponent(view);
+    content = <Suspense fallback={null}><View /></Suspense>;
+  } else {
+    content = (
+      <div className="popout-stub">
+        <h2>Unknown view</h2>
+        <code>{view || '(none)'}</code>
+      </div>
+    );
   }
 
   // The update notice docks at the bottom, in the flow, so it covers neither the transcript nor the composer.

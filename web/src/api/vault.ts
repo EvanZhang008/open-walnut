@@ -5,6 +5,12 @@
  * Mac app's page recycle) shares one unlock, and dropped on Lock or a 401. Its key is not one
  * ui-prefs mirrors to the server (ui-prefs-sync.ts `syncable`).
  *
+ * One unlock on this computer (docs/reference/passwords.md): when the person types the master
+ * password here on the computer Walnut runs on, the server hands this browser a browser key
+ * (src/core/vault/browser-keys.ts), kept in localStorage beside the session and never mirrored
+ * either. A locked window sends it, and when the status says `canJoin` (Passwords was unlocked on
+ * this computer since, in the extension or another window) it shares that unlock with no password.
+ *
  * The master password never leaves the page when WebCrypto is here: the page derives the
  * password key (PBKDF2, the vault's own parameters) and sends that. A page on plain http
  * from another device has no WebCrypto, so it sends the password and the server derives it.
@@ -39,6 +45,8 @@ export interface VaultStatus {
   recoveryUnsaved?: boolean
   /** The master password hint (shown on the unlock screen); absent when none, or from an older Walnut. */
   hint?: string
+  /** This locked window may share an unlock made on this computer (POST /vault/join); absent otherwise. */
+  canJoin?: boolean
 }
 
 /** What a recovery kit holds. */
@@ -148,6 +156,20 @@ if (typeof window !== 'undefined') {
   })
 }
 
+const BROWSER_KEY = 'walnut.vault.browser'
+let memoryBrowserKey: string | null = null
+
+/** This browser's key for sharing an unlock made on this computer, if the server gave it one. */
+function browserKey(): string | null {
+  try { return localStorage.getItem(BROWSER_KEY) } catch { return memoryBrowserKey }
+}
+
+function keepBrowserKey(r: { browserKey?: unknown }): void {
+  if (typeof r.browserKey !== 'string' || !r.browserKey) return
+  memoryBrowserKey = r.browserKey
+  try { localStorage.setItem(BROWSER_KEY, r.browserKey) } catch { /* storage off: this page keeps it */ }
+}
+
 /** `used` learns the unlock the request went with, so a dead one is dropped and never a newer one. */
 async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 20_000, extra: Record<string, string> = {}, used?: { token: string | null }): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra }
@@ -156,6 +178,8 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
   const s = vaultSession()
   if (used) used.token = s
   if (s) headers['x-walnut-vault-session'] = s
+  const bk = browserKey()
+  if (bk) headers['x-walnut-vault-browser'] = bk
   const res = await fetch(`/api/v1${path}`, {
     method, headers, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -193,20 +217,33 @@ function newKdf(): KdfParams | undefined {
 const CLIENT = 'Walnut web'
 
 export const vaultApi = {
-  /** `quiet`: a check the page makes by itself (is this window still unlocked?), which is no use of the vault. */
-  /** The vault's state for this window: an unlock the server no longer knows is dropped here. */
+  /**
+   * The vault's state for this window: an unlock the server no longer knows is dropped here, and a
+   * locked window that may share an unlock made on this computer (`canJoin`) takes it, with no
+   * password. `quiet`: a check the page makes by itself (is this window still unlocked?), which is
+   * no use of the vault (a share is none either: it renews nothing).
+   */
   async status(opts: { quiet?: boolean } = {}): Promise<VaultStatus> {
     const used = { token: null as string | null }
-    const st = await call<VaultStatus>('GET', '/vault/status', undefined, 20_000, opts.quiet ? { 'x-walnut-vault-quiet': '1' } : {}, used)
+    const quiet: Record<string, string> = opts.quiet ? { 'x-walnut-vault-quiet': '1' } : {}
+    const st = await call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet, used)
     if (!st.unlocked && used.token) dropSession(used.token)
-    return st
+    if (st.unlocked || !st.canJoin) return st
+    // Another tab may have taken it meanwhile: share only while this browser still has no unlock.
+    if (vaultSession()) return call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
+    try {
+      const r = await call<{ session: { token: string } }>('POST', '/vault/join', { client: CLIENT })
+      if (!vaultSession()) setSession(r.session.token)
+    } catch { return { ...st, canJoin: false } } // the unlock ended meanwhile: the lock screen stays
+    return call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
   },
 
   async setup(password: string, hint = ''): Promise<RecoveryKit> {
     const kdf = newKdf()
-    const r = await call<RecoveryKit & { session: { token: string } }>('POST', '/vault/setup', {
+    const r = await call<RecoveryKit & { session: { token: string }; browserKey?: string }>('POST', '/vault/setup', {
       ...(await proof(password, kdf)), ...(kdf ? { kdf } : {}), agentsWhileAway: false, client: CLIENT, ...(hint ? { hint } : {}),
     }, 60_000)
+    keepBrowserKey(r)
     setSession(r.session.token)
     return { secretKey: r.secretKey, recoveryCode: r.recoveryCode }
   },
@@ -214,9 +251,10 @@ export const vaultApi = {
   /** A forgotten master password: the recovery code sets a new one and returns the new kit. */
   async recover(recoveryCode: string, newPassword: string, secretKey?: string, hint = ''): Promise<RecoveryKit> {
     const kdf = newKdf()
-    const r = await call<RecoveryKit & { session: { token: string } }>('POST', '/vault/recover', {
+    const r = await call<RecoveryKit & { session: { token: string }; browserKey?: string }>('POST', '/vault/recover', {
       recoveryCode, ...(secretKey ? { secretKey } : {}), ...(await proof(newPassword, kdf, 'newPassword')), ...(kdf ? { kdf } : {}), client: CLIENT, hint,
     }, 60_000)
+    keepBrowserKey(r)
     setSession(r.session.token)
     return { secretKey: r.secretKey, recoveryCode: r.recoveryCode }
   },
@@ -230,9 +268,10 @@ export const vaultApi = {
     for (let tries = 0; ; tries++) {
       const kdf = (await call<VaultStatus>('GET', '/vault/status')).kdf
       try {
-        const r = await call<{ session: { token: string } }>('POST', '/vault/unlock', {
+        const r = await call<{ session: { token: string }; browserKey?: string }>('POST', '/vault/unlock', {
           ...(await proof(password, kdf)), ...(kdf ? { kdfSalt: kdf.salt } : {}), ...(secretKey ? { secretKey } : {}), client: CLIENT,
         }, 60_000)
+        keepBrowserKey(r)
         setSession(r.session.token)
         return
       } catch (err) {
@@ -302,9 +341,12 @@ export const vaultApi = {
   /** A new master password; the vault's recovery code changes with it (the new kit comes back). */
   async changePassword(oldPassword: string, newPassword: string, kdf: KdfParams | undefined, hint = ''): Promise<{ recoveryKit?: RecoveryKit }> {
     const next = newKdf()
-    return call<{ recoveryKit?: RecoveryKit }>('POST', '/vault/password', {
+    const r = await call<{ recoveryKit?: RecoveryKit; browserKey?: string }>('POST', '/vault/password', {
       ...(await proof(oldPassword, kdf, 'oldPassword')), ...(await proof(newPassword, next, 'newPassword')), ...(next ? { kdf: next } : {}), hint,
     }, 60_000)
+    // Every other browser's key ended with the old password; this one gets a new one.
+    keepBrowserKey(r)
+    return r
   },
 
   /** A new master password hint (checked against the master password), or '' to remove it (no password needed). */

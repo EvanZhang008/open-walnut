@@ -61,6 +61,9 @@ test.beforeAll(async ({}, info) => {
   await p.getByTestId('popup-connect').click()
   const connect = await opened
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 60_000 })
+  // Agents in this browser stay off here, as the person may choose on this page (on by default):
+  // a browser of this spec must not join the fixture Walnut's agents beside the agent specs' own.
+  await connect.getByTestId('connect-extension-agents').uncheck()
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
   await connect.close()

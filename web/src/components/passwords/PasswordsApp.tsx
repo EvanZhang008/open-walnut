@@ -9,6 +9,9 @@ import { KitScreen, SetupFlow, UnlockScreen, type KitToShow } from './LockScreen
 import { VaultBrowser } from './VaultBrowser'
 import '@/styles/passwords.css'
 
+/** How often a locked Passwords page looks for an unlock made elsewhere on this computer. */
+const LOCKED_CHECK_MS = 3_000
+
 export function PasswordsApp() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [error, setError] = useState('')
@@ -31,6 +34,9 @@ export function PasswordsApp() {
   useEffect(() => onVaultSessionChange(() => { void refresh() }), [refresh])
   // A Lock elsewhere (the extension, another browser) shows here without a reload: a quiet check
   // (no use of the vault) when the page comes back into view, and every minute while it is seen.
+  // While locked it looks every few seconds, so an unlock in the extension or another window on
+  // this computer opens this one too (status() shares it when the server says canJoin).
+  const lockedNow = !!status && status.setUp && !status.unlocked
   useEffect(() => {
     const check = () => {
       if (document.visibilityState !== 'visible') return
@@ -39,10 +45,10 @@ export function PasswordsApp() {
         setStatus((cur) => (cur && cur.unlocked === st.unlocked && cur.setUp === st.setUp ? cur : st))
       }).catch(() => {})
     }
-    const t = window.setInterval(check, 60_000)
+    const t = window.setInterval(check, lockedNow ? LOCKED_CHECK_MS : 60_000)
     document.addEventListener('visibilitychange', check)
     return () => { window.clearInterval(t); document.removeEventListener('visibilitychange', check) }
-  }, [])
+  }, [lockedNow])
 
   // The failed request already dropped the unlock it went with (api/vault.ts call()), never a newer one.
   const locked = useCallback(() => { void refresh() }, [refresh])

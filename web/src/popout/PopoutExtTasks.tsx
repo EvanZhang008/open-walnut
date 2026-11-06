@@ -31,6 +31,7 @@ import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { taskPath } from '@/utils/task-path';
 import { fromParent, toParent } from './ext-frame';
+import { useFrameTheme } from './ext-theme';
 import { hostOf, type PanelPage } from './ext-panel-model';
 import { askedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
 import { SNAP_ROWS, type TasksSnap } from './ext-snapshot';
@@ -64,6 +65,7 @@ function useApprovalsHere(): Approval[] {
 
 function ExtTasks() {
   const { tasks, loading } = useTasksContext();
+  useFrameTheme();
   const [current, setCurrent] = useState<PanelPage | null>(null);
   /** The save of the page the person is on now; a save of a page they left is never shown here. */
   const [save, setSave] = useState<{ url: string; state: 'busy' | 'done' | 'error'; id?: string; title?: string } | null>(null);

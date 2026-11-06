@@ -226,6 +226,9 @@ function coversWork(left: number, width: number, bottom: number, columnRight: nu
   return false;
 }
 
+/** The left columns leftColumnRight found last, for syncRoom (a column that does not scroll). */
+let columns: HTMLElement[] = [];
+
 /**
  * The page's own left columns beside the sidebar (Home's task panel, the Org list, the Settings
  * nav, the Tasks projects, Mail's folders, a plugin's list; a wide one, a notes tree or a
@@ -238,6 +241,7 @@ function coversWork(left: number, width: number, bottom: number, columnRight: nu
 function leftColumnRight(sidebarRight: number): number {
   let right = sidebarRight;
   const y = window.innerHeight - 60;
+  const found: HTMLElement[] = [];
   for (let step = 0; step < 3; step++) {
     const from = right;
     for (const el of document.elementsFromPoint(from + 30, y)) {
@@ -252,9 +256,11 @@ function leftColumnRight(sidebarRight: number): number {
       if (r.right > sidebarRight + MAX_COLUMNS_PX) continue;
       if (r.height < window.innerHeight * 0.85) continue;
       right = Math.max(right, Math.round(r.right));
+      if (el instanceof HTMLElement) found.push(el);
     }
     if (right === from) break;
   }
+  columns = found;
   return right;
 }
 
@@ -272,6 +278,29 @@ function takesSpacer(el: HTMLElement): boolean {
   const cs = getComputedStyle(el);
   const column = cs.display === 'block' || cs.display === 'flow-root' || (cs.display.endsWith('flex') && cs.flexDirection === 'column');
   return column && (el === reserved || getComputedStyle(el, '::after').content === 'none');
+}
+
+/**
+ * The page's left column under the point when what the stack covers there is that column's own
+ * rows rather than a list scrolling inside it: a column that does not scroll (the Passwords rail,
+ * its Import and Lock at its foot) takes the room at its end, so those rows move up clear of the
+ * stack instead of lying under it (2026-11-06: the approval card covered the rail's Lock). The
+ * innermost such column, so a column inside another takes it.
+ */
+function columnUnder(x: number, y: number, scroller: HTMLElement | null): HTMLElement | null {
+  let best: HTMLElement | null = null;
+  for (const col of columns) {
+    if (!col.isConnected) continue;
+    const r = col.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+    // A list scrolling inside the column already gets the room at its own end. Not once the
+    // column holds the room: its list scrolls only because of that room, and handing the room to
+    // the list would undo it on the next look, back and forth.
+    if (scroller && col.contains(scroller) && col !== reserved) continue;
+    if (best && !best.contains(col)) continue;
+    if (takesSpacer(col)) best = col;
+  }
+  return best;
 }
 
 /** A scroller that grows to fill its flex column, so a bottom margin shortens it rather than the page. */
@@ -314,7 +343,8 @@ function syncRoom(): void {
   if (!stack) return;
   const r = stack.getBoundingClientRect();
   const visible = stack.childElementCount > 0 && !stack.classList.contains('is-tucked') && !stack.classList.contains('under-drawer') && r.height > 0;
-  const scroller = visible ? (shrunkUnder(r.left + 24, r.top + 4) ?? scrollerUnder(r.left + 24, r.top + 4)) : null;
+  const under = visible ? (shrunkUnder(r.left + 24, r.top + 4) ?? scrollerUnder(r.left + 24, r.top + 4)) : null;
+  const scroller = visible ? (columnUnder(r.left + 24, r.top + 4, under) ?? under) : null;
   if (!scroller) { release(); return; }
   if (reserved !== scroller) release();
   // While the stack holds something the room only grows: a notice leaving (a toast's own time

@@ -3,8 +3,9 @@
  *
  *   GET    /api/v1/vault/status                    → status (+ `unlocked` for this request's session)
  *   POST   /api/v1/vault/setup                     { passwordKey | password, kdf, agentsWhileAway, hint? } → { secretKey, recoveryCode, session }
- *   POST   /api/v1/vault/unlock                    { passwordKey | password, secretKey?, client? } → { session }
+ *   POST   /api/v1/vault/unlock                    { passwordKey | password, secretKey?, client? } → { session, browserKey? }
  *   POST   /api/v1/vault/recover                   { recoveryCode, secretKey?, newPasswordKey | newPassword, kdf, hint? } → { secretKey, recoveryCode, session }
+ *   POST   /api/v1/vault/join                      → { session }  (this computer's extension or a Walnut window here, sharing an unlock made here)
  *   POST   /api/v1/vault/lock                      { all? | everywhere? } → { ended }  (none: this window; everywhere: every window; all: and every agent grant)
  *   GET    /api/v1/vault/items                     → { items: summaries }       (session)
  *   POST   /api/v1/vault/items                     { item } → { item }          (session)
@@ -47,6 +48,9 @@ import { derivePasswordKey, toB64, type KdfParams } from '../../core/vault/crypt
 import type { VaultItem, VaultItemInput } from '../../core/vault/types.js'
 
 export const vaultV1Router = Router()
+
+/** A Walnut window's browser key (core/vault/browser-keys.ts BROWSER_HEADER; kept here so the route loads no vault module at start). */
+const BROWSER_HEADER = 'x-walnut-vault-browser'
 
 function header(req: Request, name: string): string | undefined {
   const raw = req.headers[name]
@@ -302,7 +306,7 @@ export function deviceOf(req: Request): string | undefined {
  * The request came over this computer's own network path: a loopback connection with no proxy
  * header, addressed to a loopback name, off the tunnel's port, from Walnut's own page or another
  * origin (the browser extension), and no session made it. An unlock made so is the person's on
- * this computer, which this computer's extension may share (POST /vault/join). Known limit, the
+ * this computer, which this computer's extension and Walnut windows may share (POST /vault/join). Known limit, the
  * one local-trust.ts names: a forward that adds no proxy header looks the same.
  */
 function fromThisComputer(req: Request): boolean {
@@ -313,7 +317,7 @@ function fromThisComputer(req: Request): boolean {
 
 /**
  * An unlock the person made in a browser on this computer (a Walnut window, the Mac app's page,
- * an extension: each sends its Origin), which this computer's extension may share. A request with
+ * an extension: each sends its Origin), which this computer's extension and windows may share. A request with
  * no Origin (a script, the CLI) is not a window, and shares nothing.
  */
 function unlockedHere(req: Request): boolean {
@@ -323,10 +327,73 @@ function unlockedHere(req: Request): boolean {
 /** A paired Walnut browser extension (browser-pair.ts names its device `extension-<hex>`). */
 const EXTENSION_DEVICE = /^extension-[0-9a-f]+$/
 
-/** This computer's extension, the only client that may share an unlock made here. */
+/** This computer's extension, which may share an unlock made here with its device token. */
 function joiningDevice(req: Request): string | null {
   const device = deviceOf(req)
   return device && EXTENSION_DEVICE.test(device) && fromThisComputer(req) ? device : null
+}
+
+/**
+ * A Walnut window on this computer: Walnut's own page (its own Origin; a same-origin GET sends
+ * none) over this computer's own path (local-trust.ts: loopback, no proxy header, a loopback Host,
+ * off the tunnel's port), with no session's or automation's mark and no device token (a browser
+ * here holds none; one that does is a paired device from elsewhere). A local process can send all
+ * of that too, so this alone shares nothing: a window also needs its browser key (joiningWindow).
+ */
+function walnutWindowHere(req: Request): boolean {
+  if (header(req, 'x-walnut-caller-sid') || header(req, CALLER_KIND_HEADER) || isOnBehalfOfRemote(req) || deviceOf(req)) return false
+  return classifyLocalRequest(req).trusted
+}
+
+/**
+ * A Walnut window here that may share an unlock made on this computer: it presents a browser key
+ * this vault issued to it when the person typed the master password in it (core/vault/browser-keys.ts).
+ * Only read while the vault is open (it is whenever there is an unlock to share).
+ */
+async function joiningWindow(req: Request): Promise<{ joiner: string; key: string } | null> {
+  if (!walnutWindowHere(req) || !(await store()).isOpen()) return null
+  const key = header(req, BROWSER_HEADER)
+  const { knownBrowser } = await import('../../core/vault/browser-keys.js')
+  const joiner = await knownBrowser(key)
+  return joiner && key ? { joiner, key } : null
+}
+
+/** The window's own auto-lock is kept against its browser key's id (no need to know the key: a lock only ever withholds). */
+async function windowSelfLock(req: Request): Promise<string | undefined> {
+  const key = header(req, BROWSER_HEADER)
+  if (!walnutWindowHere(req)) return undefined
+  const { browserKeyShape, windowJoiner } = await import('../../core/vault/browser-keys.js')
+  return browserKeyShape(key) ? windowJoiner(key) : undefined
+}
+
+/**
+ * A new master password (or a recovery): no unlock made before it is shared with any window or
+ * extension (sessions.endJoinsBefore), and every browser key ends, so a browser that was let in
+ * before types the new password once (the window making the change gets a new key: browserKeyFor
+ * after this). `epoch: false`: the caller set the epoch itself (a recovery, before its own unlock).
+ */
+async function endSharing(opts: { epoch?: boolean } = {}): Promise<void> {
+  const s = await sessions()
+  if (opts.epoch !== false) s.endJoinsBefore()
+  const { forgetAllBrowsers } = await import('../../core/vault/browser-keys.js')
+  // The password is changed already: a failed write still leaves no old unlock shareable (the epoch).
+  await forgetAllBrowsers().catch(async (err) => {
+    const { log } = await import('../../logging/index.js')
+    log.web.warn('passwords: could not forget the browsers let in before the new master password', { error: (err as Error).message })
+  })
+  await (await import('../../core/vault/session-store.js')).saveSessionsNow()
+}
+
+/**
+ * The person typed the master password in a Walnut window on this computer (setup, unlock,
+ * recovery): the browser key that lets this browser share a later unlock made here. Nothing for a
+ * script (no Origin), the extension (its device token is its secret), or any caller from elsewhere.
+ */
+async function browserKeyFor(req: Request): Promise<{ browserKey?: string }> {
+  if (!unlockedHere(req) || !walnutWindowHere(req)) return {}
+  const { issueBrowserKey } = await import('../../core/vault/browser-keys.js')
+  const browserKey = await issueBrowserKey(header(req, BROWSER_HEADER), clientName(req))
+  return browserKey ? { browserKey } : {}
 }
 
 function clientName(req: Request): string {
@@ -344,9 +411,14 @@ vaultV1Router.get('/vault/status', async (req, res, next) => {
     await closeIfNobody()
     const st = await (await store()).vaultStatus()
     const u = await unlockLength(st.agentsWhileAway)
-    // This computer's extension, locked while the person has Passwords unlocked here: it may share that unlock.
+    // This computer's extension, or a Walnut window here, locked while the person has Passwords
+    // unlocked on this computer: it may share that unlock.
     const device = unlocked ? null : joiningDevice(req)
-    const canJoin = !!device && !!s.joinSource(device)
+    let canJoin = !!device && !!s.joinSource(device)
+    if (!unlocked && !device) {
+      const w = await joiningWindow(req)
+      canJoin = !!w && !!s.joinSource(w.joiner)
+    }
     return { ...st, unlocked, ...(canJoin ? { canJoin } : {}), autoLockMinutes: u.autoLockMinutes, unlockFor: u.unlockFor, lockAfterIdleMinutes: u.lockAfterIdleMinutes, waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
   })
 })
@@ -367,7 +439,7 @@ vaultV1Router.post('/vault/setup', async (req, res, next) => {
       const minutes = (await unlockLength()).limits
       return { ...made, session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
-    return r ? r.value : SENT
+    return r ? { ...r.value, ...(await browserKeyFor(req)) } : SENT
   })
 })
 
@@ -390,32 +462,43 @@ vaultV1Router.post('/vault/unlock', async (req, res, next) => {
       await st.unlockVault({ passwordKey, ...(typeof body.secretKey === 'string' && body.secretKey ? { secretKey: body.secretKey } : {}) })
       return { session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
-    return r ? r.value : SENT
+    return r ? { ...r.value, ...(await browserKeyFor(req)) } : SENT
   })
 })
 
 /**
- * One unlock for this computer: the browser extension on the computer Walnut runs on, locked while
- * the person has Passwords unlocked here (in a Walnut window, or another browser's extension),
- * gets a session of its own sharing that unlock, with no password (sessions.joinSession: on the
- * same clocks, so it never lasts longer). Nothing else may: a browser elsewhere, a phone or a
- * page has no extension device token, and a session never asks (gate). A Lock ends it with the
- * rest; an extension that locked only itself shares nothing until the person unlocks again.
+ * One unlock for this computer: the browser extension on the computer Walnut runs on, or a Walnut
+ * window there (the /passwords page, the Mac app's page), locked while the person has Passwords
+ * unlocked on this computer (in a Walnut window, or a browser's extension), gets a session of its
+ * own sharing that unlock, with no password (sessions.joinSession: on the same clocks, so it never
+ * lasts longer). The extension proves itself with its device token, a window with the browser key
+ * it got when the person typed the master password in it (a page and a local process look the same
+ * otherwise). Nothing else may: a browser elsewhere, a phone, a tunnel or a session (gate). A Lock
+ * ends it with the rest; one that locked only itself shares nothing until the person unlocks again.
  */
 vaultV1Router.post('/vault/join', async (req, res, next) => {
   if (!gate(req, res)) return
   await run(res, next, async () => {
     const s = await sessions()
     const device = joiningDevice(req)
-    if (!device) {
-      res.status(403).json({ error: 'Only the Walnut extension on the computer Walnut runs on shares an unlock: unlock with the master password.', code: 'join_refused' })
+    // A window's POST always carries its Origin: a request without one is no window.
+    const asWindow = !device && typeof req.headers.origin === 'string' && walnutWindowHere(req)
+    // Passwords closed everywhere: nothing to share, whoever asks (no key can be checked, none is needed).
+    if (asWindow && !(await store()).isOpen()) {
+      res.status(409).json({ error: 'Passwords is locked: unlock it with the master password.', code: 'nothing_to_join' })
       return SENT
     }
-    const session = s.joinSession(device, clientName(req))
+    const win = asWindow ? await joiningWindow(req) : null
+    if (!device && !win) {
+      res.status(403).json({ error: 'Only the Walnut extension, or a Walnut window that unlocked before, on the computer Walnut runs on shares an unlock: unlock with the master password.', code: 'join_refused' })
+      return SENT
+    }
+    const session = device ? s.joinSession(device, clientName(req)) : s.joinSession(win!.joiner, clientName(req), 'window')
     if (!session) {
       res.status(409).json({ error: 'Passwords is locked: unlock it with the master password.', code: 'nothing_to_join' })
       return SENT
     }
+    if (win) void import('../../core/vault/browser-keys.js').then((b) => b.touchBrowser(win.key)).catch(() => undefined)
     return { session }
   })
 })
@@ -436,7 +519,7 @@ vaultV1Router.post('/vault/lock', async (req, res, next) => {
       // A person's Lock (a window's Lock button): every window and the extension lock with it.
       // No body is one window only, what an older client (and an auto-lock) means by it.
       ended = s.endAllSessions()
-    } else s.endSession(header(req, s.SESSION_HEADER), deviceOf(req))
+    } else s.endSession(header(req, s.SESSION_HEADER), deviceOf(req) ?? await windowSelfLock(req))
     // Written before the answer: a restart right after a Lock must not bring the windows back.
     await (await import('../../core/vault/session-store.js')).saveSessionsNow()
     await closeIfNobody()
@@ -605,7 +688,9 @@ vaultV1Router.post('/vault/password', async (req, res, next) => {
     const { endAllGrants } = await import('../../core/vault/agent.js')
     const { endAgentAccess } = await import('./vault-agent-v1.js')
     await endAgentAccess(endAllGrants())
-    return { ok: true, otherWindowsLocked: s.endOtherSessions(header(req, s.SESSION_HEADER)), ...(r.value.kit ? { recoveryKit: r.value.kit } : {}) }
+    const otherWindowsLocked = s.endOtherSessions(header(req, s.SESSION_HEADER))
+    await endSharing()
+    return { ok: true, otherWindowsLocked, ...(r.value.kit ? { recoveryKit: r.value.kit } : {}), ...(await browserKeyFor(req)) }
   })
 })
 
@@ -648,13 +733,16 @@ vaultV1Router.post('/vault/recover', async (req, res, next) => {
       })
       // Inside the attempt, as unlock does: closeIfNobody must not close the vault before this window holds its session.
       s.endAllSessions()
+      // Nothing from before is shared; this unlock, the first with the new password, is.
+      s.endJoinsBefore(Date.now() - 1)
       return { ...kit, session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
     if (!r) return SENT
+    await endSharing({ epoch: false })
     const { endAllGrants } = await import('../../core/vault/agent.js')
     const { endAgentAccess } = await import('./vault-agent-v1.js')
     await endAgentAccess(endAllGrants())
-    return r.value
+    return { ...r.value, ...(await browserKeyFor(req)) }
   })
 })
 

@@ -226,15 +226,58 @@ function sendsLogin(b: Element): boolean {
   return SEND_WORDS.test(`${b.textContent ?? ''} ${b.getAttribute('aria-label') ?? ''}`)
 }
 
+// When the last trusted submit and the last `invalid` (a field the browser's own checks refused) came,
+// on performance.now()'s clock: a send attempt reads them to tell a send the browser stopped (R1-14).
+let submitAt = -1
+let lastInvalid: { at: number; field: Element } | null = null
 document.addEventListener('submit', (e) => {
   // The form is going: the menu over it goes too.
   closeMenu()
   if (!e.isTrusted) return
+  submitAt = performance.now()
   const g = groupFor(e.target as Element)
   if (g) sending(g)
 }, true)
 // A send the page's own checks stopped (an email without @): the browser's message shows there, not under the menu.
-document.addEventListener('invalid', () => closeMenu(), true)
+document.addEventListener('invalid', (e) => {
+  if (e.target instanceof Element) lastInvalid = { at: performance.now(), field: e.target }
+  closeMenu()
+}, true)
+
+/** The page asked for something (fetch, XHR, a beacon) since `t0`: a login sent by script. */
+function requestedSince(t0: number): boolean {
+  try {
+    return performance.getEntriesByType('resource').some((r) => r.startTime >= t0 && /^(fetch|xmlhttprequest|beacon|other)$/.test((r as PerformanceResourceTiming).initiatorType))
+  } catch { return true } // unknown: offer the save
+}
+
+/** How long a send the browser held back waits for the page to send the login some other way. */
+const HELD_SEND_WAIT_MS = 700
+
+/**
+ * A click or Enter that may send `g`, read once the page's handlers ran. The one case that offers no
+ * save is a send the browser itself stopped: an `invalid` fired for this form since, no submit went,
+ * and the page then neither left nor asked the network for anything (review R1-14). Anything less
+ * sure offers the save, since a missed save loses a real login and a stray bar is only closed.
+ */
+function sendAttempt(g: LoginGroup, el: Element): void {
+  const t0 = performance.now()
+  setTimeout(() => {
+    const inv = lastInvalid && lastInvalid.at >= t0 ? lastInvalid.field : null
+    const form = (el as HTMLInputElement).form ?? el.closest('form')
+    const stopped = !!inv && submitAt < t0 && (g.root.contains(inv) || (!!form && (inv as HTMLInputElement).form === form))
+    if (!stopped) { sending(g); return }
+    let settled = false
+    const left = () => { if (!settled) { settled = true; sending(g) } }
+    addEventListener('pagehide', left, { once: true })
+    setTimeout(() => {
+      removeEventListener('pagehide', left)
+      if (settled) return
+      settled = true
+      if (submitAt >= t0 || requestedSince(t0)) sending(g)
+    }, HELD_SEND_WAIT_MS)
+  }, 0)
+}
 // The field lost the focus to nothing Walnut drew (a page script blurred it, the person clicked
 // away): the menu goes, so it never stays over the page's own buttons.
 document.addEventListener('focusout', (e) => {
@@ -249,8 +292,8 @@ document.addEventListener('click', (e) => {
   const b = (e.target as Element | null)?.closest?.('button, input[type=submit], input[type=button], [role=button]')
   if (!b || !sendsLogin(b)) return
   const g = groupFor(b)
-  // Read after the page's own handlers ran, before it navigates.
-  if (g) setTimeout(() => sending(g), 0)
+  // Read after the page's own handlers ran (and the browser's checks), before it navigates.
+  if (g) sendAttempt(g, b)
 }, true)
 document.addEventListener('keydown', (e) => {
   if (onFieldKey(e)) return
@@ -259,7 +302,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Tab') { lastTab = Date.now(); return }
   if (e.key !== 'Enter' || !(e.target instanceof HTMLInputElement)) return
   const g = groupFor(e.target)
-  if (g) sending(g)
+  // A form that goes natively is read by its submit, before it leaves; a script's send right after.
+  if (g) sendAttempt(g, e.target)
 }, true)
 document.addEventListener('focusin', (e) => { void onFocus(e) }, true)
 addEventListener('scroll', reposition, true)
@@ -406,14 +450,14 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 if (SELF === 'top') {
   addEventListener('message', (e) => {
     if (e.source !== window || e.origin !== location.origin) return
-    const d = e.data as { source?: string; type?: string; code?: string } | null
+    const d = e.data as { source?: string; type?: string; code?: string; agents?: unknown } | null
     if (!d || d.source !== 'walnut-connect-page') return
     void (async () => {
       if (d.type === 'hello') {
         const r = await ask<{ connected?: boolean; version?: string }>({ type: 'connect-hello' })
         if (r.ok) postMessage({ source: 'walnut-extension', type: 'present', connected: !!r.connected, version: r.version }, location.origin)
       } else if (d.type === 'code' && typeof d.code === 'string') {
-        const r = await ask<{ device?: string; silent?: boolean }>({ type: 'connect-code', code: d.code })
+        const r = await ask<{ device?: string; silent?: boolean }>({ type: 'connect-code', code: d.code, ...(typeof d.agents === 'boolean' ? { agents: d.agents } : {}) })
         if (r.silent) return
         postMessage({ source: 'walnut-extension', type: r.ok ? 'connected' : 'error', ...(r.ok ? { device: r.device } : { message: r.error }) }, location.origin)
       }

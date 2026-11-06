@@ -14,6 +14,7 @@ import { findWalnut, rememberServer } from './popup-connect'
 import { startClipboardPage } from './clipboard-page'
 import { pageFillOn } from './settings'
 import { currentView, isCurrent, nextView, paint } from './popup-view'
+import { followTheme } from './panel-theme'
 
 interface State { connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }
 
@@ -33,6 +34,8 @@ if (embedded || inWindow) document.documentElement.classList.add('wide')
 // In the side panel the panel's own tab bar is the header: no second Walnut brand bar (ui.css).
 if (embedded) document.documentElement.classList.add('in-panel')
 const ctx: PopupCtx = { root, embedded, inWindow, panelWindow, back: () => void render() }
+// Walnut's own theme, as the Ask frame last said it (panel-theme.ts); the clipboard page draws nothing.
+if (!params.has('clipboard')) followTheme()
 /**
  * The side panel's full Passwords view (panel-ask.ts, `view=1`): one bar of its own, Back to Ask,
  * the title and the tools in a single row, as the Tasks view's bar reads. Back is the panel's to do.
@@ -44,8 +47,16 @@ const viewBack = (): HTMLElement => h('button', {
   onclick: () => window.parent.postMessage({ walnut: 'panel-view', type: 'back' }, location.origin),
 }, popupIcon('back'), h('span', {}, 'Ask'))
 
-/** Opened from the popup on Ask (its key popover's "Search all logins"): a Back to it. */
+/**
+ * The view's bar in a state that draws none of its own (locked, not connected, not set up, an
+ * error): Back to Ask is there in every state (R1-2).
+ */
+const viewBar = (): HTMLElement => h('div', { class: 'top top-sub view-bar' }, viewBack(), h('h1', {}, openSettings ? 'Settings' : 'Passwords'))
+
+/** Opened from the popup on Ask (its key popover's "Search all logins" or "Settings"): a Back to it. */
 const fromAsk = params.get('from') === 'ask'
+/** Opened on Settings (the key popover's Settings, the drawer's Settings row): its Back goes to Ask. */
+const openSettings = params.get('open') === 'settings' && (inView || fromAsk)
 const backToAsk = (): HTMLElement | null => fromAsk
   ? h('button', { class: 'back-btn', type: 'button', 'data-testid': 'popup-back-ask', onclick: () => { location.href = 'popup-ask.html' } }, popupIcon('back'), h('span', {}, 'Ask'))
   : null
@@ -115,10 +126,11 @@ function connectView(st: State): HTMLElement {
     rememberServer(server.value)
     void render()
   }
+  // Walnut first: asking about a page and agents in this browser; passwords come with it (R1-6).
   return h('div', { class: 'center' },
-    h('span', { class: 'big-icon' }, icon('keyBig')),
+    h('span', { class: 'big-icon' }, icon('askBig')),
     h('h2', {}, 'Connect to Walnut'),
-    h('p', {}, 'Fill and save passwords from your Walnut vault. Walnut opens a page that connects this browser.'),
+    h('p', {}, 'Ask Walnut about the page you are on, and let your Walnut agents work in this browser. Passwords from your vault fill here too. Walnut opens a page that connects this browser.'),
     h('label', { class: 'field-label', for: 'server', style: 'text-align:left' }, 'Walnut address'), server, found,
     h('div', { style: 'height:12px' }), go, err,
     h('details', { style: 'text-align:left' },
@@ -271,14 +283,24 @@ function showSettings(st: State): Promise<void> {
 
 // ── start ──
 
+let settingsFirst = openSettings
+
 async function render(): Promise<void> {
   const g = nextView()
   const st = await ask<State>({ type: 'state' })
+  // Opened on Settings: that view, once, with Back to Ask (its Back leaves this page).
+  if (settingsFirst && st.ok && st.connected) {
+    settingsFirst = false
+    const toAsk = inView ? () => window.parent.postMessage({ walnut: 'panel-view', type: 'back' }, location.origin) : () => { location.href = 'popup-ask.html' }
+    await settingsView(root, st, toAsk, 'Ask')
+    return
+  }
   let view: HTMLElement
   if (!st.ok) view = h('div', { class: 'center' }, errLine(st.error))
   else if (!st.connected) view = connectView(st)
   else if (!st.unlocked) view = await unlockView(st)
   else view = await vaultView(st)
+  if (inView && !view.querySelector('[data-testid="panel-view-back"]')) view = h('div', {}, viewBar(), view)
   // What it holds, read from the view itself (an unlocked render may have drawn the lock screen).
   const shows = view.querySelector('#pw') ? 'locked' : st.ok && st.connected && st.unlocked && !view.querySelector('#server') ? 'unlocked' : 'neutral'
   if (paint(root, view, g, shows) && st.ok) root.dataset.connected = st.connected ? '1' : '0'
@@ -322,6 +344,20 @@ function followVault(): void {
 // popup.html?clipboard=1 is Chrome's offscreen document for the clipboard (bg-clipboard.ts), not a view.
 if (params.has('clipboard')) startClipboardPage()
 else { void render(); followVault() }
+
+// Escape in the side panel's view (or opened from Ask) is its Back, whichever view shows (R1-2):
+// the field's own Escape (clearing a search) comes first.
+if ((inView || fromAsk) && !params.has('clipboard')) {
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return
+    const t = e.target
+    if (t instanceof HTMLInputElement && t.value && t.type === 'search') return
+    const back = root.querySelector<HTMLElement>('.back-btn')
+    if (!back) return
+    e.preventDefault()
+    back.click()
+  })
+}
 
 // In the side panel the view stays open while the person moves on: it follows the page in its
 // window (another tab, another address), unless they are typing in it.

@@ -106,12 +106,14 @@ const REPAIR_PLACEHOLDER =
 
 /** The Ask Walnut tab's quick actions: Walnut's one-tap composer seeds.
  *  Prefill only, never auto-send: the user finishes the sentence (or edits it)
- *  and presses Ask themselves. The inserted text must MATCH the label (minus
- *  the ellipsis): a chip that inserts less than it promises reads as a bug. The
- *  first is a deliberate stem (trailing space, ellipsis label); the other two
- *  are complete asks. Line icons, not emoji, like every other control. */
-const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; text: string }[] = [
-  { label: 'Which task is…', icon: ICONS.ICON_SEARCH, text: 'Which task is ' },
+ *  and presses Ask themselves. The inserted text must MATCH the label: a chip
+ *  that inserts less than it promises reads as a bug. The first is a deliberate
+ *  stem (trailing space), drawn with a blank to fill in after its words, never an
+ *  ellipsis, which read as a label cut off (review 2026-11-06, a 400 px side
+ *  panel); the other two are complete asks. Line icons, not emoji, like every
+ *  other control. */
+const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; text: string; stem?: true }[] = [
+  { label: 'Which task is', icon: ICONS.ICON_SEARCH, text: 'Which task is ', stem: true },
   { label: 'Schedule my day', icon: ICONS.ICON_CALENDAR, text: 'Schedule my day' },
   { label: 'What ran today', icon: ICONS.ICON_SECTION_RECENT, text: 'What ran today?' },
 ];
@@ -374,13 +376,15 @@ interface Props {
   placeholder?: string;
   /** In plain chat: the host's controls in the composer's bottom row (SessionPanel `composerBar`). */
   composerBar?: ReactNode;
+  /** In plain chat: a pill at the top of the composer (SessionPanel `composerPill`). */
+  composerPill?: ReactNode;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -800,9 +804,11 @@ export function DraftSessionPanel({
                     type="button"
                     className="session-action-chip"
                     onClick={() => setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }))}
+                    {...(s.stem ? { 'aria-label': `${s.label} …` } : {})}
                   >
                     <span className="session-action-chip-ic" aria-hidden="true">{s.icon}</span>
                     {s.label}
+                    {s.stem && <span className="session-action-chip-blank" aria-hidden="true" />}
                   </button>
                 ))}
               </div>
@@ -938,6 +944,7 @@ export function DraftSessionPanel({
           mentionSelfTaskId={draft.taskId}
           // Shift+Tab cycles the permission mode, as it does in a running session.
           onToggleMode={showModePill ? cycleDraftMode : undefined}
+          {...(plainChat && composerPill ? { contextPill: composerPill } : {})}
           controlsSlot={plainChat ? composerBar : (
             <div className="session-mode-bar draft-actions-bar">
               {/* The row reads like a running session's: mode first, then model.
