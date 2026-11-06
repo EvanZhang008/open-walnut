@@ -23,7 +23,7 @@ import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { PHONE_QUERY, openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+  call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, keepCornerToBoard, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -46,7 +46,7 @@ test.beforeAll(async ({ browserName }, info) => {
 })
 
 // The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
-test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader); await keepCornerToBoard(context) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {

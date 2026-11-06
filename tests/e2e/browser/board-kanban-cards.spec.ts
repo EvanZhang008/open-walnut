@@ -10,7 +10,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getTask, kanbanApi, pollUntil, seedKanbanTeam, startSession, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+  call, getTask, kanbanApi, pollUntil, seedKanbanTeam, startSession, type KanbanApi, type KanbanTeam, keepCornerToBoard, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -29,7 +29,7 @@ test.beforeAll(async ({}, info) => {
 })
 
 // The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
-test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader); await keepCornerToBoard(context) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
