@@ -32,6 +32,10 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   agent_id: 'set at create', status_report: 'drawn through user_status', promise_alarm: 'not drawn',
   needs_recheck: 'not drawn', letter_recheck: 'not drawn', recheck_watch: 'not drawn', agent_memory: 'read on its own panel',
   cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
+  // The engine comparison's facts: the server reads them for Usage & Costs; no task row draws them.
+  engine_pick: 'not drawn (Usage & Costs reads it on the server)', start_failures: 'not drawn (Usage & Costs)',
+  reopens: 'not drawn (Usage & Costs)', first_completed_at: 'not drawn (Usage & Costs)', completions: 'not drawn (Usage & Costs)',
+  review_score: 'not drawn (Usage & Costs)',
   needs_marked_at: 'drawn through user_status (a person\'s own Needs you)',
   ask_answered: 'drawn through user_status (an ask answered above leaves Needs you)',
   asks_answered: 'drawn through user_status, as ask_answered',

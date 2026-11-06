@@ -128,7 +128,7 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
               )}
               <input className="settings-input" aria-label="Model" placeholder="Model, e.g. sonnet" value={addModel} list="engine-split-models"
                 onChange={(ev) => setAddModel(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') add(); }}
-                data-testid="engine-split-add-model" />
+                data-testid="engine-split-add-model" data-no-draft="picker" />
               <datalist id="engine-split-models">{known.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</datalist>
               <SettingsButton disabled={!addKey || checked.has(addKey) || !ready} onClick={add} data-testid="engine-split-add-button">Add</SettingsButton>
             </span>

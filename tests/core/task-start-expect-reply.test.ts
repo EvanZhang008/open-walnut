@@ -49,6 +49,13 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); });
 
+/** The patch of updateTaskRaw's last call: a function of the current row is applied to the task. */
+function lastPatch(current: Record<string, unknown>): Record<string, unknown> {
+  const call = mocks.updateTaskRaw.mock.calls.at(-1)!;
+  const arg = call[1] as unknown;
+  return typeof arg === 'function' ? ((arg as (t: Record<string, unknown>) => Record<string, unknown>)(current) ?? {}) : arg as Record<string, unknown>;
+}
+
 describe('task start confirmation and reply contract', () => {
   it('seeds the record before invoking the runner and waits for confirmation', async () => {
     let finish!: (value: unknown) => void;
@@ -205,7 +212,9 @@ describe('task start confirmation and reply contract', () => {
     mocks.startSession.mockRejectedValueOnce(new Error('Adapter executable missing'));
     await expect(startSessionForTask({ ...params, engine: 'codex' })).rejects.toMatchObject({ statusCode: 502 });
     expect(mocks.createSessionRecord).not.toHaveBeenCalled();
-    expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'failed', error: 'Adapter executable missing' }) }), expect.any(Object));
+    expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.anything(), expect.any(Object));
+    // The failure is written as a function of the current row (it also counts start_failures once).
+    expect(lastPatch(task as Record<string, unknown>)).toMatchObject({ last_start: { state: 'failed', error: 'Adapter executable missing' }, start_failures: 1 });
   });
 
   it('does not create a reply request if claiming the task fails', async () => {
@@ -231,9 +240,10 @@ describe('task start confirmation and reply contract', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(await pending).toMatchObject({ started: false });
     expect(isTaskStarting(task.id)).toBe(false);
-    expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'unconfirmed' }) }), expect.any(Object));
+    expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.anything(), expect.any(Object));
+    expect(lastPatch(task as Record<string, unknown>)).toMatchObject({ last_start: { state: 'unconfirmed' } });
     finish({ claudeSessionId: 'late-session' });
-    await vi.waitFor(() => expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'started', session_id: 'late-session' }) }), expect.any(Object)), START_WAIT);
+    await vi.waitFor(() => expect(lastPatch(task as Record<string, unknown>)).toMatchObject({ last_start: { state: 'started', session_id: 'late-session' } }), START_WAIT);
   });
 
   it('inherits host even when cwd was explicitly supplied', async () => {
