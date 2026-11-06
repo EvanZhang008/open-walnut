@@ -322,11 +322,14 @@ export async function targetWindowTokens(
     .filter((r) => !model || model === 'default' || (r.cliModel || r.model || r.acpModel) === model)
     .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))[0];
   if (same?.modelMaxWindow) return Math.min(same.modelMaxWindow, same.autoCompactAt ?? Infinity);
+  let named: number | undefined;
   try {
-    const { recallModelWindow } = await import('../../providers/context-window.js');
+    const { recallModelWindow, modelStringWindow } = await import('../../providers/context-window.js');
     const known = model ? recallModelWindow(host, model) : undefined;
     if (known) return known;
+    // `[1m]`, or a model with 1M built in (Opus 5.5 as `claude-opus-5-5`).
+    named = modelStringWindow(model);
   } catch { /* defaults below */ }
-  if (!isAcpEngine(target)) return model?.toLowerCase().includes('[1m]') ? 1_000_000 : CLAUDE_DEFAULT_WINDOW;
+  if (!isAcpEngine(target)) return named ?? CLAUDE_DEFAULT_WINDOW;
   return DEFAULT_WINDOWS[target] ?? OTHER_DEFAULT_WINDOW;
 }

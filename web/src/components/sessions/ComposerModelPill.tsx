@@ -22,7 +22,7 @@ import { SubscriptionLimitPillHint, SubscriptionLimitReadout } from './Subscript
 import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import type { SessionEffort } from '@open-walnut/core';
 import { setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
-import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
+import { useSessionUsage, formatModelName, sessionContextWindow, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { shortModelName } from '@/utils/model-name';
 import { useComposerRowFit } from '@/components/chat/ComposerControlsBar';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
@@ -200,7 +200,7 @@ export function ComposerModelPill({
   const liveBeforeCompaction = contextPercent == null || liveSeen.current.at < compactedAt;
   if (liveBeforeCompaction && Number.isFinite(compactedAt) && !(replyAt > compactedAt) && session?.promptCache) {
     const totalInput = session.promptCache.tokens;
-    const ctxSize = session.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
+    const ctxSize = sessionContextWindow(session.modelMaxWindow, rawModel, totalInput, session.autoCompactAt);
     if (totalInput > 0 && ctxSize != null) {
       // Auto-compact off: 100% is where the session stops (the server's stopsAt, kept on the record).
       contextPercent = Math.round(totalInput / (session.contextStopsAt ?? ctxSize) * 100);
@@ -214,7 +214,7 @@ export function ComposerModelPill({
   if (contextPercent == null && fallbackAssistant?.usage) {
     const u = fallbackAssistant.usage as Record<string, number>;
     const totalInput = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-    const ctxSize = session?.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
+    const ctxSize = sessionContextWindow(session?.modelMaxWindow, rawModel, totalInput, session?.autoCompactAt);
     if (totalInput > 0 && ctxSize != null) {
       contextPercent = Math.round(totalInput / (session?.contextStopsAt ?? ctxSize) * 100);
       badgeUsage = {

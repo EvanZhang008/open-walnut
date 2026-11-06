@@ -56,6 +56,7 @@ export function useSessionUsage(sessionId: string | null): SessionUsage {
 // formatModelName moved to '@/utils/model-name' (pure module, unit-testable
 // without this hook's react/websocket import chain); re-exported for importers.
 export { formatModelName } from '@/utils/model-name';
+import { modelStringWindow } from '../../../src/providers/context-window';
 
 /**
  * Client-side fallback window, used ONLY when the server sent no
@@ -67,17 +68,35 @@ export { formatModelName } from '@/utils/model-name';
  * live turn; until then, showing nothing beats showing a wrong number.
  */
 export function getContextWindowSize(model: string | undefined, totalInput?: number): number | null {
-  const lower = model?.toLowerCase();
-  if (!lower) return null;
-  if (lower.includes('[1m]')) return 1_000_000;
-  // NB: no natively-1M special case here (e.g. Opus 5) — the Claude CLI generates
-  // separate plain (200K auto-compact) and "[1m]" rows for opus-5, so a plain
-  // opus-5 session string really does mean a 200K effective window.
-  if (!/claude/.test(lower) && !/\b(opus|sonnet|haiku|fable)\b/.test(lower)) return null;
-  // Claude CLI resumes sometimes drop the [1m] suffix — if tokens exceed 200K,
-  // the session must be using 1M context (you can't exceed the window).
-  if (totalInput != null && totalInput > 200_000) return 1_000_000;
-  return 200_000;
+  return liftedWindow(stringWindow(model), model, totalInput ?? 0);
+}
+
+/**
+ * The window a page shows for a session with no live reading: the server's stored one, else the
+ * string guess, lifted to what the session already holds (its tokens, its auto-compact point). A
+ * window is never below either, and an Anthropic model's window is 200K or 1M, so a stored or
+ * guessed 200K under a session holding 324K reads 1M (2026-11-06: Opus 5.5 has 1M built in with
+ * no `[1m]` in its id, and the badge read 162%). Mirrors resolveContextWindow's floor on the server.
+ */
+export function sessionContextWindow(
+  stored: number | null | undefined, model: string | undefined, totalInput: number, autoCompactAt?: number | null,
+): number | null {
+  const base = stored && stored > 0 ? stored : stringWindow(model);
+  return liftedWindow(base, model, Math.max(totalInput, autoCompactAt ?? 0));
+}
+
+const isAnthropicModel = (lower: string): boolean =>
+  lower.includes('[1m]') || /claude/.test(lower) || /\b(opus|sonnet|haiku|fable)\b/.test(lower);
+
+/** The server's own rule (src/providers/context-window.ts): `[1m]` or a model with 1M built in
+ *  (Opus 5.5 as `claude-opus-5-5`) reads 1M, any other Claude id 200K, anything else nothing. */
+function stringWindow(model: string | undefined): number | null {
+  return modelStringWindow(model) ?? null;
+}
+
+function liftedWindow(window: number | null, model: string | undefined, floor: number): number | null {
+  if (window == null || window >= floor) return window;
+  return isAnthropicModel(model?.toLowerCase() ?? '') ? Math.max(1_000_000, floor) : floor;
 }
 
 /** Compact token count for badges/tooltips: 99366 → "99K", 1000000 → "1M". */

@@ -1570,6 +1570,29 @@ describe('ClaudeCodeSession.attachToExisting', () => {
     session.detach();
   });
 
+  it('restores a stored window as the CLI\'s own only when the record says it was', async () => {
+    const base = {
+      taskId: 'task-attach-window', project: 'proj', process_status: 'running', mode: 'default',
+      startedAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(), messageCount: 1,
+      pid: 99999, outputFile: '/tmp/nonexistent.jsonl', model: 'claude-opus-9',
+    };
+    // An older Walnut's 200K guess, with no source: a hint only.
+    const guessed = await ClaudeCodeSession.attachToExisting({ ...base, claudeSessionId: 'attach-window-guess', modelMaxWindow: 200000 } as any, MOCK_CLI, daemonUrl());
+    expect((guessed as any)._cliRawContextWindow).toBeUndefined();
+    expect((guessed as any)._recordWindowHint).toBe(200000);
+    expect((guessed as any).contextReadout(324_400).contextWindow).toBe(1_000_000);
+    guessed.detach();
+    const exact = await ClaudeCodeSession.attachToExisting({ ...base, claudeSessionId: 'attach-window-exact', modelMaxWindow: 400000, modelMaxWindowSource: 'cli-model-usage', modelMaxWindowModel: 'claude-opus-9' } as any, MOCK_CLI, daemonUrl());
+    expect((exact as any)._cliRawContextWindow).toBe(400000);
+    exact.detach();
+    // The session switched model since the window was stored: that window is another model's.
+    const switched = await ClaudeCodeSession.attachToExisting({ ...base, claudeSessionId: 'attach-window-switched', modelMaxWindow: 1000000, modelMaxWindowSource: 'cli-model-usage', modelMaxWindowModel: 'claude-opus-9[1m]', model: 'claude-sonnet-4-6' } as any, MOCK_CLI, daemonUrl());
+    expect((switched as any)._cliRawContextWindow).toBeUndefined();
+    expect((switched as any)._recordWindowHint).toBeUndefined();
+    expect((switched as any).contextReadout(50_000).contextWindow).toBe(200_000);
+    switched.detach();
+  });
+
   it('inherits the requested MCP mounts from the record (attach must not blind the mount check)', async () => {
     // An attach builds a FRESH session object, so without this the requested-mount
     // list is empty and every init seen after an attach (server restart, reconnect,
@@ -2936,6 +2959,31 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(session as any)._initModel = 'claude-sonnet-4-6'; // suffix lost
       expect(win(session, 250_000)).toBe(1_000_000);
+    });
+
+    // 2026-11-06, the user's Mac app: "Context 324.4K / 200K (162%)" on Opus 5.5. Its record held a
+    // 200K guess, an attach restored it as the CLI's own reading, and the picker's panel asked for the
+    // window with no tokens, so nothing could correct it until the running turn ended.
+    it('the panel window is lifted by the CLI effective window and the tokens seen, never a stored guess', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = session as any;
+      s._initModel = 'claude-opus-9'; // a Claude id no catalog row names
+      s._recordWindowHint = 200_000;
+      expect(s.contextWindowsForUi().modelMax).toBe(200_000);
+      s._cliContextWindow = 500_000; // get_context_usage.maxTokens at session start
+      expect(s.contextWindowsForUi()).toEqual({ modelMax: 1_000_000, autoCompactAt: 500_000 });
+      s._cliContextWindow = undefined;
+      s.contextReadout(324_400); // a usage push
+      expect(s.contextWindowsForUi().modelMax).toBe(1_000_000);
+      expect(s.contextReadout(324_400).contextPercent).toBe(32);
+    });
+
+    it('a model with 1M built in reads 1M from its id alone', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-opus-5-5';
+      expect(win(session)).toBe(1_000_000);
     });
 
     it('a custom proxy model with nothing CLI-sourced yields NO denominator', () => {

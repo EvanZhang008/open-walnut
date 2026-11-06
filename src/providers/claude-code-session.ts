@@ -110,7 +110,7 @@ import { noteTurnStart as noteQuietTurnStart } from '../core/sessions/quiet-turn
 import type { SessionServerClient } from './session-server-client.js'
 import { sanitizeInitModel } from '../model/providers/defaults.js'
 import {
-  resolveContextWindow, shortModelId,
+  resolveContextWindow, shortModelId, isExactWindowSource,
   rememberAutoCompactWindow, recallAutoCompactWindow,
   rememberAutoCompactOff, recallAutoCompactOff,
   rememberEnvMaxContextTokens, recallEnvMaxContextTokens,
@@ -1388,6 +1388,13 @@ export class ClaudeCodeSession {
    *  change, but also cached per host+model so the next session on this model
    *  never has to re-learn it (rememberModelWindow). */
   private _cliRawContextWindow: number | undefined
+  /** The window this session's record held when it was attached, from a run that did not say it
+   *  was the CLI's own (an older Walnut stored its model-string guess there). A hint, lifted by
+   *  the floor like any guess, never THE denominator. Cleared on model change. */
+  private _recordWindowHint: number | undefined
+  /** The most tokens this session has been seen holding on its current model: a window can never
+   *  be smaller, so it is a floor under every guess. Cleared on model change. */
+  private _maxContextTokensSeen = 0
   /** CLAUDE_CODE_AUTO_COMPACT_WINDOW as the CLI resolved it (get_settings
    *  effective.env). Process-wide env, so unlike the two windows above it
    *  SURVIVES a model switch. Display only, per the note on _cliContextWindow. */
@@ -3326,8 +3333,19 @@ export class ClaudeCodeSession {
     }
     // The model's own window: without it an attached session has no denominator
     // until its current turn ends, and a long turn shows no percent at all.
+    // Only a window the record says came from the CLI is restored as the CLI's own; one with no
+    // source (or a guess) is a hint the floor can lift (2026-11-06: a stored 200K guess came back
+    // as exact on every attach, and a 1M session read 162%).
+    // A window stored for another model (the session switched since) is not this one's at all.
     if (typeof record.modelMaxWindow === 'number' && record.modelMaxWindow > 0) {
-      session._cliRawContextWindow = record.modelMaxWindow
+      const forModel = record.modelMaxWindowModel
+      const sameModel = !forModel || !session._initModel
+        || shortModelId(forModel).toLowerCase() === shortModelId(session._initModel).toLowerCase()
+      if (sameModel && forModel && isExactWindowSource(record.modelMaxWindowSource)) {
+        session._cliRawContextWindow = record.modelMaxWindow
+      } else if (sameModel) {
+        session._recordWindowHint = record.modelMaxWindow
+      }
     }
     if (record.cliModel) {
       session._cliModel = record.cliModel
@@ -6183,6 +6201,8 @@ export class ClaudeCodeSession {
             if (this._initModel && this._initModel !== rawModel) {
               this._cliRawContextWindow = undefined
               this._cliContextWindow = undefined
+              this._recordWindowHint = undefined
+              this._maxContextTokensSeen = 0
             }
             this._initModel = rawModel
             // Extract short model ID for display (e.g. "claude-opus-4-6" or "claude-opus-4-6[1m]")
@@ -9303,16 +9323,24 @@ export class ClaudeCodeSession {
    *    made the badge swing 70% → 25% → 10% as CLI reads landed.
    */
   private contextWindowForPercent(totalInput?: number): number | null {
+    return this.resolvedContextWindow(totalInput)?.window ?? null
+  }
+
+  private resolvedContextWindow(totalInput?: number): ReturnType<typeof resolveContextWindow> {
+    if (totalInput != null && totalInput > this._maxContextTokensSeen) this._maxContextTokensSeen = totalInput
     return resolveContextWindow({
       cliModelWindow: this._cliRawContextWindow,
+      recordWindow: this._recordWindowHint,
+      // min(model window, auto-compact clamp): the model's window is at least this.
+      effectiveWindow: this._cliContextWindow,
       // What any earlier session on this host+model already learned. The exact
       // window only arrives at a turn END, so without this every session would
       // spend its first turn on a guess and then jump.
       hostModelWindow: recallModelWindow(this._host, this._initModel ?? this._model),
       envMaxContextTokens: this._envMaxContextTokens ?? recallEnvMaxContextTokens(this._host),
       model: this._initModel ?? this._model,
-      observedTokens: totalInput,
-    })?.window ?? null
+      observedTokens: this._maxContextTokensSeen || undefined,
+    })
   }
 
   /** Same two windows, for the picker's live-details panel — so the panel and
@@ -9391,6 +9419,14 @@ export class ClaudeCodeSession {
           modelKey: key, contextWindow: win, prev: this._cliRawContextWindow ?? null,
         })
         this._cliRawContextWindow = win
+        const sid = this.claudeSessionId
+        if (sid) {
+          void import('../core/session-tracker.js')
+            .then(({ updateSessionRecord }) => updateSessionRecord(sid, {
+              modelMaxWindow: win, modelMaxWindowSource: 'cli-model-usage', modelMaxWindowModel: this._initModel ?? this._model ?? key,
+            }))
+            .catch(() => {})
+        }
       }
       // Teach every future session on this host+model: this exact value only
       // arrives at a turn END, so the cache is what stops the next session from
@@ -9438,11 +9474,14 @@ export class ClaudeCodeSession {
       if (!sid) return
       const { window: windowSize, autoCompactAt, stopsAt } = this.contextLimits(cu?.totalTokens ?? undefined)
       if (windowSize == null) return
+      const windowSource = this.resolvedContextWindow()?.source
       // Persist the numbers: a page loaded LATER missed this event, and then
       // only the record can turn history tokens into a percentage.
       void import('../core/session-tracker.js')
         .then(({ updateSessionRecord }) => updateSessionRecord(sid, {
           modelMaxWindow: windowSize,
+          modelMaxWindowSource: windowSource,
+          ...(this._initModel ?? this._model ? { modelMaxWindowModel: this._initModel ?? this._model } : {}),
           ...(autoCompactAt != null ? { autoCompactAt } : {}),
           contextStopsAt: stopsAt ?? undefined,
         }))
@@ -9625,6 +9664,8 @@ export class ClaudeCodeSession {
         // is env-wide and therefore already correct for the new model.
         this._cliRawContextWindow = undefined
         this._cliContextWindow = undefined
+        this._recordWindowHint = undefined
+        this._maxContextTokensSeen = 0
         this.seedCliContextWindow('model-change')
         // Read-back truth outside the cached catalog ⇒ the allowlist/overrides
         // evidently shifted under us (or the CLI fell back to something we don't

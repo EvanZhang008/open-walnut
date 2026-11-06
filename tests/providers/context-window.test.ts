@@ -4,8 +4,9 @@ import {
   rememberAutoCompactWindow, recallAutoCompactWindow,
   rememberEnvMaxContextTokens, recallEnvMaxContextTokens,
   rememberModelWindow, recallModelWindow, resetContextWindowCaches,
-  ANTHROPIC_DEFAULT_WINDOW, EXTENDED_WINDOW,
+  ANTHROPIC_DEFAULT_WINDOW, EXTENDED_WINDOW, hasNativeExtendedWindow, modelStringWindow, isExactWindowSource,
 } from '../../src/providers/context-window.js';
+import { MODEL_CATALOG } from '../../src/model/providers/model-catalog.js';
 
 // The percentages this module decides are the ones on the session badge. The
 // incident it exists for (inc-1787517631989-wpy5i3, 2026-08-23): one session on
@@ -76,6 +77,63 @@ describe('resolveContextWindow', () => {
   it('trusts observed tokens over a lost [1m] suffix', () => {
     expect(resolveContextWindow({ model: 'claude-sonnet-4-6', observedTokens: 250_000 })?.window)
       .toBe(EXTENDED_WINDOW);
+  });
+
+  // 2026-11-06, the user's Mac app: "Context 324.4K / 200K (162%)" on Opus 5.5, which runs a 1M
+  // window as `claude-opus-5-5` with no `[1m]`. The session's turn was still running, so no
+  // modelUsage reading had come; its CLI had answered a 500K effective window at its start, and
+  // its record held a 200K guess an earlier attach wrote.
+  it('reads the 1M window of a model with 1M built in, with no [1m] in its id', () => {
+    for (const model of ['claude-opus-5-5', 'global.anthropic.claude-opus-5-5', 'claude-opus-5', 'global.anthropic.claude-haiku-5-5']) {
+      expect(resolveContextWindow({ model })).toEqual({ window: EXTENDED_WINDOW, source: 'model-string' });
+    }
+    expect(resolveContextWindow({ model: 'claude-opus-4-8' })?.window).toBe(ANTHROPIC_DEFAULT_WINDOW);
+  });
+
+  it('every guess is lifted to the effective window the CLI reported and to the tokens held', () => {
+    // The incident: an unknown-to-the-catalog 1M model, a 500K effective window, a stored 200K.
+    const model = 'claude-opus-9'; // a Claude id no catalog row names yet
+    expect(resolveContextWindow({ model })?.window).toBe(ANTHROPIC_DEFAULT_WINDOW);
+    expect(resolveContextWindow({ model, effectiveWindow: 500_000 }))
+      .toEqual({ window: EXTENDED_WINDOW, source: 'floor' });
+    expect(resolveContextWindow({ model, recordWindow: 200_000, effectiveWindow: 500_000, observedTokens: 324_400 }))
+      .toEqual({ window: EXTENDED_WINDOW, source: 'floor' });
+    expect(resolveContextWindow({ model, hostModelWindow: 200_000, observedTokens: 324_400 })?.window).toBe(EXTENDED_WINDOW);
+    // A record or cache at or above the floor stands.
+    expect(resolveContextWindow({ model, recordWindow: 1_000_000, observedTokens: 324_400 }))
+      .toEqual({ window: 1_000_000, source: 'record' });
+    // An effective window at or below 200K proves nothing more.
+    expect(resolveContextWindow({ model, effectiveWindow: 180_000 })?.window).toBe(ANTHROPIC_DEFAULT_WINDOW);
+    // A model that is not Anthropic's is lifted to the floor itself, never to a made-up 1M.
+    expect(resolveContextWindow({ model: 'my-proxy', envMaxContextTokens: 128_000, observedTokens: 300_000 }))
+      .toEqual({ window: 300_000, source: 'floor' });
+    // The session's own reading is never second-guessed.
+    expect(resolveContextWindow({ model, cliModelWindow: 1_000_000, effectiveWindow: 500_000 }))
+      .toEqual({ window: 1_000_000, source: 'cli-model-usage' });
+  });
+
+  it('only the CLI\'s own readings are restored as exact', () => {
+    expect(isExactWindowSource('cli-model-usage')).toBe(true);
+    expect(isExactWindowSource('host-model-cache')).toBe(true);
+    for (const s of ['model-string', 'record', 'floor', 'env-max-tokens', undefined] as const) expect(isExactWindowSource(s)).toBe(false);
+  });
+
+  // The class guard: every Claude id the catalog marks 1M-native reads 1M from its id alone, in
+  // each spelling a session reports it by. A new native-1M row is covered the day it is added.
+  it('every catalog model with 1M built in reads 1M in every spelling', () => {
+    const native = [...MODEL_CATALOG.bedrock ?? [], ...MODEL_CATALOG.anthropic ?? []].filter((m) => m.compat?.native_1m);
+    expect(native.length).toBeGreaterThan(3);
+    for (const m of native) {
+      const short = shortModelId(m.id);
+      for (const id of [m.id, short, `global.anthropic.${short}`, `${short}[1m]`]) {
+        expect(hasNativeExtendedWindow(id) || id.endsWith('[1m]'), id).toBe(true);
+        expect(modelStringWindow(id), id).toBe(EXTENDED_WINDOW);
+      }
+    }
+    for (const m of [...MODEL_CATALOG.bedrock ?? [], ...MODEL_CATALOG.anthropic ?? []]) {
+      if (m.compat?.native_1m || (m.context_window ?? 0) >= 1_000_000) continue;
+      expect(modelStringWindow(m.id), m.id).toBe(ANTHROPIC_DEFAULT_WINDOW);
+    }
   });
 
   it('ignores zero / negative / non-finite windows', () => {

@@ -52,6 +52,8 @@
  * 5x wrong for a 1M proxy model.
  */
 
+import { MODEL_CATALOG } from '../model/providers/model-catalog.js'
+
 /** Window assumed for an Anthropic model with no `[1m]` marker. */
 export const ANTHROPIC_DEFAULT_WINDOW = 200_000
 export const EXTENDED_WINDOW = 1_000_000
@@ -63,6 +65,8 @@ export type ContextWindowSource =
   | 'host-model-cache' // the same value, learned from an earlier session
   | 'env-max-tokens' // CLAUDE_CODE_MAX_CONTEXT_TOKENS (unrecognized models only)
   | 'model-string' // `[1m]` marker / known Anthropic family
+  | 'record' // the window an earlier run of this session wrote, not known to be the CLI's own
+  | 'floor' // lifted to what the session already shows it holds (see ContextWindowInputs.effectiveWindow)
 
 export interface ContextWindowInputs {
   /** result.modelUsage[model].contextWindow — the CLI's resolved model window
@@ -70,13 +74,20 @@ export interface ContextWindowInputs {
   cliModelWindow?: number | undefined
   /** Same value learned earlier for this host+model (rememberModelWindow). */
   hostModelWindow?: number | undefined
+  /** The window an earlier run of this session wrote on its record when nobody knew whether it
+   *  was the CLI's own (an older Walnut wrote its 200K guess there too, 2026-11-06). A hint
+   *  only: it ranks after the host cache and is lifted by the floor like every other one. */
+  recordWindow?: number | undefined
+  /** get_context_usage.maxTokens: the CLI's EFFECTIVE window, min(model window, auto-compact
+   *  clamp). Never the denominator, but a floor under it: the model's window cannot be smaller. */
+  effectiveWindow?: number | undefined
   /** CLAUDE_CODE_MAX_CONTEXT_TOKENS as the CLI reports it (get_settings
    *  effective.env). Applies to unrecognized models only — see the header. */
   envMaxContextTokens?: number | undefined
   /** Full model string from init / get_settings.applied. */
   model?: string | undefined
-  /** input + cache_creation + cache_read of the latest call. Only used to
-   *  correct a string guess a resume stripped the `[1m]` marker from. */
+  /** input + cache_creation + cache_read of the latest call. A floor too: a session cannot
+   *  hold more than its window. */
   observedTokens?: number | undefined
 }
 
@@ -101,39 +112,83 @@ export function isRecognizedClaudeModel(model: string | undefined): boolean {
  *  ids get the 200K default). Everything else — custom proxy models, OpenAI
  *  ids, anything routed through ANTHROPIC_CUSTOM_MODEL_OPTION — is unknowable
  *  and must come from the CLI. */
-function windowFromModelString(model: string | undefined, observedTokens?: number): number | undefined {
+function windowFromModelString(model: string | undefined): number | undefined {
   if (!model) return undefined
   if (model.toLowerCase().includes('[1m]')) return EXTENDED_WINDOW
   if (!isRecognizedClaudeModel(model)) return undefined
-  // A resume can drop the `[1m]` suffix; tokens above the default prove the
-  // session really is on the extended window (you cannot exceed the window).
-  if (observedTokens != null && observedTokens > ANTHROPIC_DEFAULT_WINDOW) return EXTENDED_WINDOW
-  return ANTHROPIC_DEFAULT_WINDOW
+  return hasNativeExtendedWindow(model) ? EXTENDED_WINDOW : ANTHROPIC_DEFAULT_WINDOW
+}
+
+/** The Claude ids Walnut's model catalog marks as 1M with no `[1m]` (Opus 5 and 5.5, Sonnet 5.5,
+ *  Haiku 5.5: `compat.native_1m`), by their short form. */
+let nativeExtended: Set<string> | undefined
+
+/** A Claude model whose window is 1M with no `[1m]` in its id, as the catalog knows it. */
+export function hasNativeExtendedWindow(model: string): boolean {
+  nativeExtended ??= new Set(
+    [...MODEL_CATALOG.bedrock ?? [], ...MODEL_CATALOG.anthropic ?? []]
+      .filter((m) => m.compat?.native_1m)
+      .map((m) => shortModelId(m.id).toLowerCase()),
+  )
+  return nativeExtended.has(shortModelId(model).toLowerCase().replace(/\[1m\]$/, ''))
+}
+
+/**
+ * The window a Claude model id names before any session reported one: `[1m]` or a model with 1M
+ * built in reads 1M, any other Claude id 200K, anything else nothing. For a place that has no
+ * session to read (an engine handoff's budget, a gateway's model list); a session's own readout
+ * goes through resolveContextWindow.
+ */
+export function modelStringWindow(model: string | undefined): number | undefined {
+  return windowFromModelString(model)
 }
 
 /**
  * Resolve the context% denominator (the model's absolute max window), or null
  * when nothing available justifies a percentage — the caller then shows the
  * token count alone.
+ *
+ * Every answer but the session's own reading is lifted to the floor: what the session already
+ * holds (its tokens) and what the CLI said it may hold (its effective window). A model string
+ * names no window for a model with 1M built in (Opus 5.5 is 1M as `claude-opus-5-5`, with no
+ * `[1m]`: the CLI decides from its served catalog), so the 200K guess read 324K / 200K (162%) on
+ * a session whose CLI had reported a 500K effective window at its start (2026-11-06). An
+ * Anthropic model's window is 200K or 1M, so one lifted past 200K is 1M; any other model is
+ * lifted to the floor itself.
  */
 export function resolveContextWindow(inputs: ContextWindowInputs): ResolvedContextWindow | null {
   const own = positive(inputs.cliModelWindow)
   if (own !== undefined) return { window: own, source: 'cli-model-usage' }
 
+  const floor = Math.max(positive(inputs.observedTokens) ?? 0, positive(inputs.effectiveWindow) ?? 0)
+  const lifted = (r: ResolvedContextWindow): ResolvedContextWindow => {
+    if (r.window >= floor) return r
+    const anthropic = isRecognizedClaudeModel(inputs.model) || /\[1m\]/i.test(inputs.model ?? '')
+    return { window: anthropic ? Math.max(EXTENDED_WINDOW, floor) : floor, source: 'floor' }
+  }
+
   const cached = positive(inputs.hostModelWindow)
-  if (cached !== undefined) return { window: cached, source: 'host-model-cache' }
+  if (cached !== undefined) return lifted({ window: cached, source: 'host-model-cache' })
+
+  const recorded = positive(inputs.recordWindow)
+  if (recorded !== undefined) return lifted({ window: recorded, source: 'record' })
 
   // The CLI applies this variable to models it does not recognize, and ignores
   // it for its own — mirror that exactly rather than trusting it everywhere.
   const envMax = positive(inputs.envMaxContextTokens)
   if (envMax !== undefined && !isRecognizedClaudeModel(inputs.model)) {
-    return { window: envMax, source: 'env-max-tokens' }
+    return lifted({ window: envMax, source: 'env-max-tokens' })
   }
 
-  const guess = windowFromModelString(inputs.model, inputs.observedTokens)
-  if (guess !== undefined) return { window: guess, source: 'model-string' }
+  const guess = windowFromModelString(inputs.model)
+  if (guess !== undefined) return lifted({ window: guess, source: 'model-string' })
 
   return null
+}
+
+/** The sources a session record may restore as the CLI's own reading (`cliModelWindow`). */
+export function isExactWindowSource(source: ContextWindowSource | undefined): boolean {
+  return source === 'cli-model-usage' || source === 'host-model-cache'
 }
 
 const hostKey = (host: string | null | undefined): string => host ?? '__local__'
@@ -215,6 +270,7 @@ export function recallModelWindow(host: string | null | undefined, model: string
 /** Test seam only. */
 export function resetContextWindowCaches(): void {
   autoCompactByHost.clear()
+  autoCompactOffByHost.clear()
   envMaxTokensByHost.clear()
   modelWindowByHostModel.clear()
 }

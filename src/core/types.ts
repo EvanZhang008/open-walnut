@@ -3138,6 +3138,12 @@ export interface ContextRecoveryState {
   resent?: number;
   /** Why it failed, in words the banner shows (state failed). */
   reason?: string;
+  /**
+   * The messages that got "Prompt is too long", kept while the recovery is not done (compacting,
+   * failed): a restart forgets them in memory, and they are what the resend hands the session
+   * (2026-11-06: a restart mid-compaction left a session owing two requests for six hours).
+   */
+  owed?: Array<{ id: string; text: string; at: string; sentBy?: 'person' | 'agent'; source?: string }>;
 }
 
 export interface SessionRecord {
@@ -3354,6 +3360,13 @@ export interface SessionRecord {
    *  no `[1m]` marker, so the string tells the UI nothing and the badge would
    *  otherwise sit blank until the session's next turn. */
   modelMaxWindow?: number;
+  /** Where modelMaxWindow came from (`ContextWindowSource` in src/providers/context-window.ts).
+   *  Only the CLI's own reading is restored as exact on attach; anything else, or none (written by
+   *  an older Walnut, its 200K guess included), is a hint the floor can lift. */
+  modelMaxWindowSource?: 'cli-model-usage' | 'host-model-cache' | 'env-max-tokens' | 'model-string' | 'record' | 'floor';
+  /** The model modelMaxWindow is the window of (the session may have switched since it was stored):
+   *  a window stored for another model is never restored. */
+  modelMaxWindowModel?: string;
   /** Where this session will auto-compact (min(model window,
    *  CLAUDE_CODE_AUTO_COMPACT_WINDOW)), when that is BELOW modelMaxWindow.
    *  Reported next to the percentage rather than folded into it — a compaction

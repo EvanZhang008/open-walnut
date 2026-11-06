@@ -24,6 +24,7 @@ import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
 import { SessionCostBlock } from './SessionCostBlock';
+import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -535,7 +536,9 @@ export function ModelPicker({
   // record, so reading the pill's model checked nothing, or the old model.
   const savedModel = liveSettings && !liveSettings.live ? liveSettings.requested?.model : undefined;
   const liveModel = applied?.model ?? savedModel ?? currentModel;
-  const activeRow = matchSessionModelCatalogEntry(models, liveModel);
+  // A model no row matches by id is still the row that reads as the same model
+  // (`claude-fable-5[1m]` runs the `global.anthropic.claude-fable-5[1m]` row).
+  const activeRow = matchSessionModelCatalogEntry(models, liveModel) ?? rowNamedLike(models, liveModel);
   const requestedModel = liveSettings?.requested?.model ?? currentModel;
   const requestedRow = matchSessionModelCatalogEntry(models, requestedModel);
   // Mismatch = the CLI is NOT running what was requested. Mirrors the server's
@@ -715,9 +718,12 @@ export function ModelPicker({
     ...(autoRow
       ? [{ kind: 'auto' as const, ...autoRow }]
       : []),
-    ...models
-      .filter((model) => !(autoRow && model.value === 'default'))
-      .map((model) => ({ kind: 'catalog' as const, model })),
+    // One row per model: the CLI lists Opus 5.5 as its default, its `opus` alias and the raw id
+    // the session runs (2026-11-06: three "Opus 5.5" rows).
+    ...oneRowPerModel(
+      models.filter((model) => !(autoRow && model.value === 'default')),
+      activeRow?.value,
+    ).map((model) => ({ kind: 'catalog' as const, model })),
   ], (row) => {
     if (row.kind === 'current') return row.model;
     if (row.kind === 'auto') return `auto ${row.resolvedLabel}`;

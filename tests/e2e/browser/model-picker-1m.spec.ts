@@ -267,8 +267,9 @@ test.describe('ModelPicker CLI catalog', () => {
   test('sorts mixed provider models and effort from low to high', async ({ page }) => {
     await interceptCatalog(page, STRENGTH_CATALOG)
     // The live session reports a short canonical ID that does not match the
-    // catalog's provider-prefixed Fable row. Its synthetic current row must
-    // still sort at the Fable tier instead of being pinned above Haiku.
+    // catalog's provider-prefixed Fable row by id: it runs that row (same name),
+    // so no second "Fable 5 1M" of its own. The Default row names the same model
+    // as the Opus row, and the list keeps one row per model (2026-11-06).
     await interceptLiveSettings(page, 'claude-fable-5[1m]', 'high')
 
     const input = await openSessionPanel(page)
@@ -278,12 +279,11 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(picker.locator('.model-picker-col-models .model-picker-row-name')).toHaveText([
       'Haiku 4.5',
       'Sonnet 5',
-      'claude-fable-5 1M',
       'Fable 5 1M',
       'GPT-5.6 Sol',
-      'Default (Opus 5 1M)',
       'Opus 5 1M',
     ])
+    await expect(picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')).toHaveText('Fable 5 1M')
 
     await expect(picker.locator('.model-picker-col-effort .model-picker-row-name')).toHaveText(['Low', 'Medium', 'High', 'X-High', 'Max'])
 
@@ -300,14 +300,13 @@ test.describe('ModelPicker CLI catalog', () => {
     const picker = await openModelPicker(page, input)
 
     const options = picker.locator('.model-picker-col-models .model-picker-row')
-    await expect(options).toHaveCount(3)
+    await expect(options).toHaveCount(2)
 
-    // Rows carry the version derived from the full provider ID (caa9e214); the
-    // Default row says what it resolves to.
+    // Rows carry the version derived from the full provider ID (caa9e214). The
+    // Default row resolves to Fable 5 too, and one model is one row.
     const names = picker.locator('.model-picker-col-models .model-picker-row-name')
-    await expect(names.nth(0)).toHaveText('Default (Fable 5)')
-    await expect(names.nth(1)).toHaveText('Fable 5')
-    await expect(names.nth(2)).toHaveText('Opus 4.8 1M')
+    await expect(names.nth(0)).toHaveText('Fable 5')
+    await expect(names.nth(1)).toHaveText('Opus 4.8 1M')
 
     // Active row = Fable (resolvedModel match on the non-default row), ✓-marked.
     // Scoped to the Model column: the Effort column marks its own active row.
@@ -334,7 +333,7 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Exact name: the Default row reads "Default (Fable 5)" and also contains "Fable".
+    // Exact name (the Default row, which names Fable 5 too, folds into this one).
     const fableRow = picker.locator('.model-picker-col-models .model-picker-row')
       .filter({ has: page.locator('.model-picker-row-name', { hasText: /^Fable 5$/ }) })
     const [req] = await Promise.all([

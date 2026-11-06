@@ -24,6 +24,7 @@
  */
 
 import { parseJsonObject, serializeJsonObject, type JsonObject } from './config-file-edit.js'
+import { modelStringWindow } from '../../providers/context-window.js'
 
 /**
  * The one provider entry in pi's models.json that Walnut owns. An import replaces this entry
@@ -115,7 +116,8 @@ export function piGatewayFromClaudeCode(env: EnvLookup, bedrock: boolean, chosen
   const add = (rawId: string | undefined, name?: string): void => {
     if (!rawId?.trim()) return
     const id = plainId(rawId)
-    const contextWindow = ONE_M.test(rawId.trim()) ? 1_000_000 : 200_000
+    // `[1m]`, or a model with 1M built in (Opus 5.5 as `claude-opus-5-5`, 2026-11-06).
+    const contextWindow = ONE_M.test(rawId.trim()) ? 1_000_000 : (modelStringWindow(rawId.trim()) ?? 200_000)
     const known = byId.get(id)
     if (known) {
       known.contextWindow = Math.max(known.contextWindow, contextWindow)

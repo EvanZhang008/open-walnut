@@ -77,7 +77,8 @@ describe('the start choice with a gateway', () => {
     expect(s.gateway!.models).toEqual([
       { id: 'global.anthropic.claude-opus-5-5', name: 'Opus 5.5', contextWindow: 1_000_000 },
       { id: 'global.anthropic.claude-sonnet-5-5', contextWindow: 1_000_000 },
-      { id: 'global.anthropic.claude-haiku-5-5', contextWindow: 200_000 },
+      // Haiku 5.5 has a 1M window with no [1m] in its id (the model catalog's native_1m; 2026-11-06).
+      { id: 'global.anthropic.claude-haiku-5-5', contextWindow: 1_000_000 },
     ])
     const entry = piGatewayEntry(s.gateway!)
     expect(entry).toMatchObject({ baseUrl: 'http://127.0.0.1:9000', api: 'bedrock-converse-stream', apiKey: '$AWS_BEARER_TOKEN_BEDROCK' })

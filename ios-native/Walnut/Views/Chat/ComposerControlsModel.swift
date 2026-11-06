@@ -341,11 +341,11 @@ final class ComposerControlsModel {
     /// in the middle instead of growing without end (gate r3 P2-3: a 5-line
     /// circle at AX5). Catalog names are never shortened.
     var pillLabelIsRawID: Bool {
-        currentModelLabel != nil && ModelCatalogRowLabel.activeRow(in: models, for: currentModelID) == nil
+        currentModelLabel != nil && ModelCatalogRowLabel.runningRow(in: models, for: currentModelID) == nil
     }
 
     private var currentModelLabel: String? {
-        if let row = ModelCatalogRowLabel.activeRow(in: models, for: currentModelID) {
+        if let row = ModelCatalogRowLabel.runningRow(in: models, for: currentModelID) {
             // The catalog's label is a bare family ("Opus"); the id carries the
             // version. Prefer the versioned name, exactly like the web's
             // catalogRowLabel, so the pill says "Opus 5" not "Opus". An alias row
@@ -368,7 +368,7 @@ final class ComposerControlsModel {
     /// Effort levels the CURRENT model supports. Empty = the model has no effort
     /// axis, so no effort pill.
     var effortLevelsForCurrentModel: [String] {
-        guard let row = ModelCatalogRowLabel.activeRow(in: models, for: currentModelID) else { return [] }
+        guard let row = ModelCatalogRowLabel.runningRow(in: models, for: currentModelID) else { return [] }
         if let levels = row.supportedEffortLevels, !levels.isEmpty { return levels }
         return row.supportsEffort == true ? Self.defaultEffortLevels : []
     }

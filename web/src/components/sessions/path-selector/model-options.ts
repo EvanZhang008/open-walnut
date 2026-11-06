@@ -8,6 +8,7 @@ import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { sortByModelStrength } from '@/utils/model-strength-order';
 import { catalogRowLabel } from '../ModelPicker';
+import { oneRowPerModel } from '../model-row-dedupe';
 
 /** Model dropdown rows: the host's last-known CLI catalog (values = full
  *  provider IDs, sent verbatim to spawn) — falling back to the static registry
@@ -24,7 +25,8 @@ export function useModelOptions(host?: string | null): {
   if (catalog) {
     return {
       options: sortByModelStrength(
-        catalog.models.filter((m) => m.value !== 'default' && !m.disabled),
+        // One row per model (the CLI names one model by its alias and its raw id).
+        oneRowPerModel(catalog.models.filter((m) => m.value !== 'default' && !m.disabled)),
         (model) => `${model.value} ${model.resolvedModel ?? ''} ${catalogRowLabel(model)}`,
       )
         // Versioned label ("Opus 5 1M", not "Opus") — same rule as the

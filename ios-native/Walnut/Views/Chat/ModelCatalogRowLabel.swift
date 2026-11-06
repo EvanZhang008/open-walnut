@@ -127,7 +127,7 @@ enum ModelCatalogRowLabel {
     /// picker (a launch that has not picked a model yet); a composer pill always
     /// belongs to a conversation that has a model, so it never has one.
     static func menuRows(models: [SessionModelOptions.Model], currentModelID: String?) -> [Row] {
-        let active = activeRow(in: models, for: currentModelID)
+        let active = runningRow(in: models, for: currentModelID)
         var rows: [(row: Row, text: String)] = []
         if let currentModelID, !currentModelID.isEmpty, active == nil {
             rows.append((
@@ -135,7 +135,7 @@ enum ModelCatalogRowLabel {
                 currentModelID
             ))
         }
-        for model in models {
+        for model in oneRowPerModel(models, activeID: active?.id) {
             let title = label(for: model)
             rows.append((
                 Row(kind: .catalog, id: model.id, title: title, checked: model.id == active?.id),
@@ -143,6 +143,51 @@ enum ModelCatalogRowLabel {
             ))
         }
         return ModelStrengthOrder.sorted(rows, text: \.text).map(\.row)
+    }
+
+    /// `modelIdentity` (web/src/components/sessions/model-row-dedupe.ts): the versioned model a
+    /// row names ("Opus 5.5", "Opus 5.5 1M"), or nil when it names no version.
+    static func modelIdentity(of model: String) -> String? {
+        let named = formatModelName(model)
+        return isVersionedFamily(named) ? named : nil
+    }
+
+    /// The model a catalog row names: a row whose id asks for the 1M window is the 1M model even
+    /// when its `resolvedModel` drops the marker (`…claude-fable-5-1[1m]` → `…claude-fable-5-1`).
+    static func modelIdentity(ofRow row: SessionModelOptions.Model) -> String? {
+        guard let named = modelIdentity(of: row.resolvedModel ?? row.id) else { return nil }
+        return row.id.lowercased().contains("[1m]") && !named.hasSuffix(" 1M") ? "\(named) 1M" : named
+    }
+
+    /// The row a session runs on: `activeRow`, else (the ModelPicker's `rowNamedLike`) the row
+    /// that reads as the same model, so `claude-fable-5[1m]` runs the
+    /// `global.anthropic.claude-fable-5[1m]` row instead of drawing a second "Fable 5 1M".
+    static func runningRow(
+        in models: [SessionModelOptions.Model], for model: String?
+    ) -> SessionModelOptions.Model? {
+        if let row = activeRow(in: models, for: model) { return row }
+        guard let model, let named = modelIdentity(of: model) else { return nil }
+        let same = models.filter { modelIdentity(ofRow: $0) == named }
+        return same.first(where: { $0.id != "default" }) ?? same.first
+    }
+
+    /// `oneRowPerModel`: Claude Code names one model by its `default` row, its alias and the raw
+    /// id a session runs, so one model read as three rows. Rows naming the same versioned model
+    /// keep one: the row the session runs on, else the first that is not `default`, else `default`.
+    static func oneRowPerModel(
+        _ models: [SessionModelOptions.Model], activeID: String?
+    ) -> [SessionModelOptions.Model] {
+        var keep: [String: SessionModelOptions.Model] = [:]
+        for model in models {
+            guard let id = modelIdentity(ofRow: model) else { continue }
+            guard let held = keep[id] else { keep[id] = model; continue }
+            if held.id == activeID { continue }
+            if model.id == activeID || (held.id == "default" && model.id != "default") { keep[id] = model }
+        }
+        return models.filter { model in
+            guard let id = modelIdentity(ofRow: model) else { return true }
+            return keep[id]?.id == model.id
+        }
     }
 
     /// `matchSessionModelCatalogEntry` (src/core/types.ts): which catalog row a

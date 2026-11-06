@@ -51,7 +51,7 @@ final class ModelStrengthOrderTests: XCTestCase {
         "haiku=Haiku 4.5", "gpt-6-luna=GPT-6 Luna", "global.anthropic.claude-sonnet-5=Sonnet 5",
         "gpt-6-astra=GPT-6 Astra", "global.anthropic.claude-fable-5[1m]=Fable 5 1M",
         "global.anthropic.claude-fable-5-1[1m]=Fable 5.1 1M", "gpt-5.6-sol=GPT-5.6 Sol",
-        "gpt-6-sol=GPT-6 Sol", "default=Default (Opus 5.5 1M)", "opus=Opus 5.5 1M",
+        "gpt-6-sol=GPT-6 Sol", "opus=Opus 5.5 1M",
     ]
 
     func testTheRealCatalogIsListedInTheMacsOrder() {
@@ -76,7 +76,7 @@ final class ModelStrengthOrderTests: XCTestCase {
             "haiku=Haiku 4.5", "gpt-6-luna=GPT-6 Luna", "global.anthropic.claude-sonnet-5=Sonnet 5",
             "gpt-6-astra=GPT-6 Astra", "global.anthropic.claude-fable-5[1m]=Fable 5 1M",
             "global.anthropic.claude-fable-5-1[1m]=Fable 5.1 1M", "gpt-5.6-sol=GPT-5.6 Sol",
-            "gpt-6-sol=GPT-6 Sol", "current:opus-5", "default=Default (Opus 5.5 1M)", "opus=Opus 5.5 1M",
+            "gpt-6-sol=GPT-6 Sol", "current:opus-5", "opus=Opus 5.5 1M",
         ])
         XCTAssertEqual(order(catalog(), current: "my-proxy-model"),
                        Self.webRealOrder + ["current:my-proxy-model"],
@@ -84,6 +84,42 @@ final class ModelStrengthOrderTests: XCTestCase {
 
         let rows = ModelCatalogRowLabel.menuRows(models: catalog(), currentModelID: "my-proxy-model")
         XCTAssertEqual(rows.filter(\.checked).map(\.kind), [.current], "exactly one checkmark, on the truth")
+    }
+
+    /// One model, one row (2026-11-06, the user: "Default (Opus 5.5)", "Opus 5.5" and a ticked
+    /// "Opus 5.5" in one list). The catalog a clouddev CLI answered that day, for a session that
+    /// runs `claude-opus-5-5`; the expected lists come from the web's `oneRowPerModel` and
+    /// `rowNamedLike` (model-row-dedupe.ts) run over the same catalog.
+    func testOneModelIsOneRowWhateverNameTheSessionRunsItBy() {
+        let evan: [(String, String, String)] = [
+            ("default", "global.anthropic.claude-opus-5-5", "Default"),
+            ("opus", "global.anthropic.claude-opus-5-5", "Opus 5.5"),
+            ("global.anthropic.claude-fable-5-1[1m]", "global.anthropic.claude-fable-5-1", "Fable"),
+            ("haiku", "global.anthropic.claude-haiku-5-5", "Haiku 5.5"),
+            ("gpt-6-astra", "gpt-6-astra", "GPT-6 Astra"),
+            ("gpt-6.1-sol", "gpt-6.1-sol", "GPT-6.1 Sol"),
+            ("gpt-6-luna", "gpt-6-luna", "GPT-6 Luna"),
+            ("claude-opus-5-5", "claude-opus-5-5", "Opus 5.5"),
+        ]
+        let models = evan.map { Row(id: $0.0, label: $0.2, supportsEffort: nil, supportedEffortLevels: nil, resolvedModel: $0.1) }
+        let rest = ["haiku=Haiku 5.5", "gpt-6-luna=GPT-6 Luna", "gpt-6-astra=GPT-6 Astra",
+                    "global.anthropic.claude-fable-5-1[1m]=Fable 5.1", "gpt-6.1-sol=GPT-6.1 Sol"]
+        XCTAssertEqual(order(models, current: "claude-opus-5-5"), rest + ["claude-opus-5-5=Opus 5.5"])
+        XCTAssertEqual(order(models, current: "global.anthropic.claude-opus-5-5"), rest + ["opus=Opus 5.5"])
+        let rows = ModelCatalogRowLabel.menuRows(models: models, currentModelID: "claude-opus-5-5")
+        XCTAssertEqual(rows.filter(\.checked).map(\.id), ["claude-opus-5-5"])
+
+        // A row asking for 1M stays apart from the plain row, even when its resolvedModel drops the marker.
+        let pair = [
+            Row(id: "global.anthropic.claude-fable-5-1", label: "Fable", supportsEffort: nil, supportedEffortLevels: nil, resolvedModel: "global.anthropic.claude-fable-5-1"),
+            Row(id: "global.anthropic.claude-fable-5-1[1m]", label: "Fable", supportsEffort: nil, supportedEffortLevels: nil, resolvedModel: "global.anthropic.claude-fable-5-1"),
+        ]
+        XCTAssertEqual(ModelCatalogRowLabel.oneRowPerModel(pair, activeID: nil).count, 2)
+
+        // A short id of a listed model runs that row: no second "Fable 5 1M" of its own.
+        XCTAssertEqual(order(catalog(), current: "claude-fable-5[1m]"), Self.webRealOrder)
+        XCTAssertEqual(ModelCatalogRowLabel.menuRows(models: catalog(), currentModelID: "claude-fable-5[1m]")
+            .filter(\.checked).map(\.id), ["global.anthropic.claude-fable-5[1m]"])
     }
 
     /// Ties, unknown names and the tier table, against the web's own output.
