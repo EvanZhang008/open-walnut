@@ -195,7 +195,7 @@ struct SessionTimelineUnreadableState: View {
     @State private var retrying = false
     /// A retry finished and this page is still here, so it failed again: say so, or the tap
     /// looks like it did nothing.
-    @State private var triedAgain = false
+    @State private var triedAgain: Date?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -212,16 +212,17 @@ struct SessionTimelineUnreadableState: View {
             if let onRetry {
                 Button {
                     retrying = true
-                    triedAgain = false
-                    Task { await onRetry(); retrying = false; triedAgain = true }
+                    triedAgain = nil
+                    Task { await onRetry(); retrying = false; triedAgain = Date() }
                 } label: {
                     if retrying { ProgressView() } else { Text("Try Again") }
                 }
                 .buttonStyle(.bordered)
                 .disabled(retrying)
                 .accessibilityIdentifier("session.transcript.retry")
-                if triedAgain {
-                    Text("Still can't read it. Try again in a moment.")
+                if let triedAgain {
+                    // The time changes with every retry, so a second tap shows it ran too.
+                    Text("Still can't read it at \(triedAgain.formatted(date: .omitted, time: .shortened)). Try again in a moment.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -230,7 +231,7 @@ struct SessionTimelineUnreadableState: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .timelinePlaceholderInset(vertical: 100)
+        .timelinePlaceholderInset(vertical: 100, interactive: onRetry != nil)
         .padding(.horizontal, 32)
         .accessibilityIdentifier("session.transcript.unreadable")
     }

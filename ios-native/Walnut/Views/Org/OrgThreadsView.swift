@@ -91,6 +91,9 @@ struct OrgThreadsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                // Room under the last section, so a jump can bring even the last fold to the top
+                // and nothing ends under the floating tab bar.
+                .padding(.bottom, 240)
             }
             // At the bottom, above the tab bar: where the eye is after the card's buttons, and off the cards' text.
             .overlay(alignment: .bottom) { noticeView }
@@ -161,7 +164,12 @@ struct OrgThreadsView: View {
             ForEach(items, id: \.id) { item in
                 Button {
                     item.open.wrappedValue = true
-                    DispatchQueue.main.async { withAnimation { proxy.scrollTo("fold.\(item.id)", anchor: .top) } }
+                    // After the section has laid out its rows: scrolled at once, a short section
+                    // (one snoozed thread) stayed where it was, under the tab bar (r9 review).
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(150))
+                        withAnimation { proxy.scrollTo("fold.\(item.id)", anchor: .top) }
+                    }
                 } label: {
                     Text("\(item.label) \(item.count)")
                         .font(.footnote)
@@ -285,7 +293,8 @@ struct OrgThreadCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
-                Image(systemName: "chevron.down")
+                // One rule with the section rows: ">" folded, "v" open (r9 review).
+                Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
@@ -384,7 +393,7 @@ struct OrgThreadCard: View {
                 Spacer(minLength: 0)
                 if compact && expanded {
                     Button { withAnimation(.snappy) { expanded = false } } label: {
-                        Image(systemName: "chevron.up")
+                        Image(systemName: "chevron.down")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 36, height: 28)
@@ -725,30 +734,64 @@ struct OrgThreadFollowUpSheet: View {
 }
 
 /// Chips that wrap onto the next line instead of running off the screen.
+/// Measuring and placing break lines with ONE rule (`lines`) at the width the measure was
+/// given: placing at a bounds width a fraction of a point narrower once broke a third line the
+/// measure never counted, and that line sat on the team rows below it (2026-11-06, r9).
 struct OrgChipFlow: Layout {
     var spacing: CGFloat = 6
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? .infinity
-        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(ProposedViewSize(width: width, height: nil))
-            if x > 0, x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-            widest = max(widest, min(x - spacing, width))
+    /// The chips' indices per line at `width`, a line taking a chip while it fits within half a point.
+    static func lines(_ sizes: [CGSize], width: CGFloat, spacing: CGFloat) -> [[Int]] {
+        var out: [[Int]] = []
+        var x: CGFloat = 0
+        for (i, size) in sizes.enumerated() {
+            if !out.isEmpty, x > 0, x + size.width > width + 0.5 {
+                out.append([i]); x = size.width + spacing
+            } else {
+                if out.isEmpty { out.append([]) }
+                out[out.count - 1].append(i); x += size.width + spacing
+            }
         }
-        return CGSize(width: widest, height: y + rowHeight)
+        return out
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-            if x > bounds.minX, x + size.width > bounds.maxX { x = bounds.minX; y += rowHeight + spacing; rowHeight = 0 }
-            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: min(size.width, bounds.width), height: size.height))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+    /// The block's height: every line's tallest chip, with `spacing` between lines.
+    static func height(_ sizes: [CGSize], lines: [[Int]], spacing: CGFloat) -> CGFloat {
+        let rows = lines.map { $0.map { sizes[$0].height }.max() ?? 0 }
+        return rows.reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+    }
+
+    struct Cache { var width: CGFloat? = nil }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    private func sizes(_ subviews: Subviews, width: CGFloat) -> [CGSize] {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let sizes = sizes(subviews, width: width)
+        let lines = Self.lines(sizes, width: width, spacing: spacing)
+        let widest = lines.map { l in l.map { sizes[$0].width }.reduce(0, +) + spacing * CGFloat(max(0, l.count - 1)) }.max() ?? 0
+        if width.isFinite { cache.width = width }
+        return CGSize(width: width.isFinite ? width : widest, height: Self.height(sizes, lines: lines, spacing: spacing))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        // The width the block was measured at, so its lines are the ones its height counted.
+        let width = max(bounds.width, proposal.width ?? cache.width ?? bounds.width)
+        let sizes = sizes(subviews, width: width)
+        var y = bounds.minY
+        for line in Self.lines(sizes, width: width, spacing: spacing) {
+            var x = bounds.minX
+            let rowHeight = line.map { sizes[$0].height }.max() ?? 0
+            for i in line {
+                subviews[i].place(at: CGPoint(x: x, y: y),
+                                  proposal: ProposedViewSize(width: min(sizes[i].width, width), height: sizes[i].height))
+                x += sizes[i].width + spacing
+            }
+            y += rowHeight + spacing
         }
     }
 }

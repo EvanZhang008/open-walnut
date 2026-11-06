@@ -77,6 +77,11 @@ struct TimelinePlaceholderInset: ViewModifier {
     /// The spacing the placeholder WANTS above and below its content when the page
     /// has room for it.
     let vertical: CGFloat
+    /// The placeholder holds a control (a Try Again button): the fitting candidate takes
+    /// touches too. Gesture-transparent, its button could never be tapped, so a retry looked
+    /// like it did nothing (2026-11-06, r9). Only its own views take them; the empty space
+    /// around them still passes to the transcript beneath.
+    var interactive: Bool = false
 
     /// Never squeeze the placeholder's own text to nothing: below this it keeps a
     /// minimum of breathing room and is allowed to overflow again. The placeholders
@@ -208,7 +213,7 @@ struct TimelinePlaceholderInset: ViewModifier {
             )
             ViewThatFits(in: .vertical) {
                 laidOut(content, availableHeight: slot)
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(interactive)
                 ScrollView(.vertical) {
                     laidOut(content, availableHeight: slot)
                 }
@@ -261,8 +266,8 @@ struct TimelinePlaceholderInset: ViewModifier {
 extension View {
     /// Placeholder spacing that yields to the page's real height. See
     /// `TimelinePlaceholderInset` for the incident and the mechanism.
-    func timelinePlaceholderInset(vertical: CGFloat) -> some View {
-        modifier(TimelinePlaceholderInset(vertical: vertical))
+    func timelinePlaceholderInset(vertical: CGFloat, interactive: Bool = false) -> some View {
+        modifier(TimelinePlaceholderInset(vertical: vertical, interactive: interactive))
     }
 }
 
