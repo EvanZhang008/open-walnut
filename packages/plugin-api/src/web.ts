@@ -383,9 +383,9 @@ export interface WebUiService {
     MicButton?: PluginComponent<MicButtonProps>
     /**
      * Your plugin's generated Settings form (manifest `configSchema` + `uiHints`), the same rows
-     * the Configure card in Settings → Plugins draws, with their Save. Render it inside your own
-     * App when the page IS the settings, and declare `settingsIn: 'app'` in the manifest so the
-     * Plugins row's Configure goes to your App instead of a second copy. Optional on the views
+     * your plugin's page in Apps draws under Settings, with their Save. Render it inside your own
+     * App when the page IS the settings, and declare `settingsIn: 'app'` in the manifest so your
+     * page in Apps links to your App instead of drawing a second copy. Optional on the views
      * object: feature-detect.
      */
     PluginSettingsView?: PluginComponent<Record<string, never>>

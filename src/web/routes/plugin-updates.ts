@@ -1,7 +1,7 @@
 /**
  * GET /api/plugin-updates: every updatable plugin row's state in ONE call.
  *
- * The page asks once when Settings, Plugins opens, so this route must answer in the time
+ * The page asks once when Apps opens, so this route must answer in the time
  * it takes to read the cache: the fetches that discover "3 commits behind" run in the
  * background (`UpdateStatusCache.refreshAll`), and the response says `refreshing: true`
  * while they do. `?refresh=1` (Check now) forces a batch past the minimum interval and

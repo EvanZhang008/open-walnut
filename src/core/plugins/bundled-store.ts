@@ -3,7 +3,7 @@
  * in a build (scripts/ship-store-plugins.mjs copies it there).
  *
  * A plugin in this folder SHIPS with Walnut but is not loaded until the user installs it
- * from Settings, Plugins. Installing writes `plugins.<id>.enabled: true`; that explicit
+ * from Apps. Installing writes `plugins.<id>.enabled: true`; that explicit
  * `true` is the only thing discovery accepts (an absent key means "not installed", not
  * "on by default", which is the whole difference from a builtin). Removing deletes the
  * `plugins.<id>` key, so the next discovery (a restart included) skips the folder again.

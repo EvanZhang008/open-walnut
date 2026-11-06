@@ -1,5 +1,5 @@
 /**
- * Shared boot + page helpers for the Settings, Plugins update-status specs. Starts the
+ * Shared boot + page helpers for the plugin update-status specs in Apps. Starts the
  * browser fixture server (`test-server.ts`) with the native plugin fixture on, which also
  * builds the linked checkout pair (`linked-work` tracking `linked-origin.git`, plus the
  * `linked-publisher` clone) and the git-source repo under the fixture home.

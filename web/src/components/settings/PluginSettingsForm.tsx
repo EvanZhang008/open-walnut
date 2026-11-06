@@ -1,6 +1,6 @@
 /**
- * One plugin's generated Settings form, standing on its own: the same rows the Configure
- * card in Settings → Plugins draws, with their Save, for a plugin App that renders its
+ * One plugin's generated Settings form, standing on its own: the same rows its page in
+ * Apps draws under Settings, with their Save, for a plugin App that renders its
  * settings itself (`walnut.ui.views.PluginSettingsView`, manifest `settingsIn: 'app'`).
  *
  * It owns its config read and save (useSettingsConfig), because outside the Settings page

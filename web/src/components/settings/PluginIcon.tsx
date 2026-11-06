@@ -1,5 +1,5 @@
 /**
- * The 28px tile that leads every plugin row in Settings, Plugins.
+ * The 28px tile that leads every plugin row in Apps.
  *
  * A plugin whose manifest declares `icon` gets that SVG, drawn white on its tint (the
  * icon is a template mark, see src/core/plugins/plugin-icon.ts); one without gets its

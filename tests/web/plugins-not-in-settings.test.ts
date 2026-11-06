@@ -15,6 +15,7 @@
  * The browser half (a real old-API plugin's panel shows in Apps, not Settings, and its old
  * link forwards) is in tests/e2e/browser/native-plugin.spec.ts and apps-page.spec.ts.
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -114,6 +115,22 @@ describe('plugins are never in Settings', () => {
     // And a plugin key is no Settings pane any more.
     expect(resolvePane('#walnut-demo:demo', { silent: true })).toMatchObject({ paneId: 'general', known: false })
   })
+})
+
+describe('no text sends anyone to Settings for a plugin', () => {
+  // An error, a hint or an API doc that names "Settings, Plugins" points the user (or a plugin
+  // author) to a place that no longer exists (2026-11-05: the AI budget errors and the MCP hint
+  // still did). docs/plan keeps history and tests may describe the old bug, so neither is read.
+  it('the product, its packages and its reference docs never name Settings, Plugins', () => {
+    let out = ''
+    try {
+      out = execFileSync('git', ['grep', '-n', '-E', 'Settings(, | → | > )Plugins', '--', 'src', 'web/src', 'packages', 'docs/reference', 'examples'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    } catch (err) {
+      // git grep exits 1 when nothing matches; anything else is a real failure.
+      if ((err as { status?: number }).status !== 1) throw err
+    }
+    expect(out, 'these lines still send people to Settings for a plugin').toBe('')
+  }, 20_000)
 })
 
 describe("Walnut's own Settings anchors are never taken for an old plugin link", () => {

@@ -69,7 +69,7 @@ const firstLine = (text: string, max = 100): string => {
 
 export function formatMcpServers(result: unknown): string {
   const servers = ((result as { servers?: ServerRow[] } | undefined)?.servers ?? [])
-  if (servers.length === 0) return 'No MCP servers are registered. A plugin registers one (Settings, Plugins).'
+  if (servers.length === 0) return 'No MCP servers are registered. A plugin registers one (Apps).'
   const lines = servers.map((server) => {
     const tools = typeof server.toolCount === 'number' ? `, ${server.toolCount} tools` : ''
     const error = server.lastError ? `\n    ${str(server.lastError)}` : ''

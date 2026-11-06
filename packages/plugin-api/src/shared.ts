@@ -143,7 +143,7 @@ export interface AiRunResult {
  * Settings). Your plugin never sees a key. Failures reject with an Error whose `code` is one of
  * ai_bad_request, ai_disabled, ai_budget, ai_busy, ai_unconfigured, ai_no_engine, ai_timeout,
  * ai_aborted, ai_format, ai_failed, and whose message can be shown to the person as it is.
- * The user can turn AI off for your plugin and sets its monthly budget in Settings, Plugins.
+ * The user can turn AI off for your plugin and sets its monthly budget on your plugin's page in Apps.
  */
 export interface AiService {
   run(request: AiRunRequest): Promise<AiRunResult>

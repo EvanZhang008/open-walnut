@@ -198,6 +198,8 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
         const on = isRunning(part)
         const switchOn = store.cascadeAsk?.target.id === part.id ? true : (store.pendingToggle[part.id] ?? on)
         const connection = store.connections[part.id]
+        // Its own panels are drawn right here, so its button says Settings only for the form
+        // that lives on its own page.
         const partPanels = pluginUi.settings.filter((entry) => entry.pluginId === part.id)
         return (
           <div key={part.id} className="apps-part" data-testid={`plugin-part-${part.id}`} data-plugin-status={part.status}>
@@ -221,7 +223,7 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
               control={
                 <>
                   <SettingsButton onClick={() => onOpen(part.id)} data-testid={`plugin-part-open-${part.id}`}>
-                    {part.configurable || partPanels.length > 0 ? 'Settings' : 'Details'}
+                    {part.configurable ? 'Settings' : 'Details'}
                   </SettingsButton>
                   {part.toggleable ? (
                     <ToggleSwitch

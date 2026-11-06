@@ -1,5 +1,5 @@
 /**
- * Client controller for Settings → Plugins update status. No React in here: the hook
+ * Client controller for the plugins' update status in Apps. No React in here: the hook
  * (`usePluginUpdates`) subscribes through useSyncExternalStore, and the root vitest tier
  * (no jsdom) drives this module directly with fake timers and a counting fetch.
  *

@@ -1380,7 +1380,7 @@ Discovery and reload are different operations: `POST /api/plugin-runtime/discove
 
 The repo folder `plugin-store/` holds plugins that ship inside every Walnut build but are not loaded by default. Each one uses the same layout as `examples/plugins/<id>/`, and the folder name must equal the manifest `id`. The build (`scripts/ship-store-plugins.mjs`, run by `bun run build` and `bun run web:build`) builds each one with `walnut-plugin build`, checks its declared `server` and `web` artifacts, and copies `manifest.json`, `README.md`, `dist/` and `skills/` to `dist/plugin-store/<id>/`.
 
-In Settings, Plugins, a bundled plugin lists under Available with an **Install** button:
+In Apps, a bundled plugin lists under Available with an **Install** button:
 
 - **Install** (`POST /api/plugin-runtime/bundled/<id>/install`) writes `plugins.<id>.enabled: true` and loads the plugin live, with no restart. If nothing could load it (for example, its build output is missing), the config write is taken back and the answer says why.
 - Once installed, the row is labelled `Bundled` and has the normal on/off switch.

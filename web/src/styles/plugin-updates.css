@@ -1,5 +1,5 @@
 /*
- * Settings → Plugins: update chip, Update button wrapper, feedback line, provenance flyout
+ * Plugin updates in Apps: update chip, Update button wrapper, feedback line, provenance flyout
  * and the Installed header cluster. Imported by the components that render them.
  *
  * Two pill vocabularies on one row: the solid `.badge` answers "is it running?", this

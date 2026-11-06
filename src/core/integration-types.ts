@@ -591,9 +591,9 @@ export interface PluginManifest {
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;
   /** Where the generated Settings form for `plugins.<id>` is drawn. `'plugins'` (default):
-   *  the Configure card in Settings → Plugins. `'app'`: the plugin's own App renders it
-   *  through `walnut.ui.views.PluginSettingsView`, and the Plugins row's Configure goes to
-   *  that App instead of expanding the form, so a plugin whose page IS its settings has one
+   *  under Settings on the plugin's page in Apps. `'app'`: the plugin's own App renders it
+   *  through `walnut.ui.views.PluginSettingsView`, and the plugin's page in Apps links to
+   *  that App instead of drawing the form, so a plugin whose page IS its settings has one
    *  home, not two. */
   settingsIn?: PluginSettingsHome;
   /** Which Apps page group the plugin is listed under; omitted = derived from what it does.
@@ -623,7 +623,7 @@ export interface PluginManifest {
    *  stamped `plugin_only` (src/core/plugins/plugin-task-visibility.ts). */
   taskVisibility?: 'plugin';
   /** Relative path of an `.svg` inside the plugin folder, drawn as the plugin's tile in
-   *  Settings → Plugins (src/core/plugins/plugin-icon.ts). An unusable value is dropped
+   *  Apps (src/core/plugins/plugin-icon.ts). An unusable value is dropped
    *  with a warning; the row then shows a monogram. */
   icon?: string;
   /** Compute Walnut keeps running (src/core/plugin-jobs/): each a function of the server

@@ -22,7 +22,7 @@ export interface PluginManifest {
   server?: string
   web?: string
   webview?: { title: string; entry?: string; icon?: string }
-  /** Relative `.svg` path inside the plugin folder: the plugin's tile in Settings, Plugins. */
+  /** Relative `.svg` path inside the plugin folder: the plugin's tile in Apps. */
   icon?: string
   build?: PluginBuildConfig
   settingsIn?: 'plugins' | 'app'

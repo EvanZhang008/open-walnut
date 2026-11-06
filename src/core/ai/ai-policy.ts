@@ -117,11 +117,11 @@ export async function assertCallerMayRun(caller: AiCaller): Promise<CallerSettin
   const settings = await callerSettings(caller)
   const who = caller.name ?? caller.id
   if (!settings.enabled) {
-    throw new AiError('ai_disabled', `AI is turned off for ${who}. Turn it on in Settings, Plugins.`)
+    throw new AiError('ai_disabled', `AI is turned off for ${who}. Turn it on on its page in Apps.`)
   }
   const used = await callerSpend(caller)
   if (used.usd >= settings.monthlyUsd) {
-    throw new AiError('ai_budget', `${who} has used its AI budget for this month ($${settings.monthlyUsd}). Raise it in Settings, Plugins.`)
+    throw new AiError('ai_budget', `${who} has used its AI budget for this month ($${settings.monthlyUsd}). Raise it on its page in Apps.`)
   }
   return settings
 }

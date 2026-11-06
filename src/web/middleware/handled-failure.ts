@@ -3,7 +3,7 @@
  *
  * `POST .../linked/update` answers 502 when the user's own git remote refuses the fetch and
  * 504 when git outruns its deadline. The status is honest (an upstream failed), and the row
- * in Settings, Plugins already says so in one sentence with a Details fold. But the request
+ * in Apps already says so in one sentence with a Details fold. But the request
  * logger turns every 5xx except 501 into a red incident card plus an inbox notification with
  * an "Ask AI to fix" button, for a condition Walnut cannot fix (N3-1). One place says it: the
  * row. A route that has handled its failure marks the response with this header and the
