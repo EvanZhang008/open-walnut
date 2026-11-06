@@ -49,6 +49,13 @@ vi.mock('../../src/providers/fold-prewarm.js', () => ({
   runFoldPrewarm: async () => ({ outcome: 'ran', ms: 0 }),
 }))
 
+// The update clock (daemon-update-behind.ts) answers what a test sets; its store is pinned in daemon-update-behind.test.ts.
+const { overdue } = vi.hoisted(() => ({ overdue: { now: false } }))
+vi.mock('../../src/providers/daemon-update-behind.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/providers/daemon-update-behind.js')>()
+  return { ...actual, daemonUpdateOverdue: () => ({ overdue: overdue.now, behindMs: overdue.now ? 4 * 3600_000 : 0 }) }
+})
+
 const { spawnSpy } = vi.hoisted(() => ({ spawnSpy: vi.fn((..._args: unknown[]): never => {
   throw new Error('spawn() must not run while a service manages the daemon')
 }) }))
@@ -307,6 +314,35 @@ describe('LocalDaemon managed service updates', () => {
   })
 })
 
+describe('LocalDaemon overdue managed update (daemon-over-busy.ts)', () => {
+  afterEach(() => { vi.restoreAllMocks(); updateCommand.mockReset(); overdue.now = false })
+
+  it.each([[true, ['cron-supervision-v1']], [false, ['cron-supervision-v1']]])('overdue=%s: the CLI is asked to go over the busy daemon only when overdue', async (late, caps) => {
+    overdue.now = late
+    const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
+    const internals = daemon as unknown as {
+      ensureRunningInner(): Promise<number>
+      ping(port: number): Promise<unknown>
+      readPortFile(): number
+      readBinaryVersion(): string
+      auditOwnerOnAdopt(): void
+    }
+    vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+    vi.spyOn(internals, 'readPortFile').mockReturnValueOnce(32100).mockReturnValue(32200)
+    vi.spyOn(internals, 'ping').mockResolvedValueOnce({ alive: true, version: 'old-version', capabilities: caps })
+      .mockResolvedValue({ alive: true, version: 'new-version', capabilities: caps, instanceId: 'new-instance' })
+    vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
+    vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
+    vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(1234)
+    updateCommand.mockResolvedValue({ code: 0, stderr: '', stdout: '{"ok":true}' })
+    await expect(internals.ensureRunningInner()).resolves.toBe(32200)
+    const args = ['walnut', 'daemon', 'update', '--yes', '--scope', 'user', '--executable', '/fixture/daemon']
+    expect(updateCommand).toHaveBeenCalledWith('/fixture/daemon', late ? [...args, '--over-busy'] : args)
+  })
+})
+
 describe('LocalDaemon keeps a daemon another Walnut shares (daemon-shared.ts)', () => {
   afterEach(() => { vi.restoreAllMocks(); updateCommand.mockReset() })
   const OTHER = { 'cccccccccccccccc': Date.now() }
@@ -392,6 +428,31 @@ describe('LocalDaemon — unmanaged hosts keep their on-demand behavior', () => 
       await vi.advanceTimersByTimeAsync(LOCAL_UPGRADE_RECHECK_MS * 3)
       expect(busy).toHaveBeenCalledTimes(3)
     } finally { vi.useRealTimers() }
+  })
+
+  it('overdue, open ACP turns and host_exec runs on this Mac no longer hold the upgrade', async () => {
+    overdue.now = true
+    try {
+      const daemon = new LocalDaemon({ daemonDir: tmpDir, binaryPath: path.join(tmpDir, 'bin', 'daemon-fake') })
+      const internals = daemon as unknown as {
+        readBinaryVersion(): string
+        readPortFile(): number | null
+        ping(port: number): Promise<unknown>
+        readAcpBusySids(): string[]
+        auditOwnerOnAdopt(): void
+      }
+      vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+      vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
+      vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: [], execRunning: 1 })
+      vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+      vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      vi.spyOn(internals, 'readAcpBusySids').mockReturnValue(['acp-1'])
+      const stop = vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
+      const start = vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(32200)
+      await expect(daemon.ensureRunning()).resolves.toBe(32200)
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(start).toHaveBeenCalledTimes(1)
+    } finally { overdue.now = false }
   })
 
   it('stopIfIsolated() also ends a pending upgrade clock', async () => {

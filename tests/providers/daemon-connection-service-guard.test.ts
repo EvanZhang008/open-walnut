@@ -42,6 +42,8 @@ import {
   managedUpdateScope,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
+import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
+import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
 const TARGET: SshTarget = { hostname: 'devbox.example.com', user: 'tester' }
@@ -609,6 +611,29 @@ describe('DaemonConnection — a service probe with no answer is not a verdict',
     expect(postponed(warn).map((p) => p.retryInMs)).toEqual([UPGRADE_RECHECK_DELAYS_MS[0], UPGRADE_RECHECK_DELAYS_MS[0]])
     expect(destructive(seen).length).toBeGreaterThan(0)
     expect(lost).toHaveBeenCalledTimes(1)
+  })
+
+  it('overdue, open ACP turns no longer hold the update (daemon-update-behind.ts)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'acp-overdue-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    try {
+      const c = skewed()
+      const routes: SshRoutes = {
+        probe: probeReply(), status: RUNNING_STATUS, version: 'walnut-daemon-old00000',
+        busy: JSON.stringify({ busySids: ['acp-1'], updatedAt: Date.now() }),
+      }
+      const seen = stubSsh(c, routes)
+      const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => {})
+      const now = Date.now()
+      for (let t = now - DAEMON_UPDATE_BEHIND_MAX_MS - 60_000; t < now; t += 30 * 60_000) daemonUpdateOverdue('devbox', 'walnut-daemon-old00000', true, t)
+      await priv(c).checkDaemonRunning()
+      expect(postponed(warn).map((p) => p.reason)).not.toContain('ACP turns are open')
+      expect(destructive(seen).length).toBeGreaterThan(0)
+    } finally {
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('a re-check whose connection dropped meanwhile stops nothing and leaves the decision to the reconnect', async () => {

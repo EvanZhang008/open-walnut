@@ -365,6 +365,22 @@ describe('cron boot update', () => {
     expect(h.procs.daemon!.executable).toBe(NEW_EXE)
     expect(h.procs.supervisor).toBe(supervisor)
     expect(h.readyCalls.at(-1)?.expected).toBe(NEW_EXE)
+    expect(h.timeline).not.toContain(`signal:${old}:SIGKILL`)
+    expectUnprivileged(h)
+  })
+
+  it('an overdue update whose old daemon never finishes its shutdown kills that pid alone, and the supervisor starts the new one', async () => {
+    // An older daemon whose session command never settles: SIGTERM leaves it half shut.
+    const h = harness({ installed: { executable: OLD_EXE }, running: true, daemonStuck: true, prepareUpdate: async () => 'unprepared' })
+    const old = h.procs.daemon!.pid
+    const supervisor = h.procs.supervisor!
+    const status = expectOk(await h.manager.update())
+
+    expect(status.active).toBe(true)
+    expect(h.timeline.indexOf(`signal:${old}:SIGTERM`)).toBeLessThan(h.timeline.indexOf(`signal:${old}:SIGKILL`))
+    expect(h.timeline).not.toContain(`signal:${supervisor}:SIGKILL`)
+    expect(h.procs.daemon!.executable).toBe(NEW_EXE)
+    expect(h.procs.supervisor).toBe(supervisor)
     expectUnprivileged(h)
   })
 

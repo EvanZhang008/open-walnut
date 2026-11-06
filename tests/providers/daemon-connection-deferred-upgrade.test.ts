@@ -357,6 +357,56 @@ describe('the background update of a service-managed daemon', () => {
     expect(state(c)._lastUpgradeAttempt).toBeNull()
   })
 
+  it('a managed update that failed after it started is asked again once its cooldown ends, also inside the cooldown, never left until the link drops', async () => {
+    const c = make()
+    stub(c, { probe: MANAGED, version: OLD })
+    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    const err = vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+      expect(await opts?.onStaged?.()).toBe(true)
+      throw new Error('Managed daemon update failed: the daemon never answered as the new executable')
+    })
+    live(c)
+    const retry = () => (warn.mock.calls.filter(([m]) => m === 'DaemonConnection: daemon update postponed; checking again').at(-1)?.[1] as { reason: string; retryInMs: number } | undefined)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(state(c).upgradeRecheckTimer).not.toBeNull()
+    expect(retry()).toMatchObject({ reason: expect.stringContaining('the managed update did not complete') })
+    expect(retry()!.retryInMs).toBeGreaterThan(10 * 60_000)
+
+    // Asked inside the cooldown (a connect, a request): no second try, and a recheck at its end.
+    clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
+    state(c).upgradeRecheckTimer = null
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(state(c).upgradeRecheckTimer).not.toBeNull()
+    expect(retry()).toMatchObject({ reason: expect.stringContaining('asked again when its cooldown ends') })
+    expect(retry()!.retryInMs).toBeLessThanOrEqual(10 * 60_000 + 5_000)
+    expect(err.mock.calls.some(([m]) => String(m).includes('use `walnut daemon install'))).toBe(false)
+  })
+
+  it('during an overdue swap a file change waits for it; other commands and a plain swap do not', async () => {
+    const c = make()
+    let settle!: () => void
+    state(c)._swapInFlight = new Promise<void>((resolve) => { settle = resolve })
+    state(c)._swapOverBusy = true
+    state(c)._connected = false
+    let done = false
+    const write = c.send('fs.write', { path: '/x', data: 'y' }).catch((error: Error) => { done = true; return error })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(done).toBe(false)
+    // A session command is not held (it goes to the daemon there is, or fails on no link).
+    await expect(c.send('send', { sid: 's' })).rejects.toThrow(/not connected/)
+    settle()
+    expect(String(await write)).toMatch(/not connected/)
+
+    state(c)._swapInFlight = new Promise<void>(() => {})
+    state(c)._swapOverBusy = false
+    await expect(c.send('fs.write', { path: '/x', data: 'y' })).rejects.toThrow(/not connected/)
+  })
+
   it('a daemon busy at every ask is asked less often: three times a minute apart, then backing off', async () => {
     const c = make()
     stub(c, { probe: MANAGED, version: OLD })

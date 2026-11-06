@@ -460,6 +460,11 @@ const UPGRADE_HOLD_COMMANDS = new Set([
   'fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir', 'host.fix', 'triggers.run', 'triggers.ack', 'triggers.claim', 'offline.ack',
 ])
 
+/** File changes an overdue swap holds back until it settles (send(); daemon-over-busy.ts step 3). */
+const SWAP_HELD_FILE_COMMANDS = new Set(['fs.write', 'fs.rm', 'fs.rename', 'fs.copy', 'fs.mkdir'])
+/** The longest a file change waits for an overdue swap: the CLI's minute plus the service's restart. */
+export const SWAP_FILE_HOLD_MAX_MS = 3 * 60_000
+
 /** A re-check's connection is gone: its decision is dropped, the reconnect makes a fresh one. */
 const UPGRADE_STALE = 'stale'
 /** What a re-check's gate answers right before a stop: go (null), stale, or a reason to wait. */
@@ -852,6 +857,8 @@ export class DaemonConnection {
    * upload is dialled again at once, onto the old daemon that still serves.
    */
   private _swapInFlight: Promise<void> | null = null
+  /** The swap in flight was an overdue one (`--over-busy`): file changes wait for it. */
+  private _swapOverBusy = false
   private _swapSettle: (() => void) | null = null
   /** How long a planned swap may read as connected while the new daemon comes up. */
   static HANDOVER_WINDOW_MS = 45_000
@@ -2085,6 +2092,9 @@ export class DaemonConnection {
     params: Record<string, unknown> = {},
     timeoutMs: number = DaemonConnection.COMMAND_TIMEOUT_MS,
   ): Promise<DaemonCommandResult> {
+    // An overdue swap may end with the old daemon restarted unprepared, and an older daemon's
+    // shutdown does not wait for a file write: a file change waits for the swap (bounded).
+    if (this._swapOverBusy && this._swapInFlight && SWAP_HELD_FILE_COMMANDS.has(cmd)) await this.waitOverBusySwap()
     if (!this._connected || !this.ws) {
       throw markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}`), 'no-link')
     }
@@ -4141,9 +4151,12 @@ export class DaemonConnection {
       const msg = err instanceof Error ? err.message : String(err)
       log.session.warn('DaemonConnection: postponed daemon update check failed', { host: this.hostKey, error: msg })
       const expected = this.getExpectedDaemonVersion()
-      // A managed update that failed has its own cooldown and says so loudly;
-      // anything else (a stop the daemon refused, an ssh error) is asked again.
-      if (expected && live() && !(err instanceof DaemonServiceNotReadyError)) {
+      // A managed update that failed is asked again once its cooldown ends; anything else (a stop
+      // the daemon refused, an ssh error) sooner, with a backoff.
+      if (expected && live() && err instanceof DaemonServiceNotReadyError) {
+        this.postponeUpgrade(`the managed update did not complete (${msg.split('\n')[0].slice(0, 200)})`, expected, '',
+          { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS + 5_000 })
+      } else if (expected && live()) {
         this.postponeUpgrade(`the check failed (${msg.split('\n')[0].slice(0, 200)})`, expected, '')
       }
       return
@@ -4207,6 +4220,7 @@ export class DaemonConnection {
    */
   private beginHandover(): void {
     if (!this._connected) return
+    this._swapOverBusy = this.forceable()
     this._handoverArmed = true
     this._handoverStartedAt = Date.now()
     this._handoverUntil = 0
@@ -4225,7 +4239,17 @@ export class DaemonConnection {
     this._handoverTimer.unref?.()
   }
 
+  /** A file change during an overdue swap waits for it, at most SWAP_FILE_HOLD_MAX_MS. */
+  private async waitOverBusySwap(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cap = new Promise<void>((resolve) => { timer = setTimeout(resolve, SWAP_FILE_HOLD_MAX_MS) })
+    try { await Promise.race([this._swapInFlight, cap]) } finally { clearTimeout(timer) }
+    // The new daemon may still be connecting: give it the handover window's reads' wait.
+    if (!this._connected && this.handoverPending) await waitDaemonHandover(this.hostKey, SWAP_FILE_HOLD_MAX_MS)
+  }
+
   private settleSwap(): void {
+    this._swapOverBusy = false
     const settle = this._swapSettle
     this._swapSettle = null
     this._swapInFlight = null
@@ -4270,8 +4294,14 @@ export class DaemonConnection {
     if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length) return false
     const scope = managedUpdateScope(takeover.present)
     if (!scope) return false
-    if (this._lastUpgradeAttempt?.expected === expected
-      && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) return false
+    const sinceTry = this._lastUpgradeAttempt?.expected === expected ? Date.now() - this._lastUpgradeAttempt.at : Infinity
+    if (sinceTry < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) {
+      // A try of this build that did not finish (its daemon never answered as the new build) is
+      // asked again when its cooldown ends, not left until the link next drops.
+      this.postponeUpgrade(`an update to this build was tried ${Math.round(sinceTry / 60_000)} min ago; asked again when its cooldown ends`, expected, remoteVersion,
+        { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS - sinceTry + 5_000 })
+      return 'held'
+    }
     if (!(await this.hasDaemonBinary())) return false
     const stageFailed = (error: unknown): 'held' => {
       const attempt = this._stageFail?.expected === expected ? this._stageFail.attempt : 0

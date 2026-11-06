@@ -366,6 +366,28 @@ describe('NetDaemonUpdater', () => {
     }
   })
 
+  it('a busy refusal is a postponement, never a failure: after the cooldown, or overdue after the recheck', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-busy-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    try {
+      for (const late of [false, true]) {
+        if (late) { const now = Date.now(); for (let t = now - DAEMON_UPDATE_BEHIND_MAX_MS - 60_000; t < now; t += 30 * 60_000) daemonUpdateOverdue('studio-mac', OLD, true, t) }
+        let calls = 0
+        const { u } = updater({
+          cooldownMs: late ? 60_000 : 40,
+          update: vi.fn(async () => { calls += 1; if (calls === 1) throw new Error('Managed daemon update failed: service.handover: running host_exec jobs must finish first') }),
+        })
+        u.schedule(0)
+        await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+        expect(calls).toBe(2)
+        u.stop()
+      }
+    } finally {
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('a hold that outlasted its wait before the detached start is a postponement by a cooldown, not a failure', async () => {
     let calls = 0
     const { u } = updater({

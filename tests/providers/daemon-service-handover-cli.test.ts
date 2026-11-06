@@ -163,6 +163,32 @@ describe('managed daemon update transport', () => {
     await expect(requestDaemonServiceUpdate(runtime, state, { pauseMs: 10, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
     expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.update'])
   })
+
+  // daemon-over-busy.ts step 3: an overdue update never waits on a daemon that will not finish.
+  it('overdue, a daemon that takes the update and never answers is restarted by its service, within the deadline', async () => {
+    await setup((frame) => frame.cmd === 'hello' ? managedHello() : undefined)
+    const notes: string[] = []
+    const asked = Date.now()
+    expect(await requestDaemonServiceUpdate(runtime, state, { force: true, plainMs: 0, busyMs: 5_000, note: (text) => notes.push(text) })).toBe('unprepared')
+    expect(Date.now() - asked).toBeLessThan(15_000)
+    expect(frames.filter((frame) => frame.cmd === 'service.update')).toHaveLength(1)
+    expect(notes.at(-1)).toContain('restarting it instead')
+  }, 30_000)
+
+  it('overdue, a disconnect after the request is a restart too; without force it stays pending', async () => {
+    await setup((frame, socket) => {
+      if (frame.cmd === 'hello') return managedHello()
+      socket.close()
+    })
+    expect(await requestDaemonServiceUpdate(runtime, state, { force: true, plainMs: 0, busyMs: 1_000, note: () => {} })).toBe('unprepared')
+    await expect(requestDaemonServiceUpdate(runtime, state, { busyMs: 1_000, pauseMs: 10, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
+  })
+
+  it('overdue, a daemon that stays busy past the deadline is restarted by its service, not refused', async () => {
+    await setup((frame) => frame.cmd === 'hello' ? managedHello() : { ok: false, error: RELAYS })
+    expect(await requestDaemonServiceUpdate(runtime, state, { force: true, plainMs: 0, busyMs: 100, pauseMs: 20, note: () => {} })).toBe('unprepared')
+    expect(frames.filter((frame) => frame.cmd === 'service.update').every((frame) => frame.force === true)).toBe(true)
+  })
 })
 
 describe('daemon service handover CLI transport', () => {

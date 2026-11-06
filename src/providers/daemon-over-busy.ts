@@ -5,10 +5,13 @@
  *  2. then sends `force` with service.update until OVER_BUSY_WAIT_MS: a daemon with
  *     service-update-force-v1 goes over its requests, relays, ACP workers and host_exec runs;
  *  3. if it still refuses (an older daemon that ignores `force`, or a session command or file
- *     write that keeps its drain past 15 s), the service is restarted without the daemon's
- *     preparation: its own shutdown (SIGTERM) closes its intake, finishes the session commands
- *     and writes in flight, answers the relays and saves its sessions, and the CLI sessions keep
- *     running for the next daemon to adopt, as `walnut daemon restart` does.
+ *     write that keeps its drain past 15 s), or does not answer, the service is restarted without
+ *     the daemon's preparation: its SIGTERM shutdown closes its intake, drains for at most 45 s
+ *     (a build that has the limit), answers the relays and saves its sessions; the cron supervisor
+ *     SIGKILLs that pid alone after 60 s, as systemd and launchd do after their stop timeouts. The
+ *     CLI sessions are their own process groups and keep running for the next daemon to adopt.
+ *     An older daemon's shutdown does not wait for file writes: the server holds its own back
+ *     while such a swap runs (DaemonConnection SWAP_FILE_HOLD_MAX_MS).
  * No imports: the service CLI loads it.
  */
 export const OVER_BUSY_FLAG = '--over-busy'

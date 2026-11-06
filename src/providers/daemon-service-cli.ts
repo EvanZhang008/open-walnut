@@ -165,9 +165,17 @@ export async function requestDaemonServiceUpdate(
     try {
       // An overdue update forces only after asking plainly for a while (daemon-over-busy.ts).
       const force = wait.force === true && Date.now() - started >= (wait.plainMs ?? OVER_BUSY_PLAIN_MS)
-      await requestRunningDaemonHandover(runtimeDir, stateDir, false, true, force)
+      // Overdue, an answer is waited for only until the deadline, not the plain 60 s.
+      const replyMs = wait.force === true ? Math.max(5_000, deadline - Date.now()) : undefined
+      await requestRunningDaemonHandover(runtimeDir, stateDir, false, true, force, replyMs)
       return 'prepared'
     } catch (error) {
+      // Overdue, a daemon that took the update and never answered, or prepared and never exited,
+      // is restarted by its service too (daemon-over-busy.ts step 3); it may never come back otherwise.
+      if (wait.force === true && error instanceof DaemonServiceHandoverPendingError) {
+        say(`the running daemon did not finish the update (${error.message}); restarting it instead, and the CLI sessions keep running`)
+        return 'unprepared'
+      }
       // Overdue, a drain that ran out (it resumed and changed nothing) is asked again too.
       const busy = error instanceof DaemonServiceUpdateRefusedError
         && (handoverBusy(error) || (wait.force === true && /Service preparation timed out/.test(error.message)))
@@ -175,7 +183,7 @@ export async function requestDaemonServiceUpdate(
       if (Date.now() >= deadline) {
         if (wait.force !== true) throw error
         // Bounded: the service is restarted without the daemon's preparation (daemon-over-busy.ts step 3).
-        say(`the running daemon is still busy (${error.message}); restarting it instead: its shutdown finishes its session commands and writes, and the CLI sessions keep running`)
+        say(`the running daemon is still busy (${error.message}); restarting it instead, and the CLI sessions keep running`)
         return 'unprepared'
       }
       if (!noted) {
@@ -187,7 +195,7 @@ export async function requestDaemonServiceUpdate(
   }
 }
 
-export async function requestRunningDaemonHandover(runtimeDir: string, stateDir: string, pending: boolean, updating = false, force = false): Promise<boolean> {
+export async function requestRunningDaemonHandover(runtimeDir: string, stateDir: string, pending: boolean, updating = false, force = false, replyMs = 60_000): Promise<boolean> {
   let connection: WebSocket | undefined
   let requested = false
   let refused = false
@@ -264,7 +272,7 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
     }
     requested = true
     // `force` (an update only): the daemon goes over its own requests and runs instead of refusing as busy.
-    const result = await rpc({ cmd: updating ? 'service.update' : 'service.handover', instanceId, stateDir, ...(updating && force ? { force: true } : {}) }, 60_000)
+    const result = await rpc({ cmd: updating ? 'service.update' : 'service.handover', instanceId, stateDir, ...(updating && force ? { force: true } : {}) }, replyMs)
     if (result.ok !== true && !(updating && result.updateStarted === true)) {
       refused = true
       throw new Error(String(result.error ?? 'Daemon refused service handover'))

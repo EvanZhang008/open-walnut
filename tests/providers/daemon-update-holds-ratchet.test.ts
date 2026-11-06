@@ -6,8 +6,9 @@
  *  - finds every place an update is put off (daemon-connection.ts `postponeUpgrade(`, local-daemon.ts
  *    `scheduleUpgradeRecheck()`, daemon-net-update.ts `this.postpone(`) and fails on one that
  *    DAEMON_UPDATE_HOLDS does not list, and on a listed one that is gone;
- *  - fails on a `hold` whose method never reads the overdue verdict (it would hold for good), and on
- *    a `bounded` one whose limit is not defined where it says;
+ *  - fails on a `hold` whose method never reads the overdue verdict (it would hold for good) or that
+ *    names no behaviour test (`proof`) showing it give way, and on a `bounded` one whose limit is not
+ *    defined where it says;
  *  - fails when either daemon twin refuses an update as busy without a way past it (`force`), or the
  *    command drain refuses a forced pause.
  */
@@ -96,6 +97,14 @@ describe('daemon update holds', () => {
     for (const h of DAEMON_UPDATE_HOLDS.filter((x) => x.kind === 'hold')) {
       const site = found.find((s) => matches(h, s))!
       expect(/_overdueMs|forceable\(\)|_forceable|behind\.overdue|goesOver/.test(stripComments(site.above)), `${h.file}:${site.line} ${h.method} holds a daemon update ("${h.near}") with no upper bound: read the overdue verdict (daemon-update-behind.ts) where it decides to wait`).toBe(true)
+    }
+  })
+
+  it('each hold names a behaviour test showing it give way once the update is overdue, and that test is there', () => {
+    for (const h of DAEMON_UPDATE_HOLDS.filter((x) => x.kind === 'hold')) {
+      expect(h.proof, `${h.file} ${h.method} "${h.near}" holds a daemon update and names no test showing it give way when overdue`).toBeTruthy()
+      const text = read(h.proof!.test)
+      expect(new RegExp(`\\bit(?:\\.each\\([^\\n]*\\))?\\(\\s*['"\`]${h.proof!.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text), `${h.proof!.test} has no test named "${h.proof!.name}"`).toBe(true)
     }
   })
 

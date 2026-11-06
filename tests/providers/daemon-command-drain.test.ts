@@ -581,7 +581,7 @@ describe.each([
       server: { stop: () => { order.push('server') } },
       httpServer: { close: () => { order.push('server') } },
       daemonInstanceLock: { release: async () => { order.push('release') } },
-      process: { exit }, serviceUpdateRequested: updating, logMsg: vi.fn(),
+      process: { exit, env: {} }, serviceUpdateRequested: updating, logMsg: vi.fn(),
     })
     stop()
     stop()
@@ -600,6 +600,33 @@ describe.each([
     expect(hostFix.cancel).toHaveBeenCalledTimes(1)
   })
 
+  it('shutdown ends after its drain limit when a command never settles, saving the registry first', async () => {
+    const daemonCommands = createDrain()
+    daemonCommands.run(() => new Promise(() => {}))
+    const exited = deferred<number>()
+    const order: string[] = []
+    const logMsg = vi.fn()
+    const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
+      daemonCommands, hostFix: { cancel: vi.fn(() => false) }, releaseGatewayWaiters: vi.fn(),
+      releaseGatewayRelays: () => { order.push('relays') }, noteRestarting: () => { order.push('mark') },
+      cronRuntime: { close: vi.fn(async () => {}) }, netSupervisor: { stop: vi.fn(async () => {}) },
+      persistRegistry: () => { order.push('persist') }, cleanup: () => { order.push('cleanup') },
+      server: { stop: () => {} }, httpServer: { close: () => {} },
+      daemonInstanceLock: { release: async () => {} },
+      process: {
+        exit: (code: number) => { order.push(`exit:${code}`); exited.resolve(code) },
+        kill: (pid: number, signal: string) => { order.push(`kill:${pid}:${signal}`) },
+        pid: 4242, env: { WALNUT_DAEMON_SHUTDOWN_DRAIN_MS: '50' },
+      },
+      serviceUpdateRequested: false, logMsg,
+    })
+    stop()
+    expect(await exited.promise).toBe(0)
+    // Saved first, then ended hard: a stuck pool thread would keep a normal exit from returning.
+    expect(order).toEqual(['mark', 'relays', 'persist', 'cleanup', 'kill:4242:SIGKILL', 'exit:0'])
+    expect(logMsg).toHaveBeenCalledWith('warn', expect.stringContaining('after the drain limit'), { limitMs: 50 })
+  })
+
   it.each([false, true])('shutdown stops a Claude Code install in flight at once, even when cancel throws (%s)', async (throws) => {
     const daemonCommands = createDrain()
     const claude = claudeFixInFlight()
@@ -612,7 +639,7 @@ describe.each([
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
       persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
-      process: { exit: (code: number) => exited.resolve(code) }, serviceUpdateRequested: false, logMsg,
+      process: { exit: (code: number) => exited.resolve(code), env: {} }, serviceUpdateRequested: false, logMsg,
     })
     stop()
     if (throws) {

@@ -71,6 +71,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ home: 
     WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
     WALNUT_DAEMON_STATE_DIR: stateDir,
+    WALNUT_DAEMON_SHUTDOWN_DRAIN_MS: '3000',
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
   const [cmd, args] = twin.command()
@@ -156,6 +157,25 @@ describe.each(TWINS)('$name', (twin) => {
     }
     const logFile = find(dir)
     expect(logFile, 'the run log').not.toBeNull()
-    expect(fs.readFileSync(logFile!, 'utf8')).toContain('[walnut] the daemon on this host was replaced by an update')
+    expect(fs.readFileSync(logFile!, 'utf8')).toContain('[walnut] the daemon on this host is being replaced by an update')
   }, 90_000)
+
+  it('a session command that never settles: the overdue update restarts the daemon, whose shutdown ends within its drain limit', async () => {
+    // A write into a FIFO no one reads never finishes (2026-11-05 round 2 review): the forced
+    // pause drains it for 15 s and gives up, the CLI says 'unprepared', and the service's SIGTERM
+    // must still end the daemon instead of leaving it half shut.
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-stuck')
+    const { home, daemonDir, stateDir } = await boot(twin, dir)
+    const fifo = path.join(home, 'stuck.fifo')
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+    void rpc({ cmd: 'fs.write', path: fifo, data: 'never read' }, 120_000).catch(() => {})
+    await new Promise((r) => setTimeout(r, 300))
+    expect(await requestDaemonServiceUpdate(daemonDir, stateDir, { force: true, plainMs: 0, pauseMs: 200, busyMs: 1_000, note: () => {} })).toBe('unprepared')
+    expect(proc!.exitCode).toBeNull()
+    const signalled = Date.now()
+    proc!.kill('SIGTERM')
+    const exited = await new Promise<boolean>((r) => { const t = setTimeout(() => r(false), 15_000); proc!.once('exit', () => { clearTimeout(t); r(true) }) })
+    expect(exited, 'the daemon ends within its shutdown drain limit').toBe(true)
+    expect(Date.now() - signalled).toBeLessThan(12_000)
+  }, 120_000)
 })

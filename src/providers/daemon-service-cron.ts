@@ -199,6 +199,26 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     return null
   }
 
+  /**
+   * An overdue update's restart (daemon-over-busy.ts step 3): SIGTERM, and once its shutdown runs
+   * past DAEMON_STOP_WAIT_MS (an older daemon whose session command never settles), SIGKILL to that
+   * pid alone, as systemd and launchd do after their stop timeout. A service-mode daemon's CLI
+   * sessions are their own process groups, and the next daemon adopts them.
+   */
+  async function replaceDaemon(): Promise<string | null> {
+    await deps.setStop(false)
+    const daemon = await deps.serviceDaemon()
+    if (daemon) {
+      await deps.signal(daemon.pid, 'SIGTERM')
+      if (!(await deps.waitGone(daemon.pid, DAEMON_STOP_WAIT_MS))) {
+        await deps.signal(daemon.pid, 'SIGKILL')
+        if (!(await deps.waitGone(daemon.pid, 5_000))) return `the daemon (pid ${daemon.pid}) did not exit`
+      }
+    }
+    if (!(await deps.supervisor())) await deps.spawnDetached('/bin/sh', [script])
+    return null
+  }
+
   async function confirm(phase: 'install' | 'update' | 'restart', expectedExecutable?: string): Promise<DaemonServiceResult> {
     const opened = await probe()
     if (!opened.present || !opened.owned) return fail('verifyFailed', `${script} is not in place after the write`)
@@ -329,9 +349,9 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
         throw error
       }
       // An overdue update the busy daemon would not prepare for: its own shutdown (SIGTERM) does
-      // it, and the supervisor starts the new script, as `walnut daemon restart` (daemon-over-busy.ts).
+      // it, and the supervisor starts the new script (daemon-over-busy.ts).
       if (prepared_ === 'unprepared') {
-        const stuck = await startFromScript()
+        const stuck = await replaceDaemon()
         if (stuck) return fail('verifyFailed', `the running daemon could not be replaced: ${stuck}`)
         return confirm('update', prepared.executable)
       }

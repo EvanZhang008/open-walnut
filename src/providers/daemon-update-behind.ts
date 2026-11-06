@@ -70,6 +70,8 @@ export interface DaemonUpdateHold {
   kind: DaemonUpdateHoldKind
   bound?: string
   boundFile?: string
+  /** A `hold`: the behaviour test that shows it gives way once the update is overdue (its file, words of its name). */
+  proof?: { test: string; name: string }
   why: string
 }
 
@@ -81,8 +83,8 @@ const NU = 'src/providers/daemon-net-update.ts'
  * Every place a daemon update is put off: each `postponeUpgrade(` of daemon-connection.ts, each
  * `scheduleUpgradeRecheck()` of local-daemon.ts, each `this.postpone(` of daemon-net-update.ts.
  * tests/providers/daemon-update-holds-ratchet.test.ts finds the calls and fails on one not
- * listed, on a `hold` whose method never reads the overdue verdict, and on a `bounded` one
- * whose constant is gone.
+ * listed, on a `hold` whose method never reads the overdue verdict or that names no behaviour
+ * test showing it give way, and on a `bounded` one whose constant is gone.
  */
 export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
   { file: DC, method: 'shouldUpgradeDaemon', near: 'could not check the OS-service state', kind: 'retry', why: 'no answer from the service probe; nothing is stopped without one' },
@@ -90,17 +92,19 @@ export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
   { file: DC, method: 'shouldUpgradeDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'the version check did not finish', kind: 'retry', why: 'the version read failed' },
   { file: DC, method: 'holdUpgradeForFoldPrewarm', near: 'fold checkpoints for the new daemon are being prepared', kind: 'bounded', bound: 'REMOTE_FOLD_PREWARM_MAX_MS', boundFile: 'src/providers/remote-fold-prewarm.ts', why: 'one prewarm per build; a failed or timed-out one lets the update go ahead' },
-  { file: DC, method: 'acpTurnsOpen', near: "'ACP turns are open'", kind: 'hold', why: 'a swap ends a running ACP turn' },
-  { file: DC, method: 'execRunsOpen', near: 'postponeUpgrade(why', kind: 'hold', why: 'host_exec runs end with the daemon' },
-  { file: DC, method: 'holdUpgrade', near: 'postponeUpgrade(hold', kind: 'hold', why: 'this server\'s commands that change a session or a file are in flight' },
+  { file: DC, method: 'acpTurnsOpen', near: "'ACP turns are open'", kind: 'hold', proof: { test: 'tests/providers/daemon-connection-service-guard.test.ts', name: 'overdue, open ACP turns no longer hold the update' }, why: 'a swap ends a running ACP turn' },
+  { file: DC, method: 'execRunsOpen', near: 'postponeUpgrade(why', kind: 'hold', proof: { test: 'tests/providers/daemon-connection-deferred-upgrade.test.ts', name: 'a host behind past the bound: writes in flight, host_exec runs and a busy daemon no longer hold it' }, why: 'host_exec runs end with the daemon' },
+  { file: DC, method: 'holdUpgrade', near: 'postponeUpgrade(hold', kind: 'hold', proof: { test: 'tests/providers/daemon-connection-deferred-upgrade.test.ts', name: 'a host behind past the bound: writes in flight, host_exec runs and a busy daemon no longer hold it' }, why: 'this server\'s commands that change a session or a file are in flight' },
   { file: DC, method: 'runUpgradeRecheck', near: "'a connect was in progress'", kind: 'retry', why: 'the connect decides the update itself, with the same holds and the same clock' },
+  { file: DC, method: 'runUpgradeRecheck', near: 'the managed update did not complete', kind: 'bounded', bound: 'UPGRADE_RETRY_COOLDOWN_MS', boundFile: 'src/providers/daemon-connection.ts', why: 'a managed update failed after it started (its daemon never answered as the new build); asked again after the cooldown' },
   { file: DC, method: 'runUpgradeRecheck', near: 'the check failed', kind: 'retry', why: 'the decision threw' },
   { file: DC, method: 'updateManagedDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
-  { file: DC, method: 'updateManagedDaemon', near: "the host's daemon is busy", kind: 'hold', why: 'the daemon refused before it changed anything; overdue, the swap asks it to go over its work' },
+  { file: DC, method: 'updateManagedDaemon', near: 'asked again when its cooldown ends', kind: 'bounded', bound: 'UPGRADE_RETRY_COOLDOWN_MS', boundFile: 'src/providers/daemon-connection.ts', why: 'a try of this build did not finish; asked again when its cooldown ends' },
+  { file: DC, method: 'updateManagedDaemon', near: "the host's daemon is busy", kind: 'hold', proof: { test: 'tests/providers/daemon-connection-deferred-upgrade.test.ts', name: 'a host behind past the bound: writes in flight, host_exec runs and a busy daemon no longer hold it' }, why: 'the daemon refused before it changed anything; overdue, the swap asks it to go over its work' },
   { file: LD, method: 'ensureRunningInner', near: "updatedPort === 'busy'", kind: 'bounded', bound: 'OVER_BUSY_WAIT_MS', boundFile: 'src/providers/daemon-over-busy.ts', why: 'the managed local daemon refused as busy; overdue, the next try (a minute later) forces after OVER_BUSY_PLAIN_MS and has the service restart it by OVER_BUSY_WAIT_MS' },
-  { file: LD, method: 'ensureRunningInner', near: 'ACP turns open', kind: 'hold', why: 'open ACP turns on this Mac' },
-  { file: LD, method: 'deferForExecRuns', near: 'host_exec runs', kind: 'hold', why: 'host_exec runs on this Mac' },
-  { file: NU, method: 'attempt', near: 'postpone(held)', kind: 'hold', why: 'writes in flight or host_exec runs on a host network machine' },
-  { file: NU, method: 'attempt', near: "the host's daemon is busy", kind: 'hold', why: 'the daemon refused before it changed anything; overdue, the next swap goes over its work (--over-busy)' },
+  { file: LD, method: 'ensureRunningInner', near: 'ACP turns open', kind: 'hold', proof: { test: 'tests/providers/local-daemon-service-guard.test.ts', name: 'overdue, open ACP turns and host_exec runs on this Mac no longer hold the upgrade' }, why: 'open ACP turns on this Mac' },
+  { file: LD, method: 'deferForExecRuns', near: 'host_exec runs', kind: 'hold', proof: { test: 'tests/providers/local-daemon-service-guard.test.ts', name: 'overdue, open ACP turns and host_exec runs on this Mac no longer hold the upgrade' }, why: 'host_exec runs on this Mac' },
+  { file: NU, method: 'attempt', near: 'postpone(held)', kind: 'hold', proof: { test: 'tests/providers/daemon-net-update.test.ts', name: 'overdue (behind past the bound), host_exec runs no longer hold it' }, why: 'writes in flight or host_exec runs on a host network machine' },
+  { file: NU, method: 'attempt', near: "the host's daemon is busy", kind: 'hold', proof: { test: 'tests/providers/daemon-net-update.test.ts', name: 'a busy refusal is a postponement, never a failure' }, why: 'the daemon refused before it changed anything; overdue, the next swap goes over its work (--over-busy)' },
   { file: NU, method: 'attempt', near: 'postpone(err.message', kind: 'retry', why: 'held right before the launch, after the upload; overdue, only a dropped link or a refused grant gets here (holds() answers null)' },
 ]

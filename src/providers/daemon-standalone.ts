@@ -2980,7 +2980,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation')
   }
   // force: an update overdue for hours (daemon-update-behind.ts) goes over this daemon's own
-  // work instead of refusing. The CLI sends it only after plain asks were refused for a minute
+  // work instead of refusing. The CLI sends it only after plain asks were refused for 30 s
   // (daemon-over-busy.ts), so a run about to end or a relay of a second has ended on its own.
   // The shutdown answers the gateway's relays and waiting calls (they ask the next daemon) and
   // ends the ACP workers, the host_exec runs and the requests still open, as a plain daemon
@@ -2994,8 +2994,6 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     hostExec.running() ? `${hostExec.running()} host_exec run(s)` : '',
   ].filter(Boolean)
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith })
-  // Each run's log says why it ended (a task reading it later learns it from there).
-  if (force && hostExec.running()) hostExec.endForUpdate?.('the daemon on this host was replaced by an update that had waited 3 hours for its work to end, and this run was stopped with it. Run it again if it is still needed.')
   if (!force && (acp.workers.size || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
   }
@@ -3025,6 +3023,8 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     clearRestartMark()
     throw error
   } finally { clearTimeout(timer) }
+  // Drained, the swap goes ahead: each run it ends says why in its own log.
+  if (force && hostExec.running()) hostExec.endForUpdate?.('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.')
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID }
   if (updating) serviceUpdateRequested = true
   try {
@@ -13988,13 +13988,23 @@ if (action === '--start' || SERVICE_MODE) {
   let shutdown: Promise<void> | null = null
   const stopDaemon = () => {
     shutdown ??= (async () => {
+      // The longest it waits for work in flight (twin of daemon-source.ts), below the 60 s a
+      // service stop waits. WALNUT_DAEMON_SHUTDOWN_DRAIN_MS is for TESTS ONLY.
+      const SHUTDOWN_DRAIN_MAX_MS = Number(process.env.WALNUT_DAEMON_SHUTDOWN_DRAIN_MS) > 0 ? Number(process.env.WALNUT_DAEMON_SHUTDOWN_DRAIN_MS) : 45_000
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel() } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }) }
       // Before any call is turned away: the mark is what tells it to wait for the successor.
       noteRestarting()
       releaseGatewayWaiters()
-      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()])
+      // Bounded: a session command that never settles cannot keep the daemon half shut (its
+      // intake closed, never exiting) for good; the CLI sessions are not this process's to wait for.
+      let drainTimer: ReturnType<typeof setTimeout> | undefined
+      const drainCap = new Promise<'cap'>((resolve) => { drainTimer = setTimeout(() => resolve('cap'), SHUTDOWN_DRAIN_MAX_MS) })
+      const settled = await Promise.race([Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()]), drainCap])
+      clearTimeout(drainTimer)
+      if (settled === 'cap') logMsg('warn', 'daemon shutdown: work still running after the drain limit; exiting without it', { limitMs: SHUTDOWN_DRAIN_MAX_MS })
+      const drained = settled === 'cap' ? [] : settled
       const failed = drained.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) })
       // Answers that came while it drained went out; the rest are told now.
@@ -14003,6 +14013,9 @@ if (action === '--start' || SERVICE_MODE) {
       cleanup()
       server.stop(true)
       await daemonInstanceLock?.release()
+      // Work still stuck in a file call (a FIFO no one reads) holds a pool thread, and a normal
+      // exit joins those threads: it would never return (twin of daemon-source.ts). Its state is saved; end hard.
+      if (settled === 'cap') process.kill(process.pid, 'SIGKILL')
       process.exit(failed || serviceUpdateRequested ? 1 : 0)
     })().catch((error) => { logMsg('error', 'daemon shutdown failed', { error: String(error) }); process.exit(1) })
   }

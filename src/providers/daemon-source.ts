@@ -4505,8 +4505,6 @@ async function cmdServiceHandover(ws, id, cmd) {
     hostExec && hostExec.running() ? hostExec.running() + ' host_exec run(s)' : '',
   ].filter(Boolean);
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith: busyWith });
-  // Each run's log says why it ended (twin of daemon-standalone.ts; an older sidecar has no endForUpdate).
-  if (force && hostExec && hostExec.running() && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host was replaced by an update that had waited 3 hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
   if (!force && ((acp && acp.workers.size) || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
@@ -4536,6 +4534,8 @@ async function cmdServiceHandover(ws, id, cmd) {
     clearRestartMark();
     throw error;
   } finally { clearTimeout(timer); }
+  // Drained, the swap goes ahead: each run it ends says why in its own log (an older sidecar has no endForUpdate).
+  if (force && hostExec && hostExec.running() && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID };
   if (updating) serviceUpdateRequested = true;
   try {
@@ -16154,13 +16154,23 @@ async function startDaemon() {
   const stopDaemon = function () {
     if (shutdown) return;
     shutdown = (async function () {
+      // The longest it waits for work in flight (twin of daemon-standalone.ts), below the 60 s a
+      // service stop waits. WALNUT_DAEMON_SHUTDOWN_DRAIN_MS is for TESTS ONLY.
+      const SHUTDOWN_DRAIN_MAX_MS = Number(process.env.WALNUT_DAEMON_SHUTDOWN_DRAIN_MS) > 0 ? Number(process.env.WALNUT_DAEMON_SHUTDOWN_DRAIN_MS) : 45000;
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel(); } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }); }
       // Before any call is turned away: the mark is what tells it to wait for the successor.
       noteRestarting();
       releaseGatewayWaiters();
-      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]);
+      // Bounded: a session command that never settles cannot keep the daemon half shut (its
+      // intake closed, never exiting) for good; the CLI sessions are not this process's to wait for.
+      let drainTimer;
+      const drainCap = new Promise(function (resolve) { drainTimer = setTimeout(function () { resolve('cap'); }, SHUTDOWN_DRAIN_MAX_MS); });
+      const settled = await Promise.race([Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]), drainCap]);
+      clearTimeout(drainTimer);
+      if (settled === 'cap') logMsg('warn', 'daemon shutdown: work still running after the drain limit; exiting without it', { limitMs: SHUTDOWN_DRAIN_MAX_MS });
+      const drained = settled === 'cap' ? [] : settled;
       const failed = drained.find(function (result) { return result.status === 'rejected'; });
       if (failed) logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) });
       // Answers that came while it drained went out; the rest are told now.
@@ -16169,6 +16179,9 @@ async function startDaemon() {
       cleanup();
       try { httpServer.close(); } catch {}
       if (daemonInstanceLock) await daemonInstanceLock.release();
+      // Work still stuck in a file call (a FIFO no one reads) holds a libuv pool thread, and a
+      // normal exit joins those threads: it would never return. Its state is saved; end hard.
+      if (settled === 'cap') process.kill(process.pid, 'SIGKILL');
       process.exit(failed || serviceUpdateRequested ? 1 : 0);
     })().catch(function (err) {
       logMsg('error', 'daemon shutdown failed', { error: String(err) });
