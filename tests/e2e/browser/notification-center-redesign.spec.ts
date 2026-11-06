@@ -34,6 +34,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
+import { holdApprovalsLock } from './approvals-lock'
 // The wire shape the panel actually parses — imported, never re-declared here, so
 // a change to the server record can't leave this spec seeding a stale shape.
 import type { FeedRecord } from '../../../web/src/contexts/notifications/NotificationProvider'
@@ -48,6 +49,26 @@ const SEED_TAG = 'PW NFC'
 let fixtureRoot = ''
 
 test.describe.configure({ mode: 'serial' })
+// A waiting approval counts on the Needs you badge and hides its empty state (NotificationPanel),
+// so no other file may make one while this file reads those.
+holdApprovalsLock('file', { clear: true })
+
+/** Another file's session parked on a real permission broadcasts `notification:new` to every
+ * page; a test that reads only the stubbed feed drops live notification frames. */
+async function dropLiveNotifications(page: Page): Promise<void> {
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((m) => server.send(m))
+    server.onMessage((m) => {
+      const text = typeof m === 'string' ? m : m.toString('utf8')
+      try {
+        const f = JSON.parse(text)
+        if (f?.type === 'event' && String(f.name).startsWith('notification:')) return
+      } catch { /* not JSON: pass it on */ }
+      ws.send(m)
+    })
+  })
+}
 
 test.beforeAll(async () => {
   ;({ fixtureRoot } = await discoverBrowserFixture(TEST_PORT))
@@ -498,6 +519,7 @@ test('the Errors section lands on all categories and drills into one family', as
 // ── 2. Landing section falls back to All with nothing pending ──
 
 test('with no pending ask the center lands on All, and Needs Action reads empty', async ({ page }) => {
+  await dropLiveNotifications(page)
   await stubNotifications(page, receiptRecords(Date.now()))
   await loadHome(page)
 
@@ -508,8 +530,7 @@ test('with no pending ask the center lands on All, and Needs Action reads empty'
   await expect(seededItems(panel)).toHaveCount(4)
 
   await showSection(panel, 'Needs you')
-  // No SEEDED pending ask; another spec's real permission could add one, so this
-  // asserts the seeded half is empty rather than the whole section.
+  // No pending ask at all: the feed is stubbed and live notifications are kept off.
   await expect(seededPermCards(panel)).toHaveCount(0)
   await expect(panel.locator('.notification-feed-empty')).toHaveText('No session is asking you anything')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/landing-all-empty-action.png`, fullPage: true })
