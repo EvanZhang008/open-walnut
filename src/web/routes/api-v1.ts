@@ -3964,6 +3964,8 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     // request from it is what made the response depend on cache warmth.
     /** Set when the fresh/rich build below ran, so the fallback never builds twice. */
     let builtOnce = false
+    /** The fresh/rich build threw: the session's host or file could not be read now. */
+    let freshFailed = false
     if ((wantFresh || wantRich) && !CLOUD_MODE && safeId) {
       builtOnce = true
       try {
@@ -3978,7 +3980,7 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
           answer(built, wantRich, true)
           return
         }
-      } catch { /* unreachable session — fall back to the exported file */ }
+      } catch { freshFailed = true /* unreachable session — fall back to the exported file */ }
     }
     if (wantFresh && CLOUD_MODE && safeId) {
       // Cloud fresh path: read the live jsonl over the daemon bridge. Falls
@@ -4018,6 +4020,13 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       const alive = record?.process_status === 'running' || record?.process_status === 'idle'
       const stale = !!transcript && !!record && !alive && archivePredatesEnd(transcript, record.lastActiveAt)
         && staleRefreshMissed.get(sessionId) !== record.lastActiveAt
+      if (record && !transcript && freshFailed) {
+        // The fresh/rich read (the phone's first page) of a known session whose host
+        // cannot be read now, with no exported copy to fall back to: the same answer
+        // the plain read gives, never 404, which a client reads as "no transcript".
+        sendError(res, 503, 'transcript_unavailable', 'The session could not be read right now; retry shortly')
+        return
+      }
       if (record && (!transcript || stale) && !builtOnce) {
         const built = await buildTranscriptWithin(
           () => buildSessionTranscript(sessionId, buildOpts),

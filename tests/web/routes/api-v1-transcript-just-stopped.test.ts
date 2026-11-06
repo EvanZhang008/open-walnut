@@ -223,4 +223,23 @@ describe('plain transcript read of a session that just ended', () => {
     expect(retry.status).toBe(200)
     expect(retry.body.messages.at(-1)!.text).toBe('Read after the hang.')
   })
+
+  it('answers 503, not 404, on every read shape when the host cannot be read and nothing was exported', async () => {
+    // The phone's first read is the page read (fresh=1&rich=1&visible=N); it answered
+    // 404 not_found here while the plain read answered 503, so the phone said
+    // "No transcript yet" for a session with days of history on an offline host.
+    const sid = 'sess-host-unreachable'
+    await seedStoppedSession(sid, 'Only on the offline host.')
+    await updateSessionRecord(sid, { process_status: 'running' })
+    vi.spyOn(DaemonFileReader.prototype, 'stat').mockRejectedValue(new Error('remote host is off'))
+    for (const qs of ['', '?fresh=1', '?rich=1', '?fresh=1&rich=1&visible=40']) {
+      const read = await getTranscript(sid, qs)
+      expect(read.status, qs || 'plain').toBe(503)
+      expect(read.body.error!.code, qs || 'plain').toBe('transcript_unavailable')
+    }
+    vi.restoreAllMocks()
+    const back = await getTranscript(sid, '?fresh=1&rich=1&visible=40')
+    expect(back.status).toBe(200)
+    expect(back.body.messages.at(-1)!.text).toBe('Only on the offline host.')
+  })
 })
