@@ -14,10 +14,17 @@ import { test, expect, type Page, type APIRequestContext } from '@playwright/tes
 
 const SHOTS = process.env.WALNUT_COMMAND_SHOTS ?? '/tmp/walnut-command-notice'
 const NOTICE = 'Walnut compacted this conversation because it no longer fit the model\'s context window'
+const RECORDING = !!process.env.WALNUT_COMMAND_VIDEO
+/** A recording stays on a screen long enough to read it. */
+const hold = (page: Page) => (RECORDING ? page.waitForTimeout(2_000) : Promise.resolve())
 
 test.use({ viewport: { width: 1280, height: 860 }, video: process.env.WALNUT_COMMAND_VIDEO ? { mode: 'on', size: { width: 1280, height: 860 } } : 'off' })
 test.describe.configure({ timeout: 120_000 })
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
+// The mock CLI echoes what it read, and the resend quotes the person's line with the hints it
+// carried: off for this spec, so the recording shows the chat as a real reply would leave it.
+test.beforeEach(async ({ request }) => { await request.put('/api/v1/hints/rich-output', { data: { enabled: false } }) })
+test.afterEach(async ({ request }) => { await request.delete('/api/v1/hints/rich-output') })
 
 async function sendViaRpc(page: Page, method: string, payload: Record<string, unknown>): Promise<void> {
   await page.evaluate(async ({ method, payload }) => {
@@ -82,6 +89,7 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   await composer.fill('hi, where does the review stand?')
   await composer.press('Enter')
   await expect(panel.getByText('Walnut is compacting this conversation so it fits again')).toBeVisible({ timeout: 20_000 })
+  await hold(page)
   await expect.poll(async () => (await record(request, sid)).contextRecovery?.state, { timeout: 45_000 }).toBe('done')
   await expect.poll(async () => (await record(request, sid)).process_status, { timeout: 30_000 }).not.toBe('running')
 
@@ -89,19 +97,19 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   await expect(history.locator('.session-msg-user', { hasText: '/compact' })).toHaveCount(0)
   await expect(history.locator('.session-msg-user', { hasText: 'hi, where does the review stand?' })).toHaveCount(1)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-live.png` })
+  await hold(page)
 
   // Read back as a fresh page would: the transcript, not the live stream.
   await page.reload()
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 60_000 })
   await expect(panel).toBeVisible({ timeout: 20_000 })
-  // The compaction's line names it; under it, Walnut's notice and the resent message.
-  const fold = history.getByText(/^Context compacted( \u00b7 .*)?$/).last()
-  await expect(fold).toBeVisible({ timeout: 25_000 })
+  // The compaction stands on its own row, never inside the fold of the rest, and says who made it
+  // and why with the size it took off; Walnut's notice is inside it, one fold deep.
+  const compacted = history.getByText(/^Compacted by Walnut to fit the context window · 178K → 18K tokens$/)
+  await expect(compacted).toHaveCount(1, { timeout: 25_000 })
+  await expect(compacted).toBeVisible()
   await expect(history.locator('.session-msg-user', { hasText: '/compact' })).toHaveCount(0)
-  await fold.click()
-  // The compaction's own row, with the size it took off, holds the notice beside it.
-  const compacted = history.getByText(/^Context compacted · 178K → 18K tokens/).last()
-  await expect(compacted).toBeVisible({ timeout: 10_000 })
+  await hold(page)
   await compacted.click()
   await expect(history.getByText(NOTICE)).toBeVisible({ timeout: 10_000 })
   await expect(history.getByText('hi, where does the review stand?').first()).toBeVisible()
@@ -109,6 +117,8 @@ test('the recovery\'s /compact shows as Walnut\'s notice, never as the user\'s m
   await expect(history).not.toContainText('Walnut started this compaction')
   // The user's own message stays his bubble, once, after the reload as before it.
   await expect(history.locator('.session-msg-user', { hasText: 'hi, where does the review stand?' })).toHaveCount(1)
+  await expect(history).not.toContainText('rich-output')
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-notice.png` })
+  await hold(page)
   expect(errors).toEqual([])
 })

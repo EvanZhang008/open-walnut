@@ -70,7 +70,7 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { useTreeHalf } from './tree-half-context';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
-import { envelopeSteps, foldStepsPhrase, type FoldStep } from './fold-steps';
+import { envelopeSteps, foldStepsPhrase, walnutCompactLine, type FoldStep } from './fold-steps';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
@@ -4545,8 +4545,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const out: FoldStep[] = [];
     for (const m of part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m)) {
       if (m.role === 'system') {
-        const compact = isIdleCompactLine(m.text) ? 'idle' as const
-          : m.systemVariant === 'compact' && m.text === COMPACTED_MESSAGE ? 'cli' as const : undefined;
+        const compact = walnutCompactLine(m.text)
+          ?? (m.systemVariant === 'compact' && m.text === COMPACTED_MESSAGE ? 'cli' as const : undefined);
         out.push({ kind: 'notice', error: m.systemVariant === 'error', ...(compact ? { compact } : {}) });
         continue;
       }
@@ -4732,9 +4732,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // A compaction and the summary it left are said as themselves, one fold deep at most: under a
     // fold they read "2 notices" and hid that the session was compacted (2026-11-04 review).
     const compactRow = (m: SessionHistoryMessage) => m.role === 'system' && ((m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE) || isIdleCompactLine(m.text) || isWalnutCommandNotice(m.text));
+    const isCompact = (x: Item) => rowsOf(x.part).length > 0 && rowsOf(x.part).every(compactRow);
     if (!answerThinking && !riders && items.some((x) => rowsOf(x.part).some(compactRow))
       && items.every((x) => isContextPart(x.part) || rowsOf(x.part).every(compactRow))) {
       for (const x of items) renderOne(x);
+      return;
+    }
+    // Among other steps (Walnut's recovery: the refused reply, the compaction, its summary, the
+    // resend), the compaction and the summary right after it still stand on their own between the
+    // folds of the rest, so the reason Walnut compacted is never two folds deep (2026-11-05 review).
+    const lifted = (k: number) => isCompact(items[k]!)
+      || (isContextPart(items[k]!.part) && k > 0 && isCompact(items[k - 1]!));
+    const last = items.length - 1;
+    // The reasoning or riders of the answer after them join the last fold, so that one stays a fold.
+    if (items.some((_, k) => lifted(k)) && (!lifted(last) || (!answerThinking && !riders))) {
+      let run: Item[] = [];
+      for (let k = 0; k <= last; k++) {
+        if (!lifted(k)) { run.push(items[k]!); continue; }
+        if (run.length > 0) { quiet = run; emitQuiet(); run = []; }
+        renderOne(items[k]!);
+      }
+      quiet = run;
+      emitQuiet(answerThinking, riders);
       return;
     }
     const id = idOf(items[0].part);

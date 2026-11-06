@@ -31,6 +31,14 @@ export const CONTEXT_COMPACT_COMMAND = `/compact ${WALNUT_COMMAND_MARK} because 
 export const CONTEXT_COMPACT_HISTORY_TEXT = 'Walnut compacted this conversation because it no longer fit the model\'s context window ("Prompt is too long").';
 /** A Walnut command line whose wording this release does not know (an older or newer Walnut wrote it). */
 export const WALNUT_COMMAND_HISTORY_TEXT = 'Walnut sent /compact to compact this session.';
+/**
+ * Notice texts an older release put in a history row, still read as Walnut's: a cached parse keeps
+ * them until HISTORY_CACHE_SCHEMA moves, and a reader older than the cache may meet one. A notice
+ * text that changes moves here, and the cache schema goes up (the ratchet pins both).
+ */
+export const LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS: readonly string[] = [
+  'Walnut sent /compact because the conversation no longer fit the model\u2019s context window ("Prompt is too long"); what got no answer goes again after it.',
+];
 
 export interface WalnutCommand {
   /** The send source that carries it (send-sent-by: an agent's). */
@@ -76,5 +84,17 @@ export function walnutCommandNotice(text: string | undefined): string | undefine
 
 /** A history row Walnut put in place of one of its command lines. */
 export function isWalnutCommandNotice(text: string | undefined): boolean {
-  return !!text && (text === WALNUT_COMMAND_HISTORY_TEXT || WALNUT_COMMANDS.some((c) => c.notice === text));
+  return walnutNoticeKind(text) !== undefined;
+}
+
+/**
+ * Which compaction a Walnut command notice stands for: `idle` (before the prompt cache expired),
+ * `context` (the conversation no longer fit) or `other` (a wording this release does not know).
+ * Its compaction's row is named by it ("Compacted by Walnut to fit the context window").
+ */
+export function walnutNoticeKind(text: string | undefined): 'idle' | 'context' | 'other' | undefined {
+  if (!text) return undefined;
+  if (text === IDLE_COMPACT_HISTORY_TEXT) return 'idle';
+  if (text === CONTEXT_COMPACT_HISTORY_TEXT || LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS.includes(text)) return 'context';
+  return text === WALNUT_COMMAND_HISTORY_TEXT ? 'other' : undefined;
 }

@@ -48,8 +48,12 @@ import type { SessionHistoryMessage } from './session-history.js';
  * 6 (2026-11-05): a command Walnut sent itself (its `/compact`, sessions/walnut-commands.ts)
  * is a notice row, and a slash command's queue enqueue is the twin of its command line. A
  * version-5 parse holds them as user rows, twice.
+ *
+ * 7 (2026-11-05): the recovery's notice row has its shorter words. A version-6 parse kept serving
+ * the first wording after the deploy that changed it (a notice text that changes moves the schema:
+ * tests/core/sessions/walnut-commands-ratchet.test.ts).
  */
-export const HISTORY_CACHE_SCHEMA = 6;
+export const HISTORY_CACHE_SCHEMA = 7;
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a

@@ -16,6 +16,7 @@ import type { EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { noticeTitle } from './message-fold';
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_STOPPED_MESSAGE } from '@open-walnut/compaction-notice';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
+import { walnutNoticeKind } from '../../../../src/core/sessions/walnut-commands';
 import type { ToolRunMember } from './tool-run-phrase';
 
 export type ReceivedKind = 'peer-note' | 'reply' | 'notification' | 'trigger' | 'other';
@@ -42,7 +43,7 @@ export type FoldStep =
   | { kind: 'update' }
   /** A line the session's runtime wrote (an API error, a retry, a compaction).
    *  An error one is counted by the fold's red "N failed", not on its line. */
-  | { kind: 'notice'; error?: boolean; compact?: 'cli' | 'idle' };
+  | { kind: 'notice'; error?: boolean; compact?: CompactLine };
 
 /** A received row's steps, one per envelope it holds; a row with none is one
  *  message from no one in particular. */
@@ -61,6 +62,25 @@ export function envelopeSteps(segments: readonly EnvelopeSegment[] | null | unde
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** A runtime row that is part of a compaction's story: the compaction itself (`cli`), or Walnut's
+ *  line saying it sent one, while idle (`idle`) or for a conversation that no longer fit (`context`;
+ *  `walnut` for a wording this release does not know). */
+export type CompactLine = 'cli' | 'idle' | 'context' | 'walnut';
+
+/** Which Walnut compaction line a row is, if any (sessions/walnut-commands.ts, prompt-cache.ts). */
+export function walnutCompactLine(text: string | undefined): Exclude<CompactLine, 'cli'> | undefined {
+  if (isIdleCompactLine(text)) return 'idle';
+  const kind = walnutNoticeKind(text);
+  return kind === 'context' ? 'context' : kind === 'other' ? 'walnut' : kind;
+}
+
+/** A finished compaction's name: who made it and why, when Walnut did. */
+function compactedName(lines: ReadonlySet<CompactLine>): string {
+  if (lines.has('idle')) return 'Compacted by Walnut while idle';
+  if (lines.has('context')) return 'Compacted by Walnut to fit the context window';
+  return lines.has('walnut') ? 'Compacted by Walnut' : 'Context compacted';
+}
+
 /** The fold's line: counts only, "Received 12 messages · Sent 3 · Ran 8 tools",
  *  and the runtime's lines other than errors ("· 1 notice"; errors are the red count);
  *  a compaction by name ("Context compacted", "Compacted by Walnut while idle").
@@ -76,7 +96,7 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   let notices = 0;
   let errorNotices = 0;
   let compacted = false;
-  let idleLines = 0;
+  const walnutLines = new Set<CompactLine>();
   for (const s of steps) {
     if (s.kind === 'received') received++;
     else if (s.kind === 'sent' || s.kind === 'inbox') sent++;
@@ -85,17 +105,17 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
     else if (s.kind === 'ack') acks++;
     else if (s.kind === 'notice') {
       if (s.compact === 'cli') compacted = true;
-      else if (s.compact === 'idle') idleLines++;
+      else if (s.compact) { walnutLines.add(s.compact); notices++; }
       else if (s.error) errorNotices++;
       else notices++;
     }
   }
-  // Walnut's own line about its idle compaction is the compaction's when one came, else a notice
-  // (a compaction stopped halfway made none).
-  if (!compacted) notices += idleLines;
+  // Walnut's own line about its compaction is the compaction's when one came, else a notice (a
+  // compaction stopped halfway made none).
+  if (compacted) notices -= steps.filter((s) => s.kind === 'notice' && s.compact && s.compact !== 'cli').length;
   const pieces: string[] = [];
   // A compaction is said by name, never counted as a notice (2026-11-04 review: "2 notices" hid it).
-  if (compacted) pieces.push(idleLines > 0 ? 'Compacted by Walnut while idle' : 'Context compacted');
+  if (compacted) pieces.push(compactedName(walnutLines));
   if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}`);
   if (sent > 0) pieces.push(`Sent ${sent}`);
   if (tools > 0) pieces.push(`Ran ${count(tools, 'tool', 'tools')}`);
@@ -112,19 +132,20 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
  * running says compacting, and one stopped halfway ("Compaction stopped") says stopped.
  */
 export function systemRunLabel(members: readonly { variant: string; message: string; detail?: string }[]): string {
-  const idle = members.filter((m) => isIdleCompactLine(m.message)).length;
+  const lines = new Set<CompactLine>(members.flatMap((m) => { const l = walnutCompactLine(m.message); return l ? [l] : []; }));
+  const walnut = members.filter((m) => walnutCompactLine(m.message)).length;
   const compacts = members.filter((m) => m.variant === 'compact');
   const done = compacts.filter((m) => m.message === COMPACTED_MESSAGE);
   const more = (named: number) => {
-    const n = members.length - named - idle;
+    const n = members.length - named - walnut;
     return n > 0 ? ` \u00b7 ${n} more` : '';
   };
   if (done.length > 0) {
     const size = done[done.length - 1]!.detail;
-    return `${idle ? 'Compacted by Walnut while idle' : 'Context compacted'}${size ? ` \u00b7 ${size}` : ''}${more(done.length)}`;
+    return `${compactedName(lines)}${size ? ` \u00b7 ${size}` : ''}${more(done.length)}`;
   }
   const last = compacts[compacts.length - 1]?.message;
-  if (last === COMPACTING_MESSAGE) return `${idle ? 'Compacting while idle' : 'Compacting context'}${more(compacts.length)}`;
+  if (last === COMPACTING_MESSAGE) return `${lines.has('idle') ? 'Compacting while idle' : lines.has('context') ? 'Compacting to fit the context window' : 'Compacting context'}${more(compacts.length)}`;
   if (last === COMPACTION_STOPPED_MESSAGE) return `Compaction stopped${more(compacts.length)}`;
   return `${members.length} system messages`;
 }

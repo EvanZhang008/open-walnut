@@ -16,8 +16,10 @@ import path from 'node:path';
 import { frameForSource } from '../../../src/core/sessions/send-frame.js';
 import { isPersonSource } from '../../../src/core/sessions/send-sent-by.js';
 import {
-  WALNUT_COMMANDS, WALNUT_COMMAND_HISTORY_TEXT, WALNUT_COMMAND_MARK, isWalnutCommandNotice, walnutCommandNotice,
+  LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, WALNUT_COMMANDS, WALNUT_COMMAND_HISTORY_TEXT, WALNUT_COMMAND_MARK, isWalnutCommandNotice,
+  walnutCommandNotice, walnutNoticeKind,
 } from '../../../src/core/sessions/walnut-commands.js';
+import { HISTORY_CACHE_SCHEMA } from '../../../src/core/history-disk-cache.js';
 import { parseSessionMessages } from '../../../src/core/session-history.js';
 import { transcriptFromJsonl } from '../../../src/core/sessions/transcript-from-jsonl.js';
 import { IDLE_COMPACT_SOURCE, IDLE_COMPACT_TEXT } from '../../../src/core/sessions/idle-compaction.js';
@@ -150,6 +152,26 @@ describe('every listed command reads as Walnut\'s notice', () => {
       expect(rows.filter((r) => r.role === 'user' && r.text.startsWith('/compact')).map((r) => r.text)).toEqual([text]);
       expect(rows.some((r) => isWalnutCommandNotice(r.text))).toBe(false);
     }
+  });
+
+  it('a notice text that changes moves the history cache schema, and its old words still read as Walnut\'s', () => {
+    // A cached parse holds the notice text it was made with until the schema moves (2026-11-05: the
+    // shorter recovery notice was not served for sessions parsed under the first one). Changing a
+    // text here: bump HISTORY_CACHE_SCHEMA (history-disk-cache.ts), move the old text to
+    // LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, then update this pin.
+    expect({ schema: HISTORY_CACHE_SCHEMA, notices: [...WALNUT_COMMANDS.map((c) => c.notice), WALNUT_COMMAND_HISTORY_TEXT] }).toEqual({
+      schema: 7,
+      notices: [
+        'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.',
+        'Walnut compacted this conversation because it no longer fit the model\'s context window ("Prompt is too long").',
+        'Walnut sent /compact to compact this session.',
+      ],
+    });
+    for (const old of LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS) {
+      expect(isWalnutCommandNotice(old), old).toBe(true);
+      expect(walnutNoticeKind(old), old).toBe('context');
+    }
+    expect(WALNUT_COMMANDS.map((c) => walnutNoticeKind(c.notice))).toEqual(['idle', 'context']);
   });
 
   it('a Walnut line in a wording this release does not know still reads as Walnut\'s', () => {

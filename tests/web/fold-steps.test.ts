@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { envelopeSteps, foldStepsPhrase, systemRunLabel, type FoldStep } from '@/components/sessions/fold-steps';
 import { parseSessionEnvelopes } from '../../src/lib/history-session-envelope';
+import { CONTEXT_COMPACT_HISTORY_TEXT, LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS, WALNUT_COMMAND_HISTORY_TEXT } from '../../src/core/sessions/walnut-commands';
 
 // The first argument names the sender in the test only: a step carries none.
 const note = (_sender: string, title?: string): FoldStep => ({ kind: 'received', from: 'peer-note', ...(title ? { title } : {}) });
@@ -122,6 +123,21 @@ describe('foldStepsPhrase', () => {
     expect(systemRunLabel([error, done])).toBe('Context compacted \u00b7 400K \u2192 18K tokens \u00b7 1 more');
     expect(systemRunLabel([error, { variant: 'compact', message: 'Context compacted' }])).toBe('Context compacted \u00b7 1 more');
     expect(systemRunLabel([error, { variant: 'info', message: 'Retrying' }])).toBe('2 system messages');
+  });
+
+  // 2026-11-05 review: the recovery's compaction read "Context compacted · 178K → 18K · 1 more", its
+  // reason one more fold down. Walnut's notice names the compaction, as the idle one does.
+  it('Walnut\'s compaction for a conversation that no longer fit says so on its line', () => {
+    const done = { variant: 'compact', message: 'Context compacted', detail: '178K \u2192 18K tokens' };
+    const progress = { variant: 'compact', message: 'Compacting context...' };
+    for (const message of [CONTEXT_COMPACT_HISTORY_TEXT, ...LEGACY_CONTEXT_COMPACT_HISTORY_TEXTS]) {
+      const notice = { variant: 'info', message };
+      expect(systemRunLabel([notice, done])).toBe('Compacted by Walnut to fit the context window \u00b7 178K \u2192 18K tokens');
+      expect(systemRunLabel([notice, progress])).toBe('Compacting to fit the context window');
+    }
+    expect(systemRunLabel([{ variant: 'info', message: WALNUT_COMMAND_HISTORY_TEXT }, done])).toBe('Compacted by Walnut \u00b7 178K \u2192 18K tokens');
+    expect(foldStepsPhrase([{ kind: 'notice', compact: 'context' }, { kind: 'notice', compact: 'cli' }])).toBe('Compacted by Walnut to fit the context window');
+    expect(foldStepsPhrase([{ kind: 'notice', compact: 'context' }])).toBe('1 notice');
   });
 });
 
