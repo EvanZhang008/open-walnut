@@ -87,6 +87,8 @@ private final class FakeTalkActivity: TalkActivityPresenting {
     private(set) var updates: [TalkActivityAttributes.ContentState] = []
     private(set) var ended: [(state: TalkActivityAttributes.ContentState, linger: TimeInterval)] = []
     private(set) var leftoversEnded = 0
+    /// The takes still listed when the cards of the others were last told to go.
+    private(set) var lastKeeping: Set<String>?
 
     func start(_ state: TalkActivityAttributes.ContentState) -> Bool {
         started.append(state)
@@ -97,7 +99,10 @@ private final class FakeTalkActivity: TalkActivityPresenting {
 
     func end(_ state: TalkActivityAttributes.ContentState, linger: TimeInterval) { ended.append((state, linger)) }
 
-    func endLeftovers() { leftoversEnded += 1 }
+    func endLeftovers(keeping kept: Set<String>) {
+        leftoversEnded += 1
+        lastKeeping = kept
+    }
 }
 
 private final class FakeMainTransport: TalkMainTransport, @unchecked Sendable {
@@ -514,6 +519,65 @@ final class TalkSessionTests: XCTestCase {
         XCTAssertEqual(orphan.createdAt, recorded, "a recovered take keeps the time it was recorded")
         XCTAssertEqual(outbox.entries.count, 2, "a take already listed is not listed twice")
         XCTAssertEqual(activity.leftoversEnded, 1)
+    }
+
+    /// A "Waiting to send" card on the Lock Screen speaks of one take: once that
+    /// take is sent (by itself, Send Now or Resend) or deleted, the card goes
+    /// instead of saying it still waits for an hour.
+    func testAFailedCardLeavesTheLockScreenOnceItsTakeIsSentOrDeleted() async throws {
+        sender.failures = [APIError.network(underlying: URLError(.notConnectedToInternet))]
+        let talk = session()
+        try await pressTwice(talk)
+        let sentLater = try XCTUnwrap(outbox.unsent.first)
+        let card = try XCTUnwrap(activity.ended.last?.state)
+        XCTAssertEqual(card.take, sentLater.id, "the card names the take it waits for")
+        XCTAssertFalse(TalkLiveActivity.endsNow(card, keeping: Set(outbox.entries.map(\.id))), "it stays while the take waits")
+
+        let sent = await talk.resend(sentLater.id)
+        XCTAssertTrue(sent)
+        let afterSend = try XCTUnwrap(activity.lastKeeping)
+        XCTAssertFalse(afterSend.contains(sentLater.id))
+        XCTAssertTrue(TalkLiveActivity.endsNow(card, keeping: afterSend), "a sent take's card goes")
+
+        recorder.finishResult = .failed("No engine.", recordingID: "rec-4")
+        try await pressTwice(talk)
+        let deleted = try XCTUnwrap(outbox.unsent.first)
+        let deletedCard = try XCTUnwrap(activity.ended.last?.state)
+        XCTAssertEqual(deletedCard.take, deleted.id)
+        talk.discard(deleted.id)
+        XCTAssertTrue(TalkLiveActivity.endsNow(deletedCard, keeping: try XCTUnwrap(activity.lastKeeping)), "a deleted take's card goes")
+    }
+
+    func testOnlyACardWhoseTakeLeftTheListEndsEarly() {
+        func card(_ phase: TalkActivityAttributes.ContentState.Phase, take: String?) -> TalkActivityAttributes.ContentState {
+            var state = TalkActivityAttributes.ContentState(phase: phase, startedAt: Date(), words: nil, reason: "Why.", kept: true)
+            state.take = take
+            return state
+        }
+        XCTAssertTrue(TalkLiveActivity.endsNow(card(.listening, take: nil), keeping: []), "a dead process's Listening goes")
+        XCTAssertFalse(TalkLiveActivity.endsNow(card(.sent, take: nil), keeping: []), "Sent shows its own few seconds")
+        XCTAssertFalse(TalkLiveActivity.endsNow(card(.failed, take: "a"), keeping: ["a"]), "a take still listed keeps its card")
+        XCTAssertTrue(TalkLiveActivity.endsNow(card(.failed, take: "a"), keeping: ["b"]))
+        XCTAssertFalse(TalkLiveActivity.endsNow(card(.failed, take: nil), keeping: []), "a card an older build wrote names no take")
+    }
+
+    /// Every way a take leaves the list goes through `drop`, which also takes its
+    /// card off the Lock Screen: a new `outbox.remove` elsewhere fails here.
+    func testATakeLeavesTheListOnlyThroughTheOneStepThatEndsItsCard() throws {
+        let talk = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Walnut", isDirectory: true)
+        let files = FileManager.default.enumerator(at: talk, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+        XCTAssertFalse(files.isEmpty)
+        var removes: [String] = []
+        for file in files where file.lastPathComponent != "TalkOutbox.swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for line in text.split(separator: "\n") where line.contains("outbox.remove(") {
+                removes.append("\(file.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        XCTAssertEqual(removes, ["TalkSession.swift: outbox.remove(id)"], "remove a take with TalkSession.drop")
     }
 
     func testDiscardingAWordlessEntryDeletesItsRecording() async throws {

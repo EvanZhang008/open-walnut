@@ -279,16 +279,18 @@ final class TalkSession {
         if let entry = outbox.entry(id), entry.text == nil, let recordingID = entry.recordingID {
             recorder.forget(recordingID: recordingID)
         }
-        outbox.remove(id)
-        settleKeptNotice()
+        drop(id)
     }
 
     // MARK: - Internals
 
-    /// "Kept below to resend" is no longer true once nothing is kept: a resend
-    /// or a delete emptied the list, so the old failure stops showing.
-    private func settleKeptNotice() {
+    /// The one way a take leaves the list (sent, or deleted), so nothing still
+    /// speaks of it: "Kept below to resend" stops showing once nothing is kept,
+    /// and its "Not sent" or "Waiting to send" card leaves the Lock Screen.
+    private func drop(_ id: String) {
+        outbox.remove(id)
         if case .notSent(_, kept: true) = phase, outbox.unsent.isEmpty { phase = .idle }
+        activity.endLeftovers(keeping: Set(outbox.entries.map(\.id)))
     }
 
     /// Start the finish in its own task, never inside the monitor that may have
@@ -315,9 +317,9 @@ final class TalkSession {
             if let recordingID { recorder.forget(recordingID: recordingID) }
             finishNotSent("Didn't catch any words, so nothing was sent.", kept: false, linger: 6, quiet: true)
         case .failed(let reason, let recordingID):
-            let kept = recordingID != nil
-                && outbox.begin(newEntry(text: nil, recordingID: recordingID, reason: reason, attempts: 1))
-            finishNotSent(reason, kept: kept, linger: notSentLinger)
+            let entry = newEntry(text: nil, recordingID: recordingID, reason: reason, attempts: 1)
+            let kept = recordingID != nil && outbox.begin(entry)
+            finishNotSent(reason, kept: kept, linger: notSentLinger, take: entry.id)
         }
     }
 
@@ -342,8 +344,7 @@ final class TalkSession {
         }
         do {
             try await sender.send(text: text, messageId: entry.messageId)
-            outbox.remove(entry.id)
-            settleKeptNotice()
+            drop(entry.id)
             AppLog.info("talk", "sent", ["chars": String(text.count), "live": live ? "true" : "false"])
             if live {
                 phase = .sent(text)
@@ -360,18 +361,20 @@ final class TalkSession {
                 $0.attempts += 1
             }
             AppLog.warn("talk", "send failed", ["reason": reason, "live": live ? "true" : "false"])
-            if live { finishNotSent(reason, kept: true, linger: notSentLinger, words: text) }
+            if live { finishNotSent(reason, kept: true, linger: notSentLinger, words: text, take: entry.id) }
             return false
         }
     }
 
     private func finishNotSent(
-        _ reason: String, kept: Bool, linger: TimeInterval, words: String? = nil, quiet: Bool = false
+        _ reason: String, kept: Bool, linger: TimeInterval, words: String? = nil, quiet: Bool = false,
+        take: String? = nil
     ) {
         phase = .notSent(reason, kept: kept)
         var ending = state(.failed, words: words, reason: reason, kept: kept)
         ending.later = kept && TalkReason.goesOutLater(reason)
         ending.quiet = quiet
+        ending.take = kept ? take : nil
         activity.end(ending, linger: linger)
     }
 
@@ -430,7 +433,8 @@ final class TalkSession {
 
     /// A new process: a send still marked in flight died with the last one, a
     /// kept take nobody listed (the app was killed mid-take) joins the list, and
-    /// a Live Activity the dead process left saying "Listening" goes.
+    /// a Live Activity the dead process left saying "Listening" goes, and so does
+    /// a "Not sent" card whose take is no longer listed.
     private func recoverFromLastProcess() {
         outbox.settleInterrupted(reason: "Walnut closed before this was sent.")
         let listed = Set(outbox.entries.compactMap(\.recordingID))
@@ -442,7 +446,7 @@ final class TalkSession {
                 createdAt: recorder.keptAudio(recordingID: id)?.recordedAt ?? Date()
             ))
         }
-        activity.endLeftovers()
+        activity.endLeftovers(keeping: Set(outbox.entries.map(\.id)))
     }
 
     func state(

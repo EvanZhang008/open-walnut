@@ -13,9 +13,11 @@ protocol TalkActivityPresenting: AnyObject {
     /// End it, showing `state` in the Dynamic Island briefly and on the Lock
     /// Screen for `linger` (0: gone at once).
     func end(_ state: TalkActivityAttributes.ContentState, linger: TimeInterval)
-    /// End what a process that died mid-take left showing as still going. A
-    /// finished one ("Sent", "Not sent") stays until its own time is up.
-    func endLeftovers()
+    /// End what a process that died mid-take left showing as still going, and
+    /// every "Not sent" or "Waiting to send" card whose take is no longer in
+    /// `kept` (sent since, or deleted). Any other finished one stays until its
+    /// own time is up.
+    func endLeftovers(keeping kept: Set<String>)
 }
 
 @MainActor
@@ -87,14 +89,22 @@ final class TalkLiveActivity: TalkActivityPresenting {
     /// How long the outcome shows in the Dynamic Island before the activity ends.
     static let islandHold: TimeInterval = 3
 
-    func endLeftovers() {
-        for old in Activity<TalkActivityAttributes>.activities where old.id != activity?.id {
-            switch old.content.state.phase {
-            case .listening, .transcribing, .sending:
-                enqueue { await old.end(nil, dismissalPolicy: .immediate) }
-            case .sent, .failed:
-                continue
-            }
+    func endLeftovers(keeping kept: Set<String>) {
+        for old in Activity<TalkActivityAttributes>.activities
+        where old.id != activity?.id && Self.endsNow(old.content.state, keeping: kept) {
+            enqueue { await old.end(nil, dismissalPolicy: .immediate) }
+        }
+    }
+
+    /// Whether a card another take (or another process) left ends now: one
+    /// still going, or a failed one whose take left the list.
+    nonisolated static func endsNow(_ state: TalkActivityAttributes.ContentState, keeping kept: Set<String>) -> Bool {
+        switch state.phase {
+        case .listening, .transcribing, .sending: return true
+        case .sent: return false
+        case .failed:
+            guard let take = state.take else { return false }
+            return !kept.contains(take)
         }
     }
 

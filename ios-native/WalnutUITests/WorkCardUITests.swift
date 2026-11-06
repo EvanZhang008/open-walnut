@@ -91,8 +91,10 @@ final class WorkCardUITests: XCTestCase {
         XCTAssertTrue(needs.waitForExistence(timeout: 10), "no work card on the lock screen")
         XCTAssertTrue(count(springboard, "Completed").exists, "the lock-screen card has no Completed count")
         // The first card on a lock screen comes with iOS's own "Allow Live Activities" question.
+        // Once another of Walnut's Live Activities (Talk to Walnut) was answered on this simulator,
+        // "Allow" stays in the tree as the card's hidden swipe action: only a shown one is a question.
         let allow = springboard.buttons["Allow"]
-        if allow.waitForExistence(timeout: 3) {
+        if allow.waitForExistence(timeout: 3), allow.isHittable {
             allow.tap()
             sleep(1)
             shot("3b-lock-screen-allowed")

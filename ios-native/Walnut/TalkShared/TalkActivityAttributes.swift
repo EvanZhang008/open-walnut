@@ -31,6 +31,9 @@ struct TalkActivityAttributes: ActivityAttributes {
         var later: Bool?
         /// No words were heard: nothing went wrong, nothing was sent.
         var quiet: Bool?
+        /// The kept take a failed card speaks of, so the card goes once that
+        /// take is sent or deleted instead of saying it still waits.
+        var take: String?
     }
 }
 
