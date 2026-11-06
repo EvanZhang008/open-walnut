@@ -47,8 +47,9 @@ export interface TasksContextValue {
   batchSetPhase: (ids: string[], phase: string) => Promise<BatchTaskOutcome[]>;
   batchDelete: (ids: string[], opts?: { force?: boolean }) => Promise<BatchTaskOutcome[]>;
   bakeOrder: (orderedIds: string[]) => void;
-  /** Local-only batch patch (no API call) — for optimistic flows (Focus Bar pin/tier). */
-  patchTasksLocal: (patches: Record<string, Partial<Task>>) => void;
+  /** Local-only batch patch (no API call) — for optimistic flows (Focus Bar pin/tier).
+   *  `pending` holds it over list reads until the returned settle runs (a write still out). */
+  patchTasksLocal: (patches: Record<string, Partial<Task>>, opts?: { pending?: boolean }) => () => void;
   /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
   guardEcho: (key: string) => void;
   taskGroups: Record<string, string>;

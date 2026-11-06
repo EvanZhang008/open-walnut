@@ -379,9 +379,11 @@ interface UseTasksReturn {
   /**
    * Local-only batch patch (no API call, no echo guard) — one setTasks pass for
    * all entries. Used by optimistic flows that own their persistence (Focus Bar
-   * pin/tier/reorder). Unknown ids are skipped.
+   * pin/tier/reorder). Unknown ids are skipped. With `pending`, the patch wins over
+   * every list read and echo until the returned settle runs: pass it when the
+   * caller's own write is still out, and settle when it is answered.
    */
-  patchTasksLocal: (patches: Record<string, Partial<Task>>) => void;
+  patchTasksLocal: (patches: Record<string, Partial<Task>>, opts?: { pending?: boolean }) => () => void;
   /** Suppress the next WS echo for a key (e.g. `update:<id>`) — pair with own API call. */
   guardEcho: (key: string) => void;
   /** Folder name registry: group_id → label. */
@@ -1391,8 +1393,17 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // focus_tier + several pin_orders) commits in a single frame. Callers own
   // persistence; the WS echo of their API call later merges as the correction.
   // Unknown ids are skipped (a patch for a task not yet in the list is a no-op).
-  const patchTasksLocal = useCallback((patches: Record<string, Partial<Task>>) => {
-    noteLocalEdits(patches);
+  // `pending`: the caller's write is still out, so the patch is held like
+  // holdOptimistic's until the returned settle runs. Without it, a list read that
+  // LEFT after the patch but was answered before the write landed drew the old
+  // values back (a project rename's rows jumped back to the old group header when
+  // another writer's bulk event refetched the list mid-rename).
+  const patchTasksLocal = useCallback((patches: Record<string, Partial<Task>>, opts?: { pending?: boolean }): (() => void) => {
+    const pending = opts?.pending === true;
+    noteLocalEdits(patches, pending);
+    const ids = Object.keys(patches);
+    let settled = !pending;
+    const settle = () => { if (!settled) { settled = true; settleLocalEdits(ids); } };
     setTasks((prev) => {
       let changed = false;
       const next = prev.map((t) => {
@@ -1403,6 +1414,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       });
       return changed ? next : prev;
     });
+    return settle;
   }, []);
 
   // ── Virtual task groups ── (optimistic group_id flips + API; WS groups-changed

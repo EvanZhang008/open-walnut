@@ -31,13 +31,14 @@ const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 /**
  * How long the write is pinned at the network layer.
  *
- * 6s rather than the 3s the two DOM assertions need: the third surface (the task
- * kebab's project picker) takes three clicks to reach, and every one of them has to
- * happen while the PATCH is still unanswered for the assertion to mean anything.
- * `patchesAnswered` is checked after each surface, so a hold that expired early
- * would fail loudly instead of passing on a server-confirmed name.
+ * 10s rather than the 3s the two DOM assertions need: another writer's bulk change
+ * has to refetch the list inside the hold (its 2s debounce plus the read), and the
+ * third surface (the task kebab's project picker) then takes three clicks to reach,
+ * every one of them while the PATCH is still unanswered for the assertion to mean
+ * anything. `patchesAnswered` is checked after each surface, so a hold that expired
+ * early would fail loudly instead of passing on a server-confirmed name.
  */
-const HOLD_MS = 6000
+const HOLD_MS = 10_000
 /** How long a same-frame update may take to reach another surface. */
 const INSTANT_MS = 700
 
@@ -89,6 +90,17 @@ async function serverProject(name: string): Promise<{ name: string; metadata?: {
   const res = await fetch(`${API}/api/projects`)
   const body = (await res.json()) as { projects: { name: string; metadata?: { default_cwd?: string } }[] }
   return body.projects.find((p) => p.name.toLowerCase() === name.toLowerCase()) ?? null
+}
+
+/**
+ * Another writer's bulk change (another tab, a plugin sync, a parallel spec's cleanup in
+ * CI): deleting a project that holds a task emits `task:updated {task: null}`, and every
+ * browser refetches its whole list on that signal.
+ */
+async function bulkChangeFromAnotherWriter(project: string): Promise<void> {
+  await createTaskViaApi('Project store bystander', { project })
+  const res = await fetch(`${API}/api/projects/${encodeURIComponent(project)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`bystander project delete failed: ${res.status} ${await res.text()}`)
 }
 
 async function taskProjectViaApi(taskId: string): Promise<string> {
@@ -190,6 +202,21 @@ test('a project rename from the header kebab reaches the board header, the detai
   await expect(listHeader(page, after)).toBeVisible({ timeout: INSTANT_MS })
   await expect(listHeader(page, before)).toHaveCount(0)
   expect(patchesAnswered, 'the header waited for the server').toBe(0)
+
+  // 1b. A list read that crosses the rename: another writer's bulk change refetches the
+  //     list while the PATCH is held, so its answer still files the task under the OLD
+  //     name. The optimistic rows must hold (2026-11-06 CI: they jumped back to the old
+  //     header, and on the retry the task's open menu unmounted under the click).
+  const refetched = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname === '/api/tasks',
+    { timeout: HOLD_MS },
+  )
+  await bulkChangeFromAnotherWriter(`bystander${stamp}`)
+  await refetched
+  await page.waitForTimeout(300)
+  await expect(listHeader(page, after)).toBeVisible()
+  await expect(listHeader(page, before)).toHaveCount(0)
+  expect(patchesAnswered, 'the refetch landed after the server answered').toBe(0)
 
   // 2. The detail pane's title, resolved forward from the name its host captured.
   await expect(detailPane(page).locator('.todo-detail-project')).toHaveText(after, { timeout: INSTANT_MS })

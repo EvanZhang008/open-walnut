@@ -143,15 +143,19 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
     const moved = !isClaimed && tasksStore
       ? tasksStore.tasks.filter((t) => (t.project ?? '').toLowerCase() === entryName.toLowerCase())
       : [];
-    if (moved.length > 0) {
-      tasksStore?.patchTasksLocal(Object.fromEntries(moved.map((t) => [t.id, { project: '' }])));
-    }
+    // Held until the delete answers, so a list read another writer starts meanwhile
+    // does not draw the rows back under the project being deleted.
+    const settleMoved = moved.length > 0
+      ? tasksStore?.patchTasksLocal(Object.fromEntries(moved.map((t) => [t.id, { project: '' }])), { pending: true })
+      : undefined;
     try {
       await deleteProject(displayName, isClaimed ? { remote: true } : undefined);
       settleRegistry(true);
+      settleMoved?.();
       onClose(); // row is gone — the task list refreshes via the task:updated broadcast
     } catch (err) {
       settleRegistry(false);
+      settleMoved?.();
       // Each row goes back to ITS OWN spelling (project identity is case-insensitive,
       // so two tasks in one project can legitimately differ in case).
       if (moved.length > 0) {

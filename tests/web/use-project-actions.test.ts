@@ -85,8 +85,9 @@ const removeProjectLocal = vi.fn((name: string) => {
 vi.mock('@/hooks/useProjectRegistry', () => ({ renameProjectLocal, removeProjectLocal }))
 
 /** The task store's optimistic project patch (the board group header's truth). */
-const patchTasksLocal = vi.fn((patches: Record<string, { project?: string }>) => {
-  order.push(`patch-tasks:${Object.entries(patches).map(([id, p]) => `${id}=${p.project}`).join(',')}`)
+const patchTasksLocal = vi.fn((patches: Record<string, { project?: string }>, opts?: { pending?: boolean }) => {
+  order.push(`patch-tasks:${Object.entries(patches).map(([id, p]) => `${id}=${p.project}`).join(',')}${opts?.pending ? ':pending' : ''}`)
+  return () => { order.push('settle-tasks') }
 })
 let tasksStore: { tasks: { id: string; project: string }[]; patchTasksLocal: typeof patchTasksLocal } | null = null
 vi.mock('@/contexts/TasksContext', () => ({ useTasksContextSafe: () => tasksStore }))
@@ -163,11 +164,14 @@ describe('useProjectActions.rename', () => {
 
     // The ORDER is the contract: a store write after the request is just a
     // round-trip with extra steps, which is the bug this whole change removes.
+    // The task rows are held as pending until the answer: a list read another
+    // writer starts mid-rename must not draw them back under the old name.
     expect(order).toEqual([
       'store-rename:Marina->Harbour',
-      'patch-tasks:t1=Harbour,t2=Harbour',
+      'patch-tasks:t1=Harbour,t2=Harbour:pending',
       'request-rename',
       'settle-rename:true',
+      'settle-tasks',
     ])
     // The task outside the project was not touched (identity is case-insensitive,
     // so t2's lowercase spelling IS the same project).
@@ -181,6 +185,9 @@ describe('useProjectActions.rename', () => {
     await useProjectActions({}).rename('Marina')
 
     expect(settleRename).toHaveBeenCalledWith(false)
+    // The hold ends before the rollback, so the old names are not held as pending.
+    expect(order.indexOf('settle-tasks')).toBeGreaterThan(-1)
+    expect(order.indexOf('settle-tasks')).toBeLessThan(order.lastIndexOf(order.filter((o) => o.startsWith('patch-tasks:')).at(-1)!))
     // The rows go back to the project they came from, each with its own spelling.
     expect(patchTasksLocal).toHaveBeenLastCalledWith({
       t1: { project: 'Marina' },
@@ -284,9 +291,10 @@ describe('useProjectActions.remove', () => {
 
     expect(order).toEqual([
       'store-remove:Marina',
-      'patch-tasks:t1=,t2=',
+      'patch-tasks:t1=,t2=:pending',
       'request-delete',
       'settle-remove:true',
+      'settle-tasks',
     ])
   })
 
@@ -318,6 +326,8 @@ describe('useProjectActions.remove', () => {
     await useProjectActions({}).remove('Marina')
 
     expect(settleRemove).toHaveBeenCalledWith(false)
+    expect(order.indexOf('settle-tasks')).toBeGreaterThan(-1)
+    expect(order.indexOf('settle-tasks')).toBeLessThan(order.lastIndexOf(order.filter((o) => o.startsWith('patch-tasks:')).at(-1)!))
     expect(patchTasksLocal).toHaveBeenLastCalledWith({
       t1: { project: 'Marina' },
       t2: { project: 'marina' },

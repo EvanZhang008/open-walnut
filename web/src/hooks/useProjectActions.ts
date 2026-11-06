@@ -30,14 +30,18 @@ import { useTasksContextSafe, type TasksContextValue } from '@/contexts/TasksCon
 /**
  * Move every loaded task of `from` onto `to` ('' = Inbox) in the shared task
  * store. The board groups by `task.project`, so this is what renames the group
- * header the same frame the user confirms. Returns the undo for a failed write.
+ * header the same frame the user confirms. The patch is held as pending until
+ * `settle` (the write answered): a list read another writer's bulk event starts
+ * mid-rename must not draw the rows back under the old name. `undo` is for a
+ * failed write.
  */
 function moveLoadedTasks(
   store: TasksContextValue | null,
   from: string,
   to: string,
-): () => void {
-  if (!store) return () => { /* pop-out window: no store to patch */ };
+): { settle: () => void; undo: () => void } {
+  const none = { settle: () => {}, undo: () => {} };
+  if (!store) return none; // pop-out window: no store to patch
   const fromLower = from.trim().toLowerCase();
   const forward: Record<string, Partial<Task>> = {};
   const back: Record<string, Partial<Task>> = {};
@@ -46,9 +50,9 @@ function moveLoadedTasks(
     forward[task.id] = { project: to };
     back[task.id] = { project: task.project };
   }
-  if (Object.keys(forward).length === 0) return () => { /* nothing loaded */ };
-  store.patchTasksLocal(forward);
-  return () => store.patchTasksLocal(back);
+  if (Object.keys(forward).length === 0) return none; // nothing loaded
+  const settle = store.patchTasksLocal(forward, { pending: true }) ?? (() => {});
+  return { settle, undo: () => { settle(); store.patchTasksLocal(back); } };
 }
 
 export interface ProjectActionsOptions {
@@ -80,16 +84,17 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     // title) then the loaded task rows (board group header). Both settle on the
     // route's verdict.
     const settleRegistry = renameProjectLocal(project, target);
-    const undoTasks = moveLoadedTasks(tasksStore, project, target);
+    const movedTasks = moveLoadedTasks(tasksStore, project, target);
     try {
       await renameProject(project, target);
       settleRegistry(true);
+      movedTasks.settle();
       // Task rows reconcile via the bulk task:updated broadcast; onChanged covers
       // host-local state (the /tasks rail's selected project).
       onChanged?.('rename', project, target);
     } catch (err) {
       settleRegistry(false);
-      undoTasks();
+      movedTasks.undo();
       await alert({ title: failTitle, message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
@@ -158,14 +163,15 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     // Only a LOCAL claim has a knowable destination (Inbox). A cascade can land
     // its tasks in the plugin's fallback project instead ('grouping-removed'), so
     // guessing here would show the wrong group for a second — let the refetch say.
-    const undoTasks = isClaimed ? () => {} : moveLoadedTasks(tasksStore, project, '');
+    const movedTasks = isClaimed ? null : moveLoadedTasks(tasksStore, project, '');
     try {
       await deleteProject(project, isClaimed ? { remote: true } : undefined);
       settleRegistry(true);
+      movedTasks?.settle();
       onChanged?.('delete', project);
     } catch (err) {
       settleRegistry(false);
-      undoTasks();
+      movedTasks?.undo();
       await alert({ title: 'Delete failed', message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
