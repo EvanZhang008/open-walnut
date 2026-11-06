@@ -189,8 +189,9 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
       focusEditor.current = true;
       return;
     }
-    // Already in the editor (a tray row's Edit on the comment being edited): the typed words stay.
-    if (editingId.current === id) return;
+    // Already in the editor (a tray row's Edit on the comment being edited): the typed
+    // words stay, and the next Edit takes the focus as usual.
+    if (editingId.current === id) { focusEditor.current = true; return; }
     setDraft(c.comment);
     setEditing(id);
   }, [byId, onUpdate]);

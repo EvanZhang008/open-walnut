@@ -221,7 +221,9 @@ export function useSessionComments(
       return;
     }
     // Given back: the newest record copy decides again (another window's edit made
-    // meanwhile wins now), and a record that lost them while they were held gets them back.
+    // meanwhile wins now), and a record that lost them while they were held gets them back
+    // (a fresh change of ours: the echo cap starts over).
+    echoWrites.current = 0;
     meetRecordRef.current(lastRecord.current);
     flushRef.current();
   }, [persist]);
