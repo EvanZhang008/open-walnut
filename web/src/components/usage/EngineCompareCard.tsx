@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SettingsGroup, SettingsLoadingRow, SettingsEmpty, SettingsNotice } from '@/components/settings/SettingsSection';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
-import { fetchEngineCompare, type EngineCompare, type EngineCompareRow, type EngineCompareTask } from '@/api/usage';
+import { fetchEngineCompare, type EngineCompare, type EngineCompareRow, type EngineCompareTask, type ReviewScore } from '@/api/usage';
 import { usePageView } from '@/utils/view-memory';
 import { openTaskOnHome } from '@/utils/open-session';
 import { formatTokens } from '@/utils/format';
@@ -36,6 +36,11 @@ function hours(h: number | null): string {
 
 const ratio = (n: number | null) => (n === null ? '-' : n.toFixed(n < 10 ? 1 : 0));
 const share = (n: number | null) => (n === null ? '-' : `${Math.round(n * 100)}%`);
+const SCORE_DIMS = ['function', 'ux', 'ui'] as const;
+/** "8 · 7.5 · 9" (function · UX · UI); "-" for none, and for a dimension no reviewer scored. */
+const scoreText = (s: ReviewScore | null | undefined) => (s ? SCORE_DIMS.map((d) => (s[d] === undefined ? '-' : String(s[d]))).join(' · ') : '-');
+/** "function 9 · UX 8 · UI 9.5", for one task's line. */
+const scoreNamed = (s: ReviewScore) => SCORE_DIMS.filter((d) => s[d] !== undefined).map((d) => `${d === 'function' ? 'function' : d.toUpperCase()} ${s[d]}`).join(' · ');
 
 interface Metric {
   id: string;
@@ -45,6 +50,8 @@ interface Metric {
   show: (n: number | null, r: EngineCompareRow) => string;
   /** Lower is better (time, cost, rework); absent = not ranked. */
   lower?: boolean;
+  /** Higher is better (a reviewer score). */
+  higher?: boolean;
   /** How many of the tasks behind the value leave something out (it is a floor and is not ranked). */
   partial?: (r: EngineCompareRow) => number;
   /** The tooltip of such a value, given that count. */
@@ -94,7 +101,7 @@ const METRICS: Metric[] = [
     partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
     partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian, samples: knownDone },
-  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review" or "Reviewer"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
+  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review", "Reviewer", "Verify" or "Verifier"): more means more rounds before it passed.', value: (r) => r.reviewsPerTask, show: ratio, lower: true },
   { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
     // No reviews: nothing to show, as a cost with no usage recorded reads.
@@ -104,6 +111,9 @@ const METRICS: Metric[] = [
   { id: 'crossreview', label: 'Checked by another company', help: 'Share of the tasks it finished that a reviewer subtask on another company\'s model checked (Claude work reviewed by a GPT model, or the other way round).',
     // No reviews: nothing to show, as Review cost reads.
     value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share },
+  { id: 'score', label: 'Reviewer score (function · UX · UI)', help: 'Function · UX · UI, out of 10. Per finished task, its reviewers\' latest verdict (each company\'s latest, the lower of them on each), then the median. Ranked by the lowest of the three. Reviewers give it as `score` on their reply.',
+    value: (r) => (r.reviewScore ? Math.min(...SCORE_DIMS.map((d) => r.reviewScore![d] ?? 10)) : null),
+    show: (_n, r) => scoreText(r.reviewScore), higher: true, samples: (r) => r.scoredDone ?? 0 },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of the tasks it finished that were reopened, those being worked on again included.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
@@ -116,7 +126,7 @@ const shownMetrics = (rows: EngineCompareRow[]) => METRICS.filter((m) => !m.only
 /** How the one-line verdict names the best of a row. */
 const VERDICT: Record<string, string> = {
   time: 'Fastest', cost: 'Cheapest', tokens: 'Fewest tokens', reviews: 'Fewest review rounds', reviewcost: 'Cheapest reviews',
-  followups: 'Fewest of your messages', reopens: 'Reopened least', errored: 'Fewest errors',
+  followups: 'Fewest of your messages', score: 'Best reviewed', reopens: 'Reopened least', errored: 'Fewest errors',
 };
 
 /** One sentence on who is ahead where, from the rows' best marks; or why no one is yet. */
@@ -130,14 +140,15 @@ function verdictOf(rows: EngineCompareRow[], best: Map<string, string | null>, l
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
 function bestOf(rows: EngineCompareRow[], m: Metric): string | null {
-  if (!m.lower) return null;
+  if (!m.lower && !m.higher) return null;
   const judged = rows.filter((r) => (m.samples ?? ((x: EngineCompareRow) => x.done))(r) >= FEW && m.value(r) !== null && !(m.partial && m.partial(r) > 0));
   if (judged.length < 2) return null;
-  const sorted = [...judged].sort((a, b) => (m.value(a) as number) - (m.value(b) as number));
+  const sign = m.higher ? -1 : 1;
+  const sorted = [...judged].sort((a, b) => sign * ((m.value(a) as number) - (m.value(b) as number)));
   // A best the eye can see: two values that read the same ("1 min" and "1 min") mark neither.
   const [a, b] = sorted;
   if (m.show(m.value(a), a) === m.show(m.value(b), b)) return null;
-  return (m.value(a) as number) < (m.value(b) as number) ? a.key : null;
+  return sign * (m.value(a) as number) < sign * (m.value(b) as number) ? a.key : null;
 }
 
 /**
@@ -261,7 +272,8 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                     <tr key={t.taskId} className="usage-line" data-task={t.taskId}>
                       <td><button type="button" className="usage-ec-open" title={t.title} onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
-                          t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
+                          t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',
+                          t.score ? `scored ${scoreNamed(t.score)}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>
                       <td className="num usage-line-cost" title={taskCostNote(t)}>
                         {t.noUsage ? 'unknown' : money(t.costUsd)}{!t.noUsage && (t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}

@@ -443,6 +443,13 @@ export async function buildSessionContext(
             + 'how your result gets back. Walnut tells it on its own whenever you stop, complete '
             + 'your task or hit an error, so you need not report progress: reply to its request '
             + 'with your result, and complete your task when the work is done.\n\n'
+          // A reviewer's verdict is data Usage & Costs compares the engines by (usage/engine-compare.ts).
+          const { isReviewerTask } = await import('../agents/engine-split.js')
+          if (isReviewerTask(task)) {
+            taskLine += 'Your task is a review: when you reply with your verdict, also give it as `score` '
+              + '({"function": n, "ux": n, "ui": n}, each out of 10) on that reply (task_send in_reply_to), '
+              + 'so the comparison of engines on Usage & Costs reads it.\n\n'
+          }
         }
       }
       // Its isolated workspace's setup script (workspaces/scripts.ts): what is already installed, or why not.

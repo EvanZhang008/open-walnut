@@ -203,6 +203,9 @@ export function fetchUsageCosts(view: CostView, range: { start?: string; end?: s
 }
 
 /** One coding engine and model family on finished work (GET /api/usage/engines, core/usage/engine-compare.ts). */
+/** A review's scores out of 10 (core/peers/structured-reply.ts). */
+export interface ReviewScore { function?: number; ux?: number; ui?: number }
+
 export interface EngineCompareRow {
   key: string;
   engine: string;
@@ -237,6 +240,10 @@ export interface EngineCompareRow {
   reviewPartialCost?: number;
   /** Share of finished tasks a reviewer on another company's model checked (0..1); absent from an older server. */
   crossReviewedShare?: number | null;
+  /** Median reviewer score of its finished tasks (function / UX / UI out of 10); absent from an older server. */
+  reviewScore?: ReviewScore | null;
+  /** Finished tasks with a reviewer score. */
+  scoredDone?: number;
   followUpsPerTask: number | null;
   reopens: number;
   errored: number;
@@ -259,6 +266,9 @@ export interface EngineCompareTask {
   reviewPartialCost?: boolean;
   /** A reviewer on another company's model checked it. */
   crossReviewed?: boolean;
+  /** Its reviewers' latest verdict (each company's latest, the lower on each dimension). */
+  score?: ReviewScore;
+  scoredBy?: number;
   followUps: number;
   reopens: number;
   errored: boolean;

@@ -1,5 +1,5 @@
 import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
-import type { TaskResultReport } from './peers/structured-reply.js';
+import type { TaskResultReport, TaskReviewScore } from './peers/structured-reply.js';
 import type { AskAnswer } from './same-ask.js';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 /**
@@ -1091,6 +1091,10 @@ export interface Task {
    *  / `not_done`. A non-empty `not_done` not yet taken up or dropped reads as Partial on the Board,
    *  in the Brief and in its parent's open items. Local-only, payload blob. */
   result_report?: TaskResultReport;
+  /** A reviewer task's latest score out of 10 (function / UX / UI), from a reply's or a completion's
+   *  `score` (peers/structured-reply.ts). Kept apart from result_report, which a later reply or close
+   *  replaces: a review's verdict stays. Usage & Costs' engine comparison reads it. Local-only, payload blob. */
+  review_score?: TaskReviewScore;
   /** Main's or a lead's follow-up Walnut set because its turn said it waits on someone or will
    *  follow up, with nothing set to bring it back (src/core/sessions/promise-alarm.ts). null once
    *  cleared or fired. Local-only, payload blob. */

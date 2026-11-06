@@ -61,8 +61,8 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         reason: str(b.reason),
         messageId: str(b.messageId),
         // A reply's structured fields (core/peers/structured-reply.ts); absent on a plain send.
-        ...(b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined
-          ? { reply: { result: b.result, evidence: b.evidence, not_done: b.not_done } } : {}),
+        ...(b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined || b.score !== undefined
+          ? { reply: { result: b.result, evidence: b.evidence, not_done: b.not_done, score: b.score } } : {}),
         // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
         // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
         ...(!header(req, 'x-walnut-caller-sid') && header(req, CALLER_KIND_HEADER) === 'automation'

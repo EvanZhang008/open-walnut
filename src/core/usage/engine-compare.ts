@@ -13,6 +13,7 @@
  * "review"); a task's review count is how many it had.
  */
 import type { SessionEngine, Task } from '../types.js';
+import { SCORE_DIMENSIONS, type ReviewScore, type TaskReviewScore } from '../peers/structured-reply.js';
 import { builderLabel, REVIEW_RE, splitBuilders } from '../agents/engine-split.js';
 import { resolveEngine } from '../agents/engine-registry.js';
 import type { CostRollup } from './cost-rollup.js';
@@ -58,6 +59,11 @@ export interface EngineCompareTask {
   reviewPartialCost: boolean;
   /** At least one reviewer subtask ran on another company's model than the one that did the work. */
   crossReviewed?: boolean;
+  /** Its reviewers' latest verdict out of 10: each company's latest score, the lower on each of
+   *  function / UX / UI (the bar both must clear); absent when no reviewer gave one. */
+  score?: ReviewScore;
+  /** How many reviewers that verdict rests on (one per company). */
+  scoredBy?: number;
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -108,6 +114,10 @@ export interface EngineCompareRow {
   reviewPartialCost: number;
   /** Share of finished tasks a reviewer on another company's model checked (0..1). */
   crossReviewedShare: number | null;
+  /** Median reviewer score of its finished tasks, per dimension (out of 10); null when none was scored. */
+  reviewScore: ReviewScore | null;
+  /** Finished tasks with a reviewer score (the medians' samples). */
+  scoredDone: number;
   /** The user's messages per finished task. */
   followUpsPerTask: number | null;
   reopens: number;
@@ -257,6 +267,29 @@ function firstStart(t: Task, sessions: CompareInput['sessions']): string | undef
   return firstWork ?? first;
 }
 
+/** A task's verdict: each company's latest score, the lower on each dimension. */
+function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { score?: ReviewScore; scoredBy?: number } {
+  if (!byFam?.size) return {};
+  const score: ReviewScore = {};
+  for (const d of SCORE_DIMENSIONS) {
+    const vals = [...byFam.values()].map((x) => x[d]).filter((v): v is number => typeof v === 'number');
+    if (vals.length) score[d] = Math.min(...vals);
+  }
+  return Object.keys(score).length ? { score, scoredBy: byFam.size } : {};
+}
+
+/** The median of each dimension over the finished tasks that carry a score. */
+function scoreMedians(done: readonly EngineCompareTask[]): { reviewScore: ReviewScore | null; scoredDone: number } {
+  const scored = done.filter((p) => p.score);
+  if (!scored.length) return { reviewScore: null, scoredDone: 0 };
+  const out: ReviewScore = {};
+  for (const d of SCORE_DIMENSIONS) {
+    const m = median(scored.map((p) => p.score![d]).filter((v): v is number => typeof v === 'number'));
+    if (m !== null) out[d] = Math.round(m * 10) / 10;
+  }
+  return { reviewScore: Object.keys(out).length ? out : null, scoredDone: scored.length };
+}
+
 function inRange(day: string, range: { start?: string; end?: string }): boolean {
   return (!range.start || day >= range.start) && (!range.end || day <= range.end);
 }
@@ -268,6 +301,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const reviewPartial = new Set<string>();
   // The model families each task's reviewers ran on: their usage, else their session's model.
   const reviewFamiliesOf = new Map<string, Set<ModelFamily>>();
+  // Each company's latest reviewer score per task.
+  const scoresOf = new Map<string, Map<string, TaskReviewScore>>();
   for (const t of input.tasks) {
     if (!t.parent_task_id || !REVIEW_RE.test(t.title)) continue;
     const spend = input.spend.get(t.id);
@@ -278,6 +313,13 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     if (rfam) {
       if (!reviewFamiliesOf.has(t.parent_task_id)) reviewFamiliesOf.set(t.parent_task_id, new Set());
       reviewFamiliesOf.get(t.parent_task_id)!.add(rfam);
+    }
+    if (t.review_score) {
+      if (!scoresOf.has(t.parent_task_id)) scoresOf.set(t.parent_task_id, new Map());
+      const byFam = scoresOf.get(t.parent_task_id)!;
+      const fk = rfam ?? 'Other';
+      const was = byFam.get(fk);
+      if (!was || (t.review_score.at ?? '') > (was.at ?? '')) byFam.set(fk, t.review_score);
     }
     reviewsOf.set(t.parent_task_id, (reviewsOf.get(t.parent_task_id) ?? 0) + 1);
     reviewCostOf.set(t.parent_task_id, (reviewCostOf.get(t.parent_task_id) ?? 0) + (spend?.costUsd ?? 0));
@@ -356,6 +398,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
       partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
       crossReviewed: family !== 'Other' && [...(reviewFamiliesOf.get(t.id) ?? [])].some((f) => f !== family),
+      ...verdictOf(scoresOf.get(t.id)),
       followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - unrunCloses), errored, split: !!t.engine_pick,
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
       // An entry that names a model line (Claude Code on Sonnet) whose work ran on another known line moved too.
@@ -429,7 +472,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       medianCostUsd: median(known.map((p) => p.costUsd)),
       tokens: all.reduce((a, p) => a + p.tokens, 0), medianTokens: median(known.map((p) => p.tokens)),
       reviewsPerTask: per((p) => p.reviews), reviewCostPerTask: per((p) => p.reviewCostUsd), reviewPartialCost: done.filter((p) => p.reviewPartialCost).length,
-      crossReviewedShare: done.length ? done.filter((p) => p.crossReviewed).length / done.length : null, followUpsPerTask: per((p) => p.followUps),
+      crossReviewedShare: done.length ? done.filter((p) => p.crossReviewed).length / done.length : null,
+      ...scoreMedians(done), followUpsPerTask: per((p) => p.followUps),
       reopens: all.reduce((a, p) => a + p.reopens, 0), errored: all.filter((p) => p.errored).length,
       // Of the tasks ever finished, a reopened one still being worked on included (it is not "done" now).
       reopenedShare: everDone.length ? everDone.filter((p) => p.reopens > 0).length / everDone.length : null,

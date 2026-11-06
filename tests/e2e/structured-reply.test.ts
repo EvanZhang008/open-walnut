@@ -188,6 +188,57 @@ describe('a structured reply on task_send', () => {
     await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
   }, 60_000)
 
+  it('a review reply carries a score: kept on the replier as review_score, read as a Score line, never erased by a later result', async () => {
+    const rq = await ask(asker, lead, 'review the release page')
+    daemon.clearCommandHistory()
+    const r = await req('POST', '/api/v1/messages', {
+      in_reply_to: rq.id, text: 'Reviewed the release page.', score: { function: 8, UX: '7.5', ui: '9/10' },
+    }, asSession(lead.sid))
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(await getSessionRequest(rq.id)).toMatchObject({ status: 'replied', reply: { score: { function: 8, ux: 7.5, ui: 9 } } })
+    const t = await task(lead.taskId)
+    expect(t.review_score).toMatchObject({ function: 8, ux: 7.5, ui: 9, via: 'reply', request_id: rq.id })
+    // The score is its own field, not part of the result a later reply replaces.
+    expect(t.result_report?.score).toBeUndefined()
+    const delivered = await until('scored reply delivered', async () => sentTexts().filter((x) => x.includes('Reviewed the release page.')), (a) => a.length > 0)
+    expect(delivered[0]).toContain('Score: function 8/10, UX 7.5/10, UI 9/10')
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+
+    // A later result with no score keeps the verdict.
+    const rq2 = await ask(asker, lead, 'anything else?')
+    const r2 = await req('POST', '/api/v1/messages', { in_reply_to: rq2.id, result: 'Nothing else.' }, asSession(lead.sid))
+    expect(r2.status, JSON.stringify(r2.json)).toBe(202)
+    expect((await task(lead.taskId)).review_score).toMatchObject({ function: 8, ux: 7.5, ui: 9, request_id: rq.id })
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+
+    // A score alone never replaces the result a reply left (here a Partial): only the score is written.
+    const rq3 = await ask(asker, lead, 'check the docs')
+    const r3 = await req('POST', '/api/v1/messages', { in_reply_to: rq3.id, text: 'Docs half done.', not_done: ['the API page'] }, asSession(lead.sid))
+    expect(r3.status, JSON.stringify(r3.json)).toBe(202)
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+    const rq4 = await ask(asker, lead, 'score the docs')
+    const r4 = await req('POST', '/api/v1/messages', { in_reply_to: rq4.id, text: 'Scored.', score: '9/9/8' }, asSession(lead.sid))
+    expect(r4.status, JSON.stringify(r4.json)).toBe(202)
+    const after = await task(lead.taskId)
+    expect(after.result_report).toMatchObject({ request_id: rq3.id, not_done: ['the API page'] })
+    expect(after.review_score).toMatchObject({ function: 9, ux: 9, ui: 8, request_id: rq4.id })
+    await req('POST', `/api/v1/tasks/${lead.taskId}/not-done`, { how: 'dropped', note: 'test cleanup' })
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+
+    // A score alone is a structured field too: without in_reply_to it is refused.
+    const bad = await req('POST', '/api/v1/messages', { to: asker.taskId, text: 'scores', score: { ux: 9 } }, asSession(lead.sid))
+    expect(bad.status, JSON.stringify(bad.json)).toBe(400)
+  }, 90_000)
+
+  it('a completion may carry the score instead, and an out-of-range one is ignored', async () => {
+    const id = await createTask('Review: the release notes')
+    const done = await req('POST', `/api/v1/tasks/${id}/complete`, { result: 'Notes read.', score: { function: 10, ux: 9, ui: 11 } })
+    expect(done.status, JSON.stringify(done.json)).toBe(200)
+    const t = await task(id)
+    expect(t.review_score).toMatchObject({ function: 10, ux: 9, via: 'complete' })
+    expect(t.review_score.ui).toBeUndefined()
+  })
+
   it('the fields without in_reply_to are refused with 400, and nothing is sent', async () => {
     daemon.clearCommandHistory()
     const r = await req('POST', '/api/v1/messages', {

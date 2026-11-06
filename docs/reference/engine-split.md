@@ -36,7 +36,7 @@ the start goes are offered: an ACP engine the launch host has not reported insta
 skipped (Claude Code always can). Settings offers a model only on an engine that takes one per
 entry (Claude Code), with the models Claude Code lists as suggestions; a model outside that list (one
 your proxy serves) is kept as typed, with a note to check the name. Reviewer subtasks (a subtask whose title starts with
-"Review" or "Reviewer") take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
+"Review", "Reviewer", "Verify" or "Verifier") take no turn: they count toward their parent's work. A model on an ACP entry is ignored; set `engines.<id>.model` instead.
 
 The pick is kept on the task (`engine_pick`) and in `WALNUT_HOME/cache/engine-split.json`,
 and the start's outcome names it with the shares it saw. A start that waited (the queue, a
@@ -50,9 +50,12 @@ Settings, Usage & Costs, "Engines compared" (`GET /api/usage/engines?start&end&p
 per engine and model line (Claude Code on Opus and on Sonnet apart; a task whose usage names no
 line joins its engine's one line when there is only one), the tasks finished in the period, still open, assigned by the
 split, median time to done, median and total cost, median tokens, review subtasks per task
-(subtasks whose title starts with "Review" or "Reviewer"; a top-level task so named is work of its own),
+(subtasks whose title starts with "Review", "Reviewer", "Verify" or "Verifier"; a top-level task so named is work of its own),
 the share of finished tasks a reviewer on another company's model checked (Claude work reviewed by a
-GPT model or the other way round: its usage's model, else its session's), the
+GPT model or the other way round: its usage's model, else its session's), the reviewer score
+(function, UX and UI out of 10: a reviewer gives it as `score` on its reply or its `task_complete`,
+kept on its task as `review_score`; per task, each company's latest score, the lower on each; per
+column, the median of each, ranked by the lowest of the three; each task in the list shows its own), the
 user's messages per task, reopens after completion, and tasks whose session had an error. A
 task counts under the engine and model that carried most of its cost (dollars first,
 tokens only for a tie); counting only the split's tasks, it counts under the engine the split

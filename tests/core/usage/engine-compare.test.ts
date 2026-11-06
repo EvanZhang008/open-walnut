@@ -634,3 +634,38 @@ describe('final round', () => {
     expect(Object.fromEntries(out.tasks.map((t) => [t.taskId, t.crossReviewed]))).toEqual({ w1: true, w2: false, w3: false });
   });
 });
+
+describe('reviewer scores', () => {
+  const at = (h: number) => new Date(Date.parse('2026-11-02T00:00:00Z') + h * 3600_000).toISOString();
+  const reviewer = (id: string, parent: string, score: Record<string, number> | undefined, h: number, model: string) => ({
+    t: task({ id, title: `Final verify: ${parent}`, parent_task_id: parent, session_id: `s-${id}`, phase: 'COMPLETE', completed_at: at(h),
+      ...(score ? { review_score: { ...score, at: at(h), via: 'reply' as const } } : {}) }),
+    spend: { [id]: { costUsd: 1, model } },
+  });
+
+  it('a task\'s verdict is each company\'s latest score, the lower on each dimension; an engine shows the medians', () => {
+    const rs = [
+      reviewer('c1', 'w1', { function: 6, ux: 6, ui: 6 }, 1, 'claude-opus-5-5'), // an older Claude round
+      reviewer('c2', 'w1', { function: 9, ux: 8, ui: 10 }, 3, 'claude-opus-5-5'), // the latest Claude round
+      reviewer('g1', 'w1', { function: 10, ux: 9, ui: 8.5 }, 3, 'gpt-6.1-sol'),
+      reviewer('g2', 'w2', { function: 7, ux: 7, ui: 7 }, 2, 'gpt-6.1-sol'),
+      reviewer('n3', 'w3', undefined, 2, 'gpt-6.1-sol'),
+    ];
+    const tasks = [done('w1', 1), done('w2', 1), done('w3', 1), ...rs.map((r) => r.t)];
+    const spend = Object.assign({ w1: { costUsd: 1 }, w2: { costUsd: 1 }, w3: { costUsd: 1 } }, ...rs.map((r) => r.spend));
+    const out = aggregateEngineCompare(input(tasks, spend));
+    const byId = Object.fromEntries(out.tasks.map((t) => [t.taskId, t]));
+    expect(byId.w1).toMatchObject({ score: { function: 9, ux: 8, ui: 8.5 }, scoredBy: 2 });
+    expect(byId.w2).toMatchObject({ score: { function: 7, ux: 7, ui: 7 }, scoredBy: 1 });
+    expect(byId.w3.score).toBeUndefined();
+    expect(out.rows).toHaveLength(1);
+    expect(out.rows[0]).toMatchObject({ scoredDone: 2, reviewScore: { function: 8, ux: 7.5, ui: 7.8 } });
+    // "Verify" subtasks are reviews: they count toward their parent, never as work of their own.
+    expect(out.taskCount).toBe(3);
+  });
+
+  it('no reviewer score anywhere reads none, never a zero', () => {
+    const out = aggregateEngineCompare(input([done('w', 1)], { w: { costUsd: 1 } }));
+    expect(out.rows[0]).toMatchObject({ reviewScore: null, scoredDone: 0 });
+  });
+});

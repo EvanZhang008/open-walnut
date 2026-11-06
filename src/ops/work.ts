@@ -50,6 +50,7 @@ defineOp({
     'An answer may carry `result` (one sentence: what came of it), `evidence` (paths or links) and `not_done` ' +
     '(what is not done or not checked); a non-empty not_done shows the reply as Partial on the Board and in the Brief, ' +
     'so list there anything left over instead of burying it in the text. ' +
+    'A reviewer answering a review gives its verdict as `score` ({function, ux, ui}, each out of 10) as well as in the text. ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
     'When you decide in the user\'s place a question a task below you is asking the user, pass answers_ask=true: the user sees that ask no more, and the task is told once. ' +
     'Such an answer never resumes a stopped session or reopens a finished task: to a COMPLETE task, or one whose session is not running, it is only recorded (no turn starts); task_start it when it must act on the answer. ' +
@@ -83,6 +84,11 @@ defineOp({
     result: z.string().min(1).max(2000).optional().describe('With in_reply_to: one sentence saying what came of the work'),
     evidence: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
     not_done: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: what is NOT done or not verified (a list, or one per line). Non-empty = the reply reads as Partial'),
+    score: z.object({
+      function: z.number().min(0).max(10).optional().describe('Does it do what the user asked, correctly, out of 10'),
+      ux: z.number().min(0).max(10).optional().describe('How it feels to use, out of 10'),
+      ui: z.number().min(0).max(10).optional().describe('How it looks, out of 10'),
+    }).optional().describe('With in_reply_to, answering a review request: your verdict out of 10, e.g. {"function":8,"ux":7.5,"ui":9}. Usage & Costs compares the engines by it'),
   },
   bind: { method: 'POST', path: '/messages' },
   mapResult: ({ body, args }) => {

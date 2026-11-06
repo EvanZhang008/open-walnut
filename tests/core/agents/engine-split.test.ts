@@ -89,6 +89,10 @@ describe('splitApplies', () => {
     expect(splitApplies({ ...plain, parent_task_id: 'p', title: 'Review round 2: settings (GPT)' }, {})).toBe(false)
     expect(splitApplies({ ...plain, title: 'Review the onboarding flow' }, {})).toBe(true)
     expect(isReviewerTask({ parent_task_id: 'p', title: 'Fix review comments' })).toBe(false)
+    // A verifier is a reviewer too (the user's rules call them verifier tasks).
+    expect(isReviewerTask({ parent_task_id: 'p', title: 'Final verify: engine split (Sol)' })).toBe(true)
+    expect(isReviewerTask({ parent_task_id: 'p', title: 'Verifier round 2' })).toBe(true)
+    expect(isReviewerTask({ parent_task_id: 'p', title: 'Fix the verifier crash' })).toBe(false)
     for (const source of ['engine-switch', 'transfer', 'auto-recover', 'restart', 'folder-gone', 'start-queue']) {
       expect(splitApplies(plain, { source })).toBe(false);
     }

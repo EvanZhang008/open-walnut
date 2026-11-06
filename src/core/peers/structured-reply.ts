@@ -4,7 +4,9 @@
  *
  *   result     one sentence: what came of the work;
  *   evidence   paths or links that show it;
- *   not_done   what is not done or not checked.
+ *   not_done   what is not done or not checked;
+ *   score      a review's verdict out of 10: { function, ux, ui } (any of them), kept on the
+ *              reviewer's task as `review_score` and read by Usage & Costs' engine comparison.
  *
  * A reply whose `not_done` is not empty is PARTIAL: the Board and the Brief say so and list
  * what is missing, so "one test still not run" never drowns in a long answer. The asker reads
@@ -18,6 +20,23 @@ export interface StructuredReply {
   result?: string;
   evidence?: string[];
   not_done?: string[];
+  score?: ReviewScore;
+}
+
+/** A review's scores out of 10 (2026-11-06: the user's bar is function 10, UX 9, UI 9). */
+export interface ReviewScore {
+  function?: number;
+  ux?: number;
+  ui?: number;
+}
+
+export const SCORE_DIMENSIONS = ['function', 'ux', 'ui'] as const;
+
+/** A reviewer task's latest score (Task.review_score): from a reply or the call that completed it. */
+export interface TaskReviewScore extends ReviewScore {
+  at: string;
+  via: 'reply' | 'complete';
+  request_id?: string;
 }
 
 /**
@@ -89,18 +108,51 @@ function items(v: unknown): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/** One score out of 10: a number, or "8" / "8/10" / "7.5"; anything else (or outside 0..10) is none. */
+function scoreValue(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v.trim().replace(/\s*\/\s*10$/, '')) : NaN;
+  return Number.isFinite(n) && n >= 0 && n <= 10 ? Math.round(n * 10) / 10 : undefined;
+}
+
+/**
+ * A score from an object ({ function: 8, ux: 7.5, ui: 9 }, "UX" in any case) or the text
+ * "8/7.5/9" (function/UX/UI in that order); undefined when it names none.
+ */
+export function readScore(v: unknown): ReviewScore | undefined {
+  let raw: Record<string, unknown> = {};
+  if (typeof v === 'string') {
+    const parts = v.split(/\s*[/,|]\s*/).filter(Boolean);
+    if (parts.length === 3) raw = { function: parts[0], ux: parts[1], ui: parts[2] };
+  } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) raw[k.toLowerCase()] = x;
+  }
+  const out: ReviewScore = {};
+  for (const d of SCORE_DIMENSIONS) {
+    const n = scoreValue(raw[d]);
+    if (n !== undefined) out[d] = n;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** "function 8/10, UX 7.5/10, UI 9/10" */
+export function scoreLine(s: ReviewScore): string {
+  const name = { function: 'function', ux: 'UX', ui: 'UI' } as const;
+  return SCORE_DIMENSIONS.filter((d) => s[d] !== undefined).map((d) => `${name[d]} ${s[d]}/10`).join(', ');
+}
+
 /** The structured fields of a send's arguments, cleaned; null when it carries none. */
-export function readStructuredReply(args: { result?: unknown; evidence?: unknown; not_done?: unknown }): StructuredReply | null {
+export function readStructuredReply(args: { result?: unknown; evidence?: unknown; not_done?: unknown; score?: unknown }): StructuredReply | null {
   const result = typeof args.result === 'string' && args.result.trim() ? clean(args.result, REPLY_RESULT_MAX) : undefined;
   const evidence = items(args.evidence);
   const notDone = items(args.not_done);
-  if (!result && !evidence && !notDone) return null;
-  return { ...(result ? { result } : {}), ...(evidence ? { evidence } : {}), ...(notDone ? { not_done: notDone } : {}) };
+  const score = readScore(args.score);
+  if (!result && !evidence && !notDone && !score) return null;
+  return { ...(result ? { result } : {}), ...(evidence ? { evidence } : {}), ...(notDone ? { not_done: notDone } : {}), ...(score ? { score } : {}) };
 }
 
 /** Whether the arguments name any structured field at all (even an empty one). */
 export function hasStructuredFields(args: Record<string, unknown>): boolean {
-  return args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined;
+  return args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined || args.score !== undefined;
 }
 
 export function isPartial(r: (StructuredReply & { settled?: unknown; owed?: TaskOwed }) | null | undefined): boolean {
@@ -119,6 +171,7 @@ export function composeReplyText(text: string | undefined, r: StructuredReply | 
   if (r.result && r.result !== body) parts.push(`Result: ${r.result}`);
   if (r.evidence?.length) parts.push(`Evidence:\n${r.evidence.map((e) => `- ${e}`).join('\n')}`);
   if (r.not_done?.length) parts.push(`Not done (partial reply):\n${r.not_done.map((e) => `- ${e}`).join('\n')}`);
+  if (r.score) parts.push(`Score: ${scoreLine(r.score)}`);
   return parts.join('\n\n');
 }
 

@@ -237,6 +237,14 @@ describe('buildSessionContext (identity note)', () => {
     expect((await buildSessionContext(parent.id)).systemPrompt).not.toContain('subtask of')
   })
 
+  it('asks a reviewer subtask for its verdict as a score, and no other subtask', async () => {
+    const { task: parent } = await addTask({ title: 'Checkout page', project: 'acme' })
+    const { task: review } = await addTask({ title: 'Review: checkout page (UX)', project: 'acme', parent_task_id: parent.id })
+    const { task: worker } = await addTask({ title: 'Build the cart', project: 'acme', parent_task_id: parent.id })
+    expect((await buildSessionContext(review.id)).systemPrompt).toMatch(/Your task is a review: when you reply with your verdict, also give it as `score`/)
+    expect((await buildSessionContext(worker.id)).systemPrompt).not.toContain('Your task is a review')
+  })
+
   it('tells a subtask whose parent is COMPLETE that the parent no longer hears from it', async () => {
     // 2026-10-04: a parent may complete with its subtasks open; the subtask
     // must not keep reporting to it (its sends are refused).

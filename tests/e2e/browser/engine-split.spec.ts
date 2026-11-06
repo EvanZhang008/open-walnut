@@ -28,22 +28,22 @@ async function serverDefaults(request: APIRequestContext): Promise<Record<string
 
 function row(key: string, label: string, done: number, extra: Record<string, unknown> = {}) {
   return { key, engine: key.split('|')[0], family: key.split('|')[1], label, done, open: 2, split: 0, medianHours: 3.2, costUsd: done * 40,
-    medianCostUsd: 38, tokens: done * 9e7, medianTokens: 8.5e7, reviewsPerTask: 2.4, reviewCostPerTask: 9, crossReviewedShare: 0.5, followUpsPerTask: 1.1, reopens: 2, errored: 1,
+    medianCostUsd: 38, tokens: done * 9e7, medianTokens: 8.5e7, reviewsPerTask: 2.4, reviewCostPerTask: 9, crossReviewedShare: 0.5, reviewScore: { function: 8, ux: 7.5, ui: 9 }, scoredDone: done, followUpsPerTask: 1.1, reopens: 2, errored: 1,
     reopenedShare: 0.06, erroredShare: 0.03, partialCost: 0, ...extra }
 }
 
 function engines(project: string | null) {
   const rows: Record<string, unknown>[] = [
     row('claude|Claude', 'Claude Code · Claude', project ? 20 : 34, { split: 5 }),
-    row('codex|GPT', 'Codex · GPT', 6, { partialCost: 0,  medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, reviewCostPerTask: 6.5, followUpsPerTask: 0.6, split: 6, switched: 2, errored: 3, erroredShare: 0.38, noUsageDone: 2 }),
-    row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 0, followUpsPerTask: 2 }),
+    row('codex|GPT', 'Codex · GPT', 6, { partialCost: 0,  medianHours: 1.9, medianCostUsd: 12.5, medianTokens: 3.1e7, reviewsPerTask: 3.1, reviewCostPerTask: 6.5, followUpsPerTask: 0.6, split: 6, switched: 2, errored: 3, erroredShare: 0.38, noUsageDone: 2, reviewScore: { function: 9, ux: 9, ui: 9.5 } }),
+    row('claude|GPT', 'Claude Code · GPT', 3, { medianHours: 5.5, medianCostUsd: 21, reviewsPerTask: 0, followUpsPerTask: 2, reviewScore: null, scoredDone: 0 }),
     // A fourth engine whose model has no price: its cost is a floor and never "cheapest".
     row('opencode|Other', 'OpenCode · Other', 7, { medianCostUsd: null, medianTokens: null, partialCost: 7, noUsage: 7, medianHours: 2.5, reviewsPerTask: 2.9, erroredShare: 0.1 }),
   ]
   const tasks = Array.from({ length: 60 }, (_, i) => ({
     taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : i === 1 ? `A very long task title ${'that keeps going '.repeat(12)}` : `Task number ${i}`,
     project: i % 3 ? 'Walnut' : 'Walnut Idea', key: rows[i % 3].key, done: i % 7 !== 0, hours: i % 7 ? 1 + i / 4 : null,
-    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0, ...(i === 59 ? { done: false, hours: null, notStarted: true, errored: true } : {}),
+    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0, ...(i === 0 ? { score: { function: 9, ux: 8, ui: 9.5 }, scoredBy: 2 } : {}), ...(i === 59 ? { done: false, hours: null, notStarted: true, errored: true } : {}),
   }))
   return { range: { start: null, end: null }, rows, tasks, taskCount: 75, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
     split: { on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 1 }] } }
@@ -168,11 +168,17 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   const gptCol = (await table.locator('thead th').allTextContents()).findIndex((h) => h.startsWith('Claude Code · GPT'))
   await expect(cell('crossreview', gptCol)).toHaveText('-')
   await expect(table.locator('tr[data-metric="crossreview"] td[data-best]')).toHaveCount(0)
+  // Reviewer score: function · UX · UI medians, higher is better, ranked by the lowest of the three.
+  await expect(cell('score', 1)).toHaveText('8 · 7.5 · 9')
+  await expect(cell('score', 2)).toHaveText('9 · 9 · 9.5')
+  await expect(cell('score', 2)).toHaveAttribute('data-best', 'true')
+  await expect(cell('score', gptCol)).toHaveText('-')
   // One line on who is ahead where, from the same marks.
   const verdict = card.getByTestId('usage-engines-verdict')
   await expect(verdict).toContainText('Fastest: Codex · GPT')
   await expect(verdict).toContainText('Fewest review rounds: Claude Code · Claude')
   await expect(verdict).toContainText('Fewest errors: Claude Code · Claude')
+  await expect(verdict).toContainText('Best reviewed: Codex · GPT')
   await card.screenshot({ path: path.join(SHOTS, `engines-card-${test.info().project.name}.png`) })
 
   await card.getByTestId('usage-engines-project').selectOption('Walnut')
@@ -196,6 +202,8 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   const costBox = (await tasks.locator('tr').nth(1).locator('td.num').boundingBox())!
   expect(costBox.x + costBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
   await expect(tasks.locator('tr').first()).toContainText('Claude Code · Claude')
+  // Each task shows its reviewers' latest verdict.
+  await expect(tasks.locator('tr').first()).toContainText('scored function 9 · UX 8 · UI 9.5')
   // A task closed after a start that never ran says so, not "open".
   await expect(tasks.locator('tr').nth(59)).toContainText('never started')
   // A task row opens its task from the keyboard too.

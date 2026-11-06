@@ -107,7 +107,7 @@ export interface SessionSendInput {
   messageId?: string;
   /** A reply's structured fields (peers/structured-reply.ts): `inReplyTo` sends only. The asker
    *  reads them as sections of the text; a non-empty `not_done` marks the reply Partial. */
-  reply?: { result?: unknown; evidence?: unknown; not_done?: unknown };
+  reply?: { result?: unknown; evidence?: unknown; not_done?: unknown; score?: unknown };
   /** This message answers the target's open question to the user, in the user's place
    *  (sessions/ask-answer.ts): only from a task above it, its lead or VP, Main, or the person. */
   answersAsk?: boolean;
@@ -445,27 +445,45 @@ export async function deliverToSession(
  * nothing, and erases no result).
  * Best effort: a failed write never fails the reply or the completion.
  */
+/** A review's score alone (a close that settles the user's items writes its own result). Best effort. */
+export async function noteReviewScore(taskId: string, score: import('../peers/structured-reply.js').ReviewScore, via: 'reply' | 'complete'): Promise<void> {
+  try {
+    const { updateTaskRaw } = await import('../task-manager.js');
+    await updateTaskRaw(taskId, () => ({ review_score: { ...score, at: new Date().toISOString(), via } }), { source: 'result-report', push: false });
+  } catch (err) {
+    log.session.warn('review score not recorded on the task', { taskId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 export async function noteResultReport(
   taskId: string,
-  head: Omit<import('../peers/structured-reply.js').TaskResultReport, 'at' | 'result' | 'evidence' | 'not_done' | 'settled'>,
+  head: Omit<import('../peers/structured-reply.js').TaskResultReport, 'at' | 'result' | 'evidence' | 'not_done' | 'settled' | 'score'>,
   fields: import('../peers/structured-reply.js').StructuredReply | null,
   opts: { emit?: boolean } = {},
 ): Promise<import('../peers/structured-reply.js').TaskResultReport | undefined> {
   try {
     const { updateTaskRaw } = await import('../task-manager.js');
-    let report: import('../peers/structured-reply.js').TaskResultReport = { ...head, at: new Date().toISOString(), ...(fields ?? {}) };
+    const { score, ...rest } = fields ?? {};
+    const plain = !rest.result && !rest.evidence?.length && !rest.not_done?.length;
+    let report: import('../peers/structured-reply.js').TaskResultReport = { ...head, at: new Date().toISOString(), ...rest };
+    // A review's score is kept on its own field: a later result never erases it.
+    const reviewScore = score ? { review_score: { ...score, at: report.at, via: head.via, ...(head.request_id ? { request_id: head.request_id } : {}) } } : {};
     const { isPartial, openOwed } = await import('../peers/structured-reply.js');
     // One read-modify-write under the row lock: a settle racing this write is never lost to it.
     const { task, changed } = await updateTaskRaw(taskId, (cur) => {
       const was = cur.result_report;
       // A plain reply carries no result: it only ends a Partial it answers itself (the same
       // request), and never erases a result written before (a completion's, another reply's).
-      if (!fields && head.via === 'reply' && !(isPartial(was) && was?.request_id === head.request_id)) return null;
+      // A score alone is plain too: it is written on its own, and the result stays.
+      if (plain) {
+        const endsPartial = head.via === 'reply' ? isPartial(was) && was?.request_id === head.request_id : isPartial(was);
+        if (!endsPartial) return score ? reviewScore : null;
+      }
       // A reply never ends what a close left for the user (sessions/owed-to-user.ts): the hold rides on.
       const held = head.via === 'reply' ? openOwed(was) : undefined;
       // The merged list mixes an earlier writer's items: its writer is unknown, result/evidence stay this one's.
       if (held) report = { ...report, owed: held, not_done: [...new Set([...(report.not_done ?? []), ...held.items])], not_done_by: 'unknown' };
-      return { result_report: report };
+      return { result_report: report, ...reviewScore };
     }, { source: 'result-report', push: false });
     if (!changed) return undefined;
     // Surfaces learn of it (the Board's Partial); a completion's own event carries it instead.
@@ -753,7 +771,7 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   const { readStructuredReply, composeReplyText } = await import('../peers/structured-reply.js');
   const fields = input.reply ? readStructuredReply(input.reply) : null;
   if (fields && !input.inReplyTo) {
-    throw new SendError('bad_request', 'result, evidence and not_done answer a request: pass in_reply_to (rq-…)');
+    throw new SendError('bad_request', 'result, evidence, not_done and score answer a request: pass in_reply_to (rq-…)');
   }
   const text = composeReplyText(input.text, fields).trim();
   if (!text) throw new SendError('bad_request', 'text must be a non-empty string (or, answering a request, give result)');

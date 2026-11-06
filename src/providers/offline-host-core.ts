@@ -1402,9 +1402,14 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const result = args.in_reply_to !== undefined && typeof args.result === 'string' ? args.result.trim() : ''
     const evidence = args.in_reply_to !== undefined ? list(args.evidence) : []
     const notDone = args.in_reply_to !== undefined ? list(args.not_done) : []
+    // A review's score (function / UX / UI out of 10) rides as a line of the text too.
+    const sc = args.in_reply_to !== undefined && args.score && typeof args.score === 'object' && !Array.isArray(args.score) ? args.score as Record<string, unknown> : null
+    const score = sc ? (['function', 'ux', 'ui'] as const).filter((d) => typeof sc[d] === 'number')
+      .map((d) => `${d === 'function' ? 'function' : d.toUpperCase()} ${sc[d]}/10`).join(', ') : ''
     const text = [own, result && result !== own ? `Result: ${result}` : '',
       evidence.length ? `Evidence:\n${evidence.map((e) => `- ${e}`).join('\n')}` : '',
-      notDone.length ? `Not done (partial reply):\n${notDone.map((e) => `- ${e}`).join('\n')}` : ''].filter(Boolean).join('\n\n')
+      notDone.length ? `Not done (partial reply):\n${notDone.map((e) => `- ${e}`).join('\n')}` : '',
+      score ? `Score: ${score}` : ''].filter(Boolean).join('\n\n')
     if (!text) return fail('bad_request', 'text must be a non-empty string')
     // An answer for the user is recorded on the asking task by the server, which also keeps it from
     // waking a task that is not running (ask-answer.ts answerReach): never delivered here as a plain message.
@@ -1690,7 +1695,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (args.answers_ask !== undefined) return null
     // So does a structured reply (result / evidence / not_done): the server keeps its fields
     // on the request and the replier's task, where the Board reads Partial.
-    if (args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined) return null
+    if (args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined || args.score !== undefined) return null
     if (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId)) {
       // From the caller's call id when it sent one (src/lib/op-call-id.ts): a retry of the same
       // call then carries the same message id, here and at the server, and is written once.

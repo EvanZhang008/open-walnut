@@ -290,6 +290,10 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
         const { resultWriterOf } = await import('../../core/peers/structured-reply.js')
         wroteReport = !!(await noteResultReport(before.id, { via: 'complete', ...resultWriterOf(actorSid, admit.callerTaskId, admit.callerSessionId) }, fields, { emit: false }))
       }
+      if (owed.settle && fields?.score) {
+        const { noteReviewScore } = await import('../../core/sessions/session-send-core.js')
+        await noteReviewScore(id, fields.score, 'complete')
+      }
       const result = await closeWithSettle(owed.settle, fields, () => tm.completeTask(id, actorSid ? { actorSid } : undefined))
       log.web.info('task completed via api-v1', { taskId: result.task.id, ...(actorSid ? { actorSid } : {}) })
       // fields (additive): scopes the replica outbox op to what completion
