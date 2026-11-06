@@ -10,7 +10,7 @@ import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
 import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
-import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, changedFields, type LocalEdit } from './task-list-merge';
+import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, changedFields, noteLocalEdits as noteEdits, settleLocalEdits as settleEdits, heldOverEcho, type LocalEdit } from './task-list-merge';
 import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
@@ -474,18 +474,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // The list as last committed, for a write that has to know a row's fields up front.
   const tasksNow = useCommittedRef(tasks);
   const noteLocalEdits = (patches: Record<string, Partial<Task>>, pending = false) => {
-    const at = performance.now();
-    for (const [id, fields] of Object.entries(patches)) {
-      const prev = localEdits.current.get(id);
-      localEdits.current.set(id, { at, fields: { ...prev?.fields, ...fields }, pending: (prev?.pending ?? 0) + (pending ? 1 : 0) });
-    }
+    noteEdits(localEdits.current, patches, pending, performance.now());
   };
   const settleLocalEdits = (ids: readonly string[]) => {
-    const now = performance.now();
-    for (const id of ids) {
-      const edit = localEdits.current.get(id);
-      if (edit?.pending) { edit.pending -= 1; edit.settledAt = now; }
-    }
+    settleEdits(localEdits.current, ids, performance.now());
   };
   // A one-row optimistic write (a rename, a complete, a phase) held as a pending edit
   // until it is answered: a list answer read before the write landed would draw the old
@@ -890,8 +882,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); takeServerOwned(task); return; }
     retainServerTask(task.id);
     // An optimistic edit still waiting for its write wins over this echo (localEdits).
-    const held = localEdits.current.get(task.id);
-    const incoming = held?.pending ? { ...task, ...held.fields } : task;
+    const incoming = heldOverEcho(task, localEdits.current);
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
       if (idx === -1) {

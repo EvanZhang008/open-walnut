@@ -37,17 +37,15 @@ export interface UseFocusBarReturn {
   /**
    * Local-only optimistic pin into a tier (no server call). Used by quick-add so a
    * newly-created task shows up in its Focus tier the instant the user hits Enter,
-   * before the create round-trip returns the real id. Pair with replaceLocalPinId
-   * (swap temp→real id) + commitPin (persist) once the server id is known, or
-   * removeLocalPin to roll back on failure.
+   * before the create round-trip returns the real id. The create carries the pin
+   * itself; pair with replaceLocalPinId (swap temp→real id) once the server id is
+   * known, or removeLocalPin to roll back on failure.
    */
   addLocalPin: (taskId: string, tier: FocusTier) => void;
   /** Carry the temp id's optimistic pin state over to the real id (same position). */
   replaceLocalPinId: (tempId: string, realId: string) => void;
   /** Remove a (temp or real) id's pin state — rollback path. */
   removeLocalPin: (taskId: string) => void;
-  /** Persist a pin+tier to the server (no optimistic state change here). */
-  commitPin: (taskId: string, tier: FocusTier) => Promise<void>;
   isPinned: (taskId: string) => boolean;
   tierOf: (taskId: string) => FocusTier;
   visible: boolean;
@@ -55,6 +53,9 @@ export interface UseFocusBarReturn {
 }
 
 const SELF_CHANGE_COOLDOWN = 3000;
+/** How long a quick-add's create may hold Focus Bar answers back (the API's own
+ *  timeout is 15s, so a create that is still out past this never reports back). */
+const QUICK_ADD_HOLD_MS = 30_000;
 const VISIBLE_KEY = 'open-walnut-focus-dock-visible';
 
 function readVisible(): boolean {
@@ -66,6 +67,23 @@ function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Await one Focus Bar write whose optimistic patch is held (`patchTasksLocal(...,
+ * { pending: true })`), and run its settle exactly once when the write is answered,
+ * fails or times out (the API's own 15s default), BEFORE the caller reads the
+ * outcome: a rollback patch or a snapshot applied while the edit is still held
+ * would be laid back under the optimistic values by the next list read.
+ */
+async function heldWrite<T>(settle: () => void, write: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false }> {
+  try {
+    return { ok: true, value: await write() };
+  } catch {
+    return { ok: false };
+  } finally {
+    settle();
+  }
 }
 
 /** Normalize a tier for storage on the task object: satellite = undefined (default). */
@@ -166,10 +184,9 @@ export function useFocusBar(): UseFocusBarReturn {
     return map;
   }, [orderedPinned, customTiers]));
 
-  // Refs for async closures (commitPin, event handlers) — always-current values
+  // Refs for async closures (event handlers): always-current values
   // without re-creating the callbacks each render.
   const tasksRef = useCommittedRef<Task[]>(tasks);
-  const pinnedIdsRef = useCommittedRef<string[]>(pinnedIds);
 
   const setVisible = useCallback((v: boolean) => {
     setVisibleState(v);
@@ -177,17 +194,48 @@ export function useFocusBar(): UseFocusBarReturn {
   }, [setVisibleState]);
 
   const lastWriteRef = useRef(0);
+  // Each quick-add pin while its create is out: its tier/order so replaceLocalPinId
+  // can re-apply them to the real task (create() swaps the temp task object out
+  // wholesale), and when it began.
+  const localPinsRef = useRef(new Map<string, { tier: FocusTier; order: number; at: number }>());
 
-  // Apply a server tier snapshot as task patches. Only used for cross-client
-  // convergence + post-reorder confirmation; own optimistic patches already
-  // mirror server semantics.
+  // ── One answer at a time, and only once every write is in ──
+  // Every write answers with a full tier snapshot, read when the server applied
+  // THAT write. The server applies writes in the order they get its write lock,
+  // not the order they were sent (the tier route reads the tier registry before it
+  // locks, the reorder route locks at once), so while two writes overlap neither
+  // answer is the last word: a collapsed folder dropped in another tier sends one
+  // tier write per member plus a reorder in the same tick, the reorder often lands
+  // first, and its snapshot still holds the old tiers. Applied, it wrote the old
+  // tier over the members' held edits and the folder snapped back. So a write's own
+  // answer is applied only when no other write (nor a quick-add create, nor the
+  // pull below) was out at any point of it; otherwise, once the last one is in, one
+  // pull of the whole snapshot, sent after all of them landed, is the answer.
+  const inFlight = useRef(0);
+  const overlapped = useRef(false);
+  /** A quick-add counts as a write while its create is out (bounded, so a create
+   *  that never reports back cannot hold every answer forever). */
+  const quickAddsOut = () => {
+    const since = Date.now() - QUICK_ADD_HOLD_MS;
+    for (const entry of localPinsRef.current.values()) if (entry.at > since) return true;
+    return false;
+  };
+  const busy = () => inFlight.current > 0 || quickAddsOut();
+  const beginWrite = useCallback((opts?: { pull?: boolean }) => {
+    if (!opts?.pull) lastWriteRef.current = Date.now();
+    if (busy()) overlapped.current = true;
+    inFlight.current++;
+  }, []);
+
+  // Apply a server tier snapshot as task patches: a write's own answer, the pull
+  // after overlapping writes, or another client's change.
   //
   // DEFENSIVE: only rewrite focus_tier when the payload actually carries the tier
   // arrays. A pinned-only payload (e.g. a reorder response that forgot to include
   // them) would otherwise treat focus/wait as empty and wipe every task's tier to
   // satellite — the "Focus tasks vanish after adding a task" bug. When the tier
   // split is absent we touch only pinned + pin_order and leave focus_tier intact.
-  const applyFocusData = useCallback((data: Partial<focusApi.FocusBarData>, onlyIds?: Set<string>) => {
+  const applyFocusData = useCallback((data: Partial<focusApi.FocusBarData>) => {
     if (!data.pinned_tasks) return;
     const hasTierSplit = data.focus_tasks !== undefined || data.wait_tasks !== undefined;
     // custom_tier_tasks is typed optional ("absent on old servers"): a payload
@@ -208,7 +256,6 @@ export function useFocusBar(): UseFocusBarReturn {
     const pinnedSet = new Set(data.pinned_tasks);
     const patches: Record<string, Partial<Task>> = {};
     data.pinned_tasks.forEach((id, i) => {
-      if (onlyIds && !onlyIds.has(id)) return;
       patches[id] = {
         pinned: true,
         pin_order: i,
@@ -221,19 +268,49 @@ export function useFocusBar(): UseFocusBarReturn {
       };
     });
     for (const t of tasksRef.current) {
-      if (t.pinned && !pinnedSet.has(t.id) && (!onlyIds || onlyIds.has(t.id))) {
+      // A quick-add pin whose create has not answered is in no server snapshot yet.
+      if (localPinsRef.current.has(t.id)) continue;
+      if (t.pinned && !pinnedSet.has(t.id)) {
         patches[t.id] = { pinned: false, focus_tier: undefined, pin_order: undefined };
       }
     }
     patchTasksLocal(patches);
   }, [patchTasksLocal, customIdSet]);
 
+  // The pull counts as a write in flight, so a write that starts while it is out
+  // marks the overlap and the pull's answer is not applied (it serves as the
+  // generation check): the next quiet moment pulls again.
+  const pullThen = useCallback((done: (answer: Partial<focusApi.FocusBarData> | 'quiet') => void) => {
+    beginWrite({ pull: true });
+    focusApi.fetchPinnedTasks().then(done, () => done('quiet'));
+  }, [beginWrite]);
+  // One write is over (its held patch already settled, its rollback made). `answer`
+  // is its snapshot, `null` a failure (the page may now be wrong: pull), `'quiet'`
+  // a write with nothing of its own to apply (a quick-add whose create came back,
+  // a pull that failed). `counted` is false for a quick-add, which is counted by
+  // localPinsRef rather than inFlight.
+  const endWrite = useCallback(function end(answer: Partial<focusApi.FocusBarData> | null | 'quiet', counted = true) {
+    if (counted) inFlight.current--;
+    if (busy()) {
+      // Not the last one in: this answer may already be overtaken.
+      overlapped.current = true;
+      return;
+    }
+    if (!overlapped.current && answer !== null) {
+      if (answer !== 'quiet') applyFocusData(answer);
+      return;
+    }
+    overlapped.current = false;
+    pullThen(end);
+  }, [applyFocusData, pullThen]);
+
   // Cross-client convergence: another client's pin/reorder emits
   // config:changed{focus_bar}. pin_order reorders carry no per-task WS events,
   // so pull the snapshot. Cooldown skips our own echoes (we already applied
-  // the same change optimistically). config:changed{focus_tiers} = the custom
-  // tier registry changed (Settings CRUD, any client) — always refetch defs;
-  // tier membership self-corrects via task:updated echoes.
+  // the same change optimistically); while our own writes are out, the pull that
+  // follows them carries the other client's change too. config:changed{focus_tiers}
+  // = the custom tier registry changed (Settings CRUD, any client): always refetch
+  // defs; tier membership self-corrects via task:updated echoes.
   useEvent('config:changed', (data: unknown) => {
     const { key } = (data ?? {}) as { key?: string };
     if (key === 'focus_tiers') {
@@ -242,7 +319,8 @@ export function useFocusBar(): UseFocusBarReturn {
     }
     if (key !== 'focus_bar') return;
     if (Date.now() - lastWriteRef.current < SELF_CHANGE_COOLDOWN) return;
-    focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
+    if (busy()) { overlapped.current = true; return; }
+    pullThen(endWrite);
   });
 
   // Auto-unpin-on-completion REMOVED (2026-08-26, user request): a pin is a
@@ -250,55 +328,66 @@ export function useFocusBar(): UseFocusBarReturn {
   // done styling) until the user unpins it. The server-side auto-unpin in
   // completeTask/toggleComplete/setPhaseBulk was removed in the same change.
 
-  // ── Mutations: optimistic patch (mirrors server semantics) + API call.
-  // The WS echo of our own call merges as a no-op (same values); on API error
-  // we roll back / re-pull. ──
+  // ── Mutations: optimistic patch (mirrors server semantics), held until the API
+  // call answers, then endWrite above decides which answer the page takes. Every
+  // beginWrite is paired with exactly one endWrite, in a finally: a throw after it
+  // (a caller's error callback, a rollback) would otherwise leave the write counted
+  // as out for good, and no answer, pull or other client's change would ever apply. ──
 
   const pin = useCallback(async (taskId: string) => {
     const task = tasksRef.current.find((t) => t.id === taskId);
     // No NEW pins on done tasks (mirrors server togglePin) — existing pins
     // survive completion, but a fresh pin would be invisible outside search.
     if (task && (task.status === 'done' || task.phase === 'COMPLETE')) return;
-    lastWriteRef.current = Date.now();
     // Mirror backend togglePin: new pins land at the BOTTOM (pin_order = max
     // existing + 1), so an arriving pin never reshuffles a hand-arranged order.
     // If either side flips, the optimistic order and the echo order diverge and
     // the row visibly jumps.
     const orders = tasksRef.current.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
     const maxOrder = orders.length ? Math.max(...orders) : -1;
-    patchTasksLocal({ [taskId]: { pinned: true, pin_order: maxOrder + 1, focus_tier: undefined } });
+    beginWrite();
+    // The answer carries pinned ids only, so it never touches a tier.
+    let answer: Partial<focusApi.FocusBarData> | null = null;
     try {
-      await focusApi.pinTask(taskId);
-    } catch {
-      patchTasksLocal({ [taskId]: { pinned: false, focus_tier: undefined, pin_order: undefined } });
+      const settle = patchTasksLocal({ [taskId]: { pinned: true, pin_order: maxOrder + 1, focus_tier: undefined } }, { pending: true });
+      const written = await heldWrite(settle, () => focusApi.pinTask(taskId));
+      if (written.ok) answer = written.value;
+      else patchTasksLocal({ [taskId]: { pinned: false, focus_tier: undefined, pin_order: undefined } });
+    } finally {
+      endWrite(answer);
     }
-  }, [patchTasksLocal]);
+  }, [patchTasksLocal, beginWrite, endWrite]);
 
   const unpin = useCallback(async (taskId: string) => {
-    lastWriteRef.current = Date.now();
-    patchTasksLocal({ [taskId]: { pinned: false, focus_tier: undefined, pin_order: undefined } });
+    beginWrite();
+    let answer: Partial<focusApi.FocusBarData> | null = null;
     try {
-      await focusApi.unpinTask(taskId);
-    } catch {
-      focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
+      const settle = patchTasksLocal({ [taskId]: { pinned: false, focus_tier: undefined, pin_order: undefined } }, { pending: true });
+      const written = await heldWrite(settle, () => focusApi.unpinTask(taskId));
+      if (written.ok) answer = written.value;
+    } finally {
+      endWrite(answer);
     }
-  }, [patchTasksLocal, applyFocusData]);
+  }, [patchTasksLocal, beginWrite, endWrite]);
 
   const reorder = useCallback(async (newIds: string[]) => {
-    lastWriteRef.current = Date.now();
     const patches: Record<string, Partial<Task>> = {};
     newIds.forEach((id, i) => { patches[id] = { pin_order: i }; });
-    patchTasksLocal(patches);
+    // Held until the write answers: pin_order has no per-task event, so a list read
+    // answered before the reorder landed would keep the old order until the next read.
+    beginWrite();
+    let answer: Partial<focusApi.FocusBarData> | null = null;
     try {
-      await focusApi.reorderPinnedTasks(newIds);
-    } catch {
-      showOperationError('Could not save task order. Please try again.');
-      focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
+      const settle = patchTasksLocal(patches, { pending: true });
+      const written = await heldWrite(settle, () => focusApi.reorderPinnedTasks(newIds));
+      if (written.ok) answer = written.value;
+      else showOperationError('Could not save task order. Please try again.');
+    } finally {
+      endWrite(answer);
     }
-  }, [patchTasksLocal, applyFocusData, showOperationError]);
+  }, [patchTasksLocal, showOperationError, beginWrite, endWrite]);
 
   const setTier = useCallback(async (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => {
-    lastWriteRef.current = Date.now();
     const patches: Record<string, Partial<Task>> = {
       [taskId]: { focus_tier: tierField(tier) },
     };
@@ -307,25 +396,28 @@ export function useFocusBar(): UseFocusBarReturn {
         patches[id] = { ...(patches[id] ?? {}), pin_order: i };
       });
     }
-    patchTasksLocal(patches);
+    // Held over both requests: while held, the tier echo is laid under the local
+    // value too, so the answer (or the pull) is what brings the server's own word in.
+    beginWrite();
+    let answer: Partial<focusApi.FocusBarData> | null = null;
     try {
-      // When reordering, persist order FIRST so the setTier response
-      // (which includes pinned_tasks) reflects the correct position.
-      if (newPinnedOrder) await focusApi.reorderPinnedTasks(newPinnedOrder);
-      await focusApi.setTaskTier(taskId, tier);
-    } catch {
-      showOperationError('Could not move the task to that group. Please try again.');
-      focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
+      const settle = patchTasksLocal(patches, { pending: true });
+      const written = await heldWrite(settle, async () => {
+        // When reordering, persist order FIRST so the setTier response
+        // (which includes pinned_tasks) reflects the correct position.
+        if (newPinnedOrder) await focusApi.reorderPinnedTasks(newPinnedOrder);
+        return focusApi.setTaskTier(taskId, tier);
+      });
+      if (written.ok) answer = written.value;
+      else showOperationError('Could not move the task to that group. Please try again.');
+    } finally {
+      endWrite(answer);
     }
-  }, [patchTasksLocal, applyFocusData, showOperationError]);
+  }, [patchTasksLocal, showOperationError, beginWrite, endWrite]);
 
-  const bulkGeneration = useRef(0);
   const setTierBulk = useCallback(async (taskIds: string[], tier: FocusTier | null, onError?: (message: string, failedIds?: string[]) => void) => {
     if (taskIds.length === 0) return;
     const reportError = onError ?? showOperationError;
-    const generation = ++bulkGeneration.current;
-    const writtenAt = Date.now();
-    lastWriteRef.current = writtenAt;
     const byId = new Map(tasksRef.current.map((t) => [t.id, t]));
     const orders = tasksRef.current.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
     let nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
@@ -344,58 +436,56 @@ export function useFocusBar(): UseFocusBarReturn {
         : { pinned: true, pin_order: nextOrder++, focus_tier: tierField(tier) };
     }
     const ids = [...new Set(taskIds)];
-    // The server echoes one task:updated per changed task; the response below is the truth.
+    // The server echoes one task:updated per changed task; the answer (or the pull) is the truth.
     for (const id of ids) guardEcho(`update:${id}`);
-    patchTasksLocal(patches);
+    beginWrite();
+    let answer: Partial<focusApi.FocusBarData> | null = null;
     try {
-      const result = await focusApi.setTierBulk(ids, tier);
-      applyFocusData(result);
-      if (result.failed.length > 0) {
-        const failedIds = result.failed.map(f => f.id);
-        const names = failedIds.map(id => byId.get(id)?.title ?? id).join(', ');
-        reportError(`${result.failed.length} of ${ids.length} tasks could not be ${tier === null ? 'unpinned' : 'moved to that pin tier'}: ${names}.`, failedIds);
+      const settle = patchTasksLocal(patches, { pending: true });
+      const written = await heldWrite(settle, () => focusApi.setTierBulk(ids, tier));
+      if (written.ok) {
+        // The snapshot puts the failed rows back where the server kept them.
+        const result = answer = written.value;
+        if (result.failed.length > 0) {
+          const failedIds = result.failed.map(f => f.id);
+          const names = failedIds.map(id => byId.get(id)?.title ?? id).join(', ');
+          reportError(`${result.failed.length} of ${ids.length} tasks could not be ${tier === null ? 'unpinned' : 'moved to that pin tier'}: ${names}.`, failedIds);
+        }
+        return;
       }
-    } catch {
-      reportError(tier === null ? 'Could not unpin those tasks. Please try again.' : 'Could not move those tasks to that pin tier. Please try again.');
-      const current = new Map(tasksRef.current.map(task => [task.id, task]));
+      // Put back at once each row nothing else changed since; the pull confirms it.
       const restore: Record<string, Partial<Task>> = {};
       for (const id of Object.keys(patches)) {
-        const task = current.get(id);
+        const task = tasksRef.current.find((t) => t.id === id);
         const before = byId.get(id)!;
         if (task && Object.entries(patches[id]).every(([key, value]) => task[key as keyof Task] === value)) {
           restore[id] = Object.fromEntries(Object.keys(patches[id]).map(key => [key, before[key as keyof Task]]));
         }
       }
-      const restored = new Map(Object.keys(restore).map(id => [id, { ...current.get(id)!, ...restore[id] }]));
       patchTasksLocal(restore);
-      void focusApi.fetchPinnedTasks().then(data => {
-        if (bulkGeneration.current !== generation || lastWriteRef.current !== writtenAt) return;
-        const eligible = new Set(Object.keys(restore).filter(id => {
-          const task = tasksRef.current.find(t => t.id === id);
-          const before = restored.get(id)!;
-          return task && task.pinned === before.pinned && task.focus_tier === before.focus_tier && task.pin_order === before.pin_order;
-        }));
-        applyFocusData(data, eligible);
-      }).catch(() => {});
+      reportError(tier === null ? 'Could not unpin those tasks. Please try again.' : 'Could not move those tasks to that pin tier. Please try again.');
+    } finally {
+      endWrite(answer);
     }
-  }, [guardEcho, patchTasksLocal, applyFocusData, showOperationError]);
+  }, [guardEcho, patchTasksLocal, showOperationError, beginWrite, endWrite]);
 
   // ── Optimistic local pin helpers (quick-add: show in tier before the create
-  // round-trip returns a real id). Pure task patches + a separate persist call so
-  // the editor can pipeline temp-id → real-id without a perceptible gap. ──
-
-  // Remember each temp id's tier/order so replaceLocalPinId can re-apply them to
-  // the real task (create() swaps the temp task object out wholesale).
-  const localPinsRef = useRef(new Map<string, { tier: FocusTier; order: number }>());
+  // round-trip returns a real id). Pure task patches; the create itself carries the
+  // pin, so nothing here persists. ──
 
   const addLocalPin = useCallback((taskId: string, tier: FocusTier) => {
+    // The quick-add counts as a write in flight until replaceLocalPinId or
+    // removeLocalPin: no answer is applied while it is out, and a pull that follows
+    // is sent after the create landed. That is what keeps the reconciled REAL id
+    // from being unpinned by a snapshot read before the create (the temp id itself
+    // is skipped by applyFocusData).
     lastWriteRef.current = Date.now();
+    if (busy()) overlapped.current = true;
     // Append to the BOTTOM of its tier — the task stays exactly where the user
     // added it (the "+ Add to …" line is at the bottom), like Apple Reminders.
-    // commitPin then persists this bottom position so it survives a reload.
     const orders = tasksRef.current.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
     const maxOrder = orders.length ? Math.max(...orders) : 0;
-    localPinsRef.current.set(taskId, { tier, order: maxOrder + 1 });
+    localPinsRef.current.set(taskId, { tier, order: maxOrder + 1, at: Date.now() });
     patchTasksLocal({ [taskId]: { pinned: true, pin_order: maxOrder + 1, focus_tier: tierField(tier) } });
   }, [patchTasksLocal]);
 
@@ -403,33 +493,23 @@ export function useFocusBar(): UseFocusBarReturn {
     const entry = localPinsRef.current.get(tempId);
     localPinsRef.current.delete(tempId);
     if (!entry) return;
-    // The temp task object is gone (create() swapped in the server task, which
-    // says pinned=false until commitPin persists) — re-apply the pin state.
-    patchTasksLocal({ [realId]: { pinned: true, pin_order: entry.order, focus_tier: tierField(entry.tier) } });
-  }, [patchTasksLocal]);
+    // The temp task object is gone (create() swapped in the server task): re-apply
+    // the pin state on the real id.
+    try {
+      patchTasksLocal({ [realId]: { pinned: true, pin_order: entry.order, focus_tier: tierField(entry.tier) } });
+    } finally {
+      endWrite('quiet', false);
+    }
+  }, [patchTasksLocal, endWrite]);
 
   const removeLocalPin = useCallback((taskId: string) => {
-    localPinsRef.current.delete(taskId);
-    patchTasksLocal({ [taskId]: { pinned: false, focus_tier: undefined, pin_order: undefined } });
-  }, [patchTasksLocal]);
-
-  const commitPin = useCallback(async (taskId: string, tier: FocusTier) => {
-    lastWriteRef.current = Date.now();
-    // Backend and optimistic patch now agree on bottom placement, but the two
-    // writes (togglePin + setFocusTier) each echo task:updated mid-flight, before
-    // the reorder below settles. Guard both so the row can't flicker.
-    guardEcho(`update:${taskId}`);
-    guardEcho(`update:${taskId}`);
-    await focusApi.pinTask(taskId);
-    await focusApi.setTaskTier(taskId, tier);
-    // Persist the bottom position: take the current pinned order (already has
-    // taskId via replaceLocalPinId) and push it; apply the echo as truth.
-    const desiredOrder = pinnedIdsRef.current.includes(taskId)
-      ? pinnedIdsRef.current
-      : [...pinnedIdsRef.current, taskId];
-    const result = await focusApi.reorderPinnedTasks(desiredOrder);
-    applyFocusData(result);
-  }, [guardEcho, applyFocusData]);
+    const had = localPinsRef.current.delete(taskId);
+    try {
+      patchTasksLocal({ [taskId]: { pinned: false, focus_tier: undefined, pin_order: undefined } });
+    } finally {
+      if (had) endWrite('quiet', false);
+    }
+  }, [patchTasksLocal, endWrite]);
 
   const isPinned = useCallback((taskId: string) => pinnedIds.includes(taskId), [pinnedIds]);
 
@@ -454,7 +534,7 @@ export function useFocusBar(): UseFocusBarReturn {
     focusTasks, satelliteTasks, waitTasks,
     customTiers, customTiersLoaded, customTierIds,
     pin, unpin, reorder, setTier, setTierBulk,
-    addLocalPin, replaceLocalPinId, removeLocalPin, commitPin,
+    addLocalPin, replaceLocalPinId, removeLocalPin,
     isPinned, tierOf,
     visible, setVisible,
   };

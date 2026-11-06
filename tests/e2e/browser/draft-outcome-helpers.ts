@@ -75,8 +75,8 @@ export async function createTaskForLater(page: Page, panel: Locator, opts: { pin
 }
 
 /**
- * The pin is a SECOND write after the create (optimistic pin → commitPin), so
- * "the task landed in tier X" is a poll, not a read. Intervals are explicit so a
+ * The pin rides the create, but the card's tier on the board follows the create's
+ * answer and its echoes, so "the task landed in tier X" is a poll, not a read. Intervals are explicit so a
  * slow fixture pays a few ticks, not Playwright's default ramp.
  */
 export async function expectTaskInTier(page: Page, taskId: string, tier: string): Promise<void> {

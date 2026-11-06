@@ -92,7 +92,7 @@ describe('a transition value is never mirrored into a ref during render', () => 
       'pages/OrgPage.tsx': ['useCommittedRef(allTasks)'],
       'components/tasks/TodoPanel.tsx': ['useCommittedRef<Task[]>(tasks)', 'useCommittedRef(tasks)'],
       'components/chat/AskWalnutSlot.tsx': ['useCommittedRef(tasks)', 'useCommittedRef(askTasks)', 'useCommittedRef(rows)'],
-      'hooks/useFocusBar.ts': ['useCommittedRef<Task[]>(tasks)', 'useCommittedRef<string[]>(pinnedIds)'],
+      'hooks/useFocusBar.ts': ['useCommittedRef<Task[]>(tasks)'],
       'hooks/useTasks.ts': ['useCommittedRef(tasks)'],
     };
     for (const [file, calls] of Object.entries(uses)) {

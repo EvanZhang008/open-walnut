@@ -191,6 +191,29 @@ export function mergeFetchedTasks(prev: Task[], fetched: Task[], retain?: Readon
  *  `settledAt` is when the last of them was answered. */
 export interface LocalEdit { at: number; fields: Partial<Task>; pending?: number; settledAt?: number }
 
+/** Record optimistic fields (merged into the row's earlier edit), one more write
+ *  behind them when `pending`. */
+export function noteLocalEdits(edits: Map<string, LocalEdit>, patches: Record<string, Partial<Task>>, pending: boolean, at: number): void {
+  for (const [id, fields] of Object.entries(patches)) {
+    const prev = edits.get(id);
+    edits.set(id, { at, fields: { ...prev?.fields, ...fields }, pending: (prev?.pending ?? 0) + (pending ? 1 : 0) });
+  }
+}
+
+/** One write behind each row's edit was answered. */
+export function settleLocalEdits(edits: Map<string, LocalEdit>, ids: readonly string[], at: number): void {
+  for (const id of ids) {
+    const edit = edits.get(id);
+    if (edit?.pending) { edit.pending -= 1; edit.settledAt = at; }
+  }
+}
+
+/** A server echo of one row: an optimistic edit still waiting for its write wins over it. */
+export function heldOverEcho(task: Task, edits: Map<string, LocalEdit>): Task {
+  const held = edits.get(task.id);
+  return held?.pending ? { ...task, ...held.fields } : task;
+}
+
 /**
  * A list answer read when its request left (`sentAt`), with the optimistic fields
  * written after that, still waiting for their write, or answered only after it left,
