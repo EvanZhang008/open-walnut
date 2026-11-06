@@ -48,7 +48,7 @@ import type { ResolvedImageStorage } from './extensions/resolved-image';
 import { NotesBubbleMenu } from './NotesBubbleMenu';
 import { TagAutocomplete } from './TagAutocomplete';
 import { EditorMic } from '@/components/common/EditorMic';
-import { Lightbox } from '@/components/common/Lightbox';
+import { NoteZoom } from './NoteZoom';
 import { useImageZoom } from './image-zoom';
 import type { TagSuggestion } from './TagAutocomplete';
 import type { NoteListItem } from '@/api/notes-v2';
@@ -708,7 +708,7 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         // note-body: the note's own text (its inline links are prose, not controls).
         className={`notes-editor note-body ${className ?? ''}`}
       />
-      {zoomed && <Lightbox src={zoomed.src} alt={zoomed.alt} caption={zoomed.alt} onClose={closeZoom} fill />}
+      {zoomed && <NoteZoom src={zoomed.src} alt={zoomed.alt} caption={zoomed.alt} onClose={closeZoom} />}
       {editor && dictation && !readOnly && (
         <div className="editor-mic-dock">
           <EditorMic editor={editor} />

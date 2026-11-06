@@ -13,7 +13,7 @@
  * selection box painted over the picture. Only a press on the picture itself
  * counts, never the line beside it.
  *
- * While open, the zoom holds the keyboard (Lightbox), so a key never edits the
+ * While open, the zoom holds the keyboard (NoteZoom.tsx), so a key never edits the
  * note behind it. On close the caret sits right after the picture, where it was,
  * so a key typed next never replaces it (the start of the next line was tried:
  * typing then glued words onto the next paragraph or into a heading). A picture
