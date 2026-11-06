@@ -295,7 +295,9 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
         const { resultWriterOf } = await import('../../core/peers/structured-reply.js')
         wroteReport = !!(await noteResultReport(before.id, { via: 'complete', ...resultWriterOf(actorSid, admit.callerTaskId, admit.callerSessionId) }, fields, { emit: false }))
       }
-      if (owed.settle && fields?.score) {
+      // A score the report write above did not take (a settle writes its own result; a task already
+      // complete writes no report) is kept on its own: a 200 never drops the reviewer's verdict.
+      if (fields?.score && (owed.settle || !before || before.phase === 'COMPLETE')) {
         const { noteReviewScore } = await import('../../core/sessions/session-send-core.js')
         await noteReviewScore(id, fields.score, 'complete')
       }

@@ -3,7 +3,7 @@
  * object or "f/ux/ui" text, each 0..10, and shown to the asker as one Score line.
  */
 import { describe, expect, it } from 'vitest';
-import { composeReplyText, hasStructuredFields, readScore, readStructuredReply, scoreProblem } from '../../../src/core/peers/structured-reply.js';
+import { composeReplyText, hasStructuredFields, mergeReviewScore, readScore, readStructuredReply, scoreProblem } from '../../../src/core/peers/structured-reply.js';
 
 describe('review score', () => {
   it('reads an object (any key case, numbers or "n/10" text) and the three-part text', () => {
@@ -43,5 +43,17 @@ describe('review score', () => {
     expect(scoreProblem('10/9/9')).toBeNull();
     expect(scoreProblem({ ux: 9 })).toBeNull();
     expect(scoreProblem(undefined)).toBeNull();
+  });
+
+  it('merges a new score into the held one part by part, never over a newer part', () => {
+    const t1 = '2026-11-06T10:00:00.000Z', t2 = '2026-11-06T11:00:00.000Z', t0 = '2026-11-06T09:00:00.000Z';
+    const full = mergeReviewScore(undefined, { function: 9, ux: 8, ui: 9 }, { at: t1, via: 'reply', request_id: 'rq-aaaaaaaa' })!;
+    expect(full).toEqual({ function: 9, ux: 8, ui: 9, at: t1, via: 'reply', request_id: 'rq-aaaaaaaa' });
+    // A later UI-only score updates UI and keeps function and UX, each with its own time.
+    const later = mergeReviewScore(full, { ui: 6 }, { at: t2, via: 'complete' })!;
+    expect(later).toEqual({ function: 9, ux: 8, ui: 6, at: t2, via: 'complete', parts_at: { function: t1, ux: t1, ui: t2 } });
+    // An older one (a replay from a host) changes nothing it holds newer; the same one again is no change.
+    expect(mergeReviewScore(later, { function: 3, ux: 3, ui: 3 }, { at: t0, via: 'reply' })).toBeNull();
+    expect(mergeReviewScore(full, { function: 9, ux: 8, ui: 9 }, { at: t1, via: 'reply', request_id: 'rq-aaaaaaaa' })).toBeNull();
   });
 });

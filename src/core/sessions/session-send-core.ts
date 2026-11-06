@@ -459,11 +459,11 @@ export async function noteReviewScore(
 ): Promise<void> {
   try {
     const { updateTaskRaw } = await import('../task-manager.js');
+    const { mergeReviewScore } = await import('../peers/structured-reply.js');
     const at = opts.at && Number.isFinite(Date.parse(opts.at)) ? opts.at : new Date().toISOString();
     await updateTaskRaw(taskId, (t) => {
-      const was = t.review_score;
-      if (opts.at && was?.at && Date.parse(was.at) >= Date.parse(at)) return null;
-      return { review_score: { ...score, at, via, ...(opts.requestId ? { request_id: opts.requestId } : {}) } };
+      const merged = mergeReviewScore(t.review_score, score, { at, via, ...(opts.requestId ? { request_id: opts.requestId } : {}) });
+      return merged ? { review_score: merged } : null;
     }, { source: 'result-report', push: false });
   } catch (err) {
     log.session.warn('review score not recorded on the task', { taskId, error: err instanceof Error ? err.message : String(err) });
@@ -481,18 +481,19 @@ export async function noteResultReport(
     const { score, ...rest } = fields ?? {};
     const plain = !rest.result && !rest.evidence?.length && !rest.not_done?.length;
     let report: import('../peers/structured-reply.js').TaskResultReport = { ...head, at: new Date().toISOString(), ...rest };
-    // A review's score is kept on its own field: a later result never erases it.
-    const reviewScore = score ? { review_score: { ...score, at: report.at, via: head.via, ...(head.request_id ? { request_id: head.request_id } : {}) } } : {};
-    const { isPartial, openOwed } = await import('../peers/structured-reply.js');
+    const { isPartial, openOwed, mergeReviewScore } = await import('../peers/structured-reply.js');
     // One read-modify-write under the row lock: a settle racing this write is never lost to it.
     const { task, changed } = await updateTaskRaw(taskId, (cur) => {
       const was = cur.result_report;
+      // A review's score is kept on its own field, part by part: a later result never erases it.
+      const merged = score ? mergeReviewScore(cur.review_score, score, { at: report.at, via: head.via, ...(head.request_id ? { request_id: head.request_id } : {}) }) : null;
+      const reviewScore = merged ? { review_score: merged } : {};
       // A plain reply carries no result: it only ends a Partial it answers itself (the same
       // request), and never erases a result written before (a completion's, another reply's).
       // A score alone is plain too: it is written on its own, and the result stays.
       if (plain) {
         const endsPartial = head.via === 'reply' ? isPartial(was) && was?.request_id === head.request_id : isPartial(was);
-        if (!endsPartial) return score ? reviewScore : null;
+        if (!endsPartial) return merged ? reviewScore : null;
       }
       // A reply never ends what a close left for the user (sessions/owed-to-user.ts): the hold rides on.
       const held = head.via === 'reply' ? openOwed(was) : undefined;

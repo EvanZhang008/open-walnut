@@ -225,6 +225,14 @@ describe('a structured reply on task_send', () => {
     await req('POST', `/api/v1/tasks/${lead.taskId}/not-done`, { how: 'dropped', note: 'test cleanup' })
     await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
 
+    // A later reply naming only UI updates UI and keeps the function and UX it gave before.
+    const rqUi = await ask(asker, lead, 'look at the UI again')
+    const rUi = await req('POST', '/api/v1/messages', { in_reply_to: rqUi.id, text: 'UI rechecked.', score: { ui: 5 } }, asSession(lead.sid))
+    expect(rUi.status, JSON.stringify(rUi.json)).toBe(202)
+    expect((await task(lead.taskId)).review_score).toMatchObject({ function: 9, ux: 9, ui: 5, request_id: rqUi.id })
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+
     // An unusable score is refused, never dropped in silence; nothing is sent.
     const rq5 = await ask(asker, lead, 'score again')
     const r5 = await req('POST', '/api/v1/messages', { in_reply_to: rq5.id, text: 'Scored again.', score: { function: 12 } }, asSession(lead.sid))
@@ -249,6 +257,11 @@ describe('a structured reply on task_send', () => {
     const t = await task(id)
     expect(t.review_score).toMatchObject({ function: 10, ux: 9, via: 'complete' })
     expect(t.review_score.ui).toBeUndefined()
+    // A close of a task already closed still keeps the score it carries: a 200 never drops it,
+    // and a part it does not name keeps the one given before.
+    const again = await req('POST', `/api/v1/tasks/${id}/complete`, { score: { ui: 8 } })
+    expect(again.status, JSON.stringify(again.json)).toBe(200)
+    expect((await task(id)).review_score).toMatchObject({ function: 10, ux: 9, ui: 8, via: 'complete' })
   })
 
   it('the fields without in_reply_to are refused with 400, and nothing is sent', async () => {

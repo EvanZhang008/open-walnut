@@ -37,6 +37,44 @@ export interface TaskReviewScore extends ReviewScore {
   at: string;
   via: 'reply' | 'complete';
   request_id?: string;
+  /** When each part was given, when they differ from `at` (a later score that named only some). */
+  parts_at?: Partial<Record<(typeof SCORE_DIMENSIONS)[number], string>>;
+}
+
+/**
+ * A new score merged into the one a task holds, part by part: a part is replaced only by a newer
+ * one, and a part the new score does not name is kept (2026-11-06: a full 9/8/9 followed by
+ * {ui: 6} kept only the UI). null when nothing changes (a replay, an older score).
+ */
+export function mergeReviewScore(
+  was: TaskReviewScore | undefined,
+  next: ReviewScore,
+  meta: { at: string; via: 'reply' | 'complete'; request_id?: string },
+): TaskReviewScore | null {
+  const out: TaskReviewScore = { at: was?.at ?? meta.at, via: was?.via ?? meta.via, ...(was?.request_id ? { request_id: was.request_id } : {}) };
+  const partsAt: Partial<Record<(typeof SCORE_DIMENSIONS)[number], string>> = {};
+  let changed = false;
+  for (const d of SCORE_DIMENSIONS) {
+    const old = was?.[d];
+    const oldAt = was?.parts_at?.[d] ?? was?.at;
+    const v = next[d];
+    if (typeof v === 'number' && (old === undefined || !oldAt || Date.parse(meta.at) > Date.parse(oldAt))) {
+      if (v !== old || oldAt !== meta.at) changed = true;
+      out[d] = v;
+      partsAt[d] = meta.at;
+    } else if (typeof old === 'number') {
+      out[d] = old;
+      if (oldAt) partsAt[d] = oldAt;
+    }
+  }
+  if (!changed) return null;
+  // The newest write names the score's time, way and request; parts given earlier keep their own time.
+  out.at = meta.at;
+  out.via = meta.via;
+  if (meta.request_id) out.request_id = meta.request_id; else delete out.request_id;
+  const differ = SCORE_DIMENSIONS.filter((d) => partsAt[d] && partsAt[d] !== meta.at);
+  if (differ.length) out.parts_at = partsAt;
+  return out;
 }
 
 /**

@@ -370,7 +370,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
       for (const d of SCORE_DIMENSIONS) {
         const v = t.review_score[d];
         if (typeof v !== 'number') continue;
-        const at = t.review_score.at ?? '';
+        const at = t.review_score.parts_at?.[d] ?? t.review_score.at ?? '';
         if (was[d] === undefined || at > (was.at[d] ?? '')) { was[d] = v; was.at[d] = at; }
       }
       byFam.set(fk, was);
@@ -506,7 +506,11 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     return lines.length === 1 ? lines[0] : undefined;
   };
   const rows: EngineCompareRow[] = [];
-  for (const [key, { engine, family, label }] of meta) {
+  for (const [key, { engine, family, label: named }] of meta) {
+    // Counting every task, a column whose usage names no model line, beside a line of the same engine
+    // and family, says so: "Claude Code" next to "Claude Code · Opus" read as one of them.
+    const lineless = !splitView && key.endsWith('|') && [...meta.keys()].some((k) => k !== key && k.startsWith(key));
+    const label = lineless ? `${named} · model unknown` : named;
     const all = picked.filter((p) => p.key === key);
     const done = all.filter((p) => p.done);
     const known = done.filter((p) => !p.noUsage);

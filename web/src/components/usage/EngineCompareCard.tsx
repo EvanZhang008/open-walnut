@@ -45,7 +45,7 @@ const scoreNamed = (s: ReviewScore) => SCORE_DIMS.filter((d) => s[d] !== undefin
 const scoredByText = (families: string[] | undefined) => {
   if (!families?.length) return '';
   const unknown = families.filter((f) => f === 'unknown').length;
-  const named = [...new Set(families.filter((f) => f !== 'unknown')), ...(unknown ? [unknown === 1 ? 'an unknown model' : `${unknown} unknown models`] : [])];
+  const named = [...new Set(families.filter((f) => f !== 'unknown')), ...(unknown ? [unknown === 1 ? 'a reviewer of unknown company' : `${unknown} reviewers of unknown company`] : [])];
   return ` by ${named.join(' + ')}`;
 };
 
@@ -294,7 +294,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                           t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}${t.scorePartial ? ' (partial, not in the median)' : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>
                       <td className="num usage-line-cost" title={taskCostNote(t)}>
-                        {t.noUsage ? 'unknown' : money(t.costUsd)}{!t.noUsage && (t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}
+                        {t.noUsage ? 'cost unknown' : money(t.costUsd)}{!t.noUsage && (t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}
                       </td>
                     </tr>
                   ))}

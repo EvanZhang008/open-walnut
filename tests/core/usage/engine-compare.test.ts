@@ -319,7 +319,7 @@ describe('model lines', () => {
     expect(aggregateEngineCompare(one).rows.map((r) => [r.key, r.done])).toEqual([['claude|Claude|Opus', 2]]);
     const two = input([done('a', 1), done('c', 1), done('b', 1)], { a: { costUsd: 1 }, c: { costUsd: 1, model: 'claude-sonnet-5-5' } });
     (two.spend as Map<string, TaskSpend>).delete('b');
-    expect(aggregateEngineCompare(two).rows.map((r) => [r.label, r.done]).sort()).toEqual([['Claude Code · Opus', 1], ['Claude Code · Sonnet', 1], ['Claude Code', 1]]);
+    expect(aggregateEngineCompare(two).rows.map((r) => [r.label, r.done]).sort()).toEqual([['Claude Code · Opus', 1], ['Claude Code · Sonnet', 1], ['Claude Code · model unknown', 1]]);
   });
 });
 
@@ -614,6 +614,12 @@ describe('split entry names', () => {
     const config = { defaults: { engine_split: ['claude', { engine: 'claude', model: 'claude-sonnet-5-5' }, 'codex'] } } as unknown as CompareInput['config'];
     const out = aggregateEngineCompare(input([done('w1', 1)], { w1: { costUsd: 1 } }, { config }));
     expect(out.split?.entries.map((e) => e.label)).toEqual(['Claude Code · default model', 'Claude Code · Sonnet', 'Codex']);
+  });
+
+  it('counting every task, a column whose usage names no model line beside named lines says the model is unknown', () => {
+    const out = aggregateEngineCompare(input([done('o', 1), done('s', 1), done('n', 1)],
+      { o: { costUsd: 1, model: 'claude-opus-5-5' }, s: { costUsd: 1, model: 'claude-sonnet-5-5' }, n: { costUsd: 1, model: 'claude-x' } }));
+    expect(out.rows.map((r) => r.label).sort()).toEqual(['Claude Code · Opus', 'Claude Code · Sonnet', 'Claude Code · model unknown'].sort());
   });
 });
 
