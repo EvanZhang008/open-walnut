@@ -315,7 +315,8 @@ enum OrgThreadModel {
         out.append(("In 3 hours", now.addingTimeInterval(3 * 3600)))
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)),
            let nine = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) {
-            out.append(("Tomorrow, 9 AM", nine))
+            // Its time written as the toast and the snoozed row write it ("9:00 AM", r10 review).
+            out.append(("Tomorrow, \(nine.formatted(date: .omitted, time: .shortened))", nine))
         }
         if let week = calendar.date(byAdding: .day, value: 7, to: calendar.startOfDay(for: now)),
            let nine = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: week) {

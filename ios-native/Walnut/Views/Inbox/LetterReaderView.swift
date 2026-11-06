@@ -377,7 +377,14 @@ struct LetterReaderView: View {
             let line = stacked
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
                 : AnyLayout(HStackLayout(spacing: 6))
-            line {
+            // A task link takes a line of its own under the sender at every size: side by side,
+            // the two cut each other ("Fork of..." beside "Walnut Demo and Promotion Campaign ·
+            // X War...", r10 review), and the link is what the row is for.
+            let linked = letter.taskTitle != nil
+            let top = stacked || linked
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                : AnyLayout(HStackLayout(spacing: 6))
+            top {
                 HStack(spacing: 6) {
                     Image(systemName: letter.kind.symbol).font(.caption2)
                     Text(letter.senderName).font(.caption)
@@ -387,8 +394,7 @@ struct LetterReaderView: View {
                 // The task link wins the line (it is the tap target); a long sender name
                 // truncates, keeping enough to read. With the sender first it took the line
                 // and squeezed a short task name into a column ("W…").
-                .frame(minWidth: stacked ? nil : 72, alignment: .leading)
-                .layoutPriority(letter.taskTitle == nil ? 1 : 0)
+                .layoutPriority(1)
                 if let title = letter.taskTitle {
                     if let id = letter.sender?.taskId, !id.isEmpty {
                         Button {
@@ -396,8 +402,8 @@ struct LetterReaderView: View {
                         } label: {
                             HStack(spacing: 4) {
                                 Text(title)
-                                    .lineLimit(stacked ? nil : 1)
-                                    .fixedSize(horizontal: false, vertical: stacked)
+                                    .lineLimit(stacked ? nil : 2)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Image(systemName: "chevron.right").font(.caption2)
                             }
                             .font(.caption)
@@ -411,9 +417,9 @@ struct LetterReaderView: View {
                         .accessibilityIdentifier("inbox.letter.taskTitle")
                         .layoutPriority(1)
                     } else {
-                        Text(stacked ? title : "· \(title)").font(.caption)
-                            .lineLimit(stacked ? nil : 1)
-                            .fixedSize(horizontal: false, vertical: stacked)
+                        Text(title).font(.caption)
+                            .lineLimit(stacked ? nil : 2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }

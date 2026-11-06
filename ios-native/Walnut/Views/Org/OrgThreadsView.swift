@@ -68,10 +68,6 @@ struct OrgThreadsView: View {
                         }
                     } else if sections.open.isEmpty {
                         emptyText(sections)
-                    } else {
-                        // Always above the cards while there are any, so the page keeps one header
-                        // as a snooze or an acknowledge takes a card away (r8 review).
-                        jumps(sections, proxy: proxy)
                     }
                     ForEach(sections.open) { t in
                         card(t, shared: shared, now: now, snoozed: false).id(t.id)
@@ -94,6 +90,18 @@ struct OrgThreadsView: View {
                 // Room under the last section, so a jump can bring even the last fold to the top
                 // and nothing ends under the floating tab bar.
                 .padding(.bottom, 240)
+            }
+            // Pinned under the page's switch while there are cards, so a jump is one tap from
+            // anywhere in the list (r10 review: it scrolled away with the cards), and the page keeps
+            // one header as a snooze or an acknowledge takes a card away (r8 review).
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if store.threads != nil, !sections.open.isEmpty {
+                    jumps(sections, proxy: proxy)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                        .background(.bar)
+                        .overlay(alignment: .bottom) { Divider() }
+                }
             }
             // At the bottom, above the tab bar: where the eye is after the card's buttons, and off the cards' text.
             .overlay(alignment: .bottom) { noticeView }

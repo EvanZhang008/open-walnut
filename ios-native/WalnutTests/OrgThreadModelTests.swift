@@ -139,7 +139,11 @@ final class OrgThreadModelTests: XCTestCase {
 
     func testSnoozeChoicesAreAllLater() {
         let choices = OrgThreadModel.snoozeChoices(now: Self.now)
-        XCTAssertEqual(choices.map(\.label), ["In 3 hours", "Tomorrow, 9 AM", "Next week"])
+        XCTAssertEqual(choices.map(\.label), [
+            "In 3 hours", "Tomorrow, \(choices[1].until.formatted(date: .omitted, time: .shortened))", "Next week",
+        ])
+        // The menu writes tomorrow's time as the toast and the snoozed row do ("9:00 AM", never "9 AM").
+        XCTAssertFalse(choices[1].label.hasSuffix(" 9 AM"))
         XCTAssertTrue(choices.allSatisfy { $0.until > Self.now })
     }
 
