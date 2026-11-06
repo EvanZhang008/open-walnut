@@ -88,8 +88,11 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   { re: /^\/(health|places)(\/|$)/, why: 'device-data' },
   { re: /^\/time\/heartbeats$/, why: 'device-data' },
   // Passwords never cross the companion, which would see them in the clear between
-  // its TLS and the bridge: it answers vault_not_here (routes/vault-v1.ts).
-  { re: /^\/vault(\/|$)/, why: 'secret' },
+  // its TLS and the bridge: it answers vault_not_here (routes/vault-v1.ts). The one
+  // exception is the vault's ciphertext for a device that opens it itself (the iPhone,
+  // routes/vault-sealed-v1.ts): nothing in it is readable without the master password
+  // and the Secret Key, neither of which ever crosses here.
+  { re: /^\/vault(\/|$)/, unless: /^\/vault\/sealed(\/items)?$/, why: 'secret' },
   // The companion's exact copy of the task store: its reads are as fresh as the
   // Mac's. Its writes go to the Mac while it answers (one writer, replica plan
   // WP13); away, the companion's own route applies them and queues them by field.
@@ -107,11 +110,21 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
 ]
 
 /**
+ * The path a rule reads. Express matches routes without regard to case, so the Mac answers
+ * `/Vault/items` with the vault's own route: every rule here matches the lowercased path, or a
+ * case variant of a kept path would go to the Mac (every literal in the rules is lowercase).
+ */
+function ruleKey(rel: string): string {
+  return rel.toLowerCase()
+}
+
+/**
  * A write the companion forwards to the Mac whose result its task copy shows (the
  * copy's reads stay on the companion): the Mac then sends the copy a round at once
  * (task-replica.ts taskReplicaRoundNow), not after the 3 s debounce.
  */
 export function isTaskCopyWrite(method: string, rel: string): boolean {
+  rel = ruleKey(rel)
   const m = method.toUpperCase()
   if (m === 'GET' || m === 'HEAD') return false
   return /^\/(tasks|focus)(\/|$)/.test(rel) && !/^\/tasks\/[^/]+\/board(\/|$)/.test(rel)
@@ -127,6 +140,7 @@ export function noteForwardedTaskWrite(method: string, rel: string, status: numb
 export function companionAnswers(method: string, rel: string): CompanionReason | null {
   // Express answers a HEAD with the GET handler, so a GET route kept here keeps its HEAD.
   const m = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
+  rel = ruleKey(rel)
   for (const r of COMPANION_ROUTES) {
     if (r.methods && !r.methods.includes(m)) continue
     if (!r.re.test(rel)) continue
@@ -150,7 +164,8 @@ const PHONE_COPY_READS: ReadonlyArray<{ re: RegExp; kind: string; choice: string
 export function phoneCopyReadOf(method: string, rel: string): { kind: string; choice: string } | null {
   const m = method.toUpperCase()
   if (m !== 'GET' && m !== 'HEAD') return null
-  const hit = PHONE_COPY_READS.find((r) => r.re.test(rel))
+  const key = ruleKey(rel)
+  const hit = PHONE_COPY_READS.find((r) => r.re.test(key))
   return hit ? { kind: hit.kind, choice: hit.choice } : null
 }
 

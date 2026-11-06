@@ -34,6 +34,7 @@ const NOT_TO_AI: Record<string, string> = {
   'Views/Inbox/InboxItemTaskSelector.swift': 'a task search',
   'Views/Notes/NoteEditorView.swift': 'a note (its editor takes pictures of its own)',
   'Views/Notes/NotesView.swift': 'a note search',
+  'Views/Passwords/PasswordsSetupView.swift': 'the master password and Secret Key, which open the vault on this phone and never go to an AI',
   'Views/Sessions/AgentMemorySheet.swift': "a task's agent memory, a document the agent reads, not a message",
   'Views/Sessions/SessionLifecycleDialogs.swift': "a session's title",
   'Views/Sessions/SessionPathPicker.swift': 'a folder path',

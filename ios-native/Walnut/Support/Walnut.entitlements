@@ -21,6 +21,12 @@
   background delivery, which wakes the app when new Health data arrives so it
   can keep the user's Mac up to date. The App ID needs the HealthKit capability
   with Background Delivery for a device build to provision.
+
+  Passwords (docs/reference/passwords.md "iPhone"): Walnut is an AutoFill password
+  provider, and shares one app group with its AutoFill extension. The group holds
+  the vault's ciphertext and is also the Keychain access group for the vault key
+  (behind Face ID), the Secret Key and the device token copy the extension fetches
+  with. The App ID needs the AutoFill Credential Provider and App Groups capabilities.
 -->
 <plist version="1.0">
 <dict>
@@ -32,5 +38,11 @@
 	<array/>
 	<key>com.apple.developer.healthkit.background-delivery</key>
 	<true/>
+	<key>com.apple.developer.authentication-services.autofill-credential-provider</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.dev.openwalnut.ios</string>
+	</array>
 </dict>
 </plist>

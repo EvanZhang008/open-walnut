@@ -1,0 +1,53 @@
+appId: com.apple.mobilesafari
+name: A site with no saved login opens Walnut's own list
+---
+# The same page at another address: no login of the vault names 127.0.0.1, so iOS offers the
+# password list instead of one login, and Walnut's sheet shows every login to pick from.
+- openLink: ${OTHER_SITE}
+- extendedWaitUntil:
+    visible: "Sign in to your account"
+    timeout: 40000
+- tapOn:
+    id: "xmark.circle.fill"
+    optional: true
+- tapOn: "Email"
+- waitForAnimationToEnd
+- takeScreenshot: 05-keyboard
+- tapOn:
+    text: "Passwords"
+    optional: true
+- waitForAnimationToEnd
+- takeScreenshot: 05-sheet
+- tapOn:
+    text: "Walnut.*"
+    optional: true
+- waitForAnimationToEnd
+# Face ID starts by itself; tap the button only if the sheet still waits on it.
+- extendedWaitUntil:
+    notVisible:
+      id: "passwords.unlockBiometrics"
+    timeout: 10000
+    optional: true
+- tapOn:
+    id: "passwords.unlockBiometrics"
+    optional: true
+- waitForAnimationToEnd
+- takeScreenshot: 05-walnut-list
+# Walnut's sheet is another process, out of Maestro's reach: its rows are tapped by place. The
+# fake vault has one login for a site like this page, "Local test site" (localhost), listed first.
+- tapOn:
+    point: "50%,25%"
+- waitForAnimationToEnd
+# Saved for localhost, picked for 127.0.0.1: Walnut asks before it fills another site.
+- takeScreenshot: 05-cross-site
+- tapOn:
+    point: "68%,57%"
+- waitForAnimationToEnd
+- takeScreenshot: 05-picked
+- tapOn:
+    text: "Sign in"
+    optional: true
+- extendedWaitUntil:
+    visible: "Signed in as tester@example.test with a password"
+    timeout: 20000
+- takeScreenshot: 05-filled

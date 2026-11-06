@@ -1,0 +1,10 @@
+appId: dev.openwalnut.ios
+name: The Codes tile lists the logins with a verification code
+---
+- runFlow: _open-passwords.yaml
+- tapOn:
+    id: "passwords.tile.codes"
+- extendedWaitUntil:
+    visible: "GitHub"
+    timeout: 10000
+- takeScreenshot: 02-codes

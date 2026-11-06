@@ -1,0 +1,18 @@
+appId: dev.openwalnut.ios
+name: Lock, then Face ID opens it again
+---
+- runFlow: _open-passwords.yaml
+- tapOn:
+    id: "passwords.lock"
+- extendedWaitUntil:
+    visible:
+      id: "passwords.unlockBiometrics"
+    timeout: 10000
+- takeScreenshot: 06-locked
+- tapOn:
+    id: "passwords.unlockBiometrics"
+- extendedWaitUntil:
+    visible:
+      id: "passwords.tile.all"
+    timeout: 20000
+- takeScreenshot: 06-unlocked-again

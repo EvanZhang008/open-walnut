@@ -144,6 +144,8 @@ struct AppConfig {
         }
         KeychainHelper.set(token, forKey: tokenKey)
         cachedToken.withLock { $0 = .some(token) }
+        // The AutoFill extension fetches with its own copy of the pairing (VaultServerMirror).
+        if let url = URL(string: normalize(serverURL)) { VaultServerMirror.updateIfKept(VaultServer(baseURL: url, token: token)) }
     }
 
     static func clear() {

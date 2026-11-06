@@ -1,0 +1,60 @@
+appId: com.apple.mobilesafari
+name: Fill a login and a two-step code in Safari
+---
+- openLink: ${SITE}
+- extendedWaitUntil:
+    visible: "Sign in to your account"
+    timeout: 40000
+# Safari's first-run tip covers the page and hides it from the accessibility tree.
+- tapOn:
+    id: "xmark.circle.fill"
+    optional: true
+- tapOn: "Email"
+- waitForAnimationToEnd
+- takeScreenshot: 04-quicktype
+- tapOn:
+    text: ".*tester@example.test.*"
+- waitForAnimationToEnd
+# iOS 26 asks once more ("saved in Walnut"), then opens Walnut's sheet, which Face ID unlocks.
+- takeScreenshot: 04-confirm
+- tapOn:
+    text: "Fill Password"
+    optional: true
+- waitForAnimationToEnd
+- takeScreenshot: 04-faceid
+# Face ID starts by itself; tap the button only if the sheet still waits on it.
+- extendedWaitUntil:
+    notVisible:
+      id: "passwords.unlockBiometrics"
+    timeout: 10000
+    optional: true
+- tapOn:
+    id: "passwords.unlockBiometrics"
+    optional: true
+- waitForAnimationToEnd
+- takeScreenshot: 04-after-fill
+# iOS often sends the form itself once the password is filled.
+- tapOn:
+    text: "Sign in"
+    optional: true
+# The code page echoes what the form sent: proof the login was filled, password included.
+- extendedWaitUntil:
+    visible: "Signed in as tester@example.test with a password"
+    timeout: 20000
+- takeScreenshot: 04-filled
+- tapOn: "000000"
+- waitForAnimationToEnd
+- takeScreenshot: 04-otp-quicktype
+# The code Walnut offers above the keypad ("verification code for this website"), not the
+# address bar's "localhost" just above it.
+- tapOn:
+    text: ".*verification code for this website.*"
+- waitForAnimationToEnd
+- takeScreenshot: 04-otp-filled
+- tapOn:
+    text: "Verify"
+    optional: true
+- extendedWaitUntil:
+    visible: "Code sent: [0-9]{6}"
+    timeout: 20000
+- takeScreenshot: 04-otp-sent

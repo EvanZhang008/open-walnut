@@ -40,6 +40,11 @@ struct SettingsView: View {
             List {
                 DemoSettingsSection()
                 serverSection
+                // Passwords sits high, where a password app is looked for, not below the server's
+                // details (round-1 review: the run scrolled past five sections to reach it).
+                if !inDemo {
+                    PasswordsSettingsSection()
+                }
                 serverInfoSection
                 automationSection
                 // Focus music streams from the paired Mac; the demo has none.

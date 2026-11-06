@@ -200,7 +200,12 @@ enum LocalDataReset {
         // copy is only removed by "Delete Places on Mac").
         PlacesRecorder.shared.eraseLocalState()
 
-        // 8. The demo's own preferences, last, so the values the resets above
+        // 8. Passwords: the vault's ciphertext in the app group, its keys in the Keychain, the
+        // token copy the AutoFill extension fetches with, and iOS's suggestion list. The folder
+        // sweep above never reaches the app group, and the vault on the Mac is untouched.
+        if scope == .real { PasswordsStore.shared.pairingRemoved() }
+
+        // 9. The demo's own preferences, last, so the values the resets above
         // wrote back go too.
         locations.eraseDemoPreferences()
 

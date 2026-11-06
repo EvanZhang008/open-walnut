@@ -1,0 +1,37 @@
+appId: dev.openwalnut.ios
+name: Browse, search, show and copy
+---
+# iOS has no system back press for Maestro: every screen this flow checks is reached forward.
+- runFlow: _open-passwords.yaml
+- tapOn:
+    id: "passwords.tile.all"
+- extendedWaitUntil:
+    visible: "Search all"
+    timeout: 10000
+- takeScreenshot: 02-all-list
+- tapOn: "Search all"
+- inputText: "bank"
+- extendedWaitUntil:
+    visible: "Example Bank"
+    timeout: 10000
+- takeScreenshot: 02-search
+- eraseText: 10
+- inputText: "git"
+- extendedWaitUntil:
+    visible: "GitHub"
+    timeout: 10000
+- tapOn: "GitHub"
+- extendedWaitUntil:
+    visible:
+      id: "passwords.detail.Password"
+    timeout: 10000
+- takeScreenshot: 02-detail-hidden
+- tapOn:
+    id: "passwords.detail.reveal.Password"
+- assertVisible: "Fake-GitHub-Pass-71!"
+- takeScreenshot: 02-detail-revealed
+- tapOn:
+    id: "passwords.detail.Password"
+- assertVisible:
+    id: "passwords.toast"
+- takeScreenshot: 02-copied

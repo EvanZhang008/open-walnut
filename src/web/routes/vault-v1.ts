@@ -62,7 +62,7 @@ function param(v: unknown): string {
  * `readStatus`: the status route, which a test run may read (it holds no secret), so an
  * automated browser can see the Passwords page on the person's own Walnut without using it.
  */
-function gate(req: Request, res: Response, readStatus = false): boolean {
+export function gate(req: Request, res: Response, readStatus = false): boolean {
   res.setHeader('Cache-Control', 'no-store')
   if (role() !== 'leader' || isFollower()) {
     res.status(503).json({ error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })

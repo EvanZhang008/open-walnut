@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme passkey sign-in</title>
+<style>
+body{font-family:-apple-system,system-ui,sans-serif;background:#f3f0eb;margin:0;padding:24px;color:#222}
+.card{background:#fff;border-radius:18px;padding:24px;max-width:420px;margin:60px auto}
+h1{margin:0 0 6px;font-size:28px}p{color:#555}
+button{width:100%;padding:14px;border:0;border-radius:12px;background:#8a5a2b;color:#fff;font-size:17px;font-weight:600}
+#out{margin-top:18px;font-size:16px}.ok{color:#1d7a3a;font-weight:700;font-size:24px}
+</style></head><body><div class="card">
+<h1>Acme</h1><p>Sign in with a passkey. No password needed.</p>
+<button id="go">Sign in with a passkey</button>
+<div id="out"></div></div>
+<script>
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+// The public key the site kept when the passkey was made (P-256, SPKI, base64url), from ?pk=
+// (seed-vault.sh prints it); without one the page only reports the assertion.
+const PUBLIC_KEY = new URLSearchParams(location.search).get('pk') || '';
+const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+// WebAuthn signs as DER; WebCrypto takes r||s.
+function derToRaw(der) {
+  const d = new Uint8Array(der); let i = 2;
+  const part = () => { i++; let len = d[i++]; let v = d.slice(i, i + len); i += len;
+    while (v.length > 32 && v[0] === 0) v = v.slice(1); const o = new Uint8Array(32); o.set(v, 32 - v.length); return o; };
+  const r = part(), s = part(); const raw = new Uint8Array(64); raw.set(r); raw.set(s, 32); return raw;
+}
+async function verify(r) {
+  const key = await crypto.subtle.importKey('spki', unb64(PUBLIC_KEY), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', r.clientDataJSON));
+  const auth = new Uint8Array(r.authenticatorData);
+  const signed = new Uint8Array(auth.length + hash.length); signed.set(auth); signed.set(hash, auth.length);
+  return crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, derToRaw(r.signature), signed);
+}
+document.getElementById('go').onclick = async () => {
+  const out = document.getElementById('out');
+  out.textContent = 'Waiting for your passkey…';
+  try {
+    const cred = await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: 'localhost', userVerification: 'required', timeout: 60000 } });
+    const r = cred.response;
+    const client = JSON.parse(new TextDecoder().decode(r.clientDataJSON));
+    const user = r.userHandle ? new TextDecoder().decode(r.userHandle) : '(none)';
+    const valid = PUBLIC_KEY ? await verify(r) : null;
+    out.innerHTML = '<div class="ok">Signed in with a passkey</div>' +
+      (valid === null ? '' : '<p><b>Signature checked with the saved public key: ' + (valid ? 'valid' : 'NOT valid') + '</b></p>') +
+      '<p>User: ' + user + '<br>Credential: ' + cred.id.slice(0, 16) + '…<br>Signature: ' + r.signature.byteLength +
+      ' bytes<br>Origin: ' + client.origin + '</p>';
+  } catch (e) { out.textContent = 'No passkey used: ' + e.name; }
+};
+</script></body></html>

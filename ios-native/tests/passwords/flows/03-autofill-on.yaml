@@ -1,0 +1,31 @@
+appId: dev.openwalnut.ios
+name: Turn on Walnut as the AutoFill provider
+---
+- runFlow: _open-passwords.yaml
+- scrollUntilVisible:
+    element:
+      id: "passwords.turnOnAutofill"
+    direction: DOWN
+    optional: true
+- takeScreenshot: 03-before
+- tapOn:
+    id: "passwords.turnOnAutofill"
+    optional: true
+- waitForAnimationToEnd
+- takeScreenshot: 03-system-prompt
+- tapOn:
+    text: "Allow"
+    optional: true
+- tapOn:
+    text: "Turn On"
+    optional: true
+- waitForAnimationToEnd
+- takeScreenshot: 03-after-allow
+- tapOn:
+    id: "autofill.configuredDone"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: "passwords.autofillOn"
+    timeout: 15000
+- takeScreenshot: 03-autofill-on

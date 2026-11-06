@@ -1,0 +1,33 @@
+appId: com.apple.mobilesafari
+name: Sign in with a Walnut passkey in Safari
+---
+- openLink: ${PASSKEY_SITE}
+- extendedWaitUntil:
+    visible: "Sign in with a passkey. No password needed."
+    timeout: 40000
+- takeScreenshot: 07-page
+- tapOn: "Sign in with a passkey"
+# iOS offers the passkey saved in Walnut, then Walnut's sheet asks Face ID.
+- extendedWaitUntil:
+    visible: "Use Passkey"
+    timeout: 20000
+- takeScreenshot: 07-sheet
+- tapOn: "Use Passkey"
+- waitForAnimationToEnd
+- takeScreenshot: 07-faceid
+# Face ID starts by itself; tap the button only if the sheet still waits on it.
+- extendedWaitUntil:
+    notVisible:
+      id: "passwords.unlockBiometrics"
+    timeout: 10000
+    optional: true
+- tapOn:
+    id: "passwords.unlockBiometrics"
+    optional: true
+# The page checks the signature with the public key the site kept (?pk=), when it has one.
+- extendedWaitUntil:
+    visible: "Signed in with a passkey"
+    timeout: 20000
+- assertVisible: "User: tester@example.test"
+- assertNotVisible: ".*NOT valid.*"
+- takeScreenshot: 07-signed-in

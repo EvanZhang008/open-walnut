@@ -1,0 +1,37 @@
+appId: dev.openwalnut.ios
+name: Set up Passwords with the master password
+---
+- launchApp:
+    stopApp: true
+# A fresh install asks to let this iPhone sign approvals unless the server has no signing key
+# (autofill-e2e.sh clears them with WALNUT_E2E_SERVER_HOME); deny it if it still shows.
+- tapOn:
+    id: "approval.deny"
+    optional: true
+- extendedWaitUntil:
+    visible: "Settings"
+    timeout: 30000
+- tapOn: "Settings"
+- scrollUntilVisible:
+    element:
+      id: "settings.passwords"
+    direction: DOWN
+- tapOn:
+    id: "settings.passwords"
+- extendedWaitUntil:
+    visible:
+      id: "passwords.setup.password"
+    timeout: 20000
+- takeScreenshot: 01-setup-intro
+- tapOn:
+    id: "passwords.setup.password"
+- inputText: ${MASTER}
+- takeScreenshot: 01-setup-typed
+# Return submits (the field's Go key). Maestro's hideKeyboard can land on the QuickType bar's
+# key icon, which opens iOS's own password sheet over the app.
+- pressKey: Enter
+- extendedWaitUntil:
+    visible:
+      id: "passwords.tile.all"
+    timeout: 30000
+- takeScreenshot: 01-unlocked-home

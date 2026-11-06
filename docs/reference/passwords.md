@@ -2,7 +2,7 @@
 
 Walnut keeps a password vault on the machine that runs the Walnut server (the Mac, the
 leader). The web console and the Mac app have a Passwords app; the browser extension, the
-iPhone app and agents come in later steps and use the same vault.
+iPhone app (and its AutoFill extension) and agents use the same vault.
 
 Code: `src/core/vault/` (crypto, store, sessions, generator, TOTP, site matching, import,
 export), `src/web/routes/vault-v1.ts`, `web/src/components/passwords/`,
@@ -157,7 +157,8 @@ machine or a paired device, the approvals rule. Agents never get a vault session
 the vault through their own ops, each use gated by the item's agent access and a person's
 approval. A test run may read the status and nothing else. The cloud companion never carries
 these calls (`/vault` is in its kept routes, `src/web/v1-forward/policy.ts`), because it
-would see them in the clear between its TLS and the bridge, and a follower answers
+would see them in the clear between its TLS and the bridge (the one exception is the ciphertext the
+iPhone opens itself, "iPhone" below), and a follower answers
 `vault_not_here`. No vault answer is kept in the applied-ops ledger, a plain file kept for
 days, and none is answered from it (`SECRET_ROUTE_RE` in `src/web/middleware/op-id.ts`).
 
@@ -300,6 +301,70 @@ sites on `*.example.test`, the attacks above included), `tests/e2e/browser/exten
 (the form shapes), `tests/scripts/build-extension.test.ts`, and the server side in `tests/e2e/vault.test.ts`.
 
 **Agents in the browser.** The same extension can let Walnut agents work in tabs of their own, on sites the person approves; it is off until they turn it on in the popup. See [Agents in your browser](browser-control.md).
+
+## iPhone
+
+The iPhone app is a password app iOS offers everywhere (Settings, General, AutoFill & Passwords,
+Walnut): logins above the keyboard and in the password sheet in Safari and other apps, two-step
+codes in one-time code fields, and sign in with the passkeys kept in the vault. The app's own
+Passwords screen (Settings, Passwords) lists, searches, shows and copies every item.
+
+Code: `ios-native/Shared/Vault/` (crypto, models, cache, Keychain, the fetch, site matching, TOTP,
+passkey signing, the identities given to iOS), `ios-native/Shared/VaultUI/`, the AutoFill extension
+`ios-native/WalnutAutoFill/`, the app's `Walnut/Stores/PasswordsStore.swift` and
+`Walnut/Views/Passwords/`, and the server's `src/web/routes/vault-sealed-v1.ts`.
+
+**The phone opens the vault itself.** It never gets a vault session and no item crosses the wire in
+the clear: `GET /api/v1/vault/sealed` answers `vault.json`'s header (format, version, id, kdf,
+aukSalt, the password wrap; never the machine or recovery wrap) and a tag per item, a hash of its
+two nonces, which change on every seal, a new vault key included; `POST /api/v1/vault/sealed/items
+{ids}` answers those items' sealed `key` and `data` as stored. Both stay under the companion's
+forward limit (pages by `next` and `more`), and they are the only vault routes the cloud companion
+carries to the Mac (`v1-forward/policy.ts`): it sees the ciphertext and its outline (the item ids,
+how many, when the vault last changed, the key settings), never a title, a hint or a key. The same person gate as every
+vault route applies (no agent, no test run). The phone keeps what it fetched in the app group it
+shares with its extension, and fetches only items whose tag changed. A vault set up again on the
+Mac (another id) starts the phone over; a newer `version` is refused with "update the app".
+
+**Setting it up** takes the master password once. The phone derives the password key itself with
+the same KDF and floor as the extension (PBKDF2-SHA256, 600,000 iterations or more, a 16-byte
+salt), then needs the Secret Key: over a private link (this Mac, https, Tailscale; the status's
+`privateLink`) it reads it with the existing unlock, `POST /vault/secret-key` and lock, so the
+master password's key crosses only links a typed one may; on any other link (the cloud companion,
+plain http on the Wi-Fi) Walnut never sends it, and the person pastes it from the recovery kit
+or the Mac's Settings (Passwords, Recovery and advanced, Show Secret Key). The vault key goes into the Keychain behind Face ID (biometry of the current
+enrollment, else the passcode), this device only, never in a backup; the Secret Key beside it, this
+device only. A new master password on the Mac makes a new vault key: the phone sees a new wrap whose
+items its key no longer opens and asks for the master password again. Face ID enrolled anew loses
+the key the same way. "Remove from This iPhone" and Disconnect delete the cache, both keys and the
+token copy, and empty iOS's list; the vault on the Mac is untouched.
+
+**AutoFill.** The extension holds a copy of the phone's device token (the shared Keychain group)
+and fetches the newest ciphertext itself each time it opens, so a login saved in the browser
+extension or on the Mac is in the sheet right away. iOS's QuickType suggestions come from the list
+Walnut gives it (`ASCredentialIdentityStore`: site, username, item id; never a secret), replaced
+whole every time the items are opened on the phone (in the app or the sheet), so a new login shows
+above the keyboard after the next unlock. Every fill needs Face ID: the vault key is never readable
+without it, so `provideCredentialWithoutUserInteraction` always hands over to the sheet. Turning
+Walnut on uses iOS 18's own prompt from the app; iOS then shows the extension's setup screen, which
+unlocks once and gives iOS the list.
+
+What Apple allows and what Walnut does (iOS 18 is the app's floor): passwords (iOS 12+), passkey
+sign in (iOS 17+, ES256 with the vault's keys, synced-passkey flags; the counter stays 0 for a passkey
+that never counted, as synced ones do, else one more than the stored count, which the phone cannot
+write back)
+and one-time codes (iOS 18+) are all used. New passkeys are not made on the phone: the vault's
+writes stay on the Mac, so a passkey registration iOS sends to Walnut gets a screen saying to save
+it elsewhere. Saving or changing a password from the phone is not there either; the browser
+extension and the Mac do it, and the phone shows the change.
+
+Site matching for the sheet's "Suggested" section is the same host or a parent and child of it,
+never two sites under a shared suffix anyone can register under (two `github.io` sites); the full
+public suffix list stays on the server, so a miss only means a login is not suggested (search
+finds it). Tests: `tests/e2e/vault-sealed.test.ts` (the routes, paging, rekey, a device opening the
+vault), `ios-native/WalnutTests/VaultCryptoTests.swift` (a fixture the server's code sealed,
+`scripts/ios-vault-fixture.ts`, opened by the phone's code; TOTP, matching, passkey signatures, the
+cache, the identities, the extension's build number).
 
 ## Agents
 

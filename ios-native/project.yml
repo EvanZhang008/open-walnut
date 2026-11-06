@@ -29,13 +29,18 @@ targets:
       # user's own Walnut server, which the developers never see.
       - path: Walnut/Support/PrivacyInfo.xcprivacy
         buildPhase: resources
-      # The lock-screen work card's model, shared with the widget extension.
+      # Shared with the extensions: the lock-screen work card's model (Shared/WorkCard.swift,
+      # for the widget extension) and Passwords on this iPhone (Shared/Vault, Shared/VaultUI:
+      # crypto, cache, Keychain, the vault fetch, for the AutoFill extension).
       - path: Shared
     # The widget extension draws the lock-screen work card and Talk to Walnut's
     # take (both Live Activities); iOS keeps a recording an AudioRecordingIntent
     # started only while its activity shows.
+    # The AutoFill extension is the password provider (Settings, General, AutoFill & Passwords).
     dependencies:
       - target: WalnutWidgets
+        embed: true
+      - target: WalnutAutoFill
         embed: true
     # Hosted unit tests: `xcodebuild test -scheme Walnut` runs WalnutTests
     # (correctness + rendering-perf regression gates) on a simulator.
@@ -77,7 +82,7 @@ targets:
         NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
-        NSFaceIDUsageDescription: Walnut uses Face ID to sign the approvals you give, so only you can say yes to a step a script or an agent waits on.
+        NSFaceIDUsageDescription: Walnut uses Face ID to unlock your passwords, and to sign the approvals you give, so only you can say yes to a step a script or an agent waits on.
         NSMicrophoneUsageDescription: Walnut uses the microphone for voice input. Your recording goes only to your own Walnut server, on your Mac or on a cloud machine you run, which turns it into text itself or with a speech service you set up on it.
         # Tasks-tab calendar view: device calendar events render read-only in
         # the day agenda next to your Walnut tasks. Read access only; nothing
@@ -153,6 +158,53 @@ targets:
       configs:
         Release:
           APS_ENVIRONMENT: production
+  # The AutoFill credential provider: Walnut as a password app iOS offers in Safari and
+  # other apps (docs/reference/passwords.md "iPhone"). It opens the vault itself from the
+  # ciphertext the app keeps in the app group, with the vault key the Keychain holds behind
+  # Face ID; it fetches the newest ciphertext by itself with the app's device token copy.
+  WalnutAutoFill:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WalnutAutoFill
+      - path: Shared/Vault
+      - path: Shared/VaultUI
+      - path: Walnut/Core/Theme.swift
+    info:
+      path: WalnutAutoFill/Info.plist
+      properties:
+        CFBundleDisplayName: Walnut
+        # iOS and App Store Connect want an extension's versions to match its app's: the
+        # script phase below copies the app's version and build number at build time, so the
+        # app's line stays the one build-number line the TestFlight bump rewrites.
+        CFBundleShortVersionString: "1.0.1"
+        NSFaceIDUsageDescription: Walnut uses Face ID to unlock your passwords before it fills one in.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).CredentialProviderViewController
+          NSExtensionAttributes:
+            ASCredentialProviderExtensionCapabilities:
+              ProvidesPasswords: true
+              ProvidesPasskeys: true
+              ProvidesOneTimeCodes: true
+              ShowsConfigurationUI: true
+    postBuildScripts:
+      - name: Match the app's version and build number
+        script: |
+          for k in CFBundleShortVersionString CFBundleVersion; do
+            v=$(/usr/libexec/PlistBuddy -c "Print :$k" "$SRCROOT/Walnut/Support/Info.plist")
+            /usr/libexec/PlistBuddy -c "Set :$k $v" "$TARGET_BUILD_DIR/$INFOPLIST_PATH" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :$k string $v" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          done
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.autofill
+        CODE_SIGN_ENTITLEMENTS: WalnutAutoFill/WalnutAutoFill.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        # The script phase above edits the built Info.plist, outside the sandbox's declared files.
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
   # The widget extension: the lock-screen work card and its Dynamic Island
   # (WalnutWidgets/WorkCardLiveActivity.swift). It draws what the app and the
   # server's silent pushes give it, and reaches no network itself.
@@ -161,7 +213,8 @@ targets:
     platform: iOS
     sources:
       - path: WalnutWidgets
-      - path: Shared
+      # Only the work card's model: Shared/Vault is the AutoFill extension's.
+      - path: Shared/WorkCard.swift
       # Talk to Walnut's activity and its Send / Cancel intents, compiled into
       # both targets; iOS runs the intents in the app, and WIDGET_EXTENSION
       # leaves their bodies empty here.

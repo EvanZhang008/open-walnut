@@ -50,6 +50,15 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/vault/status', 'secret'],
     ['POST', '/vault/unlock', 'secret'],
     ['GET', '/vault/items/i1', 'secret'],
+    ['GET', '/vault/sealed/x', 'secret'],
+    ['POST', '/vault/sealed/items/x', 'secret'],
+    ['GET', '/vault/sealedx', 'secret'],
+    // Express routes ignore case, so a case variant of a kept path stays here too.
+    ['GET', '/Vault/items/i1', 'secret'],
+    ['POST', '/VAULT/unlock', 'secret'],
+    ['GET', '/vault/Sealed/x', 'secret'],
+    ['GET', '/Tasks/t1', 'task-copy'],
+    ['GET', '/Sessions/abc/Transcript', 'paged'],
     ['GET', '/tasks', 'task-copy'],
     ['HEAD', '/tasks', 'task-copy'],
     ['GET', '/tasks/t1', 'task-copy'],
@@ -78,6 +87,9 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['DELETE', '/tasks/t1'],
     ['PUT', '/focus/reorder'],
     ['GET', '/usage/overview'],
+    // The vault's ciphertext for a device that opens it itself (routes/vault-sealed-v1.ts).
+    ['GET', '/vault/sealed'],
+    ['POST', '/vault/sealed/items'],
     ['GET', '/usage/summary'],
     ['PATCH', '/projects/Acme'],
     ['DELETE', '/projects/Acme'],
@@ -266,6 +278,21 @@ describe('what the companion does not keep (4f)', () => {
       ['GET', '/api/v1/notes/search'], ['GET', ''], [1, '/api/search'],
     ] as Array<[unknown, string]>) {
       expect([m, u, parseConsoleCopyCall(m, u)]).toEqual([m, u, null])
+    }
+  })
+})
+
+describe('the rules match without regard to case, as Express routes do', () => {
+  it('every rule the companion keeps or reads a copy for is written in lowercase', async () => {
+    // The rules match the lowercased path (ruleKey), so an uppercase letter in a rule would
+    // never match anything: a new rule written with one fails here instead of leaking quietly.
+    const fsp = await import('node:fs/promises')
+    const src = await fsp.readFile(new URL('../../../src/web/v1-forward/policy.ts', import.meta.url), 'utf8')
+    const block = (name: string) => src.slice(src.indexOf(`const ${name}`), src.indexOf('\n]\n', src.indexOf(`const ${name}`)))
+    for (const name of ['COMPANION_ROUTES', 'PHONE_COPY_READS']) {
+      const rules = [...block(name).matchAll(/(?:re|unless): (\/\^[^\n]*?\/)[,\s]/g)].map((m) => m[1])
+      expect(rules.length, name).toBeGreaterThan(1)
+      for (const r of rules) expect([name, r, /[A-Z]/.test(r.replace(/\\[A-Za-z]/g, ''))]).toEqual([name, r, false])
     }
   })
 })
