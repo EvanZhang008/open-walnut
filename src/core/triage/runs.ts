@@ -44,6 +44,7 @@ import { TRIAGE_PROJECT } from './bootstrap.js';
 import { ackTriageClaim, loadTriageState, markTriageStateStale, recordTriageJournalLine } from './state.js';
 import { TRIAGE_AGENT_ID } from './types.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
+import { addContextRecoveryFailListener, contextFullRecovery, contextRecoveryHoldsTurn } from '../sessions/context-full-recovery.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it. */
 export const TRIAGE_RUNS_SUBSCRIBER = 'triage-runs';
@@ -397,6 +398,9 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
   function handler(event: BusEvent): void {
     if (stopped) return;
     handled += 1;
+    // Read at the event, before anything awaits: the recovery lets go of a session on this same event.
+    const eventSid = (event.data as { sessionId?: string } | undefined)?.sessionId;
+    const recoveryHeld = event.name !== EventNames.TASK_CREATED && !!contextFullRecovery()?.holds(eventSid ?? '');
     void (async () => {
       try {
         if (event.name === EventNames.TASK_CREATED) {
@@ -426,6 +430,10 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
           await onRunSettled(task!, { status: 'error', error: data?.error });
           return;
         }
+        // A turn that ended on "Prompt is too long" answered nothing: the context recovery compacts and
+        // resends, and the turn that answers settles the run (2026-11-06; a run it gives up on stays
+        // open as the error it is).
+        if (recoveryHeld || await contextRecoveryHoldsTurn(eventSid, data?.isError ? data.result : undefined)) return;
         await onRunSettled(task!, data?.isError
           ? { status: 'error', error: data?.result }
           : { status: 'ok' });
@@ -441,6 +449,18 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
     global: true,
     interest: [EventNames.TASK_CREATED, EventNames.SESSION_RESULT, EventNames.SESSION_ERROR],
   });
+  // A run held for the context recovery (above) whose recovery failed: it settles as that error.
+  const removeRecoveryFail = addContextRecoveryFailListener(({ taskId, reason }) => {
+    if (stopped || !taskId || settledTasks.has(taskId)) return;
+    void (async () => {
+      await seedRunTasks();
+      if (!runTasks.has(taskId)) return;
+      const task = await getTask(taskId);
+      if (isTriageRunTask(task)) await onRunSettled(task!, { status: 'error', error: `Prompt is too long. ${reason}` });
+    })().catch((err) => log.cron.warn('triage: run not settled after a failed context recovery', {
+      taskId, error: err instanceof Error ? err.message : String(err),
+    }));
+  });
 
   const handle: TriageRunsHandle = {
     async settleIdle(task: Task) {
@@ -453,6 +473,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
       runTasks.clear();
       seeding = null;
       bus.unsubscribe(TRIAGE_RUNS_SUBSCRIBER);
+      removeRecoveryFail();
       if (active === handle) active = null;
     },
     stats() {

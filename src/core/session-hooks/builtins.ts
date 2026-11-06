@@ -2338,6 +2338,8 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const { isMainAgentTask } = await import('../org/main-stays-active.js');
       if (phase !== 'COMPLETE' && !isMainAgentTask(task)) return;
       lastMessage = (payload as unknown as Partial<OnTurnCompletePayload>).result || undefined;
+      // A "Prompt is too long" end answered nothing: the notice says so instead of quoting it.
+      if (lastMessage) lastMessage = (await import('../sessions/session-request-notify.js')).noticeText(lastMessage);
     }
     if (!task && taskId) {
       const { listTasksByIds } = await import('../task-manager.js');

@@ -61,6 +61,10 @@ export function turnEndVerdict(input: { hold: TurnHold; askedAt: number; backgro
 
 /** What holds a session: `queue` counts only when the wait asks for it (a message about to start a turn). */
 export async function turnHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'>, opts: { queue: boolean }): Promise<TurnHold> {
+  // A session the context recovery holds is mid-work even between turns: its last turn ended on
+  // "Prompt is too long", answered nothing, and the recovery compacts and resends (2026-11-06).
+  const { contextFullRecovery } = await import('./context-full-recovery.js');
+  if (contextFullRecovery()?.holds(rec.claudeSessionId)) return 'turn';
   if (opts.queue) {
     const { getStore } = await queueStore();
     const rows = (await getStore().catch(() => null))?.queues[rec.claudeSessionId] ?? [];

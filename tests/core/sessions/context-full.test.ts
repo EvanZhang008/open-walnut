@@ -7,9 +7,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { hardStopTokens, isContextFullText, needsContextRecovery } from '../../../src/core/sessions/context-full.js'
 import { isContextFullText as webIsContextFullText, needsContextRecovery as webNeedsContextRecovery } from '../../../web/src/utils/context-full.js'
 import {
-  attemptsLeft, ContextFullRecovery, MAX_ATTEMPTS_PER_HOUR, resendNoteText, type ContextFullRecoveryDeps,
+  attemptsLeft, ContextFullRecovery, MAX_ATTEMPTS_PER_HOUR, resendNoteText, compactedAtOrAfter, RESTART_CHECK_MS, type ContextFullRecoveryDeps,
 } from '../../../src/core/sessions/context-full-recovery.js'
-import { resetQuietTurnsForTest, quietTurnKind, noteQuietTurnDelivery, noteTurnStart, noteSessionSend, addQuietTurnEndListener } from '../../../src/core/sessions/quiet-turn.js'
+import { resetQuietTurnsForTest, quietTurnKind, isQuietTurn, noteQuietTurnDelivery, noteTurnStart, noteSessionSend, addQuietTurnEndListener } from '../../../src/core/sessions/quiet-turn.js'
 import { EventNames } from '../../../src/core/event-bus.js'
 import { CONTEXT_COMPACT_COMMAND as CONTEXT_COMPACT_TEXT } from '../../../src/core/sessions/walnut-commands.js'
 import type { SessionRecord } from '../../../src/core/types.js'
@@ -125,6 +125,8 @@ describe('ContextFullRecovery', () => {
   /** Runs inside the next send, before the queue asks stillWanted. */
   let beforeSend: ((source: string) => void) | null
   let taken: string[]
+  /** What the host's transcript shows about a compaction a restart caught (null: unreadable). */
+  let hostCompacted: boolean | null
   let recovery: ContextFullRecovery
 
   const ev = (name: string, data: Record<string, unknown>) => recovery.handleEvent({ name, data, source: 'test' } as never)
@@ -159,7 +161,9 @@ describe('ContextFullRecovery', () => {
     holdResend = null
     beforeSend = null
     taken = []
+    hostCompacted = null
     const deps: Partial<ContextFullRecoveryDeps> = {
+      compactedSince: async () => hostCompacted,
       now: () => nowMs,
       getSession: async () => { const hook = onRead; onRead = null; hook?.(); return rec },
       saveSession: async (_id, updates) => { rec = { ...rec, ...updates } },
@@ -413,9 +417,13 @@ describe('ContextFullRecovery', () => {
   })
 
   it('a compaction a restart caught, which then finished in its host, still tells the session to answer', async () => {
-    rec = { ...rec, contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: ['2026-11-05T16:00:00Z'], failedSince: '2026-11-05T15:59:00Z' } }
+    rec = { ...rec, process_status: 'running', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: ['2026-11-05T16:00:00Z'], failedSince: '2026-11-05T15:59:00Z' } }
+    hostCompacted = false // still running there
     await recovery.rebuild(async () => [rec])
-    expect(rec.contextRecovery?.state).toBe('failed')
+    await settle()
+    expect(rec.contextRecovery?.state).toBe('compacting')
+    expect(recovery.holds(SID)).toBe(true)
+    expect(cards).toEqual([])
     ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: false, result: '', turnGen: 7 })
     await settle()
     expect(sends).toHaveLength(1)
@@ -650,9 +658,162 @@ describe('ContextFullRecovery', () => {
     expect(recovery.takes('API Error: 529 overloaded', { claudeSessionId: SID } as SessionRecord)).toBe(false)
   })
 
-  it('a restart that cut a compaction off marks it failed, so the banner offers it again', async () => {
-    rec = { ...rec, contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: ['2026-11-05T16:00:00Z'] } }
+  it('a restart that cut a compaction off, with no compaction in its host, marks it failed, so the banner offers it again', async () => {
+    rec = { ...rec, process_status: 'idle', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: ['2026-11-05T16:00:00Z'] } }
+    hostCompacted = false
     expect(await recovery.rebuild(async () => [rec])).toBe(1)
-    expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: expect.stringMatching(/restart/) })
+    await settle()
+    expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: expect.stringMatching(/restart.*no compaction since/) })
+    expect(recovery.holds(SID)).toBe(false)
+    expect(cards).toHaveLength(1)
+  })
+
+  // 2026-11-06 (f081a055): Walnut restarted while the session compacted; the compaction finished in
+  // its host meanwhile, the old rule failed it at boot, the task was handed back, its asker read
+  // "Prompt is too long" as the answer, and nothing was resent for six hours.
+  it('a restart mid-compaction: the host shows it finished, so the words the record kept go out, with no card', async () => {
+    deliver('qm-1', 'please reply to rq-1 with the result', 2, 'agent')
+    await overflow(2)
+    expect(rec.contextRecovery?.owed).toEqual([expect.objectContaining({ id: 'qm-1', text: 'please reply to rq-1 with the result', sentBy: 'agent' })])
+    // The server restarts: a fresh recovery knows only the record.
+    const saved = rec
+    recovery.stop()
+    recovery = new ContextFullRecovery({ ...(recovery as unknown as { deps: ContextFullRecoveryDeps }).deps })
+    rec = { ...saved, process_status: 'idle' }
+    sends = []
+    hostCompacted = true
+    expect(await recovery.rebuild(async () => [rec])).toBe(1)
+    await settle()
+    expect(sends).toHaveLength(1)
+    expect(sends[0].source).toBe('context-recovery')
+    expect(sends[0].text).toContain('please reply to rq-1 with the result')
+    expect(rec.contextRecovery?.state).toBe('done')
+    expect(rec.contextRecovery?.owed).toBeUndefined()
+    expect(cards).toEqual([])
+  })
+
+  it('a restart mid-compaction with its host unreadable keeps looking, and fails only past the deadline', async () => {
+    rec = { ...rec, process_status: 'idle', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: ['2026-11-05T16:00:00Z'] } }
+    hostCompacted = null
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    expect(rec.contextRecovery?.state).toBe('compacting')
+    expect(recovery.holds(SID)).toBe(true)
+    recovery.stop()
+    recovery = new ContextFullRecovery({ ...(recovery as unknown as { deps: ContextFullRecoveryDeps }).deps })
+    onRead = () => { nowMs += RESTART_CHECK_MS + 1 }
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: expect.stringMatching(/could not be read/) })
+  })
+
+  it('a record that failed keeps the owed words, so a click after a restart resends them', async () => {
+    rec = { ...rec, process_status: 'idle', contextRecovery: { state: 'failed', at: '2026-11-05T16:00:00Z', attempts: [], reason: 'x',
+      owed: [{ id: 'qm-9', text: 'the ask a restart forgot', at: '2026-11-05T15:58:00Z', sentBy: 'person' }] } }
+    await recovery.rebuild(async () => [rec])
+    expect(await recovery.recoverNow(SID)).toBe(true)
+    await compactEnds(9)
+    expect(sends.at(-1)!.text).toContain('the ask a restart forgot')
+  })
+
+  // 2026-11-06 review of the restart check: each of these sent words that should never go out again.
+  it('a Stop while Walnut looks for a compaction a restart caught ends the hold, and nothing is resent', async () => {
+    rec = { ...rec, process_status: 'idle', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: [],
+      owed: [{ id: 'qm-1', text: 'the ask', at: '2026-11-05T15:58:00Z', sentBy: 'person' }] } }
+    hostCompacted = null
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    expect(recovery.holds(SID)).toBe(true)
+    ev(EventNames.SESSION_INTERRUPT, { sessionId: SID })
+    await settle()
+    expect(recovery.holds(SID)).toBe(false)
+    expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: 'The compaction was stopped.' })
+    expect(cards).toEqual([])
+    // The host comes back showing the compaction: still nothing goes out by itself.
+    hostCompacted = true
+    await (recovery as unknown as { checkRestarted: (s: string, d: number) => Promise<void> }).checkRestarted(SID, nowMs + RESTART_CHECK_MS)
+    await settle()
+    expect(sends).toEqual([])
+  })
+
+  it('a stop of the team while the hold lasts (the fence moved) refuses the resend when the compaction turns up', async () => {
+    rec = { ...rec, process_status: 'idle', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: [],
+      owed: [{ id: 'qm-1', text: 'the ask', at: '2026-11-05T15:58:00Z', sentBy: 'agent' }] } }
+    hostCompacted = null
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    fence = 'f2'
+    hostCompacted = true
+    await (recovery as unknown as { checkRestarted: (s: string, d: number) => Promise<void> }).checkRestarted(SID, nowMs + RESTART_CHECK_MS)
+    await settle()
+    expect(sends).toEqual([])
+    expect(rec.contextRecovery).toMatchObject({ state: 'failed', reason: 'The session was stopped.' })
+    expect(cards).toEqual([])
+  })
+
+  it('a compaction found in its host while the turn still runs waits for that turn to end, and its end is quiet', async () => {
+    rec = { ...rec, process_status: 'running', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: [] } }
+    hostCompacted = true // the boundary is written; the summary and result are not yet
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    expect(sends).toEqual([])
+    expect(recovery.holds(SID)).toBe(true)
+    // The compaction's turn, begun before the restart, reads as quiet to every reader of its result.
+    expect(isQuietTurn(SID, 12)).toBe(true)
+    ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: false, result: '', turnGen: 12 })
+    await settle()
+    expect(sends).toHaveLength(1)
+    expect(sends[0].source).toBe('context-recovery')
+    // Its readers that run late still read that result as quiet, after the resend went out.
+    expect(isQuietTurn(SID, 12)).toBe(true)
+  })
+
+  it('a compaction a restart caught that overflowed itself compacts again', async () => {
+    rec = { ...rec, process_status: 'running', contextRecovery: { state: 'compacting', at: '2026-11-05T16:00:00Z', attempts: [] } }
+    hostCompacted = false
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: true, result: 'Prompt is too long', turnGen: 12 })
+    await settle()
+    expect(sends.at(-1)).toMatchObject({ source: 'context-compact' })
+  })
+
+  it('words answered once are never resent by a later failure', async () => {
+    rec = { ...rec, process_status: 'idle', contextRecovery: { state: 'failed', at: '2026-11-05T16:00:00Z', attempts: [], reason: 'x',
+      owed: [{ id: 'qm-9', text: 'the old ask', at: '2026-11-05T15:58:00Z', sentBy: 'person' }] } }
+    await recovery.rebuild(async () => [rec])
+    // The person takes it back (or it was answered), and the session works again.
+    ev(EventNames.SESSION_QUEUED_CANCELLED, { sessionId: SID, messageIds: ['qm-9'] })
+    ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: false, result: 'ok', turnGen: 3 })
+    await settle()
+    expect(rec.contextRecovery?.state).toBe('done')
+    expect(rec.contextRecovery?.owed).toBeUndefined()
+    // A fresh recovery after a restart, failing with nothing of its own, carries none of them.
+    recovery.stop()
+    recovery = new ContextFullRecovery({ ...(recovery as unknown as { deps: ContextFullRecoveryDeps }).deps })
+    rec = { ...rec, contextRecovery: { ...rec.contextRecovery!, state: 'compacting' } }
+    hostCompacted = false
+    await recovery.rebuild(async () => [rec])
+    await settle()
+    expect(rec.contextRecovery?.state).toBe('failed')
+    expect(rec.contextRecovery?.owed).toBeUndefined()
+  })
+
+  it('tells a compaction after the overflow by order, whatever the host clock says', () => {
+    const ptl = { role: 'assistant', text: 'Prompt is too long', timestamp: '2026-11-05T15:50:00Z' }
+    const done = { role: 'system', systemVariant: 'compact', text: 'Context compacted', timestamp: '2026-11-05T15:52:00Z' }
+    // The host runs 20 minutes behind the server's 16:10.
+    expect(compactedAtOrAfter([ptl, done], '2026-11-05T16:10:00Z')).toBe(true)
+    // An old compaction before the overflow, stamped "now" for want of a time, is not this one.
+    expect(compactedAtOrAfter([{ ...done, timestamp: '2026-11-05T16:30:00Z' }, ptl], '2026-11-05T16:10:00Z')).toBe(false)
+  })
+
+  it('reads a finished compaction in a history only at or after the time asked', () => {
+    const rows = [
+      { role: 'system', systemVariant: 'compact', text: 'Context compacted', timestamp: '2026-11-05T15:00:00Z' },
+      { role: 'system', systemVariant: 'compact', text: 'Compaction failed', timestamp: '2026-11-05T16:30:00Z' },
+    ]
+    expect(compactedAtOrAfter(rows, '2026-11-05T16:00:00Z')).toBe(false)
+    expect(compactedAtOrAfter([...rows, { role: 'system', systemVariant: 'compact', text: 'Context compacted', timestamp: '2026-11-05T16:01:00Z' }], '2026-11-05T16:00:00Z')).toBe(true)
   })
 })

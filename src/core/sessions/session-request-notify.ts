@@ -22,6 +22,7 @@
 
 import { log } from '../../logging/index.js';
 import { cutEnd } from '../text-cut.js';
+import { isContextFullText } from './context-full.js';
 import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
@@ -125,12 +126,25 @@ function lastWordsOfTurn(
     });
   if (lastSaid >= 0) {
     // '' when its last message was only the no-action line.
-    const words = clipNoticeMessage(turn[lastSaid].text) ?? { text: '' };
+    const words = clipNoticeMessage(noticeText(turn[lastSaid].text)) ?? { text: '' };
     return actions.length ? { ...words, actions } : words;
   }
   if (actions.length) return { text: '', actions };
   const earlier = messages.slice(0, start).reverse().find(said);
-  return earlier ? clipNoticeMessage(earlier.text) : undefined;
+  return earlier ? clipNoticeMessage(noticeText(earlier.text)) : undefined;
+}
+
+/**
+ * What a notice says for a turn that ended on "Prompt is too long": Claude Code's refusal is no
+ * answer, and quoting it read as one (2026-11-06: an asker took a quoted "Prompt is too long" as the
+ * reply). Guard: tests/core/sessions/context-full-turn-end-guard.test.ts.
+ */
+export const CONTEXT_FULL_NOTICE_WORDS = '[It answered nothing: its turn ended on "Prompt is too long" (its conversation no longer fits '
+  + 'the model\'s context window). Walnut compacts it and hands it the message again; if that fails, the session waits for a person.]';
+
+/** A last message as a notice quotes it. */
+export function noticeText(text: string): string {
+  return isContextFullText(text) ? CONTEXT_FULL_NOTICE_WORDS : text;
 }
 
 export interface FallbackContext {

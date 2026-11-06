@@ -28,7 +28,7 @@ import { log } from '../../logging/index.js';
 import type { ContextRecoveryState, SessionRecord } from '../types.js';
 import { isContextFullText } from './context-full.js';
 import {
-  addQuietTurnEndListener, beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled,
+  addQuietTurnEndListener, beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled, noteTurnStart,
   quietTurnKind, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
 } from './quiet-turn.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
@@ -110,7 +110,28 @@ export interface ContextFullRecoveryDeps {
   taskOpen: (taskId: string) => Promise<boolean>;
   /** Take a queued row back before it goes out (a Stop after the resend was queued). */
   deleteQueued: (sessionId: string, messageId: string) => Promise<boolean>;
+  /**
+   * Whether the session's transcript, in its host, shows a compaction at or after `since`: true or
+   * false, or null when it cannot be read now (the host is away). A restart that caught a compaction
+   * asks it (2026-11-06: the compaction had finished in its host while Walnut restarted).
+   */
+  compactedSince: (rec: SessionRecord, since: string) => Promise<boolean | null>;
 }
+
+/**
+ * Told whenever a recovery fails (gave up, or was stopped): a reader that held a turn's end for the
+ * recovery settles it then (triage/runs.ts: a run held on "Prompt is too long" settles as the error).
+ */
+export interface ContextRecoveryFail { sessionId: string; taskId?: string; reason: string }
+const failListeners = new Set<(fail: ContextRecoveryFail) => void>();
+export function addContextRecoveryFailListener(listener: (fail: ContextRecoveryFail) => void): () => void {
+  failListeners.add(listener);
+  return () => { failListeners.delete(listener); };
+}
+
+/** How long, and how often, a compaction a restart caught is looked for in its host. */
+export const RESTART_CHECK_MS = 30 * 60_000;
+export const RESTART_CHECK_EVERY_MS = 30_000;
 
 /** A stop still waits for its host: the session takes no new work until it settles. */
 const PENDING_STOP = Symbol('pending-stop');
@@ -137,7 +158,9 @@ function defaultDeps(): ContextFullRecoveryDeps {
         .catch(() => {});
     },
     announceState: (sessionId, state) => {
-      void import('../../web/ws/handler.js').then(({ broadcastEvent }) => broadcastEvent(CONTEXT_RECOVERY_EVENT, { sessionId, contextRecovery: state }))
+      // The words still owed stay on the record; the banner needs none of them.
+      const { owed: _owed, ...shown } = state;
+      void import('../../web/ws/handler.js').then(({ broadcastEvent }) => broadcastEvent(CONTEXT_RECOVERY_EVENT, { sessionId, contextRecovery: shown }))
         .catch(() => {});
     },
     gaveUp: async () => {},
@@ -148,7 +171,45 @@ function defaultDeps(): ContextFullRecoveryDeps {
       const task = await getTask(taskId).catch(() => null);
       return !!task && task.phase !== 'COMPLETE';
     },
+    compactedSince: async (rec, since) => {
+      const { readSessionHistoryTail } = await import('../session-history.js');
+      const rows = await readSessionHistoryTail(rec.claudeSessionId, rec.cwd, rec.host ?? undefined, rec.outputFile, 2 * 1024 * 1024)
+        .catch(() => null);
+      return rows?.length ? compactedAtOrAfter(rows, since) : null;
+    },
   };
+}
+
+/** How far a host's clock may run behind the server's, for a compaction told apart by its time only. */
+const HOST_CLOCK_SKEW_MS = 10 * 60_000;
+
+/**
+ * Whether a history shows a finished compaction after the overflow it was for. Told by order: a
+ * compaction row after the last "Prompt is too long" (2026-11-06 review: the server's clock against
+ * the host's missed a real one on a host running behind, and a row with no time of its own reads as
+ * now). Only when the overflow is out of the window read, by its time, give or take a host clock.
+ * Pure; exported for tests.
+ */
+export function compactedAtOrAfter(rows: ReadonlyArray<{ role: string; systemVariant?: string; text: string; timestamp: string }>, since: string): boolean {
+  const compacted = (r: (typeof rows)[number]) => r.role === 'system' && r.systemVariant === 'compact' && r.text.startsWith('Context compacted');
+  let overflow = -1;
+  rows.forEach((r, i) => { if (r.role === 'assistant' && isContextFullText(r.text)) overflow = i; });
+  if (overflow >= 0) return rows.slice(overflow + 1).some(compacted);
+  const from = Date.parse(since) - HOST_CLOCK_SKEW_MS;
+  return rows.some((r) => compacted(r) && Date.parse(r.timestamp) >= from);
+}
+
+/** The owed rows a record keeps: newest first into the note's budget, kept oldest first. */
+function owedForRecord(rows: ReadonlyArray<SeenRow>): ContextRecoveryState['owed'] {
+  let budget = NOTE_CHARS;
+  const kept: NonNullable<ContextRecoveryState['owed']> = [];
+  for (const r of [...rows].reverse()) {
+    if (budget <= 0) break;
+    const text = r.text.slice(0, Math.min(KEEP_CHARS, budget));
+    budget -= text.length;
+    kept.unshift({ id: r.id, text, at: r.at, ...(r.sentBy ? { sentBy: r.sentBy } : {}), ...(r.source ? { source: r.source } : {}) });
+  }
+  return kept;
 }
 
 /** The words of the note that hands the session what got no answer. Pure; exported for tests. */
@@ -216,6 +277,10 @@ export class ContextFullRecovery {
   private readonly resendRow = new Map<string, { id: string; taken?: boolean }>();
   /** Sessions a restart caught compacting: their next clean result is that compaction's end. */
   private readonly restartCompacting = new Set<string>();
+  /** The host checks of those sessions (rebuild): stopped with the recovery. */
+  private readonly restartChecks = new Map<string, ReturnType<typeof setTimeout>>();
+  /** The stop fence each of those sessions stood under at boot: a Stop after it refuses their resend. */
+  private readonly restartFence = new Map<string, string | null>();
   private stopped = false;
 
   constructor(deps: Partial<ContextFullRecoveryDeps> = {}) {
@@ -255,6 +320,10 @@ export class ContextFullRecovery {
         // A resend still waiting in the queue was the recovery's, not the person's: a Stop takes it back.
         const row = this.resendRow.get(sessionId);
         if (row && !row.taken) void this.deps.deleteQueued(sessionId, row.id).catch(() => false);
+        // A compaction a restart caught: a Stop ends the hold, and nothing is resent by itself.
+        if (this.endRestartHold(sessionId)) {
+          void this.fail(sessionId, undefined, 'The compaction was stopped.', undefined, { card: false }).catch(() => {});
+        }
         return;
       }
       case EventNames.SESSION_RESULT: {
@@ -263,8 +332,13 @@ export class ContextFullRecovery {
           : d.isError === true ? String(d.result ?? '') : null;
         const run = this.running.get(sessionId);
         if (quietTurnKind(sessionId) === 'context-compact' && isQuietTurn(sessionId, turnGen)) {
+          const restartEnd = !run && this.restartCompacting.has(sessionId);
+          // A turn begun before the restart: its generation is remembered now, so the result's late
+          // readers still read it as quiet once the resend went out.
+          if (restartEnd && typeof turnGen === 'number' && !quietTurnRow(sessionId)) noteTurnStart(sessionId, turnGen);
           noteQuietTurnSettled(sessionId);
           if (run?.phase === 'compacting') void this.onCompactionEnd(sessionId, run, outcome);
+          else if (restartEnd) this.onRestartCompactionEnd(sessionId, outcome);
           return;
         }
         // A compaction that stopped being quiet (someone else's send went out with it already in
@@ -278,8 +352,11 @@ export class ContextFullRecovery {
         const modelReplied = this.replied.has(sessionId);
         this.slashQueued.delete(sessionId);
         this.replied.delete(sessionId);
-        // A compaction a restart caught that then failed or was stopped: the banner offers it again.
-        if (outcome !== null) this.restartCompacting.delete(sessionId);
+        // A compaction a restart caught whose quiet mark is gone (its 30 minutes ran out): its end all the same.
+        if (!run && this.restartCompacting.has(sessionId) && (outcome === null || !isContextFullText(outcome))) {
+          this.onRestartCompactionEnd(sessionId, outcome);
+          return;
+        }
         // The turn that took the resend did not answer it: the words are still owed.
         const resend = this.resendRow.get(sessionId);
         if (outcome !== null && resend) resend.taken = false;
@@ -290,12 +367,6 @@ export class ContextFullRecovery {
           return;
         }
         if (outcome !== null || isQuietTurn(sessionId, turnGen)) return;
-        if (this.restartCompacting.delete(sessionId)) {
-          // A restart caught this session compacting and the compaction went on in its host: the
-          // first clean end after is that compaction's, so the session is told to answer now.
-          void this.resendOwed(sessionId, { evenEmpty: true });
-          return;
-        }
         if (slash && !modelReplied) {
           // A command the CLI ran itself (no model reply) answered nothing (2026-11-05 review: a
           // person's own /compact read as a clean turn and dropped the words still owed). A
@@ -434,7 +505,8 @@ export class ContextFullRecovery {
     const rec = await this.deps.getSession(sessionId).catch(() => null);
     const prior = rec?.contextRecovery;
     if (prior?.state !== 'failed' || this.running.has(sessionId)) return;
-    const { reason: _reason, ...rest } = prior;
+    // Answered: nothing is owed any more (a later failure must not resend these).
+    const { reason: _reason, owed: _owed, ...rest } = prior;
     await this.setState(sessionId, { ...rest, state: 'done', at: new Date(this.deps.now()).toISOString() });
   }
 
@@ -564,9 +636,11 @@ export class ContextFullRecovery {
     const at = new Date(nowMs).toISOString();
     if (!run.manual) run.attemptAt = at;
     const { recent } = attemptsLeft(rec.contextRecovery, nowMs);
+    const owed = owedForRecord(this.failed.get(sessionId) ?? []);
     await this.setState(sessionId, {
       state: 'compacting', at, attempts: run.attemptAt ? [...recent, run.attemptAt] : recent,
       ...(failedSince ? { failedSince } : {}),
+      ...(owed?.length ? { owed } : {}),
     });
     this.deps.announce(sessionId, true);
     const waiting = this.failed.get(sessionId)?.length ?? 0;
@@ -673,7 +747,7 @@ export class ContextFullRecovery {
     }
     await this.finish(sessionId, run, async () => {
       const latest = await this.deps.getSession(sessionId);
-      const { reason: _reason, ...prior } = latest?.contextRecovery ?? rec?.contextRecovery ?? { attempts: [] as string[] };
+      const { reason: _reason, owed: _owed, ...prior } = latest?.contextRecovery ?? rec?.contextRecovery ?? { attempts: [] as string[] };
       await this.setState(sessionId, { ...prior, state: 'done', at: new Date(this.deps.now()).toISOString(), resent: rows.length });
     });
     log.session.info('context recovery: compacted and resent', { sessionId, taskId: rec?.taskId, resent: rows.length, manual: run.manual });
@@ -683,14 +757,20 @@ export class ContextFullRecovery {
    * The session has room again (a person's own /compact, a compaction a restart caught, a clean
    * turn after a failed resend): what got no answer goes out now.
    */
-  private async resendOwed(sessionId: string, opts: { evenEmpty?: boolean } = {}): Promise<void> {
+  private async resendOwed(sessionId: string, opts: { evenEmpty?: boolean; bound?: { fence: string | null } } = {}): Promise<void> {
     if (this.running.has(sessionId) || (!opts.evenEmpty && !(this.failed.get(sessionId)?.length))) return;
     const run: Run = { phase: 'resending', manual: true, fence: null };
     this.running.set(sessionId, run);
     try {
       const fence = await this.fenceNow(sessionId);
-      if (fence === PENDING_STOP) { this.release(sessionId, run); return; }
-      run.fence = fence;
+      if (fence === PENDING_STOP || (opts.bound && fence !== opts.bound.fence)) {
+        // Stopped since the fence this resend is bound to (a restart's: a Stop or a team stop while
+        // Walnut looked for the compaction): nothing goes out, a click still can.
+        this.release(sessionId, run);
+        if (opts.bound) await this.fail(sessionId, undefined, 'The session was stopped.', undefined, { card: false });
+        return;
+      }
+      run.fence = opts.bound ? opts.bound.fence : fence;
       await this.resend(sessionId, run, await this.deps.getSession(sessionId));
     } catch (err) {
       this.release(sessionId, run);
@@ -736,6 +816,7 @@ export class ContextFullRecovery {
       await this.setState(sessionId, {
         attempts: (prior?.attempts ?? []).filter((t) => t !== run.attemptAt),
         ...(prior?.failedSince ? { failedSince: prior.failedSince } : {}),
+        ...(prior?.owed?.length ? { owed: prior.owed } : {}),
         state: 'failed', at: new Date(this.deps.now()).toISOString(),
         reason: 'Another message went out before the compaction could. Walnut compacts when that message gets "Prompt is too long" too.',
       });
@@ -753,11 +834,18 @@ export class ContextFullRecovery {
     const current = rec ?? await this.deps.getSession(sessionId);
     const prior = current?.contextRecovery;
     const failedAt = new Date(this.deps.now()).toISOString();
+    // What is still owed stays on the record, so a click after a restart resends it too.
+    const known = owedForRecord(this.failed.get(sessionId) ?? []);
+    const owed = known?.length ? known : prior?.owed;
     await this.setState(sessionId, {
       attempts: prior?.attempts ?? [], ...(prior?.failedSince || failedSince ? { failedSince: prior?.failedSince ?? failedSince } : {}),
+      ...(owed?.length ? { owed } : {}),
       state: 'failed', at: failedAt, reason,
     });
     this.failedState.add(sessionId);
+    for (const listener of failListeners) {
+      try { listener({ sessionId, taskId: current?.taskId, reason }); } catch { /* a listener's own fault */ }
+    }
     this.deps.emitNote(sessionId, current?.taskId, `Walnut could not recover this session by itself. ${reason}`, 'error');
     log.session.warn('context recovery failed', { sessionId, taskId: current?.taskId, reason });
     if (opts.card !== false && current) {
@@ -768,20 +856,113 @@ export class ContextFullRecovery {
   }
 
   /**
-   * At boot: a compaction a restart cut off is not resumed (a restart forgets which turn was
-   * quiet); its record says so, and the banner offers to run it again.
+   * At boot. The messages a recovery still owed come back from the record. A compaction a restart
+   * caught is looked for in its host before anything is decided (2026-11-06: one had finished there
+   * while Walnut restarted, and the old rule failed it outright: the task was handed back, its asker
+   * read "Prompt is too long" as the answer, and nothing was resent for six hours). Found: the session
+   * is told to answer now. Not found once the session is idle, or not readable for
+   * RESTART_CHECK_MS: the banner offers it again. A clean end of the compaction meanwhile resends
+   * too (handleEvent).
    */
   async rebuild(listSessions: () => Promise<SessionRecord[]>): Promise<number> {
     let n = 0;
     for (const rec of await listSessions()) {
-      if (rec.contextRecovery?.state === 'failed') this.failedState.add(rec.claudeSessionId);
-      if (rec.contextRecovery?.state !== 'compacting') continue;
-      // The compaction may still run in its host: its clean end then resends (handleEvent).
-      this.restartCompacting.add(rec.claudeSessionId);
-      await this.fail(rec.claudeSessionId, rec, 'A Walnut restart interrupted the compaction.');
+      const state = rec.contextRecovery?.state;
+      if (state !== 'failed' && state !== 'compacting') continue;
+      const sid = rec.claudeSessionId;
+      if (rec.contextRecovery?.owed?.length && !this.failed.get(sid)?.length) {
+        this.failed.set(sid, rec.contextRecovery.owed.map((r) => ({ ...r, delivered: true, taken: true })));
+      }
+      if (state === 'failed') { this.failedState.add(sid); continue; }
+      const fence = await this.fenceNow(sid);
+      if (fence === PENDING_STOP) {
+        await this.fail(sid, rec, 'The session was stopped.', undefined, { card: false }).catch(() => {});
+        continue;
+      }
+      this.restartCompacting.add(sid);
+      this.restartFence.set(sid, fence);
+      // Its end is the compaction's, as quiet as it was before the restart: no hand-back, no notice.
+      if (!quietTurnKind(sid)) beginQuietTurn(sid, 'context-compact', CONTEXT_COMPACT_SOURCE, this.deps.now());
+      void this.checkRestarted(sid, this.deps.now() + RESTART_CHECK_MS);
       n++;
     }
     return n;
+  }
+
+  /** Whether the recovery holds this session now: a run of its own, or a compaction a restart caught. */
+  holds(sessionId: string): boolean {
+    return !this.stopped && (this.running.has(sessionId) || this.restartCompacting.has(sessionId));
+  }
+
+  /** Look in its host for the compaction a restart caught (rebuild). */
+  private async checkRestarted(sessionId: string, deadline: number): Promise<void> {
+    this.restartChecks.delete(sessionId);
+    if (this.stopped || !this.restartCompacting.has(sessionId)) return;
+    const again = () => {
+      if (this.stopped) return;
+      const t = setTimeout(() => { void this.checkRestarted(sessionId, deadline); }, RESTART_CHECK_EVERY_MS);
+      t.unref?.();
+      this.restartChecks.set(sessionId, t);
+    };
+    try {
+      const rec = await this.deps.getSession(sessionId);
+      if (!this.restartCompacting.has(sessionId)) return;
+      if (!rec || rec.contextRecovery?.state !== 'compacting') { this.endRestartHold(sessionId); return; }
+      const found = await this.deps.compactedSince(rec, rec.contextRecovery.at);
+      if (!this.restartCompacting.has(sessionId)) return;
+      // A turn still runs: the compaction is not over until it ends (its result resends), even with
+      // its boundary already written (2026-11-06 review: a resend went in under the summary).
+      if (rec.process_status === 'running' && this.deps.now() < deadline) { again(); return; }
+      if (found) {
+        log.session.info('context recovery: the compaction a restart caught finished in its host', { sessionId, taskId: rec.taskId });
+        this.resendAfterRestart(sessionId);
+        return;
+      }
+      // Not readable now: look again, up to the deadline.
+      if (found === null && this.deps.now() < deadline) { again(); return; }
+      this.endRestartHold(sessionId);
+      await this.fail(sessionId, rec, found === null
+        ? 'A Walnut restart interrupted the compaction, and its host could not be read since.'
+        : 'A Walnut restart interrupted the compaction, and the session shows no compaction since.');
+    } catch (err) {
+      log.session.warn('context recovery: restart check failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+      if (this.deps.now() < deadline) again();
+      else { this.endRestartHold(sessionId); await this.fail(sessionId, undefined, 'A Walnut restart interrupted the compaction.').catch(() => {}); }
+    }
+  }
+
+  /** The end of a compaction a restart caught, seen as its turn's result. */
+  private onRestartCompactionEnd(sessionId: string, outcome: string | null): void {
+    // Its quiet mark ends by its own grace, for the result's late readers.
+    if (outcome === null) { this.resendAfterRestart(sessionId, false); return; }
+    this.endRestartHold(sessionId, false);
+    if (isContextFullText(outcome)) {
+      // It overflowed itself: the next run compacts again.
+      void this.onOverflow(sessionId).catch(() => {});
+      return;
+    }
+    void this.fail(sessionId, undefined, outcome === 'stopped' ? 'The compaction was stopped.' : `The compaction failed: ${outcome.slice(0, 300)}`,
+      undefined, { card: outcome !== 'stopped' }).catch(() => {});
+  }
+
+  /** The compaction a restart caught is over: the session is told to answer now, under the fence it had at boot. */
+  private resendAfterRestart(sessionId: string, endQuiet = true): void {
+    const fence = this.restartFence.get(sessionId) ?? null;
+    // resendOwed takes the session before its first await, so the hold never lapses in between.
+    void this.resendOwed(sessionId, { evenEmpty: true, bound: { fence } });
+    this.endRestartHold(sessionId, endQuiet);
+  }
+
+  /** Let go of a compaction a restart caught. Whether one was held. */
+  private endRestartHold(sessionId: string, endQuiet = true): boolean {
+    if (!this.restartCompacting.delete(sessionId)) return false;
+    this.restartFence.delete(sessionId);
+    const check = this.restartChecks.get(sessionId);
+    if (check) clearTimeout(check);
+    this.restartChecks.delete(sessionId);
+    // The quiet mark rebuild set (no row of its own; a run's own compaction has one).
+    if (endQuiet && quietTurnKind(sessionId) === 'context-compact' && !quietTurnRow(sessionId)) endQuietTurn(sessionId, 'settled');
+    return true;
   }
 
   forget(sessionId: string): void {
@@ -794,6 +975,10 @@ export class ContextFullRecovery {
     this.replied.delete(sessionId);
     this.resendRow.delete(sessionId);
     this.restartCompacting.delete(sessionId);
+    this.restartFence.delete(sessionId);
+    const check = this.restartChecks.get(sessionId);
+    if (check) clearTimeout(check);
+    this.restartChecks.delete(sessionId);
   }
 
   stop(): void {
@@ -803,6 +988,8 @@ export class ContextFullRecovery {
       run.stopped = true;
       if (run.deadline) clearTimeout(run.deadline);
     }
+    for (const check of this.restartChecks.values()) clearTimeout(check);
+    this.restartChecks.clear();
   }
 
   /** Tests only. */
@@ -826,6 +1013,23 @@ export function contextFullRecovery(): ContextFullRecovery | null {
   return instance;
 }
 
+/**
+ * Whether a session's turn end belongs to the recovery: it holds the session (a compaction, a resend,
+ * one a restart caught), or the turn ended on a "Prompt is too long" it takes. Whatever acts on a
+ * turn's end (closing a run, closing a handed-over task, a hand-back) waits while this says so: such
+ * a turn answered nothing (2026-11-06). Guard: tests/core/sessions/context-full-turn-end-guard.test.ts.
+ */
+export async function contextRecoveryHoldsTurn(sessionId: string | undefined, result?: string | null): Promise<boolean> {
+  const recovery = instance;
+  if (!recovery || !sessionId) return false;
+  if (recovery.holds(sessionId)) return true;
+  if (!isContextFullText(result)) return false;
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const rec = await getSessionByClaudeId(sessionId).catch(() => null);
+  // The recovery's own listener of this result may have taken the session meanwhile.
+  return recovery.holds(sessionId) || recovery.takes(result, rec);
+}
+
 /** Start the recovery on the primary. */
 export function startContextFullRecovery(deps: Partial<ContextFullRecoveryDeps> = {}): { stop: () => void; instance: ContextFullRecovery } {
   const recovery = new ContextFullRecovery(deps);
@@ -837,7 +1041,7 @@ export function startContextFullRecovery(deps: Partial<ContextFullRecoveryDeps> 
       'session:interrupt', 'session:result', 'session:error', 'session:deleted'],
   });
   void import('../session-tracker.js').then(({ listSessions }) => recovery.rebuild(listSessions))
-    .then((n) => { if (n) log.session.info('context recovery: interrupted compactions marked', { count: n }); })
+    .then((n) => { if (n) log.session.info('context recovery: compactions a restart caught, looked for in their hosts', { count: n }); })
     .catch((err) => log.session.warn('context recovery rebuild failed', { error: err instanceof Error ? err.message : String(err) }));
   return {
     instance: recovery,
