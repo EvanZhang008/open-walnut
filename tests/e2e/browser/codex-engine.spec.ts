@@ -227,23 +227,26 @@ test('Codex session controls cycle on Homepage', async ({ page }) => {
   // The pill/menu use the ChatGPT-parity wording overlaid on codex's mode ids
   // (SessionControlPills CHATGPT_MODE_WORDING): agent → "Approve for me",
   // agent-full-access → "Full access", read-only → "Ask for approval".
-  const modePill = panel.locator('.mode-toggle-pill').filter({ hasText: 'Approve for me' })
+  // A start that names no mode runs in bypass, as a Claude Code start does
+  // (80a1060d1), so a fresh Codex session opens on the full-access preset.
+  const modePill = panel.locator('.mode-toggle-pill').filter({ hasText: 'Full access' })
   await expect(modePill).toBeVisible({ timeout: 15_000 })
 
-  const clickModeResponse = page.waitForResponse((candidate) =>
-    candidate.request().method() === 'POST'
-      && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
-  await modePill.click()
-  await panel.locator('.session-control-option', { hasText: 'Full access' }).click()
-  expect((await clickModeResponse).status()).toBe(200)
-  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Full access' })).toBeVisible()
-
+  // Shift+Tab steps the adapter's options in order and wraps: full access → read-only.
   const shortcutResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
   await panel.locator('.chat-input-textarea').press('Shift+Tab')
   expect((await shortcutResponse).status()).toBe(200)
   await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Ask for approval' })).toBeVisible()
+
+  const clickModeResponse = page.waitForResponse((candidate) =>
+    candidate.request().method() === 'POST'
+      && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
+  await panel.locator('.mode-toggle-pill').filter({ hasText: 'Ask for approval' }).click()
+  await panel.locator('.session-control-option', { hasText: 'Approve for me' }).click()
+  expect((await clickModeResponse).status()).toBe(200)
+  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Approve for me' })).toBeVisible()
 
   const collaborationResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
