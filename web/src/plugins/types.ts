@@ -102,8 +102,8 @@ export interface PluginSettingsContribution {
 }
 
 /** Mirrors `@open-walnut/plugin-api`'s SlotTarget: the host surfaces a plugin can draw inside. */
-export type PluginSlotTarget = 'task.meta' | 'session.meta' | 'status-item.panel'
-export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.meta', 'session.meta', 'status-item.panel']
+export type PluginSlotTarget = 'task.meta' | 'session.meta' | 'status-item.panel' | 'dialog'
+export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.meta', 'session.meta', 'status-item.panel', 'dialog']
 
 export interface PluginTaskMetaSlotProps {
   taskId: string
@@ -125,7 +125,14 @@ export interface PluginStatusItemPanelSlotProps {
   navigate(path: string): void
 }
 
+export interface PluginDialogSlotProps {
+  args?: Record<string, unknown>
+  close(): void
+  navigate(path: string): void
+}
+
 export interface PluginSlotPropsByTarget {
+  'dialog': PluginDialogSlotProps
   'task.meta': PluginTaskMetaSlotProps
   'session.meta': PluginSessionMetaSlotProps
   'status-item.panel': PluginStatusItemPanelSlotProps
@@ -356,6 +363,7 @@ export interface WalnutWebApiHost {
     page(contribution: PluginPageContribution): Disposable
     settings(contribution: PluginSettingsContribution): Disposable
     slot<T extends PluginSlotTarget>(contribution: PluginSlotContribution<T>): Disposable
+    openDialog(id: string, args?: Record<string, unknown>): boolean
     link(contribution: LinkHandlerContribution): Disposable
     injectCss(css: string): Disposable
     readonly views: PluginViews

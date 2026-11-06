@@ -65,3 +65,16 @@ const hostMicIsPublicMic: PublicMicButton = null as unknown as HostMicButton
 const publicMicIsHostMic: HostMicButton = null as unknown as PublicMicButton
 void hostMicIsPublicMic
 void publicMicIsHostMic
+
+hostApi.ui.slot({
+  id: 'record', target: 'dialog', title: 'Record',
+  component: ({ args, close, navigate }) => {
+    const record: unknown = args?.record
+    void record
+    void close
+    void navigate
+    return null
+  },
+})
+const dialogOpened: boolean | undefined = hostImplementsPublicContract.ui.openDialog?.('record', { record: 'one' })
+void dialogOpened

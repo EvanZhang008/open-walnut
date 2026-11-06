@@ -127,6 +127,29 @@ describe('walnut.notifications.notify (reminder + actions)', () => {
     expect(seen[0].destinations).toEqual(['web-ui']);
   });
 
+  it('stores only the owning plugin and a local dialog id, cloning its arguments', async () => {
+    const { api } = pluginApi('sample');
+    const args = { record: 'one', nested: { value: 1 } };
+    await api.notifications.notify({ title: 'Open a record', dedupKey: 'dialog', actions: [{ label: 'Open', dialog: 'record', args, pluginId: 'other' } as never] });
+    args.nested.value = 2;
+    expect((await listNotifications()).feed[0].actions).toEqual([
+      { kind: 'dialog', label: 'Open', pluginId: 'sample', slot: 'record', args: { record: 'one', nested: { value: 1 } } },
+    ]);
+  });
+
+  it.each([
+    { label: 'Open', op: 'go', dialog: 'record' },
+    { label: 'Open' },
+    { label: 'Open', dialog: 'other:record' },
+    { label: 'Open', dialog: '../record' },
+    { label: 'Open', dialog: null },
+    { label: 'Open', dialog: 'record', args: [] },
+  ])('refuses malformed dialog actions without writing a notice: %j', async (action) => {
+    const { api } = pluginApi('sample');
+    await expect(api.notifications.notify({ title: 'Open', dedupKey: 'bad', actions: [action as never] })).rejects.toThrow();
+    expect((await listNotifications()).feed).toEqual([]);
+  });
+
   it('cannot name another plugin\'s op: the host always prefixes with its own id', async () => {
     const { api } = pluginApi('walnut-rhythm');
     await api.notifications.notify({

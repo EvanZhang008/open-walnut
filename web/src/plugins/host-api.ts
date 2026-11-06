@@ -25,6 +25,7 @@ import type {
   WalnutWebApiHost,
 } from './types'
 import { PLUGIN_SLOT_TARGETS } from './types'
+import { openPluginDialog } from './dialog-store'
 
 const LOCAL_EVENT = 'walnut:plugin-web-event'
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -98,9 +99,11 @@ function validatePagePath(value: string): void {
 }
 
 function validateComponent(component: unknown): void {
-  if (typeof component !== 'function' && typeof component !== 'object') {
-    throw new Error('Plugin UI contribution requires a React component')
-  }
+  if (typeof component === 'function') return
+  // React's wrapper types are components, unlike null, element instances or arbitrary objects.
+  const tag = component && typeof component === 'object' ? (component as { $$typeof?: unknown }).$$typeof : undefined
+  if (tag === Symbol.for('react.memo') || tag === Symbol.for('react.lazy') || tag === Symbol.for('react.forward_ref')) return
+  throw new Error('Plugin UI contribution requires a React component')
 }
 
 function validateAppBadge(badge: AppBadge | undefined): void {
@@ -338,6 +341,11 @@ export function createWebPluginApi(
           throw new Error('Plugin slot order must be finite')
         }
         return own(pluginUiRegistry.registerSlot(pluginId, pluginName, contribution as unknown as PluginSlotContribution))
+      },
+      openDialog(id: string, args?: Record<string, unknown>) {
+        validateLocalId(id)
+        if (context.signal.aborted) return false
+        return openPluginDialog(pluginId, id, args)
       },
       link(contribution: LinkHandlerContribution) {
         validateLocalId(contribution.id)

@@ -19,7 +19,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ContextMenu, type ContextMenuItem, type ContextMenuPoint } from '@/components/common/ContextMenu'
 import { closeModalOverlays } from '@/hooks/useModalOverlay'
-import { afterPhoneOverlayBacks } from '@/hooks/usePhoneOverlayHistory'
 import { isPopoutPath } from '@/popout/openPopout'
 import { copyTextRobust } from '@/utils/clipboard'
 import { log } from '@/utils/log'
@@ -119,8 +118,7 @@ export function LinkCaptureHost() {
       }
       // A modal the link was in would stay on top of the App it opens. On a phone
       // closing it is a history back, and a push made before it lands is undone.
-      closeModalOverlays()
-      afterPhoneOverlayBacks(() => routerNavigate(path))
+      closeModalOverlays(() => routerNavigate(path))
     })
     return () => setLinkNavigate(null)
   }, [routerNavigate])

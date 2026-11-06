@@ -10,6 +10,8 @@
  *     past its `until` no longer counts even before the server says so.
  */
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { SHOULD_TOAST, IS_PERSISTENT, TOAST_DURATION_MS } from '../../web/src/contexts/notifications/types';
 import { actionOf, sectionOf } from '../../web/src/contexts/notifications/notification-model';
 import {
@@ -60,6 +62,25 @@ describe('actions', () => {
     expect(list.map(a => a.label)).toEqual(['Done', 'Open', 'Legacy link']);
     expect(wireActionsOf('nope')).toEqual([]);
     expect(wireActionsOf(null)).toEqual([]);
+  });
+
+  it('parses dialog buttons, preserving their owner, local slot and arguments', () => {
+    const dialog = { kind: 'dialog', label: ' Open ', pluginId: 'sample', slot: 'record', args: { id: 'one' } };
+    expect(wireActionsOf([dialog])).toEqual([{ ...dialog, label: 'Open' }]);
+    expect(actionOf({ actions: [dialog], sessionId: 'other' })).toEqual({ ...dialog, label: 'Open' });
+    expect(wireActionsOf([{ ...opButton, dialog: 'record' }])).toEqual([]);
+    expect(opActionPath(wireActionsOf([dialog])[0])).toBeNull();
+    for (const patch of [{ slot: 'other:record' }, { pluginId: '../sample' }, { slot: '' }, { args: [] }, { op: 'go' }, { to: 'https://example.com' }]) {
+      expect(wireActionsOf([{ ...dialog, ...patch }])).toEqual([]);
+    }
+  });
+
+  it('action buttons let Escape reach the notification panel after dialog focus returns', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/common/NotificationActionButtons.tsx'), 'utf8');
+    const handler = source.match(/onKeyDown=\{\(e\) => \{([^}]+)\}\}/)?.[1] ?? '';
+    expect(handler).toContain("e.key === 'Enter'");
+    expect(handler).toContain("e.key === ' '");
+    expect(handler).toContain('e.stopPropagation()');
   });
 
   it('displayActionsOf renders the list when present, else the single action', () => {

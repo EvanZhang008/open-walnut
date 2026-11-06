@@ -47,6 +47,9 @@ import {
 } from '../../web/src/plugins/loader.js'
 import { pluginUiRegistry } from '../../web/src/plugins/registry.js'
 import type { PluginRuntimeResponse, WalnutWebApiHost } from '../../web/src/plugins/types.js'
+import { closePluginDialog, getPluginDialog } from '../../web/src/plugins/dialog-store.js'
+import { PLUGIN_SLOT_TARGETS } from '../../web/src/plugins/types.js'
+import { forwardRef, lazy, memo } from '../../web/node_modules/react/index.js'
 
 const Component = () => null
 
@@ -73,6 +76,8 @@ beforeEach(() => {
 afterEach(async () => {
   await disposeWebPluginsForTesting()
   pluginUiRegistry.clear()
+  const dialog = getPluginDialog()
+  if (dialog) closePluginDialog(dialog.sequence)
   appRegistry.clear()
   vi.clearAllMocks()
 })
@@ -94,6 +99,26 @@ describe('walnut.ui.slot', () => {
     serve(false, 'disabled')
     await refreshWebPlugins()
     expect(slots()).toEqual([])
+  })
+
+  it('registers a dialog and opens only the caller namespace, refusing a stale API', async () => {
+    let saved!: WalnutWebApiHost
+    activate = (api) => {
+      saved = api
+      api.ui.slot({ id: 'record', target: 'dialog', title: 'Record', component: Component })
+      expect(() => api.ui.openDialog('other:record')).toThrow(/id is invalid/)
+      expect(api.ui.openDialog('record', { id: 'one' })).toBe(true)
+    }
+    serve(true)
+    await refreshWebPlugins()
+    expect(slots()).toEqual([['sample:record', 'dialog', 'Record']])
+    expect(getPluginDialog()).toMatchObject({ pluginId: 'sample', slot: 'record', args: { id: 'one' } })
+    const dialog = getPluginDialog()!
+    closePluginDialog(dialog.sequence)
+    serve(false, 'disabled')
+    await refreshWebPlugins()
+    expect(saved.ui.openDialog('record')).toBe(false)
+    expect(getPluginDialog()).toBeNull()
   })
 
   it('removes one slot when its own disposable is disposed', async () => {
@@ -121,6 +146,35 @@ describe('walnut.ui.slot', () => {
     await refreshWebPlugins()
     expect(slots()).toEqual([])
     expect(errors().some((e) => e.includes(message))).toBe(true)
+  })
+
+  // Enumerate the host targets so a new slot cannot reintroduce silent invalid components.
+  it.each(PLUGIN_SLOT_TARGETS.flatMap(target => [null, {}, [], 'nope'].map(component => ({ target, component }))))('rejects invalid component $component for $target', async ({ target, component }) => {
+    activate = api => { api.ui.slot({ id: 'invalid', target, title: 'Invalid', component: component as never }) }
+    serve(true)
+    await refreshWebPlugins()
+    expect(slots()).toEqual([])
+    expect(errors()).toEqual([expect.stringContaining('requires a React component')])
+  })
+
+  it.each([memo(Component), lazy(async () => ({ default: Component })), forwardRef(() => null)])('allows React component wrappers', async component => {
+    activate = api => { api.ui.slot({ id: 'wrapped', target: 'dialog', title: 'Wrapped', component }) }
+    serve(true)
+    await refreshWebPlugins()
+    expect(slots()).toEqual([['sample:wrapped', 'dialog', 'Wrapped']])
+    expect(errors()).toEqual([])
+  })
+
+  it('publishes loading before a re-enabled plugin registers and settles it afterward', async () => {
+    serve(false, 'disabled')
+    await refreshWebPlugins()
+    let during = false
+    activate = api => { during = getWebPluginRuntimeSnapshot().loading; api.ui.slot({ id: 'record', target: 'dialog', title: 'Record', component: Component }) }
+    serve(true)
+    await refreshWebPlugins()
+    expect(during).toBe(true)
+    expect(getWebPluginRuntimeSnapshot().loading).toBe(false)
+    expect(getWebPluginRuntimeSnapshot().plugins).toEqual([{ id: 'sample', state: 'active' }])
   })
 
   it('refuses a component that is not one', async () => {

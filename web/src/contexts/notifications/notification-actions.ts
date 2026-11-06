@@ -8,6 +8,7 @@
  * stamped its `pluginId`, so a notice can only ever run its own plugin's ops.
  */
 import type { Notification, NotificationAction } from './types';
+import { isPluginDialogId } from '@/plugins/dialog-store';
 
 /** The console renders at most this many buttons per notice. */
 export const MAX_NOTIFICATION_ACTIONS = 3;
@@ -24,7 +25,17 @@ function wireActionOf(raw: unknown): NotificationAction | null {
   if (!isPlainObject(raw)) return null;
   const label = typeof raw.label === 'string' ? raw.label.trim() : '';
   if (!label) return null;
+  if (raw.kind === 'dialog') {
+    if (!isPluginDialogId(raw.pluginId) || !isPluginDialogId(raw.slot)) return null;
+    if (raw.op !== undefined || raw.to !== undefined || raw.dialog !== undefined) return null;
+    if (raw.args !== undefined && !isPlainObject(raw.args)) return null;
+    return {
+      label, kind: 'dialog', pluginId: raw.pluginId, slot: raw.slot,
+      ...(raw.args !== undefined ? { args: raw.args } : {}),
+    };
+  }
   if (raw.kind === 'op') {
+    if (raw.slot !== undefined || raw.dialog !== undefined) return null;
     if (typeof raw.pluginId !== 'string' || !raw.pluginId) return null;
     if (typeof raw.op !== 'string' || !raw.op) return null;
     return {

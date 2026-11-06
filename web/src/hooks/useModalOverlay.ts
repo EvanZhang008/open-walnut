@@ -1,4 +1,5 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { createContext, useContext, useEffect, useCallback, useRef } from 'react';
+import { afterPhoneOverlayBacks } from './usePhoneOverlayHistory';
 
 /**
  * Ref-counted body scroll lock — multiple overlapping modals
@@ -8,7 +9,20 @@ import { useEffect, useCallback, useRef } from 'react';
  */
 let scrollLockCount = 0;
 let activeModalCount = 0;
-const openModalClosers = new Set<{ current: () => void }>();
+interface ModalCloser { current: () => void; parent: ModalCloser | null }
+const openModalClosers = new Set<ModalCloser>();
+export const ModalOverlayOwner = createContext<ModalCloser | null>(null);
+function orderedModalClosers(): ModalCloser[] {
+  // Child effects mount first; ancestry, not effect order, keeps a nested dialog on top.
+  const closers = [...openModalClosers];
+  const ordered: ModalCloser[] = [];
+  const append = (owner: ModalCloser) => {
+    ordered.push(owner);
+    for (const child of closers) if (child.parent === owner) append(child);
+  };
+  for (const closer of closers) if (!closer.parent || !openModalClosers.has(closer.parent)) append(closer);
+  return ordered;
+}
 
 export function hasActiveModalOverlay(): boolean {
   return activeModalCount > 0;
@@ -19,10 +33,18 @@ export function hasActiveModalOverlay(): boolean {
  * (a link opened in a plugin's App, plugins/LinkCaptureHost.tsx), and a modal left
  * open would sit on top of it, as a slot's `onNavigate` closes its own (PluginSlots).
  */
-export function closeModalOverlays(): void {
-  for (const closer of [...openModalClosers].reverse()) {
-    try { closer.current(); } catch { /* one modal's close must not keep the rest open */ }
-  }
+export function closeModalOverlays(afterClose: () => void = () => {}): void {
+  const closers = orderedModalClosers().reverse();
+  const next = () => {
+    const closer = closers.shift();
+    if (!closer) { afterClose(); return; }
+    if (openModalClosers.has(closer)) {
+      try { closer.current(); } catch { /* one modal's close must not keep the rest open */ }
+    }
+    // A lower phone layer must close against the history state the previous back landed on.
+    afterPhoneOverlayBacks(next);
+  };
+  afterPhoneOverlayBacks(next);
 }
 
 export function lockScroll() {
@@ -55,18 +77,22 @@ export function unlockScroll() {
  * consumed this Escape.
  */
 export function useModalOverlay(onClose: () => void) {
+  const parent = useContext(ModalOverlayOwner);
+  const closeRef = useRef<ModalCloser>({ current: onClose, parent }).current;
+  closeRef.current = onClose;
+  closeRef.parent = parent;
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // A child picker may already own this key. Only the newest modal handles the rest.
+    if (e.defaultPrevented || orderedModalClosers().at(-1) !== closeRef) return;
     // An Escape that cancels an input method's composition is the IME's, not a close.
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      onClose();
+      closeRef.current();
     }
-  }, [onClose]);
+  }, []);
 
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
   useEffect(() => {
     openModalClosers.add(closeRef);
     return () => { openModalClosers.delete(closeRef); };
@@ -82,4 +108,5 @@ export function useModalOverlay(onClose: () => void) {
       unlockScroll();
     };
   }, [handleKeyDown]);
+  return closeRef;
 }

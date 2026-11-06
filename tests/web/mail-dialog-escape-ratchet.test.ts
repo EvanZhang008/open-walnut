@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const MAIL_DIR = path.resolve(__dirname, '../../web/src/apps/mail');
+const COMMON_DIR = path.resolve(__dirname, '../../web/src/components/common');
 
 function sources(dir: string, prefix = ''): { file: string; text: string }[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -34,6 +35,22 @@ describe('Mail dialogs and Escape', () => {
 
   it('every one hears Escape on the document', () => {
     expect(dialogs.filter(({ text }) => !hearsDocument(text)).map((one) => one.file)).toEqual([]);
+  });
+
+  it('common modal dialogs use the shared newest-owner policy', () => {
+    const common = sources(COMMON_DIR).filter(({ text }) => text.includes('role="dialog"'));
+    expect(common.map(({ file }) => file)).toContain('Lightbox.tsx');
+    expect(common.filter(({ text }) => !/\buseModalOverlay\(/.test(text)).map(({ file }) => file)).toEqual([]);
+    expect(common.filter(({ text }) => /(?:key|code)\s*===\s*['"]Escape['"]/.test(text)).map(({ file }) => file)).toEqual([]);
+  });
+
+  it('the notification panel leaves Escape to a modal regardless of document listener order', () => {
+    const panel = fs.readFileSync(path.join(COMMON_DIR, 'NotificationPanel.tsx'), 'utf8');
+    const handler = panel.match(/const onKey = \(e: KeyboardEvent\) => \{([\s\S]*?)\n    \};/)?.[1] ?? '';
+    expect(handler).toContain('e.defaultPrevented');
+    expect(handler).toContain('e.isComposing');
+    expect(handler).toContain('hasActiveModalOverlay()');
+    expect(handler.indexOf('hasActiveModalOverlay()')).toBeLessThan(handler.indexOf('onClose()'));
   });
 
   it('catches the shape it was written for', () => {

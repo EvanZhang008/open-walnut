@@ -2,7 +2,7 @@
  * The buttons of one notice (toast or feed card), primary first, at most three.
  *
  * `navigate` routes, `callback` fires the producer's onAction, `op` runs a plugin
- * op (runOpAction).
+ * op (runOpAction), and `dialog` opens only its owner's named dialog slot.
  *
  * A TOAST closes on the click and runs the op after: the op answers in tens of
  * milliseconds, but a server busy with other work once held one for 5s and the
@@ -19,6 +19,7 @@ import {
   runOpAction, useNotifications, type Notification, type NotificationAction,
 } from '@/contexts/notifications';
 import { log } from '@/utils/log';
+import { openPluginDialog } from '@/plugins/dialog-store';
 
 export function NotificationActionButtons({
   n, actions, variant, onNavigate, onDone, onInteract,
@@ -41,6 +42,14 @@ export function NotificationActionButtons({
     if (a.kind === 'navigate') {
       if (!a.to) return; // malformed: leave the notice up rather than a silent no-op dismiss
       onNavigate(a.to);
+      onDone();
+      return;
+    }
+    if (a.kind === 'dialog') {
+      if (!a.pluginId || !a.slot || !openPluginDialog(a.pluginId, a.slot, a.args)) {
+        setError('Close the current dialog before opening another.');
+        return;
+      }
       onDone();
       return;
     }
@@ -91,7 +100,7 @@ export function NotificationActionButtons({
       <div
         className={card ? 'nfc-card-actions' : 'nfc-perm-actions nfc-notice-actions'}
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
       >
         {actions.map((a, i) => {
           const primary = i === 0;

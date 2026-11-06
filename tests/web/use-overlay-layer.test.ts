@@ -98,6 +98,31 @@ describe('useOverlayLayer stack', () => {
     expect(click.preventDefault).toHaveBeenCalled();
     expect(click.stopImmediatePropagation).toHaveBeenCalled();
   });
+  it('an outside boundary preserves lower layers and lets a child portal click through', () => {
+    const lower = layer({ el: menu });
+    const modal = layer({ el: node('modal', body), closeOnOutside: false, closeOnEscape: false, trapFocus: false });
+    overlayLayerHandlers.pointerdown(ev({ target: flyout }) as unknown as PointerEvent);
+    expect(lower).not.toHaveBeenCalled();
+    expect(modal).not.toHaveBeenCalled();
+    const click = ev();
+    overlayLayerHandlers.click(click as unknown as MouseEvent);
+    expect(click.preventDefault).not.toHaveBeenCalled();
+    const key = ev({ key: 'Escape' });
+    overlayLayerHandlers.keydown(key as unknown as KeyboardEvent);
+    expect(key.preventDefault).not.toHaveBeenCalled();
+  });
+  it('closes a child above an outside boundary, without dismissing the modal or lower layers', () => {
+    const lower = layer({ el: menu });
+    const modal = layer({ el: node('modal', body), closeOnOutside: false });
+    const child = layer({ el: flyout });
+    overlayLayerHandlers.pointerdown(ev({ target: row }) as unknown as PointerEvent);
+    expect(child).toHaveBeenCalledWith('outside');
+    expect(modal).not.toHaveBeenCalled();
+    expect(lower).not.toHaveBeenCalled();
+    const click = ev();
+    overlayLayerHandlers.click(click as unknown as MouseEvent);
+    expect(click.preventDefault).toHaveBeenCalled();
+  });
   it('a press that closes nothing never swallows a click', () => {
     layer({ el: menu });
     overlayLayerHandlers.pointerdown(ev({ target: node('x', menu) }) as unknown as PointerEvent);

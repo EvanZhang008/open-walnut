@@ -29,7 +29,10 @@ export type SlotEntry = RegisteredUiContribution<PluginSlotContribution>
 
 const DEFAULT_ORDER = 500
 
-interface PluginSlotsProps<T extends PluginSlotTarget> {
+// Dialogs are selected by owner and local id by PluginDialogHost, never broadcast to a surface.
+type SurfaceSlotTarget = Exclude<PluginSlotTarget, 'dialog'>
+
+interface PluginSlotsProps<T extends SurfaceSlotTarget> {
   target: T
   props: Omit<PluginSlotPropsByTarget[T], 'navigate'>
   /** Wrap each rendered slot. Default: rendered as is. */
@@ -46,7 +49,7 @@ interface PluginSlotsProps<T extends PluginSlotTarget> {
   onNavigate?: () => void
 }
 
-export function PluginSlots<T extends PluginSlotTarget>({ target, props, wrap, include, className, onNavigate }: PluginSlotsProps<T>) {
+export function PluginSlots<T extends SurfaceSlotTarget>({ target, props, wrap, include, className, onNavigate }: PluginSlotsProps<T>) {
   const ui = usePluginUi()
   const routerNavigate = useNavigate()
   const navigate = useCallback((path: string) => {

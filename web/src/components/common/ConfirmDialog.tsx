@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDraft } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 
@@ -42,7 +42,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  useModalOverlay(onCancel);
+  const modalOwner = useModalOverlay(onCancel);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isPrompt = promptDefaultValue !== undefined;
@@ -80,49 +80,50 @@ export function ConfirmDialog({
   };
 
   return createPortal(
-    <div
-      className="app-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      onMouseDown={onCancel}
-    >
-      <div className="app-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="app-modal-title">{title}</div>
-        {message != null && message !== '' && (
-          <div className="app-modal-message">{message}</div>
-        )}
-        {isPrompt && (
-          <input
-            ref={inputRef}
-            data-draft-key={draft.key ?? undefined}
-            className="app-modal-input"
-            value={value}
-            placeholder={promptPlaceholder}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); submit(); }
-              else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
-            }}
-          />
-        )}
-        <div className="app-modal-actions">
-          {cancelLabel && (
-            <button className="app-modal-btn" onClick={() => { draft.clear(); onCancel(); }}>
-              {cancelLabel}
-            </button>
+    <ModalOverlayOwner.Provider value={modalOwner}>
+      <div
+        className="app-modal-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={onCancel}
+      >
+        <div className="app-modal" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="app-modal-title">{title}</div>
+          {message != null && message !== '' && (
+            <div className="app-modal-message">{message}</div>
           )}
-          <button
-            ref={confirmRef}
-            className={`app-modal-btn primary${danger ? ' danger' : ''}`}
-            onClick={submit}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
-          >
-            {confirmLabel}
-          </button>
+          {isPrompt && (
+            <input
+              ref={inputRef}
+              data-draft-key={draft.key ?? undefined}
+              className="app-modal-input"
+              value={value}
+              placeholder={promptPlaceholder}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); submit(); }
+              }}
+            />
+          )}
+          <div className="app-modal-actions">
+            {cancelLabel && (
+              <button className="app-modal-btn" onClick={() => { draft.clear(); onCancel(); }}>
+                {cancelLabel}
+              </button>
+            )}
+            <button
+              ref={confirmRef}
+              className={`app-modal-btn primary${danger ? ' danger' : ''}`}
+              onClick={submit}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
+            >
+              {confirmLabel}
+            </button>
+          </div>
         </div>
       </div>
-    </div>,
+    </ModalOverlayOwner.Provider>,
     document.body,
   );
 }

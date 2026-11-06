@@ -49,6 +49,7 @@ import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { localNoticeShows } from '@/utils/local-claude-banner';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
+import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { navigateToTarget } from '@/utils/open-session';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { startNotificationFix } from '@/api/notifications';
@@ -426,7 +427,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      // The reader (or its file preview) owns Escape while it is open.
+      // A modal opened from a notice owns the first Escape, regardless of listener order.
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || hasActiveModalOverlay()) return;
       if (e.key === 'Escape' && !readerOpenRef.current) onClose();
     };
     document.addEventListener('keydown', onKey);

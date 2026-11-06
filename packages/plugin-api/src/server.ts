@@ -346,15 +346,17 @@ export interface PluginNotice {
 }
 
 /**
- * One button on a notice. `op` is the LOCAL name of one of YOUR ops ('snooze'); the host
- * prefixes it with your plugin id, so a notice can only ever run your own ops. A click
- * POSTs `args` to that op, then closes the toast and marks the notice read.
+ * One button on a notice: exactly one of `op` or `dialog`, both LOCAL names owned by
+ * your plugin. An op POSTs `args`; a dialog opens your `target: 'dialog'` slot.
+ * Notice args are stored with the notice: pass identifiers, never passwords or codes.
  */
-export interface PluginNoticeAction {
+export type PluginNoticeAction = {
   label: string
-  op: string
   args?: Record<string, unknown>
-}
+} & (
+  | { op: string; dialog?: never }
+  | { dialog: string; op?: never }
+)
 
 /**
  * `kind: 'reminder'` is a timed prompt for the human (a stand-up nudge, a focus block

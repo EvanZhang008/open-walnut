@@ -141,9 +141,8 @@ export interface NotificationRecord {
   action?: NotificationAction;
 
   /** The buttons this record offers, primary first, at most three. Authoritative
-   *  over `action` when present (clients fall back to `action` otherwise). An `op`
-   *  button runs a plugin op; the plugin API stamps `pluginId` itself, so a plugin
-   *  can only ever attach buttons for its OWN ops. */
+   *  over `action` when present (clients fall back to `action` otherwise). The
+   *  plugin API stamps `pluginId`, so ops and dialogs always belong to its owner. */
   actions?: NotificationButton[];
 
   // ── Permission detail (so the feed can render + answer a request itself) ──
@@ -202,11 +201,11 @@ export interface NotificationAction {
   to: string;
 }
 
-/** One entry of `actions`: a console link, or a plugin op the client POSTs to
- *  `/api/plugin-runtime/<pluginId>/ops/<op>` with `args` as the JSON body. */
+/** One entry of `actions`: a console link, a plugin op, or the owner's local dialog slot. */
 export type NotificationButton =
   | { kind: 'navigate'; label: string; to: string }
-  | { kind: 'op'; label: string; pluginId: string; op: string; args?: Record<string, unknown> };
+  | { kind: 'op'; label: string; pluginId: string; op: string; args?: Record<string, unknown> }
+  | { kind: 'dialog'; label: string; pluginId: string; slot: string; args?: Record<string, unknown> };
 
 interface NotificationsStore {
   version: 1;

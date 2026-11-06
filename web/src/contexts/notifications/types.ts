@@ -30,17 +30,19 @@ export interface NotificationAcpOption {
   name?: string;
 }
 
-/** A deep-link, callback or plugin op the toast/feed entry can offer (e.g. "Go to Session"). */
+/** A deep-link, callback, plugin op or plugin dialog the toast/feed entry can offer. */
 export interface NotificationAction {
   label: string;
-  /** `navigate` uses react-router; `callback` invokes onAction; `op` POSTs
-   *  `args` to `/api/plugin-runtime/<pluginId>/ops/<op>` (notification-actions.ts). */
-  kind: 'navigate' | 'callback' | 'op';
+  /** `navigate` uses react-router; `callback` invokes onAction; `op` POSTs args;
+   *  `dialog` opens only the owning plugin's named slot in this window. */
+  kind: 'navigate' | 'callback' | 'op' | 'dialog';
   to?: string;
-  /** kind 'op' only: the plugin that owns `op` (stamped server-side). */
+  /** kind 'op' or 'dialog': the owning plugin (stamped server-side). */
   pluginId?: string;
   /** kind 'op' only: the FULL registered op name. */
   op?: string;
+  /** kind 'dialog' only: the owner's local dialog slot id. */
+  slot?: string;
   args?: Record<string, unknown>;
 }
 

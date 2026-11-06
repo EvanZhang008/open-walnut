@@ -90,10 +90,14 @@ export interface SettingsContribution {
  *   so keep the actions meaningful on their own. Call `close()` once the panel has done
  *   what it was opened for.
  *
+ * - `'dialog'`: opened only by `ui.openDialog(id, args)` or your notice's `dialog` action.
+ *   The host draws the title and close control. Your component owns its content and cleanup.
+ *   Reloading or disabling the plugin unmounts it, never restarts work automatically.
+ *
  * There is no slot a plugin puts on a session's header row by itself: its width belongs
  * to the host's own tools, and only the user decides to spend it.
  */
-export type SlotTarget = 'task.meta' | 'session.meta' | 'status-item.panel'
+export type SlotTarget = 'task.meta' | 'session.meta' | 'status-item.panel' | 'dialog'
 
 export interface TaskMetaSlotProps {
   taskId: string
@@ -123,7 +127,17 @@ export interface StatusItemPanelSlotProps {
   navigate(path: string): void
 }
 
+/** A host modal for your dialog slot. Use component-local state for sensitive inputs. */
+export interface DialogSlotProps {
+  args?: Record<string, unknown>
+  /** Unmounts the component; release or cancel your own work in its effect cleanup. */
+  close(): void
+  /** Console paths only. Closes the dialog before navigating. */
+  navigate(path: string): void
+}
+
 export interface SlotPropsByTarget {
+  'dialog': DialogSlotProps
   'task.meta': TaskMetaSlotProps
   'session.meta': SessionMetaSlotProps
   'status-item.panel': StatusItemPanelSlotProps
@@ -133,7 +147,7 @@ export interface SlotContribution<T extends SlotTarget = SlotTarget> {
   /** Local id, unique within the plugin. */
   id: string
   target: T
-  /** The fact's label, a word or two ("Time"). */
+  /** The fact's label ("Time"), or the dialog's accessible title. */
   title: string
   /**
    * The value, rendered once per object inside its own error boundary. Render nothing
@@ -338,6 +352,13 @@ export interface WebUiService {
    * older than slots does not have it, so call it as `walnut.ui.slot?.(...)`.
    */
   slot?<T extends SlotTarget>(contribution: SlotContribution<T>): Disposable
+  /**
+   * Open your `target: 'dialog'` slot by its LOCAL id. Args stay in memory in this window,
+   * never in view memory, drafts, URLs or storage. The same id stays open with its original
+   * args and component state; another dialog returns false until the first closes. True
+   * means opened or already open. Optional on older hosts: feature-detect it.
+   */
+  openDialog?(id: string, args?: Record<string, unknown>): boolean
   /**
    * Open matching links in your plugin (see LinkHandlerContribution). Optional: a host
    * older than link handlers does not have it, so call it as `walnut.ui.link?.(...)`.

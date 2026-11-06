@@ -32,6 +32,8 @@ export interface OverlayLayerOptions {
   exemptSelectors?: readonly string[];
   /** Default true. */
   closeOnEscape?: boolean;
+  /** Default true. False blocks outside dismissal of this layer and every layer below it. */
+  closeOnOutside?: boolean;
   /** Runs before closing on Escape; return true to consume the key without closing (e.g. clear a search box). */
   onEscape?(e: KeyboardEvent): boolean;
   /** Default true: Tab cycles inside the layer's first ref. */
@@ -127,7 +129,7 @@ function onPointerDownCapture(e: PointerEvent): void {
   let closed = false;
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const layer = stack[i];
-    if (contains(layer, e.target)) break;
+    if (contains(layer, e.target) || layer.opts.current.closeOnOutside === false) break;
     layer.opts.current.onClose('outside');
     closed = true;
   }

@@ -7,8 +7,8 @@
  *   - reminders (`kind: 'reminder'`): a re-fire REPLACES the previous record, so a
  *     recurring prompt under a stable key alerts again even when nobody touched
  *     the last one, and `dismiss` retires it once it no longer applies.
- *   - buttons (`actions`): the plugin names its OWN op by its local name and the
- *     host prefixes it (pluginOpName) and stamps `pluginId`. The console route runs
+ *   - buttons (`actions`): the plugin names its OWN op or dialog by its local name.
+ *     The host stamps `pluginId` and prefixes ops (pluginOpName). The console route runs
  *     whatever op name it is handed, so the namespace is the only thing that keeps
  *     one plugin's notice from firing another plugin's op on a human's click.
  *   - quiet: one hold per plugin (`plugin:<id>`), cleared when the generation that
@@ -18,7 +18,7 @@
 import { bus, EventNames } from '../event-bus.js'
 import { clearQuiet, getQuiet, setQuiet, type QuietState } from '../quiet/quiet-state.js'
 import { toDisposable, type Disposable } from './disposable.js'
-import { pluginOpName } from './ids.js'
+import { pluginOpName, validatePluginId } from './ids.js'
 import type { NotificationButton } from '../notifications/store.js'
 
 /** Buttons one notice may carry; the console renders at most this many. */
@@ -33,7 +33,10 @@ export interface PluginNoticeInput {
   taskId?: string
   sessionId?: string
   kind?: 'skill' | 'reminder'
-  actions?: Array<{ label: string; op: string; args?: Record<string, unknown> }>
+  actions?: Array<{ label: string; args?: Record<string, unknown> } & (
+    | { op: string; dialog?: never }
+    | { dialog: string; op?: never }
+  )>
 }
 
 export function namespacedDedup(pluginId: string, key: string): string {
@@ -43,7 +46,7 @@ export function namespacedDedup(pluginId: string, key: string): string {
   return `plugin:${pluginId}:${key}`
 }
 
-/** A plugin's local button list → host buttons bound to that plugin's ops. Throws on a bad list. */
+/** A plugin's local button list becomes host buttons bound to its own ops or dialogs. */
 export function pluginNoticeActions(
   pluginId: string,
   actions: PluginNoticeInput['actions'],
@@ -63,13 +66,21 @@ export function pluginNoticeActions(
     if (args !== undefined && (args === null || typeof args !== 'object' || Array.isArray(args))) {
       throw new Error('Plugin notification action args must be a plain object')
     }
-    return {
-      kind: 'op' as const,
-      label,
-      pluginId,
-      op: pluginOpName(pluginId, action.op),
-      ...(args !== undefined ? { args: structuredClone(args) } : {}),
+    const hasOp = action.op !== undefined
+    const hasDialog = action.dialog !== undefined
+    if (hasOp === hasDialog) {
+      throw new Error('Plugin notification action requires exactly one of op or dialog')
     }
+    const shared = { label, pluginId, ...(args !== undefined ? { args: structuredClone(args) } : {}) }
+    if (hasDialog) {
+      // Same local id rule as the web slot API. The caller cannot supply an owner prefix.
+      if (typeof action.dialog !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(action.dialog)) {
+        throw new Error('Plugin notification dialog must be a local slot id')
+      }
+      validatePluginId(pluginId)
+      return { ...shared, kind: 'dialog' as const, slot: action.dialog }
+    }
+    return { ...shared, kind: 'op' as const, op: pluginOpName(pluginId, action.op!) }
   })
 }
 
