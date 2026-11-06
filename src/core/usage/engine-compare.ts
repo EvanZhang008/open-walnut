@@ -147,6 +147,8 @@ export interface EngineCompare {
 export const AUTO_SPLIT_MIN = 10;
 
 export const TASKS_MAX = 60;
+/** Of those, at most this many open or never-started ones, always shown even when finished ones would fill the list. */
+export const TASKS_OTHERS_MAX = 20;
 
 /** The model family an engine runs when nothing says otherwise. */
 const ENGINE_FAMILY: Record<string, ModelFamily> = { claude: 'Claude', codex: 'GPT', gemini: 'Gemini' };
@@ -157,7 +159,7 @@ export interface CompareInput {
   sessions: ReadonlyMap<string, { engine?: SessionEngine; startedAt?: string; model?: string; cliModel?: string; acpModel?: string;
     process_status?: string; status_history?: { process_status?: string; reason?: string; timestamp?: string }[]; errorCount?: number;
     contextTokens?: number | null; lastCompactUuid?: string; summary?: string; messageCount?: number;
-    promptCache?: { requestAt?: string } }>;
+    promptCache?: { requestAt?: string }; firstTurnAt?: string }>;
   spend: ReadonlyMap<string, TaskSpend>;
   followUps: (taskId: string) => number;
   range: { start?: string; end?: string };
@@ -182,34 +184,37 @@ function entryLabelOf(b: { engine: SessionEngine; model?: string }): string {
 
 type SessionFacts = CompareInput['sessions'] extends ReadonlyMap<string, infer R> ? R : never;
 
-/** The session record's own ring of status moves keeps this many, newest first (session-tracker.ts). */
-const STATUS_HISTORY_KEPT = 10;
-
 /**
- * A session that ran at least one turn: a main-loop request (Claude Code's prompt cache facts, written at
- * every turn), a turn end in its status moves, context (an ACP engine's), a summary or a compaction.
+ * A session that ran at least one turn: the first turn time Walnut keeps on the record, a main-loop
+ * request (Claude Code's prompt cache facts), a turn end in its status moves, context (an ACP engine's),
+ * a summary or a compaction.
  */
 function sessionRanTurn(s: SessionFacts | undefined): boolean {
   if (!s) return false;
   // Not messageCount: Claude Code counts a spawn that got its pid, before any turn ran.
-  return s.contextTokens != null || !!s.lastCompactUuid || !!s.summary || !!s.promptCache?.requestAt
+  return !!s.firstTurnAt || s.contextTokens != null || !!s.lastCompactUuid || !!s.summary || !!s.promptCache?.requestAt
     || !!s.status_history?.some((h) => h.reason === 'turn_completed');
 }
 
+/** A session that died in error, at any point (the evidence a start failed, when no turn ran). */
+function sessionErrored(s: SessionFacts | undefined): boolean {
+  return s?.process_status === 'error' || (s?.errorCount ?? 0) > 0 || !!s?.status_history?.some((h) => h.process_status === 'error');
+}
+
 /**
- * When a session's work began, for a task first closed at `firstClose`. A Claude Code session whose CLI
- * died before its first reply keeps its record, and a retry resumes that same id: when its kept moves
- * reach back to its spawn and show only an error before that close (no turn end, no request), the
- * work began with its first move after the close. Otherwise its start.
+ * When a session's work began, for a task first closed at `firstClose`; undefined when it did none.
+ * - Its first turn ran after a close that came after its start (a CLI that died before its first
+ *   reply, resumed under the same id after a reopen): the work began with that turn.
+ * - It ran a turn (that one known, or only signs of one on an older record): its start.
+ * - No sign of a turn, and it died in error: the record of a failed start, no work.
+ * - No sign either way (an older record): its start.
  */
 function workStartOf(s: SessionFacts, firstClose: string | undefined): string | undefined {
   const at = s.startedAt;
-  const moves = s.status_history;
-  if (!at || !firstClose || firstClose <= at || !moves || moves.length >= STATUS_HISTORY_KEPT) return at;
-  if (s.promptCache?.requestAt && s.promptCache.requestAt <= firstClose) return at;
-  const before = moves.filter((m) => !!m.timestamp && m.timestamp <= firstClose);
-  if (!before.some((m) => m.process_status === 'error') || before.some((m) => m.reason === 'turn_completed')) return at;
-  return moves.map((m) => m.timestamp).filter((ts): ts is string => !!ts && ts > firstClose).sort()[0] ?? at;
+  if (!at) return undefined;
+  if (s.firstTurnAt) return firstClose && at <= firstClose && s.firstTurnAt > firstClose ? s.firstTurnAt : at;
+  if (sessionRanTurn(s)) return at;
+  return sessionErrored(s) ? undefined : at;
 }
 
 function median(xs: number[]): number | null {
@@ -237,22 +242,22 @@ function sessionsOf(t: Task): string[] {
 }
 
 /**
- * When the task's work began: the earliest work start among its sessions that ran a turn, so a failed
- * start's empty session (kept in legacy_session_ids after a retry, or resumed by it) never dates or times the work;
- * with no session showing a turn (an older record, an engine that reports none), the earliest of all.
+ * When the task's work began: the earliest work start among its sessions (workStartOf), so a failed
+ * start's empty session, kept in legacy_session_ids after a retry or resumed by it, never dates or times
+ * the work; with none that did work, the earliest start of all.
  */
 function firstStart(t: Task, sessions: CompareInput['sessions']): string | undefined {
   let first: string | undefined;
-  let firstRan: string | undefined;
+  let firstWork: string | undefined;
   for (const id of sessionsOf(t)) {
     const s = sessions.get(id);
     const at = s?.startedAt;
     if (!s || !at) continue;
     if (!first || at < first) first = at;
-    const workAt = sessionRanTurn(s) ? workStartOf(s, t.first_completed_at) : undefined;
-    if (workAt && (!firstRan || workAt < firstRan)) firstRan = workAt;
+    const workAt = workStartOf(s, t.first_completed_at);
+    if (workAt && (!firstWork || workAt < firstWork)) firstWork = workAt;
   }
-  return firstRan ?? first;
+  return firstWork ?? first;
 }
 
 function inRange(day: string, range: { start?: string; end?: string }): boolean {
@@ -290,21 +295,20 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const ranTurn = !!spend || sessionsOf(t).some((id) => sessionRanTurn(input.sessions.get(id)));
     // The evidence its start failed: a refused start, or a session that died in error (a CLI that got its
     // pid and exited before its first reply leaves last_start "started" and only the session's error).
-    const sessionErrored = sessionsOf(t).some((id) => {
-      const r = input.sessions.get(id);
-      return r?.process_status === 'error' || (r?.errorCount ?? 0) > 0 || !!r?.status_history?.some((h) => h.process_status === 'error');
-    });
-    const notStarted = closed && !ranTurn && ((t.start_failures ?? 0) > 0 || t.last_start?.state === 'failed' || sessionErrored);
+    const anySessionErrored = sessionsOf(t).some((id) => sessionErrored(input.sessions.get(id)));
+    const notStarted = closed && !ranTurn && ((t.start_failures ?? 0) > 0 || t.last_start?.state === 'failed' || anySessionErrored);
     const done = closed && !notStarted;
     // From its first session's start (a restart, an engine switch or a recovery starts another)
     // to its first completion (a reopen adds the idle time before it otherwise).
     // No session start known (an old task whose records are gone, a start that never ran): no time, rather than its age.
     const sessionStart = firstStart(t, input.sessions);
     const startedAt = sessionStart ?? t.engine_pick?.at ?? t.created_at;
-    // A "first completion" before any session started is the close of a start that never ran (then
-    // reopened and worked on): not a finish, so neither its date, its time nor a reopen counts from it.
-    const closedUnrun = !!t.first_completed_at && !!sessionStart && t.first_completed_at < sessionStart;
-    const firstDone = closedUnrun ? undefined : t.first_completed_at;
+    // A completion before the work began is the close of a start that never ran (then reopened and
+    // worked on): not a finish, so neither its date, its time nor its reopen counts. The first one
+    // after is the first finish (a task from before the completion list has only its first).
+    const completions = [...(t.completions?.length ? t.completions : t.first_completed_at ? [t.first_completed_at] : [])].sort();
+    const unrunCloses = sessionStart ? completions.filter((c) => c < sessionStart).length : 0;
+    const firstDone = completions[unrunCloses];
     const finishedAt = firstDone && t.completed_at && firstDone < t.completed_at ? firstDone : t.completed_at;
     // Finished: the day it finished. Reopened and open again: the day it first finished, so the
     // rework stays in the period of the work it reopened. Never finished: the day it started.
@@ -331,14 +335,14 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     }
     const hours = done && sessionStart ? (Date.parse(finishedAt!) - Date.parse(sessionStart)) / 3600_000 : null;
     // Any session it held: a task that failed on one engine and finished on another still had the error.
-    const errored = sessionErrored || t.last_start?.state === 'failed' || (t.start_failures ?? 0) > 0;
+    const errored = anySessionErrored || t.last_start?.state === 'failed' || (t.start_failures ?? 0) > 0;
     candidates.push({
       byCost, byPick, taskId: t.id, title: t.title, project: t.project ?? '', key: byCost.key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
       // A task that never ran cost nothing: a known $0, not an unknown.
       costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
       partialTokens: !notStarted && (!spend || spend.unknown > 0), tokens: spend?.tokens ?? 0, reviews: reviewsOf.get(t.id) ?? 0, reviewCostUsd: reviewCostOf.get(t.id) ?? 0, reviewPartialCost: reviewPartial.has(t.id),
-      followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - (closedUnrun ? 1 : 0)), errored, split: !!t.engine_pick,
+      followUps: input.followUps(t.id), reopens: Math.max(0, (t.reopens ?? 0) - unrunCloses), errored, split: !!t.engine_pick,
       // A model id that names no known family ("Other": a proxy alias) is no evidence of a move within one engine.
       switched: !!byPick && (byPick.engine !== byCost.engine || (byCost.family !== 'Other' && byPick.family !== byCost.family)), everDone: !notStarted && (done || !!firstDone), notStarted, sortAt: done ? t.completed_at! : startedAt,
     });
@@ -390,11 +394,13 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     });
   }
   rows.sort((a, b) => b.done - a.done || b.open - a.open || a.label.localeCompare(b.label));
-  const tasks = [...picked]
-    // Finished first, then open, then the ones that never started; newest first in each part
-    // (finished by when they finished, the others by when they started).
-    .sort((a, b) => Number(b.done) - Number(a.done) || Number(a.notStarted) - Number(b.notStarted) || b.sortAt.localeCompare(a.sortAt))
-    .slice(0, TASKS_MAX)
+  // Finished first, then open, then the ones that never started; newest first in each part
+  // (finished by when they finished, the others by when they started). The open and never-started
+  // keep their own places, so a long run of finished work never hides them.
+  const ordered = [...picked]
+    .sort((a, b) => Number(b.done) - Number(a.done) || Number(a.notStarted) - Number(b.notStarted) || b.sortAt.localeCompare(a.sortAt));
+  const others = ordered.filter((x) => !x.done).slice(0, TASKS_OTHERS_MAX);
+  const tasks = [...ordered.filter((x) => x.done).slice(0, TASKS_MAX - others.length), ...others]
     .map(({ sortAt: _f, byCost: _c, byPick: _p, group: _g, everDone: _d, ...t }) => t);
   return {
     range: { start: input.range.start ?? null, end: input.range.end ?? null }, rows, tasks,

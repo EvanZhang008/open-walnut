@@ -118,7 +118,8 @@
 .usage-ec-table { table-layout: auto; min-width: 420px; }
 .usage-ec-table th.num { white-space: nowrap; }
 .usage-ec-table td:first-child { color: var(--fg-muted); }
-.usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); }
+/* Bold alone barely shows in the dark theme: a faint accent ground marks the best value in both. */
+.usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); background: color-mix(in srgb, var(--accent, #2563eb) 14%, transparent); border-radius: 4px; }
 .usage-ec-few { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); }
 /* Fixed layout: a long title is cut with an ellipsis instead of pushing the cost column out of the card. */
 .usage-ec-tasks { table-layout: fixed; width: 100%; }

@@ -821,6 +821,8 @@ export interface Task {
   reopens?: number;
   /** When the task was first completed; completed_at is cleared by a reopen and set again by the next completion. */
   first_completed_at?: string;
+  /** Each time the task entered COMPLETE, earliest first, the first COMPLETIONS_KEPT (phase.ts). */
+  completions?: string[];
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;
@@ -3643,6 +3645,10 @@ export interface SessionRecord {
    *  reloaded page shows the last turn's numbers until the next turn streams.
    *  Written once per turn at its result. Spilled into `payload` (no column). */
   lastTurnSpeed?: SessionTurnSpeed;
+  /** ISO time the session's first model turn ran, written once by session-tracker from the first sign of
+   *  a turn (its speed, prompt cache facts, an ACP turn's context); absent on records from before it.
+   *  Spilled into `payload` (no column). */
+  firstTurnAt?: string;
   /** Error message when process_status is 'error' — persisted for post-mortem display. */
   errorMessage?: string;
   /** STRUCTURED verdict on an 'error' status: is the cause infrastructure (host

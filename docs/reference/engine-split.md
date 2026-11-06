@@ -60,6 +60,15 @@ In that view each split entry is its own column, so two entries of one engine an
 ran a turn (its start failed, on any engine) is neither finished nor open: it counts as not
 started, as an error, and at a known cost of $0.
 
+Time runs from when the work began to the first finish. The work begins at the earliest start of
+a session that did work: Walnut keeps, once, when each session's first model turn ran
+(`firstTurnAt` on the session record, from its first turn speed, prompt cache facts or an ACP turn's
+context), so a CLI that died before its first reply and was resumed under the same id after a
+reopen is timed from that turn. A session with no sign of a turn that died in error did no work;
+an older record with no sign either way counts from its start. Every time a task completes is
+kept (`completions` on the task, its earliest 8), so a close that came before the work began is no
+finish: neither its date, its time nor its reopen counts, and the first completion after is.
+
 `split=1` counts only the tasks the split assigned, the fair test (a lead may have picked an
 engine by hand for the rest). `split=auto`, the card's default, does so while the split is on
 and has assigned at least 10 tasks in the period, else counts every task; the answer says

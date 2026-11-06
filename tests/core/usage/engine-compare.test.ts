@@ -130,7 +130,8 @@ describe('aggregateEngineCompare', () => {
     const inp = input(tasks, { sw: { costUsd: 3, unpriced: 2 } });
     (inp.sessions as Map<string, object>).set('s-failed', { startedAt: '2026-11-01T20:00:00.000Z', process_status: 'error' });
     const out = aggregateEngineCompare(inp);
-    expect(out.tasks[0]).toMatchObject({ errored: true, partialCost: true, hours: 5 });
+    // Timed from the session that worked: the failed one ran no turn.
+    expect(out.tasks[0]).toMatchObject({ errored: true, partialCost: true, hours: 1 });
     expect(out.rows[0]).toMatchObject({ errored: 1, partialCost: 1 });
   });
 
@@ -409,20 +410,69 @@ describe('round-9 counting', () => {
   });
 
   it('a Claude Code CLI that died before its first reply, closed in October, resumed under the same id and finished in November, counts in November', () => {
-    // The retry resumes the record the dead spawn left (newest move first, as session-tracker keeps them).
+    // The retry resumes the record the dead spawn left; Walnut kept the time its first turn ran.
     const t = task({ id: 'resumed', phase: 'COMPLETE', session_ids: ['s-one'], reopens: 1,
-      first_completed_at: '2026-10-10T00:05:00.000Z', completed_at: '2026-11-03T01:00:00.000Z' });
+      first_completed_at: '2026-10-10T00:05:00.000Z', completions: ['2026-10-10T00:05:00.000Z', '2026-11-03T01:00:00.000Z'],
+      completed_at: '2026-11-03T01:00:00.000Z' });
     const inp = input([t], { resumed: { costUsd: 3 } }, { range: { start: '2026-11-01', end: '2026-11-30' } });
     (inp.sessions as Map<string, object>).set('s-one', { engine: 'claude', startedAt: '2026-10-10T00:00:00.000Z', errorCount: 1,
-      promptCache: { requestAt: '2026-11-03T00:49:00.000Z' }, status_history: [
-        { process_status: 'stopped', reason: 'normal_completion', timestamp: '2026-11-03T01:00:00.000Z' },
-        { process_status: 'idle', reason: 'turn_completed', timestamp: '2026-11-03T00:50:00.000Z' },
-        { process_status: 'running', reason: 'message_sent', timestamp: '2026-11-03T00:00:00.000Z' },
-        { process_status: 'error', reason: 'process_exited_no_result', timestamp: '2026-10-10T00:01:00.000Z' },
-        { process_status: 'running', reason: 'session_started', timestamp: '2026-10-10T00:00:00.000Z' }] });
+      firstTurnAt: '2026-11-03T00:00:00.000Z', promptCache: { requestAt: '2026-11-03T00:49:00.000Z' } });
     const out = aggregateEngineCompare(inp);
     expect(out.taskCount).toBe(1);
     expect(out.tasks[0]).toMatchObject({ done: true, hours: 1, reopens: 0 });
+  });
+
+  it('a Claude Code session that worked, then errored, closed, and was resumed and finished later keeps its first close and the reopen', () => {
+    // Its first turn ran before the close (kept once), though its latest request is after the reopen.
+    const t = task({ id: 'worked-errored', phase: 'COMPLETE', session_ids: ['s-w'], reopens: 1,
+      first_completed_at: '2026-10-10T00:50:00.000Z', completions: ['2026-10-10T00:50:00.000Z', '2026-11-03T01:00:00.000Z'],
+      completed_at: '2026-11-03T01:00:00.000Z' });
+    const inp = input([t], { 'worked-errored': { costUsd: 3 } }, { range: { start: '2026-10-01', end: '2026-10-31' } });
+    (inp.sessions as Map<string, object>).set('s-w', { engine: 'claude', startedAt: '2026-10-10T00:00:00.000Z', errorCount: 1,
+      firstTurnAt: '2026-10-10T00:01:00.000Z', promptCache: { requestAt: '2026-11-03T00:59:00.000Z' },
+      status_history: [{ process_status: 'error', reason: 'api_error', timestamp: '2026-10-10T00:49:00.000Z' }] });
+    const out = aggregateEngineCompare(inp);
+    expect(out.taskCount).toBe(1);
+    expect(out.tasks[0]).toMatchObject({ done: true, reopens: 1 });
+    expect(out.tasks[0].hours).toBeCloseTo(50 / 60, 5);
+  });
+
+  it('an older session with no sign of a turn and no error still dates the work it finished', () => {
+    // October's session (from before any turn sign was kept) finished it; November's reopen worked on it.
+    const t = task({ id: 'old-then-new', phase: 'COMPLETE', session_ids: ['s-new'], legacy_session_ids: ['s-old'], reopens: 1,
+      first_completed_at: '2026-10-20T05:00:00.000Z', completed_at: '2026-11-03T01:00:00.000Z' });
+    const inp = input([t], { 'old-then-new': { costUsd: 3 } }, { range: { start: '2026-10-01', end: '2026-10-31' } });
+    (inp.sessions as Map<string, object>).set('s-old', { engine: 'claude', startedAt: '2026-10-20T00:00:00.000Z' });
+    (inp.sessions as Map<string, object>).set('s-new', { engine: 'claude', startedAt: '2026-11-03T00:00:00.000Z', summary: 'x' });
+    const out = aggregateEngineCompare(inp);
+    expect(out.taskCount).toBe(1);
+    expect(out.tasks[0]).toMatchObject({ done: true, hours: 5, reopens: 1 });
+  });
+
+  it('a failed close, a first real finish, a real reopen and a second finish: dated and timed by the first real finish', () => {
+    const t = task({ id: 'three-closes', phase: 'COMPLETE', session_ids: ['s-real'], legacy_session_ids: ['s-empty'], reopens: 2, start_failures: 1,
+      first_completed_at: '2026-10-10T00:05:00.000Z',
+      completions: ['2026-10-10T00:05:00.000Z', '2026-11-03T01:00:00.000Z', '2026-11-20T00:00:00.000Z'],
+      completed_at: '2026-11-20T00:00:00.000Z' });
+    const inp = input([t], { 'three-closes': { costUsd: 3 } }, { range: { start: '2026-11-01', end: '2026-11-07' } });
+    (inp.sessions as Map<string, object>).set('s-empty', { engine: 'claude', startedAt: '2026-10-10T00:00:00.000Z', process_status: 'error', errorCount: 1 });
+    (inp.sessions as Map<string, object>).set('s-real', { engine: 'claude', startedAt: '2026-11-03T00:00:00.000Z', firstTurnAt: '2026-11-03T00:01:00.000Z' });
+    const out = aggregateEngineCompare(inp);
+    expect(out.taskCount).toBe(1);
+    expect(out.tasks[0]).toMatchObject({ done: true, hours: 1, reopens: 1 });
+  });
+
+  it('keeps room for open and never-started tasks when finished ones would fill the list', () => {
+    const many = Array.from({ length: 70 }, (_, i) => task({ id: `f${i}`, phase: 'COMPLETE', session_ids: [`s${i}`],
+      completed_at: `2026-11-02T${String(10 + (i % 10)).padStart(2, '0')}:00:00.000Z` }));
+    const open = task({ id: 'still-open', phase: 'IN_PROGRESS', session_ids: ['s-open'] });
+    const inp = input([...many, open], {});
+    for (let i = 0; i < 70; i++) (inp.sessions as Map<string, object>).set(`s${i}`, { engine: 'claude', startedAt: '2026-11-02T00:00:00.000Z', summary: 'x' });
+    (inp.sessions as Map<string, object>).set('s-open', { engine: 'claude', startedAt: '2026-11-02T00:00:00.000Z', summary: 'x' });
+    const out = aggregateEngineCompare(inp);
+    expect(out.tasks).toHaveLength(60);
+    expect(out.tasks.at(-1)?.taskId).toBe('still-open');
+    expect(out.tasks.filter((x) => x.done)).toHaveLength(59);
   });
 
   it('a session that ran a turn before its first close keeps that close, and the reopen counts', () => {

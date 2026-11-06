@@ -85,6 +85,45 @@ afterEach(async () => {
   }
 });
 
+describe('first turn time', () => {
+  it('is written once, from the first sign of a turn, and never moved by a later turn', async () => {
+    await createSessionRecord('first-turn', '', 'demo');
+    await updateSessionRecord('first-turn', { process_status: 'error' });
+    expect((await getSessionByClaudeId('first-turn'))?.firstTurnAt).toBeUndefined();
+    await updateSessionRecord('first-turn', { promptCache: { tokens: 10, requestAt: '2026-11-03T00:00:00.000Z' } });
+    expect((await getSessionByClaudeId('first-turn'))?.firstTurnAt).toBe('2026-11-03T00:00:00.000Z');
+    await updateSessionRecord('first-turn', { promptCache: { tokens: 20, requestAt: '2026-11-04T00:00:00.000Z' },
+      lastTurnSpeed: { startedAt: Date.parse('2026-11-04T00:00:00.000Z'), ttftMs: 1, generationMs: 1, outputTokens: 1, messages: 1, inFlight: false } as never });
+    expect((await getSessionByClaudeId('first-turn'))?.firstTurnAt).toBe('2026-11-03T00:00:00.000Z');
+  });
+
+  it('a turn speed with no finished message is no turn; one with a message is, from its start', async () => {
+    await createSessionRecord('speed-turn', '', 'demo');
+    const speed = { startedAt: Date.parse('2026-11-02T08:00:00.000Z'), ttftMs: null, generationMs: 0, outputTokens: 0, messages: 0, inFlight: false };
+    await updateSessionRecord('speed-turn', { lastTurnSpeed: speed as never });
+    expect((await getSessionByClaudeId('speed-turn'))?.firstTurnAt).toBeUndefined();
+    await updateSessionRecord('speed-turn', { lastTurnSpeed: { ...speed, messages: 1 } as never });
+    expect((await getSessionByClaudeId('speed-turn'))?.firstTurnAt).toBe('2026-11-02T08:00:00.000Z');
+  });
+
+  it('a record that had a turn before the field existed gets none from a later turn', async () => {
+    // As an older Walnut left it: the sign of a turn, no first turn time (taken out of the stored payload).
+    await createSessionRecord('older-record', '', 'demo');
+    await updateSessionRecord('older-record', { contextTokens: 500 });
+    const db = getSessionDb()!;
+    const row = db.prepare('SELECT payload FROM sessions WHERE claude_session_id = ?').get('older-record') as { payload: string };
+    const payload = JSON.parse(row.payload);
+    expect(payload.firstTurnAt).toBeTruthy();
+    delete payload.firstTurnAt;
+    db.prepare('UPDATE sessions SET payload = ? WHERE claude_session_id = ?').run(JSON.stringify(payload), 'older-record');
+    _resetSessionTrackerForTesting();
+    expect((await getSessionByClaudeId('older-record'))?.firstTurnAt).toBeUndefined();
+    expect((await getSessionByClaudeId('older-record'))?.contextTokens).toBe(500);
+    await updateSessionRecord('older-record', { promptCache: { tokens: 10, requestAt: '2026-11-05T00:00:00.000Z' } });
+    expect((await getSessionByClaudeId('older-record'))?.firstTurnAt).toBeUndefined();
+  });
+});
+
 describe('live command failure PID', () => {
   it('counts a live failed CLI as idle capacity', async () => {
     await createSessionRecord('capacity-error', '', 'demo', undefined, { pid: 4242 });

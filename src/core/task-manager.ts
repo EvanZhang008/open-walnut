@@ -12,7 +12,7 @@ import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
-import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
+import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES, withCompletion } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
 import { TaskSyncError, TASK_SYNC_PUSH_FAILED_LOG, taskSyncPushRecoveryKey } from './task-sync-error.js';
 import { TEST_RUN_OWNER, TEST_RUN_PROJECT_KEY, ambientTestRun, isTestRunProject, isTestRunTask, testRunProjectMetadata, unmarkForTestViewer } from './test-run.js';
@@ -8644,6 +8644,9 @@ function prepareRawUpdate(
   if (!TERMINAL_PHASES.has(task.phase) && incomingPhase && TERMINAL_PHASES.has(incomingPhase) && !task.first_completed_at
     && safeUpdates.first_completed_at === undefined) {
     safeUpdates.first_completed_at = (typeof safeUpdates.completed_at === 'string' && safeUpdates.completed_at) || task.completed_at || new Date().toISOString();
+  }
+  if (!TERMINAL_PHASES.has(task.phase) && incomingPhase && TERMINAL_PHASES.has(incomingPhase) && safeUpdates.completions === undefined) {
+    safeUpdates.completions = withCompletion(task, (typeof safeUpdates.completed_at === 'string' && safeUpdates.completed_at) || new Date().toISOString());
   }
   if (!TERMINAL_PHASES.has(task.phase) && incomingPhase && TERMINAL_PHASES.has(incomingPhase) && safeUpdates.user_status === undefined) {
     (safeUpdates as Record<string, unknown>).user_status = { state: 'done' };

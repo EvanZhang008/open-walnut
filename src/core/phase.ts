@@ -239,6 +239,19 @@ export type PhaseClearedField = 'completed_at' | 'session_id' | 'plan_session_id
  * on COMPLETE a completed_at (`nowIso`) when the task has none and a Done user_status. `clear`: on COMPLETE the
  * session slots (new 1-slot, legacy 2-slot), off it completed_at and a Done user_status.
  */
+/** How many completion times a task keeps: its earliest ones (engine-compare.ts reads them). */
+export const COMPLETIONS_KEPT = 8;
+
+/**
+ * The task's completion times with one more, earliest first. A task from before the list existed
+ * starts it from its first completion. The earliest are kept: the comparison wants the first real
+ * finish, which a close of a start that never ran may precede.
+ */
+export function withCompletion(task: Readonly<Partial<Task>>, at: string): string[] {
+  const prior = task.completions?.length ? task.completions : task.first_completed_at ? [task.first_completed_at] : [];
+  return prior.length >= COMPLETIONS_KEPT ? [...prior] : [...prior, at];
+}
+
 export function phaseDerivedFields(
   task: Readonly<Partial<Task>>, phase: TaskPhase, nowIso: string,
 ): { set: Partial<Task>; clear: PhaseClearedField[] } {
@@ -246,7 +259,10 @@ export function phaseDerivedFields(
   // nothing leave whatever the caller set untouched.
   const set: Partial<Task> = { ...readMarkerForPhase(phase) };
   if (phase === 'COMPLETE') {
-    if (!task.completed_at) set.completed_at = nowIso;
+    if (!task.completed_at) {
+      set.completed_at = nowIso;
+      set.completions = withCompletion(task, nowIso);
+    }
     // The first completion stays when a reopen clears completed_at (engine-compare.ts times work by it).
     if (!task.first_completed_at) set.first_completed_at = task.completed_at || nowIso;
     // A completed task is verified (the user mostly closes it after checking): its stored

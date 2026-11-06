@@ -1983,6 +1983,18 @@ function expireErrorNotificationsOnDeath(sessionId: string): void {
  *
  * Returns `false` when the patch is a no-op (caller should skip write entirely).
  */
+/**
+ * When a record's facts show a model turn ran, else undefined: a turn's speed with a finished message
+ * (from its start), the prompt cache facts of a main-loop request (Claude Code), an ACP turn's context.
+ */
+function turnEvidenceAt(r: Partial<SessionRecord>): string | undefined {
+  const speed = r.lastTurnSpeed;
+  if (speed && speed.messages > 0) return new Date(speed.startedAt ?? Date.now()).toISOString();
+  if (r.promptCache?.requestAt) return r.promptCache.requestAt;
+  if (r.contextTokens != null) return new Date().toISOString();
+  return undefined;
+}
+
 function applyUpdateToSession(
   session: SessionRecord,
   updates: SessionRecordUpdates,
@@ -2130,10 +2142,17 @@ function applyUpdateToSession(
 
   if (isNoOpUpdate(session, updates)) return false;
 
+  // When the session's first turn ran, kept once (usage/engine-compare.ts dates and times the work from
+  // it, so a CLI that died before its first reply and was resumed later is told from work done then).
+  // Only from the first sign of a turn this record ever got: a record that already had one before this
+  // field existed keeps none, rather than a later turn's time.
+  const firstTurnAt = !session.firstTurnAt && !turnEvidenceAt(session) ? turnEvidenceAt(updates) : undefined;
+
   const prevStatus = session.process_status;
   const prevPid = session.pid;
   const now = new Date().toISOString();
   Object.assign(session, updates);
+  if (firstTurnAt) session.firstTurnAt = firstTurnAt;
 
   if (updates.process_status && updates.process_status !== prevStatus) {
     const transition: StatusTransition = {

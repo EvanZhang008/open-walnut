@@ -170,6 +170,12 @@ describe('the engine split', () => {
       if (path === 'route') expect((await api('PATCH', `/api/tasks/${t.id}`, { phase: 'IN_PROGRESS' })).status).toBe(200)
       else await updateTaskRaw(t.id, { phase: 'IN_PROGRESS' }, { source: 'api', reopenTerminal: true })
       expect((await task(t.id)).first_completed_at).toBe(old)
+      // The next completion joins the list after the legacy first one, on the same path.
+      if (path === 'route') expect((await api('PATCH', `/api/tasks/${t.id}`, { phase: 'COMPLETE' })).status).toBe(200)
+      else await updateTaskRaw(t.id, { phase: 'COMPLETE', status: 'done', completed_at: new Date().toISOString() })
+      const completions = (await task(t.id)).completions ?? []
+      expect(completions).toHaveLength(2)
+      expect(completions[0]).toBe(old)
     }
   }, 60_000)
 
@@ -200,7 +206,13 @@ describe('the engine split', () => {
     // The retried run ends a real turn (Claude Code records it in its status moves and prompt cache facts).
     await expect.poll(async () => (await getSessionsForTask(placeholder.id)).some((s) =>
       !!s.promptCache?.requestAt || !!s.status_history?.some((h) => h.reason === 'turn_completed')), { timeout: 30_000 }).toBe(true)
+    // Walnut kept when the first turn ran, after the reopen (the dead spawn had none).
+    const reopenedAt = (await task(placeholder.id)).first_completed_at!
+    const firstTurns = (await getSessionsForTask(placeholder.id)).map((x) => x.firstTurnAt).filter(Boolean) as string[]
+    expect(firstTurns.length).toBeGreaterThan(0)
+    expect(firstTurns.every((at) => at > reopenedAt)).toBe(true)
     expect((await api('PATCH', `/api/tasks/${placeholder.id}`, { phase: 'COMPLETE' })).status).toBe(200)
+    expect((await task(placeholder.id)).completions).toHaveLength(2)
     const r = await api('GET', '/api/usage/engines?project=Revived')
     expect(r.body.rows).toHaveLength(1)
     expect(r.body.rows[0]).toMatchObject({ done: 1, notStarted: 0, reopens: 0 })
