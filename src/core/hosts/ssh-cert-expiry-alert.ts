@@ -80,6 +80,12 @@ export interface CertExpiryAlertDeps {
   archive: (ref: { letterId?: string; opKey: string }) => Promise<void>
   /** The user's own renew step (config ssh_login_hint). */
   loginHint: () => Promise<string | undefined>
+  /**
+   * Another reminder owns the certificate (config `ssh_cert_letter: false`, set by whatever warns
+   * instead, a plugin or the user): no letter here, an open one is archived, and the sign-in
+   * alert sends its own. Read at every check, so the switch takes effect without a restart.
+   */
+  handedOff?: () => Promise<boolean>
   language?: () => Promise<LetterLang>
   statePath?: string
   warnAheadMs?: number
@@ -151,6 +157,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
 
   const lang = async (): Promise<LetterLang> => (await deps.language?.().catch(() => 'en' as const)) ?? 'en'
   const hint = async (): Promise<string | undefined> => deps.loginHint().catch(() => undefined)
+  const handedOff = async (): Promise<boolean> => (await deps.handedOff?.().catch(() => false)) ?? false
 
   async function close(why: string): Promise<void> {
     const ep = episode!
@@ -196,6 +203,11 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
 
   async function checkOnce(): Promise<void> {
     await loaded
+    if (await handedOff()) {
+      if (episode) await close('another reminder owns the certificate')
+      arm(CHECK_EVERY_MS)
+      return
+    }
     const hosts = await deps.hosts()
     const byHost = new Map(hosts.map((h) => [h.host, h] as const))
     const expiry = new Map<string, number>()
@@ -251,6 +263,7 @@ export function createCertExpiryAlert(deps: CertExpiryAlertDeps): CertExpiryAler
     episode: async () => { await chain; await loaded; return episode },
     joinLetter: (hosts, error) => serial(async () => {
       await loaded
+      if (await handedOff()) return null
       if (!episode?.letterId || episode.signInWorks || !hosts.some((h) => episode!.hosts.includes(h))) return null
       if (now() >= episode.expiresAt) await tellExpired(error)
       return episode.letterId
@@ -325,6 +338,7 @@ export async function startCertExpiryAlert(opts: { enabled?: boolean }): Promise
       const hint = (await getConfig()).ssh_login_hint
       return typeof hint === 'string' ? hint : undefined
     },
+    handedOff: async () => (await getConfig()).ssh_cert_letter === false,
     language: walnutLetterLanguage,
   })
   running = alert

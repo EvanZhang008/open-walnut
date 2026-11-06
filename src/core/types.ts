@@ -1595,6 +1595,11 @@ export interface Config {
    *  letter Walnut sends (core/hosts/host-auth-alert.ts); unset reads
    *  "refresh your login credentials". */
   ssh_login_hint?: string;
+  /** false: another reminder owns this machine's SSH certificate expiry (a plugin that warns and
+   *  signs in itself), so Walnut sends no certificate letter of its own and archives an open one
+   *  (core/hosts/ssh-cert-expiry-alert.ts). The sign-in letter for a refused login still goes out.
+   *  Unset or true: Walnut warns a few hours ahead. */
+  ssh_cert_letter?: boolean;
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').

@@ -192,6 +192,27 @@ describe('the SSH certificate letter', () => {
     expect((await alert.episode())?.letterId).toBe('letter-x')
   })
 
+  it('handed off to another reminder: no letter, an open one archived, no join; handed back, it warns again', async () => {
+    let off = false
+    const alert = createCertExpiryAlert(deps({ handedOff: async () => off }))
+    clock = EXPIRES - HOUR
+    await alert.check()
+    expect(sent).toHaveLength(1)
+    off = true
+    await alert.check()
+    expect(archived).toHaveLength(1)
+    expect(await alert.episode()).toBeNull()
+    clock = EXPIRES + 60_000
+    await alert.check()
+    expect(sent).toHaveLength(1)
+    expect(probes).toEqual([])
+    expect(await alert.joinLetter(['dev'], 'denied')).toBeNull()
+    off = false
+    clock = EXPIRES - 30 * 60_000
+    await alert.check()
+    expect(sent).toHaveLength(2)
+  })
+
   it('reads in Chinese for a Chinese letter language', () => {
     const { subject } = SSH_CERT_EXPIRY.render('zh', { hosts: ['Dev box'], expiresAt: EXPIRES, now: EXPIRES - 2 * HOUR })
     expect(subject).toBe('Dev box 的 SSH 证书将于 2026-11-04 15:52 UTC 过期')

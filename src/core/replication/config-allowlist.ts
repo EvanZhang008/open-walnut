@@ -103,6 +103,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   local_capabilities: 'the Mac\'s own capability tags, read where its fleet card is built, on the Mac',
   ssh_login_files: 'ssh files on the Mac',
   ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
+  ssh_cert_letter: 'the ssh certificate letter is sent on the Mac',
   triage: 'inbox triage runs on the Mac',
   placement_weights: 'placement by load decides on the Mac',
   backup: 'backup targets of the Mac',
