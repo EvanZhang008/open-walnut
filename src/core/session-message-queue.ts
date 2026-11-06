@@ -48,7 +48,7 @@ import { frameForSource } from './sessions/send-frame.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
-import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly } from '../lib/ai-only-envelope.js';
+import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly, withoutAiOnly } from '../lib/ai-only-envelope.js';
 import { forgetBriefsTold } from './sessions/app-brief.js';
 
 // ── Types and store (session-queue-store.ts) ──
@@ -582,12 +582,19 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
  * An App's AI-only brief on a row that will not reach the model (removed, or edited into a
  * command, which goes raw): the next queued row that will takes it, at its head, as the engine
  * switch's context is handed on. False when no such row: the next send carries it again.
+ * The notes keep the order they were made in (a "replaced" or "added to" note after the one it
+ * follows), so a target before the row puts its own briefs first. `fromAt` is the row's place
+ * in `queue` (where it would be, when it was already taken out).
  */
-function handOnBrief(queue: QueuedMessage[], from: QueuedMessage): boolean {
-  const next = queue.find((m) => m !== from && m.status === 'pending' && !m.message.trimStart().startsWith('/'));
-  const briefs = aiOnlyEnvelopes(from.message).filter((b) => !next?.message.includes(b));
-  if (!next) return false;
-  if (briefs.length > 0) next.message = `${briefs.join('\n\n')}\n\n${next.message}`;
+function handOnBrief(queue: QueuedMessage[], from: QueuedMessage, fromAt: number): boolean {
+  const at = queue.findIndex((m) => m !== from && m.status === 'pending' && !m.message.trimStart().startsWith('/'));
+  if (at === -1) return false;
+  const next = queue[at];
+  const moved = aiOnlyEnvelopes(from.message).filter((b) => !next.message.includes(b));
+  if (moved.length === 0) return true;
+  const own = aiOnlyEnvelopes(next.message);
+  const ordered = at < fromAt ? [...own, ...moved] : [...moved, ...own];
+  next.message = `${ordered.join('\n\n')}\n\n${withoutAiOnly(next.message)}`;
   return true;
 }
 
@@ -612,7 +619,7 @@ export async function editMessage(
     // Its hint blocks stay (their state is already recorded); the new words are escaped.
     // A slash command stays byte-exact (the CLI reads a command only at the start).
     // An App's AI-only brief on the row stays as it was: the editor saw its fold (lib/ai-only-envelope.ts).
-    if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = !handOnBrief(queue, msg);
+    if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = !handOnBrief(queue, msg, queue.indexOf(msg));
     msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, newText));
     stored = msg.message;
     return true;
@@ -653,7 +660,8 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (queue[idx].status === 'processing') return false;
 
     const [removed] = queue.splice(idx, 1);
-    if (hasAiOnly(removed.message)) droppedBrief = !handOnBrief(queue, removed);
+    // Spliced out: a row now at `idx` or later stood after it.
+    if (hasAiOnly(removed.message)) droppedBrief = !handOnBrief(queue, removed, idx - 0.5);
     // The engine switch's carried context rode this row: the next queued row takes it, else the
     // session record keeps it for the next send (engine-switch-io.ts).
     const carried = switchContextIn(removed.message);

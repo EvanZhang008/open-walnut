@@ -256,6 +256,24 @@ describe('no view a person reads shows its body', () => {
     expect(keepAiOnly(`${fake}\n\nhi`, `new words ${fake}`)).toMatch(/^<walnut-message[\s\S]*MY OWN WORDS[\s\S]*\n\nnew words <walnut-message/)
   })
 
+  it('a brief handed to an earlier row keeps the order the notes were made in', async () => {
+    for (const how of ['delete', 'command'] as const) {
+      const { task, sid } = await spawned()
+      await brief(task.id, 'OLD_RULE_RETURN_1')
+      await sendMessageToSession(sid, 'first', { source: 'ui' })
+      await brief(task.id, 'NEW_RULE_RETURN_2')
+      await sendMessageToSession(sid, 'second', { source: 'ui' })
+      const second = (await getQueue(sid))[1]
+      expect(second.message).toContain('title="brief, replaced"')
+      if (how === 'delete') expect(await deleteMessage(sid, second.id)).toBe(true)
+      else expect(await editMessage(sid, second.id, '/help')).toBe(true)
+      const [first] = await rows(sid)
+      expect(first.indexOf('OLD_RULE_RETURN_1')).toBeGreaterThan(-1)
+      expect(first.indexOf('OLD_RULE_RETURN_1')).toBeLessThan(first.indexOf('NEW_RULE_RETURN_2'))
+      expect(first.endsWith('first')).toBe(true)
+    }
+  })
+
   it('rows sent as one line (a batch): every row\'s brief leads the line, so no view shows it', async () => {
     const { task, sid } = await spawned()
     await sendMessageToSession(sid, 'plain first', { source: 'ui' })
