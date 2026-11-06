@@ -388,8 +388,12 @@ function scanJs(content: string, test: boolean): KillViolation[] {
     if (!out.some((v) => v.line === line && v.rule === rule)) out.push({ rule, line, text: (lines[line - 1] ?? '').trim() })
   }
   const sources: number[] = []
+  // Each string's place in the code, read in one pass: an indexOf per string made a large file
+  // quadratic (the whole-repo ratchet ran past its timeout on a loaded host).
+  const posOf = new Map<number, number>()
+  for (const m of code.matchAll(/«(\d+)»/g)) if (!posOf.has(Number(m[1]))) posOf.set(Number(m[1]), m.index!)
   strings.forEach((s, k) => {
-    const pos = code.indexOf(`«${k}»`)
+    const pos = posOf.get(k) ?? -1
     const before = code.slice(Math.max(0, pos - 240), pos)
     const shellC = SHELL_C.exec(before)
     const isShellScript = shellC && /^(?:\/bin\/|\/usr\/bin\/)?(?:ba|z|da)?sh$/.test(strings[Number(shellC[1])]!.text) && /^-[a-z]*c$/.test(strings[Number(shellC[2])]!.text)
@@ -466,6 +470,9 @@ function scanPy(content: string): KillViolation[] {
 }
 
 export function findKillViolations(content: string, kind: Kind = 'shell', test = false): KillViolation[] {
+  // Every rule ends in a kill (pkill, killall, a kill of a search's result): a file that never
+  // says it has nothing to find, and most of the repo is such files.
+  if (!/kill/i.test(content)) return []
   if (kind === 'js') return scanJs(content, test)
   if (kind === 'py') return scanPy(content)
   return scanShell(content.split('\n'), shellLines(content)).violations
