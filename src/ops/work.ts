@@ -109,6 +109,9 @@ defineOp({
           ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
           : '')
         + (args.answers_ask === true ? ' It answers that task\'s ask of the user: Walnut took it off the user\'s Needs you and told the task.' : '')
+        + (typeof b.openAsk === 'string' && b.openAsk
+          ? ` That task still asks the user: "${b.openAsk.replace(/\s+/g, ' ').slice(0, 160)}". If your message decides it, send one more short line with answers_ask: true naming the answer: only that takes it off the user's Needs you, and without it the user is asked again.`
+          : '')
         + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
         + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
           ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`

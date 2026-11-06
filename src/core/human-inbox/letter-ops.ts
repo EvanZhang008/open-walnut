@@ -211,7 +211,9 @@ export async function sendLetterAsCallerOnce(
   if (!opts.opKey && senderKey(sender) !== null && input.type === 'action_required') {
     const { refuseSameAsk } = await import('../same-ask-tree.js');
     const { SameAskError } = await import('../same-ask.js');
-    await refuseSameAsk(sender.taskId, subject, 'letter', sameAskInput).catch((err) => {
+    // Each numbered or bulleted item of the letter too: one of them may be an ask already answered.
+    const parts = String(input.markdown ?? '').split('\n').map((l) => /^\s*(?:\d+[.)]|[-*])\s+(.+)$/.exec(l)?.[1]?.trim() ?? '').filter((l) => l.length >= 12).slice(0, 20);
+    await refuseSameAsk(sender.taskId, subject, 'letter', sameAskInput, parts).catch((err) => {
       throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
     });
   }

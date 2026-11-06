@@ -13,7 +13,7 @@
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { briefTeam } from '../user-status.js';
-import { APPROVAL_KINDS, askAnswerLine, askKey, type AskAnswer, type SameAskFold } from '../same-ask.js';
+import { APPROVAL_KINDS, ASKS_ANSWERED_MAX, askAnswerLine, askKey, type AskAnswer, type SameAskFold } from '../same-ask.js';
 
 export class AskAnswerError extends Error {
   constructor(readonly code: 'not_above' | 'no_open_ask' | 'user_words' | 'bad_request', message: string, readonly status = 409) {
@@ -98,7 +98,9 @@ export async function prepareAskAnswer(
   return {
     line: askAnswerLine(ask, byTitle),
     commit: async () => {
-      await updateTaskRaw(target.id, { ask_answered: answer } as Partial<Task>, { emitEvent: true, source: 'ask-answer' })
+      // Kept beside the ones before it: one answer never takes another's place.
+      const kept = [...(target.asks_answered ?? (target.ask_answered ? [target.ask_answered] : [])).filter((a) => a.key !== answer.key), answer].slice(-ASKS_ANSWERED_MAX);
+      await updateTaskRaw(target.id, { ask_answered: answer, asks_answered: kept } as Partial<Task>, { emitEvent: true, source: 'ask-answer' })
         .catch((err) => log.task.warn('ask-answer: not recorded', { taskId: target.id, error: err instanceof Error ? err.message : String(err) }));
       log.task.info('ask-answer: answered for the user', { taskId: target.id, by: answer.by });
     },

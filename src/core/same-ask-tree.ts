@@ -13,7 +13,7 @@ import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import { briefTeam } from './user-status.js';
 import {
-  FOLDABLE_SOURCES, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type RelativeAsk, type TreeAsk,
+  FOLDABLE_SOURCES, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type RelativeAsk, type TreeAsk,
 } from './same-ask.js';
 
 /** How far a leader chain is walked (subtask-limits.ts caps sessions at 3 levels below a top-level task). */
@@ -176,7 +176,7 @@ export function treeAsksOf(
     out.push({ taskId: task.id, title: task.title, ask: l.subject, where: 'letter', letterId: l.id, relation });
   }
   // The deepest first: a task below, then its team, then above.
-  const rank: Record<TreeAsk['relation'], number> = { descendant: 0, team: 1, ancestor: 2 };
+  const rank: Record<TreeAsk['relation'], number> = { descendant: 0, team: 1, ancestor: 2, elsewhere: 3 };
   return out.sort((a, b) => rank[a.relation] - rank[b.relation]);
 }
 
@@ -205,26 +205,67 @@ async function readTree(taskId: string, forWrite: boolean): Promise<{ self?: Tas
 export async function refuseSameAsk(
   taskId: string | undefined, text: string | undefined, what: 'letter' | 'report' | 'thread',
   input?: { same_ask_reason?: unknown; sameAskReason?: unknown } | null,
+  /** The parts of the ask beside `text` (a letter's numbered items), checked against what was answered. */
+  parts: readonly string[] = [],
 ): Promise<void> {
   if (!taskId || !text?.trim()) return;
   const reason = sameAskReasonOf(input);
   let hit: TreeAsk | null = null;
+  let everything: Task[] = [];
   try {
+    const { listTasks } = await import('./task-manager.js');
+    everything = await listTasks();
     hit = findSameAsk(text, (await readTree(taskId, true)).asks);
   } catch (err) {
     log.task.debug('same-ask: tree unreadable, ask let through', { taskId, error: err instanceof Error ? err.message : String(err) });
     return;
   }
-  if (!hit) return;
   if (reason) {
-    log.task.info('same-ask: asked again on purpose', { taskId, sameAsTaskId: hit.taskId, what, reason });
+    if (hit) log.task.info('same-ask: asked again on purpose', { taskId, sameAsTaskId: hit.taskId, what, reason });
     return;
   }
-  log.task.info('same-ask: refused', { taskId, sameAsTaskId: hit.taskId, where: hit.where, what });
+  if (hit) {
+    log.task.info('same-ask: refused', { taskId, sameAsTaskId: hit.taskId, where: hit.where, what });
+    throw new SameAskError(sameAskMessage(hit, what), hit);
+  }
+  // Answered already for the user by a lead, VP or Main: the whole ask, or one part of it again.
+  const self = everything.find((t) => t.id === taskId);
+  const answers = answersOf(self);
+  if (answers.length) {
+    for (const ask of [text, ...parts]) {
+      const answer = answerFor(answers, ask);
+      if (!answer) continue;
+      log.task.info('same-ask: refused, answered above', { taskId, by: answer.by, what });
+      throw new SameAskError(answeredAskMessage(answer, what), { taskId, title: self?.title ?? taskId, ask: answer.ask, where: 'status', relation: 'ancestor' });
+    }
+  }
+  await refuseSignInAsk(taskId, text, what, everything);
+}
+
+/**
+ * A sign-in ask (sign-in-ask.ts) is put on the user once: never while a sign-in letter is open or a
+ * checker says sign-in works, and never beside another task's sign-in ask, whatever its team.
+ */
+async function refuseSignInAsk(taskId: string, text: string, what: 'letter' | 'report' | 'thread', everything: readonly Task[]): Promise<void> {
+  const { isSignInAsk, loginCommandWords, readSignInState, signInRefusal } = await import('./sign-in-ask.js');
+  const { getConfig } = await import('./config-manager.js');
+  const words = loginCommandWords((await getConfig().catch(() => ({}) as { ssh_login_hint?: string })).ssh_login_hint);
+  if (!isSignInAsk(text, words)) return;
+  const why = signInRefusal(await readSignInState());
+  const dummy = { taskId, title: '', ask: text, where: 'status' as const, relation: 'elsewhere' as const };
+  if (why) {
+    log.task.info('same-ask: sign-in ask refused, the sign-in state is known', { taskId, what });
+    throw new SameAskError(why, dummy);
+  }
+  const other = everything.find((t) => t.id !== taskId && t.phase !== 'COMPLETE' && t.status !== 'done'
+    && t.user_status?.state === 'needs' && t.user_status.source === 'session' && isSignInAsk(t.user_status.ask, words));
+  if (!other) return;
+  const hit: TreeAsk = { taskId: other.id, title: other.title, ask: other.user_status!.ask!, where: 'status', relation: 'elsewhere' };
+  log.task.info('same-ask: sign-in ask refused, another task asks it', { taskId, sameAsTaskId: other.id, what });
   throw new SameAskError(sameAskMessage(hit, what), hit);
 }
 
-const WHO: Record<TreeAsk['relation'], string> = { descendant: 'your subtask', team: 'your team', ancestor: 'above you' };
+const WHO: Record<TreeAsk['relation'], string> = { descendant: 'your subtask', team: 'your team', ancestor: 'above you', elsewhere: 'another team' };
 
 /**
  * The turn-end status question's part on the tree's open asks (status-question.ts): '' when none.

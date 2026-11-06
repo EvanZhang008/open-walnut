@@ -250,6 +250,8 @@ export interface SameAskFold {
   at: string;
   /** The user wrote to the deeper task after the fold, and it asks no more: the answer went there. */
   answered?: true;
+  /** Both ask the user to sign in again (sign-in-ask.ts), whatever the words or the team. */
+  signIn?: true;
 }
 
 /** What a fold reads of the tasks around it. */
@@ -279,6 +281,9 @@ export interface FoldContext {
   /** That task's own status reads the ask answered (a fold of its own that was answered, or an answer
    *  above it): the answer travels along a chain of folds. */
   answeredThere?: (taskId: string) => boolean;
+  /** Whether an ask asks the user to sign in again (sign-in-ask.ts isSignInAsk): two of them are one
+   *  ask, and `relatives` then holds every task's sign-in ask, not only its teammates'. */
+  signIn?: (ask: string) => boolean;
 }
 
 /** A teammate's open ask, as a fold reads it. */
@@ -304,8 +309,9 @@ function stampOf(status: UserStatus, report: FoldContext['report']): string {
 
 /** Its wait in words, as every surface prints it after "Waiting on": what it is first, since a row
  *  shows one line (2026-11-05 UI review: the title first left "same decision" cut off). */
-export function foldWords(f: Pick<SameAskFold, 'title' | 'ask' | 'answered' | 'team'>): string {
+export function foldWords(f: Pick<SameAskFold, 'title' | 'ask' | 'answered' | 'team' | 'signIn'>): string {
   const title = f.title.replace(/\s+/g, ' ').slice(0, 80);
+  if (f.signIn) return f.answered ? `the user's sign-in, answered in "${title}"` : `the user's sign-in, asked once in "${title}"`;
   const where = f.team ? `"${title}", beside it in its team` : `its subtask "${title}"`;
   return f.answered
     ? `the same decision, answered in ${where}`
@@ -328,14 +334,18 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
   const key = askKey(derived.ask);
   const stamp = stampOf(derived, own);
   const prev = ctx.prev?.sameAsk;
+  const ownSignIn = !!ctx.signIn?.(derived.ask);
+  const bothSignIn = (a: RolledAsk): boolean => ownSignIn && !!ctx.signIn?.(a.ask);
   const same = (a: RolledAsk): boolean => {
+    // One sign-in is one ask, however each task words it (sign-in-ask.ts).
+    if (bothSignIn(a)) return true;
     const theirs = ctx.declared?.(a.id);
     if (theirs?.ask_distinct) return false;
     return own?.same_as === a.id || theirs?.same_as === selfId || sameAskText(derived.ask, a.ask);
   };
   const pick = (): { hit: RolledAsk; team?: true } | undefined => {
-    // Its own word first; a "different" from either side is never folded.
-    if (own?.ask_distinct) return undefined;
+    // Its own word first; a "different" from either side is never folded (a sign-in ask always is).
+    if (own?.ask_distinct && !ownSignIn) return undefined;
     // Below it first: the deepest task shows it.
     const below = asks.find(same);
     if (below) return { hit: below };
@@ -354,6 +364,7 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
     fold = {
       id: hit.id, title: hit.title, ask: hit.ask, key, stamp, at,
       ...(picked.team ? { team: true as const } : {}), ...((hit as RelativeAsk).answered ? { answered: true as const } : {}),
+      ...(bothSignIn(hit) ? { signIn: true as const } : {}),
     };
   } else if (prev && prev.key === key && prev.stamp === stamp && prev.at && !prev.answered && ctx.stillAsks?.(prev.id, prev.ask)) {
     fold = prev;
@@ -398,11 +409,46 @@ export interface AskAnswer {
 /** An answer above holds this long: a much later ask in the same words is a new decision. */
 export const ASK_ANSWER_HOLD_MS = 7 * 24 * 60 * 60_000;
 
-/** Whether `answer` still answers an ask in these words now (the same key, inside the hold). Pure. */
+/** The answers a task keeps (Task.asks_answered); Task.ask_answered, the last one, for a record written before. */
+export const ASKS_ANSWERED_MAX = 8;
+
+/**
+ * Whether `answer` still answers `ask` now, inside the hold: the same words, the same ask reworded
+ * (sameAskReworded), or one part of what it answered asked again on its own (2026-11-05: Main
+ * answered six questions at once, and the task asked one of them again in a letter of its own).
+ * Pure.
+ */
 export function answerHolds(answer: AskAnswer | null | undefined, ask: string | null | undefined, nowMs = Date.now()): boolean {
   if (!answer || !ask) return false;
   const at = Date.parse(answer.at);
-  return Number.isFinite(at) && nowMs - at <= ASK_ANSWER_HOLD_MS && askKey(ask) === answer.key;
+  if (!Number.isFinite(at) || nowMs - at > ASK_ANSWER_HOLD_MS) return false;
+  if (askKey(ask) === answer.key || sameAskReworded(answer.ask, ask)) return true;
+  return askIsPartOf(ask, answer.ask);
+}
+
+/**
+ * Whether `part` asks only what `whole` already asks: at least SAME_ASK_MIN_WORDS content words, all
+ * of them in `whole`, the same numbers, and the same "not" (askShape). Pure.
+ */
+export function askIsPartOf(part: string, whole: string): boolean {
+  const p = askShape(part);
+  const w = askShape(whole);
+  if (p.neg !== w.neg || p.words.length < SAME_ASK_MIN_WORDS) return false;
+  const inWhole = new Set(w.words);
+  return p.words.every((x) => inWhole.has(x));
+}
+
+/** The answer of `answers` that still answers `ask` now, or null. Pure. */
+export function answerFor(answers: readonly (AskAnswer | null | undefined)[], ask: string | null | undefined, nowMs = Date.now()): AskAnswer | null {
+  for (const a of answers) if (answerHolds(a, ask, nowMs)) return a!;
+  return null;
+}
+
+/** Every answer recorded on a task, newest first. */
+export function answersOf(t: { ask_answered?: AskAnswer | null; asks_answered?: AskAnswer[] | null } | null | undefined): AskAnswer[] {
+  const list = [...(t?.asks_answered ?? [])].reverse();
+  if (t?.ask_answered && !list.some((a) => a.key === t.ask_answered!.key && a.at === t.ask_answered!.at)) list.unshift(t.ask_answered);
+  return list;
 }
 
 /** Ask kinds only the user may approve: an answer in their place quotes their words (user_words). */
@@ -425,9 +471,10 @@ export function answeredWords(a: Pick<AskAnswer, 'byTitle' | 'text'>): string {
  * asks the same in the same words. Any other status as derived. Only the session's own question: a
  * Board choice is answered on the Board, a prompt or a failure in the session. Pure.
  */
-export function answeredAbove(derived: UserStatus, answer: AskAnswer | null | undefined, nowMs = Date.now()): UserStatus {
-  if (!answer || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
-  if (!answerHolds(answer, derived.ask, nowMs)) return derived;
+export function answeredAbove(derived: UserStatus, answers: AskAnswer | readonly AskAnswer[] | null | undefined, nowMs = Date.now()): UserStatus {
+  if (!answers || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
+  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs);
+  if (!answer) return derived;
   return {
     state: 'waiting', kind: 'task', waitingOn: answeredWords(answer),
     answeredFor: { by: answer.by, byTitle: answer.byTitle, at: answer.at, ask: answer.ask },
@@ -449,7 +496,7 @@ export interface TreeAsk {
   where: 'status' | 'letter';
   letterId?: string;
   /** Where that task stands to the writer's task. */
-  relation: 'ancestor' | 'descendant' | 'team';
+  relation: 'ancestor' | 'descendant' | 'team' | 'elsewhere';
 }
 
 /** The first open ask in the tree that asks what `text` asks, or null. */
@@ -465,8 +512,16 @@ export function sameAskReasonOf(input: { same_ask_reason?: unknown; sameAskReaso
 }
 
 const RELATION_WORDS: Record<TreeAsk['relation'], string> = {
-  ancestor: 'a task above this one', descendant: 'a subtask of this one', team: 'a task in this team',
+  ancestor: 'a task above this one', descendant: 'a subtask of this one', team: 'a task in this team', elsewhere: 'another task',
 };
+
+/** The refusal's words for an ask a lead, VP or Main already answered for the user. */
+export function answeredAskMessage(answer: AskAnswer, what: 'letter' | 'report' | 'thread'): string {
+  const verb = what === 'letter' ? 'Not sent' : what === 'thread' ? 'Not handed to the user' : 'Not put on the user';
+  return `${verb}: ${answer.byTitle.replace(/\s+/g, ' ').slice(0, 80)} already answered this for the user (${answer.at.slice(0, 16).replace('T', ' ')} UTC), `
+    + `when you asked "${answer.ask.replace(/\s+/g, ' ').slice(0, 160)}": "${answer.text.replace(/\s+/g, ' ').slice(0, 240)}". `
+    + `Act on that answer. If it leaves a different decision open, ask that one in its own words, or pass same_ask_reason: one line (at least ${SAME_ASK_REASON_MIN} characters) saying why it is not answered.`;
+}
 
 /** The refusal's words: which ask, where, and what to do instead. */
 export function sameAskMessage(hit: TreeAsk, what: 'letter' | 'report' | 'thread'): string {

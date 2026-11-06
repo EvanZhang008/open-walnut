@@ -144,10 +144,32 @@ export interface SessionSendResult {
   answeredFor?: string[];
   /** The request whose answer, already delivered with the same words, settled this one: nothing was delivered again. */
   sameAnswerAs?: string;
+  /** The target's open ask of the user, sent by a task above it without answers_ask (openAskBelow). */
+  openAsk?: string;
   messageId?: string;
 }
 
 const shortId = (sid: string): string => sid.slice(0, 8);
+
+/**
+ * The ask of the user that the target holds open, when the sender stands above it (a lead, VP or
+ * Main) and sent without answers_ask: if the message answers it, only answers_ask takes it off the
+ * user's list (2026-11-04: Main decided a launch date in a plain message, nothing recorded it, and
+ * the task asked the user again the next day).
+ */
+async function openAskBelow(callerSid: string | undefined, targetTaskId: string | undefined): Promise<string | null> {
+  if (!targetTaskId) return null;
+  const caller = await resolveCaller(callerSid);
+  if (caller.kind !== 'session' || !caller.record.taskId || caller.record.taskId === targetTaskId) return null;
+  const { listTasks } = await import('../task-manager.js');
+  const everything = await listTasks();
+  const from = everything.find((t) => t.id === caller.record.taskId);
+  const target = everything.find((t) => t.id === targetTaskId);
+  if (!from || !target) return null;
+  const { openAskOf, standsAbove } = await import('./ask-answer.js');
+  const open = openAskOf(target);
+  return 'ask' in open && standsAbove(from, target, everything) ? open.ask : null;
+}
 const displayHost = (host: string | undefined): string =>
   !host || host === '__local__' ? 'local' : host;
 
@@ -551,7 +573,11 @@ async function holdAnswer(key: string): Promise<() => void> {
 
 /** The one send entry point (route + gateway both land here). */
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
-  if (!input.answersAsk) return performPlainSend(input);
+  if (!input.answersAsk) {
+    const result = await performPlainSend(input);
+    const openAsk = input.inReplyTo ? null : await openAskBelow(input.callerSid, result.targetTaskId).catch(() => null);
+    return openAsk ? { ...result, openAsk } : result;
+  }
   // An answer for the user (ask-answer.ts): checked and led by Walnut's line, then recorded.
   const caller = await resolveCaller(input.callerSid);
   if (caller.kind === 'external' || (caller.kind === 'session' && !caller.record.taskId)) {

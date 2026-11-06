@@ -1013,6 +1013,9 @@ export interface Task {
    *  answers_ask, sessions/ask-answer.ts): while it asks the same, it is not Needs you
    *  (same-ask.ts answeredAbove). Local-only, payload blob. */
   ask_answered?: AskAnswer;
+  /** Every such answer still kept, oldest first, at most ASKS_ANSWERED_MAX (same-ask.ts): a second
+   *  answer no longer takes the first one's place. Local-only, payload blob. */
+  asks_answered?: AskAnswer[];
   /** The ONE status the user sees (src/core/user-status.ts), derived on the server from the
    *  phase, the live session, open letters, Board choices, reply requests, triggers and
    *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task

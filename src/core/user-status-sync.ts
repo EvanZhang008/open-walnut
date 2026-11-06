@@ -25,7 +25,8 @@ import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
-import { answeredAbove, answerHolds, askKey, foldSameAsk, type RelativeAsk } from './same-ask.js';
+import { answeredAbove, answerFor, answersOf, askKey, foldSameAsk, type RelativeAsk } from './same-ask.js';
+import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
 import { relativeAsksIndex } from './same-ask-tree.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
@@ -97,6 +98,11 @@ export interface StatusFacts {
   relativeAsks?: (task: Task) => RelativeAsk[];
   /** Task id -> when a person last wrote to its sessions (ISO), for the tasks a same-ask fold names (readFoldEvidence). */
   personInputAt?: Map<string, string>;
+  /** Every open sign-in ask shown as Needs you now, whatever team (sign-in-ask.ts; completeStatusFacts). */
+  signInAsks?: RelativeAsk[];
+  /** The user's login command words (config ssh_login_hint), and the live sign-in state (readFoldEvidence). */
+  loginWords?: string[];
+  signIn?: SignInState;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
   undelivered?: Map<string, { reason: string; at: string }>;
   /** Main or a lead -> what its Threads hold for the user (org/thread-view.ts threadCounts). */
@@ -550,6 +556,17 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
  * that the user answered the deeper task, so its ancestor's fold may stay once that task asks no more.
  */
 export async function readFoldEvidence(facts: StatusFacts, targets: readonly Task[]): Promise<void> {
+  // One sign-in is one ask (sign-in-ask.ts): the user's login command words, every task's sign-in
+  // ask shown now, and what Walnut knows of the sign-in itself.
+  facts.loginWords = await safely('login-words', async () => {
+    const { getConfig } = await import('./config-manager.js');
+    return (await import('./sign-in-ask.js')).loginCommandWords((await getConfig()).ssh_login_hint);
+  }, []);
+  facts.signInAsks = [...(facts.tasksById?.values() ?? [])]
+    .filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && t.user_status?.state === 'needs' && t.user_status.source === 'session'
+      && isSignInAsk(t.user_status.ask, facts.loginWords ?? []))
+    .map((t) => ({ id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at }));
+  facts.signIn = await safely('sign-in-state', async () => (await import('./sign-in-ask.js')).readSignInState(), {});
   const ids = new Set(targets.map((t) => t.user_status?.sameAsk?.id).filter((id): id is string => !!id));
   facts.personInputAt = new Map();
   if (!ids.size) return;
@@ -586,7 +603,7 @@ function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now()): bool
   const key = askKey(ask);
   // Answered there for the user (a lead, VP or Main, or the answer reached its own holder): it no
   // longer holds it, and the fold reads answered.
-  if (answerHolds(t.ask_answered, ask, nowMs) || answeredThereOf(t)) return false;
+  if (answerFor(answersOf(t), ask, nowMs) || answeredThereOf(t)) return false;
   const r = t.status_report;
   if (r?.state === 'needs' && askKey(r.ask) === key) {
     if (reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
@@ -619,7 +636,7 @@ export function askCheckedAtOf(task: Pick<Task, 'recheck_watch'>, checks: Readon
 
 /** When a lead, VP or Main answered `ask` of that task for the user (Task.ask_answered), or null. */
 function answeredAtOf(t: Task | undefined, ask: string, nowMs = Date.now()): string | null {
-  return t && answerHolds(t.ask_answered, ask, nowMs) ? t.ask_answered!.at : null;
+  return (t && answerFor(answersOf(t), ask, nowMs)?.at) ?? null;
 }
 
 /** Its open subtasks by parent id, for statusOf. */
@@ -651,12 +668,34 @@ export function statusOf(
     personInputAt: (id) => facts.personInputAt?.get(id),
     stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs),
     nowIso: new Date(nowMs).toISOString(),
-    relatives: facts.relativeAsks?.(task) ?? [],
+    relatives: relativesWithSignIn(task, facts, withAsks),
     selfCreatedAt: task.created_at,
     answeredAt: (id, ask) => answeredAtOf(facts.tasksById?.get(id), ask, nowMs),
     answeredThere: (id) => answeredThereOf(facts.tasksById?.get(id)),
+    signIn: (ask) => isSignInAsk(ask, facts.loginWords ?? []),
   });
-  return { input, status: answeredAbove(folded, task.ask_answered, nowMs) };
+  return { input, status: signInHeld(answeredAbove(folded, answersOf(task), nowMs), facts) };
+}
+
+/** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */
+function relativesWithSignIn(task: Task, facts: StatusFacts, derived: UserStatus): RelativeAsk[] {
+  const team = facts.relativeAsks?.(task) ?? [];
+  if (derived.state !== 'needs' || derived.source !== 'session' || !isSignInAsk(derived.ask, facts.loginWords ?? [])) return team;
+  const seen = new Set([task.id, ...team.map((r) => r.id)]);
+  return [...team, ...(facts.signInAsks ?? []).filter((r) => !seen.has(r.id))];
+}
+
+/**
+ * A sign-in ask while the live sign-in state is known (sign-in-ask.ts): it waits on the open
+ * sign-in letter, the one place the user is asked, or on its own next step when sign-in works.
+ * A fold of it under another task's sign-in ask stands as made. Any other status as given.
+ */
+function signInHeld(status: UserStatus, facts: StatusFacts): UserStatus {
+  if (status.state !== 'needs' || status.source !== 'session' || !isSignInAsk(status.ask, facts.loginWords ?? [])) return status;
+  const words = facts.signIn ? signInWaitWords(facts.signIn) : null;
+  if (!words) return status;
+  const { ask: _ask, source: _source, ...rest } = status;
+  return { ...rest, state: 'waiting', kind: facts.signIn?.ok ? 'task' : 'outside', waitingOn: words };
 }
 
 /**
