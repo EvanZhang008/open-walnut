@@ -184,6 +184,15 @@ describe('managed daemon update transport', () => {
     await expect(requestDaemonServiceUpdate(runtime, state, { busyMs: 1_000, pauseMs: 10, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
   })
 
+  it('overdue, a daemon that never answers its hello is restarted by its service; without force it is refused', async () => {
+    await setup(() => undefined)
+    const asked = Date.now()
+    expect(await requestDaemonServiceUpdate(runtime, state, { force: true, plainMs: 0, busyMs: 1_000, pauseMs: 20, note: () => {} })).toBe('unprepared')
+    expect(Date.now() - asked).toBeLessThan(15_000)
+    expect(frames.every((frame) => frame.cmd === 'hello')).toBe(true)
+    await expect(requestDaemonServiceUpdate(runtime, state, { busyMs: 1_000, pauseMs: 20, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceUpdateRefusedError)
+  }, 30_000)
+
   it('overdue, a daemon that stays busy past the deadline is restarted by its service, not refused', async () => {
     await setup((frame) => frame.cmd === 'hello' ? managedHello() : { ok: false, error: RELAYS })
     expect(await requestDaemonServiceUpdate(runtime, state, { force: true, plainMs: 0, busyMs: 100, pauseMs: 20, note: () => {} })).toBe('unprepared')

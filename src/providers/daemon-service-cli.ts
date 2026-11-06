@@ -176,9 +176,10 @@ export async function requestDaemonServiceUpdate(
         say(`the running daemon did not finish the update (${error.message}); restarting it instead, and the CLI sessions keep running`)
         return 'unprepared'
       }
-      // Overdue, a drain that ran out (it resumed and changed nothing) is asked again too.
+      // Overdue, a drain that ran out (it resumed and changed nothing) is asked again too, and so is
+      // a daemon that does not answer before the request (its hello): both end in a restart.
       const busy = error instanceof DaemonServiceUpdateRefusedError
-        && (handoverBusy(error) || (wait.force === true && /Service preparation timed out/.test(error.message)))
+        && (handoverBusy(error) || (wait.force === true && /Service preparation timed out|Daemon handover (connection|response) (timed out|closed)/.test(error.message)))
       if (!busy) throw error
       if (Date.now() >= deadline) {
         if (wait.force !== true) throw error

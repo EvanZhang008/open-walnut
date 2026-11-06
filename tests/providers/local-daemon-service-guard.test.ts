@@ -292,7 +292,7 @@ describe('LocalDaemon managed service updates', () => {
       ping(port: number): Promise<unknown>
       readPortFile(): number
       readBinaryVersion(): string
-      updateManagedDaemon(path: string, version: string): Promise<number | null>
+      updateManagedDaemon(path: string, version: string): Promise<number | null | 'later'>
       auditOwnerOnAdopt(): void
     }
     vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
@@ -304,12 +304,18 @@ describe('LocalDaemon managed service updates', () => {
     const stop = vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
     const start = vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(1234)
     updateCommand.mockResolvedValue(fails ? { code: 1, stderr: 'busy', stdout: '' } : { code: 0, stderr: '', stdout: '{"ok":true}' })
-    if (fails) await expect(internals.ensureRunningInner()).rejects.toThrow('Managed daemon update failed')
-    else await expect(internals.ensureRunningInner()).resolves.toBe(32200)
+    if (fails) {
+      await expect(internals.ensureRunningInner()).rejects.toThrow('Managed daemon update failed')
+      // Asked again on the upgrade clock, never left until the next start.
+      const recheck = (daemon as unknown as { _upgradeRecheck: ReturnType<typeof setTimeout> | null })._upgradeRecheck
+      expect(recheck).not.toBeNull()
+      clearTimeout(recheck!)
+    } else await expect(internals.ensureRunningInner()).resolves.toBe(32200)
     expect(updateCommand).toHaveBeenCalledWith('/fixture/daemon', ['walnut', 'daemon', 'update', '--yes', '--scope', 'user', '--executable', '/fixture/daemon'])
     expect(stop).not.toHaveBeenCalled()
     expect(start).not.toHaveBeenCalled()
-    expect(await internals.updateManagedDaemon('/fixture/daemon', 'new-version')).toBeNull()
+    // Tried within 10 minutes: asked again on the upgrade clock, not run twice.
+    expect(await internals.updateManagedDaemon('/fixture/daemon', 'new-version')).toBe('later')
     expect(updateCommand).toHaveBeenCalledTimes(1)
   })
 })

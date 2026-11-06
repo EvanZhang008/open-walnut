@@ -223,6 +223,8 @@ export interface NetUpdaterDeps {
   /** Why the host's daemon must not stop now, asked of the host (host_exec runs there: exec-runs-hold.ts), or null. */
   busy?: () => Promise<string | null>
   cooldownMs: number
+  /** Overdue: hold this server's file changes to the host while the swap runs (DaemonConnection); returns the release. */
+  fence?: () => () => void
   /** The gap between automatic replacements (daemon-update-gap.ts); default from the env. */
   minGapMs?: number
   autofixOff?: () => Promise<string | null>
@@ -369,12 +371,13 @@ export class NetDaemonUpdater {
     if (this.stopped || !c.connected) return this.set('skipped', 'the host is not connected')
     this.set('checking', 'checking the host\'s daemon')
     const facts = await this.facts(trigger)
+    // The bound on the whole update (daemon-update-behind.ts), read before any skip so a round that
+    // skips (a cooldown, the gap) still counts as seen: behind this long, the writes in flight and
+    // the host_exec runs no longer hold it, and the daemon goes over its own work.
+    const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!facts.expected && !!c.daemonVersion && c.daemonVersion !== facts.expected, (this.d.now ?? Date.now)())
     const first = decideNetUpdate(facts)
     if (first.go === false) return this.skipped(first, trigger)
     const expected = facts.expected!
-    // The bound on the whole update (daemon-update-behind.ts): behind this long, the writes in
-    // flight and the host_exec runs no longer hold it, and the daemon goes over its own work.
-    const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!c.daemonVersion && c.daemonVersion !== expected, (this.d.now ?? Date.now)())
     if (behind.overdue && this.overdueNoted !== expected) {
       this.overdueNoted = expected
       log.session.warn('DaemonConnection: host network daemon update overdue; it goes ahead over the work that held it', {
@@ -416,6 +419,9 @@ export class NetDaemonUpdater {
       host: c.host, from, expected, scope: scope.scope, target: decision.target, source: 'file' in src ? 'daemon binary' : `walnut file ${src.id}`, trigger,
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
+    // Overdue, the old daemon may be restarted unprepared, and an older one's shutdown does not
+    // wait for a file write: this server's file changes wait for the swap (daemon-over-busy.ts).
+    const release = goesOver ? this.d.fence?.() : undefined
     try {
       await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, { overBusy: goesOver })
     } catch (err) {
@@ -442,7 +448,7 @@ export class NetDaemonUpdater {
       this.retryAt = (this.d.now ?? Date.now)() + retryInMs
       if (!this.stopped) this.later(0)
       return this.set('failed', msg)
-    }
+    } finally { release?.() }
     this.failed = null
     this.retryAt = 0
     this.installed = expected

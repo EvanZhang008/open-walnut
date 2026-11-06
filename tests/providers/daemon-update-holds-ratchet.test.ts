@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { DAEMON_UPDATE_HOLDS, DAEMON_UPDATE_BEHIND_MAX_MS } from '../../src/providers/daemon-update-behind.js'
+import { DAEMON_UPDATE_HOLDS, DAEMON_UPDATE_BEHIND_MAX_MS, DAEMON_UPDATE_STOPS } from '../../src/providers/daemon-update-behind.js'
 import { LIFECYCLE_WAITS } from '../../src/core/sessions/lifecycle-waits.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -105,6 +105,38 @@ describe('daemon update holds', () => {
       expect(h.proof, `${h.file} ${h.method} "${h.near}" holds a daemon update and names no test showing it give way when overdue`).toBeTruthy()
       const text = read(h.proof!.test)
       expect(new RegExp(`\\bit(?:\\.each\\([^\\n]*\\))?\\(\\s*['"\`]${h.proof!.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text), `${h.proof!.test} has no test named "${h.proof!.name}"`).toBe(true)
+    }
+  })
+
+  // An update not done can also be a plain `return false` with a log line and no clock (2026-11-06
+  // round 3 review: the cooldown and the "refusing to loop" exits). Every log of an update deferred,
+  // refused or held must sit next to a listed hold, or be a listed stop that says why no clock is needed.
+  const STOP_WORDS = /\b(deferred|DEFERRED|refusing|not updated)\b|\bheld by\b/
+  const logsOfUpdatesNotDone = () => {
+    const out: Array<{ file: string; line: number; text: string; nearHold: boolean }> = []
+    for (const [file, re] of Object.entries(SITES)) {
+      const lines = read(file).split('\n')
+      lines.forEach((l, i) => {
+        if (!/log\.session\.(warn|error|info)\(/.test(l)) return
+        const text = /\(\s*$/.test(l) ? `${l} ${lines[i + 1] ?? ''}` : l
+        if (!STOP_WORDS.test(text) || !/update|upgrade/i.test(text)) return
+        const nearHold = lines.slice(Math.max(0, i - 12), i + 13).some((x) => re.test(x))
+        out.push({ file, line: i + 1, text, nearHold })
+      })
+    }
+    return out
+  }
+
+  it('an update not done with no clock to ask again is a listed stop, and every listed stop is one log line', () => {
+    const found = logsOfUpdatesNotDone()
+    expect(found.length).toBeGreaterThan(0)
+    for (const f of found.filter((x) => !x.nearHold)) {
+      const hits = DAEMON_UPDATE_STOPS.filter((st) => st.file === f.file && f.text.includes(st.near))
+      expect(hits.length, `${f.file}:${f.line} logs a daemon update not done, with no listed hold next to it and no DAEMON_UPDATE_STOPS entry: ask again on a clock, or list it and say why none is needed`).toBe(1)
+    }
+    for (const st of DAEMON_UPDATE_STOPS) {
+      expect(found.filter((f) => f.file === st.file && f.text.includes(st.near)).length, `listed stop ${st.file} "${st.near}" must be exactly one log line`).toBe(1)
+      expect(st.why.length).toBeGreaterThan(10)
     }
   })
 

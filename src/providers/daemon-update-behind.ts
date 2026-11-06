@@ -90,6 +90,7 @@ export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
   { file: DC, method: 'shouldUpgradeDaemon', near: 'could not check the OS-service state', kind: 'retry', why: 'no answer from the service probe; nothing is stopped without one' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'daemonUpdateGapWhy(', kind: 'bounded', bound: 'DAEMON_UPDATE_MIN_GAP_MS', boundFile: 'src/providers/daemon-update-gap.ts', why: 'one replacement per gap, at most one gap in all; skipped when overdue' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
+  { file: DC, method: 'shouldUpgradeDaemon', near: 'right after an update; asked again when its cooldown ends', kind: 'bounded', bound: 'UPGRADE_RETRY_COOLDOWN_MS', boundFile: 'src/providers/daemon-connection.ts', why: 'the daemon still reports another build right after an update (its version stamp may be broken); asked again once the cooldown ends' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'the version check did not finish', kind: 'retry', why: 'the version read failed' },
   { file: DC, method: 'holdUpgradeForFoldPrewarm', near: 'fold checkpoints for the new daemon are being prepared', kind: 'bounded', bound: 'REMOTE_FOLD_PREWARM_MAX_MS', boundFile: 'src/providers/remote-fold-prewarm.ts', why: 'one prewarm per build; a failed or timed-out one lets the update go ahead' },
   { file: DC, method: 'acpTurnsOpen', near: "'ACP turns are open'", kind: 'hold', proof: { test: 'tests/providers/daemon-connection-service-guard.test.ts', name: 'overdue, open ACP turns no longer hold the update' }, why: 'a swap ends a running ACP turn' },
@@ -101,10 +102,26 @@ export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
   { file: DC, method: 'updateManagedDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
   { file: DC, method: 'updateManagedDaemon', near: 'asked again when its cooldown ends', kind: 'bounded', bound: 'UPGRADE_RETRY_COOLDOWN_MS', boundFile: 'src/providers/daemon-connection.ts', why: 'a try of this build did not finish; asked again when its cooldown ends' },
   { file: DC, method: 'updateManagedDaemon', near: "the host's daemon is busy", kind: 'hold', proof: { test: 'tests/providers/daemon-connection-deferred-upgrade.test.ts', name: 'a host behind past the bound: writes in flight, host_exec runs and a busy daemon no longer hold it' }, why: 'the daemon refused before it changed anything; overdue, the swap asks it to go over its work' },
-  { file: LD, method: 'ensureRunningInner', near: "updatedPort === 'busy'", kind: 'bounded', bound: 'OVER_BUSY_WAIT_MS', boundFile: 'src/providers/daemon-over-busy.ts', why: 'the managed local daemon refused as busy; overdue, the next try (a minute later) forces after OVER_BUSY_PLAIN_MS and has the service restart it by OVER_BUSY_WAIT_MS' },
+  { file: LD, method: 'ensureRunningInner', near: "} else if (updatedPort !== null) {", kind: 'bounded', bound: 'OVER_BUSY_WAIT_MS', boundFile: 'src/providers/daemon-over-busy.ts', why: 'the managed local daemon refused as busy; overdue, the next try (a minute later) forces after OVER_BUSY_PLAIN_MS and has the service restart it by OVER_BUSY_WAIT_MS' },
   { file: LD, method: 'ensureRunningInner', near: 'ACP turns open', kind: 'hold', proof: { test: 'tests/providers/local-daemon-service-guard.test.ts', name: 'overdue, open ACP turns and host_exec runs on this Mac no longer hold the upgrade' }, why: 'open ACP turns on this Mac' },
+  { file: LD, method: 'ensureRunningInner', near: 'throw error', kind: 'bounded', bound: 'LOCAL_MANAGED_UPDATE_COOLDOWN_MS', boundFile: 'src/providers/local-daemon.ts', why: 'a managed update failed; the recheck every minute tries again once its cooldown ends' },
   { file: LD, method: 'deferForExecRuns', near: 'host_exec runs', kind: 'hold', proof: { test: 'tests/providers/local-daemon-service-guard.test.ts', name: 'overdue, open ACP turns and host_exec runs on this Mac no longer hold the upgrade' }, why: 'host_exec runs on this Mac' },
   { file: NU, method: 'attempt', near: 'postpone(held)', kind: 'hold', proof: { test: 'tests/providers/daemon-net-update.test.ts', name: 'overdue (behind past the bound), host_exec runs no longer hold it' }, why: 'writes in flight or host_exec runs on a host network machine' },
   { file: NU, method: 'attempt', near: "the host's daemon is busy", kind: 'hold', proof: { test: 'tests/providers/daemon-net-update.test.ts', name: 'a busy refusal is a postponement, never a failure' }, why: 'the daemon refused before it changed anything; overdue, the next swap goes over its work (--over-busy)' },
   { file: NU, method: 'attempt', near: 'postpone(err.message', kind: 'retry', why: 'held right before the launch, after the upload; overdue, only a dropped link or a refused grant gets here (holds() answers null)' },
+]
+
+/**
+ * Every place a daemon update is not done and no clock asks again, logged as such: each says why
+ * that is right (a setting, a permanent condition, or a wait that brings the update back itself).
+ * The ratchet fails on a log of an update deferred, refused or held in these files that is
+ * neither next to a listed hold nor listed here.
+ */
+export const DAEMON_UPDATE_STOPS: readonly { file: string; near: string; why: string }[] = [
+  { file: DC, near: 'managed daemon update was deferred; use', why: 'no update is possible from here: a read-only or test server, no service scope, an unknown config, no daemon file; nothing a clock would change' },
+  { file: LD, near: 'Managed local daemon version differs; automatic update was deferred', why: 'not a production daemon dir, an unknown config or no service scope; nothing a clock would change' },
+  { file: LD, near: 'local daemon: deferred upgrade check failed', why: 'the recheck itself failed: a failed managed update has already set the next recheck (ensureRunningInner), and any other failure is a start that every caller of ensureRunning retries' },
+  { file: LD, near: 'upgrade DEFERRED (preparing fold checkpoints)', why: 'the prewarm runs at most REMOTE_FOLD_PREWARM_MAX_MS and calls ensureRunning itself when it ends (deferUpgradeForFoldPrewarm)' },
+  { file: NU, near: 'daemon update held by the host setting', why: "the host's own setting (autofix: false) or the user's: updated on request" },
+  { file: NU, near: 'host network daemon not updated', why: 'each skip names its reason; the gap and a failure ask again on their own clock (later), the rest wait for a request, a setting or the next build' },
 ]

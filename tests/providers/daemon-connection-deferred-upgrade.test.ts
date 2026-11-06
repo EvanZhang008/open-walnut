@@ -405,6 +405,18 @@ describe('the background update of a service-managed daemon', () => {
     state(c)._swapInFlight = new Promise<void>(() => {})
     state(c)._swapOverBusy = false
     await expect(c.send('fs.write', { path: '/x', data: 'y' })).rejects.toThrow(/not connected/)
+
+    // The host network updater's fence (its own promise, so a reconnect never waits on it).
+    state(c)._swapInFlight = null
+    const release = c.fenceFileChanges()
+    let fenced = false
+    const held = c.send('fs.rename', { from: '/a', to: '/b' }).catch((error: Error) => { fenced = true; return error })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fenced).toBe(false)
+    expect(state(c)._swapInFlight).toBeNull()
+    release()
+    expect(String(await held)).toMatch(/not connected/)
+    expect(state(c)._fileFence).toBeNull()
   })
 
   it('a daemon busy at every ask is asked less often: three times a minute apart, then backing off', async () => {

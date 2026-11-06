@@ -859,6 +859,8 @@ export class DaemonConnection {
   private _swapInFlight: Promise<void> | null = null
   /** The swap in flight was an overdue one (`--over-busy`): file changes wait for it. */
   private _swapOverBusy = false
+  /** An overdue swap the host network updater runs (fenceFileChanges): file changes wait for it. */
+  private _fileFence: Promise<void> | null = null
   private _swapSettle: (() => void) | null = null
   /** How long a planned swap may read as connected while the new daemon comes up. */
   static HANDOVER_WINDOW_MS = 45_000
@@ -978,6 +980,7 @@ export class DaemonConnection {
         return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
       },
       cooldownMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS,
+      fence: () => this.fenceFileChanges(),
     })
     return this._netUpdaterInstance
   }
@@ -2094,7 +2097,7 @@ export class DaemonConnection {
   ): Promise<DaemonCommandResult> {
     // An overdue swap may end with the old daemon restarted unprepared, and an older daemon's
     // shutdown does not wait for a file write: a file change waits for the swap (bounded).
-    if (this._swapOverBusy && this._swapInFlight && SWAP_HELD_FILE_COMMANDS.has(cmd)) await this.waitOverBusySwap()
+    if (((this._swapOverBusy && this._swapInFlight) || this._fileFence) && SWAP_HELD_FILE_COMMANDS.has(cmd)) await this.waitOverBusySwap()
     if (!this._connected || !this.ws) {
       throw markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}`), 'no-link')
     }
@@ -3801,10 +3804,13 @@ export class DaemonConnection {
         && this._lastUpgradeAttempt.expected === expected
         && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS
       ) {
+        const agoMs = Date.now() - this._lastUpgradeAttempt.at
         log.session.error('DaemonConnection: daemon version still mismatched after recent upgrade — refusing to loop', {
-          host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
-          lastAttemptAgoMs: Date.now() - this._lastUpgradeAttempt.at,
+          host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', lastAttemptAgoMs: agoMs,
         })
+        // Asked again once the cooldown ends, so a host that stays connected is not left on it for good.
+        this.postponeUpgrade('the daemon still reports another build right after an update; asked again when its cooldown ends', expected, remoteVersion,
+          { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS - agoMs + 5_000 })
         return false
       }
 
@@ -4239,13 +4245,28 @@ export class DaemonConnection {
     this._handoverTimer.unref?.()
   }
 
+  /**
+   * An overdue swap this connection does not run itself (the host network updater): file changes
+   * wait until the release, as they do for its own (beginHandover). The release is idempotent.
+   */
+  fenceFileChanges(): () => void {
+    // Its own promise, never _swapInFlight: a reconnect waits on that one, and this update may
+    // need the link to confirm the new daemon.
+    let release!: () => void
+    const fence = new Promise<void>((resolve) => { release = resolve })
+    this._fileFence = fence
+    return () => { if (this._fileFence === fence) this._fileFence = null; release() }
+  }
+
   /** A file change during an overdue swap waits for it, at most SWAP_FILE_HOLD_MAX_MS. */
   private async waitOverBusySwap(): Promise<void> {
+    const until = Date.now() + SWAP_FILE_HOLD_MAX_MS
     let timer: ReturnType<typeof setTimeout> | undefined
     const cap = new Promise<void>((resolve) => { timer = setTimeout(resolve, SWAP_FILE_HOLD_MAX_MS) })
-    try { await Promise.race([this._swapInFlight, cap]) } finally { clearTimeout(timer) }
-    // The new daemon may still be connecting: give it the handover window's reads' wait.
-    if (!this._connected && this.handoverPending) await waitDaemonHandover(this.hostKey, SWAP_FILE_HOLD_MAX_MS)
+    try { await Promise.race([this._fileFence ?? this._swapInFlight, cap]) } finally { clearTimeout(timer) }
+    // The new daemon may still be connecting: wait for it within the same limit.
+    const left = until - Date.now()
+    if (left > 0 && !this._connected && this.handoverPending) await waitDaemonHandover(this.hostKey, left)
   }
 
   private settleSwap(): void {

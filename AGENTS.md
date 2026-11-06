@@ -663,13 +663,16 @@ the waiting stops: every hold gives way (host_exec runs, open ACP turns, the upd
 server's writes in flight get 30 s), and the swap passes `walnut daemon update --over-busy`
 (`daemon-over-busy.ts`): plain asks for 30 s, then `force` (a daemon with `service-update-force-v1`
 goes over its requests, relays, ACP workers and host_exec runs, each run's log saying why), and at
-a minute, or when the daemon does not answer, a restart by its service. That restart's SIGTERM
-shutdown drains for at most 45 s, and the cron supervisor SIGKILLs the daemon pid alone after 60 s
-(systemd and launchd have their own stop timeouts); the CLI sessions are their own process groups
-and keep running. An older daemon's shutdown does not wait for file writes, so while such a swap
-runs this server holds its file changes back (at most 3 minutes, `SWAP_FILE_HOLD_MAX_MS`); writes
-from another client of that daemon are not covered. 3 hours is when the waiting stops, not a bound on
-the whole update. `DAEMON_UPDATE_HOLDS` lists every place an update is put off;
+a minute, or when the daemon does not answer (its hello or the update), a restart by its service.
+That restart's SIGTERM shutdown drains for at most 45 s, then ends by SIGKILL to itself, and the cron
+supervisor SIGKILLs the daemon pid alone after 60 s (systemd and launchd have their own stop
+timeouts). The CLI sessions are their own process groups and keep running; an ACP turn or a
+host_exec run open at that moment ends. An older daemon's shutdown does not wait for file writes, so
+while such a swap runs (the SSH path and the host network path alike) this server holds its file
+changes back, at most 3 minutes in all (`SWAP_FILE_HOLD_MAX_MS`); writes from another client of that
+daemon are not covered. 3 hours is when the waiting stops, not a bound on the whole update, and on a
+host that is never quiet a forced swap can come about every 3 hours while builds keep landing. An
+update not done with no clock to ask again is listed in `DAEMON_UPDATE_STOPS` with why. `DAEMON_UPDATE_HOLDS` lists every place an update is put off;
 `tests/providers/daemon-update-holds-ratchet.test.ts` fails on one not listed.
 
 **Never scp manually** — some corporate SSH proxies kills large transfers. That's exactly what the chunked auto-deploy solves.

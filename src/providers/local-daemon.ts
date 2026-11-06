@@ -168,6 +168,8 @@ function serviceAccount(): { name: string | null; uid: number | null } {
 
 /** How soon a local upgrade deferred for open ACP turns is tried again. */
 export const LOCAL_UPGRADE_RECHECK_MS = 60_000
+/** How long after a managed update of this Mac's daemon the same build is not tried again. */
+export const LOCAL_MANAGED_UPDATE_COOLDOWN_MS = 600_000
 
 export type ServiceProbeState = 'present' | 'absent' | 'unknown'
 export interface ServiceTakeoverProbe { path: string; state: ServiceProbeState }
@@ -497,10 +499,15 @@ export class LocalDaemon {
             return existingPort
           }
           if (expectedVersion && helloResult.version !== expectedVersion) {
-            const updatedPort = await this.updateManagedDaemon(binaryPath, expectedVersion)
-            if (updatedPort === 'busy') {
-              // Work of its own started after the hello (a host_exec run): the old daemon keeps serving.
-              // Overdue (this._overdueMs), the next try asks a daemon that can to go over that work.
+            let updatedPort: Awaited<ReturnType<LocalDaemon['updateManagedDaemon']>>
+            try { updatedPort = await this.updateManagedDaemon(binaryPath, expectedVersion) } catch (error) {
+              // A failed update is asked again after its 10 minute cooldown, never left until the next start.
+              this.scheduleUpgradeRecheck()
+              throw error
+            }
+            if (updatedPort === 'busy' || updatedPort === 'later') {
+              // Work of its own started after the hello (a host_exec run), or a try within 10 minutes:
+              // the old daemon keeps serving. Overdue (this._overdueMs), the next try goes over that work.
               this.scheduleUpgradeRecheck()
             } else if (updatedPort !== null) {
               existingPort = updatedPort
@@ -640,7 +647,7 @@ export class LocalDaemon {
     return true
   }
 
-  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy'> {
+  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later'> {
     if (!isProductionDaemonDir(this.daemonDir) || binaryPath.endsWith('.cjs')) return null
     const takeover = this.detectServiceTakeover()
     const configs = daemonServiceConfigPaths()
@@ -648,7 +655,8 @@ export class LocalDaemon {
     const present = configs.filter((config) => takeover.present.includes(config))
     const scope = present.length !== 1 ? null : present[0] === configs[0] ? 'user' : process.platform === 'linux' && present[0] === configs[2] ? 'cron' : null
     if (takeover.unknown.length || !scope) return null
-    if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < 600_000) return null
+    // Tried within 10 minutes: asked again on the upgrade clock, never left until the next start.
+    if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < LOCAL_MANAGED_UPDATE_COOLDOWN_MS) return 'later'
     this._lastManagedUpdate = { expected, at: Date.now() }
     const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
     // Overdue (daemon-update-behind.ts): the CLI goes over the daemon's own work, in at most a minute.

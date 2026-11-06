@@ -353,11 +353,16 @@ describe('NetDaemonUpdater', () => {
             return base.send(cmd, params)
           },
         })
-        const { u, update } = updater({}, conn)
+        // The swap holds this server's file changes to the host until it ends (daemon-over-busy.ts).
+        const order: string[] = []
+        const fence = vi.fn(() => { order.push('fence'); return () => { order.push('release') } })
+        const update = vi.fn(async () => { order.push('update') })
+        const { u } = updater({ fence, update }, conn)
         u.schedule(0)
         await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
         expect(update).toHaveBeenCalledTimes(1)
         expect((update.mock.calls[0] as unknown[])[4]).toEqual({ overBusy })
+        expect(order).toEqual(['fence', 'update', 'release'])
         u.stop()
       }
     } finally {

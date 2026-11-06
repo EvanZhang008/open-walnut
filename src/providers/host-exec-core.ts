@@ -436,7 +436,8 @@ export function createHostExec(deps: HostExecDeps) {
   function endForUpdate(note: string): number {
     let n = 0
     for (const j of jobs.values()) {
-      if (j.endedAt !== null) continue
+      // Ended, or already asked to stop (its line is written): one line per run.
+      if (j.endedAt !== null || j.killed) continue
       try { fs.appendFileSync(j.logFile, `\n[walnut] ${note}\n`) } catch { /* the log is gone */ }
       audit({ event: 'ended-by-update', jobId: j.id, taskId: j.taskId })
       stop(j, 'asked')
