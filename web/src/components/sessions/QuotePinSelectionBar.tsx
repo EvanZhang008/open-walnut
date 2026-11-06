@@ -83,6 +83,9 @@ import { ASK_MODE_HINT, ASK_MODE_LABEL, ASK_MODES, type AskMode } from '@/utils/
 /** Room between the passage and the bar, and between a button and its menu. */
 const BAR_GAP = 8;
 const MENU_GAP = 4;
+/** The narrowest Ask choice and Comment box that still read (their words wrap). */
+const MENU_MIN_ASK = 200;
+const MENU_MIN_COMMENT = 240;
 /** The room a menu needs under the bar to open downward: the Comment box's height. */
 const MENU_ROOM = 110;
 
@@ -378,8 +381,19 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     const el = menuOpen ? containerRef.current : null;
     if (!el) return undefined;
     const cs = getComputedStyle(el);
-    const column = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
-    return Math.max(column, Math.min(el.clientWidth, 220));
+    const padL = parseFloat(cs.paddingLeft) || 0;
+    const column = el.clientWidth - padL - (parseFloat(cs.paddingRight) || 0);
+    const room = Math.max(column, Math.min(el.clientWidth, 220));
+    // Still a dropdown off its button where the column is narrow: as wide as the
+    // wider side of the button allows (its words wrap), never held at the column's
+    // edge away from its button, down to the narrowest menu that still reads.
+    const btn = askPick ? askGroupRef.current : commentBtnRef.current;
+    if (!btn) return room;
+    const box = el.getBoundingClientRect();
+    const b = btn.getBoundingClientRect();
+    const colLeft = box.left + el.clientLeft + padL;
+    const side = Math.max(colLeft + column - b.left, b.right - colLeft) - 4;
+    return side >= (askPick ? MENU_MIN_ASK : MENU_MIN_COMMENT) + 12 ? Math.min(room, side) : room;
   })();
 
   const reanchor = useCallback((point: HeldPoint) => {
