@@ -26,6 +26,8 @@ struct TaskDetailExtras: View {
     /// them (`DictationSendGate`). One sheet shows at a time, so one gate.
     @State private var editorSendGate = DictationSendGate()
     @State private var confirmDelete = false
+    /// A Parent, Subtask or Blocked-by row the user tapped: it opens as every task tap does.
+    @State private var openedRelative: TaskOpenTarget?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -163,8 +165,18 @@ struct TaskDetailExtras: View {
 
     // MARK: - Relations (blocked / parent / children)
 
-    @ViewBuilder
     private func relationsBlock(_ detail: TaskDetail) -> some View {
+        relationsList(detail)
+            // A related task opens its conversation (its task page only when it has none).
+            .sheet(item: $openedRelative) { target in
+                TaskSessionSheet(target: target)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
+    }
+
+    @ViewBuilder
+    private func relationsList(_ detail: TaskDetail) -> some View {
         if detail.isBlocked == true, let deps = detail.resolvedDependencies, !deps.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Label("Blocked by", systemImage: "hand.raised.fill")
@@ -210,7 +222,12 @@ struct TaskDetailExtras: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        return Group {
+        let chevron = Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.tertiary)
+        return Button {
+            openedRelative = TaskOpenTarget(id: relative.id, title: relative.title)
+        } label: { Group {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) { icon; state }
@@ -223,9 +240,14 @@ struct TaskDetailExtras: View {
                     title.lineLimit(1)
                     Spacer()
                     state
+                    chevron
                 }
             }
         }
+        .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("task.relative.\(relative.id)")
     }
 
     // MARK: - Description / note readback + editing

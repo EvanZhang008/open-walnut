@@ -182,6 +182,20 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertNil(OrgThreadModel.movedNotice("open", threads: threads, now: Self.now))
         XCTAssertEqual(OrgThreadModel.movedNotice("busy", threads: threads, now: Self.now), "Moved to In progress")
         XCTAssertEqual(OrgThreadModel.movedNotice("zz", threads: threads, now: Self.now)?.hasPrefix("Snoozed until "), true)
+        // The toast and the snoozed row say the time the same way.
+        let snoozedRow = threads.first { $0.id == "zz" }!.snoozed!
+        XCTAssertEqual(OrgThreadModel.movedNotice("zz", threads: threads, now: Self.now), "Snoozed until \(OrgThreadModel.backAt(snoozedRow.until, now: Self.now))")
         XCTAssertEqual(OrgThreadModel.movedNotice("done", threads: threads, now: Self.now), "Closed. It is under Closed this week")
+    }
+
+    func testAPreviewCutAtAListMarkerEndsOnTheItemBefore() {
+        // The reviewer's card: the answer's list was cut right after the second item's "-".
+        let list = "- " + String(repeating: "a", count: 60) + "\n- " + String(repeating: "b", count: 60)
+        let cut = OrgThreadModel.cutAtWord(list, max: 65)
+        XCTAssertEqual(cut, "- " + String(repeating: "a", count: 60) + "\u{2026}")
+        XCTAssertFalse(cut.contains("\n-"))
+        XCTAssertEqual(OrgThreadModel.cutAtWord("1. one two\n2. three", max: 14), "1. one two\u{2026}")
+        XCTAssertTrue(OrgThreadModel.isBareListMarker("  3) "))
+        XCTAssertFalse(OrgThreadModel.isBareListMarker("- words"))
     }
 }

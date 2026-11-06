@@ -435,13 +435,20 @@ struct OrgThreadCard: View {
         let named = OrgThreadModel.namedTasks(in: t.reply)
         let ids = (t.tasks ?? []).filter { !named.contains($0) }
         if !ids.isEmpty {
+            let titles = ids.map { id in tasks.tasks.first { $0.id == id }?.title ?? id }
             OrgChipFlow(spacing: 6) {
                 ForEach(ids, id: \.self) { id in
                     let task = tasks.tasks.first { $0.id == id }
+                    let title = task?.title ?? id
+                    // Two chips with one title say their state, so they can be told apart.
+                    let twin = titles.filter { $0 == title }.count > 1
                     Button { target = TaskOpenTarget(id: id, title: task?.title) } label: {
                         HStack(spacing: 5) {
                             if let task { Circle().fill(UserStatePill.color(TeamStatusModel.state(of: task))).frame(width: 7, height: 7) }
-                            Text(task?.title ?? id).lineLimit(1)
+                            Text(title).lineLimit(1)
+                            if twin, let task {
+                                Text("· \(TeamStatusModel.state(of: task).label)").foregroundStyle(.secondary).fixedSize()
+                            }
                         }
                         .font(.footnote)
                         .padding(.horizontal, 10)
@@ -613,9 +620,17 @@ struct OrgThreadConversation: View {
                                 } else if m.via == "letter" {
                                     Text("Answering \u{201C}\(m.about ?? "a letter")\u{201D}").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                                 }
-                                Text(m.text.isEmpty ? "A picture" : m.text)
-                                    .font(.subheadline)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                if !m.text.isEmpty {
+                                    Text(m.text)
+                                        .font(.subheadline)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                // Pictures render as the chat renders them (the web card does the same).
+                                ForEach(Array((m.images ?? []).enumerated()), id: \.offset) { _, path in
+                                    AttachmentImageView(raw: path, alt: "")
+                                        .frame(maxWidth: 220, alignment: .leading)
+                                        .accessibilityIdentifier("org.thread.message.image")
+                                }
                             }
                         }
                     }

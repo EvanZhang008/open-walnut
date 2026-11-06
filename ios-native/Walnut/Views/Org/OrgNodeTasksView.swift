@@ -25,11 +25,27 @@ struct OrgNodeTasksView: View {
             : OrgNodeTasksModel.pinSections(mine, tiers: tasks.allTierChoices, tierOf: { tasks.tierId(for: $0.id) })
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("View", selection: $modeRaw) {
-                    ForEach(OrgNodeTasksModel.Mode.allCases) { Text($0.label).tag($0.rawValue) }
+                // A small grouping menu, not a second segmented bar under Threads | Tasks | Brief,
+                // so the page keeps one main switch.
+                HStack {
+                    Spacer()
+                    Menu {
+                        Picker("Group by", selection: $modeRaw) {
+                            ForEach(OrgNodeTasksModel.Mode.allCases) { Text($0.label).tag($0.rawValue) }
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Group: \(mode.label)")
+                            Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .frame(minHeight: 32)
+                        .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Group by \(mode.label)")
+                    .accessibilityIdentifier("org.tasks.mode")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("org.tasks.mode")
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.needsText)
                 }

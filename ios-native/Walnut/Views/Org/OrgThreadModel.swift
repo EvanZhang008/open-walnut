@@ -144,11 +144,9 @@ enum OrgThreadModel {
         let s = sections(threads, now: now)
         if s.open.contains(where: { $0.id == id }) { return nil }
         if let t = s.snoozed.first(where: { $0.id == id }) {
-            guard let until = t.snoozed.flatMap({ WalnutTask.parseISO($0.until) }) else { return "Snoozed" }
-            let day = Calendar.current.isDate(until, inSameDayAs: now)
-                ? until.formatted(date: .omitted, time: .shortened)
-                : until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
-            return "Snoozed until \(day)"
+            guard let sn = t.snoozed else { return "Snoozed" }
+            // The words the snoozed row and the card use, so one moment reads one way.
+            return "Snoozed until \(backAt(sn.until, now: now))"
         }
         if s.inProgress.contains(where: { $0.id == id }) { return "Moved to In progress" }
         if s.closed.contains(where: { $0.id == id }) { return "Closed. It is under Closed this week" }
@@ -276,7 +274,19 @@ enum OrgThreadModel {
         }
         if let open = head.lastIndex(of: "<"), !head[open...].contains(">") { head = String(head[..<open]) }
         if let open = head.lastIndex(of: "["), !head[open...].contains(")") { head = String(head[..<open]) }
+        // A cut right after a list item's marker leaves the marker alone on its last line
+        // ("- …"): end on the item before it instead.
+        var lines = head.components(separatedBy: "\n")
+        while lines.count > 1, let last = lines.last, isBareListMarker(last) { lines.removeLast() }
+        head = lines.joined(separator: "\n")
         return head.trimmingCharacters(in: .whitespacesAndNewlines) + "\u{2026}"
+    }
+
+    /// A line holding no words: empty, or only a list marker (`-`, `*`, `+`, `•`, `1.`, `2)`).
+    static func isBareListMarker(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.isEmpty || ["-", "*", "+", "\u{2022}"].contains(t)
+            || t.range(of: #"^\d+[.)]$"#, options: .regularExpression) != nil
     }
 
     /// The task ids a summary already names as pills (`<task-ref id="…">`), so their chips are not
