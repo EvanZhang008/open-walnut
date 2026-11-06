@@ -47,7 +47,12 @@ const TASKS = [
 type GatewayResult = { ok: true; result: Record<string, any> } | { ok: false; error: { code: string; message: string; detail?: unknown } }
 
 let dirs: string[] = []
-afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = [] })
+const journals: Array<{ close: () => void }> = []
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+  dirs = []
+})
 function tmp(): string { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-sim-')); dirs.push(d); return d }
 
 function simulate() {
@@ -90,6 +95,7 @@ function simulate() {
         if (!sent) resolve({ ok: false, reason: 'no server leads this Walnut right now' })
       }),
     })
+    journals.push(host.journal)
     host.configure({
       v: 1, home: HOME, hash: 'h1', asOf: clock.now, host: name, sessions, tasks: TASKS, requests: [],
       // The team's Board rides every host's copy (host-slice.ts teamBoards).

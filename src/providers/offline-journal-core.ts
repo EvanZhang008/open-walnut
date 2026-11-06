@@ -166,6 +166,8 @@ interface HomeJournal {
   lastAckSeq: number | null
   /** File identity and the offset read so far (tail re-read). */
   ino: number
+  /** Pins the folded file even when appends do not keep a descriptor. */
+  readFd: number
   offset: number
   bytes: number
   badLines: string[]
@@ -391,7 +393,7 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     return {
       home, key, journalId: '', pending: new Map(), lineBytes: new Map(), byOp: new Map(), maxSeq: 0,
       frozen: new Set(), rows: {}, settledCopies: [], migratedV1: [], importedAcked: [], lastDrainAt: null, lastAckSeq: null,
-      ino: 0, offset: 0, bytes: 0, badLines: [], stateDirty: false, stateSig: '', stateLoaded: false, stateError: '', fd: -1, fdIno: 0,
+      ino: 0, readFd: -1, offset: 0, bytes: 0, badLines: [], stateDirty: false, stateSig: '', stateLoaded: false, stateError: '', fd: -1, fdIno: 0,
     }
   }
 
@@ -456,7 +458,25 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     for (const id of (rec.saveOpIds as string[] | undefined) ?? []) j.byOp.set(id, rec.seq)
   }
 
+  function dropReadFd(j: HomeJournal): void {
+    if (j.readFd >= 0) { try { fs.closeSync(j.readFd) } catch { /* closed */ } }
+    j.readFd = -1
+  }
+
+  function pinReadFd(j: HomeJournal): import('node:fs').Stats {
+    const fd = fs.openSync(fileOf(j.key, 'ndjson'), 'r')
+    let st: import('node:fs').Stats
+    try { st = fs.fstatSync(fd) } catch (err) {
+      fs.closeSync(fd)
+      throw err
+    }
+    dropReadFd(j)
+    j.readFd = fd
+    return st
+  }
+
   function resetFold(j: HomeJournal): void {
+    dropReadFd(j)
     j.pending.clear(); j.lineBytes.clear(); j.byOp.clear(); j.badLines = []
     j.offset = 0; j.bytes = 0; j.ino = 0
   }
@@ -470,43 +490,61 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
   function readTail(j: HomeJournal, locked: boolean): void {
     const file = fileOf(j.key, 'ndjson')
     let st: import('node:fs').Stats
-    try { st = fs.statSync(file) } catch {
+    try { st = fs.statSync(file) } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
       if (j.ino) resetFold(j)
       return
     }
-    if (st.ino !== j.ino || st.size < j.offset) {
+    if (j.readFd < 0 || st.ino !== j.ino || st.size < j.offset) {
+      const fd = fs.openSync(file, 'r')
+      try { st = fs.fstatSync(fd) } catch (err) {
+        fs.closeSync(fd)
+        throw err
+      }
       const floor = j.maxSeq
       resetFold(j)
       j.maxSeq = floor
       j.ino = st.ino
+      // Pin the inode until the reader changes files: two compactions can reuse a freed one.
+      j.readFd = fd
+    } else {
+      try { st = fs.fstatSync(j.readFd) } catch (err) {
+        dropReadFd(j)
+        throw err
+      }
+      if (st.size < j.offset) {
+        const fd = j.readFd
+        j.readFd = -1
+        resetFold(j)
+        j.readFd = fd
+        j.ino = st.ino
+      }
     }
     if (st.size === j.offset) return
     const len = st.size - j.offset
     const buf = Buffer.alloc(len)
-    const fd = fs.openSync(file, 'r')
-    try {
-      let got = 0
-      while (got < len) {
-        const n = fs.readSync(fd, buf, got, len - got, j.offset + got)
-        if (n <= 0) break
-        got += n
-      }
-    } finally { fs.closeSync(fd) }
-    const end = buf.lastIndexOf(10)
+    let got = 0
+    while (got < len) {
+      const n = fs.readSync(j.readFd, buf, got, len - got, j.offset + got)
+      if (n <= 0) break
+      got += n
+    }
+    const read = buf.subarray(0, got)
+    const end = read.lastIndexOf(10)
     if (end >= 0) {
       let start = 0
       while (start <= end) {
-        const nl = buf.indexOf(10, start)
+        const nl = read.indexOf(10, start)
         const bytes = nl - start + 1
-        foldLine(j, buf.toString('utf8', start, nl), bytes)
+        foldLine(j, read.toString('utf8', start, nl), bytes)
         start = nl + 1
       }
       j.offset += end + 1
     }
-    if (end + 1 < len && locked) {
+    if (end + 1 < got && locked) {
       try { fs.truncateSync(file, j.offset) } catch (err) { throw refuse('journal_unwritable', `journal: torn line not cut: ${(err as Error).message}`, { why: 'io' }) }
       tornDropped++
-      deps.log('warn', 'journal: torn last line dropped', { home: j.home, journalKey: j.key, bytes: len - end - 1 })
+      deps.log('warn', 'journal: torn last line dropped', { home: j.home, journalKey: j.key, bytes: got - end - 1 })
     }
     j.bytes = j.offset
   }
@@ -692,6 +730,9 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     if (j.fd !== fd) { try { fs.closeSync(fd) } catch { /* closed */ } }
     j.offset += buf.length
     j.bytes = j.offset
+    if (j.readFd < 0) {
+      try { j.ino = pinReadFd(j).ino } catch { /* the next read refolds the saved file */ }
+    }
     return Buffer.byteLength(own, 'utf8') + 1
   }
 
@@ -1025,7 +1066,11 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     j.lineBytes.clear()
     recs.forEach((r, i) => j.lineBytes.set(r.seq, Buffer.byteLength(lines[i], 'utf8')))
     j.badLines = []
-    const st = fs.statSync(file)
+    let st: import('node:fs').Stats
+    try { st = pinReadFd(j) } catch (err) {
+      dropReadFd(j)
+      throw err
+    }
     j.ino = st.ino
     j.offset = st.size
     j.bytes = st.size
@@ -1767,9 +1812,9 @@ export function createOfflineJournal(deps: OfflineJournalDeps) {
     try { return locked(home, (j) => maybeCompact(j, true)) } catch { return false }
   }
 
-  /** Release every kept append fd (keepOpen); the store stays usable and reopens on demand. */
+  /** Release file descriptors; the store stays usable and reopens on demand. */
   function close(): void {
-    for (const j of journals.values()) dropFd(j)
+    for (const j of journals.values()) { dropFd(j); dropReadFd(j) }
   }
 
   // Building a store reads and writes nothing (every run of the daemon binary builds one,

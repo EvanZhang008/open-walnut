@@ -31,7 +31,11 @@ function trig(id: string, home = HOME, extra: Partial<OfflineTrigger> = {}): Off
 }
 
 const dirs: string[] = []
-afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
+const journals: Array<{ close: () => void }> = []
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+})
 
 function setup(opts: { triggers?: boolean; dir?: string } = {}) {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'offline-triggers-'))
@@ -63,6 +67,7 @@ function setup(opts: { triggers?: boolean; dir?: string } = {}) {
       },
     }),
   })
+  journals.push(host.journal)
   host.configure({
     v: 1, home: HOME, hash: 'h1', asOf: NOW - 120_000, host: 'devbox',
     sessions: [{ sid: SID, taskId: TASK, title: 'Watcher' }],
@@ -267,6 +272,7 @@ describe('two Walnuts on one host', () => {
         changed: () => {},
       },
     })
+    journals.push(host.journal)
     for (const home of [HOME, OTHER]) {
       host.configure({
         v: 1, home, hash: `h-${home}`, asOf: NOW - 120_000, host: 'devbox',

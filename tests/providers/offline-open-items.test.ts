@@ -52,8 +52,9 @@ function slice(): HostSlice {
 }
 
 let dir = ''
+const journals: Array<{ close: () => void }> = []
 function make(withFormatter = true) {
-  return createOfflineHost({
+  const host = createOfflineHost({
     fs, path, dir, now: () => NOW,
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (v) => createHash('sha1').update(v).digest('hex').slice(0, 12),
@@ -62,13 +63,18 @@ function make(withFormatter = true) {
     deliver: async () => ({ ok: true }),
     ...(withFormatter ? { openItems: createOpenItemsText() } : {}),
   })
+  journals.push(host.journal)
+  return host
 }
 
 const call = (h: ReturnType<typeof make>, sid: string, args: Record<string, unknown> = {}) =>
   h.handle(HOME, sid, 'tools.call', { name: 'open_items', args })
 
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'woi-')) })
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  fs.rmSync(dir, { recursive: true, force: true })
+})
 
 describe('open_items from the copy', () => {
   it('lists the unfinished subtasks, both kinds of pending request and the Board, worded as the server words them', async () => {

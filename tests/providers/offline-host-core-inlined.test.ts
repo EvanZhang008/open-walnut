@@ -57,7 +57,12 @@ function slice(): HostSlice {
 }
 
 let dirs: string[] = []
-afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = [] })
+const journals: Array<ReturnType<typeof createOfflineJournal>> = []
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+  dirs = []
+})
 
 /**
  * A host built ONLY from rebuilt copies. `online` gives it pendingPrompt, which turns on
@@ -79,6 +84,7 @@ function inlinedHost(opts: { online?: boolean } = {}) {
   const journal = rebuild(createOfflineJournal)({
     ...base, sha256: (body: string) => createHash('sha256').update(body).digest('hex'),
   })
+  journals.push(journal)
   const deps: OfflineHostDeps = {
     ...base,
     kit: rebuild(createEnvelopeKit)(),

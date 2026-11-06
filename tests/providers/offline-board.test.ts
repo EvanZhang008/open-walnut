@@ -59,7 +59,12 @@ function slice(over: Partial<HostSlice> = {}): HostSlice {
 }
 
 let dirs: string[] = []
-afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = [] })
+const journals: Array<{ close: () => void }> = []
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+  dirs = []
+})
 
 function harness(opts: { boards?: boolean; dir?: string } = {}) {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'offline-board-'))
@@ -78,6 +83,7 @@ function harness(opts: { boards?: boolean; dir?: string } = {}) {
     ...(opts.boards === false ? {} : { boards: createBoardOffline() }),
   }
   const host = createOfflineHost(deps)
+  journals.push(host.journal)
   if (!opts.dir) host.configure(slice())
   const call = (sid: string, name: string, args: Record<string, unknown> = {}) => host.handle(HOME, sid, 'tools.call', { name, args })
   return { host, call, dir }

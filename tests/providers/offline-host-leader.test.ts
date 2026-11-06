@@ -40,7 +40,12 @@ function slice(over: Partial<HostSlice> = {}): HostSlice {
 }
 
 let dirs: string[] = []
-afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = [] })
+const journals: Array<{ close: () => void }> = []
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+  dirs = []
+})
 
 function harness(opts: { relay?: boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offline-leader-'))
@@ -70,6 +75,7 @@ function harness(opts: { relay?: boolean } = {}) {
     }),
   }
   const host = createOfflineHost(deps)
+  journals.push(host.journal)
   host.configure(slice())
   return { host, delivered, relayed, relayFail, live, clock, deps }
 }

@@ -38,6 +38,7 @@ const TASK_A = 'mtaskaaa-0001'
 const TASK_B = 'mtaskbbb-0002'
 const DEVICE = { kind: 'device', deviceId: 'dev-acme-phone', name: 'Acme phone' }
 const BUN: string | undefined = testBun()
+const COMPILED_FILE = process.env.WALNUT_JOURNAL_TEST_FILE
 
 /** The host server: hands its follower token to the test (FAKE_OUT) and idles. */
 const FAKE_SERVER = `
@@ -161,9 +162,17 @@ async function spawnDaemon(dir: string, twin: Twin, journalDir: string | null, e
   delete env.WALNUT_DAEMON_STATE_DIR
   if (!journalDir) delete env.WALNUT_JOURNAL_DIR
   Object.assign(env, extraEnv)
+  if (twin === 'standalone' && COMPILED_FILE) {
+    env.HOME = path.join(dir, 'home')
+    env.OPEN_WALNUT_HOME = path.join(dir, 'home', '.open-walnut')
+    env.WALNUT_RUNTIME_DIR = path.join(dir, 'runtime')
+    fs.mkdirSync(env.HOME, { recursive: true })
+  }
   let proc: ChildProcess
   if (twin === 'standalone') {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
+    const command = COMPILED_FILE ?? BUN!
+    const args = COMPILED_FILE ? ['__daemon', '--start'] : [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']
+    proc = spawn(command, args, { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
   } else {
     const script = path.join(dir, twin === 'old' ? 'daemon-old.cjs' : 'daemon.cjs')
     fs.writeFileSync(script, twin === 'old' ? oldDaemonSource() : getDaemonSource(), { mode: 0o755 })

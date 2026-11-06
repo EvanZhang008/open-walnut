@@ -55,6 +55,7 @@ const TAIL = `${RICH_OUTPUT_MODE_REMINDER}\n\n${LINE}`
 const LANG_BLOCK = renderHintBlock('reply-language', `${REPLY_LANGUAGE_LINES.zh.reply} ${LANG} ${REPLY_LANGUAGE_SCOPE}`)
 const RICH_BLOCK = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
 const dirs: string[] = []
+const journals: Array<{ close: () => void }> = []
 
 function fixture(mainTail: string | null = TAIL) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-reply-tail-'))
@@ -69,6 +70,7 @@ function fixture(mainTail: string | null = TAIL) {
     deliver: async (sid, text) => { writes.push({ sid, text }); return { ok: true } },
     resume: async (_home, sid, text) => { writes.push({ sid, text, resumed: true }); return { ok: true } },
   })
+  journals.push(host.journal)
   const slice: HostSlice = {
     v: 1, home, hash: 'tail-one', asOf: Date.now(), host: 'fixture',
     sessions: [
@@ -87,7 +89,10 @@ function fixture(mainTail: string | null = TAIL) {
   return { host, writes, live, send }
 }
 
-afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+})
 
 describe('a host delivery carries the session reply tail', () => {
   it('a same-host peer note and the reply to it both end with the tail', async () => {

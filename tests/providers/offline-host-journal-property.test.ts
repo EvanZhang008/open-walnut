@@ -20,12 +20,14 @@
  *   7. replay order == append order (a drain hands out increasing seqs; an old Mac
  *      only the v1 prefix).
  */
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { JOURNAL_V2_DRAINS, type JournalRecord } from '../../src/providers/offline-journal-core.js'
-import { JHOME, journalStore, keyOf } from '../helpers/offline-journal-harness.js'
+import { JHOME, cleanupJournalDirs, journalStore, keyOf } from '../helpers/offline-journal-harness.js'
+
+afterEach(() => cleanupJournalDirs())
 
 const RUNS = Math.max(1, Number(process.env.WALNUT_SIM_RUNS) || 500)
 const BASE_SEED = Number(process.env.WALNUT_SIM_SEED) || 0x5eed0008
@@ -154,7 +156,7 @@ const ACTORS = [{ kind: 'device' as const, deviceId: 'dev-marina' }, { kind: 'se
 const TASKS = ['mtask-acme-1', 'mtask-acme-2', 'mtask-acme-3']
 const PATHS = ['notes/acme.md', 'notes/marina \u00e9t\u00e9.md']
 
-function runOnce(seed: number): void {
+function runOnce(seed: number, observeBoth = true): void {
   const rnd = mulberry32(seed)
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-prop-'))
@@ -237,7 +239,8 @@ function runOnce(seed: number): void {
         restart(false)
       }
       m.ops.push(op)
-      check(a, m, `step ${step} ${op}`)
+      check(a, m, `step ${step} ${op} (writer)`)
+      if (observeBoth) check(b, m, `step ${step} ${op} (other reader)`)
       if (m.torn && (op.startsWith('append') || op.startsWith('drain') || op.startsWith('ack') || op === 'compact' || op === 'retry')) {
         // Invariant 5: the next locked write cut the torn tail, and reported it.
         for (const l of fs.readFileSync(fileOf(dir), 'utf8').split('\n').filter(Boolean)) JSON.parse(l)
@@ -255,6 +258,7 @@ function runOnce(seed: number): void {
     throw new Error(`seed ${seed} (WALNUT_SIM_SEED=${seed} WALNUT_SIM_RUNS=1): ${(err as Error).message}\nops: ${m.ops.join(' ')}`)
   } finally {
     a.close(); b.close()
+    cleanupJournalDirs()
     fs.rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -275,6 +279,10 @@ describe('journal v2 property suite', () => {
   describe('pinned cases', () => {
     const fieldSave = (title: string) => ({ kind: 'task-fields', op: 'task_update', taskId: 'mtask-acme-1', fields: { title: { base: 'b', value: title } } })
     const dev = { actor: { kind: 'device' as const, deviceId: 'dev-marina' } }
+
+    it('a reader sleeping across two compactions never revives an ack or loses a later save', () => {
+      runOnce(1592590615, false)
+    })
 
     it('drain, coalesce into the drained record, ack, drain again: the later save comes back', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-prop-'))

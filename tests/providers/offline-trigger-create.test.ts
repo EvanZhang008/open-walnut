@@ -31,7 +31,11 @@ const BASE = { run: 'bash ~/.open-walnut/triggers/review/check.sh', every: '5m',
 const KINDS = ['task-fields']
 
 const dirs: string[] = []
-afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
+const journals: Array<{ close: () => void }> = []
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+})
 
 function setup(opts: { drains?: string[] | null; validate?: boolean | 'refuse'; dir?: string } = {}) {
   const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'offline-trigger-create-'))
@@ -63,6 +67,7 @@ function setup(opts: { drains?: string[] | null; validate?: boolean | 'refuse'; 
       }),
     },
   })
+  journals.push(host.journal)
   host.configure({
     v: 1, home: HOME, hash: 'h1', asOf: NOW - 60_000, host: 'devbox',
     sessions: [{ sid: SID, taskId: TASK, title: 'Review lead' }],

@@ -76,6 +76,7 @@ interface Harness {
 }
 
 let dirs: string[] = []
+const journals: Array<ReturnType<typeof createOfflineJournal>> = []
 
 function harness(dir?: string, opts: { noPromptHook?: boolean } = {}): Harness {
   const d = dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'host-local-send-'))
@@ -107,6 +108,7 @@ function harness(dir?: string, opts: { noPromptHook?: boolean } = {}): Harness {
     serverAnswers: () => serverUp.v,
   }
   const host = createOfflineHost(deps)
+  journals.push(host.journal)
   host.configure(slice())
   return { host, delivered, live, prompts, clock, dir: d, deps, pings, failDelivery, serverUp }
 }
@@ -121,7 +123,10 @@ function records(h: Harness): OfflineRecord[] {
 }
 
 beforeEach(() => { dirs = [] })
-afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }) })
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+})
 
 describe('a same-host message while the server answers: the host delivers it', () => {
   it('by exact task id: the server\'s envelope, the server\'s answer shape, a nudge, and nothing held back', async () => {
@@ -385,6 +390,7 @@ describe('the source twin runs it from its text', () => {
       fs: h.deps.fs, path: h.deps.path, dir: h.deps.dir, now: h.deps.now, randomHex: h.deps.randomHex, keyOf: h.deps.keyOf, log: h.deps.log,
       sha256: (body) => createHash('sha256').update(body).digest('hex'),
     })
+    journals.push(journal)
     const copy = rebuild(createOfflineHostCore)({ ...h.deps, kit: rebuild(createEnvelopeKit)(), journal })
     copy.configure(slice())
     const r = await copy.handleLocal(HOME, A, 'tools.call', { name: 'task_send', args: { to: TASK_B, text: 'from the copy', expect_reply: false } })

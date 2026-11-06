@@ -21,6 +21,7 @@ export const TASK_B = 'mtaskbbb-0002'
 export const DEVICE = { kind: 'device' as const, deviceId: 'dev-acme-phone', name: 'Acme phone' }
 
 const made: string[] = []
+const stores: Array<ReturnType<typeof createOfflineJournal>> = []
 let base: string | null = null
 
 /**
@@ -36,6 +37,7 @@ export function journalTmpDir(prefix = 'journal-v2-'): string {
 }
 
 export function cleanupJournalDirs(): void {
+  for (const store of stores.splice(0)) store.close()
   for (const d of made.splice(0)) {
     try { fs.chmodSync(d, 0o700) } catch { /* gone */ }
     fs.rmSync(d, { recursive: true, force: true })
@@ -49,12 +51,14 @@ export const sha256 = (body: Uint8Array) => createHash('sha256').update(body).di
 export interface Clock { now: number }
 
 export function journalStore(dir: string, clock: Clock, over: Partial<OfflineJournalDeps> = {}) {
-  return createOfflineJournal({
+  const store = createOfflineJournal({
     fs, path, dir, now: () => clock.now,
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf, sha256, log: () => {},
     ...over,
   })
+  stores.push(store)
+  return store
 }
 
 export function jslice(overrides: Partial<HostSlice> = {}): HostSlice {

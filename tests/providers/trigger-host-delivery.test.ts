@@ -167,7 +167,11 @@ describe('the envelope a host builds is the one the server builds', () => {
 
 describe('offline host: which session on this host takes the fire', () => {
   const dirs: string[] = []
-  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
+  const journals: Array<{ close: () => void }> = []
+  afterEach(() => {
+    for (const journal of journals.splice(0)) journal.close()
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
 
   function setup(overrides: Partial<HostSlice> = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trigger-host-'))
@@ -186,6 +190,7 @@ describe('offline host: which session on this host takes the fire', () => {
         return { ok: true }
       },
     })
+    journals.push(host.journal)
     host.configure({
       v: 1, home: HOME, hash: 'h1', asOf: NOW, host: 'devbox',
       // Newest first, as the server lists them: the live one is not the first row.
@@ -228,7 +233,11 @@ describe('offline host: which session on this host takes the fire', () => {
 
 describe('offline host: a stopped session is resumed for the fire (trigger-host-resume-v1)', () => {
   const dirs: string[] = []
-  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
+  const journals: Array<{ close: () => void }> = []
+  afterEach(() => {
+    for (const journal of journals.splice(0)) journal.close()
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
   const OTHER = 'abababab-3333-4333-8333-333333333333'
   const ASIDE = 'cdcdcdcd-4444-4444-8444-444444444444'
 
@@ -249,6 +258,7 @@ describe('offline host: a stopped session is resumed for the fire (trigger-host-
         return answer.value
       },
     })
+    journals.push(host.journal)
     host.configure({
       v: 1, home: HOME, hash: 'h1', asOf: NOW, host: 'devbox',
       // Newest first, as the server lists them.

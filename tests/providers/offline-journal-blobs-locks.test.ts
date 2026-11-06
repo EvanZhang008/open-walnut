@@ -76,6 +76,214 @@ describe('journal v2: folded note saves free the bodies they replace', () => {
   })
 })
 
+describe('journal v2: readers pin the file they folded', () => {
+  it.each([false, true])('keeps a sleeping reader correct through repeated compaction (keepOpen=%s)', (keepOpen) => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    const readFds = new Set<number>()
+    const watching = {
+      ...fs,
+      openSync: (...args: Parameters<typeof fs.openSync>) => {
+        const fd = fs.openSync(...args)
+        if (String(args[0]) === file && args[1] === 'r') readFds.add(fd)
+        return fd
+      },
+      closeSync: (fd: number) => { readFds.delete(fd); fs.closeSync(fd) },
+    } as typeof fs
+    const a = journalStore(dir, clock, { keepOpen: true, durable: false })
+    const b = journalStore(dir, clock, { keepOpen, durable: false, fs: watching })
+    expect(a.append(JHOME, { kind: 'settings', value: 'old' })).toMatchObject({ ok: true, seq: 1 })
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([1])
+    expect(readFds.size).toBe(1)
+    const pinned = [...readFds][0]!
+    const originalIno = fs.fstatSync(pinned).ino
+    a.drain(JHOME, { kinds: null })
+    expect(a.ack(JHOME, { seqs: [1] }).acked.map(r => r.seq)).toEqual([1])
+    expect(a.append(JHOME, { kind: 'settings', value: 'new', padding: 'x'.repeat(8192) })).toMatchObject({ ok: true, seq: 2 })
+    for (let i = 0; i < 8; i++) {
+      expect(a.compact(JHOME)).toBe(true)
+      expect(fs.statSync(file).ino).not.toBe(originalIno)
+      expect(fs.fstatSync(pinned).ino).toBe(originalIno)
+    }
+    expect(fs.statSync(file).size).toBeGreaterThan(8192)
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([2])
+    expect(readFds.size).toBe(1)
+    expect(b.compact(JHOME)).toBe(true)
+    expect(journalStore(dir, clock).records(JHOME).map(r => r.seq)).toEqual([2])
+    b.close()
+    expect(readFds.size).toBe(0)
+    a.drain(JHOME, { kinds: null })
+    a.ack(JHOME, { seqs: [2] })
+    expect(a.append(JHOME, { kind: 'settings', value: 'after-close' })).toMatchObject({ ok: true, seq: 3 })
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([3])
+    b.close()
+    expect(readFds.size).toBe(0)
+  })
+
+  it('a saved append still answers saved when its first read descriptor cannot be opened', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    let refuseRead = true
+    const blocked = {
+      ...fs,
+      openSync: (...args: Parameters<typeof fs.openSync>) => {
+        if (refuseRead && String(args[0]) === file && args[1] === 'r') {
+          throw Object.assign(new Error('read refused'), { code: 'EACCES' })
+        }
+        return fs.openSync(...args)
+      },
+    } as typeof fs
+    const a = journalStore(dir, clock, { durable: false, fs: blocked })
+    expect(a.append(JHOME, { kind: 'settings', value: 'saved' })).toMatchObject({ ok: true, seq: 1 })
+    expect(journalStore(dir, clock).pending(JHOME).records.map(r => r.seq)).toEqual([1])
+    refuseRead = false
+    expect(a.pending(JHOME).records.map(r => r.seq)).toEqual([1])
+    expect(a.append(JHOME, { kind: 'settings', value: 'next' })).toMatchObject({ ok: true, seq: 2 })
+  })
+
+  it('reads the opened generation when the path changes between stat and open', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    const a = journalStore(dir, clock, { durable: false })
+    a.append(JHOME, { kind: 'settings', value: 'old', padding: 'x'.repeat(8192) })
+    let swap = true
+    const racing = {
+      ...fs,
+      openSync: (...args: Parameters<typeof fs.openSync>) => {
+        if (swap && String(args[0]) === file && args[1] === 'r') {
+          swap = false
+          a.drain(JHOME, { kinds: null })
+          a.ack(JHOME, { seqs: [1] })
+          a.append(JHOME, { kind: 'settings', value: 'new' })
+        }
+        return fs.openSync(...args)
+      },
+    } as typeof fs
+    const b = journalStore(dir, clock, { durable: false, fs: racing })
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([2])
+    expect(b.compact(JHOME)).toBe(true)
+    expect(journalStore(dir, clock).pending(JHOME).records.map(r => r.seq)).toEqual([2])
+  })
+
+  it('refolds an in-place truncation and releases its pinned file when the path goes away', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    const readFds = new Set<number>()
+    const watching = {
+      ...fs,
+      openSync: (...args: Parameters<typeof fs.openSync>) => {
+        const fd = fs.openSync(...args)
+        if (String(args[0]) === file && args[1] === 'r') readFds.add(fd)
+        return fd
+      },
+      closeSync: (fd: number) => { readFds.delete(fd); fs.closeSync(fd) },
+    } as typeof fs
+    const a = journalStore(dir, clock, { durable: false })
+    a.append(JHOME, { kind: 'settings', padding: 'x'.repeat(8192) })
+    const b = journalStore(dir, clock, { durable: false, fs: watching })
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([1])
+    const header = fs.readFileSync(file, 'utf8').split('\n')[0]!
+    fs.writeFileSync(file, header + '\n')
+    expect(b.pending(JHOME).records).toEqual([])
+    expect(readFds.size).toBe(1)
+    fs.unlinkSync(file)
+    expect(b.pending(JHOME).records).toEqual([])
+    expect(readFds.size).toBe(0)
+    expect(b.append(JHOME, { kind: 'settings', value: 'new' })).toMatchObject({ ok: true, seq: 2 })
+    expect(readFds.size).toBe(1)
+    b.close()
+    expect(readFds.size).toBe(0)
+  })
+
+  it('reopens after a pinned descriptor cannot be inspected', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    let readFd = -1
+    let refuseStat = false
+    const interrupted = {
+      ...fs,
+      openSync: (...args: Parameters<typeof fs.openSync>) => {
+        const fd = fs.openSync(...args)
+        if (String(args[0]) === file && args[1] === 'r') readFd = fd
+        return fd
+      },
+      fstatSync: (...args: Parameters<typeof fs.fstatSync>) => {
+        if (refuseStat && args[0] === readFd) {
+          refuseStat = false
+          throw Object.assign(new Error('descriptor read failed'), { code: 'EIO' })
+        }
+        return fs.fstatSync(...args)
+      },
+    } as typeof fs
+    const a = journalStore(dir, clock, { durable: false, fs: interrupted })
+    expect(a.append(JHOME, { kind: 'settings', value: 'old' }).ok).toBe(true)
+    refuseStat = true
+    expect(a.compact(JHOME)).toBe(false)
+    expect(a.append(JHOME, { kind: 'settings', value: 'new' })).toMatchObject({ ok: true, seq: 2 })
+    expect(journalStore(dir, clock).pending(JHOME).records.map(r => r.seq)).toEqual([1, 2])
+  })
+
+  it('refolds a truncation between path stat and descriptor stat', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    let truncate = false
+    const racing = {
+      ...fs,
+      statSync: (...args: Parameters<typeof fs.statSync>) => {
+        const st = fs.statSync(...args)
+        if (truncate && String(args[0]) === file) {
+          truncate = false
+          const header = fs.readFileSync(file, 'utf8').split('\n')[0]!
+          fs.writeFileSync(file, header + '\n')
+        }
+        return st
+      },
+    } as typeof fs
+    const a = journalStore(dir, clock, { durable: false, fs: racing })
+    a.append(JHOME, { kind: 'settings', padding: 'x'.repeat(8192) })
+    truncate = true
+    expect(a.pending(JHOME).records).toEqual([])
+    expect(a.append(JHOME, { kind: 'settings', value: 'after-truncate' })).toMatchObject({ ok: true, seq: 2 })
+    expect(journalStore(dir, clock).pending(JHOME).records.map(r => r.seq)).toEqual([2])
+  })
+
+  it('refuses a stale-fold compaction when opening the replacement file fails', () => {
+    const dir = journalTmpDir()
+    const clock = { now: T0 }
+    const file = path.join(dir, `journal-${keyOf(JHOME)}.ndjson`)
+    let refuseRead = false
+    const blocked = {
+      ...fs,
+      openSync: (...args: Parameters<typeof fs.openSync>) => {
+        if (refuseRead && String(args[0]) === file && args[1] === 'r') {
+          throw Object.assign(new Error('read refused'), { code: 'EACCES' })
+        }
+        return fs.openSync(...args)
+      },
+    } as typeof fs
+    const a = journalStore(dir, clock, { durable: false })
+    const b = journalStore(dir, clock, { durable: false, fs: blocked })
+    a.append(JHOME, { kind: 'settings', value: 'old' })
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([1])
+    a.drain(JHOME, { kinds: null })
+    a.ack(JHOME, { seqs: [1] })
+    a.append(JHOME, { kind: 'settings', value: 'new', padding: 'x'.repeat(8192) })
+    refuseRead = true
+    expect(b.compact(JHOME)).toBe(false)
+    expect(journalStore(dir, clock).records(JHOME).map(r => r.seq)).toEqual([2])
+    refuseRead = false
+    expect(b.pending(JHOME).records.map(r => r.seq)).toEqual([2])
+    expect(b.compact(JHOME)).toBe(true)
+    expect(journalStore(dir, clock).records(JHOME).map(r => r.seq)).toEqual([2])
+  })
+})
+
 describe('journal v2: only the blob lock holder removes a body', () => {
   it('while another live process holds the blob lock, nothing is freed; the next save frees it', () => {
     const dir = journalTmpDir()

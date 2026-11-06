@@ -60,6 +60,7 @@ interface Harness {
 }
 
 let dirs: string[] = []
+const journals: Array<ReturnType<typeof createOfflineJournal>> = []
 
 function harness(dir?: string): Harness {
   const d = dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'offline-host-'))
@@ -88,6 +89,7 @@ function harness(dir?: string): Harness {
     onJournal: (home) => { journalPings.push(home) },
   }
   const host = createOfflineHost(deps)
+  journals.push(host.journal)
   return { host, delivered, live, busy, clock, dir: d, deps, journalPings, failDelivery }
 }
 
@@ -100,7 +102,10 @@ function asRequest(row: { id: string; preview: string; fromSessionId: string; to
 }
 
 beforeEach(() => { dirs = [] })
-afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }) })
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close()
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+})
 
 describe('offline host: the read copy', () => {
   it('persists the copy and the journal, so a daemon restart keeps both', async () => {
@@ -174,6 +179,7 @@ describe('offline host: search from the copy', () => {
     const h = harness()
     const replica = { memoryDocs: () => memory, ops: () => [], answer: () => null, keeps: () => false } as unknown as NonNullable<OfflineHostDeps['replica']>
     const host = createOfflineHost({ ...h.deps, search: createOfflineSearch(), replica })
+    journals.push(host.journal)
     host.configure(slice({
       tasks: [
         ...slice().tasks,
@@ -508,6 +514,7 @@ describe('offline host: messages between sessions on this host', () => {
     const h = harness()
     h.deps.streamOffset = () => 1_000
     const host = createOfflineHost(h.deps)
+    journals.push(host.journal)
     host.configure(slice())
     await host.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: B, text: 'q' } })
     // The startup result the tailer had not read yet: it ends at byte 900.
@@ -523,6 +530,7 @@ describe('offline host: messages between sessions on this host', () => {
     h.busy.add(B)
     h.deps.streamOffset = () => 100
     const host = createOfflineHost(h.deps)
+    journals.push(host.journal)
     host.configure(slice())
     await host.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: B, text: 'q' } })
     const line = JSON.stringify({ type: 'result', result: 'the running turn' })
@@ -680,6 +688,7 @@ describe('offline host: the source twin runs the factories from their text', () 
       fs: h.deps.fs, path: h.deps.path, dir: h.deps.dir, now: h.deps.now, randomHex: h.deps.randomHex, keyOf: h.deps.keyOf, log: h.deps.log,
       sha256: (body) => createHash('sha256').update(body).digest('hex'),
     })
+    journals.push(journal)
     const copy = hostCopy({ ...h.deps, kit: kitCopy, journal })
     copy.configure(slice())
     const r = await copy.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: B, text, expect_reply: false } })

@@ -18,7 +18,11 @@ import { QUEUEABLE_TASK_FIELDS } from '../../src/providers/offline-host-core.js'
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const fields = (f: Record<string, [unknown, unknown]>) => ({ kind: 'task-fields', op: 'task_update', taskId: TASK_A, fields: Object.fromEntries(Object.entries(f).map(([k, [base, value]]) => [k, { base, value }])) })
 
-afterEach(() => cleanupJournalDirs())
+const rebuiltJournals: Array<{ close: () => void }> = []
+afterEach(() => {
+  for (const journal of rebuiltJournals.splice(0)) journal.close()
+  cleanupJournalDirs()
+})
 
 describe('journal v2: append, reload, compaction', () => {
   it('appends NDJSON lines with seq, opId, rev and actor, and a second store reads them back', () => {
@@ -717,6 +721,7 @@ describe('journal v2: rebuilt from its text (the source twin inlines both cores)
       fs, path, dir, now: () => clock.now, randomHex: (n) => randomBytes(n).toString('hex'), keyOf,
       sha256: (b) => createHash('sha256').update(b).digest('hex'), log: () => {},
     })
+    rebuiltJournals.push(journal)
     const host = rebuiltHost({
       fs, path, dir, now: () => clock.now, randomHex: (n) => randomBytes(n).toString('hex'), keyOf, kit: createEnvelopeKit(), log: () => {},
       isLive: () => true, turnActive: () => false, streamOffset: () => undefined, deliver: async () => ({ ok: true }),

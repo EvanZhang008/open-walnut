@@ -13,6 +13,7 @@ const mainSid = 'aaaaaaaa-1111-4111-8111-111111111111';
 const workerSid = 'bbbbbbbb-2222-4222-8222-222222222222';
 const policy = createEnvelopeKit().buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'task-routing-policy' }, body: TASK_ROUTING_CONTRACT });
 const dirs: string[] = [];
+const journals: Array<{ close: () => void }> = [];
 const local = (host: ReturnType<typeof createOfflineHost>, sid: string, args: Record<string, unknown>) =>
   host.handleLocal(home, sid, 'tools.call', { name: 'task_send', args });
 function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-host-'))) {
@@ -30,6 +31,7 @@ function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-hos
     },
     resume: async (_home, sid, text, messageId) => { writes.push({ sid, text, messageId, resumed: true }); return { ok: true }; },
   });
+  journals.push(host.journal);
   const slice: HostSlice = { v: 1, home, hash: 'policy-one', asOf: Date.now(), host: 'fixture',
     sessions: [{ sid: mainSid, taskId: 'main-task', taskRoutingPolicy: policy, taskRoutingDue: 'due-one' }, { sid: workerSid, taskId: 'work-task' }],
     tasks: [{ id: 'main-task', title: 'Main', phase: 'IN_PROGRESS', project: 'Ask Walnut' },
@@ -37,7 +39,10 @@ function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-hos
   host.configure(slice);
   return { host, writes, live, state, dir, slice };
 }
-afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const journal of journals.splice(0)) journal.close();
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 describe('host-local routing policy from the receiving host slice', () => {
   it('the first same-host delivery carries the rule once, journaled as told; workers never get it', async () => {
