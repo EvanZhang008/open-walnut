@@ -175,6 +175,29 @@ describe('the prompt each role is spawned with (Claude Code)', () => {
     expect(append).toBe(old)
     keep('claude-worker-resumed-old.txt', append!)
   }, 60_000)
+
+  it('...unless its cache expired and the stored prompt is far behind: then the current prompt, stored (prompt-refresh.ts)', async () => {
+    // A session of its own: the last test's resumed turn would end late and rewrite the facts below.
+    const own = await startOn(undefined, 'Tidy the release notes')
+    const full = promptsOf(own.args).append!
+    const old = full.replace(`\n\n${TEAM_CHARTER}`, '')
+    // Its first turn ended (it stored its cache facts), then the CLI dies.
+    await waitFor(async () => (await getSessionByClaudeId(own.sid))?.promptCache, 'first turn facts', 30_000)
+    await waitFor(async () => (await getSessionByClaudeId(own.sid))?.appliedAppendSystemPrompt === full, 'stored spawn prompt')
+    daemon.simulateDeath(own.sid, 0)
+    await new Promise((r) => setTimeout(r, 500))
+    const past = new Date(Date.now() - 2 * 3_600_000).toISOString()
+    await updateSessionRecord(own.sid, {
+      appliedAppendSystemPrompt: old,
+      promptCache: { tokens: 300_000, ttlMs: 3_600_000, requestAt: past, expiresAt: past },
+    })
+    await sendMessageToSession(own.sid, 'continue')
+    const resumed = await waitFor(() => startsFor(own.sid).find((s) => s.resume), 'resume start command', 30_000)
+    const { append } = promptsOf(resumed.args)
+    expect(append).toContain(TEAM_CHARTER)
+    expect(append).not.toBe(old)
+    await waitFor(async () => (await getSessionByClaudeId(own.sid))?.appliedAppendSystemPrompt === append, 'refreshed prompt stored')
+  }, 90_000)
 })
 
 describe('ACP engines', () => {

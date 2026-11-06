@@ -13668,6 +13668,32 @@ export class SessionRunner {
   }
 
   /**
+   * The prompt a resume spawn of this session runs on: the stored one it replays, or the
+   * current one when its cache expired and the stored one is behind (sessions/prompt-refresh.ts).
+   * The current one is stored BEFORE the spawn, so a line frozen meanwhile compares against what
+   * the new CLI holds and carries no notice of its own prompt. Never throws.
+   */
+  private async resumeSpawnPrompt(sessionId: string, stored: string | undefined): Promise<string | undefined> {
+    if (!stored) return stored
+    try {
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      if (!record || record.appliedAppendSystemPrompt !== stored) return stored
+      const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
+      const fresh = await freshResumePrompt(record)
+      if (!fresh) return stored
+      await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: fresh })
+      log.session.info('resume: runs on the current prompt (its cache expired and the stored one is behind)', {
+        sessionId, storedLength: stored.length, promptLength: fresh.length,
+      })
+      return fresh
+    } catch (err) {
+      log.session.warn('resume: prompt refresh failed, replaying the stored prompt', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      return stored
+    }
+  }
+
+  /**
    * End the in-place rewind pending window: the first completed turn after a
    * rewind proves the new branch exists in the transcript, so a plain --resume
    * now lands correctly — and re-sending --resume-session-at would CUT the new
@@ -13934,7 +13960,8 @@ export class SessionRunner {
     // Model/effort routes persist BEFORE applying their process-local control
     // requests. Re-read after the old process is stopped so changes made during
     // the restart window are applied to the replacement CLI.
-    const { model, effort, profile, lane, resumeSessionAt, appendSystemPrompt: resumePrompt } = await this.resolveResumeArgs(sessionId)
+    const { model, effort, profile, lane, resumeSessionAt, appendSystemPrompt: storedPrompt } = await this.resolveResumeArgs(sessionId)
+    const resumePrompt = await this.resumeSpawnPrompt(sessionId, storedPrompt)
     const refreshedRecord = await getSessionByClaudeId(sessionId)
     const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
@@ -14719,7 +14746,8 @@ export class SessionRunner {
           // fail (publickey denied) happens asynchronously. Removing the message before
           // that confirmation is what silently lost messages. See onSpawnSettled doc.
           const endsBefore = session.processEndCount
-          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, resolvedResumePrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
+          const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
+          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, spawnPrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err, line) => {
               if (ok) { this.settleResumeSuccess(sessionId, session, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
@@ -14772,7 +14800,8 @@ export class SessionRunner {
       // SSH/daemon deploy can fail AFTER send() returns. See onSpawnSettled doc on send().
       const settleTarget = targetSession
       const endsBefore = targetSession.processEndCount
-      targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, resolvedResumePrompt, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
+      const spawnPrompt = await this.resumeSpawnPrompt(sessionId, resolvedResumePrompt)
+      targetSession.send(combined, targetSession.cwd ?? undefined, sessionId, existingResumeMode, resolvedModel, spawnPrompt, resumeHost ?? undefined, resumeSshTarget, undefined, resumeConfig2.session?.permission_prompt, undefined, resumeConfig2.session?.stream_partial_messages, resolvedEffort,
         (ok, err, line) => {
           if (ok) { this.settleResumeSuccess(sessionId, settleTarget, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))

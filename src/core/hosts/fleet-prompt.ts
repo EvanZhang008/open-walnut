@@ -25,7 +25,9 @@ interface HostCaps { host: string; label: string; local: boolean; caps: HostCapa
 
 let refreshing = false
 function refreshInBackground(): void {
-  if (refreshing) return
+  // Off in tests that wipe their data home: a read nobody awaits opens the session store at any moment, and a test
+  // that wipes its data home meanwhile poisons that store for the rest of the file.
+  if (refreshing || process.env.WALNUT_FLEET_PROMPT_REFRESH === '0') return
   refreshing = true
   void import('./fleet.js').then((m) => m.listFleet({ days: 7 }))
     .catch((err) => log.web.debug('fleet prompt: background read failed', { error: String(err) }))

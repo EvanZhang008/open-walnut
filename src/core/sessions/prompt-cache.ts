@@ -67,6 +67,9 @@ export interface PromptCacheFacts {
   compactsAt?: number;
   /** Which of the two `compactsAt` is. */
   compactsAtSource?: CompactsAtSource;
+  /** Stored from a turn that did not end clean (an error, a stop, work still running): no idle
+   *  compaction is armed from it after a restart (idle-compaction.ts). */
+  unclean?: true;
 }
 
 /** 'auto-compact': the session's or host's auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW); 'model': the model's context window. */

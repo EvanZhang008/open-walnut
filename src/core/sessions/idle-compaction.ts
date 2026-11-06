@@ -231,8 +231,10 @@ export class IdleCompaction {
           noteQuietTurnSettled(d.sessionId);
           void this.noteQuietEnd(d.sessionId);
         }
-        if (d.teamActive || d.backgroundActive) return;
-        if (d.isError || d.interrupted) { this.cancel(d.sessionId, 'turn-not-clean'); return; }
+        // Not a clean end: no timer, but the facts are stored still, since the cache they describe is
+        // what a cold resume replays against (prompt-refresh.ts).
+        if (d.teamActive || d.backgroundActive) { void this.storeFacts(d.sessionId, false); return; }
+        if (d.isError || d.interrupted) { this.cancel(d.sessionId, 'turn-not-clean'); void this.storeFacts(d.sessionId, false); return; }
         void this.onTurnEnd(d.sessionId).catch((err) => log.session.warn('idle compaction: turn end failed', {
           sessionId: d.sessionId, error: err instanceof Error ? err.message : String(err),
         }));
@@ -320,12 +322,28 @@ export class IdleCompaction {
   /** A turn ended: store the facts the runner holds, and set the timer from them. */
   async onTurnEnd(sessionId: string): Promise<void> {
     this.held.delete(sessionId);
-    const facts = this.deps.live(sessionId).promptCache;
-    if (!facts) return;
-    const rec = await this.deps.getSession(sessionId);
-    if (!rec) return;
-    if (JSON.stringify(rec.promptCache) !== JSON.stringify(facts)) await this.deps.saveSession(sessionId, { promptCache: facts });
-    await this.schedule(sessionId, facts);
+    const facts = await this.storeFacts(sessionId, true);
+    if (facts) await this.schedule(sessionId, facts);
+  }
+
+  /**
+   * Store the facts the runner holds on the record; what was stored, or undefined. Never throws.
+   * A turn that did not end clean is marked, so a restart arms no compaction from it (`rebuild`).
+   */
+  private async storeFacts(sessionId: string, clean: boolean): Promise<PromptCacheFacts | undefined> {
+    try {
+      const live = this.deps.live(sessionId).promptCache;
+      if (!live) return undefined;
+      const { unclean: _, ...rest } = live;
+      const facts: PromptCacheFacts = clean ? rest : { ...rest, unclean: true };
+      const rec = await this.deps.getSession(sessionId);
+      if (!rec) return undefined;
+      if (JSON.stringify(rec.promptCache) !== JSON.stringify(facts)) await this.deps.saveSession(sessionId, { promptCache: facts });
+      return facts;
+    } catch (err) {
+      log.session.warn('idle compaction: facts not stored', { sessionId, error: err instanceof Error ? err.message : String(err) });
+      return undefined;
+    }
   }
 
   /** Set (or clear) the session's timer for these facts. */
@@ -441,7 +459,7 @@ export class IdleCompaction {
         if (ic.rowId) await this.takeBack(rec.claudeSessionId, ic.rowId, 'restart');
         await this.noteQuietEnd(rec.claudeSessionId);
       }
-      if (!rec.promptCache) continue;
+      if (!rec.promptCache || rec.promptCache.unclean) continue;
       await this.schedule(rec.claudeSessionId, rec.promptCache);
       if (this.timers.has(rec.claudeSessionId)) n++;
     }
@@ -457,7 +475,7 @@ export class IdleCompaction {
     for (const rec of await this.deps.listSessions()) {
       if (this.held.has(rec.claudeSessionId)) continue;
       const facts = this.deps.live(rec.claudeSessionId).promptCache ?? rec.promptCache;
-      if (!facts) continue;
+      if (!facts || facts.unclean) continue;
       const sent = rec.idleCompaction && Date.parse(rec.idleCompaction.sentAt) >= Date.parse(facts.requestAt);
       if (sent) continue;
       await this.schedule(rec.claudeSessionId, facts);

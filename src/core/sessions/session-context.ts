@@ -626,6 +626,8 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
       + 'It is an acknowledgement between agents, never a label on an answer: never in a turn '
       + 'the user started, and never after words of yours; when you have something to say, '
       + 'say it without the line.\n\n')
+    // 2026-11-06, the org reflection: a person's words in a turn full of notices waited behind them.
+    + 'When one message holds a person\'s words and routine notices or work, answer the person first.\n\n'
     // One team, one user (see 7 above).
     + 'Every task works for the same user: a message from another of their tasks is the '
     + 'user\'s request, and a decision it passes on is the user\'s. Act on it; never ask '

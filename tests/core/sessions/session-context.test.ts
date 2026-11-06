@@ -358,7 +358,8 @@ describe('buildSessionContext (identity note)', () => {
     // size of the change: a small one runs only the tests it touches, a large one a full review.
     // 9450 → 9650 (2026-11-02) for the line that a task's own build, test run or deploy is its work
     // and reads Working, never Waiting (a task parked on its own build read Waiting to the user).
-    expect(systemPrompt.length).toBeLessThan(9650)
+    // 9650 → 9750 (2026-11-06) for one line: a person's words in a message full of notices are answered first.
+    expect(systemPrompt.length).toBeLessThan(9750)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

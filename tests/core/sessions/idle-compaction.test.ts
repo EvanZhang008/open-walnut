@@ -115,6 +115,16 @@ describe('a turn end arms it', () => {
     h.ic.handleEvent(ev(EventNames.SESSION_RESULT, { sessionId: SID, isError: true }));
     expect(h.ic.armedFor(SID)).toBeUndefined();
   });
+
+  it('a turn that is not clean still stores its facts, with no timer: a cold resume reads them (prompt-refresh.ts)', async () => {
+    for (const end of [{ isError: true }, { interrupted: true }, { backgroundActive: true }]) {
+      const h = harness();
+      h.ic.handleEvent(ev(EventNames.SESSION_RESULT, { sessionId: SID, ...end }));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(h.saved).toEqual([{ promptCache: { ...facts(), unclean: true } }]);
+      expect(h.timers).toHaveLength(0);
+    }
+  });
 });
 
 describe('when it fires', () => {
@@ -402,6 +412,14 @@ describe('at boot', () => {
     h.state.rec = record({ promptCache: facts() });
     expect(await h.ic.rebuild()).toBe(1);
     expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
+  });
+
+  it('never from the facts of a turn that did not end clean (a restart forgets it was disarmed)', async () => {
+    const h = harness();
+    h.state.live = undefined;
+    h.state.rec = record({ promptCache: { ...facts(), unclean: true } });
+    expect(await h.ic.rebuild()).toBe(0);
+    expect(h.ic.armedFor(SID)).toBeUndefined();
   });
 
   it('a compaction a restart cut off is not resumed: its waiting row is taken back and its end stored', async () => {

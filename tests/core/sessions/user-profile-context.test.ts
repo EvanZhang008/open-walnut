@@ -10,6 +10,10 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-user-profile-context'))
+// Each session prompt starts a background fleet read (hosts/fleet-prompt.ts) that opens the session
+// store whenever it gets there; one landing while beforeEach wipes the data home failed that store's
+// open for the rest of this file (2026-11-06, 3 of 4 batch runs).
+process.env.WALNUT_FLEET_PROMPT_REFRESH = '0'
 import { WALNUT_HOME, USER_FILE } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
