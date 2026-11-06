@@ -36,8 +36,6 @@ function activate(row: HTMLElement | null, id: string) {
 interface ItemState {
   /** The open view. */
   value: string;
-  /** A view chip's number (Changed's file count), open or not. */
-  count: string | null;
   /** The real button's accessible name ("Find on Home" where the panel is not on Home). */
   label: string;
   /** The real button cannot be clicked (Fork on an engine without session forking), and why. */
@@ -47,20 +45,18 @@ interface ItemState {
 /** What the hidden item currently says about itself. */
 function stateOf(row: HTMLElement | null, id: string): ItemState {
   const el = itemOf(row, id);
-  const none: ItemState = { value: '', count: null, label: '', disabled: null };
+  const none: ItemState = { value: '', label: '', disabled: null };
   if (!el) return none;
   const button = el.matches('button, [role="button"]') ? el : el.querySelector<HTMLElement>('button, [role="button"]') ?? el;
   const disabled = button instanceof HTMLButtonElement && button.disabled ? (button.title || 'Unavailable') : null;
   const label = button.getAttribute('aria-label') ?? '';
-  // A view chip with a number (Changed's file count) keeps it in the menu, open or not.
-  const count = !id.startsWith(SLOT_ID_PREFIX) && /^\d/.test(button.dataset.headerValue ?? '') ? button.dataset.headerValue! : null;
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
   // A pinned plugin fact's row shows what the chip says, so hiding it costs nothing: its
   // `data-header-value` when it gives one (the time pill's exact "You 2h 46m · Agent 8h 26m"
   // behind its "2h" and "8h"), else its text.
   else if (id.startsWith(SLOT_ID_PREFIX)) value = (button.dataset.headerValue || button.textContent || '').replace(/\s+/g, ' ').trim();
-  return { value, count, label, disabled };
+  return { value, label, disabled };
 }
 
 /** The live state of one hidden item, re-read whenever the item changes. */
@@ -93,7 +89,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  // Changed folded in here keeps its number on the "···" chip (what the session changed, at a glance).
+  // Changed folded in here and open lights the "···" chip.
   const changed = useItemState(rowRef, 'changed');
   const placement = useMenuPlacement(open, buttonRef, menuRef, {
     align: 'left', preferSide: 'down', minHeight: 100, onAnchorLost: () => setOpen(false),
@@ -144,8 +140,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
   }
   const views = ids.filter((id) => TOOL_ITEMS[id]?.kind !== 'window');
   const windows = ids.filter((id) => TOOL_ITEMS[id]?.kind === 'window');
-  const changedCount = ids.includes('changed') ? changed.count : null;
-  const label = (id: string) => (id === 'changed' && changedCount ? `${nameOf(rowRef.current, id)} (${changedCount})` : nameOf(rowRef.current, id));
+  const label = (id: string) => nameOf(rowRef.current, id);
   return (
     <>
       <button
@@ -162,7 +157,6 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
         title={`More: ${ids.map(label).join(', ')}`}
       >
         <span aria-hidden="true">···</span>
-        {changedCount && <span className="session-chip-count" aria-hidden="true" data-testid="session-header-more-count">{changedCount}</span>}
       </button>
       {open && createPortal(
         <div
@@ -186,7 +180,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
 }
 
 function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLElement | null>; onChoose: (id: string) => void }) {
-  const { value, count, disabled } = useItemState(rowRef, id);
+  const { value, disabled } = useItemState(rowRef, id);
   const name = nameOf(rowRef.current, id);
   return (
     <button
@@ -203,7 +197,6 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
       data-state={value || undefined}
     >
       <span className="session-header-more-name">{name}</span>
-      {count && <span className="session-chip-count" data-testid={`session-header-more-item-${id}-count`}>{count}</span>}
       {value && <span className="session-header-more-value">{value}</span>}
     </button>
   );

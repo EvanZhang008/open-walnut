@@ -1604,11 +1604,11 @@ describe('a pending inbox email action ends when its spec says so', () => {
 })
 
 describe('the session panel Changed chip', () => {
-  // The Changed chip carries the count its tab lists ("Changed" then "3", and "0" when nothing
-  // changed), so its accessible name is never exactly "Changed". Three specs still found it by
-  // that exact name and timed out on CI (2026-11-04: fullscreen-is-the-tab,
-  // session-scroll-boundary, session-popout-interactive). Find it by its test id,
-  // `session-changed-chip`; a substring name (`name: 'Changed'` without exact) still matches.
+  // The Changed chip once carried the count its tab lists ("Changed" then "3"), so three specs
+  // that found it by the exact name "Changed" timed out on CI (2026-11-04: fullscreen-is-the-tab,
+  // session-scroll-boundary, session-popout-interactive). The count is gone (2026-11-05), but a
+  // spec still finds the chip by its test id, `session-changed-chip`, so a word added beside it
+  // never breaks them again; a substring name (`name: 'Changed'` without exact) still matches.
   const panelSource = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/sessions/SessionPanel.tsx'), 'utf8')
   const EXACT_NAME = /name:\s*(?:['"`]Changed['"`]\s*,\s*exact:\s*true|\/\^Changed\$\/)/
   // A list of tab names with Changed in it, each looked up by an exact name.
@@ -1621,9 +1621,19 @@ describe('the session panel Changed chip', () => {
     return out
   }
 
-  it('the chip still carries a count beside its word, under its test id', () => {
+  it('no count badge on Changed anywhere it is drawn: the header chip, "...", its menu, the phone', () => {
+    // 2026-11-05, the user of the "611" on the chip: "don't show". Every place that drew the
+    // count used the one badge class; a new place drawing it, or a count read into one of
+    // the session header's files, fails here.
     expect(panelSource).toContain('data-testid="session-changed-chip"')
-    expect(panelSource).toContain('session-chip-count')
+    const webRoot = path.resolve(__dirname, '../../web/src')
+    const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : /\.(tsx?|css)$/.test(e.name) ? [path.join(dir, e.name)] : [])
+    const badge = walk(webRoot).filter((f) => fs.readFileSync(f, 'utf8').includes('session-chip-count'))
+      .map((f) => path.relative(webRoot, f))
+    const header = ['SessionPanel.tsx', 'SessionHeaderMore.tsx', 'PhoneSessionHeaderRows.tsx', 'SessionMenuOpen.tsx']
+      .filter((f) => /compactCount|changedFiles/.test(fs.readFileSync(path.join(webRoot, 'components/sessions', f), 'utf8')))
+    expect({ badge, header }).toEqual({ badge: [], header: [] })
   })
 
   it('no spec finds the chip by the exact name "Changed"', () => {

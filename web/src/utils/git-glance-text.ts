@@ -109,8 +109,8 @@ export function gitGlanceTitle(glance: SessionGitGlance, s: GitGlanceSummary): s
   return lines.join('\n');
 }
 
-/** The Changed chip's tooltip: what its number counts, set against git's count
- *  (they differ: the chip counts the session's own edits, committed or not). */
+/** The Changed chip's tooltip: how many files the session changed, set against git's
+ *  count (they differ: the session's own edits count, committed or not). */
 export function changedChipTitle(glance: SessionGitGlance | null): string {
   const base = 'See the files this session changed, in a full-screen diff alongside the chat';
   if (!glance) return base;

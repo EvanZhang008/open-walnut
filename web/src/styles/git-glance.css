@@ -143,31 +143,6 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 .git-glance-line { overflow: hidden; vertical-align: top; }
 .git-glance-line.git-glance-fit-2 > .git-glance-lines { display: none; }
 
-/* The Changed chip's count: what the tab lists. */
-.session-chip-count {
-  animation: session-chip-count-in 160ms ease-out;
-  display: inline-block;
-  min-width: 14px;
-  padding: 0 4px;
-  border-radius: 7px;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font-size: 9.5px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-/* Room kept for the count before it is known, so the chips beside it never jump. */
-.session-chip-count.is-pending { visibility: hidden; animation: none; }
-.session-chip-count.is-zero { opacity: 0.55; }
-/* In a menu (the header's "..."), on the menu's own surface in both themes. */
-.task-kebab-item .session-chip-count { background: color-mix(in srgb, var(--accent, #2563eb) 16%, transparent); color: var(--fg); }
-.session-action-chip-active .session-chip-count {
-  background: color-mix(in srgb, currentColor 18%, transparent);
-  color: inherit;
-}
-
 .session-diff-gitstrip {
   display: flex;
   align-items: center;
@@ -201,11 +176,5 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   }
 }
 
-@keyframes session-chip-count-in { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .session-chip-count { animation: none; } }
-
-/* A menu row's count (the phone's session menu, Changed): beside its name. */
-.phone-session-row .session-chip-count { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 12px; line-height: 18px; }
-.task-kebab-item .session-chip-count + .session-header-more-value { margin-left: 6px; }
 /* The Changed toolbar's ↻ keeps its room while idle (SessionDiffView). */
 .session-diff-refreshing.is-idle { visibility: hidden; animation: none; }

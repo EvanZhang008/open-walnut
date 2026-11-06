@@ -2,12 +2,13 @@
  * A session's git state at a glance, read from a REAL repository by the
  * server's own git code (git-glance-fixture.ts):
  *   - task rows stay free of git status, even with uncommitted or unpushed work;
- *   - the session's Changed chip counts the files its tab lists, and the tab's
+ *   - the session's Changed chip shows no count anywhere it is drawn (2026-11-05,
+ *     the user: "don't show"), its tooltip says what the tab lists, and the tab's
  *     strip repeats the git state;
  *   - while the tab is open, an edit the session makes shows up by itself
- *     (no Re-scan click): the list, the strip and the chip's number follow.
+ *     (no Re-scan click): the list, the strip and the chip's tooltip follow.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { GIT_GLANCE_BRANCH, GIT_GLANCE_SESSION, GIT_GLANCE_TASK } from './git-glance-fixture'
@@ -49,7 +50,8 @@ test('a task with uncommitted files and an unpushed commit has no inline git pil
   await expect(row.getByTestId('git-glance-pill')).toHaveCount(0)
   const panel = await openPanel(page)
   const chip = panel.getByTestId('session-changed-chip')
-  await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 20_000 })
+  await expect(chip).toHaveAttribute('title', /This session changed 2 files/, { timeout: 20_000 })
+  await expect(chip).toHaveText('Changed')
   await expect(row.locator('.git-glance')).toHaveCount(0)
   await chip.click()
   await expect(panel.getByTestId('session-diff-gitstrip').locator('.git-glance-branch')).toHaveText(GIT_GLANCE_BRANCH)
@@ -57,12 +59,20 @@ test('a task with uncommitted files and an unpushed commit has no inline git pil
   await expect(row.locator('.git-glance')).toHaveCount(0)
 })
 
-test('the Changed chip counts what its tab lists, and the tab shows the git strip', async ({ page }) => {
+/** The chip's tooltip, once it names the session's own count. */
+const COUNTED = /This session changed (\d+) files?/
+async function tooltipCount(chip: Locator, timeout = 20_000): Promise<number> {
+  await expect(chip).toHaveAttribute('title', COUNTED, { timeout })
+  return Number(COUNTED.exec((await chip.getAttribute('title'))!)![1])
+}
+
+test('the Changed chip shows no count, in the header, in "..." and its menu; its tooltip says what the tab lists', async ({ page }) => {
   const panel = await openPanel(page)
   const chip = panel.getByTestId('session-changed-chip')
-  // The number is there before the tab is ever opened, and its tooltip says what it counts.
-  await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 20_000 })
-  expect(await chip.getAttribute('title')).toContain('This session changed 2 files. Its repo has 2 uncommitted files.')
+  // The tooltip has the number, before the tab is ever opened; the chip itself reads only "Changed".
+  await expect(chip).toHaveAttribute('title', /This session changed 2 files\. Its repo has 2 uncommitted files\./, { timeout: 20_000 })
+  await expect(chip).toHaveText('Changed')
+  await expect(chip.locator('.session-chip-count')).toHaveCount(0)
   await chip.click()
   const diff = panel.locator('.session-diff-view')
   await expect(diff).toBeVisible()
@@ -72,27 +82,37 @@ test('the Changed chip counts what its tab lists, and the tab shows the git stri
   await expect(strip.locator('.git-glance-branch')).toHaveText(GIT_GLANCE_BRANCH)
   await expect(strip.getByTestId('git-glance-files')).toHaveText('2 uncommitted files')
   await expect(strip.getByTestId('git-glance-ahead')).toHaveText('↑1 unpushed')
-  // The chip's number is the tab's own count, there whether the tab is open or not.
-  await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 15_000 })
+  // Open or not, the chip carries no number.
+  await expect(chip).toHaveText('Changed')
   await chip.click()
   await expect(diff).toBeHidden()
-  await expect(chip.getByTestId('session-changed-count')).toHaveText('2')
-  // A column too narrow for the chip folds it into "...": the number comes along.
-  await panel.evaluate((el) => { el.style.width = '250px'; el.style.maxWidth = '250px'; el.style.flex = 'none' })
-  await expect(panel.locator('[data-header-id="changed"][data-hidden="true"]')).toHaveCount(1, { timeout: 10_000 })
-  await expect(panel.getByTestId('session-header-more-count')).toHaveText('2')
-  expect(await panel.getByTestId('session-header-more-btn').getAttribute('title')).toContain('Changed (2)')
+  await expect(chip).toHaveText('Changed')
+  // A column too narrow for the chip folds it into "...": no number comes along. Changed is
+  // the second last chip to leave, so the column narrows until it has.
+  const folded = panel.locator('[data-header-id="changed"][data-hidden="true"]')
+  for (const width of [250, 220, 200, 180, 160]) {
+    await panel.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = `${w}px`; el.style.flex = 'none' }, width)
+    await page.waitForTimeout(300)
+    if (await folded.count()) break
+  }
+  await expect(folded).toHaveCount(1, { timeout: 10_000 })
   const more = panel.getByTestId('session-header-more-btn')
+  await expect(more).toHaveText('···')
+  const moreTitle = await more.getAttribute('title')
+  expect(moreTitle).toContain('Changed')
+  expect(moreTitle).not.toMatch(/Changed \(/)
   const menuRow = page.getByTestId('session-header-more-item-changed')
   await more.click()
-  await expect(menuRow.getByTestId('session-header-more-item-changed-count')).toHaveText('2')
-  // Opened from the menu, Changed keeps its number there and on "...", beside "Open".
+  await expect(menuRow).toHaveText('Changed')
+  // Opened from the menu, Changed reads "Open" there and lights "...", still with no number.
   await menuRow.click()
   await expect(panel.locator('[data-header-id="changed"].session-action-chip-active')).toHaveCount(1)
-  await expect(more.getByTestId('session-header-more-count')).toHaveText('2')
+  await expect(more).toHaveText('···')
+  await expect(more).toHaveClass(/session-action-chip-active/)
   await more.click()
-  await expect(menuRow.getByTestId('session-header-more-item-changed-count')).toHaveText('2')
   await expect(menuRow).toHaveAttribute('data-state', 'Open')
+  await expect(menuRow.locator('.session-header-more-name')).toHaveText('Changed')
+  await expect(menuRow.locator('.session-chip-count')).toHaveCount(0)
 })
 
 test('an open Changed tab follows the session as it edits, with no Re-scan', async ({ page }) => {
@@ -127,7 +147,7 @@ test('an open Changed tab follows the session as it edits, with no Re-scan', asy
   await expect(diff.locator('.session-diff-toolbar-title')).toContainText(`${before + 1} files changed`, { timeout: 60_000 })
   await expect(diff.locator('.session-diff-tree').getByText(name)).toBeVisible()
   await expect(diff.getByTestId('session-diff-gitstrip').getByTestId('git-glance-files')).toHaveText(`${before + 1} uncommitted files`)
-  await expect(chip.getByTestId('session-changed-count')).toHaveText(String(before + 1), { timeout: 15_000 })
+  await expect(chip).toHaveAttribute('title', new RegExp(`This session changed ${before + 1} files`), { timeout: 15_000 })
   // What the user was doing survived the re-read: the same file, the comment and its text.
   await expect(pane).toBeVisible()
   await expect(box).toHaveValue('half-typed note')
@@ -149,8 +169,8 @@ test('an open Changed tab follows the session as it edits, with no Re-scan', asy
   // An automatic re-read is quiet: no "re-scanning" spinner is left turning after it.
   await expect(diff.locator('.session-diff-refreshing:not(.is-idle)')).toHaveCount(0, { timeout: 15_000 })
 
-  // With the tab closed, the session writes one more file: the chip's number follows by itself.
-  const shown = Number(await chip.getByTestId('session-changed-count').innerText())
+  // With the tab closed, the session writes one more file: the chip's tooltip follows by itself.
+  const shown = await tooltipCount(chip)
   await pane.locator('.session-diff-comment-cancel').click()
   await chip.click()
   await expect(diff).toBeHidden()
@@ -161,7 +181,8 @@ test('an open Changed tab follows the session as it edits, with no Re-scan', asy
     type: 'assistant', sessionId: GIT_GLANCE_SESSION, timestamp: new Date().toISOString(),
     message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${name2}`, name: 'Write', input: { file_path: file2, content: 'export const closed = 1\n' } }] },
   }) + '\n')
-  await expect(chip.getByTestId('session-changed-count')).toHaveText(String(shown + 1), { timeout: 90_000 })
+  await expect(chip).toHaveAttribute('title', new RegExp(`This session changed ${shown + 1} files`), { timeout: 90_000 })
+  await expect(chip).toHaveText('Changed')
 })
 
 test('a comment started while the tab is still reading its list survives that read', async ({ page }) => {
@@ -169,7 +190,7 @@ test('a comment started while the tab is still reading its list survives that re
   const repo = await repoPath(page)
   const panel = await openPanel(page)
   const chip = panel.getByTestId('session-changed-chip')
-  await expect(chip.getByTestId('session-changed-count')).toBeVisible({ timeout: 20_000 })
+  await tooltipCount(chip)
   // The session writes just before the tab opens: the server's list is behind, so the
   // tab's first read paints what it had and polls for the new one.
   const name = `early-${Date.now()}.ts`

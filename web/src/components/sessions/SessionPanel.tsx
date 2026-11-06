@@ -44,7 +44,7 @@ import { SessionWebView, type WebViewRequest } from './SessionWebView';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { SessionChangedTab } from './SessionChangedTab';
 import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store';
-import { changedChipTitle, compactCount } from '@/utils/git-glance-text';
+import { changedChipTitle } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
@@ -1096,8 +1096,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Terminal tab. The host's own capability says so (its status frame), never
   // its alias; a host the server has not described yet keeps the tab.
   const terminalOffered = useHostStatus(session?.host)?.terminal !== false;
-  // An open panel asks first: its repos are re-read and its Changed count is
-  // computed ahead of the rows', so the chip has its number without the tab.
+  // An open panel asks first: its repos are re-read ahead of the rows', so the Changed
+  // chip's tooltip has the session's git state without the tab.
   useEffect(() => { if (sessionId) void sessionGitStore.refresh(sessionId); }, [sessionId]);
   const {
     unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
@@ -3482,32 +3482,10 @@ function InsetSessionPanel(props: SessionPanelProps) {
 }
 
 /**
- * The Changed chip with its count (this session's own changed files) and its git
- * tooltip. Its own component: a git reading re-renders the chip, not the panel
- * (whose header refits its row on every render).
+ * The Changed chip with its git tooltip, and no count on it (2026-11-05, the user of the
+ * "611" beside it: "don't show"). Its own component: a git reading re-renders the chip, not
+ * the panel (whose header refits its row on every render).
  */
-/** How many digits each session's Changed count had last time, so the room kept before
- *  the count lands is its width (a session of 42 files does not push Files over). */
-const COUNT_DIGITS_KEY = 'open-walnut-changed-count-digits';
-const COUNT_DIGITS_MAX = 200;
-function lastCountDigits(sessionId: string): number {
-  try {
-    const n = (JSON.parse(localStorage.getItem(COUNT_DIGITS_KEY) ?? '{}') as Record<string, number>)[sessionId];
-    return typeof n === 'number' && n >= 1 && n <= 4 ? n : 1;
-  } catch { return 1; }
-}
-function rememberCountDigits(sessionId: string, digits: number): void {
-  try {
-    const map = JSON.parse(localStorage.getItem(COUNT_DIGITS_KEY) ?? '{}') as Record<string, number>;
-    if (map[sessionId] === digits) return;
-    delete map[sessionId];
-    map[sessionId] = digits;
-    const ids = Object.keys(map);
-    for (const id of ids.slice(0, Math.max(0, ids.length - COUNT_DIGITS_MAX))) delete map[id];
-    localStorage.setItem(COUNT_DIGITS_KEY, JSON.stringify(map));
-  } catch { /* storage off: one digit's room */ }
-}
-
 const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onToggle }: {
   sessionId: string;
   active: boolean;
@@ -3515,10 +3493,6 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
   onToggle: (view: 'changed') => void;
 }) {
   const gitGlance = useSessionGitGlance(sessionId);
-  const changedFiles = gitGlance?.changedFiles ?? null;
-  const count = changedFiles ? compactCount(changedFiles) : null;
-  useEffect(() => { if (changedFiles !== null) rememberCountDigits(sessionId, (count ?? '0').length); }, [sessionId, changedFiles, count]);
-  const pendingText = useMemo(() => '0'.repeat(lastCountDigits(sessionId)), [sessionId]);
   return (
     <button
       className={`session-action-chip${active ? ' session-action-chip-active' : ''}`}
@@ -3527,14 +3501,8 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
       data-header-id="changed"
       data-hidden={hidden}
       data-testid="session-changed-chip"
-      data-header-value={count ?? undefined}
     >
       Changed
-      {count
-        ? <span className="session-chip-count" data-testid="session-changed-count">{count}</span>
-        // Nothing changed yet reads 0; not counted yet keeps that room (hidden), so the chip
-        // is one width from first paint to its count and Files and the rest stay put.
-        : <span className={`session-chip-count ${changedFiles === 0 ? 'is-zero' : 'is-pending'}`} aria-hidden={changedFiles === 0 ? undefined : true} data-testid={changedFiles === 0 ? 'session-changed-count' : undefined}>{changedFiles === 0 ? '0' : pendingText}</span>}
     </button>
   );
 });
