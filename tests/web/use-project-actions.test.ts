@@ -112,7 +112,7 @@ beforeEach(() => {
     tasks: [
       { id: 't1', project: 'Marina' },
       { id: 't2', project: 'marina' }, // identity is case-insensitive
-      { id: 't3', project: 'Harbour' },
+      { id: 't3', project: 'Lagoon' },
     ],
     patchTasksLocal,
   }
@@ -120,17 +120,17 @@ beforeEach(() => {
 
 describe('useProjectActions.rename', () => {
   it('reports a rejected rename instead of failing silently', async () => {
-    prompt.mockResolvedValue('Harbour')
-    renameProject.mockRejectedValue(new Error('project "Harbour" already exists'))
+    prompt.mockResolvedValue('Lagoon')
+    renameProject.mockRejectedValue(new Error('project "Lagoon" already exists'))
     const onChanged = vi.fn()
 
     await useProjectActions({ onChanged }).rename('Marina')
 
-    expect(renameProject).toHaveBeenCalledWith('Marina', 'Harbour')
+    expect(renameProject).toHaveBeenCalledWith('Marina', 'Lagoon')
     expect(alert).toHaveBeenCalledTimes(1)
     expect(alert.mock.calls[0][0]).toMatchObject({
       title: 'Rename failed',
-      message: 'project "Harbour" already exists',
+      message: 'project "Lagoon" already exists',
     })
     // A failed rename is not a change: a host that refreshed its registry copy
     // here would show the new name that never landed.
@@ -148,17 +148,17 @@ describe('useProjectActions.rename', () => {
   })
 
   it('reports the change once the server confirms it', async () => {
-    prompt.mockResolvedValue('  Harbour  ')
+    prompt.mockResolvedValue('  Lagoon  ')
     const onChanged = vi.fn()
     await useProjectActions({ onChanged }).rename('Marina')
     // Trimmed: the trailing space the user typed must not become the name.
-    expect(renameProject).toHaveBeenCalledWith('Marina', 'Harbour')
-    expect(onChanged).toHaveBeenCalledWith('rename', 'Marina', 'Harbour')
+    expect(renameProject).toHaveBeenCalledWith('Marina', 'Lagoon')
+    expect(onChanged).toHaveBeenCalledWith('rename', 'Marina', 'Lagoon')
     expect(alert).not.toHaveBeenCalled()
   })
 
   it('writes both shared stores BEFORE the request, then settles them with the verdict', async () => {
-    prompt.mockResolvedValue('Harbour')
+    prompt.mockResolvedValue('Lagoon')
 
     await useProjectActions({}).rename('Marina')
 
@@ -167,8 +167,8 @@ describe('useProjectActions.rename', () => {
     // The task rows are held as pending until the answer: a list read another
     // writer starts mid-rename must not draw them back under the old name.
     expect(order).toEqual([
-      'store-rename:Marina->Harbour',
-      'patch-tasks:t1=Harbour,t2=Harbour:pending',
+      'store-rename:Marina->Lagoon',
+      'patch-tasks:t1=Lagoon,t2=Lagoon:pending',
       'request-rename',
       'settle-rename:true',
       'settle-tasks',
@@ -179,7 +179,7 @@ describe('useProjectActions.rename', () => {
   })
 
   it('rolls both stores back when the rename is rejected', async () => {
-    prompt.mockResolvedValue('Harbour')
+    prompt.mockResolvedValue('Lagoon')
     renameProject.mockRejectedValue(new Error('nope'))
 
     await useProjectActions({}).rename('Marina')
@@ -197,13 +197,13 @@ describe('useProjectActions.rename', () => {
 
   it('works outside a task provider (a pop-out window has no store)', async () => {
     tasksStore = null
-    prompt.mockResolvedValue('Harbour')
+    prompt.mockResolvedValue('Lagoon')
 
     await useProjectActions({}).rename('Marina')
 
-    expect(renameProject).toHaveBeenCalledWith('Marina', 'Harbour')
+    expect(renameProject).toHaveBeenCalledWith('Marina', 'Lagoon')
     expect(patchTasksLocal).not.toHaveBeenCalled()
-    expect(order).toEqual(['store-rename:Marina->Harbour', 'request-rename', 'settle-rename:true'])
+    expect(order).toEqual(['store-rename:Marina->Lagoon', 'request-rename', 'settle-rename:true'])
   })
 })
 
