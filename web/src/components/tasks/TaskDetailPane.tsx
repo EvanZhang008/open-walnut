@@ -50,6 +50,7 @@ import { dateTags } from '../../../../src/core/tag-model';
 import { openTaskOnHome } from '@/utils/open-session';
 import { TaskFieldEditor } from './TaskFieldEditor';
 import { TaskDependencies, TaskDetailActions, TaskNoteAdd } from './TaskDetailEdits';
+import { StartQueueLine } from './StartQueueLine';
 import '@/styles/task-detail-pane.css';
 
 type Task = CoreTask & { has_description?: boolean; has_summary?: boolean; has_ext?: boolean; has_note?: boolean };
@@ -223,6 +224,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
       <div className="tdp-body">
         <div className="tdp-main">
           <TransferLinks task={task} onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else openTaskOnHome(id, navigate); }} className="tdp-transfer" />
+          <StartQueueLine task={task} onError={reportError} />
 
           {hasSessions && (
             <Section label="Session">

@@ -166,5 +166,6 @@ export const TURN_END_OBSERVERS: Readonly<Record<string, string>> = {
   'src/web/routes/quick-main-follow.ts': 'streams a quick ask\'s follow-up to the open request; the request has its own HTTP deadline',
   'src/core/sessions/turn-end-wait.ts': 'the shared wait itself',
   'src/core/user-status-sync.ts': 'derives the user status from the session\'s status on each change; waits for nothing',
+  'src/core/sessions/start-queue.ts': 'nudges the start queue when a session leaves its turn (a host slot may be free); waits for nothing, the drain asks each host again',
   'src/core/sessions/queue-after-turn.ts': 'releases the messages held for a turn\'s end; its sweep releases them once it finds the session idle (a crash, a reap, a restart), so no hold outlives its turn',
 };

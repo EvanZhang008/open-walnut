@@ -73,6 +73,29 @@ async function folderExistsOn(host: string | undefined, dir: string): Promise<bo
   }
 }
 
+/**
+ * An ancestor's recorded folder gives way to the session that creates the task when
+ * that session runs on another host (2026-11-05: a worker on clouddev created a review
+ * task; its lead's Mac folder came down the parent chain, the start took the Mac, and
+ * load placement sent it to another Mac without the brief the worker wrote on clouddev).
+ * The task's own folder, and a ready workspace, never give way; nor does a folder on the
+ * Mac for work that needs the Mac's tools (`macTools`), or a folder the task names a
+ * path in (`paths`): the work is about that folder's files.
+ */
+export async function ancestorFolderYields(
+  task: Chain, callerHost: string | undefined, defaultHost: string | undefined,
+  opts: { macTools?: boolean; paths?: readonly string[] } = {},
+): Promise<boolean> {
+  const { recordedPlace } = await import('./task-start.js');
+  const place = await recordedPlace(task);
+  if (!place || place.ownerId === task.id || place.host) return false;
+  const dir = place.cwd.replace(/\/+$/, '');
+  if (opts.paths?.some((p) => p === dir || p.startsWith(`${dir}/`))) return false;
+  const lives = await hostOfRecordedCwd(place.ownerId, place.cwd, defaultHost);
+  if (lives === normalizeHost(callerHost)) return false;
+  return !(opts.macTools && lives === '__local__');
+}
+
 /** Where a start that names no host runs from the record: the folder, and the host when the record names one (a ready workspace). */
 export async function unnamedStartPlace(task: Chain): Promise<{ cwd: string; host?: string } | undefined> {
   const { recordedPlace } = await import('./task-start.js');

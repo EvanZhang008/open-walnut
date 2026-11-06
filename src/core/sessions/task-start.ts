@@ -26,7 +26,7 @@ export interface SessionStartParams {
   mode?: string;
   /** Reasoning effort for the spawn (Claude Code's --effort). */
   effort?: SessionEffort;
-  /** The user's own words asking for this start: lifts the running-subtask brake to its higher ceiling (subtask-limits.ts). */
+  /** The user's own words asking for this start: it starts at once even on a full host (host-admission.ts). */
   userRequest?: string;
   /** "Create folder & start": make `cwd` on its host first (ensureCwd, as quick-start's createCwd). */
   createCwd?: boolean;
@@ -43,11 +43,21 @@ export interface SessionStartParams {
   /** Answer only once the session really started or failed (an engine switch must know the new id). */
   awaitStart?: boolean;
   /**
-   * A session's start over the running-subtask cap is queued (start-queue.ts) instead of
-   * refused. Set by the paths whose callers read a queued answer (the start route, a
-   * workspace's deferred start); an engine switch or a transfer needs the session now.
+   * How long the answer waits for the session to come up (default START_RESPONSE_BUDGET_MS): an
+   * agent's start answers once it really started or failed (2026-11-06, the user: a start is a
+   * sync call, "if it did not start, it must be an error").
    */
-  queueWhenFull?: boolean;
+  answerWithinMs?: number;
+  /** Walnut's own move of the task's work (an engine switch): never waits for a host slot. */
+  ownMove?: boolean;
+  /** A person's click through an automatic path (the Org page's Retry, Start now on a queued start): never waits. */
+  byPerson?: boolean;
+  /**
+   * The queued entry this start runs (its `at`): the start is recorded only while that entry is
+   * still queued, and takes it off the queue in the same write, so a cancel either comes first
+   * (nothing starts) or finds it already starting (review round 5, Sol).
+   */
+  queuedAt?: string;
 }
 
 /** Restart recovery holds this session's start: it sends its first line again by itself. */
@@ -86,16 +96,24 @@ export interface SessionStartResult {
   /** Where placement by load put this first start, and why (start-placement.ts). */
   placement?: import('./start-placement.js').StartPlacement;
   /**
-   * The start waits for a free slot under the running-subtask cap (start-queue.ts): its place
-   * in its parent's queue, the subtasks running now, and the cap. Walnut starts it by itself.
+   * The start waits for a free slot (host-admission.ts, start-queue.ts): its place in the
+   * queue, the host it will run on, and why it waits. Walnut starts it by itself.
    */
-  queued?: { position: number; running: string[]; cap: number };
+  queued?: { position: number; host: string; reason: string; running: string[]; cap?: number };
 }
 
 export class SessionExistsError extends QuickStartError {
   constructor(message: string, public existingSessionId: string) {
     super(message, 409);
     this.name = 'SessionExistsError';
+  }
+}
+
+/** A queued start the user cancelled while it was being placed: nothing started (start-queue.ts drops it quietly). */
+export class QueuedStartGoneError extends QuickStartError {
+  constructor(message: string) {
+    super(message, 409);
+    this.name = 'QueuedStartGoneError';
   }
 }
 
@@ -107,49 +125,26 @@ export function isTaskStarting(taskId: string): boolean {
   return pendingStarts.has(taskId);
 }
 
+/** How long a started session's slot stays held after its start settled (host-admission.ts). */
+const SLOT_HOLD_MS = 60_000;
+
 function alreadyStarted(task: Task, sid: string): SessionExistsError {
   return new SessionExistsError(
     `Task "${task.title}" is already started or starting. Continue with task_send {"to":"${task.id}","text":"..."}.`, sid);
 }
 
 /**
- * A worker session may run only so many subtasks at once (subtask-limits.ts).
- * Returns the admission's release, or throws SubtaskLimitError; the human's
- * starts and a Personal AI ask's (Main's included: it is born walnut_agent) are
- * never limited, a start quoting the user's words runs under the higher ceiling,
- * and a caller that cannot be
- * resolved is not either (fail open: the limit is a brake on runaway fan-out,
- * not an access check).
+ * `user_request` must be the user's own words: a token shorter than that is refused. It lets an
+ * automatic start go ahead on a full host (sessions/host-admission.ts), as a person's own start does.
  */
-export async function admitStartWithinLimits(task: Task, callerSid: string | undefined, userRequest?: string): Promise<() => void> {
-  const open = () => {};
-  if (!callerSid) return open;
-  const { resolveCallerPlacement } = await import('./caller-placement.js');
-  const caller = await resolveCallerPlacement(callerSid).catch(() => ({ kind: 'unknown' as const }));
-  if (caller.kind !== 'worker') return open;
-  const { admitSubtaskStart, MIN_USER_REQUEST_CHARS } = await import('./subtask-limits.js');
+export async function checkUserRequest(task: Task, callerSid: string | undefined, userRequest?: string): Promise<void> {
   const quoted = (userRequest ?? '').trim();
-  if (quoted && quoted.length < MIN_USER_REQUEST_CHARS) {
+  if (!quoted || !callerSid) return;
+  const { MIN_USER_REQUEST_CHARS } = await import('./subtask-limits.js');
+  if (quoted.length < MIN_USER_REQUEST_CHARS) {
     throw new QuickStartError(`user_request must quote the user's own words asking for this start (${MIN_USER_REQUEST_CHARS} characters or more)`, 400);
   }
-  // Whose cap: the task's own lead, whoever starts it. Counted on the starting session, any
-  // session could start another lead's queued subtask past that lead's cap (2026-11-05: a helper
-  // task started a lead's queued subtask with 18 of its 16 running). A task with no lead counts
-  // on the starter, a lead that is Main or an ask is never limited, as its own starts are not, and a
-  // transfer's new task takes its source's slot.
-  let lead: { id: string; title?: string } = caller.task;
-  if (task.parent_task_id && task.parent_task_id !== caller.task.id) {
-    const parent = await getTask(task.parent_task_id).catch(() => null);
-    if (parent) {
-      const { isAskPlacement } = await import('./caller-placement.js');
-      if (isAskPlacement(parent)) return open;
-      lead = parent;
-    }
-  }
-  if (quoted) {
-    log.session.info('subtask start as the user asked', { taskId: task.id, parentId: lead.id, callerSid, userRequest: quoted.slice(0, 300) });
-  }
-  return admitSubtaskStart(lead.id, task.id, lead.title, { userAsked: !!quoted, replacing: task.transferred_from });
+  log.session.info('start as the user asked', { taskId: task.id, callerSid, userRequest: quoted.slice(0, 300) });
 }
 
 /**
@@ -203,28 +198,39 @@ async function inheritedEngine(task: Task, params: SessionStartParams): Promise<
 }
 
 /**
- * Start a session for a task. A session's start over the running-subtask cap is queued instead
- * of refused (start-queue.ts) when the path asks for it (`queueWhenFull`), unless it IS the
- * queue's own replay; any other answer means the
- * task started (or is starting), so a start it had queued is dropped.
+ * Start a session for a task. An automatic start that no host has room for is an error to its
+ * caller, never a start left waiting (2026-11-06, the user: "if it did not start, it must be an
+ * error ... if it fails, it fails, and the VP gets the message directly and can fix it"). A start
+ * still in the old start queue (start-queue.ts) is dropped once the task started.
  */
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
   let result: SessionStartResult;
   try {
     result = await startSessionForTaskNow(params);
   } catch (err) {
-    const { SubtaskLimitError } = await import('./subtask-limits.js');
-    if (err instanceof SubtaskLimitError && err.code === 'too_many_running_subtasks' && err.detail
-      && params.queueWhenFull && params.callerSid && params.source !== 'start-queue') {
-      const { enqueueStart } = await import('./start-queue.js');
-      const queued = await enqueueStart(err.detail, params);
-      if (queued) return queued;
+    const { HostsFullError } = await import('./host-admission.js');
+    if (err instanceof HostsFullError) {
+      const d = err.detail;
+      const why = `${d.label ?? d.host} has no room (${d.reason})`;
+      // On the task, where task_get, the Board and its lead read it (review round 6: the reason
+      // reached only the caller, and the task sat in To do saying nothing).
+      await recordStartRefused(d.taskId, `Did not start: ${why}.`, d.host);
+      const where = d.placement ? ` ${d.placement.charAt(0).toUpperCase()}${d.placement.slice(1)}.` : '';
+      throw new HostsFullError(`Task ${d.taskId} did not start: ${why}.${where} Retry task_start with this id once one of your running `
+        + `tasks ends; when the user asked for it now, pass user_request with their words, which starts it at once.`, d);
     }
     throw err;
   }
   const { clearStartQueue } = await import('./start-queue.js');
   await clearStartQueue(result.taskId, 'started');
   return result;
+}
+
+/** A start no host had room for, as the task's last start (unless another start is under way). */
+async function recordStartRefused(taskId: string, error: string, host: string): Promise<void> {
+  await updateTaskRaw(taskId, (cur) => (cur.last_start?.state === 'starting' || pendingStarts.has(taskId) ? null : {
+    last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed' as const, error, host },
+  }), { source: 'task-start' }).catch(() => null);
 }
 
 async function startSessionForTaskNow(params: SessionStartParams): Promise<SessionStartResult> {
@@ -270,8 +276,8 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     if (made) return made;
   }
   if (willDeferStart(task, params)) {
-    // The brake holds for a start that waits too (a preparing subtask counts as running).
-    (await admitStartWithinLimits(task, params.callerSid, params.userRequest))();
+    // Its host's slot is taken when the workspace is ready and the start runs (manager.ts).
+    await checkUserRequest(task, params.callerSid, params.userRequest);
     const deferred = await deferTaskStart(task, params);
     if (deferred) return { ...deferred, applied: pendingApplied(params) };
   }
@@ -280,9 +286,13 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
   // Take the slot as soon as the task id is normalized; waiting on the disk or the runner must not allow a duplicate start.
   pendingStarts.set(task.id, sid ?? '');
   let releaseOnReturn = true;
-  let releaseAdmission = () => {};
+  // The start's host slot (host-admission.ts): `holdMs` keeps it counted that long after.
+  let releaseAdmission: (holdMs?: number) => void = () => {};
+  // A spawn whose confirmation timed out still runs on: its slot is held until it settles.
+  let spawnStill: Promise<unknown> | undefined;
+  let spawnFailed = false;
   try {
-    releaseAdmission = await admitStartWithinLimits(task, params.callerSid, params.userRequest);
+    await checkUserRequest(task, params.callerSid, params.userRequest);
     const records = await getSessionsForTask(task.id);
     const live = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status));
     const previous = records.find((s) => s.claudeSessionId === task.last_start?.session_id);
@@ -312,20 +322,24 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
     if (conversation) {
       if (params.startAttemptId) throw new QuickStartError('This task changed. Review the action again.', 409);
       refuseDifferentPlace(task, conversation, params);
+      // A conversation with no live session resumes into a new process: an automatic one takes a
+      // slot on its host like a first start, and fails when that host is full (review round 6, Sol).
+      let resumeSlot: ((holdMs?: number) => void) | undefined;
+      if (!LIVE_STATUSES.has(conversation.process_status)) {
+        const { admitHostStart, isAutomaticStart } = await import('./host-admission.js');
+        if (await isAutomaticStart(params)) resumeSlot = await admitHostStart(task.id, conversation.host, { automatic: true });
+      }
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
         callerSid: params.callerSid, source: params.source, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
         ...(params.handsOn ? { handsOn: params.handsOn } : {}),
-      });
+      }).then((r) => { resumeSlot?.(SLOT_HOLD_MS); return r; }, (e: unknown) => { resumeSlot?.(0); throw e; });
       return {
         taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true, applied: [],
         ...(sent.handedOn ? { handedOn: sent.handedOn } : {}), ...(sent.handOnRefused ? { handOnRefused: sent.handOnRefused } : {}),
       };
     }
-    const launch = await prepareLaunch(task, { ...params, engine });
-    // A first start that names no host goes where there is room (start-placement.ts).
-    const { placeStartByLoad } = await import('./start-placement.js');
-    const placement = await placeStartByLoad(task, params, launch, engine);
+    // The start's own checks first: nothing is placed or set up on a host for a start refused here.
     let callerSessionId: string | undefined;
     // Its task: what that task still owes is handed on with this start's request.
     let callerTaskId: string | undefined;
@@ -349,6 +363,35 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         }
       }
     }
+    const launch = await prepareLaunch(task, { ...params, engine });
+    // A first start that names no host goes where there is room (start-placement.ts).
+    // A slot on the host it runs on; an automatic start fails when that host is full (its caller
+    // reads why). A move takes its slot on the target before anything is set up there (review
+    // round 3: a refused start left a new clone behind on every try). Nothing waits here, so
+    // nothing holds the task while a person's own start goes at once (review round 5).
+    const { admitHostStart, isAutomaticStart, HostsFullError } = await import('./host-admission.js');
+    const automatic = await isAutomaticStart(params);
+    const slotOpts = { automatic };
+    let moveSlot: ((holdMs?: number) => void) | undefined;
+    const { placeStartByLoad } = await import('./start-placement.js');
+    const placement = await placeStartByLoad(task, params, launch, engine, {
+      admit: async (host) => (moveSlot = await admitHostStart(task.id, host, slotOpts)),
+    });
+    if (placement?.moved && moveSlot) releaseAdmission = moveSlot;
+    else {
+      moveSlot?.(0);
+      try {
+        releaseAdmission = await admitHostStart(task.id, launch.host, slotOpts);
+      } catch (err) {
+        // Why no other host took it, in placement's words (review round 6: the answer said every
+        // host was full when one had room but no checkout, or none was looked at).
+        if (err instanceof HostsFullError) {
+          err.detail.placement = placement && !placement.moved ? placement.reason
+            : 'Walnut did not look for another host: this start keeps its host (it names its host or folder, or what it needs is only there)';
+        }
+        throw err;
+      }
+    }
     const attempt: NonNullable<Task['last_start']> = {
       id: params.startAttemptId ?? randomUUID(), at: new Date().toISOString(), state: 'starting',
       session_id: sid, runtime_id: runtimeId, host: launch.host || '__local__', engine,
@@ -357,12 +400,20 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       const { validateInboxStartBoundary } = await import('../human-inbox/item-execution.js');
       await validateInboxStartBoundary(task.id, params.startAttemptId);
     }
-    const claimed = await withInboxStartAuthorization(task.id, params.startAttemptId, () => updateTaskRaw(task.id, { last_start: attempt }, {
+    const claimed = await withInboxStartAuthorization(task.id, params.startAttemptId, () => updateTaskRaw(task.id, {
+      last_start: attempt, ...(params.queuedAt ? { start_queue: null as never } : {}),
+    }, {
       source: 'task-start', shouldUpdate: (current) => current.last_start?.id === task.last_start?.id
+        && (!params.queuedAt || current.start_queue?.at === params.queuedAt)
         && (!params.startAttemptId || stableJson(current.last_start) === stableJson(task.last_start)
           && current.phase !== 'COMPLETE' && current.phase === task.phase && current.cwd === task.cwd && current.project === task.project),
     }));
-    if (!claimed.changed) throw new QuickStartError(`Task ${task.id} changed before its start could be recorded. Read task_get before retrying.`, 409);
+    if (!claimed.changed) {
+      if (params.queuedAt && !(await getTask(task.id).catch(() => null))?.start_queue) {
+        throw new QueuedStartGoneError(`Task ${task.id}'s queued start was cancelled before it began; nothing started.`);
+      }
+      throw new QuickStartError(`Task ${task.id} changed before its start could be recorded. Read task_get before retrying.`, 409);
+    }
     const settle = async (updates: Partial<NonNullable<Task['last_start']>>) => {
       try {
         await updateTaskRaw(task.id, { last_start: { ...attempt, ...updates } },
@@ -441,7 +492,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         const { pendingAppState } = await import('./app-state.js');
         const appState = firstMessage.trim() ? await pendingAppState(runtimeId, firstMessage, Date.now(), { taskId: task.id }) : null;
         if (appState) firstMessage = `${appState.text}\n\n${firstMessage}`;
-        const starting = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
+        const starting = spawnStill = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
           appState?.markTold(ready.claudeSessionId);
           await settle({ state: 'started', session_id: ready.claudeSessionId });
           return { ...result, sessionId: ready.claudeSessionId, started: true };
@@ -480,6 +531,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
           }
           return { ...result, sessionId: sid, started: false, starting: true };
         }
+        if (!uncertain) spawnFailed = true;
         await settle({ state: uncertain ? 'unconfirmed' : 'failed', error: message });
         if (seeded && sid) {
           await updateSessionRecord(sid, {
@@ -499,7 +551,23 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       } finally {
         delivered?.();
         pendingStarts.delete(task.id);
-        releaseAdmission();
+        // Review round 3 (Sol): a started session is counted by its record from now on, and its
+        // slot stays held a minute so a record not yet marked running is never counted as none;
+        // a failed spawn gives it back now; one whose answer timed out keeps it until the spawn
+        // settles (at most 10 minutes), as the process may still come up.
+        if (spawnFailed || !spawnStill) releaseAdmission(0);
+        else {
+          const release = releaseAdmission;
+          const cap = setTimeout(() => release(0), 10 * 60_000);
+          cap.unref?.();
+          // A spawn whose own answer was lost (the link dropped, the daemon's reply timed out)
+          // may still come up: it keeps the slot until the cap (review round 4, Sol).
+          void spawnStill.then(() => { clearTimeout(cap); release(SLOT_HOLD_MS); }, (e: unknown) => {
+            if (isDaemonCommandOutcomeUnknown(e)) return;
+            clearTimeout(cap);
+            release(0);
+          });
+        }
       }
     })();
     releaseOnReturn = false;
@@ -509,7 +577,7 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
       return await Promise.race([
         work,
         new Promise<SessionStartResult>((resolve) => {
-          timer = setTimeout(() => resolve({ ...result, starting: true }), START_RESPONSE_BUDGET_MS);
+          timer = setTimeout(() => resolve({ ...result, starting: true }), params.answerWithinMs ?? START_RESPONSE_BUDGET_MS);
         }),
       ]);
     } finally {
@@ -659,7 +727,7 @@ function pendingApplied(params: SessionStartParams): string[] {
 
 /**
  * task_start asking for an isolated workspace the task does not have yet: check
- * now everything the fresh start would check (the subtask brake, the task's one
+ * now everything the fresh start would check (the user's words, the task's one
  * session, a place a workspace can copy), then ask the host for it and leave the
  * start waiting in it. Null = the task already has a ready workspace or one on
  * the way, and the ordinary paths take the start.
@@ -683,7 +751,7 @@ async function startInNewWorkspace(
   if (place.createTaskDir) {
     throw new QuickStartError(`Task ${task.id} has no folder of its own for a workspace to copy (only its task directory): pass cwd (an existing folder, usually a repository).`, 400);
   }
-  (await admitStartWithinLimits(task, params.callerSid, params.userRequest))();
+  await checkUserRequest(task, params.callerSid, params.userRequest);
   const made = await requestTaskStartWorkspace(task, params, workspace, place);
   return made ? { ...made, applied: pendingApplied(params) } : null;
 }

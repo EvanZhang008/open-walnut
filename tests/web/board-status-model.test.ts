@@ -141,6 +141,15 @@ describe('waitingLine', () => {
     expect(waitingLine({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until: ago(-60) }, fmt)).toBe('Waiting until Mon 9:00');
     expect(waitingLine({ state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet' }, fmt)).toBe('Not started yet');
   });
+  it('a start that did not start, or an old queued one, reads whole on the row (2026-11-06, the VP)', () => {
+    for (const us of [
+      { state: 'waiting', kind: 'not-started', waitingOn: 'Did not start: clouddev has no room (all 24 slots taken).' },
+      { state: 'waiting', kind: 'machine', waitingOn: 'Queued by an older Walnut for room on clouddev (all 24 slots taken): Walnut tries it once more, then says why if it does not start' },
+    ] as UserStatus[]) {
+      expect(waitingLine(us, fmt)).toBe(us.waitingOn);
+      expect(waitingSentence(us)).toBe(us.waitingOn);
+    }
+  });
 });
 
 describe('a wait whose decision shows elsewhere names who or where first (sameAskLine)', () => {

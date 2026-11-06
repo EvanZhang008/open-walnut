@@ -34,7 +34,6 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
   last_words: 'drawn through user_status (its ask words)',
   needs_marked_at: 'drawn through user_status (a person\'s own Needs you)',
-  start_queue: 'not drawn (the start queue keeps it; task_get execution says queued)',
   ask_answered: 'drawn through user_status (an ask answered above leaves Needs you)',
   asks_answered: 'drawn through user_status, as ask_answered',
 };
@@ -58,6 +57,9 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     'wait_until',
   ];
   for (const k of scalarKeys) if (a[k] !== b[k]) return false;
+  // A start waiting for room on a host (start-queue.ts), written raw: the details show its line.
+  if ((a.start_queue?.at ?? null) !== (b.start_queue?.at ?? null) || a.start_queue?.host !== b.start_queue?.host
+    || a.start_queue?.reason !== b.start_queue?.reason) return false;
   // A host replica's mark on a row with a write still on its way to the Mac (WP10;
   // never on the Mac's own rows, where both sides lack it).
   if ((a as { replica_sync?: unknown }).replica_sync !== (b as { replica_sync?: unknown }).replica_sync) return false;

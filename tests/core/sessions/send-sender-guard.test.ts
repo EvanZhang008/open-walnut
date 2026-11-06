@@ -89,7 +89,7 @@ const CALL_SITES: Record<string, number> = {
   'src/web/routes/personal-ai-v1.ts': 1,
   // Walnut, a task or a script sends: framed unless an envelope already frames the text
   'src/core/boards/board-delivery.ts': 1,          // a due reminder is `board-reminder`; a user's thread message is theirs
-  'src/core/sessions/start-queue.ts': 1,           // a queued start replayed as `start-queue`, framed as the asking session's
+  'src/core/sessions/start-queue.ts': 3,           // a queued start run as `start-queue`, framed as the asking session's (the pass's, the user's Start now), and its failure told to the asker
   'src/core/hooks/actions.ts': 1,
   // The answer to a session's own approval request: one Walnut notice (walnut-notify).
   'src/core/approvals/tell-asker.ts': 1,
@@ -122,7 +122,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/machine-wake.ts': 1,
   'src/core/sessions/needs-recheck.ts': 1,
   'src/core/sessions/promise-alarm.ts': 1,
-  'src/core/sessions/session-request-notify.ts': 3,
+  'src/core/sessions/session-request-notify.ts': 4, // and the 10-minute silent-target notice (remindSilent)
   'src/core/sessions/session-send-core.ts': 5,
   'src/core/sessions/status-push.ts': 1,
   'src/core/sessions/subtask-notices.ts': 1,

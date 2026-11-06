@@ -1,53 +1,29 @@
 /**
- * Server-side brakes on how far one session can multiply itself through Walnut
- * tasks: how DEEP a chain of subtasks may go, and how many of one task's
- * subtasks may run at once.
+ * The server-side brake on how far one session can multiply itself through Walnut
+ * tasks: how DEEP a chain of subtasks may go.
  *
  * Why in the server and not the prompt: a prompt line is one routine edit away
  * from deletion, and a session that files subtasks which file subtasks has no
- * natural stop. These limits are what still holds when the prompt's advice is
- * ignored. A start over the running limit is queued, not refused, for a session
- * caller (start-queue.ts): a lead whose job is to delegate must never read a full
- * slot as "do it yourself".
+ * natural stop. This limit is what still holds when the prompt's advice is ignored.
  *
- * Scope: only work a SESSION creates or starts (a caller id rides the request).
- * The human's own creates and starts, from the board, the phone or the CLI, are
- * never limited, and a Personal AI ask is exempt from the running limit because
- * the user asking it IS the request (see caller-placement.ts for the same split).
- * Main is an ask (born walnut_agent), so it is not limited either. A worker's
- * start the user asked for runs under the higher MAX_RUNNING_SUBTASKS_USER_ASKED.
+ * How many run at once is no longer a lead's limit (2026-11-05, the user: "remove this
+ * we don't want this limitation, it is more like not per vp, like per host can handle x
+ * amount"): each host has its own slots for automatic starts (host-admission.ts), and a
+ * start past them waits in the start queue (start-queue.ts).
  */
 
 import type { Task } from '../types.js';
 
 /** Levels below a top-level task. A top-level task is depth 0; its subtask 1. */
 export const MAX_SUBTASK_DEPTH = 3;
-/** Subtasks of one task that may run (IN_PROGRESS or starting) at once. */
-export const MAX_RUNNING_SUBTASKS = 8;
-/**
- * The ceiling for a start the user asked for (a session quoting the user's words
- * in `user_request`): such a start goes ahead of the brake above, and this one
- * still holds, so an agent that loops on the claim stops here instead of at
- * nothing (2026-10-27: a start the user asked for "now" could only wait behind
- * eight running workers of its lead).
- */
-export const MAX_RUNNING_SUBTASKS_USER_ASKED = 16;
 /** A user_request shorter than this is not the user's words, it is a token. */
 export const MIN_USER_REQUEST_CHARS = 10;
 
-export type SubtaskLimitCode = 'subtask_too_deep' | 'too_many_running_subtasks';
-
-/** What a running-cap refusal was about: the start queue (start-queue.ts) records it from this. */
-export interface RunningCapDetail {
-  parentId: string;
-  taskId: string;
-  running: string[];
-  cap: number;
-}
+export type SubtaskLimitCode = 'subtask_too_deep';
 
 export class SubtaskLimitError extends Error {
   readonly statusCode = 409;
-  constructor(readonly code: SubtaskLimitCode, message: string, readonly detail?: RunningCapDetail) {
+  constructor(readonly code: SubtaskLimitCode, message: string) {
     super(message);
     this.name = 'SubtaskLimitError';
   }
@@ -157,75 +133,4 @@ export async function assertAdoptionDepth(
     `Refused: ${parent} is a subtask ${depth} level${depth === 1 ? '' : 's'} deep, so ${task}${below} would reach `
     + `${deepest} levels down, and subtasks go at most ${MAX_SUBTASK_DEPTH} levels. Leave it where it is and `
     + 'talk to it with task_send, or ask the task that started you to adopt it.');
-}
-
-/** Starts that passed the running check and have not settled yet, per parent. */
-const admitted = new Map<string, Set<string>>();
-/** One admission at a time per parent: see admitSubtaskStart. */
-const admissionLocks = new Map<string, Promise<void>>();
-
-/**
- * Admit one start under `parentId`, or throw when the maximum number of its
- * subtasks is already running. Returns the release to call once the start has
- * settled (spawned or failed); until then the start counts as running.
- *
- * Serialized per parent: Claude Code runs a turn's tool calls in parallel, so a
- * worker can fire ten task_create calls at once, and a check that only reads the
- * board would let all ten through before any is IN_PROGRESS. Inside the lock a
- * start counts every sibling that is IN_PROGRESS or already admitted; one that
- * merely entered its own start first does not, so two racing starts at the
- * limit admit exactly one. `startingTaskId` never counts against itself (a
- * restart of a running child is refused elsewhere, as already started).
- * Releasing when the start settles leaves no gap: the runner writes the child's
- * IN_PROGRESS before it confirms the spawn.
- */
-export async function admitSubtaskStart(
-  parentId: string, startingTaskId: string, parentTitle?: string, opts: { userAsked?: boolean; replacing?: string } = {},
-): Promise<() => void> {
-  let unlock!: () => void;
-  const mine = new Promise<void>((resolve) => { unlock = resolve; });
-  const previous = admissionLocks.get(parentId) ?? Promise.resolve();
-  const tail = previous.then(() => mine);
-  admissionLocks.set(parentId, tail);
-  await previous;
-  try {
-    // A board that cannot be read admits the start (fail open, like an unknown caller).
-    const children = await import('../task-manager.js')
-      .then((m) => m.getChildTasks(parentId)).catch(() => [] as Task[]);
-    const starting = admitted.get(parentId) ?? new Set<string>();
-    // A start waiting for its isolated workspace is a start on the way (core/workspaces).
-    const preparing = (c: Task) => c.workspace?.state === 'creating' && !!c.workspace.pending_start;
-    // A transfer's new task takes its source's place (`replacing`): one for one, no new slot.
-    const running = children.filter((c) => c.id !== startingTaskId && c.id !== opts.replacing
-      && (c.phase === 'IN_PROGRESS' || starting.has(c.id) || preparing(c)));
-    const cap = opts.userAsked ? MAX_RUNNING_SUBTASKS_USER_ASKED : MAX_RUNNING_SUBTASKS;
-    if (running.length >= cap) {
-      const name = parentTitle ? `"${parentTitle}"` : parentId;
-      const ids = running.slice(0, cap).map((c) => c.id);
-      // A session's start never reaches the caller as this refusal: the start queue takes it
-      // (start-queue.ts) and starts it once a slot frees. It still reads plainly for the
-      // queue's own start and for a server path that does not queue.
-      const ask = opts.userAsked
-        ? ` Even a start the user asked for stops at ${cap}; tell the user which running one to stop (task_stop) first.`
-        : ' When the user asked for this start now, user_request quoting their words'
-          + ` lets up to ${MAX_RUNNING_SUBTASKS_USER_ASKED} run.`;
-      throw new SubtaskLimitError('too_many_running_subtasks',
-        `Not started: ${running.length} subtasks of ${name} are already running, and at most ${cap} run at `
-        + `once (walnut wait ${ids.slice(0, 3).join(' ')} --any shows when one stops; a task_start or task_create `
-        + `from a session queues instead, and Walnut starts it then).${ask} Running: ${ids.join(', ')}.`,
-        { parentId, taskId: startingTaskId, running: ids, cap });
-    }
-    starting.add(startingTaskId);
-    admitted.set(parentId, starting);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      starting.delete(startingTaskId);
-      if (starting.size === 0 && admitted.get(parentId) === starting) admitted.delete(parentId);
-    };
-  } finally {
-    unlock();
-    if (admissionLocks.get(parentId) === tail) admissionLocks.delete(parentId);
-  }
 }

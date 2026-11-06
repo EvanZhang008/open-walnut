@@ -347,3 +347,32 @@
 .tdp-doc .notes-editor-panel.notes-width-normal .ProseMirror { max-width: none; }
 /* No scroll-past-end zone (notes-editor.css gives the page editor 40vh under the last line). */
 .tdp-doc .notes-editor .ProseMirror::after { display: none; }
+
+/* A start waiting in the start queue for a host slot (StartQueueLine.tsx). */
+.tdp-start-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 13px;
+}
+.tdp-start-queue-label { font-weight: 600; }
+.tdp-start-queue-text { flex: 1 1 240px; color: var(--fg-muted); }
+.tdp-start-queue-actions { display: inline-flex; gap: 6px; }
+.tdp-start-queue-btn {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.tdp-start-queue-now { font-weight: 600; }
+.tdp-start-queue-btn:disabled { opacity: 0.5; cursor: default; }

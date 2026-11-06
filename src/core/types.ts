@@ -707,10 +707,14 @@ export function resolveModelSwitchValue(raw: string): string | null {
 /** A queued start (Task.start_queue, src/core/sessions/start-queue.ts). */
 export interface StartQueueEntry {
   at: string;
-  /** The task whose running subtasks this start waits behind (the caller's task). */
+  /** The task that asked for the start (the caller session's task). */
   parent_id: string;
   /** The session that asked for the start: the replay runs as its start. */
   caller_sid: string;
+  /** The host it waits for now ('__local__' = this Mac); placed again when it starts, it may run on another with room. Older entries have none. */
+  host?: string;
+  /** Why that host has no room, in words that stay the same while it waits ("all 24 slots taken"). */
+  reason?: string;
   /** The start as asked (SessionStartParams fields, minus the task and the caller). */
   params: {
     message?: string;
@@ -968,10 +972,10 @@ export interface Task {
    *  start and offer Retry. Cleared once the node has a session. Payload blob, local-only; an
    *  older Walnut ignores it. */
   org_start?: { state: 'starting' | 'failed'; at: string; error?: string; attempts?: number };
-  /** A session's start of this task that waits for a free slot under the running-subtask cap
-   *  (src/core/sessions/start-queue.ts): when it was queued, the task whose running subtasks
-   *  it waits behind, the session that asked, and the start as asked, so Walnut replays it by
-   *  itself once one of them stops running. Cleared by any start of the task; null clears it.
+  /** An automatic start of this task that waits for a free slot on a host
+   *  (src/core/sessions/start-queue.ts): when it was queued, the task and session that asked,
+   *  the host it would run on and why it waits, and the start as asked, so Walnut replays it by
+   *  itself once a host that can run it has room. Cleared by any start of the task; null clears it.
    *  Payload blob, local-only, never pushed to sync backends; an older Walnut ignores it. */
   start_queue?: StartQueueEntry | null;
   /** The Org nodes this task is pinned to (src/core/org/org-pins.ts): the user's focus on that node,

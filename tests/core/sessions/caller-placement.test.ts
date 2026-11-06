@@ -375,6 +375,48 @@ describe('against the real store', () => {
     expect(await inheritedLaunchPair(sid, sibling)).toBeUndefined()
   })
 
+  it('2026-11-05: a worker on another host hands on its place over its lead\'s folder on the Mac', async () => {
+    // The lead's folder came down the parent chain, so the review task a clouddev worker
+    // created started on the Mac, and load placement sent it to a Mac without its brief.
+    const { updateConfig } = await import('../../../src/core/config-manager.js')
+    await updateConfig({ hosts: { clouddev: { hostname: 'clouddev', enabled: true } } } as never)
+    const { resolveTaskLaunchReadOnly } = await import('../../../src/core/sessions/task-launch-plan.js')
+    const { task: lead } = await addTask({ title: 'Lead', project: 'marina' })
+    await updateTask(lead.id, { cwd: '/Users/me/marina' })
+    const { task: worker } = await addTask({ title: 'Worker', project: 'marina', parent_task_id: lead.id } as Parameters<typeof addTask>[0])
+    const workerCwd = '/home/me/.local/state/open-walnut/tasks/w-1/marina'
+    await createSessionRecord('sid-cloud-worker', worker.id, 'marina', workerCwd, { title: 'Worker', host: 'clouddev' })
+    const { task: review } = await addTask({ title: 'Review', project: 'marina', parent_task_id: worker.id } as Parameters<typeof addTask>[0])
+    const plan = (callerSid?: string) => resolveTaskLaunchReadOnly(review, { taskIdPrefix: review.id, source: 'test', expectReply: false, ...(callerSid ? { callerSid } : {}) })
+    expect(await plan('sid-cloud-worker')).toMatchObject({ host: 'clouddev', cwd: workerCwd })
+    // No caller, or a caller on the lead's own host: the lead's folder, as before.
+    expect((await plan()).host || '').toBe('')
+    expect((await plan()).cwd).toBe('/Users/me/marina')
+    const { task: macWorker } = await addTask({ title: 'Mac worker', project: 'marina', parent_task_id: lead.id } as Parameters<typeof addTask>[0])
+    await createSessionRecord('sid-mac-worker', macWorker.id, 'marina', '/Users/me/marina-wt', { title: 'Mac worker' })
+    expect(await plan('sid-mac-worker')).toMatchObject({ cwd: '/Users/me/marina' })
+    expect((await plan('sid-mac-worker')).host || '').toBe('')
+    // Mac-only work keeps the lead's Mac folder (review round 1).
+    const { task: ios } = await addTask({ title: 'Run the iOS build on the simulator', project: 'marina', parent_task_id: worker.id } as Parameters<typeof addTask>[0])
+    const iosPlan = await resolveTaskLaunchReadOnly(ios, { taskIdPrefix: ios.id, source: 'test', expectReply: false, callerSid: 'sid-cloud-worker' })
+    expect([iosPlan.host || '', iosPlan.cwd]).toEqual(['', '/Users/me/marina'])
+    // Plain words about the Mac are no Mac tools: it still yields (review round 2).
+    const { task: lands } = await addTask({ title: 'Review the change', description: 'The change lands on the Mac and runs in WebKit.', project: 'marina', parent_task_id: worker.id } as Parameters<typeof addTask>[0])
+    expect(await resolveTaskLaunchReadOnly(lands, { taskIdPrefix: lands.id, source: 'test', expectReply: false, callerSid: 'sid-cloud-worker' })).toMatchObject({ host: 'clouddev', cwd: workerCwd })
+    // A task about a file in the lead's folder keeps that folder.
+    const { task: cfgFix } = await addTask({ title: 'Fix the config', description: 'Inspect /Users/me/marina/config/x.yaml and fix it.', project: 'marina', parent_task_id: worker.id } as Parameters<typeof addTask>[0])
+    const cfgPlan = await resolveTaskLaunchReadOnly(cfgFix, { taskIdPrefix: cfgFix.id, source: 'test', expectReply: false, callerSid: 'sid-cloud-worker' })
+    expect([cfgPlan.host || '', cfgPlan.cwd]).toEqual(['', '/Users/me/marina'])
+    // So does one that names it as ./ (read against the lead's folder before it would give way; review round 5, Sol).
+    const { task: rel } = await addTask({ title: 'Fix the local config', description: 'Read ./config.local.yaml and fix it.', project: 'marina', parent_task_id: worker.id } as Parameters<typeof addTask>[0])
+    const relPlan = await resolveTaskLaunchReadOnly(rel, { taskIdPrefix: rel.id, source: 'test', expectReply: false, callerSid: 'sid-cloud-worker' })
+    expect([relPlan.host || '', relPlan.cwd]).toEqual(['', '/Users/me/marina'])
+    // The task's own folder never gives way.
+    await updateTask(review.id, { cwd: '/Users/me/own' })
+    const own = await resolveTaskLaunchReadOnly(await getTask(review.id), { taskIdPrefix: review.id, source: 'test', expectReply: false, callerSid: 'sid-cloud-worker' })
+    expect([own.host || '', own.cwd]).toEqual(['', '/Users/me/own'])
+  })
+
   it('makes one folder holding the caller and the new task, then refines its label', async () => {
     const { task: me } = await seedCaller()
     const { task: born } = await addTask({ title: 'Fix the flake', project: 'marina' })

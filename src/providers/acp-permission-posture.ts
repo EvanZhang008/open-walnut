@@ -300,3 +300,14 @@ export function shellWords(text: string): string[] | null {
   if (inWord) words.push(cur)
   return words
 }
+
+/**
+ * A Claude Code tool use that is Walnut's own (claude-code-session.ts answers it in
+ * every mode): Bash running the Walnut CLI in an answered shape, or one of Walnut's
+ * MCP tools (`mcp__walnut__<op>`) for an answered op.
+ */
+export function isWalnutOwnToolUse(toolName: string | undefined, input: Record<string, unknown> | undefined): boolean {
+  if (toolName === 'Bash') return typeof input?.command === 'string' && isWalnutCliCommand(input.command)
+  const m = typeof toolName === 'string' ? /^mcp__walnut__([A-Za-z0-9_-]+)$/.exec(toolName) : null
+  return !!m && walnutOpAnswered(m[1])
+}

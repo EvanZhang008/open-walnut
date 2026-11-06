@@ -1,11 +1,11 @@
 /**
  * The start queue's pure rules (core/sessions/start-queue.ts) and a guard on its words.
  *
- * Why the guard: 2026-11-03 a VP at the running-subtask cap read "do this part with your own
- * tools" in the refusal and did the work itself. A full slot means "queued"; no refusal of the
- * cap and no queued answer may tell the caller to do the work itself. The guard scans every
- * place in src/ that throws the cap's refusal or catches it, plus the queue module, so a NEW
- * site with those words fails too.
+ * Why the guard: 2026-11-03 a VP at a full slot read "do this part with your own tools" in
+ * the refusal and did the work itself. A full slot means "queued"; no refusal of a full host
+ * and no queued answer may tell the caller to do the work itself. The guard scans every place
+ * in src/ that throws the full-host refusal or catches an older server's cap, plus the queue
+ * and admission modules, so a NEW site with those words fails too.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -55,14 +55,23 @@ describe('team stop hold', () => {
 
 describe('words: a full slot never says "do it yourself"', () => {
   it('the op\'s queued answer', () => {
-    for (const q of [{ position: 1, running: ['a', 'b'], cap: 8 }, { position: 3, running: [], cap: 16 }, {}]) {
+    for (const q of [
+      { position: 2, host: 'clouddev', reason: 'all 24 slots taken', running: ['a'], cap: 24 },
+      { position: 1, host: '__local__', reason: 'load past 6 per CPU', running: [] },
+      // An older server's answer (2026-11-03 to 11-05): its running subtasks against its cap.
+      { position: 1, running: ['a', 'b'], cap: 8 }, {},
+    ]) {
       const [outcome, next] = queuedOutcome('t1', q)
       expect(outcome).toContain('queued')
       expect(`${outcome} ${next}`).not.toMatch(DO_IT_YOURSELF)
     }
+    const [outcome, next] = queuedOutcome('t1', { position: 2, host: '__local__', reason: 'all 7 slots taken', running: [], cap: 7 })
+    expect(outcome).toBe('Task t1 is queued (number 2 in its host\'s queue): this Mac has no room (all 7 slots taken). Walnut starts it '
+      + 'by itself as soon as a host that can run it has room, highest priority first.')
+    expect(next).toMatch(/waiting_for and waits_for_host/)
   })
 
-  it('every site in src/ that throws or catches the running-cap refusal, and the queue module', () => {
+  it('every site in src/ that throws the full-host refusal or catches an older cap, and the queue and admission modules', () => {
     const root = path.resolve(__dirname, '../../../src')
     const files: string[] = []
     const walk = (dir: string) => {
@@ -74,12 +83,12 @@ describe('words: a full slot never says "do it yourself"', () => {
     }
     walk(root)
     const code = (line: string) => !/^\s*(\/\/|\*|\/\*)/.test(line)
-    const site = /SubtaskLimitError\(\s*'too_many_running_subtasks'|includes\('\(too_many_running_subtasks\)'\)/
+    const site = /new HostsFullError\(|includes\('\(too_many_running_subtasks\)'\)/
     let sites = 0
     for (const file of files) {
       const lines = fs.readFileSync(file, 'utf8').split('\n')
       const rel = path.relative(root, file)
-      if (rel === path.join('core', 'sessions', 'start-queue.ts')) {
+      if (rel === path.join('core', 'sessions', 'start-queue.ts') || rel === path.join('core', 'sessions', 'host-admission.ts')) {
         for (const [i, l] of lines.entries()) if (code(l)) expect(l, `${rel}:${i + 1}`).not.toMatch(DO_IT_YOURSELF)
         continue
       }
@@ -92,7 +101,8 @@ describe('words: a full slot never says "do it yourself"', () => {
         }
       })
     }
-    // subtask-limits.ts throws it; ops/tasks.ts catches an older server's.
-    expect(sites).toBeGreaterThanOrEqual(2)
+    // host-admission.ts throws it (scanned whole above); ops/tasks.ts catches an older server's cap.
+    expect(sites).toBeGreaterThanOrEqual(1)
+    expect(fs.readFileSync(path.join(root, 'core', 'sessions', 'host-admission.ts'), 'utf8')).toMatch(/new HostsFullError\(/)
   })
 })

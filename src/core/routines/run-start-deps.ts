@@ -40,6 +40,12 @@ export interface RunStartDeps {
 }
 
 const LOCAL = '__local__';
+/** Routine runs waiting for room on their host, by routine (its task, or its source, folder and instructions: a title may carry the time). */
+const waitingRuns = new Set<string>();
+/** How long a run waits for room on its host: well inside a trigger's delivery (2 minutes). */
+export const ROUTINE_WAIT_MS = 60_000;
+/** How long a started run's slot stays counted, as a task start's (task-start.ts). */
+const SLOT_HOLD_MS = 60_000;
 
 export function defaultRunStartDeps(): RunStartDeps {
   return {
@@ -57,23 +63,50 @@ export function defaultRunStartDeps(): RunStartDeps {
     },
     async launch(launch, opts) {
       const { quickStartSession, continuedSessionOf } = await import('../sessions/quick-start.js');
-      const task = await quickStartSession({
-        message: launch.message,
-        cwd: launch.cwd,
-        host: launch.host,
-        model: launch.model,
-        ...(launch.taskTitle ? { taskTitle: launch.taskTitle } : {}),
-        // Background automation: an explicit null keeps every run off the pinned board.
-        taskMeta: { pinTier: null },
-        ...(launch.project ? { project: launch.project } : {}),
-        source: launch.source,
-        ...(launch.walnutAgent ? { walnutAgent: true } : {}),
-        ...(launch.agentId ? { agentId: launch.agentId } : {}),
-        ...(opts.preassignedSessionId ? { preassignedSessionId: opts.preassignedSessionId } : {}),
-        ...(opts.existingTaskId ? { existingTaskId: opts.existingTaskId } : {}),
-      });
-      const continued = continuedSessionOf(task);
-      return { task, ...(continued ? { continued } : {}) };
+      // A routine's run is an automatic start: it waits for a free slot on its host
+      // (sessions/host-admission.ts), asking again every 15 s for up to ROUTINE_WAIT_MS, inside
+      // a trigger's 2-minute delivery (cron/trigger-apply.ts), so no wait outlives its delivery:
+      // a fire that found no room fails retryable and the daemon delivers it again later (review
+      // round 5, Sol). One run of a routine waits at a time: a fire meanwhile is refused the same way.
+      const { admitHostStart, holdSlotFor } = await import('../sessions/host-admission.js');
+      const host = launch.host && launch.host !== LOCAL ? launch.host : LOCAL;
+      const key = opts.existingTaskId ?? `${launch.source ?? ''}|${launch.cwd ?? ''}|${launch.message.slice(0, 200)}`;
+      if (waitingRuns.has(key)) {
+        throw new Error(`Skipped: the routine's previous run still waits for room on ${host === LOCAL ? 'this Mac' : host}.`);
+      }
+      waitingRuns.add(key);
+      let slot: (holdMs?: number) => void;
+      try {
+        slot = await admitHostStart(opts.existingTaskId ?? `routine-run:${opts.preassignedSessionId ?? randomUUID()}`, host, { automatic: true, waitMs: ROUTINE_WAIT_MS });
+      } finally {
+        waitingRuns.delete(key);
+      }
+      let started = false;
+      try {
+        const task = await quickStartSession({
+          message: launch.message,
+          cwd: launch.cwd,
+          host: launch.host,
+          model: launch.model,
+          ...(launch.taskTitle ? { taskTitle: launch.taskTitle } : {}),
+          // Background automation: an explicit null keeps every run off the pinned board.
+          taskMeta: { pinTier: null },
+          ...(launch.project ? { project: launch.project } : {}),
+          source: launch.source,
+          ...(launch.walnutAgent ? { walnutAgent: true } : {}),
+          ...(launch.agentId ? { agentId: launch.agentId } : {}),
+          ...(opts.preassignedSessionId ? { preassignedSessionId: opts.preassignedSessionId } : {}),
+          ...(opts.existingTaskId ? { existingTaskId: opts.existingTaskId } : {}),
+        });
+        const continued = continuedSessionOf(task);
+        started = true;
+        // Its session has its record now, counted by its task; the hold covers one not yet
+        // marked running, under the task it made (review round 5, Sol: a new run's slot was let go).
+        if (!opts.existingTaskId && task?.id) holdSlotFor(host, task.id, SLOT_HOLD_MS);
+        return { task, ...(continued ? { continued } : {}) };
+      } finally {
+        slot(started && opts.existingTaskId ? SLOT_HOLD_MS : 0);
+      }
     },
     async getSession(sessionId) {
       const { getSessionByClaudeId } = await import('../session-tracker.js');

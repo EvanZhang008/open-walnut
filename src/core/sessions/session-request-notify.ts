@@ -23,7 +23,7 @@
 import { log } from '../../logging/index.js';
 import { cutEnd } from '../text-cut.js';
 import { isContextFullText } from './context-full.js';
-import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
+import { buildWalnutMessage, parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
   buildRequestNotification,
@@ -577,12 +577,80 @@ export function sweepSessionRequests(): Promise<number> {
       await remindOverdue().catch((err) => log.session.warn('overdue reminders failed', {
         error: err instanceof Error ? err.message : String(err),
       }));
+      await remindSilent().catch((err) => log.session.warn('silent-target notices failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }));
       return notified;
     } finally {
       sweeping = undefined;
     }
   })();
   return sweeping;
+}
+
+/** A task asked to start or sent work that shows nothing this long tells its asker. */
+export const SILENT_AFTER_MS = 10 * 60_000;
+
+/**
+ * The safety net under a start or a send (2026-11-06, the user: "if a task has not updated for a
+ * while, the VP gets a notification and checks it; best is that it never happens"): a pending
+ * request whose target task shows nothing for SILENT_AFTER_MS since the ask (no session of it,
+ * or one that is not in a turn and has not been active since) tells its asker once, waking it.
+ * A target that runs, or ran since, is working; its own end of turn answers for it.
+ */
+export async function remindSilent(now = Date.now()): Promise<number> {
+  const { IS_EPHEMERAL } = await import('../../constants.js');
+  const { listPendingRequests, claimSilentNotice, releaseSilentNotice } = await import('../session-requests.js');
+  const runner = await import('../../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
+  const due = (await listPendingRequests()).filter((r) => !r.silentToldAt && r.toTaskId && now - Date.parse(r.createdAt) >= SILENT_AFTER_MS
+    && (!IS_EPHEMERAL || Date.parse(r.createdAt) >= PROCESS_STARTED_AT));
+  if (!due.length) return 0;
+  const { listTasksByIds } = await import('../task-manager.js');
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const tasks = new Map((await listTasksByIds([...new Set(due.map((r) => r.toTaskId!))]).catch(() => [])).map((t) => [t.id, t] as const));
+  let told = 0;
+  for (const r of due) {
+    const task = tasks.get(r.toTaskId!);
+    if (!task || task.phase === 'COMPLETE') continue;
+    if (await askerTaskIsComplete(r.fromSessionId)) continue;
+    const sid = r.toSessionId ?? task.session_id ?? task.exec_session_id ?? undefined;
+    const session = sid ? await getSessionByClaudeId(sid).catch(() => null) : null;
+    const asked = Date.parse(r.createdAt);
+    // Working: a turn runs now (or may: this server holds no runner for it), or one began since
+    // the ask. Not lastActiveAt: a status write moves it (review round 6, Sol: a spawn timeout's
+    // error write read as work).
+    const turnNow = session?.process_status === 'running' ? runner?.isInTurn(session.claudeSessionId) ?? null : false;
+    if (turnNow !== false) continue;
+    if ((session?.lastTurnSpeed?.startedAt ?? 0) > asked) continue;
+    const why = !session ? 'no session of it ever started'
+      : session.process_status === 'error' ? `its session stopped with an error${session.errorMessage ? `: ${session.errorMessage.length > 200 ? `${session.errorMessage.slice(0, cutEnd(session.errorMessage, 199))}…` : session.errorMessage}` : ''}`
+      : `its session has not taken up the work (${session.process_status === 'running' ? 'it waits after its last turn' : `it is ${session.process_status || 'not running'}`})`;
+    const { resolveReplyDestination, isLive } = await import('./reply-routing.js');
+    const destination = await resolveReplyDestination(r.fromSessionId).catch(() => null);
+    if (!destination || !isLive(destination.session)) continue;
+    const claimed = await claimSilentNotice(r.id, now);
+    if (!claimed) continue;
+    const minutes = Math.round((now - asked) / 60_000);
+    const text = buildWalnutMessage({
+      kind: 'notification',
+      attrs: { from: 'Walnut', about: task.title, 'about-task': task.id, request: r.id, asked: r.preview, outcome: 'error', note: 'automated Walnut status notice' },
+      body: [
+        `"${task.title}" (${task.id}) has shown nothing for ${minutes} minutes since you asked (${r.id}): ${why}.`,
+        'Read task_get for it, then start it again with task_start, send the work again with task_send, or tell the user. This is the only notice for this request.',
+      ].join('\n'),
+    });
+    try {
+      const { deliverToSession } = await import('./session-send-core.js');
+      await deliverToSession(destination.session, { busText: text, enqueueText: text, source: 'walnut-notify', ...(destination.session.taskId ? { taskId: destination.session.taskId } : {}) });
+      told++;
+      log.session.info('silent target: its asker told', { requestId: r.id, taskId: task.id, minutes, why });
+    } catch (err) {
+      // Not delivered: the claim goes, so the next sweep tries again (its one notice is not spent).
+      await releaseSilentNotice(r.id).catch(() => {});
+      log.session.warn('silent target notice not delivered', { requestId: r.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return told;
 }
 
 /** An ephemeral server's copy of the ledger came with the process: only rows it made overdue are its own. */

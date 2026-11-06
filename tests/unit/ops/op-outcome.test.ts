@@ -490,6 +490,18 @@ describe('contradictory flags are refused BEFORE the write', () => {
 })
 
 describe('a failed launch keeps the task and the id', () => {
+  it('no host with room is a definite no: not started, an error the caller reads now, a SAME-id retry (2026-11-06)', async () => {
+    const r = createRunner({ start: async () => { throw new Error(`Walnut API error (hosts_full): Task ${TASK.id} did not start: clouddev has no room (all 24 slots taken).`) } })
+    const created = await r.speak({ title: TASK.title, message: 'Reproduce, then fix.' })
+    expect(rec(created.task).id).toBe(TASK.id)
+    expect(rec(created.execution).state).toBe('not_started')
+    expect(String(created.start_error)).toContain('hosts_full')
+    expect(created.outcome).toContain(`Task ${TASK.id} was created but did not start: no host that can run it has room.`)
+    expect(created.next).toContain(`task_start '{"id":"${TASK.id}"}'`)
+    expect(`${created.outcome} ${created.next}`).not.toMatch(/queued/i)
+  })
+
+
   // Handler contract only: the handler RETURNS the payload (task + start_error)
   // instead of throwing, so the created task is never hidden from the caller.
   // Turning that payload into a failed call ({ ok: false, message, result }) for

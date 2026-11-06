@@ -240,7 +240,7 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     const { startSessionForTask } = await import('./task-start.js');
     const started = await startSessionForTask({
       taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
-      callerSid: req.callerSid, expectReply: false, source: req.source,
+      callerSid: req.callerSid, expectReply: false, source: req.source, ownMove: true,
       ...(req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
       // Nothing to say: the task's description is not run as if it were (the same as a switch).
       ...(message.trim() ? {} : { idle: true }),
@@ -549,7 +549,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     const started = await startSessionForTask({
       taskIdPrefix: taskId, message: prepared.message, cwd: prepared.cwd, host: host === LOCAL_HOST ? '__local__' : host,
       engine, ...(state.to.model ? { model: state.to.model } : {}), ...(state.to.effort ? { effort: state.to.effort } : {}),
-      ...(prepared.mode ? { mode: prepared.mode } : {}), expectReply: false, source: 'engine-switch', awaitStart: true,
+      ...(prepared.mode ? { mode: prepared.mode } : {}), expectReply: false, source: 'engine-switch', ownMove: true, awaitStart: true,
       ...(prepared.message ? {} : { idle: true }),
     });
     sessionId = started.sessionId;

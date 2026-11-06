@@ -152,6 +152,8 @@ export interface SessionRequest {
   answeredAt?: string;
   /** Settled by an answer already delivered for this request (sameAnswerOf): its asker read it once. */
   sameAnswerAs?: string;
+  /** When its asker was told its target showed nothing since the ask (once; session-request-notify.ts remindSilent). */
+  silentToldAt?: string;
 }
 
 /** How long an answer already delivered makes the same words to the same asker a repeat: one
@@ -574,6 +576,32 @@ export async function claimReminder(id: string, now = Date.now()): Promise<Sessi
     return { requests };
   });
   return claimed;
+}
+
+/** Claim a pending request's one "nothing since you asked" notice. Null when it is not pending or was told. */
+export async function claimSilentNotice(id: string, now = Date.now()): Promise<SessionRequest | null> {
+  let claimed: SessionRequest | null = null;
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || requests[idx].status !== 'pending' || requests[idx].silentToldAt) return undefined;
+    claimed = { ...requests[idx], silentToldAt: new Date(now).toISOString() };
+    requests[idx] = claimed;
+    return { requests };
+  });
+  return claimed;
+}
+
+/** Undo a silent-target claim whose notice could not be delivered, so the next sweep tries again. */
+export async function releaseSilentNotice(id: string): Promise<void> {
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || !requests[idx].silentToldAt) return undefined;
+    const { silentToldAt: _told, ...rest } = requests[idx];
+    requests[idx] = rest;
+    return { requests };
+  });
 }
 
 /** Undo a claim whose reminder could not be delivered, so the next sweep tries again. */

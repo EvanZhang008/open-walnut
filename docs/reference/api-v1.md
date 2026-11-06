@@ -95,7 +95,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `no_open_ask` | 409 | `POST /messages` with `answers_ask: true` to a task with no ask of its own to answer: it asks nothing, its ask is a Board choice, or its ask shows on another task (named in the message). Nothing is sent |
 | `user_words` | 409 | `POST /messages` with `answers_ask: true` from a task, for an ask of a kind only the user approves (outward, spending, credentials, permissions, cloud_delete, irreversible), without `user_words` (10+ characters) quoting the user. Nothing is sent |
 | `subtask_too_deep` | 409 | `POST /tasks` from a session: the new task would be its subtask more than 3 levels below a top-level task. Nothing is created |
-| `too_many_running_subtasks` | 409 | No longer answered to `POST /tasks/:id/start`: a worker session's start past its 8 running subtasks (IN_PROGRESS or starting) is queued instead, `202` with `started: false` and `queued: { position, running, cap }`, and Walnut starts it by itself when one of them stops running (highest priority first, then the oldest). An older server answered this 409 and started nothing |
+| `too_many_running_subtasks` | 409 | Retired 2026-11-05: no lead's subtasks are capped any more; each host has its own slots (`hosts_full`). A server from 2026-11-03 to 11-05 answered a full cap with `202`, `started: false` and `queued: { position, host?, reason?, running, cap }` and started it later by itself; an older one answered this 409 and started nothing |
+| `hosts_full` | 409 | `POST /tasks/:id/start` by a worker session when no host that can run the task has a free slot (each host's own, from its cores and memory or `session_limits`): nothing started and nothing is queued (since 2026-11-06); the message names the host and why |
 | `host_not_ready` | 409 | `POST /sessions` refused before anything was written: the host is connected but its Claude Code cannot run the session (`kind`: `claude_missing`, `claude_needs_node`, `claude_error`, `claude_outdated`, `claude_not_logged_in`). Extras `kind`, `host`, `headline`, `hint`, and `allowOverride: true` for the two kinds `overrideReadiness` may skip |
 | `host_unreachable` | 409 | `POST /sessions`: a fresh connect attempt to the host just failed; `kind`, `headline` and `hint` describe that attempt |
 | `host_off` | 409 | `POST /sessions`: remote hosts are off on this test server (never dialled) |
@@ -157,8 +158,9 @@ path on the companion".
 | GET | `/api/v1/tasks/:id` | Full task detail (description/note readback + deps). Additive `links`: the task's link tags as the console draws them, `[{tag, name, kind, group, target, file, gone?}]` (`name` is 1 to 3 words, distinct on the task; `group` is `doc`/`review`/`ticket`/`thread`/`link`; `gone: true` when the file is known to be gone) |
 | DELETE | `/api/v1/tasks/:id?force=true` | Delete a task (409 on active sessions unless forced) |
 | POST | `/api/v1/tasks/:id/complete` | Complete a task (auto-unpins + awaits sync push; ≠ `PATCH status:done`) |
-| POST | `/api/v1/tasks/:id/start` | Start a NEW session for an existing task (cwd resolved server-side; 409 when one is already live; 501 on REPLICA; `queued` when a worker's running-subtask cap is full) |
-| DELETE | `/api/v1/tasks/:id/start-queue` | Cancel a queued start (`{ taskId, cleared }`), so Walnut does not start the task by itself |
+| POST | `/api/v1/tasks/:id/start` | Start a NEW session for an existing task (cwd resolved server-side; 409 when one is already live; 501 on REPLICA; `409 hosts_full` when a worker's start finds no host with room). A worker session's start answers once its session is up or failed (up to 110 s; `starting: true` past that) |
+| DELETE | `/api/v1/tasks/:id/start-queue` | Cancel a start an older server queued (`{ taskId, cleared }`), so Walnut does not start the task by itself; `?by=person` (the task page's Cancel) also records the cancel as the task's last start, where its asker reads it |
+| POST | `/api/v1/tasks/:id/start-queue/start` | Start a queued start now as the user's own start (never waits for a host slot), with its asker's reply request; 404 `not_queued` when none |
 | POST | `/api/v1/messages` | Send a message to any session by session/task/title handle (501 on REPLICA) |
 | GET | `/api/v1/requests/:id` | Status of one `expect_reply` request (`rq-…`) |
 | POST | `/api/v1/messages/:id/send-now` | Send a queued message now (`rq-…` or `qm-…`), the bubble's Send now |
@@ -1715,10 +1717,11 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   (`x-walnut-caller-sid`) and returns its `requestId`. When that caller is a
   worker session and the task belongs to its project, has no cwd of its own and
   the body names neither `cwd` nor `host`, the session starts on the caller's
-  host in the caller's cwd, as one pair (additive, 2026-09-23). A worker caller
-  that already has 8 subtasks running (IN_PROGRESS or starting, the task being
-  started excluded) answers `409 too_many_running_subtasks` and nothing starts
-  (additive, 2026-09-28); the human and a Personal AI ask are never limited.
+  host in the caller's cwd, as one pair (additive, 2026-09-23). A worker caller's
+  start waits for a free slot on the host it would run on (each host's slots:
+  one per two CPUs and per 3 GB of memory, 2 to 32, or its `session_limits`
+  setting; plus its load caps), queued as above (2026-11-05; the per-lead cap
+  of 8 is gone); the human and a Personal AI ask are never limited.
   Additive, 2026-10-27 (the draft column's launch choices, for agents):
   `"effort"?` (`low|medium|high|xhigh|max`, claude engine only; `400` with an
   ACP engine), `"create_cwd"?: true` (make `cwd` on its host first),
@@ -1726,8 +1729,8 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   `preparing: true` and starts in it once ready; `409` when the task already
   has a live session or a conversation, or is complete; `400` when the task has
   no folder to copy or `create_cwd` comes with it) and `"user_request"?` (the
-  user's own words asking for the start, 10+ characters: a worker caller then
-  runs under a ceiling of 16 running subtasks instead of 8; shorter is `400`).
+  user's own words asking for the start, 10+ characters: a worker caller's
+  start then goes ahead at once even on a full host; shorter is `400`).
   The answer adds `applied`, the names of those fields it honoured; a server
   older than them omits it and ignores the fields.
   `202` means ACCEPTED,

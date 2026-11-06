@@ -1,47 +1,39 @@
 /**
- * The start queue: a session's start that the running-subtask cap (subtask-limits.ts) would
- * refuse is recorded on the task (`Task.start_queue`) and answered "queued"; Walnut starts it
- * by itself once one of its lead's running subtasks stops running (the cap counts the task's lead).
+ * What is left of the start queue (2026-11-06, the user: "if it did not start, it must be an
+ * error ... it is a sync call: did it start or not? ... if it fails it fails, and the VP gets the
+ * message directly and can fix it"). A start no host has room for is an error to its caller now
+ * (task-start.ts), so nothing is queued any more. The starts an older Walnut queued
+ * (`Task.start_queue`) are each started once for real, as their asker asked them, or failed
+ * loudly: the entry goes, the failure is the task's `last_start` (task_get's execution reads it),
+ * and the asking session is told at once.
  *
- * Why (2026-11-03): a VP whose job is to delegate hit the cap with 17 running, read "do this
- * part with your own tools" in the refusal and ran the investigation itself, then wrote its own
- * background loops to retry the starts. A full slot now means "queued", never "do it yourself".
+ * Kept: an entry's task completed, its asking task completed or is gone, or it started some other
+ * way since (a person's start, a newer `last_start`, a session that began after it): it is dropped
+ * with nothing told. A team stop (team-stop.ts) holds its team's entries until team_resume. On the
+ * task's page Start now runs an entry as the user's own start and Cancel drops it, saying so on
+ * the task (src/web/routes/task-v1.ts).
  *
- * Order: highest task priority first (immediate, important, unset, backlog), then the oldest
- * queued. The replay is the same start as asked, run as the asking session's start with source
- * `start-queue`; such a start is never queued again: at the cap it throws as before, and the
- * drain stops for that parent's starts under that cap until the next slot frees (a start the user
- * asked for runs under the higher one, so it still goes when only the lower cap is full).
- *
- * Lifecycle: a start through startSessionForTask clears its entry, and the drain drops one whose task
- * has a session that began after it was queued (the web's Start, the phone, a quick start); a COMPLETE
- * task's entry is dropped, and so is one whose asking task (the caller session's task, not the lead
- * whose cap holds it) completed or is gone; a task started some other way since it was queued (its `last_start`
- * is newer) is dropped; a team stop (team-stop.ts, `team_stop` on the task or an ancestor) holds
- * the entries of its team until team_resume; a replay that fails for another reason is dropped
- * with the failure left on `last_start`, where task_get's execution reads it.
- *
- * Primary only: a loop every 30 s plus a nudge (debounced 1 s) when a subtask leaves
- * IN_PROGRESS. A cloud companion never drains, and an ephemeral server only drains what was
- * queued after it booted, so neither starts work it copied from the user's real data.
- * `WALNUT_START_QUEUE=0` turns the loop off, `=1` lets an ephemeral server drain everything.
+ * Primary only: a pass soon after boot and every few minutes (for a team resumed later). A cloud
+ * companion never runs one, and an ephemeral server only touches what was queued after it booted,
+ * so neither starts work it copied from the user's real data. `WALNUT_START_QUEUE=0` turns it
+ * off, `=1` lets an ephemeral server run every entry.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { StartQueueEntry, Task, TaskPriority } from '../types.js';
 import { log } from '../../logging/index.js';
-import type { RunningCapDetail } from './subtask-limits.js';
-import type { SessionStartParams, SessionStartResult } from './task-start.js';
+import type { SessionStartResult } from './task-start.js';
 
 export const START_QUEUE_SOURCE = 'start-queue';
-export const START_QUEUE_INTERVAL_MS = 30_000;
-export const START_QUEUE_NUDGE_MS = 1_000;
+/** The first pass after boot, then one every so often for a team resumed since. */
+export const START_QUEUE_FIRST_MS = 30_000;
+export const START_QUEUE_INTERVAL_MS = 5 * 60_000;
 
 const PRIORITY_RANK: Record<TaskPriority, number> = { immediate: 0, important: 1, none: 2, backlog: 3 };
 
 type Queued = Pick<Task, 'id' | 'priority'> & { start_queue?: StartQueueEntry | null };
 
-/** Queue order: priority first, then the oldest queued, then the id (a stable tie-break). */
+/** Order: priority first, then the oldest queued, then the id (a stable tie-break). */
 export function queueOrder(a: Queued, b: Queued): number {
   const rank = (t: Queued) => PRIORITY_RANK[t.priority ?? 'none'] ?? PRIORITY_RANK.none;
   return rank(a) - rank(b)
@@ -61,51 +53,6 @@ export function heldByTeamStop(task: Pick<Task, 'id' | 'parent_task_id' | 'team_
   return false;
 }
 
-/** The fields of a start the replay needs (the task and the caller ride the entry itself). */
-function replayParams(params: SessionStartParams): StartQueueEntry['params'] {
-  const out: StartQueueEntry['params'] = {};
-  const keys = ['message', 'cwd', 'host', 'model', 'mode', 'effort', 'engine', 'userRequest', 'createCwd',
-    'workspace', 'expectReply', 'replyTimeoutSecs', 'handsOn'] as const;
-  for (const k of keys) if (params[k] !== undefined) (out as Record<string, unknown>)[k] = params[k];
-  return out;
-}
-
-/** Position (1-based) of a task among the entries queued behind the same parent. */
-function positionOf(taskId: string, parentId: string, tasks: readonly Task[]): number {
-  const line = tasks.filter((t) => t.start_queue && leadOf(t) === parentId && t.phase !== 'COMPLETE').sort(queueOrder);
-  const at = line.findIndex((t) => t.id === taskId);
-  return at < 0 ? line.length + 1 : at + 1;
-}
-
-/**
- * Record a start the running cap refused and answer it as queued. A task queued again keeps its
- * place (its first `at`) and takes the newer start's settings. Returns null when the task is
- * COMPLETE (nothing to queue: the caller gets the refusal).
- */
-export async function enqueueStart(detail: RunningCapDetail, params: SessionStartParams): Promise<SessionStartResult | null> {
-  if (!params.callerSid) return null;
-  const { listTasks, updateTaskRaw } = await import('../task-manager.js');
-  let title = '';
-  const res = await updateTaskRaw(detail.taskId, (cur) => {
-    if (cur.phase === 'COMPLETE') return null;
-    title = cur.title;
-    const keep = cur.start_queue && cur.start_queue.parent_id === detail.parentId ? cur.start_queue.at : undefined;
-    const entry: StartQueueEntry = {
-      at: keep ?? new Date().toISOString(), parent_id: detail.parentId, caller_sid: params.callerSid!, params: replayParams(params),
-    };
-    return { start_queue: entry };
-  }, { emitEvent: true, push: false, source: START_QUEUE_SOURCE });
-  if (!res.changed && !title) return null;
-  const position = positionOf(detail.taskId, detail.parentId, await listTasks());
-  log.session.info('start queued behind running subtasks', {
-    taskId: detail.taskId, parentId: detail.parentId, callerSid: params.callerSid, position, running: detail.running.length, cap: detail.cap,
-  });
-  return {
-    taskId: detail.taskId, title, started: false, applied: [],
-    queued: { position, running: detail.running, cap: detail.cap },
-  };
-}
-
 /** Drop a task's queued start (it started, it completed, it was stopped). Never throws. */
 export async function clearStartQueue(taskId: string, why: string): Promise<boolean> {
   const { updateTaskRaw } = await import('../task-manager.js');
@@ -119,61 +66,96 @@ export async function clearStartQueue(taskId: string, why: string): Promise<bool
   }
 }
 
-/** A replay that failed for another reason than the cap: drop it, and leave the failure where task_get reads it. */
-async function dropFailed(task: Task, entry: StartQueueEntry, error: string): Promise<void> {
+/**
+ * The user's Start now on a queued start (the task's page): the start as it was asked, with its
+ * asker's reply request, run now as the user's own start, which never waits for a slot. Null
+ * when nothing is queued for the task.
+ */
+export async function startQueuedNow(taskId: string): Promise<SessionStartResult | null> {
+  const { getTask } = await import('../task-manager.js');
+  const entry = (await getTask(taskId)).start_queue;
+  if (!entry) return null;
+  const { startSessionForTask } = await import('./task-start.js');
+  return await startSessionForTask({ ...entry.params, taskIdPrefix: taskId, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, byPerson: true, queuedAt: entry.at });
+}
+
+/**
+ * The user cancelled a queued start: it goes, and the task says so where its asker reads it
+ * (task_get `execution`: an error naming the cancel), so the asker does not wait for a start that
+ * never comes.
+ */
+export async function cancelQueuedStartByPerson(taskId: string): Promise<boolean> {
+  const { updateTaskRaw } = await import('../task-manager.js');
+  const res = await updateTaskRaw(taskId, (cur) => (cur.start_queue ? {
+    start_queue: null,
+    last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed' as const, error: 'The user cancelled this queued start; it did not run.' },
+  } : null), { emitEvent: true, push: false, source: START_QUEUE_SOURCE }).catch(() => ({ changed: false }));
+  if (res.changed) log.session.info('queued start cancelled by the user', { taskId });
+  return res.changed;
+}
+
+/**
+ * A queued start that could not start: the entry goes, the failure is the task's `last_start`
+ * (unless its own start recorded one), and its asking session is told now, so it can fix it.
+ */
+async function failLoudly(task: Task, entry: StartQueueEntry, error: string): Promise<void> {
   const { updateTaskRaw } = await import('../task-manager.js');
   await updateTaskRaw(task.id, (cur) => {
     if (!cur.start_queue) return null;
-    // The start got far enough to record its own outcome: keep that one.
     const recorded = !!cur.last_start && cur.last_start.at >= entry.at;
     return {
       start_queue: null,
       ...(recorded ? {} : { last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed' as const, error } }),
     };
   }, { emitEvent: true, push: false, source: START_QUEUE_SOURCE }).catch(() => null);
-  log.session.warn('queued start failed and was dropped', { taskId: task.id, parentId: entry.parent_id, error });
+  log.session.warn('queued start failed and was dropped', { taskId: task.id, askerId: entry.parent_id, error });
+  try {
+    const { resolveReplyDestination, isLive } = await import('./reply-routing.js');
+    const destination = await resolveReplyDestination(entry.caller_sid).catch(() => null);
+    if (!destination || !isLive(destination.session)) return;
+    const { buildWalnutMessage } = await import('../peers/walnut-message-tag.js');
+    const text = buildWalnutMessage({
+      kind: 'notification',
+      attrs: { from: 'Walnut', 'about-task': task.id, outcome: 'error', note: 'automated Walnut status notice' },
+      body: `"${task.title}" (${task.id}), which you started and Walnut had queued since ${entry.at}, did not start: ${error}\n`
+        + 'Walnut no longer queues starts: a start either starts or fails. Read task_get for it, then retry task_start with its id, or tell the user.',
+    });
+    const { deliverToSession } = await import('./session-send-core.js');
+    await deliverToSession(destination.session, { busText: text, enqueueText: text, source: 'walnut-notify', ...(destination.session.taskId ? { taskId: destination.session.taskId } : {}) });
+  } catch (err) {
+    log.session.warn('queued start failure not told', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 export interface DrainResult {
   started: string[];
+  /** Dropped with nothing told: done, its asker done or gone, or started some other way. */
   dropped: string[];
   held: string[];
-  /** Still queued: the cap is full again for their parent. */
-  waiting: string[];
+  /** Could not start: dropped, with the failure on the task and its asker told. */
+  failed: string[];
 }
 
 let chain: Promise<unknown> = Promise.resolve();
 
-/**
- * Start what the queue holds while its parents have room, one drain at a time. `parentId`
- * limits it to one parent's queue; `notBefore` (ms) leaves entries queued earlier untouched.
- */
-export function drainStartQueue(parentId?: string, opts: { notBefore?: number } = {}): Promise<DrainResult> {
-  const run = chain.then(() => drainNow(parentId, opts));
+/** Start or fail every queued start, one pass at a time. `notBefore` (ms) leaves older entries untouched. */
+export function drainStartQueue(opts: { notBefore?: number } = {}): Promise<DrainResult> {
+  const run = chain.then(() => drainNow(opts));
   chain = run.catch(() => {});
   return run;
 }
 
-/**
- * The lead whose running-subtask cap holds a queued start: the task's own parent, as the start's
- * admission counts it (task-start.ts admitStartWithinLimits), else the task it was queued under
- * (an entry from before the cap counted on the lead recorded the asker's task there).
- */
-export function leadOf(t: Pick<Task, 'parent_task_id' | 'start_queue'>): string {
-  return t.parent_task_id || t.start_queue?.parent_id || '';
-}
-
-async function drainNow(parentId: string | undefined, opts: { notBefore?: number }): Promise<DrainResult> {
-  const out: DrainResult = { started: [], dropped: [], held: [], waiting: [] };
+async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
+  const out: DrainResult = { started: [], dropped: [], held: [], failed: [] };
   const { listTasks } = await import('../task-manager.js');
   const all = await listTasks();
   const byId = new Map(all.map((t) => [t.id, t] as const));
-  const queued = all.filter((t) => t.start_queue && (!parentId || leadOf(t) === parentId));
-  if (!queued.length) return out;
-  const lines = new Map<string, Task[]>();
-  for (const t of queued) {
+  const line = all.filter((t) => t.start_queue && (opts.notBefore === undefined || Date.parse(t.start_queue.at) >= opts.notBefore)).sort(queueOrder);
+  if (!line.length) return out;
+  const { getSessionsForTask, getSessionByClaudeId } = await import('../session-tracker.js');
+  const { startSessionForTask, SessionExistsError, QueuedStartGoneError } = await import('./task-start.js');
+  for (const t of line) {
     const entry = t.start_queue!;
-    if (opts.notBefore !== undefined && !(Date.parse(entry.at) >= opts.notBefore)) continue;
     if (t.phase === 'COMPLETE') {
       await clearStartQueue(t.id, 'task complete');
       out.dropped.push(t.id);
@@ -186,9 +168,6 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
       continue;
     }
     // The task whose session queued it finished or is gone: nobody waits for this start any more.
-    // That is the asker's task (caller_sid), not the lead whose cap holds it (parent_id): a helper
-    // may start a lead's subtask, and a lead completes with its subtasks still open.
-    const { getSessionsForTask, getSessionByClaudeId } = await import('../session-tracker.js');
     const askerTaskId = (await getSessionByClaudeId(entry.caller_sid).catch(() => null))?.taskId ?? entry.parent_id;
     const asker = byId.get(askerTaskId);
     if (!asker || asker.phase === 'COMPLETE') {
@@ -196,8 +175,8 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
       out.dropped.push(t.id);
       continue;
     }
-    // A session began since it was queued by a path that writes no last_start (the web's Start, the
-    // phone, a quick start): a replay now would send the queued message into that conversation again.
+    // A session began since it was queued by a path that writes no last_start (the web's Start,
+    // the phone, a quick start): a replay now would send the queued message into it again.
     const records = await getSessionsForTask(t.id).catch(() => []);
     if (records.some((r) => (r.startedAt ?? '') > entry.at)) {
       await clearStartQueue(t.id, 'session since queued');
@@ -205,81 +184,39 @@ async function drainNow(parentId: string | undefined, opts: { notBefore?: number
       continue;
     }
     if (heldByTeamStop(t, byId)) { out.held.push(t.id); continue; }
-    const lead = leadOf(t);
-    const line = lines.get(lead) ?? [];
-    line.push(t);
-    lines.set(lead, line);
-  }
-  const { startSessionForTask, SessionExistsError } = await import('./task-start.js');
-  const { SubtaskLimitError, admitSubtaskStart } = await import('./subtask-limits.js');
-  for (const line of lines.values()) {
-    line.sort(queueOrder);
-    // A start the user asked for runs under the higher ceiling, so one refused at the lower cap
-    // must not hold it back (2026-11-04: three older plain starts at the cap of 8 kept a user-asked
-    // start queued for hours with 15 of 16 running). A full cap stops only the starts it caps.
-    const full = new Set<boolean>();
-    for (let i = 0; i < line.length; i++) {
-      const t = line[i];
-      const entry = t.start_queue!;
-      const userAsked = !!entry.params.userRequest;
-      if (full.has(userAsked)) { out.waiting.push(t.id); continue; }
-      // Admitted against the parent itself, not through the caller's session: a caller session
-      // that is gone would otherwise fail open and start every entry over the cap at once.
-      let release = () => {};
-      try {
-        release = await admitSubtaskStart(leadOf(t), t.id, undefined, { userAsked, replacing: t.transferred_from });
-        await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE });
-        out.started.push(t.id);
-        log.session.info('queued start started', { taskId: t.id, parentId: entry.parent_id, queuedAt: entry.at });
-      } catch (err) {
-        if (err instanceof SubtaskLimitError && err.code === 'too_many_running_subtasks') {
-          out.waiting.push(t.id);
-          full.add(userAsked);
-          // The higher ceiling full means the lower one is too.
-          if (userAsked) full.add(false);
-          continue;
-        }
-        if (err instanceof SessionExistsError) {
-          await clearStartQueue(t.id, 'already started');
-          out.dropped.push(t.id);
-          continue;
-        }
-        await dropFailed(t, entry, err instanceof Error ? err.message : String(err));
+    try {
+      // Placed again: it goes to the host with room that has its files (start-placement.ts).
+      await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
+      out.started.push(t.id);
+      log.session.info('queued start started', { taskId: t.id, askerId: entry.parent_id, host: entry.host, queuedAt: entry.at });
+    } catch (err) {
+      // The user cancelled it while it was placed: nothing started, the cancel is on the task.
+      if (err instanceof QueuedStartGoneError) { out.dropped.push(t.id); continue; }
+      if (err instanceof SessionExistsError) {
+        await clearStartQueue(t.id, 'already started');
         out.dropped.push(t.id);
-      } finally {
-        release();
+        continue;
       }
+      await failLoudly(t, entry, err instanceof Error ? err.message : String(err));
+      out.failed.push(t.id);
     }
   }
   return out;
 }
 
-// ── The loop and the nudge (primary only) ──
+// ── The passes (primary only) ──
 
-const SUBSCRIBER = 'start-queue';
+let first: ReturnType<typeof setTimeout> | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
-let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
-const nudged = new Set<string>();
 let notBefore: number | undefined;
 let live = false;
 
-function drainLogged(parentId?: string): void {
-  void drainStartQueue(parentId, notBefore !== undefined ? { notBefore } : {})
-    .catch((err) => log.session.warn('start queue: drain failed', { parentId, error: err instanceof Error ? err.message : String(err) }));
-}
-
-/** A subtask of `parentId` stopped running (or finished): try its parent's queue soon. */
-export function nudgeStartQueue(parentId: string): void {
-  if (!live) return;
-  nudged.add(parentId);
-  if (nudgeTimer) return;
-  nudgeTimer = setTimeout(() => {
-    nudgeTimer = null;
-    const parents = [...nudged];
-    nudged.clear();
-    for (const p of parents) drainLogged(p);
-  }, START_QUEUE_NUDGE_MS);
-  nudgeTimer.unref?.();
+function drainLogged(): void {
+  void drainStartQueue(notBefore !== undefined ? { notBefore } : {})
+    .then((r) => {
+      if (r.started.length || r.failed.length) log.session.info('start queue: old queued starts run', { started: r.started, failed: r.failed, held: r.held });
+    })
+    .catch((err) => log.session.warn('start queue: pass failed', { error: err instanceof Error ? err.message : String(err) }));
 }
 
 /** On the primary, after boot. */
@@ -288,21 +225,8 @@ export async function startStartQueue(opts: { ephemeral?: boolean; cloud?: boole
   if (live || opts.cloud || flag === '0') return { stop: () => {} };
   live = true;
   notBefore = opts.ephemeral && flag !== '1' ? Date.now() : undefined;
-  const { bus, EventNames } = await import('../event-bus.js');
-  bus.subscribe(SUBSCRIBER, (event) => {
-    const data = event.data as { task?: Task; newPhase?: string; oldPhase?: string } | undefined;
-    const task = data?.task;
-    if (!data || !task?.id) return;
-    if (event.name === EventNames.TASK_PHASE_CHANGED) {
-      if (data.oldPhase === data.newPhase) return;
-      // A sibling left a running slot: its parent's queue may start one.
-      if (data.oldPhase === 'IN_PROGRESS' && task.parent_task_id) nudgeStartQueue(task.parent_task_id);
-      // A queued task completed: its entry goes.
-      if (data.newPhase === 'COMPLETE' && task.start_queue) void clearStartQueue(task.id, 'task complete');
-    } else if (event.name === EventNames.TASK_DELETED && task.parent_task_id) {
-      nudgeStartQueue(task.parent_task_id);
-    }
-  }, { global: true, interest: [EventNames.TASK_PHASE_CHANGED, EventNames.TASK_DELETED] });
+  first = setTimeout(() => { first = null; drainLogged(); }, START_QUEUE_FIRST_MS);
+  first.unref?.();
   timer = setInterval(() => drainLogged(), START_QUEUE_INTERVAL_MS);
   timer.unref?.();
   return { stop: stopStartQueue };
@@ -311,10 +235,8 @@ export async function startStartQueue(opts: { ephemeral?: boolean; cloud?: boole
 export function stopStartQueue(): void {
   if (!live) return;
   live = false;
+  if (first) clearTimeout(first);
   if (timer) clearInterval(timer);
-  if (nudgeTimer) clearTimeout(nudgeTimer);
+  first = null;
   timer = null;
-  nudgeTimer = null;
-  nudged.clear();
-  void import('../event-bus.js').then(({ bus }) => bus.unsubscribe(SUBSCRIBER)).catch(() => {});
 }

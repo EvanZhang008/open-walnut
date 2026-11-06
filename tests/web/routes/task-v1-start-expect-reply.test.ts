@@ -53,7 +53,7 @@ async function postStart(body: Record<string, unknown>, callerSid?: string) {
 beforeEach(() => {
   startSessionForTaskMock.mockReset()
   startSessionForTaskMock.mockResolvedValue({
-    taskId: 'task-1', title: 'Fix the flake', sessionId: 'sess-new-1', requestId: 'rq-0123456789ab',
+    taskId: 'task-1', title: 'Fix the flake', sessionId: 'sess-new-1', requestId: 'rq-0123456789ab', started: true,
   })
 })
 

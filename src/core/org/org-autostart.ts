@@ -13,8 +13,10 @@
  * message right after, and a second start would race that one.
  *
  * `task.org_start` tells the Org page how it went: `starting`, or `failed` with the error, which
- * the page shows with Retry in place. It is cleared once the node has a session. Starts run one at
- * a time. The org switch (org-enabled.ts) stops all of it.
+ * the page shows with Retry in place. A lead's start is an automatic start, held to its host's
+ * slots (sessions/host-admission.ts): with no room it fails, saying so, and the user's Retry starts
+ * it at once (2026-11-06, the user: a start that did not start is an error). It is cleared once
+ * the node has a session. Starts run one at a time. The org switch (org-enabled.ts) stops all of it.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -152,6 +154,8 @@ export async function startOrgNode(taskId: string, why: OrgStartWhy): Promise<Or
       const { startSessionForTask } = await import('../sessions/task-start.js');
       const started = await startSessionForTask({
         taskIdPrefix: task.id, message, source: ORG_START_SOURCE, expectReply: false, awaitStart: true,
+        // Retry is the user's own click: it starts at once wherever the node runs (review round 5).
+        ...(why === 'retry' ? { byPerson: true } : {}),
       });
       sessionId = started.sessionId;
     }
@@ -168,7 +172,11 @@ export async function startOrgNode(taskId: string, why: OrgStartWhy): Promise<Or
       await writeStart(task.id, null);
       return { started: false, skipped: 'has_session' };
     }
-    const error = text.slice(0, 500);
+    // No host had room: the user's words on the Org page, beside Retry (review round 6: it showed the agent's).
+    const { HostsFullError } = await import('../sessions/host-admission.js');
+    const error = err instanceof HostsFullError
+      ? `${err.detail.label ?? err.detail.host} has no room (${err.detail.reason}). Retry starts it now.`
+      : text.slice(0, 500);
     await writeStart(task.id, { state: 'failed', at: new Date().toISOString(), error, attempts });
     log.task.warn('org start: could not start', { ...fields, error });
     return { started: false, error };

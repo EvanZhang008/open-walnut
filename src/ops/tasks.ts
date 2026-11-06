@@ -422,7 +422,7 @@ defineOp({
       execution.state === 'not_started'
         ? dispatchHint(id)
         : execution.state === 'queued'
-        ? `Its start is queued behind running subtasks; Walnut starts it by itself when one stops running. Do not start it again or do its work yourself.`
+        ? `Its start is queued until a host that can run it has a free slot (execution.waiting_for says why, waits_for_host where); Walnut starts it by itself. Do not start it again or do its work yourself.`
         : `Read task_history for its result. Continue the same deliverable with task_send '${JSON.stringify({ to: id, text: '...', ...(phase === 'COMPLETE' ? { force: true, reason: 'What changed in this deliverable' } : {}) })}'; an independent goal needs task_create.`,
     )
   },
@@ -663,7 +663,7 @@ defineOp({
     }
     try {
       const started = await startTask(id, launch, call)
-      // A start the running-subtask cap queued (core/sessions/start-queue.ts) has no session yet.
+      // An older server's queued start (core/sessions/start-queue.ts) has no session yet.
       const queued = (started.execution as { state?: string } | undefined)?.state === 'queued'
       return withOutcome(
         withRef({ ...view, execution: started.execution }, { ...extra, ...started }),
@@ -671,6 +671,19 @@ defineOp({
       )
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
+      // No host that can run it has room (core/sessions/host-admission.ts): a definite "no", said
+      // as an error so the caller acts on it now (2026-11-06, the user: a start that did not start
+      // is an error, never a start left waiting).
+      if (error.includes('(hosts_full)')) {
+        return withOutcome(
+          withRef({ ...view, execution: { state: 'not_started', error } }, {
+            ...extra, execution: { state: 'not_started', error }, start_error: error,
+          }),
+          `${where}Task ${id} was created but did not start: no host that can run it has room.${await cardLine(false)}`,
+          `Retry with walnut tools call task_start '{"id":"${id}"}' once one of your running tasks ends; when the user asked for it now, `
+            + 'pass their words as user_request, which starts it at once. Do not create another task, and do not do its work yourself.',
+        )
+      }
       // An older server's running-subtask cap (subtask-limits.ts), before the start queue: a
       // definite "no", not an unconfirmed start, so the task is a placeholder until one finishes.
       // Its words are not repeated: they told the caller to do the work itself.
@@ -697,7 +710,8 @@ defineOp({
     }
   },
   resultError: (result) => (result as { start_error?: string } | undefined)?.start_error,
-  timeoutMs: 40_000,
+  // Its start answers once the session is up or failed (up to 110 s: src/web/routes/task-v1.ts).
+  timeoutMs: 130_000,
   tags: { readonly: false, remote: 'allow' },
 })
 

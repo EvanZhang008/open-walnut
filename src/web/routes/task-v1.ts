@@ -101,6 +101,12 @@ async function resolveTaskIdPrefix(res: Response, id: string): Promise<string | 
 const RESERVED_TASK_SUBPATHS = new Set(['groups', 'enriched'])
 /** How long a task detail waits to learn which of its link files are gone. */
 const LINK_EXISTS_DEADLINE_MS = 1500
+/**
+ * How long an agent's start waits for its session to come up before it answers: under the
+ * start's own 120 s spawn deadline (task-start.ts) and the task_start / task_create op's
+ * timeout (ops/work.ts, ops/tasks.ts).
+ */
+const AGENT_START_ANSWER_MS = 110_000
 
 // GET /api/v1/tasks/:id — FULL task detail (description/note/summary readback
 // — the slim list projection is write-only for those fields). Adds the same
@@ -485,9 +491,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
     const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
+    const { HostsFullError } = await import('../../core/sessions/host-admission.js')
     const { launchErrorCode } = await import('../../core/sessions/mobile-launch.js')
     try {
-      res.status(202).json(await startSessionForTask({
+      const started = await startSessionForTask({
         taskIdPrefix: id,
         message: str('message'),
         cwd: str('cwd'),
@@ -507,9 +514,22 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         callerSid,
         startAttemptId: str('start_attempt_id'),
         source: 'api-v1',
-        // A session's start over the running-subtask cap waits in the start queue (202, `queued`).
-        queueWhenFull: true,
-      }))
+        // An agent's start answers once its session is up or the start failed (a sync call,
+        // 2026-11-06, the user): never a start left to come up later unseen.
+        ...(callerSid ? { answerWithinMs: AGENT_START_ANSWER_MS } : {}),
+      })
+      // An agent's start is a sync call (2026-11-06, the user: "if it did not start, it must be an
+      // error"): one whose session did not confirm in time answers an error, never a 202 the caller
+      // reads as started. The start itself goes on: it may still come up.
+      if (callerSid && started.started !== true && !started.continued && !started.preparing) {
+        sendError(res, 504, 'start_unconfirmed', `Task ${started.taskId} did not confirm it started within `
+          + `${Math.round(AGENT_START_ANSWER_MS / 1000)} seconds. Do not start it again: task_get shows it running once it is up`
+          + (started.requestId ? `, and Walnut tells you when it shows nothing for 10 minutes (${started.requestId}).` : '.'), {
+          detail: { taskId: started.taskId, sessionId: started.sessionId, ...(started.requestId ? { requestId: started.requestId } : {}) },
+        })
+        return
+      }
+      res.status(202).json(started)
     } catch (err) {
       if (err instanceof SessionExistsError) {
         sendError(res, 409, 'session_exists', err.message, { existing_session_id: err.existingSessionId })
@@ -520,6 +540,11 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         const { code, ...detail } = err.body ?? {}
         if (code === 'lead_handed_over' || code === 'no_capable_host' || code === 'bad_selector' || code === 'org_off') sendError(res, err.statusCode, code, err.message, detail)
         else sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        return
+      }
+      if (err instanceof HostsFullError) {
+        // Additive: the host, its words and why, for a client that reads more than the message.
+        sendError(res, err.statusCode, err.code, err.message, { detail: err.detail })
         return
       }
       if (err instanceof SubtaskLimitError) {
@@ -533,7 +558,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
   }
 })
 
-// DELETE /api/v1/tasks/:id/start-queue: cancel a start the running-subtask cap queued
+// DELETE /api/v1/tasks/:id/start-queue: cancel a start queued for a free host slot
 // (core/sessions/start-queue.ts), so Walnut does not start the task by itself. task_stop on a
 // task that never started calls it. Answers whether there was one to cancel.
 taskV1Router.delete('/tasks/:id/start-queue', async (req: Request, res: Response, next: NextFunction) => {
@@ -546,9 +571,49 @@ taskV1Router.delete('/tasks/:id/start-queue', async (req: Request, res: Response
       if (sendTaskManagerError(res, err)) return
       throw err
     }
-    const { clearStartQueue } = await import('../../core/sessions/start-queue.js')
-    const cleared = await clearStartQueue(task.id, 'cancelled')
+    const { clearStartQueue, cancelQueuedStartByPerson } = await import('../../core/sessions/start-queue.js')
+    // `by=person`: the user's Cancel on the task's page, which the task records for its asker.
+    const cleared = req.query.by === 'person' ? await cancelQueuedStartByPerson(task.id) : await clearStartQueue(task.id, 'cancelled')
     res.json({ taskId: task.id, cleared })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/tasks/:id/start-queue/start: the user's Start now on a queued start. It runs the
+// start as it was asked (its asker still gets the reply) as the user's own start, which never
+// waits for a host slot. 404 when nothing is queued for the task.
+taskV1Router.post('/tasks/:id/start-queue/start', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getTask } = await import('../../core/task-manager.js')
+    let task
+    try {
+      task = await getTask(paramStr(req.params.id))
+    } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+    const { startQueuedNow } = await import('../../core/sessions/start-queue.js')
+    const { SessionExistsError } = await import('../../core/sessions/task-start.js')
+    const { QuickStartError } = await import('../../core/sessions/quick-start.js')
+    try {
+      const started = await startQueuedNow(task.id)
+      if (!started) {
+        sendError(res, 404, 'not_queued', `Task ${task.id} has no queued start.`)
+        return
+      }
+      res.status(202).json(started)
+    } catch (err) {
+      if (err instanceof SessionExistsError) {
+        sendError(res, 409, 'session_exists', err.message, { existing_session_id: err.existingSessionId })
+        return
+      }
+      if (err instanceof QuickStartError) {
+        sendError(res, err.statusCode, 'start_failed', err.message)
+        return
+      }
+      throw err
+    }
   } catch (err) {
     next(err)
   }

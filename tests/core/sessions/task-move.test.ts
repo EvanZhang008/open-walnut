@@ -63,6 +63,17 @@ vi.mock('../../../src/core/sessions/task-dir-place.js', () => ({
     return { path: dir, host: h };
   },
   localTaskDirRoot: () => `${W.homes.__local__}/tasks`,
+  isFallbackFolder: async (cwd: string, host?: string | null) => {
+    const h = host && host !== 'local' ? host : '__local__';
+    return (await import('node:path')).dirname(cwd.replace(/\/+$/, '')) === `${W.homes[h]}/tasks`;
+  },
+}));
+// Both hosts' folders are on this machine: making one is a local mkdir, never an ssh.
+vi.mock('../../../src/core/sessions/ensure-cwd.js', () => ({
+  ensureCwd: async (cwd: string) => {
+    if (!cwd.startsWith(W.root)) throw new Error('outside the test root: ' + cwd);
+    (await import('node:fs')).mkdirSync(cwd, { recursive: true });
+  },
 }));
 vi.mock('../../../src/core/daemon-file-reader.js', () => {
   const expand = (host: string, p: string) => (p.startsWith('~/') ? `${W.homes[host]}${p.slice(1)}` : p);
@@ -87,6 +98,11 @@ vi.mock('../../../src/core/daemon-file-reader.js', () => {
         (await import('node:fs')).rmSync(f, { recursive: true, force: true });
       }
       async readFileBytes() { return null; }
+      async gitFileShow(cwd: string, p: string, sha: string) {
+        const { execFileSync: run } = await import('node:child_process');
+        const rel = (await import('node:path')).relative(cwd, p);
+        return run('git', ['show', `${sha}:${rel}`], { cwd, stdio: 'pipe' }).toString('utf8');
+      }
     },
   };
 });
@@ -130,6 +146,8 @@ import { createTransferCore, type TransferCoreDeps } from '../../../src/provider
 import { recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js';
 import { __setHostLoadProberForTesting } from '../../../src/core/hosts/placement.js';
 import { placeStartByLoad } from '../../../src/core/sessions/start-placement.js';
+import { HostsFullError } from '../../../src/core/sessions/host-admission.js';
+import { __setPathsCheckerForTesting } from '../../../src/core/hosts/named-paths.js';
 import { sendMessageToSession } from '../../../src/core/session-message-queue.js';
 import { MOVE_HELD_REASON } from '../../../src/core/sessions/engine-switch-io.js';
 
@@ -230,10 +248,17 @@ beforeEach(async () => {
   W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false; W.failApply = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
+  // Each host's daemon answers fs.stat for its own folders only (both live on this machine).
+  __setPathsCheckerForTesting(async (host, paths) => {
+    const roots = host === 'cloud' ? [W.homes.cloud, path.join(W.root, 'world', 'cloud-workplace')] : [W.homes.__local__, path.join(W.root, 'world', 'mac-workplace')];
+    const has = (p: string) => roots.some((r) => p === r || p.startsWith(`${r}/`)) && fs.existsSync(p);
+    return { present: paths.filter(has), missing: paths.filter((p) => !has(p)) };
+  });
 });
 
 afterEach(async () => {
   __setTransferConnectionResolverForTesting(null);
+  __setPathsCheckerForTesting(null);
   await new Promise((r) => setTimeout(r, 30));
   closeTaskDb(); closeSessionDb();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
@@ -345,8 +370,25 @@ describe('task_move', () => {
       : { cpus: 48, load: [3, 3, 3], cpuBusy: 0.05, memTotalBytes: 192 * GB, memAvailBytes: 150 * GB, diskPath: '/', diskFreeBytes: 2000 * GB, diskTotalBytes: 3000 * GB, at: now }));
     try {
       const task = await getTask(taskId);
+      // Review round 3: the slot on the target is taken before anything is set up there, so a
+      // full target leaves nothing behind (each refused try once made a new clone). Moved for
+      // load, the start then stays where it was, over a cap but with room (review round 4).
+      const full = { host: '', cwd: shared, message: 'x' };
+      const stayed = await placeStartByLoad(task, {}, full, 'claude', {
+        admit: async (host) => { throw new HostsFullError('full', { taskId, host, reason: 'all 24 slots taken' }); },
+      });
+      expect(stayed).toMatchObject({ host: '', moved: false });
+      expect(stayed!.reason).toMatch(/, but cloud filled up first; it stays$/);
+      expect(fs.existsSync(`${W.homes.cloud}/tasks/${taskId}`)).toBe(false);
+      expect(full).toMatchObject({ host: '', cwd: shared });
+      const admitted: string[] = [];
+      let released = 0;
       const launch = { host: '', cwd: shared, message: 'Make the parser faster.' };
-      const placed = await placeStartByLoad(task, {}, launch, 'claude');
+      const placed = await placeStartByLoad(task, {}, launch, 'claude', {
+        admit: async (host) => { admitted.push(host); return () => { released++; }; },
+      });
+      expect(admitted).toEqual(['cloud']);
+      expect(released).toBe(0);
       const dest = `${W.homes.cloud}/tasks/${taskId}/marina`;
       expect(placed).toMatchObject({ host: 'cloud', moved: true, from: '__local__', cwd: dest, setUp: true });
       expect(placed!.reason).toMatch(/^this Mac is overloaded \(load 600 on 14 CPUs/);
@@ -370,13 +412,151 @@ describe('task_move', () => {
       try {
         const late = { host: '', cwd: shared, message: 'x' };
         const slow = await placeStartByLoad(task, {}, late, 'claude');
-        expect(slow).toMatchObject({ host: '', moved: false });
-        // Either the read of the folder or the setup ran out of the budget.
-        expect(slow!.reason).toMatch(/(could not be prepared there in time; it stays|no other host has room)$/);
+        // The choice, the read of the folder or the setup ran out of the budget: no move.
+        if (slow) {
+          expect(slow).toMatchObject({ host: '', moved: false });
+          expect(slow.reason).toMatch(/(could not be prepared there in time; it stays|no other host has room)$/);
+        }
         expect(late).toEqual({ host: '', cwd: shared, message: 'x' });
       } finally {
         delete process.env.WALNUT_PLACE_SETUP_MS;
       }
+    } finally {
+      __setHostLoadProberForTesting(null);
+    }
+  }, 120_000);
+
+  it('placement: the files a task names choose its host first (2026-11-05: a brief on clouddev, the task sent to a Mac without it)', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    const now = new Date().toISOString();
+    const GB = 1024 ** 3;
+    // Setting the prober drops the 15 s load cache, so each change of the Mac's load is read.
+    const macAt = (macLoad: number) => __setHostLoadProberForTesting(async (host) => (host === '__local__'
+      ? { cpus: 14, load: [macLoad, 4, 4], cpuBusy: 0.2, memTotalBytes: 48 * GB, memAvailBytes: 20 * GB, diskPath: '/', diskFreeBytes: 200 * GB, diskTotalBytes: 1000 * GB, at: now }
+      : { cpus: 48, load: [3, 3, 3], cpuBusy: 0.05, memTotalBytes: 192 * GB, memAvailBytes: 150 * GB, diskPath: '/', diskFreeBytes: 2000 * GB, diskTotalBytes: 3000 * GB, at: now }));
+    macAt(4);
+    try {
+      const task = await getTask(taskId);
+      const brief = `${W.homes.cloud}/.local/state/open-walnut/tasks/parent-task/review-brief-codex.md`;
+      write(brief, '# brief\n');
+      const reviewer = { ...task, title: 'Review notes inline images', description: `You are a fresh reviewer. Read the brief at ${brief} and follow it exactly.` };
+      const dest = `${W.homes.cloud}/tasks/${taskId}/marina`;
+      // A move records its clone as cloud's checkout; each case starts from cloud's own again.
+      const clearCloud = async () => {
+        fs.rmSync(`${W.homes.cloud}/tasks/${taskId}`, { recursive: true, force: true });
+        await recordRepoPath('cloud', repoKey(URL, 'marina'), targetBase);
+      };
+
+      // The Mac has room but not the brief: the start goes to cloud, set up from its checkout.
+      const launch = { host: '', cwd: shared, message: reviewer.description };
+      const placed = await placeStartByLoad(reviewer, {}, launch, 'claude');
+      expect(placed).toMatchObject({ host: 'cloud', moved: true, from: '__local__', cwd: dest, setUp: true });
+      expect(placed!.reason).toBe(`this Mac does not have ${brief}, which the task names; cloud has it (load 3 on 48 CPUs, 0 of 24 sessions in a turn)`);
+      expect(launch.message).toContain(`Walnut placed this task on cloud: this Mac does not have ${brief}`);
+      expect(launch.message.trimEnd().endsWith('follow it exactly.')).toBe(true);
+      await clearCloud();
+
+      // A task in its own directory (no project folder) gets a new one of its own there.
+      const ownDir = `${W.homes.__local__}/tasks/${taskId}`;
+      fs.mkdirSync(ownDir, { recursive: true });
+      const own = { host: '', cwd: ownDir, message: 'x' };
+      expect(await placeStartByLoad(reviewer, {}, own, 'claude')).toMatchObject({ host: 'cloud', moved: true, cwd: `${W.homes.cloud}/tasks/${taskId}` });
+      expect(own).toMatchObject({ host: 'cloud', cwd: `${W.homes.cloud}/tasks/${taskId}` });
+      expect(own.message).toMatch(/^Walnut placed this task on cloud: this Mac does not have /);
+      await clearCloud();
+
+      // Moved for load, a task's own directory goes only while it holds nothing: a brief written
+      // there and read by a relative path would stay behind (review round 3, Sol).
+      macAt(600);
+      write(path.join(ownDir, 'brief.md'), 'Read me.\n');
+      const kept = { host: '', cwd: ownDir, message: 'Read ./brief.md and do it.' };
+      expect(await placeStartByLoad(task, {}, kept, 'claude')).toMatchObject({ host: '', moved: false });
+      expect(kept).toMatchObject({ host: '', cwd: ownDir });
+      // For its files too (review round 4, Sol): the files in its own directory would stay.
+      const forFiles = { host: '', cwd: ownDir, message: 'x' };
+      expect(await placeStartByLoad(reviewer, {}, forFiles, 'claude')).toMatchObject({ host: '', moved: false });
+      fs.rmSync(path.join(ownDir, 'brief.md'));
+      // More files named than placement checks: the start stays where it is.
+      const crowd = Array.from({ length: 13 }, (_, i) => `/data/set/f${i}.md`).join(' ');
+      expect(await placeStartByLoad({ ...task, description: crowd }, {}, { host: '', cwd: shared, message: 'x' }, 'claude')).toBeNull();
+      const empty = { host: '', cwd: ownDir, message: 'Make the parser faster.' };
+      expect(await placeStartByLoad(task, {}, empty, 'claude')).toMatchObject({ host: 'cloud', moved: true, cwd: `${W.homes.cloud}/tasks/${taskId}` });
+      await clearCloud();
+
+      // The Mac overloaded and the named file only on the Mac: the start stays with its file.
+      macAt(600);
+      const macNote = `${W.homes.__local__}/notes/plan.md`;
+      write(macNote, '# plan\n');
+      const stays = await placeStartByLoad({ ...task, description: `Follow ${macNote}.` }, {}, { host: '', cwd: shared, message: 'x' }, 'claude');
+      expect(stays).toMatchObject({ host: '', moved: false });
+      expect(stays!.reason).toMatch(/^this Mac is overloaded .*, and no other host has room$/);
+
+      // The files it names in the folder it works in ride as they are now (an untracked
+      // brief there too, review round 1); the checkout's other work does not; a path no
+      // host has asks for nothing.
+      write(path.join(shared, 'notes', 'brief.md'), 'the brief, untracked\n');
+      const named = { ...task, description: `Read ${shared}/notes/brief.md, edit ${shared}/a.txt and write /nowhere/at/all/new.md.` };
+      const carriedLaunch = { host: '', cwd: shared, message: 'x' };
+      const carried = await placeStartByLoad(named, {}, carriedLaunch, 'claude');
+      expect(carried, carried?.reason).toMatchObject({ host: 'cloud', moved: true, setUp: true });
+      expect(fs.readFileSync(`${dest}/notes/brief.md`, 'utf8')).toBe('the brief, untracked\n');
+      expect(fs.readFileSync(`${dest}/a.txt`, 'utf8')).toBe('FOREIGN edit\n');
+      expect(fs.existsSync(`${dest}/foreign.txt`)).toBe(false);
+      expect(carriedLaunch.message).toContain('and the files this task names in it as they are now');
+      expect(carriedLaunch.message).toContain(`${shared}/notes/brief.md is ${dest}/notes/brief.md`);
+      await clearCloud();
+
+      // Tracked once, deleted and ignored since, then written again: not in HEAD, left behind (review round 2, Sol).
+      write(path.join(shared, 'old-brief.md'), 'v1\n');
+      git(shared, ['add', 'old-brief.md']);
+      git(shared, ['commit', '-q', '-m', 'old brief']);
+      git(shared, ['rm', '-q', 'old-brief.md']);
+      git(shared, ['commit', '-q', '-m', 'drop it']);
+      fs.appendFileSync(path.join(shared, '.git', 'info', 'exclude'), 'old-brief.md\n');
+      write(path.join(shared, 'old-brief.md'), 'v2, ignored\n');
+      const reborn = await placeStartByLoad({ ...task, description: `Read ${shared}/old-brief.md.` }, {}, { host: '', cwd: shared, message: 'x' }, 'claude');
+      expect(reborn).toMatchObject({ host: '', moved: false });
+
+      // The folder spelled through a symlink: its untracked brief still rides (review round 2, Sol).
+      const alias = path.join(W.root, 'world', 'mac-alias');
+      fs.rmSync(alias, { force: true });
+      fs.symlinkSync(shared, alias);
+      write(path.join(shared, 'alias-brief.md'), 'through the alias\n');
+      const viaAlias = await placeStartByLoad({ ...task, description: `Read ${alias}/alias-brief.md.` }, {}, { host: '', cwd: alias, message: 'x' }, 'claude');
+      expect(viaAlias, viaAlias?.reason).toMatchObject({ host: 'cloud', moved: true, setUp: true });
+      expect(fs.readFileSync(`${dest}/alias-brief.md`, 'utf8')).toBe('through the alias\n');
+      await clearCloud();
+
+      // A named file git ignores, or a named folder, would not ride: no move for load (review round 1, Sol).
+      fs.appendFileSync(path.join(shared, '.git', 'info', 'exclude'), 'review-assets/\n');
+      write(path.join(shared, 'review-assets', 'brief.md'), 'ignored brief\n');
+      for (const left of [`${shared}/review-assets/brief.md`, `${shared}/notes`]) {
+        const kept = await placeStartByLoad({ ...task, description: `Read ${left}.` }, {}, { host: '', cwd: shared, message: 'x' }, 'claude');
+        expect(kept, left).toMatchObject({ host: '', moved: false });
+        // It names the host that has room and why the work cannot go there (review round 6).
+        expect(kept!.reason).toContain(`cloud has room but ${left}, which the task names, would not move with its repository`);
+      }
+
+      // A tracked folder, and the folder it works in, ride with the committed state (review round 2).
+      write(path.join(shared, 'web', 'index.ts'), 'x\n');
+      git(shared, ['add', 'web/index.ts']);
+      git(shared, ['commit', '-q', '-m', 'web']);
+      const folders = await placeStartByLoad({ ...task, description: `Work in ${shared}/web; your cwd is ${shared}.` }, {}, { host: '', cwd: shared, message: 'x' }, 'claude');
+      expect(folders, folders?.reason).toMatchObject({ host: 'cloud', moved: true });
+      await clearCloud();
+
+      // For load, a host with no checkout of the repository is no place to go.
+      fs.rmSync(targetBase, { recursive: true, force: true });
+      const noCheckout = await placeStartByLoad(task, {}, { host: '', cwd: shared, message: 'x' }, 'claude');
+      expect(noCheckout).toMatchObject({ host: '', moved: false });
+      expect(noCheckout!.reason).toContain('cloud has room but it has no checkout of ');
+
+      // For its files it still goes, and the session clones the repository first.
+      macAt(4);
+      const cloneFirst = { host: '', cwd: shared, message: 'x' };
+      expect(await placeStartByLoad(reviewer, {}, cloneFirst, 'claude')).toMatchObject({ host: 'cloud', moved: true, setUp: false });
+      expect(cloneFirst.message).toContain('Set the repository up first');
     } finally {
       __setHostLoadProberForTesting(null);
     }

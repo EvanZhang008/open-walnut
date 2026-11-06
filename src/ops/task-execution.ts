@@ -15,7 +15,7 @@ export const TASK_START_INPUT = {
   mode: z.enum(SESSION_MODE_IDS).optional().describe('Permission mode. Leave it out for a new coding task: never plan except when the user asks for plan; the owner writes its own plan and carries on.'),
   engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default: the default engine (Settings > Engines), claude when none is set'),
   effort: z.enum(SESSION_EFFORT_IDS as [typeof SESSION_EFFORT_IDS[number], ...typeof SESSION_EFFORT_IDS[number][]]).optional().describe('Reasoning effort, the draft picker\'s Effort row (claude engine only; xhigh and max only on models that offer them). Omit for the model default'),
-  user_request: z.string().trim().min(10).optional().describe('The user\'s own words asking for this start now, quoted. Only when the user asked: it lets the start past the 8-running-subtask brake (up to 16). Never for work you decided on yourself'),
+  user_request: z.string().trim().min(10).optional().describe('The user\'s own words asking for this start now, quoted. Only when the user asked: the start goes ahead at once even when its host has no free slot, as the user\'s own start does. Never for work you decided on yourself'),
   create_cwd: z.boolean().optional().describe('Create cwd on its host first, the folder picker\'s "Create folder & start". Default false: a missing folder fails the start'),
   workspace: z.object({
     provider: z.string().min(1).describe('Provider id from workspace_providers'),
@@ -38,10 +38,14 @@ export function taskExecution(task: Record<string, unknown>): Record<string, unk
     && (typeof status.pid === 'number' && status.pid > 1
     || (SESSION_ENGINE_IDS.includes(status.engine as typeof SESSION_ENGINE_IDS[number])
       && engineCaps(status.engine as typeof SESSION_ENGINE_IDS[number]).idProvisioning === 'provider-issued'))
-  // A start the running-subtask cap queued (core/sessions/start-queue.ts), with no session yet.
-  const queue = task.start_queue as { at?: string } | null | undefined
+  // A start waiting for a free slot on its host (core/sessions/start-queue.ts), with no session yet.
+  const queue = task.start_queue as { at?: string; host?: string; reason?: string } | null | undefined
   if (queue && !sessionId && !confirmed && !(attempt?.at && queue.at && attempt.at > queue.at)) {
-    return { state: 'queued', ...(queue.at ? { queued_at: queue.at } : {}) }
+    return {
+      state: 'queued', ...(queue.at ? { queued_at: queue.at } : {}),
+      waiting_for: `room on ${!queue.host ? 'a host' : queue.host === '__local__' ? 'this Mac' : queue.host}${queue.reason ? ` (${queue.reason})` : ''}`,
+      ...(queue.host ? { waits_for_host: queue.host } : {}),
+    }
   }
   const currentAttempt = attempt && !beganAfterAttempt && (!sessionId || !attempt.session_id || attempt.session_id === sessionId
     || attempt.state === 'starting')
@@ -106,21 +110,23 @@ function placementNote(started: Record<string, unknown>): string {
 }
 
 /**
- * The words of a start the running-subtask cap queued (core/sessions/start-queue.ts). Never tells
- * the caller to do the work itself: a lead whose job is to delegate read "do this part with your
- * own tools" in the old refusal and did the work (2026-11-03).
+ * The words of a start queued for a free slot on its host (core/sessions/start-queue.ts). Never
+ * tells the caller to do the work itself: a lead whose job is to delegate read "do this part with
+ * your own tools" in an old refusal and did the work (2026-11-03).
  */
-export function queuedOutcome(taskId: string, queued: { position?: number; running?: unknown[]; cap?: number }): [string, string] {
-  const running = Array.isArray(queued.running) ? queued.running.length : undefined
-  const cap = typeof queued.cap === 'number' ? queued.cap : undefined
-  const place = typeof queued.position === 'number' && queued.position > 1 ? ` (number ${queued.position} in its queue)` : ''
+export function queuedOutcome(taskId: string, queued: { position?: number; host?: string; reason?: string; running?: unknown[]; cap?: number }): [string, string] {
+  const place = typeof queued.position === 'number' && queued.position > 1 ? ` (number ${queued.position} in its host's queue)` : ''
+  // An older server's queue said how many of the caller's subtasks ran, against its cap.
+  const host = typeof queued.host === 'string' && queued.host ? queued.host === '__local__' ? 'this Mac' : queued.host : ''
+  const why = host ? `${host} has no room${typeof queued.reason === 'string' && queued.reason ? ` (${queued.reason})` : ''}`
+    : Array.isArray(queued.running) ? `${queued.running.length} subtasks of your task are running${typeof queued.cap === 'number' ? ` (at most ${queued.cap} run at once)` : ''}`
+    : 'no host has room'
   return [
-    `Task ${taskId} is queued${place}: ${running ?? 'the maximum number of'} subtasks of your task are running`
-      + `${cap ? ` (at most ${cap} run at once)` : ''}. Walnut starts it by itself when one of them stops running, `
+    `Task ${taskId} is queued${place}: ${why}. Walnut starts it by itself as soon as a host that can run it has room, `
       + 'highest priority first.',
     'Do not retry the start, and do not do its work yourself: it runs as its own task. task_get shows execution.state '
-      + '"queued" until it starts.'
-      + (cap !== undefined && cap >= 16 ? '' : ' When the user asked for it to start now, task_start with user_request quoting their words lets up to 16 run.'),
+      + '"queued", with waiting_for and waits_for_host, until it starts. When the user asked for it to start now, task_start '
+      + 'with user_request quoting their words starts it at once.',
   ]
 }
 
@@ -129,7 +135,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
   if (!started || typeof started.taskId !== 'string') {
     throw new Error(`Start response was incomplete. Read task_get for ${id} before retrying; do not create another task.`)
   }
-  const queued = started.queued as { position?: number; running?: unknown[]; cap?: number } | undefined
+  const queued = started.queued as Parameters<typeof queuedOutcome>[1] | undefined
   if (queued && typeof queued === 'object') return withOutcome({ ...started, execution: { state: 'queued' } }, ...queuedOutcome(String(started.taskId), queued))
   // Old servers only confirm that the request was accepted; a pre-assigned id does not prove the process has started.
   const state = started.started === true ? 'running' : 'starting'

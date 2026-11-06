@@ -1,14 +1,18 @@
 /**
- * The start queue (core/sessions/start-queue.ts): a worker session's start past the
- * running-subtask cap is queued on the task and started by Walnut itself once a slot frees,
- * highest priority first, then the oldest. 2026-11-03: a VP at the cap read "do this part with
- * your own tools" and did the work itself, then wrote its own retry loops.
+ * Each host's slots (core/sessions/host-admission.ts) for an automatic start (a worker
+ * session's), and what is left of the start queue (core/sessions/start-queue.ts). 2026-11-05, the
+ * user: "remove this we don't want this limitation ... let only limit the auto start, not the one
+ * start by human manually". 2026-11-06, the user: a start is a sync call, "if it did not start, it
+ * must be an error": a worker's start that no host has room for is a 409 hosts_full to it, never
+ * queued; a person's start and a start that quotes the user's words never wait; the starts an
+ * older Walnut queued are each started for real or failed loudly.
  *
  * Real startServer({ port: 0, dev: true }) with an isolated home, real task and session
- * records, the real start path. Only the Claude CLI spawn is replaced (sessionRunner.startSession).
- * The loop runs (WALNUT_START_QUEUE=1), so the nudge on a sibling leaving IN_PROGRESS is real.
+ * records, the real start path and the real host view (hostLoads); this Mac's numbers come
+ * from the load prober seam (full = load 4 per CPU). Only the Claude CLI spawn is replaced
+ * (sessionRunner.startSession). The loop runs (WALNUT_START_QUEUE=1), so nudges are real.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import type { Server as HttpServer } from 'node:http'
@@ -18,13 +22,15 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-start-que
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.js'
+import { addTask, getTask, listTasks, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
-import { MAX_RUNNING_SUBTASKS, MAX_RUNNING_SUBTASKS_USER_ASKED, SubtaskLimitError } from '../../../src/core/sessions/subtask-limits.js'
 import { startSessionForTask } from '../../../src/core/sessions/task-start.js'
-import { drainStartQueue } from '../../../src/core/sessions/start-queue.js'
+import { clearStartQueue, drainStartQueue } from '../../../src/core/sessions/start-queue.js'
+import { __resetHostAdmissionForTesting, slotHoldersOn, startsAdmittedOn } from '../../../src/core/sessions/host-admission.js'
+import { __setHostLoadProberForTesting } from '../../../src/core/hosts/placement.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { taskExecution } from '../../../src/ops/task-execution.js'
+import * as sendCore from '../../../src/core/sessions/session-send-core.js'
 
 const DO_IT_YOURSELF = /own tools|do (it|this part|that part|the work) yourself/i
 
@@ -32,13 +38,27 @@ let server: HttpServer
 let port: number
 const api = (p: string): string => `http://localhost:${port}${p}`
 const failFor = new Set<string>()
+/** Spawns whose answer is lost (the daemon's reply timed out): the outcome is unknown. */
+const lostFor = new Set<string>()
 const spawned: string[] = []
+
+/**
+ * This Mac's numbers: 14 CPUs and 36 GB (7 slots). Full: load 100, past twice the cap of 3 per
+ * CPU; busy: load 56, over the cap (placement looks elsewhere) but not full.
+ */
+function mac(state: boolean | 'busy', load1?: number): void {
+  __setHostLoadProberForTesting(async () => ({
+    cpus: 14, load: [load1 ?? (state === 'busy' ? 56 : state ? 100 : 1), 1, 1], cpuBusy: 0.1, memTotalBytes: 36 * 1024 ** 3, memAvailBytes: 20 * 1024 ** 3,
+    diskPath: '/', diskFreeBytes: 500 * 1024 ** 3, diskTotalBytes: 1000 * 1024 ** 3, at: new Date().toISOString(),
+  }))
+}
 
 let seq = 0
 async function sessionFor(taskId: string): Promise<string> {
   seq += 1
   const sid = `33333333-4444-5555-6666-${String(seq).padStart(12, '0')}`
-  await createSessionRecord(sid, taskId, 'queue', '/repo/queue', { title: `Session ${seq}` })
+  // Idle, not in a turn: a caller's own session takes no slot.
+  await createSessionRecord(sid, taskId, 'queue', '/repo/queue', { title: `Session ${seq}`, initialProcessStatus: 'idle' })
   return sid
 }
 
@@ -60,22 +80,24 @@ async function startAs(sid: string | undefined, taskId: string, body: Record<str
   return { status: res.status, json: await res.json() as Record<string, any> }
 }
 
-/** A worker with the cap full of running subtasks. */
-async function fullWorker(title: string) {
+/** A worker task with a session of its own (an automatic starter). */
+async function worker(title: string, running = 0) {
   const { task: parent } = await addTask({ title, project: 'queue' })
-  const running = await children(parent.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
+  const runningIds = await children(parent.id, Array(running).fill('IN_PROGRESS'))
   const sid = await sessionFor(parent.id)
-  return { parent, running, sid }
+  return { parent, running: runningIds, sid }
 }
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   process.env.WALNUT_START_QUEUE = '1'
+  mac(true)
   // The CLI spawn only: the runner marks the task running the way the real one does.
   vi.spyOn(sessionRunner, 'startSession').mockImplementation(async (data: any) => {
     const sid = data.preassignedSessionId as string
     if (failFor.has(data.taskId)) throw new Error('spawn refused for the test')
+    if (lostFor.has(data.taskId)) throw new Error('daemon command timeout: spawn answer lost for the test')
     spawned.push(data.taskId)
     await updateTaskRaw(data.taskId, { phase: 'IN_PROGRESS' as never })
     return { claudeSessionId: sid, title: 'x' } as never
@@ -86,182 +108,248 @@ beforeAll(async () => {
   port = addr.port
 }, 30_000)
 
+afterEach(async () => {
+  // One queue for every host: what a test left queued would start in the next.
+  mac(true)
+  // A started session holds its slot a minute (host-admission.ts): each test starts on a free Mac.
+  __resetHostAdmissionForTesting()
+  for (const t of await listTasks()) if (t.start_queue) await clearStartQueue(t.id, 'test cleanup')
+})
+
 afterAll(async () => {
   delete process.env.WALNUT_START_QUEUE
+  __setHostLoadProberForTesting(null)
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe('the start queue', () => {
-  it('queues a start at the cap, starts the highest priority first, and the next one by itself when a sibling stops', async () => {
-    const { parent, running, sid } = await fullWorker('Busy lead')
+/** What Walnut delivered to a session (session-send-core.ts deliverToSession), spied. */
+const delivered = vi.spyOn(sendCore, 'deliverToSession')
+const toldTo = (sid: string) => delivered.mock.calls.filter(([rec]) => rec.claudeSessionId === sid).map(([, o]) => o.busText).join('\n')
+
+/** An entry an older Walnut queued (the start queue is no longer written). */
+async function oldEntry(taskId: string, parentId: string, callerSid: string, params: Record<string, unknown> = {}) {
+  await updateTaskRaw(taskId, { start_queue: {
+    at: new Date(Date.now() - 60_000).toISOString(), parent_id: parentId, caller_sid: callerSid, host: '__local__', reason: 'all 7 slots taken',
+    params: { cwd: os.tmpdir(), message: `queued ${taskId}`, expectReply: false, ...params },
+  } } as never)
+}
+
+describe('a worker\'s start on each host\'s slots', () => {
+  it('no host with room: a 409 hosts_full to the worker, naming the host and why; nothing is queued', async () => {
+    const { parent, sid } = await worker('Busy lead')
+    const [next] = await children(parent.id, ['TODO'])
+    const res = await startAs(sid, next, { message: 'go' })
+    expect(res.status).toBe(409)
+    expect(res.json.error).toMatchObject({ code: 'hosts_full' })
+    expect(res.json.error.message).toMatch(new RegExp(`^Task ${next} did not start: this Mac has no room \\(load past 6 per CPU\\)\\. `))
+    expect(res.json.error.message).not.toMatch(DO_IT_YOURSELF)
+    expect(res.json.detail).toMatchObject({ host: '__local__', label: 'this Mac', reason: 'load past 6 per CPU' })
+    // On the task too, where task_get, the Board and its lead read it (review round 6).
+    const after = await getTask(next)
+    expect(after.start_queue ?? undefined).toBeUndefined()
+    expect(taskExecution(after as never)).toMatchObject({ state: 'error', error: 'Did not start: this Mac has no room (load past 6 per CPU).' })
+    // The status the Board and the lead read, as its sync derives it from the record.
+    const { syncUserStatuses } = await import('../../../src/core/user-status-sync.js')
+    await syncUserStatuses(new Set([next]))
+    expect((await getTask(next)).user_status)
+      .toMatchObject({ state: 'waiting', kind: 'not-started', waitingOn: 'Did not start: this Mac has no room (load past 6 per CPU).' })
+    expect(spawned).not.toContain(next)
+    expect(startsAdmittedOn('__local__')).toBe(0)
+  })
+
+  it('the start answers once the session is up (a sync call, 2026-11-06)', async () => {
+    mac(false)
+    const { parent, sid } = await worker('Lead on a free Mac')
+    const [next] = await children(parent.id, ['TODO'])
+    const res = await startAs(sid, next, { message: 'go' })
+    expect(res.status).toBe(202)
+    expect(res.json).toMatchObject({ taskId: next, started: true })
+    expect(spawned).toContain(next)
+  })
+
+  it('a start whose session does not confirm is an error to the worker, never a 202 it reads as started', async () => {
+    mac(false)
+    const { parent, sid } = await worker('Lead whose start is not confirmed')
+    const [next] = await children(parent.id, ['TODO'])
+    lostFor.add(next)
+    const res = await startAs(sid, next, { message: 'go' })
+    expect(res.status).toBe(504)
+    expect(res.json.error).toMatchObject({ code: 'start_unconfirmed' })
+    expect(res.json.error.message).toMatch(new RegExp(`^Task ${next} did not confirm it started within 110 seconds\\. Do not start it again`))
+    expect(res.json.detail).toMatchObject({ taskId: next })
+  })
+
+  it('a worker\'s message to a task whose conversation has no live session resumes it only when its host has room', async () => {
+    const { parent, sid } = await worker('Lead resuming a stopped child')
+    const [stopped] = await children(parent.id, ['IN_PROGRESS'])
+    seq += 1
+    const old = `33333333-4444-5555-6666-${String(seq).padStart(12, '0')}`
+    await createSessionRecord(old, stopped, 'queue', os.tmpdir(), { title: 'Stopped child', initialProcessStatus: 'stopped' })
+    await updateTaskRaw(stopped, { session_ids: [old], session_id: old } as never)
+    const res = await startAs(sid, stopped, { message: 'go on' })
+    expect(res.status).toBe(409)
+    expect(res.json.error).toMatchObject({ code: 'hosts_full' })
+    expect(res.json.detail).toMatchObject({ taskId: stopped, host: '__local__' })
+    expect(startsAdmittedOn('__local__')).toBe(0)
+  })
+
+  it('a host over its load cap but not full still takes an automatic start (the load caps only steer placement)', async () => {
+    mac('busy')
+    const { parent, sid } = await worker('Lead on a busy Mac')
+    const [next] = await children(parent.id, ['TODO'])
+    const res = await startAs(sid, next, { message: 'go' })
+    expect(res.status).toBe(202)
+    expect(spawned).toContain(next)
+  })
+
+  it('no lead cap: a worker with 20 subtasks running starts the next at once when its host has room', async () => {
+    mac(false)
+    const { parent, sid } = await worker('Lead with twenty running', 20)
+    const [next] = await children(parent.id, ['TODO'])
+    const res = await startAs(sid, next, { message: 'go' })
+    expect(res.status).toBe(202)
+    expect(spawned).toContain(next)
+  })
+
+  it("a person's start and a start quoting the user's words start at once on a full host; a token is refused", async () => {
+    const { parent, sid } = await worker('Lead the person overrides')
+    const [byPerson, asked, token] = await children(parent.id, ['TODO', 'TODO', 'TODO'])
+    const person = await startAs(undefined, byPerson, { message: 'now, from the board' })
+    expect(person.status).toBe(202)
+    expect((await getTask(byPerson)).last_start?.state).toBe('started')
+    const userAsked = await startAs(sid, asked, { message: 'now', user_request: 'please start this one now, I am waiting' })
+    expect(userAsked.status).toBe(202)
+    expect(spawned).toContain(asked)
+    // A too-short quote is a 400 and records nothing.
+    const refused = await startAs(sid, token, { message: 'go', user_request: 'now' })
+    expect(refused.status).toBe(400)
+    expect((await getTask(token)).last_start).toBeUndefined()
+  })
+})
+
+describe('the starts an older Walnut queued', () => {
+  it('start for real once there is room, highest priority first', async () => {
+    const { parent, sid } = await worker('Lead with old entries')
     const [plain, urgent] = await children(parent.id, ['TODO', 'TODO'])
     await updateTaskRaw(urgent, { priority: 'immediate' as never })
-
-    const first = await startAs(sid, plain, { message: 'go plain' })
-    expect(first.status).toBe(202)
-    expect(first.json).toMatchObject({ taskId: plain, started: false, queued: { position: 1, cap: MAX_RUNNING_SUBTASKS } })
-    const second = await startAs(sid, urgent, { message: 'go urgent' })
-    expect(second.json.queued.position).toBe(1)
-    const queuedPlain = await getTask(plain)
-    expect(queuedPlain.start_queue).toMatchObject({ parent_id: parent.id, caller_sid: sid, params: { message: 'go plain' } })
-    expect(taskExecution(queuedPlain as never).state).toBe('queued')
-
-    // The queue's own start is never queued again: at the cap it throws, and the entry stays as it was.
-    const replay = await startSessionForTask({ taskIdPrefix: plain, callerSid: sid, source: 'start-queue', queueWhenFull: true })
-      .catch((e: unknown) => e) as SubtaskLimitError
-    expect(replay).toBeInstanceOf(SubtaskLimitError)
-    expect(replay.code).toBe('too_many_running_subtasks')
-    expect(replay.message).not.toMatch(DO_IT_YOURSELF)
-    expect((await getTask(plain)).start_queue?.at).toBe(queuedPlain.start_queue?.at)
-
-    // One sibling stops: the immediate one starts first, the plain one still waits.
-    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
-    const drained = await drainStartQueue(parent.id)
-    expect(drained.started).toEqual([urgent])
-    expect(drained.waiting).toEqual([plain])
-    const started = await getTask(urgent)
-    expect(started.start_queue ?? undefined).toBeUndefined()
-    expect(started.last_start?.state).toBe('started')
-    expect((await getTask(plain)).start_queue).toBeTruthy()
-
-    // Another sibling stops: the nudge starts the plain one by itself, no drain called here.
-    await updateTaskRaw(running[1], { phase: 'NEED_ACTION' as never }, { emitEvent: true, source: 'test' })
-    await vi.waitFor(async () => {
-      expect((await getTask(plain)).start_queue ?? undefined).toBeUndefined()
-    }, { timeout: 10_000, interval: 200 })
-    expect(spawned).toContain(plain)
-    expect((await getTask(plain)).last_start?.state).toBe('started')
-  })
-
-  it('a start the user asked for is not held back by older plain starts the lower cap refuses', async () => {
-    // 2026-11-04: three older plain starts at the cap of 8 kept a user-asked start queued for
-    // hours with 15 of 16 running, because the first refusal stopped the whole line.
-    const { task: parent } = await addTask({ title: 'Lead past both caps', project: 'queue' })
-    const running = await children(parent.id, Array(MAX_RUNNING_SUBTASKS_USER_ASKED).fill('IN_PROGRESS'))
-    const sid = await sessionFor(parent.id)
-    const [olderA, olderB, asked, askedLater] = await children(parent.id, ['TODO', 'TODO', 'TODO', 'TODO'])
-    for (const id of [olderA, olderB]) expect((await startAs(sid, id, { message: 'plain' })).json.queued).toBeTruthy()
-    for (const id of [asked, askedLater]) {
-      expect((await startAs(sid, id, { message: 'asked', user_request: 'please start this one now, I am waiting' })).json.queued).toBeTruthy()
+    for (const id of [plain, urgent]) await oldEntry(id, parent.id, sid)
+    expect(taskExecution(await getTask(plain) as never)).toMatchObject({ state: 'queued' })
+    mac(false)
+    const out = await drainStartQueue()
+    expect(out.started).toEqual([urgent, plain])
+    for (const id of [urgent, plain]) {
+      const t = await getTask(id)
+      expect(t.start_queue ?? undefined).toBeUndefined()
+      expect(t.last_start?.state).toBe('started')
     }
-
-    // One slot frees: under 16, still over 8. The user-asked one goes, the plain ones wait.
-    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
-    const drained = await drainStartQueue(parent.id)
-    expect(drained.started).toEqual([asked])
-    expect(drained.waiting.sort()).toEqual([olderA, olderB, askedLater].sort())
-    expect((await getTask(olderA)).start_queue).toBeTruthy()
-    expect((await getTask(askedLater)).start_queue).toBeTruthy()
   })
 
-  it("a helper's start of a lead's subtask queues under the lead, starts when the lead has room, and drops with the helper", async () => {
-    const { parent: lead, running } = await fullWorker('Lead a helper starts for')
-    const [forHelper, dropsWithHelper] = await children(lead.id, ['TODO', 'TODO'])
-    const { task: helper } = await addTask({ title: 'Helper task', project: 'queue' })
-    const helperSid = await sessionFor(helper.id)
-    expect((await startAs(helperSid, forHelper, { message: 'go for the lead' })).json.queued).toMatchObject({ cap: MAX_RUNNING_SUBTASKS })
-    expect((await getTask(forHelper)).start_queue).toMatchObject({ parent_id: lead.id, caller_sid: helperSid })
-
-    // The lead completes with its subtasks open: the helper still waits, the entry stays.
-    await updateTaskRaw(lead.id, { phase: 'COMPLETE' as never })
-    expect((await drainStartQueue(lead.id)).waiting).toContain(forHelper)
-    await updateTaskRaw(lead.id, { phase: 'IN_PROGRESS' as never })
-
-    // A slot of the lead frees: the drain starts it.
-    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
-    expect((await drainStartQueue(lead.id)).started).toEqual([forHelper])
-
-    // The helper completes: its other queued start goes with it.
-    expect((await startAs(helperSid, dropsWithHelper, { message: 'later' })).json.queued).toBeTruthy()
-    await updateTaskRaw(helper.id, { phase: 'COMPLETE' as never })
-    expect((await drainStartQueue(lead.id)).dropped).toContain(dropsWithHelper)
-  })
-
-  it("a person's start clears a queued entry", async () => {
-    const { parent, sid } = await fullWorker('Lead the person overrides')
-    const [waiting] = await children(parent.id, ['TODO'])
-    expect((await startAs(sid, waiting, { message: 'later' })).json.queued).toBeTruthy()
-
-    const person = await startAs(undefined, waiting, { message: 'now, from the board' })
-    expect(person.status).toBe(202)
-    expect(person.json.queued).toBeUndefined()
-    const after = await getTask(waiting)
+  it('fail loudly on a full host: the entry goes, the failure is on the task, and the asker is told now', async () => {
+    const { parent, sid } = await worker('Lead whose old entry cannot start')
+    const [stuck] = await children(parent.id, ['TODO'])
+    await oldEntry(stuck, parent.id, sid)
+    const out = await drainStartQueue()
+    expect(out.failed).toEqual([stuck])
+    const after = await getTask(stuck)
     expect(after.start_queue ?? undefined).toBeUndefined()
-    expect(after.last_start?.state).toBe('started')
+    expect(taskExecution(after as never)).toMatchObject({ state: 'error', error: expect.stringMatching(/did not start: this Mac has no room/i) })
+    const told = toldTo(sid)
+    expect(told).toContain(`(${stuck}), which you started and Walnut had queued since`)
+    expect(told).toContain('Walnut no longer queues starts')
+    expect(spawned).not.toContain(stuck)
   })
 
-  it('drops a COMPLETE task, holds a team-stopped team, and cancels on DELETE', async () => {
-    const { parent, running, sid } = await fullWorker('Lead with a stopped team')
-    const [done, held, cancelled] = await children(parent.id, ['TODO', 'TODO', 'TODO'])
-    for (const id of [done, held, cancelled]) expect((await startAs(sid, id, { message: id })).status).toBe(202)
+  it("one that quotes the user's words starts at once on a full host", async () => {
+    const { parent, sid } = await worker('Lead with an old user-asked entry')
+    const [asked] = await children(parent.id, ['TODO'])
+    await oldEntry(asked, parent.id, sid, { userRequest: 'please start this one now, I am waiting' })
+    expect((await drainStartQueue()).started).toEqual([asked])
+  })
 
+  it('drops a COMPLETE task, one whose asker finished, and holds a team-stopped team until it resumes', async () => {
+    const { parent, sid } = await worker('Lead with a stopped team')
+    const [done, held] = await children(parent.id, ['TODO', 'TODO'])
+    for (const id of [done, held]) await oldEntry(id, parent.id, sid)
     await updateTaskRaw(done, { phase: 'COMPLETE' as never })
-    const del = await fetch(api(`/api/v1/tasks/${cancelled}/start-queue`), { method: 'DELETE' })
-    expect(await del.json()).toMatchObject({ taskId: cancelled, cleared: true })
     await updateTaskRaw(parent.id, { team_stop: { at: new Date().toISOString(), by: 'human', when: 'now', members: [] } as never })
-    // A slot frees while the stop is in force: nothing of the team starts.
-    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
-    const whileStopped = await drainStartQueue(parent.id)
+    mac(false)
+    const whileStopped = await drainStartQueue()
+    expect(whileStopped.dropped).toContain(done)
     expect(whileStopped.held).toEqual([held])
-    expect(whileStopped.started).toEqual([])
-    expect((await getTask(done)).start_queue ?? undefined).toBeUndefined()
     expect(spawned).not.toContain(held)
-
-    // team_resume: the held start goes (this drain, or the nudge if it came first).
     await updateTaskRaw(parent.id, { team_stop: null as never })
-    await drainStartQueue(parent.id)
-    expect(spawned).toContain(held)
-    expect((await getTask(held)).start_queue ?? undefined).toBeUndefined()
-    expect(spawned).not.toContain(cancelled)
+    expect((await drainStartQueue()).started).toEqual([held])
+
+    const { parent: finished, sid: finishedSid } = await worker('Lead that finished')
+    const [orphan] = await children(finished.id, ['TODO'])
+    await oldEntry(orphan, finished.id, finishedSid)
+    await updateTaskRaw(finished.id, { phase: 'COMPLETE' as never })
+    expect((await drainStartQueue()).dropped).toContain(orphan)
+    expect(spawned).not.toContain(orphan)
   })
 
-  it('a replay that fails for another reason is dropped, with the failure on the task', async () => {
-    const { parent, running, sid } = await fullWorker('Lead whose replay fails')
+  it("Start now runs one as the user's own on a full host; the user's Cancel says so on the task; a run after a cancel starts nothing", async () => {
+    const { parent, sid } = await worker('Lead the user overrides from the page')
+    const [now, cancelled] = await children(parent.id, ['TODO', 'TODO'])
+    for (const id of [now, cancelled]) await oldEntry(id, parent.id, sid)
+    const res = await fetch(api(`/api/v1/tasks/${now}/start-queue/start`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    expect(res.status).toBe(202)
+    expect(await res.json()).toMatchObject({ taskId: now })
+    expect(spawned).toContain(now)
+    expect((await getTask(now)).start_queue ?? undefined).toBeUndefined()
+    expect((await fetch(api(`/api/v1/tasks/${now}/start-queue/start`), { method: 'POST' })).status).toBe(404)
+
+    const entry = (await getTask(cancelled)).start_queue!
+    const del = await fetch(api(`/api/v1/tasks/${cancelled}/start-queue?by=person`), { method: 'DELETE' })
+    expect(await del.json()).toMatchObject({ cleared: true })
+    expect(taskExecution(await getTask(cancelled) as never)).toMatchObject({ state: 'error', error: 'The user cancelled this queued start; it did not run.' })
+    // A pass that read the entry before the cancel runs it after: nothing starts.
+    mac(false)
+    const late = await startSessionForTask({ ...entry.params, taskIdPrefix: cancelled, callerSid: sid, source: 'start-queue', queuedAt: entry.at } as never)
+      .catch((e: unknown) => e) as Error
+    expect(late.name).toBe('QueuedStartGoneError')
+    expect(spawned).not.toContain(cancelled)
+    expect(slotHoldersOn('__local__')).toEqual([now])
+  })
+
+  it('a run that fails for another reason is dropped, with the failure on the task, and gives its slot back', async () => {
+    const { parent, sid } = await worker('Lead whose old entry fails')
     const [broken] = await children(parent.id, ['TODO'])
-    expect((await startAs(sid, broken, { message: 'will fail' })).status).toBe(202)
+    await oldEntry(broken, parent.id, sid)
     failFor.add(broken)
-    await updateTaskRaw(running[0], { phase: 'COMPLETE' as never })
-    const out = await drainStartQueue(parent.id)
-    expect(out.dropped).toEqual([broken])
+    mac(false)
+    const out = await drainStartQueue()
+    expect(out.failed).toEqual([broken])
     const after = await getTask(broken)
     expect(after.start_queue ?? undefined).toBeUndefined()
     expect(after.last_start?.state).toBe('failed')
     expect(taskExecution(after as never).state).toBe('error')
-  })
-  // The 2026-11-03 review: a caller whose session is gone failed open and started every entry at once;
-  // a session begun by a path that writes no last_start got the queued message again.
-  it('a gone caller session still waits for a slot, a finished caller drops its entries, a session since queued drops one', async () => {
-    const { parent, running, sid } = await fullWorker('Lead whose session went away')
-    const [a, b] = await children(parent.id, ['TODO', 'TODO'])
-    for (const id of [a, b]) expect((await startAs(sid, id, { message: id })).status).toBe(202)
-    // The caller's session record is gone: the replay is admitted against the parent itself.
-    await updateTaskRaw(a, { start_queue: { ...(await getTask(a)).start_queue!, caller_sid: '99999999-0000-0000-0000-000000000000' } as never })
-    await updateTaskRaw(b, { start_queue: { ...(await getTask(b)).start_queue!, caller_sid: '99999999-0000-0000-0000-000000000000' } as never })
-    const full = await drainStartQueue(parent.id)
-    expect(full.started).toEqual([])
-    expect(full.waiting.sort()).toEqual([a, b].sort())
-    await updateTaskRaw(running[0], { phase: 'NEED_ACTION' as never })
-    const one = await drainStartQueue(parent.id)
-    expect(one.started).toHaveLength(1)
-    expect(one.waiting).toHaveLength(1)
-
-    const { parent: done, sid: doneSid } = await fullWorker('Lead that finished')
-    const [orphan] = await children(done.id, ['TODO'])
-    expect((await startAs(doneSid, orphan, { message: 'x' })).status).toBe(202)
-    await updateTaskRaw(done.id, { phase: 'COMPLETE' as never })
-    expect((await drainStartQueue(done.id)).dropped).toEqual([orphan])
-    expect((await getTask(orphan)).start_queue ?? undefined).toBeUndefined()
-
-    const { parent: p3, running: r3, sid: sid3 } = await fullWorker('Lead whose task the board started')
-    const [boardStarted] = await children(p3.id, ['TODO'])
-    expect((await startAs(sid3, boardStarted, { message: 'x' })).status).toBe(202)
-    await new Promise((r) => setTimeout(r, 5))
-    await sessionFor(boardStarted)
-    await updateTaskRaw(r3[0], { phase: 'NEED_ACTION' as never })
-    const out = await drainStartQueue(p3.id)
-    expect(out.dropped).toEqual([boardStarted])
-    expect(spawned).not.toContain(boardStarted)
+    expect(startsAdmittedOn('__local__')).toBe(0)
   })
 })
 
+// 2026-11-06, the user: "if a task has not updated for a while, the VP gets a notification and checks it".
+describe('a task asked to start or sent work that shows nothing for 10 minutes tells its asker', () => {
+  it('once, waking it; never for a task whose session runs or ran since the ask', async () => {
+    const { remindSilent, SILENT_AFTER_MS } = await import('../../../src/core/sessions/session-request-notify.js')
+    const { createSessionRequest } = await import('../../../src/core/session-requests.js')
+    const { parent, sid } = await worker('Lead that asked and heard nothing')
+    const [silent, busy] = await children(parent.id, ['TODO', 'TODO'])
+    const ask = await createSessionRequest({ fromSessionId: sid, fromTaskId: parent.id, toTaskId: silent, text: 'Do the silent part.' })
+    seq += 1
+    const busySid = `33333333-4444-5555-6666-${String(seq).padStart(12, '0')}`
+    await createSessionRecord(busySid, busy, 'queue', '/repo/queue', { title: 'Busy child', initialProcessStatus: 'running' })
+    await createSessionRequest({ fromSessionId: sid, fromTaskId: parent.id, toTaskId: busy, toSessionId: busySid, text: 'Do the busy part.' })
+
+    // Not yet ten minutes: nothing.
+    expect(await remindSilent(Date.now() + SILENT_AFTER_MS - 60_000)).toBe(0)
+    const later = Date.now() + SILENT_AFTER_MS + 60_000
+    expect(await remindSilent(later)).toBe(1)
+    const told = toldTo(sid)
+    expect(told).toContain(`(${silent}) has shown nothing for 11 minutes since you asked (${ask.id}): no session of it ever started.`)
+    expect(told).not.toContain(busy)
+    // Only once.
+    expect(await remindSilent(later + 60_000)).toBe(0)
+  })
+})

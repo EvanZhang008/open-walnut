@@ -227,6 +227,10 @@ export interface UserStatusInput {
   status?: string;
   /** The task has (or had) a session. */
   hasSession?: boolean;
+  /** Its start waits for a free slot on a host (Task.start_queue, sessions/start-queue.ts). */
+  startQueue?: { host?: string; reason?: string } | null;
+  /** Its last start was refused or failed and no session ran since: why ("Did not start: ..."). */
+  startFailed?: string | null;
   /** Its session's process status (running / idle / stopped / error). */
   processStatus?: string;
   /** Its session's own work that runs on after its turn (sessions/outliving-work.ts): a background
@@ -636,6 +640,18 @@ export function reportIsCurrent(input: Pick<UserStatusInput, 'report' | 'phaseCh
   return !Number.isFinite(movedAt) || Date.parse(r.at) >= movedAt - REPORT_CLOCK_SLACK_MS;
 }
 
+/** The words of a start that waits for a free slot on a host. Pure. */
+/** `text` cut to `max` characters at a word, with an ellipsis. */
+function clipped(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, cutEnd(text, max - 1))}…` : text;
+}
+
+export function queuedWaitingOn(q: { host?: string; reason?: string }): string {
+  const host = !q.host ? 'a host' : q.host === '__local__' ? 'this Mac' : q.host;
+  // An older Walnut queued it; it is tried once more, then fails saying why (start-queue.ts).
+  return `Queued by an older Walnut for room on ${host}${q.reason ? ` (${q.reason})` : ''}: Walnut tries it once more, then says why if it does not start`;
+}
+
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
   const derived = orgNodeNeverNeeds(derive(input, nowMs), input);
   // A thread's ask is the thread; the node's own report words are no line of it.
@@ -934,6 +950,18 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     return strip({ state: 'needs', source: 'session', ask: heldAsk, ...w });
   }
   const own = ownWork(input, report, w, nowMs);
+  // Its start waits for room on a host (sessions/start-queue.ts; a start clears it), whatever its
+  // phase: a first start, a retry after a failed one, a parked task started again. A person's own
+  // mark of Needs you still says so (review round 3, Sol).
+  if (input.startQueue && !input.markedByPerson) {
+    return strip({ state: 'waiting', kind: 'machine', waitingOn: queuedWaitingOn(input.startQueue), ...w });
+  }
+  // Its start did not happen (no host had room, the spawn failed) and nothing ran since: the row
+  // says why, so its lead and the user see it (2026-11-06, the user: a start that did not start is
+  // an error). A person's own mark of Needs you still says so.
+  if (input.startFailed && !input.hasSession && !input.markedByPerson) {
+    return strip({ state: 'waiting', kind: 'not-started', waitingOn: clipped(input.startFailed.startsWith('Did not start') ? input.startFailed : `Did not start: ${input.startFailed}`, 240), ...w });
+  }
 
   // The state is the task's own phase (2026-10-26, the user: "this status need to be self updated
   // by task, can also be updated by leader ... task has status, we already have good task system").

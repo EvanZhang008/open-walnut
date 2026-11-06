@@ -2,7 +2,7 @@ import { getProjectMetadata } from '../task-manager.js';
 import { QuickStartError } from './quick-start.js';
 import { recordedCwd } from './task-start.js';
 import { inheritedLaunchPair } from './caller-placement.js';
-import { defaultCwdOnHost, recordedCwdOnHost } from './launch-place.js';
+import { ancestorFolderYields, defaultCwdOnHost, recordedCwdOnHost } from './launch-place.js';
 import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { Task } from '../types.js';
 import type { SessionStartParams } from './task-start.js';
@@ -50,8 +50,22 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   const named = !wsPlace && params.host !== undefined;
   let cwd = wsPlace?.cwd ?? params.cwd
     ?? (named ? await recordedCwdOnHost(task, params.host, metadata?.default_host) : await recordedCwd(task));
-  const pair = !cwd && params.host === undefined && params.callerSid
+  // The creating session's place, when the task has no folder of its own: also over an
+  // ancestor's folder on another host (launch-place.ts ancestorFolderYields).
+  const fromRecord = !wsPlace && params.cwd === undefined && !!cwd;
+  let pair = (!cwd || fromRecord) && params.host === undefined && params.callerSid
     ? await inheritedLaunchPair(params.callerSid, task).catch(() => undefined) : undefined;
+  if (pair && cwd) {
+    const text = [task.title, task.description ?? '', params.message ?? ''].join('\n');
+    const { needsMacTools } = await import('../hosts/placement.js');
+    const { namedPaths } = await import('../hosts/named-paths.js');
+    const yields = await ancestorFolderYields(task, pair.host, metadata?.default_host, {
+      // ./ and ../ read against the folder that would yield, before it is given up (review round 5, Sol).
+      macTools: needsMacTools(text, cwd, task.tags ?? []), paths: namedPaths(text, undefined, { cwd }),
+    }).catch(() => false);
+    if (yields) cwd = undefined;
+    else pair = undefined;
+  }
   const requestedHost = wsPlace ? wsPlace.host : params.host ?? (pair ? pair.host : metadata?.default_host);
   const host = requestedHost === '__local__' || requestedHost === 'local' ? '' : requestedHost;
   if (host) {

@@ -649,3 +649,18 @@ export async function moveFolderToProject(
 }> {
   return apiPatch(`/api/tasks/folders/${groupId}`, { project });
 }
+
+/** Cancel a start waiting in the start queue for a host slot (core/sessions/start-queue.ts). */
+export async function cancelQueuedStart(id: string): Promise<{ taskId: string; cleared: boolean }> {
+  return apiDelete<{ taskId: string; cleared: boolean }>(`/api/v1/tasks/${encodeURIComponent(id)}/start-queue?by=person`);
+}
+
+/** The user's own start of a task (the start route with no caller: it never waits for a host slot). */
+export async function startTaskAsPerson(id: string): Promise<{ taskId: string; sessionId?: string }> {
+  return apiPost<{ taskId: string; sessionId?: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/start`, {}, { timeoutMs: 60_000 });
+}
+
+/** Start a queued start now, as the user's own start (it never waits for a host slot). */
+export async function startQueuedNow(id: string): Promise<{ taskId: string; sessionId?: string }> {
+  return apiPost<{ taskId: string; sessionId?: string }>(`/api/v1/tasks/${encodeURIComponent(id)}/start-queue/start`, {}, { timeoutMs: 60_000 });
+}

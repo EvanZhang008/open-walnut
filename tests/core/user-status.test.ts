@@ -309,3 +309,42 @@ describe('a message that never reached the session', () => {
     expect(statusInputOf(task('2026-10-28T07:00:00.000Z'), facts).undeliveredMessage).toBeNull()
   })
 })
+
+// 2026-11-06, the user: a start that did not start is an error. Its reason is on the row, so its
+// lead and the user see it, until a session runs.
+describe('a start that did not start', () => {
+  it('says why on the row while no session runs; a session, or a person\'s mark, takes over', () => {
+    const startFailed = 'Did not start: clouddev has no room (all 24 slots taken).'
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startFailed }, NOW)).toMatchObject({ state: 'waiting', kind: 'not-started', waitingOn: startFailed })
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startFailed: 'spawn refused' }, NOW).waitingOn).toBe('Did not start: spawn refused')
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: true, processStatus: 'running', startFailed }, NOW).waitingOn).not.toBe(startFailed)
+    expect(deriveUserStatus({ phase: 'COMPLETE', hasSession: false, startFailed }, NOW).state).toBe('done')
+  })
+})
+
+// 2026-11-05: "show on the task what it waits for and where it will run". A start queued for a
+// free slot on a host (sessions/start-queue.ts) says so on every surface that reads the status.
+describe('a start queued for a free host slot', () => {
+  it('says where it will run and why it waits, while no session runs it', () => {
+    const startQueue = { host: 'clouddev', reason: 'all 24 slots taken' }
+    for (const phase of ['TODO', 'IN_PROGRESS'] as const) {
+      expect(deriveUserStatus({ phase, hasSession: false, startQueue }, NOW)).toMatchObject({
+        state: 'waiting', kind: 'machine',
+        waitingOn: 'Queued by an older Walnut for room on clouddev (all 24 slots taken): Walnut tries it once more, then says why if it does not start',
+      })
+    }
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startQueue: { host: '__local__' } }, NOW).waitingOn)
+      .toBe('Queued by an older Walnut for room on this Mac: Walnut tries it once more, then says why if it does not start')
+    // An entry from before the host and reason were kept.
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startQueue: {} }, NOW).waitingOn).toBe('Queued by an older Walnut for room on a host: Walnut tries it once more, then says why if it does not start')
+    // Started (a session runs it) or completed: the queue says nothing any more.
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: true, processStatus: 'running', startQueue }, NOW).kind).not.toBe('machine')
+    expect(deriveUserStatus({ phase: 'COMPLETE', hasSession: false, startQueue }, NOW).state).toBe('done')
+    // A retry after a failed start, and a parked task started again: the queue speaks (review round 3, Sol).
+    expect(deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'error', errorMessage: 'spawn failed', startQueue }, NOW))
+      .toMatchObject({ state: 'waiting', kind: 'machine' })
+    expect(deriveUserStatus({ phase: 'WAITING', hasSession: false, startQueue }, NOW)).toMatchObject({ state: 'waiting', kind: 'machine' })
+    // A person's own Needs you mark still says so.
+    expect(deriveUserStatus({ phase: 'NEED_ACTION', hasSession: false, markedByPerson: true, startQueue }, NOW).state).toBe('needs')
+  })
+})

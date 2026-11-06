@@ -79,6 +79,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
 import { recordedSessionMode } from '../core/sessions/acp-recorded-mode.js'
+import { isWalnutOwnToolUse } from './acp-permission-posture.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
@@ -8435,7 +8436,17 @@ export class ClaudeCodeSession {
           // the else-branch below runs the ordinary emit-to-UI path (pending map +
           // persisted pendingPermission + re-emit timer + SESSION_PERMISSION_REQUEST)
           // so the human answers for real. Behavior for every other tool is unchanged.
-          if (this._mode === 'bypass' && request.tool_name !== 'AskUserQuestion') {
+          if (isWalnutOwnToolUse(request.tool_name, request.input) && !this._pendingPermissionRequests.has(request_id)
+            && this._answerWalnutOwn(request_id, request)) {
+            // Walnut's own CLI and MCP tools (the reads and the reporting writes) are
+            // Walnut's to answer in every mode, bypass with auto_approve_bypass off included,
+            // as for an ACP session of the same task (acp-permission-posture.ts); on any
+            // host, since a remote session's requests arrive here too. 2026-11-05: such a
+            // prompt landed on the user's list.
+            log.session.info('control_request answered: Walnut\'s own tool', {
+              sessionId: this.claudeSessionId, taskId: this.taskId, requestId: request_id, toolName: request.tool_name,
+            })
+          } else if (this._mode === 'bypass' && request.tool_name !== 'AskUserQuestion') {
             // Bypass mode: check auto_approve_bypass config (default: true).
             // Config read is async — use .then() since handleStreamLine is sync.
             // Add sentinel BEFORE async gap so hasPendingPermission is true during config read.
@@ -8920,6 +8931,28 @@ export class ClaudeCodeSession {
    *   AskUserQuestion to inject `answers` (question text → chosen label).
    * @returns true if the response was written (or at least attempted), false if no transport
    */
+  /**
+   * Answer a request for Walnut's own tool (allow), held as pending while the answer is
+   * written: an interrupt or the CLI's cancel withdraws it as any pending request, and a
+   * write the CLI may not have got turns it into a normal card. False when nothing was
+   * written (no transport): the caller shows the card.
+   */
+  private _answerWalnutOwn(
+    requestId: string,
+    request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string },
+  ): boolean {
+    const held = { request_id: requestId, request }
+    this._pendingPermissionRequests.set(requestId, held)
+    const written = this.respondToControlRequest(requestId, request, true, undefined, undefined, undefined, (delivered) => {
+      // Withdrawn meanwhile (cancel, interrupt, a person's answer): nothing left to do.
+      if (this._pendingPermissionRequests.get(requestId) !== held) return
+      this._pendingPermissionRequests.delete(requestId)
+      if (!delivered && !this._resolvedPermissionRequestIds.has(requestId)) this._awaitUserDecision(requestId, request)
+    })
+    if (!written) this._pendingPermissionRequests.delete(requestId)
+    return written
+  }
+
   private respondToControlRequest(
     requestId: string,
     request: { tool_name?: string; input?: Record<string, unknown> },
@@ -8927,6 +8960,9 @@ export class ClaudeCodeSession {
     denyMessage?: string,
     updatedInputPatch?: Record<string, unknown>,
     restorePending?: { request_id: string; request: { subtype: string; tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string; decision_reason?: string } },
+    /** How the write ended: false when the CLI may not have it (this session is still the
+     *  live owner of the request, but the write failed or its transport was replaced). */
+    onSettled?: (delivered: boolean) => void,
   ): boolean {
     const result = allow
       ? {
@@ -8976,11 +9012,16 @@ export class ClaudeCodeSession {
       attempt?.resolve(ok)
     }
     const settle = async (ok: boolean): Promise<void> => {
-      if (!current()) { finish(false); return }
+      if (!current()) {
+        finish(false)
+        if (this._active && this.claudeSessionId === sid) onSettled?.(false)
+        return
+      }
       if (!ok) {
         // Nothing resolved: the original pending card and persisted request stay
         // exactly as they were. The user can retry the same decision.
         finish(false)
+        onSettled?.(false)
         return
       }
       this._resolvedPermissionRequestIds.add(requestId)
@@ -9003,6 +9044,7 @@ export class ClaudeCodeSession {
         message: `Permission ${allow ? 'granted' : 'denied'}: ${request.tool_name}`,
       }, ['main-ai'], { source: 'session-runner' })
       finish(ok && sameOwner())
+      onSettled?.(true)
     }
     const failed = async (err: unknown): Promise<void> => {
       log.session.warn('control_response write error; the unanswered permission stays pending', {

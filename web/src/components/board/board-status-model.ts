@@ -149,6 +149,8 @@ export function sameAskLine(status: UserStatus): string {
 /** The whole sentence of what a waiting row waits on, for its hover text. */
 export function waitingSentence(status: UserStatus): string {
   const on = (status.waitingOn ?? '').trim();
+  // A queued or refused start says it whole (src/core/user-status.ts).
+  if (/^(Queued|Did not start)\b/.test(on)) return on;
   return on ? `Waiting on ${on.charAt(0).toLowerCase()}${on.slice(1)}` : '';
 }
 
@@ -159,6 +161,8 @@ export function waitingLine(status: UserStatus, formatUntil: (iso: string) => st
   if (status.kind === 'stuck') return on ? `Nothing will wake it. ${on}` : 'Nothing will wake it.';
   if (status.kind === 'not-started') return on || 'Not started yet';
   if (status.kind === 'time' && status.until) return `Waiting until ${formatUntil(status.until)}`;
+  // A start an older Walnut queued: it says it whole (src/core/user-status.ts queuedWaitingOn).
+  if (on.startsWith('Queued')) return on;
   const lower = on ? on.charAt(0).toLowerCase() + on.slice(1) : 'something';
   return `Waiting on ${lower}`;
 }

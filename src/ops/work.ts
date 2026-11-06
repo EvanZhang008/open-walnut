@@ -23,7 +23,8 @@ defineOp({
     ...TASK_START_INPUT,
   },
   handler: async ({ id, ...body }, call) => startTask(String(id), body, call),
-  timeoutMs: 40_000,
+  // The start answers once its session is up or failed (up to 110 s: src/web/routes/task-v1.ts).
+  timeoutMs: 130_000,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 

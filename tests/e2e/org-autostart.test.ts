@@ -6,6 +6,7 @@
  *   - Main, made, starts when the Org page shows it (making it starts nothing: its maker's message does);
  *   - a test window's start starts nothing;
  *   - a start that fails says why on the task, and Retry starts it;
+ *   - a start whose host is full fails saying so, and the user's Retry starts it at once there;
  *   - with the org off: a new VP starts nothing, the start route, an agent's org_send, task_send
  *     and task_start to a VP answer 409 org_off, a Brief refresh and the team note are skipped,
  *     and nothing reaches a VP from a worker's status change;
@@ -29,6 +30,8 @@ import { addTask, getTask, setProjectMetadata } from '../../src/core/task-manage
 import { getSessionsForTask } from '../../src/core/session-tracker.js'
 import { pendingOrgDigest } from '../../src/core/org/org-store.js'
 import { _orgStartsSettled, orgStartMessage } from '../../src/core/org/org-autostart.js'
+import { __setHostLoadProberForTesting } from '../../src/core/hosts/placement.js'
+import { __resetHostAdmissionForTesting } from '../../src/core/sessions/host-admission.js'
 import { orgEnabledOf } from '../../src/core/org/org-enabled.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
 
@@ -169,6 +172,30 @@ describe('a VP starts by itself', () => {
     await _orgStartsSettled()
     expect((await getTask(id)).org_start).toBeUndefined()
   }, 60_000)
+
+  it('a full host: the VP\'s start fails saying so, and the user\'s Retry starts it at once on the full host (2026-11-06)', async () => {
+    // This Mac full: load 100 on 14 CPUs is past twice the cap of 3 per CPU.
+    __setHostLoadProberForTesting(async () => ({
+      cpus: 14, load: [100, 1, 1], cpuBusy: 0.1, memTotalBytes: 36 * 1024 ** 3, memAvailBytes: 20 * 1024 ** 3,
+      diskPath: '/', diskFreeBytes: 500 * 1024 ** 3, diskTotalBytes: 1000 * 1024 ** 3, at: new Date().toISOString(),
+    }) as never)
+    try {
+      const made = await req('POST', '/api/v1/org/projects', { name: 'Full Fields' })
+      expect(made.status, JSON.stringify(made.json)).toBe(201)
+      const id = made.json.task.id as string
+      const failed = await until('the start failed', () => getTask(id), (t) => t.org_start?.state === 'failed')
+      expect(failed.org_start?.error).toBe('this Mac has no room (load past 6 per CPU). Retry starts it now.')
+      expect(await hasSession(id)).toBe(false)
+      const retry = await req('POST', `/api/v1/org/nodes/${id}/start`, {})
+      expect(retry.status).toBe(202)
+      await until('the VP has a session', () => hasSession(id), Boolean, 20_000)
+      await _orgStartsSettled()
+      expect((await getTask(id)).org_start).toBeUndefined()
+    } finally {
+      __setHostLoadProberForTesting(null)
+      __resetHostAdmissionForTesting()
+    }
+  }, 90_000)
 
   it('a VP that already has a session is not started again', async () => {
     const vp = (await req('GET', '/api/v1/org')).json
