@@ -367,6 +367,23 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.delivered).toHaveLength(2)
   })
 
+  it('a reply\'s review score is journalled with the replied row, normalized, so the server keeps it on the replier\'s task', async () => {
+    const h = harness()
+    h.host.configure(slice())
+    const sent = await call(h, A, 'task_send', { to: B, text: 'Review it' })
+    const requestId = sent.ok ? String(sent.result.requestId) : ''
+    const reply = await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Reviewed.', score: { Function: 8.04, ux: 7.5, ui: 11 } })
+    expect(reply.ok).toBe(true)
+    // An out-of-range dimension is left out of the text and the journal alike.
+    expect(h.delivered[1].text).toContain('Score: function 8/10, UX 7.5/10')
+    expect(h.delivered[1].text).not.toContain('UI')
+    const rec = [...h.host.drain(HOME).records].reverse().find((r): r is Extract<OfflineRecord, { kind: 'row' }> => r.kind === 'row')!
+    expect(rec.row.status).toBe('replied')
+    expect(rec.score).toMatchObject({ function: 8, ux: 7.5, taskId: 'mtaskbbb-0002' })
+    expect(rec.score?.ui).toBeUndefined()
+    expect(Number.isFinite(Date.parse(String(rec.score?.at)))).toBe(true)
+  })
+
   it('a subtask cannot message or answer its COMPLETE parent, and a COMPLETE asker hears no notice, as on the server', async () => {
     const h = harness()
     h.host.configure(slice())

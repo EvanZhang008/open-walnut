@@ -134,6 +134,23 @@ export function readScore(v: unknown): ReviewScore | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/**
+ * Why a given `score` is unusable, or null when it is fine (or absent): the HTTP routes refuse it
+ * with 400 the way the op's schema does, instead of dropping a dimension without a word.
+ */
+export function scoreProblem(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  const why = 'score must be {"function": n, "ux": n, "ui": n} (any of them, each 0..10) or "n/n/n"';
+  if (typeof v === 'string') return readScore(v) ? null : why;
+  if (typeof v !== 'object' || Array.isArray(v)) return why;
+  const raw = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.toLowerCase(), x]));
+  const unknown = Object.keys(raw).filter((k) => !(SCORE_DIMENSIONS as readonly string[]).includes(k));
+  if (unknown.length) return `${why}; unknown: ${unknown.join(', ')}`;
+  const bad = SCORE_DIMENSIONS.filter((d) => raw[d] !== undefined && scoreValue(raw[d]) === undefined);
+  if (bad.length) return `${why}; not 0..10: ${bad.join(', ')}`;
+  return readScore(v) ? null : why;
+}
+
 /** "function 8/10, UX 7.5/10, UI 9/10" */
 export function scoreLine(s: ReviewScore): string {
   const name = { function: 'function', ux: 'UX', ui: 'UI' } as const;

@@ -41,6 +41,13 @@ const SCORE_DIMS = ['function', 'ux', 'ui'] as const;
 const scoreText = (s: ReviewScore | null | undefined) => (s ? SCORE_DIMS.map((d) => (s[d] === undefined ? '-' : String(s[d]))).join(' · ') : '-');
 /** "function 9 · UX 8 · UI 9.5", for one task's line. */
 const scoreNamed = (s: ReviewScore) => SCORE_DIMS.filter((d) => s[d] !== undefined).map((d) => `${d === 'function' ? 'function' : d.toUpperCase()} ${s[d]}`).join(' · ');
+/** "by Claude + GPT": which companies' reviewers a task's score comes from. */
+const scoredByText = (families: string[] | undefined) => {
+  if (!families?.length) return '';
+  const unknown = families.filter((f) => f === 'unknown').length;
+  const named = [...new Set(families.filter((f) => f !== 'unknown')), ...(unknown ? [unknown === 1 ? 'an unknown model' : `${unknown} unknown models`] : [])];
+  return ` by ${named.join(' + ')}`;
+};
 
 interface Metric {
   id: string;
@@ -52,6 +59,8 @@ interface Metric {
   lower?: boolean;
   /** Higher is better (a reviewer score). */
   higher?: boolean;
+  /** A small second line under the value (what it rests on). */
+  sub?: (r: EngineCompareRow) => string | null;
   /** How many of the tasks behind the value leave something out (it is a floor and is not ranked). */
   partial?: (r: EngineCompareRow) => number;
   /** The tooltip of such a value, given that count. */
@@ -112,8 +121,10 @@ const METRICS: Metric[] = [
     // No reviews: nothing to show, as Review cost reads.
     value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share },
   { id: 'score', label: 'Reviewer score (function · UX · UI)', help: 'Function · UX · UI, out of 10. Per finished task, its reviewers\' latest verdict (each company\'s latest, the lower of them on each), then the median. Ranked by the lowest of the three. Reviewers give it as `score` on their reply.',
-    value: (r) => (r.reviewScore ? Math.min(...SCORE_DIMS.map((d) => r.reviewScore![d] ?? 10)) : null),
-    show: (_n, r) => scoreText(r.reviewScore), higher: true, samples: (r) => r.scoredDone ?? 0 },
+    // Ranked only on all three: a missing UI score is unknown, never a 10.
+    value: (r) => (r.reviewScore && SCORE_DIMS.every((d) => r.reviewScore![d] !== undefined) ? Math.min(...SCORE_DIMS.map((d) => r.reviewScore![d]!)) : null),
+    show: (_n, r) => scoreText(r.reviewScore), higher: true, samples: (r) => r.scoredDone ?? 0,
+    sub: (r) => (r.reviewScore ? `${r.scoredDone ?? 0} of ${r.done} scored` : null) },
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of the tasks it finished that were reopened, those being worked on again included.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
@@ -133,9 +144,13 @@ const VERDICT: Record<string, string> = {
 function verdictOf(rows: EngineCompareRow[], best: Map<string, string | null>, label: (key: string) => string): string | null {
   if (rows.length < 2) return null;
   const wins = METRICS.filter((m) => VERDICT[m.id] && best.get(m.id)).map((m) => `${VERDICT[m.id]}: ${label(best.get(m.id)!)}`);
-  if (wins.length) return `${wins.join('. ')}.`;
+  // Scores shown but not ranked yet: say so, rather than leave them out of the verdict without a word.
+  const scored = rows.filter((r) => r.reviewScore);
+  const scoreNote = !best.get('score') && scored.length && rows.some((r) => (r.scoredDone ?? 0) < FEW)
+    ? ` Reviewer score: too few scored yet (${rows.map((r) => `${label(r.key)} ${r.scoredDone ?? 0}`).join(', ')}; ${FEW} each needed).` : '';
+  if (wins.length) return `${wins.join('. ')}.${scoreNote}`;
   const short = rows.filter((r) => r.done < FEW).length;
-  return short ? `Too few finished tasks to call a winner yet: each engine needs ${FEW} finished tasks behind a value.` : 'No engine is clearly ahead on any row yet.';
+  return (short ? `Too few finished tasks to call a winner yet: each engine needs ${FEW} finished tasks behind a value.` : 'No engine is clearly ahead on any row yet.') + scoreNote;
 }
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
@@ -241,7 +256,8 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                       {data.rows.map((r) => (
                         <td key={r.key} className="num" data-best={best.get(m.id) === r.key || undefined}
                           data-partial={(m.partial && m.partial(r) > 0) || undefined} title={(m.partial && m.partial(r) > 0 ? m.partialNote?.(m.partial(r)) : undefined) ?? m.excluded?.(r)}>
-                          {m.show(m.value(r), r)}{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
+                          <span className="usage-ec-val">{m.show(m.value(r), r)}</span>{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
+                          {m.sub?.(r) && <span className="usage-ec-cellsub">{m.sub(r)}</span>}
                         </td>
                       ))}
                     </tr>
@@ -273,7 +289,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                       <td><button type="button" className="usage-ec-open" title={t.title} onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',
-                          t.score ? `scored ${scoreNamed(t.score)}` : '', t.followUps ? `${t.followUps} of your messages` : '',
+                          t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>
                       <td className="num usage-line-cost" title={taskCostNote(t)}>
                         {t.noUsage ? 'unknown' : money(t.costUsd)}{!t.noUsage && (t.partialCost || t.reviewPartialCost) && <span className="usage-ec-partial">+?</span>}

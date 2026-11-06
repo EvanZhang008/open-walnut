@@ -93,6 +93,8 @@ describe('splitApplies', () => {
     expect(isReviewerTask({ parent_task_id: 'p', title: 'Final verify: engine split (Sol)' })).toBe(true)
     expect(isReviewerTask({ parent_task_id: 'p', title: 'Verifier round 2' })).toBe(true)
     expect(isReviewerTask({ parent_task_id: 'p', title: 'Fix the verifier crash' })).toBe(false)
+    // Work that verifies something is work, not a review: only "Verify:" names one.
+    expect(isReviewerTask({ parent_task_id: 'p', title: 'Verify the iOS build on device' })).toBe(false)
     for (const source of ['engine-switch', 'transfer', 'auto-recover', 'restart', 'folder-gone', 'start-queue']) {
       expect(splitApplies(plain, { source })).toBe(false);
     }

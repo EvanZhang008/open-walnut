@@ -919,6 +919,15 @@ async function tellCallers(unapplied: Unapplied[]): Promise<void> {
   }
 }
 
+/** A review score a host journalled with an offline reply: kept on the replier's task, as online. */
+async function keepOfflineScore(s: import('../providers/offline-host-core.js').OfflineReplyScore, requestId: string): Promise<void> {
+  const { readScore } = await import('./peers/structured-reply.js');
+  const score = readScore(s);
+  if (!score || typeof s.taskId !== 'string' || !s.taskId) return;
+  const { noteReviewScore } = await import('./sessions/session-send-core.js');
+  await noteReviewScore(s.taskId, score, 'reply', { at: typeof s.at === 'string' ? s.at : undefined, requestId });
+}
+
 function toRequest(row: Extract<OfflineRecord, { kind: 'row' }>['row']): SessionRequest {
   return {
     id: row.id,
@@ -947,11 +956,13 @@ async function applyRecord(
     case 'row': {
       const { importOfflineRequest } = await import('./session-requests.js');
       if (await importOfflineRequest(toRequest(record.row))) result.imported++;
+      if (record.score && record.row.status === 'replied') await keepOfflineScore(record.score, record.row.id);
       return;
     }
     case 'settle': {
       const { settleReplied } = await import('./session-requests.js');
       if (await settleReplied(record.requestId)) result.settled++;
+      if (record.score) await keepOfflineScore(record.score, record.requestId);
       return;
     }
     case 'delivery': {

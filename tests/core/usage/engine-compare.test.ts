@@ -664,6 +664,20 @@ describe('reviewer scores', () => {
     expect(out.taskCount).toBe(3);
   });
 
+  it('reviewers of no known company are each their own voice, never merged into one bucket', () => {
+    const rs = [
+      reviewer('u1', 'w1', { function: 9, ux: 9, ui: 9 }, 1, 'mystery-model-a'),
+      reviewer('u2', 'w1', { function: 4, ux: 9, ui: 9 }, 2, 'mystery-model-b'),
+    ];
+    const tasks = [done('w1', 1), ...rs.map((r) => r.t)];
+    // An engine of no known company too (an ACP engine), so nothing names one.
+    const spend = Object.assign({ w1: { costUsd: 1 } }, ...rs.map((r) => Object.fromEntries(Object.entries(r.spend).map(([k, v]) => [k, { ...v, engine: 'opencode' }]))));
+    const out = aggregateEngineCompare(input(tasks, spend));
+    const w1 = out.tasks.find((t) => t.taskId === 'w1')!;
+    // Merged, the later one would have replaced the first; apart, the lower function score stands.
+    expect(w1).toMatchObject({ score: { function: 4, ux: 9, ui: 9 }, scoredBy: 2, scoredFamilies: ['unknown', 'unknown'] });
+  });
+
   it('no reviewer score anywhere reads none, never a zero', () => {
     const out = aggregateEngineCompare(input([done('w', 1)], { w: { costUsd: 1 } }));
     expect(out.rows[0]).toMatchObject({ reviewScore: null, scoredDone: 0 });

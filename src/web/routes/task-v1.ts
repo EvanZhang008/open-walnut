@@ -258,7 +258,12 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       const rawActor = req.headers['x-walnut-caller-sid']
       const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
       const b = (req.body ?? {}) as Record<string, unknown>
-      const { readStructuredReply } = await import('../../core/peers/structured-reply.js')
+      const { readStructuredReply, scoreProblem } = await import('../../core/peers/structured-reply.js')
+      const badScore = scoreProblem(b.score)
+      if (badScore) {
+        sendError(res, 400, 'bad_request', badScore)
+        return
+      }
       const fields = readStructuredReply(b)
       // A session closing ANOTHER task the user may still be using (2026-10-28: a lead completed
       // the task the user had open in a terminal) is refused with the reasons, unless it says why.

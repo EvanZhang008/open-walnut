@@ -381,6 +381,30 @@ describe('runOfflineHandover', () => {
     expect(await getSessionRequest(row.id)).toMatchObject({ status: 'notified' })
   })
 
+  it('a review score journalled with an offline reply lands on the replier\'s task, once, and never over a newer one', async () => {
+    const reviewer = await newTask('Review: offline score')
+    const row = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: reviewer, text: 'score it' })
+    const copyRow = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: reviewer, text: 'and this one' })
+    const t0 = Date.now()
+    const records = [
+      { seq: 1, at: t0, kind: 'row', row: { ...row, status: 'replied', settledAt: new Date(t0).toISOString() },
+        score: { function: 8, ux: 7.5, ui: 9, at: new Date(t0).toISOString(), taskId: reviewer } },
+      // An older one (a copy settled earlier on its clock) never replaces the newer score.
+      { seq: 2, at: t0, kind: 'settle', requestId: copyRow.id, status: 'replied',
+        score: { function: 3, ux: 3, ui: 3, at: new Date(t0 - 60_000).toISOString(), taskId: reviewer } },
+    ] as unknown as OfflineRecord[]
+    const drainOnce = () => {
+      let n = 0
+      return async (cmd: string) => cmd === 'offline.drain' && n++ === 0 ? { ok: true, records } : { ok: true, records: [] }
+    }
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce() })
+    const kept = (await task(reviewer)).review_score as Record<string, unknown>
+    expect(kept).toMatchObject({ function: 8, ux: 7.5, ui: 9, at: new Date(t0).toISOString(), via: 'reply', request_id: row.id })
+    // A replay of the same journal (an ack lost) changes nothing.
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce() })
+    expect((await task(reviewer)).review_score).toEqual(kept)
+  })
+
   it('a notice waits for a running handover, and never longer than its bound', async () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })

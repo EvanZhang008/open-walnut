@@ -225,14 +225,26 @@ describe('a structured reply on task_send', () => {
     await req('POST', `/api/v1/tasks/${lead.taskId}/not-done`, { how: 'dropped', note: 'test cleanup' })
     await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
 
+    // An unusable score is refused, never dropped in silence; nothing is sent.
+    const rq5 = await ask(asker, lead, 'score again')
+    const r5 = await req('POST', '/api/v1/messages', { in_reply_to: rq5.id, text: 'Scored again.', score: { function: 12 } }, asSession(lead.sid))
+    expect(r5.status, JSON.stringify(r5.json)).toBe(400)
+    expect((await getSessionRequest(rq5.id))?.status).toBe('pending')
+    await req('POST', '/api/v1/messages', { in_reply_to: rq5.id, text: 'Scored again.' }, asSession(lead.sid))
+    await until('asker idle', () => sessionStatus(asker.sid), (x) => x !== 'running', 30_000)
+
     // A score alone is a structured field too: without in_reply_to it is refused.
     const bad = await req('POST', '/api/v1/messages', { to: asker.taskId, text: 'scores', score: { ux: 9 } }, asSession(lead.sid))
     expect(bad.status, JSON.stringify(bad.json)).toBe(400)
   }, 90_000)
 
-  it('a completion may carry the score instead, and an out-of-range one is ignored', async () => {
+  it('a completion may carry the score instead; an out-of-range one is refused, as the op refuses it', async () => {
     const id = await createTask('Review: the release notes')
-    const done = await req('POST', `/api/v1/tasks/${id}/complete`, { result: 'Notes read.', score: { function: 10, ux: 9, ui: 11 } })
+    const bad = await req('POST', `/api/v1/tasks/${id}/complete`, { result: 'Notes read.', score: { function: 10, ux: 9, ui: 11 } })
+    expect(bad.status, JSON.stringify(bad.json)).toBe(400)
+    expect(JSON.stringify(bad.json)).toContain('not 0..10: ui')
+    expect((await task(id)).phase).not.toBe('COMPLETE')
+    const done = await req('POST', `/api/v1/tasks/${id}/complete`, { result: 'Notes read.', score: { function: 10, ux: 9 } })
     expect(done.status, JSON.stringify(done.json)).toBe(200)
     const t = await task(id)
     expect(t.review_score).toMatchObject({ function: 10, ux: 9, via: 'complete' })

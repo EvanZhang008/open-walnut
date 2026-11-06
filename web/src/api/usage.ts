@@ -269,6 +269,8 @@ export interface EngineCompareTask {
   /** Its reviewers' latest verdict (each company's latest, the lower on each dimension). */
   score?: ReviewScore;
   scoredBy?: number;
+  /** The companies whose reviewers scored it ('Claude', 'GPT', 'unknown'). */
+  scoredFamilies?: string[];
   followUps: number;
   reopens: number;
   errored: boolean;

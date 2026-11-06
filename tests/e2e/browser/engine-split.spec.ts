@@ -43,7 +43,7 @@ function engines(project: string | null) {
   const tasks = Array.from({ length: 60 }, (_, i) => ({
     taskId: `t-${i}`, title: i === 0 ? 'Settings: share new tasks between engines and compare them on Usage & Costs' : i === 1 ? `A very long task title ${'that keeps going '.repeat(12)}` : `Task number ${i}`,
     project: i % 3 ? 'Walnut' : 'Walnut Idea', key: rows[i % 3].key, done: i % 7 !== 0, hours: i % 7 ? 1 + i / 4 : null,
-    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0, ...(i === 0 ? { score: { function: 9, ux: 8, ui: 9.5 }, scoredBy: 2 } : {}), ...(i === 59 ? { done: false, hours: null, notStarted: true, errored: true } : {}),
+    costUsd: 5 + i, tokens: 1e6 * i, reviews: i % 4, reviewCostUsd: (i % 4) * 2, followUps: i % 3, reopens: i % 9 === 0 ? 1 : 0, errored: i % 11 === 0, split: i % 2 === 0, ...(i === 0 ? { score: { function: 9, ux: 8, ui: 9.5 }, scoredBy: 2, scoredFamilies: ['Claude', 'GPT'] } : {}), ...(i === 59 ? { done: false, hours: null, notStarted: true, errored: true } : {}),
   }))
   return { range: { start: null, end: null }, rows, tasks, taskCount: 75, projects: [{ project: 'Walnut', tasks: 40 }, { project: 'Walnut Idea', tasks: 20 }],
     split: { on: true, entries: [{ key: 'claude', label: 'Claude Code · Claude', weight: 1 }, { key: 'codex', label: 'Codex · GPT', weight: 1 }] } }
@@ -169,8 +169,10 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(cell('crossreview', gptCol)).toHaveText('-')
   await expect(table.locator('tr[data-metric="crossreview"] td[data-best]')).toHaveCount(0)
   // Reviewer score: function · UX · UI medians, higher is better, ranked by the lowest of the three.
-  await expect(cell('score', 1)).toHaveText('8 · 7.5 · 9')
-  await expect(cell('score', 2)).toHaveText('9 · 9 · 9.5')
+  await expect(cell('score', 1).locator('.usage-ec-val')).toHaveText('8 · 7.5 · 9')
+  await expect(cell('score', 2).locator('.usage-ec-val')).toHaveText('9 · 9 · 9.5')
+  // What the median rests on, under it.
+  await expect(cell('score', 2).locator('.usage-ec-cellsub')).toHaveText(/^\d+ of \d+ scored$/)
   await expect(cell('score', 2)).toHaveAttribute('data-best', 'true')
   await expect(cell('score', gptCol)).toHaveText('-')
   // One line on who is ahead where, from the same marks.
@@ -179,6 +181,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   await expect(verdict).toContainText('Fewest review rounds: Claude Code · Claude')
   await expect(verdict).toContainText('Fewest errors: Claude Code · Claude')
   await expect(verdict).toContainText('Best reviewed: Codex · GPT')
+  await expect(verdict).not.toContainText('too few scored')
   await card.screenshot({ path: path.join(SHOTS, `engines-card-${test.info().project.name}.png`) })
 
   await card.getByTestId('usage-engines-project').selectOption('Walnut')
@@ -203,7 +206,7 @@ test('Engines compared: engines side by side, the best marked, a project filter,
   expect(costBox.x + costBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
   await expect(tasks.locator('tr').first()).toContainText('Claude Code · Claude')
   // Each task shows its reviewers' latest verdict.
-  await expect(tasks.locator('tr').first()).toContainText('scored function 9 · UX 8 · UI 9.5')
+  await expect(tasks.locator('tr').first()).toContainText('scored function 9 · UX 8 · UI 9.5 by Claude + GPT')
   // A task closed after a start that never ran says so, not "open".
   await expect(tasks.locator('tr').nth(59)).toContainText('never started')
   // A task row opens its task from the keyboard too.

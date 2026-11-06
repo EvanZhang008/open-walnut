@@ -445,11 +445,26 @@ export async function deliverToSession(
  * nothing, and erases no result).
  * Best effort: a failed write never fails the reply or the completion.
  */
-/** A review's score alone (a close that settles the user's items writes its own result). Best effort. */
-export async function noteReviewScore(taskId: string, score: import('../peers/structured-reply.js').ReviewScore, via: 'reply' | 'complete'): Promise<void> {
+/**
+ * A review's score alone (a close that settles the user's items writes its own result). Best effort.
+ * `opts.at` / `opts.requestId`: when and for which request the score was given, for one a host
+ * journalled while the server was away (offline-handover.ts). A replay of the same one, or one
+ * older than the score the task holds, changes nothing.
+ */
+export async function noteReviewScore(
+  taskId: string,
+  score: import('../peers/structured-reply.js').ReviewScore,
+  via: 'reply' | 'complete',
+  opts: { at?: string; requestId?: string } = {},
+): Promise<void> {
   try {
     const { updateTaskRaw } = await import('../task-manager.js');
-    await updateTaskRaw(taskId, () => ({ review_score: { ...score, at: new Date().toISOString(), via } }), { source: 'result-report', push: false });
+    const at = opts.at && Number.isFinite(Date.parse(opts.at)) ? opts.at : new Date().toISOString();
+    await updateTaskRaw(taskId, (t) => {
+      const was = t.review_score;
+      if (opts.at && was?.at && Date.parse(was.at) >= Date.parse(at)) return null;
+      return { review_score: { ...score, at, via, ...(opts.requestId ? { request_id: opts.requestId } : {}) } };
+    }, { source: 'result-report', push: false });
   } catch (err) {
     log.session.warn('review score not recorded on the task', { taskId, error: err instanceof Error ? err.message : String(err) });
   }
@@ -768,7 +783,9 @@ async function settleAnswerNotDelivered(
 }
 
 async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult> {
-  const { readStructuredReply, composeReplyText } = await import('../peers/structured-reply.js');
+  const { readStructuredReply, composeReplyText, scoreProblem } = await import('../peers/structured-reply.js');
+  const badScore = scoreProblem(input.reply?.score);
+  if (badScore) throw new SendError('bad_request', badScore);
   const fields = input.reply ? readStructuredReply(input.reply) : null;
   if (fields && !input.inReplyTo) {
     throw new SendError('bad_request', 'result, evidence, not_done and score answer a request: pass in_reply_to (rq-…)');

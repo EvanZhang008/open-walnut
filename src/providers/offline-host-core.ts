@@ -170,14 +170,23 @@ export interface OfflineRequestRow {
   reachedAt?: string
 }
 
+/** A reply's review score as journalled: normalized here (each 0..10), stamped when it was given. */
+export interface OfflineReplyScore { function?: number; ux?: number; ui?: number; at: string; taskId: string }
+
 /**
  * `online`: written while the server answered (a same-host message this host
  * delivered itself, handleLocal). The server takes it within moments, and a
  * relayed call never has to wait for it: the server drains before it answers.
  */
 export type OfflineRecord =
-  | { seq: number; at: number; online?: true; kind: 'row'; row: OfflineRequestRow }
-  | { seq: number; at: number; online?: true; kind: 'settle'; requestId: string; status: 'replied' }
+  /**
+   * `score` (on a row that turned replied, or a settle): a review's function / UX / UI score the
+   * reply carried, with the replier's task, so the server keeps it on that task as an online reply
+   * does (`noteReviewScore`). An older server reads the record without it: the score stays a line
+   * of the delivered text, as before.
+   */
+  | { seq: number; at: number; online?: true; kind: 'row'; row: OfflineRequestRow; score?: OfflineReplyScore }
+  | { seq: number; at: number; online?: true; kind: 'settle'; requestId: string; status: 'replied'; score?: OfflineReplyScore }
   | { seq: number; at: number; online?: true; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean; routingTold?: string }
   /**
    * `base`: the copy's updated_at for that task when the write was queued (the server's clock).
@@ -410,6 +419,21 @@ export function escapeSenderWords(text: string): string {
 }
 
 export function createOfflineHostCore(deps: OfflineHostDeps) {
+  /** The score dimensions a reply's `score` carries (peers/structured-reply.ts SCORE_DIMENSIONS). */
+  const OFFLINE_SCORE_DIMS = ['function', 'ux', 'ui'] as const
+
+  /** `score` of a reply as the server would read it from an object: numbers 0..10, one decimal. */
+  function offlineScoreOf(v: unknown): Partial<Record<(typeof OFFLINE_SCORE_DIMS)[number], number>> | null {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+    const raw = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.toLowerCase(), x]))
+    const out: Partial<Record<(typeof OFFLINE_SCORE_DIMS)[number], number>> = {}
+    for (const d of OFFLINE_SCORE_DIMS) {
+      const n = raw[d]
+      if (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 10) out[d] = Math.round(n * 10) / 10
+    }
+    return Object.keys(out).length ? out : null
+  }
+
   const { fs, path, kit } = deps
   // The same as the module's escapeSenderWords: the factory body reaches nothing at
   // module scope, because daemon-source.ts inlines only its source text.
@@ -1348,15 +1372,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (remoteHost) return needsServer(`The asking session runs on ${remoteHost} and the answer could not be routed there (${delivered.reason}); answering it`)
       return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
     }
+    // A review's score is journalled with the reply, so the server keeps it on the replier's task.
+    const given = offlineScoreOf(args.score)
+    const score: OfflineReplyScore | undefined = given && me.taskId ? { ...given, at: new Date(deps.now()).toISOString(), taskId: me.taskId } : undefined
     if (own) {
       if (own.status === 'pending') {
         own.status = 'replied'
         own.settledAt = new Date(deps.now()).toISOString()
-        append(home, { kind: 'row', row: { ...own } })
+        append(home, { kind: 'row', row: { ...own }, ...(score ? { score } : {}) })
       }
     } else if (!journalOf(home).settledCopies.includes(id)) {
       journalOf(home).settledCopies.push(id)
-      append(home, { kind: 'settle', requestId: id, status: 'replied' })
+      append(home, { kind: 'settle', requestId: id, status: 'replied', ...(score ? { score } : {}) })
     }
     // The host that wrote the text into the asker's session journals the delivery.
     if (!remoteHost) append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: row.fromSessionId, messageId: mid, requestId: id, reply: true })
@@ -1403,8 +1430,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const evidence = args.in_reply_to !== undefined ? list(args.evidence) : []
     const notDone = args.in_reply_to !== undefined ? list(args.not_done) : []
     // A review's score (function / UX / UI out of 10) rides as a line of the text too.
-    const sc = args.in_reply_to !== undefined && args.score && typeof args.score === 'object' && !Array.isArray(args.score) ? args.score as Record<string, unknown> : null
-    const score = sc ? (['function', 'ux', 'ui'] as const).filter((d) => typeof sc[d] === 'number')
+    const sc = args.in_reply_to !== undefined ? offlineScoreOf(args.score) : null
+    const score = sc ? OFFLINE_SCORE_DIMS.filter((d) => sc[d] !== undefined)
       .map((d) => `${d === 'function' ? 'function' : d.toUpperCase()} ${sc[d]}/10`).join(', ') : ''
     const text = [own, result && result !== own ? `Result: ${result}` : '',
       evidence.length ? `Evidence:\n${evidence.map((e) => `- ${e}`).join('\n')}` : '',

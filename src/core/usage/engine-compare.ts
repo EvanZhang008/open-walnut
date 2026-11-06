@@ -64,6 +64,8 @@ export interface EngineCompareTask {
   score?: ReviewScore;
   /** How many reviewers that verdict rests on (one per company). */
   scoredBy?: number;
+  /** Their companies ("Claude", "GPT"; "unknown" for a reviewer whose model is not known). */
+  scoredFamilies?: string[];
   followUps: number;
   reopens: number;
   errored: boolean;
@@ -268,14 +270,15 @@ function firstStart(t: Task, sessions: CompareInput['sessions']): string | undef
 }
 
 /** A task's verdict: each company's latest score, the lower on each dimension. */
-function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { score?: ReviewScore; scoredBy?: number } {
+function verdictOf(byFam: ReadonlyMap<string, TaskReviewScore> | undefined): { score?: ReviewScore; scoredBy?: number; scoredFamilies?: string[] } {
   if (!byFam?.size) return {};
   const score: ReviewScore = {};
   for (const d of SCORE_DIMENSIONS) {
     const vals = [...byFam.values()].map((x) => x[d]).filter((v): v is number => typeof v === 'number');
     if (vals.length) score[d] = Math.min(...vals);
   }
-  return Object.keys(score).length ? { score, scoredBy: byFam.size } : {};
+  const families = [...byFam.keys()].map((k) => (k.startsWith('?') ? 'unknown' : k)).sort();
+  return Object.keys(score).length ? { score, scoredBy: byFam.size, scoredFamilies: families } : {};
 }
 
 /** The median of each dimension over the finished tasks that carry a score. */
@@ -308,8 +311,10 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     const spend = input.spend.get(t.id);
     const rsid = taskSessionId(t);
     const rs = rsid ? input.sessions.get(rsid) : undefined;
+    // Only evidence names the company: a model, else the engine a session or start recorded (never a default).
+    const rEngine = spend?.engine ?? rs?.engine ?? t.last_start?.engine;
     const rfam = [spend?.model, rs?.acpModel ?? rs?.cliModel ?? rs?.model].map(modelFamily).find((f) => !!f && f !== 'Other')
-      ?? ENGINE_FAMILY[resolveEngine(spend?.engine ?? rs?.engine ?? t.last_start?.engine)];
+      ?? (rEngine ? ENGINE_FAMILY[resolveEngine(rEngine)] : undefined);
     if (rfam) {
       if (!reviewFamiliesOf.has(t.parent_task_id)) reviewFamiliesOf.set(t.parent_task_id, new Set());
       reviewFamiliesOf.get(t.parent_task_id)!.add(rfam);
@@ -317,7 +322,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     if (t.review_score) {
       if (!scoresOf.has(t.parent_task_id)) scoresOf.set(t.parent_task_id, new Map());
       const byFam = scoresOf.get(t.parent_task_id)!;
-      const fk = rfam ?? 'Other';
+      // A reviewer of no known company is a company of its own: two unknown reviewers are never one.
+      const fk = rfam ?? `?${t.id}`;
       const was = byFam.get(fk);
       if (!was || (t.review_score.at ?? '') > (was.at ?? '')) byFam.set(fk, t.review_score);
     }
