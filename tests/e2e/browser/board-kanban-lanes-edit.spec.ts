@@ -23,7 +23,8 @@ import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { PHONE_QUERY, openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, keepCornerToBoard, pickCardsView } from './board-kanban-fixture'
+  call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { keepCornerToBoard } from './board-kanban-corner'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`

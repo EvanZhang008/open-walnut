@@ -24,7 +24,8 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, keepCornerToBoard, pickCardsView } from './board-kanban-fixture'
+  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { keepCornerToBoard } from './board-kanban-corner'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`

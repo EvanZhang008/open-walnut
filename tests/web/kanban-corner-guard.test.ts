@@ -1,6 +1,6 @@
 /**
  * Every kanban browser spec that measures or drags the board keeps the notice corner to the
- * board's own toasts (keepCornerToBoard in tests/e2e/browser/board-kanban-fixture.ts).
+ * board's own toasts (keepCornerToBoard in tests/e2e/browser/board-kanban-corner.ts).
  *
  * The corner (web/src/components/common/corner-stack.tsx) shows every live notice of the shared
  * fixture server, and each kanban team seeds two Bash permission prompts. 2026-11-06, main CI:
