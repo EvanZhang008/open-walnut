@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  createHostAuthAlert, frameVerdict, isLoginFailure, signInLetter, GENERIC_LOGIN_HINT, type AlertFrame, type HostAuthAlertDeps,
+  createHostAuthAlert, frameVerdict, isLoginFailure, signInLetter, GENERIC_LOGIN_HINT, OWNER_RECHECK_MS, type AlertFrame, type HostAuthAlertDeps,
 } from '../../src/core/hosts/host-auth-alert.js'
 
 const CERT = 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)'
@@ -163,6 +163,36 @@ describe('createHostAuthAlert', () => {
     await alert.check()
     expect(sent).toHaveLength(1)
     expect(await alert.openLetterIds()).toEqual(['lt-1'])
+  })
+
+  it('an outside reminder that owns sign-in holds the login letter; once it stops, the letter goes', async () => {
+    let owner: { by: string } | null = { by: 'the sign-in plugin' }
+    const alert = make({ signInOwner: async () => owner })
+    await alert.observe(failed('dev', 'cert_expired'))
+    await alert.observe(failed('box2', 'auth', 'Permission denied (publickey).'))
+    await advance(alert, GRACE)
+    // A refused key is not a sign-in: its own letter goes; the login waits on the owner.
+    expect(sent.map((l) => l.opKey)).toEqual([expect.stringMatching(/^host-sign-in:host:box2:/)])
+    await advance(alert, 3 * OWNER_RECHECK_MS)
+    expect(sent).toHaveLength(1)
+    // The owner stopped (its file stale or removed): the next recheck sends the login letter.
+    owner = null
+    await advance(alert, OWNER_RECHECK_MS)
+    expect(sent.map((l) => l.opKey)).toEqual([expect.stringMatching(/^host-sign-in:host:box2:/), expect.stringMatching(/^host-sign-in:login:/)])
+  })
+
+  it('a login fixed while the owner holds it sends nothing, and an owner that cannot be read never holds', async () => {
+    const alert = make({ signInOwner: async () => ({ by: 'the sign-in plugin' }) })
+    await alert.observe(failed('dev', 'cert_expired'))
+    await advance(alert, GRACE + OWNER_RECHECK_MS)
+    await alert.observe(connected('dev'))
+    await advance(alert, 2 * OWNER_RECHECK_MS)
+    expect(sent).toHaveLength(0)
+    expect(fs.existsSync(statePath())).toBe(false)
+    const broken = make({ signInOwner: async () => { throw new Error('unreadable') } })
+    await broken.observe(failed('dev', 'cert_expired'))
+    await advance(broken, GRACE)
+    expect(sent).toHaveLength(1)
   })
 
   it("sends the letter in the user's letter language", async () => {

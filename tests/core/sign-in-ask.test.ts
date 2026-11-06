@@ -6,7 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isSignInAsk, loginCommandWords, readSignInState, SIGN_IN_OK_FRESH_MS } from '../../src/core/sign-in-ask.js'
+import { isSignInAsk, loginCommandWords, readSignInOwner, readSignInState, SIGN_IN_OK_FRESH_MS } from '../../src/core/sign-in-ask.js'
+import { certLetterHandedOff } from '../../src/core/hosts/ssh-cert-expiry-alert.js'
 
 const WORDS = loginCommandWords('run acmelogin -o on this Mac')
 
@@ -84,6 +85,42 @@ describe('readSignInState', () => {
     expect(await readSignInState(now + SIGN_IN_OK_FRESH_MS, dir, open)).toEqual({})
     write('sign-in-state.json', { ok: false, checkedAt: new Date(now).toISOString(), letterId: 'lt-p' })
     expect(await readSignInState(now, dir, open)).toEqual({ broken: { letterId: 'lt-p', by: 'the sign-in check' } })
+    // A checker that stopped says nothing of now, a broken word no more than a working one.
+    expect(await readSignInState(now + SIGN_IN_OK_FRESH_MS + 1, dir, open)).toEqual({})
+  })
+
+  it('a file without ok or a time, or dated ahead, counts for nothing', async () => {
+    const now = Date.now()
+    for (const bad of [{ checkedAt: new Date(now).toISOString(), owns: true }, { ok: true, owns: true }, { ok: 'yes', checkedAt: new Date(now).toISOString() }, { ok: true, checkedAt: new Date(now + 5 * 60_000).toISOString(), owns: true }]) {
+      write('sign-in-state.json', bad)
+      expect(await readSignInState(now, dir, open)).toEqual({})
+      expect(await readSignInOwner(now, dir)).toBeNull()
+    }
+  })
+})
+
+describe('an outside reminder owns sign-in only while it runs (readSignInOwner, certLetterHandedOff)', () => {
+  let dir: string
+  const write = (v: unknown) => fs.writeFileSync(path.join(dir, 'sign-in-state.json'), JSON.stringify(v))
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-sign-in-owner-')) })
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
+
+  it('fresh with owns: true it owns, whatever it found; without owns, stale or removed, Walnut speaks', async () => {
+    const now = Date.now()
+    expect(await readSignInOwner(now, dir)).toBeNull()
+    expect(await certLetterHandedOff(undefined, now, dir)).toBe(false)
+    write({ ok: false, checkedAt: new Date(now - 60_000).toISOString(), by: 'the sign-in plugin', owns: true })
+    expect(await readSignInOwner(now, dir)).toEqual({ by: 'the sign-in plugin' })
+    expect(await certLetterHandedOff(undefined, now, dir)).toBe(true)
+    write({ ok: true, checkedAt: new Date(now - 60_000).toISOString() })
+    expect(await readSignInOwner(now, dir)).toBeNull()
+    write({ ok: true, checkedAt: new Date(now - 60_000).toISOString(), owns: true })
+    expect(await readSignInOwner(now + SIGN_IN_OK_FRESH_MS, dir)).toBeNull()
+    expect(await certLetterHandedOff(undefined, now + SIGN_IN_OK_FRESH_MS, dir)).toBe(false)
+    fs.rmSync(path.join(dir, 'sign-in-state.json'))
+    expect(await readSignInOwner(now, dir)).toBeNull()
+    // The config switch hands it off with no owner at all.
+    expect(await certLetterHandedOff(false, now, dir)).toBe(true)
   })
 })
 

@@ -211,6 +211,30 @@ describe('the SSH certificate letter', () => {
     clock = EXPIRES - 30 * 60_000
     await alert.check()
     expect(sent).toHaveLength(2)
+    // A new letter, never the archived one under its old key.
+    expect(sent[1]!.opKey).not.toBe(sent[0]!.opKey)
+  })
+
+  it('handed back after a restart, with a store that answers a known key with its archived letter, the warning still reaches the user', async () => {
+    // As sendLetterOnce: a key it has seen returns that letter and sends nothing.
+    const byKey = new Map<string, string>()
+    const delivered: string[] = []
+    const send = async (l: { opKey: string }) => {
+      if (byKey.has(l.opKey)) return byKey.get(l.opKey)!
+      delivered.push(l.opKey)
+      byKey.set(l.opKey, `letter-${delivered.length}`)
+      return byKey.get(l.opKey)!
+    }
+    let off = false
+    clock = EXPIRES - HOUR
+    await createCertExpiryAlert(deps({ send, handedOff: async () => off })).check()
+    off = true
+    await createCertExpiryAlert(deps({ send, handedOff: async () => off })).check()
+    off = false
+    const back = createCertExpiryAlert(deps({ send, handedOff: async () => off }))
+    await back.check()
+    expect(delivered).toHaveLength(2)
+    expect((await back.episode())?.letterId).toBe('letter-2')
   })
 
   it('reads in Chinese for a Chinese letter language', () => {
@@ -276,6 +300,37 @@ describe('the sign-in letter joins the certificate letter (one expiry, one threa
     expiry = { dev: EXPIRES + 24 * HOUR, build: EXPIRES + 24 * HOUR, gpu: null }
     await cert.check()
     expect(archived).toHaveLength(1)
+  })
+
+  it('a certificate letter handed off while a login failure was joined to it: the failure gets its own letter', async () => {
+    let off = false
+    let auth: ReturnType<typeof createHostAuthAlert> | null = null
+    const cert = createCertExpiryAlert(deps({ handedOff: async () => off, onLetterClosed: async (id) => { await auth?.unjoin(id) } }))
+    clock = EXPIRES - HOUR
+    await cert.check()
+    const signInSent: string[] = []
+    auth = createHostAuthAlert({
+      send: async (l) => { signInSent.push(l.subject); return 'signin-1' },
+      archive: async () => {},
+      loginHint: async () => undefined,
+      knownHosts: () => new Set(['dev', 'build']),
+      joinLetter: (h, e) => cert.joinLetter(h, e),
+      statePath: path.join(dir, 'auth.json'),
+      graceMs: 0,
+      now: () => clock,
+      setTimer: () => ({ unref: () => {} }),
+      clearTimer: () => {},
+    })
+    clock = EXPIRES + 60_000
+    await auth.observe({ host: 'dev', label: 'Dev box', connected: false, phase: 'failed', kind: 'cert_expired', error: 'denied' })
+    await auth.check()
+    expect(await auth.openLetterIds()).toEqual(['letter-1'])
+    off = true
+    await cert.check()
+    expect(archived).toHaveLength(1)
+    await auth.check()
+    expect(signInSent).toHaveLength(1)
+    expect(await auth.openLetterIds()).toEqual(['signin-1'])
   })
 
   it('with no certificate letter open, the sign-in letter goes out as before', async () => {

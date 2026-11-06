@@ -60,6 +60,9 @@ export function isLoginFailure(error: string | undefined): boolean {
 /** How long a sign-in failure stands before the letter goes out. */
 export const DEFAULT_GRACE_MS = 60_000
 
+/** While an outside reminder owns sign-in, how often a held login failure looks again whether it still does. */
+export const OWNER_RECHECK_MS = 5 * 60_000
+
 /** The next step when config names none (English; each letter language has its own). */
 export const GENERIC_LOGIN_HINT = genericSignInStep('en')
 
@@ -140,6 +143,12 @@ export interface HostAuthAlertDeps {
    * login episode joins it (its id) instead of sending a second letter, so one expiry is one thread.
    */
   joinLetter?: (hosts: string[], error?: string) => Promise<string | null>
+  /**
+   * An outside reminder owns telling the user about sign-in now (sign-in-ask.ts readSignInOwner):
+   * a login failure sends no letter while it does, and does once it stops (stale, removed). A host
+   * key or account failure is not a sign-in and always gets its letter.
+   */
+  signInOwner?: () => Promise<{ by: string } | null>
   statePath?: string
   graceMs?: number
   now?: () => number
@@ -156,6 +165,11 @@ export interface HostAuthAlert {
   openLetterIds: () => Promise<string[]>
   /** Off: no new letter; a host connecting still archives one already sent. Test seam for the grace too. */
   configure: (opts: { enabled?: boolean; graceMs?: number }) => void
+  /**
+   * The certificate letter `letterId` was archived by its own alert: a login episode joined to it
+   * has no letter any more, and a login still failing gets its own (or waits on an owner).
+   */
+  unjoin: (letterId: string) => Promise<void>
   stop: () => void
 }
 
@@ -173,6 +187,8 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
   let timer: unknown = null
   let timerAt = 0
   let stopped = false
+  // The owner a login failure was last held for (logged once, not at every recheck).
+  let heldBy: string | null = null
   // Frames come in bursts (several per connect); one at a time keeps the episode file consistent.
   let chain: Promise<void> = Promise.resolve()
   const serial = (fn: () => Promise<void>): Promise<void> => {
@@ -281,8 +297,16 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
       let next = Infinity
       for (const [key, hosts] of groups) {
         const due = hosts.some(([, f]) => now() - f.since >= graceMs)
-        if (due) await sendFor(key, hosts)
-        else next = Math.min(next, ...hosts.map(([, f]) => f.since + graceMs))
+        if (!due) { next = Math.min(next, ...hosts.map(([, f]) => f.since + graceMs)); continue }
+        const owner = key === 'login' ? await deps.signInOwner?.().catch(() => null) : null
+        if (owner) {
+          if (heldBy !== owner.by) log.session.info('host sign-in failed: no letter, another reminder owns sign-in', { by: owner.by, hosts: hosts.map(([h]) => h) })
+          heldBy = owner.by
+          next = Math.min(next, now() + OWNER_RECHECK_MS)
+          continue
+        }
+        heldBy = null
+        await sendFor(key, hosts)
       }
       if (next < Infinity) schedule(next)
     })
@@ -345,6 +369,17 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     observe,
     check,
     openLetterIds: async () => { await chain; return [...episodes.values()].flatMap((e) => (e.letterId ? [e.letterId] : [])) },
+    unjoin: (letterId) => serial(async () => {
+      await loaded
+      const ep = [...episodes.values()].find((e) => e.joined && e.letterId === letterId)
+      if (!ep) return
+      delete ep.letterId
+      delete ep.joined
+      await save()
+      log.session.info('host sign-in episode: its joined certificate letter was archived', { letterId })
+      if ([...failing.values()].some((f) => f.cls === 'login')) schedule(now())
+      else await settle()
+    }),
     configure: (opts) => {
       if (opts.enabled !== undefined) enabled = opts.enabled
       if (opts.graceMs !== undefined) graceMs = Math.max(0, opts.graceMs)
@@ -390,6 +425,7 @@ export async function startHostAuthAlert(opts: { knownHosts: () => Set<string>; 
       const { runningCertExpiryAlert } = await import('./ssh-cert-expiry-alert.js')
       return (await runningCertExpiryAlert()?.joinLetter(hosts, error)) ?? null
     },
+    signInOwner: async () => (await import('../sign-in-ask.js')).readSignInOwner(),
     ...(process.env.WALNUT_HOST_SIGN_IN_LETTER_GRACE_MS && Number.isFinite(graceEnv) && graceEnv >= 0 ? { graceMs: graceEnv } : {}),
   })
   alert.configure({ enabled: opts.enabled !== false && process.env.WALNUT_HOST_SIGN_IN_LETTER !== '0' })

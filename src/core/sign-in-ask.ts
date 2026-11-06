@@ -13,16 +13,38 @@
  *   - a checker said sign-in works within SIGN_IN_OK_FRESH_MS (`local/sign-in-state.json`, written
  *     by whatever checks it, a plugin): the ask is not shown, and a write is refused saying so;
  *   - otherwise every task's sign-in ask folds into the first one asked, whatever team it is in.
+ *
+ * The checker's file (SignInStateFile) is also how an outside reminder owns telling the user about
+ * sign-in: written fresh with `owns: true`, Walnut's certificate letter and its sign-in failure
+ * letter step aside (readSignInOwner); stale or removed, they speak again.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 
-/** A checker's "sign-in works" counts this long. */
+/** A checker's word counts this long. */
 export const SIGN_IN_OK_FRESH_MS = 30 * 60_000;
 
-/** Where an outside checker writes what it found: `{ ok, checkedAt, by?, letterId? }`. */
+/** Where an outside checker writes what it found (SignInStateFile), under `local/`. */
 export const SIGN_IN_STATE_FILE = 'sign-in-state.json';
+
+/**
+ * What an outside checker writes, whole, every few minutes while it runs. A word older than
+ * SIGN_IN_OK_FRESH_MS, dated more than a minute ahead, or without `ok` and `checkedAt`, counts for
+ * nothing; the checker removes the file when it is turned off.
+ */
+export interface SignInStateFile {
+  /** Sign-in works now (true) or fails now (false). */
+  ok: boolean;
+  /** When it checked, ISO 8601. */
+  checkedAt: string;
+  /** Who checked, a few words the user reads ("the sign-in plugin"); at most 80 characters. */
+  by?: string;
+  /** With ok false: its own letter asking the user to sign in; every sign-in ask waits on it. */
+  letterId?: string;
+  /** It tells the user about sign-in itself: Walnut's certificate and sign-in failure letters step aside. */
+  owns?: boolean;
+}
 
 const MEANING: RegExp[] = [
   /\b(?:sign|log)(?:ged)?[\s-]?(?:in|on)\s+(?:again|once more)\b/i,
@@ -81,6 +103,24 @@ async function readJson(file: string): Promise<unknown> {
   try { return JSON.parse(await fs.readFile(file, 'utf-8')); } catch { return null; }
 }
 
+/** The checker's file while its word still counts, with the time it checked, or null. */
+async function freshStateFile(nowMs: number, dir: string): Promise<{ said: SignInStateFile; at: number; by?: string } | null> {
+  const said = await readJson(path.join(dir, SIGN_IN_STATE_FILE)) as Partial<SignInStateFile> | null;
+  const at = typeof said?.checkedAt === 'string' ? Date.parse(said.checkedAt) : NaN;
+  if (!said || typeof said.ok !== 'boolean' || !Number.isFinite(at) || nowMs - at > SIGN_IN_OK_FRESH_MS || at > nowMs + 60_000) return null;
+  const by = typeof said.by === 'string' && said.by.trim() ? said.by.trim().slice(0, 80) : undefined;
+  return { said: said as SignInStateFile, at, ...(by ? { by } : {}) };
+}
+
+/**
+ * The outside reminder that owns telling the user about sign-in now (its file fresh, `owns: true`),
+ * or null: then Walnut's own certificate and sign-in failure letters speak.
+ */
+export async function readSignInOwner(nowMs = Date.now(), dir = path.join(WALNUT_HOME, 'local')): Promise<{ by: string } | null> {
+  const fresh = await freshStateFile(nowMs, dir);
+  return fresh?.said.owns === true ? { by: fresh.by ?? 'the sign-in check' } : null;
+}
+
 /** Whether a letter is still before the user (not archived); a letter that cannot be read counts as open. */
 async function letterOpen(id: string): Promise<boolean> {
   try {
@@ -108,13 +148,14 @@ export async function readSignInState(
       broken = { letterId: cert.episode.letterId, by: 'the certificate letter', since: Number(cert.episode.expiresAt) || 0 };
     }
   }
-  const said = await readJson(path.join(dir, SIGN_IN_STATE_FILE)) as { ok?: unknown; checkedAt?: unknown; by?: unknown; letterId?: unknown } | null;
-  const at = typeof said?.checkedAt === 'string' ? Date.parse(said.checkedAt) : NaN;
-  const by = typeof said?.by === 'string' ? said.by.slice(0, 80) : undefined;
-  const fresh = said && Number.isFinite(at) && nowMs - at <= SIGN_IN_OK_FRESH_MS && at <= nowMs + 60_000;
-  if (fresh && said.ok === true && (!broken || at > broken.since)) return { ok: { at: new Date(at).toISOString(), ...(by ? { by } : {}) } };
+  // A stale word counts for nothing either way: a checker that stopped says nothing of now.
+  const fresh = await freshStateFile(nowMs, dir);
+  if (fresh?.said.ok === true && (!broken || fresh.at > broken.since)) return { ok: { at: new Date(fresh.at).toISOString(), ...(fresh.by ? { by: fresh.by } : {}) } };
   if (broken) return { broken: { ...(broken.letterId ? { letterId: broken.letterId } : {}), by: broken.by } };
-  if (said && Number.isFinite(at) && said.ok === false) return { broken: { ...(typeof said.letterId === 'string' ? { letterId: said.letterId } : {}), by: by ?? 'the sign-in check' } };
+  if (fresh?.said.ok === false) {
+    const letterId = typeof fresh.said.letterId === 'string' && fresh.said.letterId ? fresh.said.letterId : undefined;
+    return { broken: { ...(letterId ? { letterId } : {}), by: fresh.by ?? 'the sign-in check' } };
+  }
   return {};
 }
 
