@@ -312,6 +312,16 @@ describe("whose cap: the started task's lead, whoever starts it", () => {
     await expect(admitStartWithinLimits(await getTask(loose.id), workerSid)).rejects.toMatchObject({ detail: { parentId: worker.id } })
   })
 
+  it('a moved Ask in a work project has the same cap from itself and another worker', async () => {
+    const { task: lead } = await addTask({ title: 'Moved Ask', project: 'fanout', walnut_agent: true });
+    await children(lead.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'));
+    const [waiting] = await children(lead.id, ['TODO']);
+    const { task: helper } = await addTask({ title: 'Helper', project: 'fanout' });
+    for (const sid of [await sessionFor(lead.id, 'fanout'), await sessionFor(helper.id, 'fanout')]) {
+      await expect(admitStartWithinLimits(await getTask(waiting), sid)).rejects.toMatchObject({ detail: { parentId: lead.id, cap: MAX_RUNNING_SUBTASKS } });
+    }
+  });
+
   it("a transfer's new task takes its source's slot: one for one, never refused for the source", async () => {
     const { task: lead } = await addTask({ title: 'Lead at its cap', project: 'fanout' })
     const running = await children(lead.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))

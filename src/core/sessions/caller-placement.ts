@@ -34,8 +34,8 @@
  *     the parent, and the parent counts it, so work an agent split off stays
  *     visibly attached to the work it came from wherever it lands.
  *   - tier: where on the board the caller sits (pinned, and its focus tier:
- *     Focus, Satellite, Parked or a custom tier; or unpinned). A worker's
- *     new task is born in the SAME tier unless the call names `pinned` or a
+ *     Focus, Satellite, Parked or a custom tier; or unpinned). Every session's
+ *     subtask is born in the SAME tier unless the call names `pinned` or a
  *     `focus_tier`: work split off a Focus task is Focus work, and the user moves
  *     it later if not (user report 2026-09-25: a Focus task's subtask landed in
  *     Satellite). The tier follows work into another project too, because a tier
@@ -48,8 +48,8 @@
  * Only a WORKER caller (a session running a regular task) is placed from. The
  * Personal AI's own conversations are sessions too, but their tasks live in the
  * `Ask …` projects, and filing the user's work there would bury it: an ask keeps
- * the old defaults for project, folder, tier and cwd and only gets the parent
- * link (an ask often sits in Wait, which would park the work it files).
+ * the old defaults for project, folder and cwd. Its parent link and pin tier
+ * still follow the conversation, as every leader's subtasks do.
  * Humans and external processes keep the old behaviour entirely. The cloud
  * companion reads its caller from the projections the Mac pushes
  * (resolveCallerOnReplica) and files no folder (it holds none): the Mac places
@@ -139,7 +139,7 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
     ...(task.org_role === 'lead' ? { orgLead: true } : {}),
     ...(task.org_role === 'lead' && task.org_leads?.length ? { orgLeads: [...task.org_leads] } : {}),
   };
-  return { kind: isAskTask(task) ? 'ask' : 'worker', task: callerTask, session };
+  return { kind: isAskPlacement(task) ? 'ask' : 'worker', task: callerTask, session };
 }
 
 /**
@@ -175,7 +175,7 @@ async function resolveCallerOnReplica(sid: string): Promise<CallerPlacement> {
     ...(task?.org_role === 'lead' ? { orgLead: true } : {}),
     ...(task?.org_role === 'lead' && task.org_leads?.length ? { orgLeads: [...task.org_leads] } : {}),
   };
-  return { kind: isAskTask({ project, walnut_agent: task?.walnut_agent === true }) ? 'ask' : 'worker', task: callerTask, session };
+  return { kind: isAskPlacement({ project, walnut_agent: task?.walnut_agent === true, org_role: task?.org_role }) ? 'ask' : 'worker', task: callerTask, session };
 }
 
 /**
@@ -184,6 +184,12 @@ async function resolveCallerOnReplica(sid: string): Promise<CallerPlacement> {
  */
 export function isAskTask(task: { walnut_agent?: boolean; project?: string }): boolean {
   return task.walnut_agent === true || /^ask /i.test((task.project ?? '').trim());
+}
+
+/** Moving an ask into a work project keeps its persona, not its placement defaults. */
+export function isAskPlacement(task: { walnut_agent?: boolean; project?: string; org_role?: string }): boolean {
+  const project = (task.project ?? '').trim();
+  return /^ask /i.test(project) || (task.walnut_agent === true && (!project || task.org_role === 'main'));
 }
 
 /** What a create request asked for (undefined = not said). */
@@ -214,8 +220,7 @@ export interface PlacementDecision {
 export function decidePlacement(req: PlacementRequest, caller: CallerPlacement): PlacementDecision {
   const explicitGroup = req.group_id === undefined ? undefined : (req.group_id || undefined);
   if (caller.kind === 'ask') {
-    // Its `Ask …` project is never a place for the user's work, but the work
-    // is still this conversation's: the parent link and nothing else.
+    // Its `Ask …` project is never a place for the user's work, but the parent link stays.
     return { project: req.project, group_id: explicitGroup, placeBesideCaller: false, parentTaskId: caller.task.id };
   }
   if (caller.kind !== 'worker') {
@@ -370,7 +375,7 @@ export async function workerMoveRefusal(input: {
   if (caller.task.id !== parentId && caller.task.id !== input.task.id) return null;
   const parent = await taskPlace(parentId);
   // An ask (the Personal AI, Main) files work wherever it belongs: its own project is no team's.
-  if (!parent || isAskTask(parent)) return null;
+  if (!parent || isAskPlacement(parent)) return null;
   if (sameProject(input.project, parent.project)) return null;
   if (parent.org_role === 'lead' && parent.org_leads?.some((p) => sameProject(input.project, p))) return null;
   const words = typeof input.userWords === 'string' ? input.userWords.replace(/\s+/g, ' ').trim() : '';
@@ -389,17 +394,15 @@ export async function workerMoveRefusal(input: {
 }
 
 /**
- * The board tier a worker's new task is born in: the caller's own, unless the
+ * The board tier a session's subtask is born in: the caller's own, unless the
  * create names `pinned` or a `focus_tier` (''/null = not named). Undefined =
  * nothing inherited, and the route's defaults apply (Satellite for a create).
- * Only a worker: an ask's tier is where the conversation is parked, not where
- * the work belongs.
  */
 export function inheritedTier(
   req: { pinned?: unknown; focus_tier?: unknown },
   caller: CallerPlacement,
 ): { pinned: boolean; focus_tier?: string } | undefined {
-  if (caller.kind !== 'worker' || typeof caller.task.pinned !== 'boolean') return undefined;
+  if ((caller.kind !== 'worker' && caller.kind !== 'ask') || typeof caller.task.pinned !== 'boolean') return undefined;
   if (req.pinned !== undefined) return undefined;
   if (typeof req.focus_tier === 'string' && req.focus_tier.trim() !== '') return undefined;
   if (!caller.task.pinned) return { pinned: false };

@@ -156,6 +156,7 @@ describe('one full screen for the tab', () => {
     const SHEETS: Record<string, 'tab' | 'own'> = {
       'components/sessions/SessionPanel.tsx': 'tab', // a session panel, wherever it is hosted
       'components/org/OrgTaskRail.tsx': 'tab', // an Org node's side bar (Tasks, Brief, Threads)
+      'components/tasks/HomeBoardSheet.tsx': 'tab',
       'components/dock/FocusDock.tsx': 'own', // the dock, beside every page
       'components/sessions/WorkflowProgress.tsx': 'own', // a workflow card inside a panel's chat
     };

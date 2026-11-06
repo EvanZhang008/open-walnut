@@ -22,6 +22,16 @@ async function boot(page: Page, baseURL: string) {
   await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'));
   await openHome(page, baseURL);
 }
+async function locateInPanel(page: Page, panel: Locator) {
+  const button = panel.getByTestId('session-panel-locate');
+  await expect(button).toBeAttached();
+  if (await button.isVisible()) await button.click();
+  else {
+    await panel.getByTestId('session-header-more-btn').click();
+    await page.getByTestId('session-header-more-menu').getByTestId('session-header-more-item-locate').click();
+  }
+}
+
 const navigation = (page: Page) => page.locator('#home-task-navigation');
 /** A navigation region's heading; the status sections' headings share the class but not the role. */
 const NAV_HEADING = '.navigation-heading:not(.status-section-heading)';
@@ -76,7 +86,7 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await expect(page.locator('.todo-section-tabs, .task-view-row')).toHaveCount(0);
   await expect(page.getByTestId('tier-view-bar')).toHaveCount(0);
   expect(await homeToolbar(page).evaluate(bar => [...bar.children].map(child => child.className.split(' ')[0])))
-    .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'todo-panel-hide']);
+    .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'todo-panel-board', 'todo-panel-hide']);
   // One menu button, Display, named by its aria-label (it holds the filters too).
   expect(await homeToolbar(page).locator(':scope > .tp-btn').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Display']);
   await expect(homeToolbar(page).locator('.todo-search-input')).toBeVisible();
@@ -1166,7 +1176,7 @@ test('Locate never moves or opens a session column, in an unlocked column or the
   await expect.poll(() => sessionColumnOrder(page)).toEqual(seededColumns);
 
   // The right-hand column's Locate selects the task and leaves both columns where they were.
-  await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true }).click();
+  await locateInPanel(page, page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]'));
   await expect(card).toHaveClass(/todo-pinned-card-active/);
   expect(await sessionColumnOrder(page)).toEqual(seededColumns);
 
@@ -1177,9 +1187,7 @@ test('Locate never moves or opens a session column, in an unlocked column or the
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');
   await expect(card).not.toHaveClass(/todo-pinned-card-active/);
-  const slotLocate = page.locator('.ask-walnut-session[data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true });
-  await expect(slotLocate).toBeVisible({ timeout: 20_000 });
-  await slotLocate.click();
+  await locateInPanel(page, page.locator('.ask-walnut-session[data-session-id="pw-store-sync-session"]'));
   await expect(card).toHaveClass(/todo-pinned-card-active/);
   expect(await sessionColumnOrder(page)).toEqual(['pw-exec-bug-session']);
   expect(errors).toEqual([]);

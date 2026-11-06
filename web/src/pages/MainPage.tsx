@@ -23,6 +23,7 @@ import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
+import { HomeBoardSheet } from '@/components/tasks/HomeBoardSheet';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
 import { createdToastId, readTierUsed } from '@/components/tasks/filter-bar-persist';
 import { revealViewOption } from '@/components/tasks/view-dropdown-reveal';
@@ -2347,6 +2348,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     handleLocateTaskById(taskId);
   }, [handleLocateTaskById, handleToggleSession]);
 
+  const handleFocusTaskByIdFromBoard = useCallback((task: Task) => {
+    if (resolveTaskSessionId(task)) handleFocusTaskById(task.id);
+    else { setTodoVisible(true); handleFocusTask(task, { openDetail: true, fromOutside: true }); }
+  }, [handleFocusTaskById, handleFocusTask]);
+
   // `locateTaskOnHome` (utils/open-session.ts): a session panel off Home asked to be found. Its task
   // may be seconds old and not in this page's list yet (an ask started from Mail), so the locate is
   // held until the task arrives, for a bounded while, rather than dropped on the first miss. The panel
@@ -3288,6 +3294,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             instead of dropping a popover here. The chat-anchored instances of
             both components remain (fix-walnut + the chat "+" pills). */}
       </div>
+
+      <HomeBoardSheet onOpenTask={handleFocusTaskByIdFromBoard} />
 
       {/* Todo Resize Handle — only shown when todo is visible */}
       {todoShown && <div className="todo-resize-handle" {...todoPanel.handleProps} />}

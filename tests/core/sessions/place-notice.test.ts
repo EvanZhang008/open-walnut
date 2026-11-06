@@ -188,13 +188,20 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
   })
 
   it('never for a Personal AI ask, nor a session with no task', async () => {
-    const { task, sid } = await spawned('Ask Walnut', { walnutAgent: true })
-    await updateTask(task.id, { project: 'marina' })
+    const { sid } = await spawned('Ask Walnut', { walnutAgent: true })
     await sendMessageToSession(sid, 'plain', { source: 'ui' })
     expect(await rows(sid)).toEqual(['plain'])
     await createSessionRecord('sid-free', '', '', '/tmp')
     await sendMessageToSession('sid-free', 'free', { source: 'ui' })
     expect(await rows('sid-free')).toEqual(['free'])
+  })
+
+  it('an ask moved to a work project hears its live place without losing its persona', async () => {
+    const { task, sid } = await spawned('Ask Walnut', { walnutAgent: true })
+    await updateTask(task.id, { project: 'marina' })
+    await sendMessageToSession(sid, 'continue the work', { source: 'ui' })
+    expect((await rows(sid))[0]).toContain('now stands in project "marina"')
+    expect((await getTask(task.id)).walnut_agent).toBe(true)
   })
 
   it('a record with no stored prompt is judged by the project it started in', async () => {

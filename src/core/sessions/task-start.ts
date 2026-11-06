@@ -135,8 +135,8 @@ export async function admitStartWithinLimits(task: Task, callerSid: string | und
   if (task.parent_task_id && task.parent_task_id !== caller.task.id) {
     const parent = await getTask(task.parent_task_id).catch(() => null);
     if (parent) {
-      const { isAskTask } = await import('./caller-placement.js');
-      if (isAskTask(parent)) return open;
+      const { isAskPlacement } = await import('./caller-placement.js');
+      if (isAskPlacement(parent)) return open;
       lead = parent;
     }
   }

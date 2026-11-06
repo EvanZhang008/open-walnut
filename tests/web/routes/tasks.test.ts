@@ -305,6 +305,24 @@ describe('GET /api/tasks — canonical query params', () => {
     await expect400('?completedWithinDays=-1');
   });
 
+  it('the unloaded completed count excludes every hidden organization role', async () => {
+    const { completeTask, updateTaskRaw } = await import('../../../src/core/task-manager.js');
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { task: visible } = await addTask({ title: 'Visible archived task' });
+    await completeTask(visible.id);
+    await updateTaskRaw(visible.id, { completed_at: old });
+    for (const role of ['main', 'lead'] as const) {
+      const { task } = await addTask({ title: `Archived ${role}` });
+      await completeTask(task.id);
+      await updateTaskRaw(task.id, { completed_at: old, org_role: role });
+    }
+    const res = await request(createApp()).get('/api/tasks?fields=list&completedWithinDays=7');
+    expect(res.status).toBe(200);
+    expect(res.body.tasks).toEqual([]);
+    expect(res.body.completedHidden).toBe(1);
+    expect(res.body.total).toBe(3);
+  });
+
   it('completedWithinDays keeps old completed asks: the Ask drawer lists every ask', async () => {
     const { completeTask, updateTaskRaw } = await import('../../../src/core/task-manager.js');
     const { task: filed } = await addTask({ title: 'Old chat filed as an ask', project: 'Ask Walnut' });

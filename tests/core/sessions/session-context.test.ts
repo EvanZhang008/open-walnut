@@ -192,6 +192,15 @@ describe('buildSessionContext (identity note)', () => {
     }
   })
 
+  it('keeps the Ask persona rule after moving into a work project and states its inherited placement', async () => {
+    const { task } = await addTask({ title: 'Moved chat', project: 'Work', walnut_agent: true });
+    const { systemPrompt } = await buildSessionContext(task.id);
+    expect(systemPrompt).toMatch(/never create or start a task, or hand work to another task, unless the user asked/i);
+    expect(systemPrompt).not.toMatch(/split work with your own tools/i);
+    expect(systemPrompt).toMatch(/lands beside yours: same project, folder and board tier/i);
+    expect(systemPrompt).toMatch(/quoting their words in user_words/);
+  });
+
   it('says where asked-for work lands: beside the caller, another project only with a reason', async () => {
     // Without this an agent "helps" by naming a project it guessed, which files
     // the work away from the folder the user put the caller in.

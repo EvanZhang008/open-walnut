@@ -19,6 +19,8 @@
  * found on the Mac at all. They cost little: 190 asks, about 25 KB gzipped.
  */
 
+import { isHiddenFromTaskLists } from './org/org-tree.js'
+
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export interface CompletedWindowTask {
@@ -30,11 +32,13 @@ export interface CompletedWindowTask {
   focus_tier?: string
   walnut_agent?: boolean
   project?: string
+  org_role?: string
+  plugin_only?: string
 }
 
 export interface CompletedWindow<T> {
   tasks: T[]
-  /** Completed tasks older than the window that were left out. */
+  /** Visible completed tasks older than the window that were left out. */
   completedHidden: number
 }
 
@@ -75,7 +79,7 @@ export function recentCompletedWindow<T extends CompletedWindowTask>(
       kept.push(task)
       continue
     }
-    completedHidden += 1
+    if (!isHiddenFromTaskLists(task)) completedHidden += 1
   }
   return { tasks: kept, completedHidden }
 }

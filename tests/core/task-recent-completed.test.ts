@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { recentCompletedWindow, parseCompletedWithinDays } from '../../src/core/task-recent-completed.js'
+import { isHiddenFromTaskLists } from '../../src/core/org/org-tree.js'
 
 const NOW = Date.parse('2026-09-29T12:00:00.000Z')
 const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString()
@@ -89,6 +90,20 @@ describe('recentCompletedWindow', () => {
     const { tasks: kept, completedHidden } = recentCompletedWindow(tasks, 0, NOW)
     expect(kept.map((t) => t.id)).toEqual(['a', 'c', 'd'])
     expect(completedHidden).toBe(1)
+  })
+
+  it('counts the unloaded archive with the same visibility rule as the loaded list', () => {
+    const tasks = [
+      { id: 'visible', org_role: undefined, plugin_only: undefined },
+      { id: 'main', org_role: 'main', plugin_only: undefined },
+      { id: 'lead', org_role: 'lead', plugin_only: undefined },
+      { id: 'plugin', org_role: undefined, plugin_only: 'fixture-plugin' },
+      { id: 'empty-plugin', org_role: undefined, plugin_only: '' },
+    ].map(t => ({ ...t, status: 'done', completed_at: daysAgo(30) }))
+    const window = recentCompletedWindow(tasks, 7, NOW)
+    expect(window.tasks).toEqual([])
+    expect(window.completedHidden).toBe(tasks.filter(t => !isHiddenFromTaskLists(t)).length)
+    expect(window.completedHidden).toBe(2)
   })
 
   it('an empty list is an empty answer', () => {

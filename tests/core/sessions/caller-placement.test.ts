@@ -20,7 +20,7 @@ vi.mock('../../../src/core/fork-title.js', () => ({ summarizeGroupLabel: vi.fn(a
 import { WALNUT_HOME } from '../../../src/constants.js'
 import {
   decidePlacement, resolveCallerPlacement, createTimeCwd, inheritedLaunchPair,
-  joinOrCreateSiblingFolder, inheritedTier, projectElsewhereRefusal, type CallerPlacement,
+  joinOrCreateSiblingFolder, inheritedTier, isAskPlacement, projectElsewhereRefusal, type CallerPlacement,
 } from '../../../src/core/sessions/caller-placement.js'
 import {
   addTask, getTask, createFolder, updateTask, setProjectMetadata, listGroups,
@@ -183,7 +183,7 @@ describe('projectElsewhereRefusal (another project needs the user\'s words)', ()
   })
 })
 
-describe('inheritedTier (a worker\'s new task is born in its board tier)', () => {
+describe('inheritedTier (every session\'s subtask is born in its board tier)', () => {
   // User report 2026-09-25: a Focus task's subtask landed in Satellite.
   const at = (pinned: boolean | undefined, focus_tier?: string): CallerPlacement => ({
     kind: 'worker',
@@ -210,14 +210,34 @@ describe('inheritedTier (a worker\'s new task is born in its board tier)', () =>
     expect(inheritedTier({ focus_tier: 'wait' }, at(true, 'focus'))).toBeUndefined()
   })
 
-  it('only a worker: an ask (often parked in Wait), a human, or an unknown caller inherits nothing', () => {
-    const ask: CallerPlacement = { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut', pinned: true, focus_tier: 'wait' }, session: SESSION }
-    expect(inheritedTier({}, ask)).toBeUndefined()
+  it('an Ask inherits its tier without changing its project placement defaults', () => {
+    for (const tier of ['focus', 'wait', 'ct_launch', undefined]) {
+      const ask: CallerPlacement = { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut', pinned: true, focus_tier: tier }, session: SESSION }
+      expect(inheritedTier({}, ask)).toEqual({ pinned: true, ...(tier ? { focus_tier: tier } : {}) })
+      expect(decidePlacement({}, ask)).toEqual({ project: undefined, group_id: undefined, placeBesideCaller: false, parentTaskId: 't-ask' })
+    }
+  })
+
+  it('a human or an unknown caller inherits nothing', () => {
     expect(inheritedTier({}, { kind: 'human' })).toBeUndefined()
     expect(inheritedTier({}, { kind: 'external' })).toBeUndefined()
     expect(inheritedTier({}, { kind: 'untracked', session: SESSION })).toBeUndefined()
     // A hand-built caller that never read the board says nothing either.
     expect(inheritedTier({}, at(undefined))).toBeUndefined()
+  })
+})
+
+describe('isAskPlacement', () => {
+  it.each([
+    [{ project: 'Ask Walnut' }, true],
+    [{ project: ' ask mentor ', walnut_agent: true }, true],
+    [{ project: '', walnut_agent: true }, true],
+    [{ project: 'Walnut', walnut_agent: true, org_role: 'main' }, true],
+    [{ project: 'Personal', walnut_agent: true }, false],
+    [{ project: 'Walnut', walnut_agent: true, org_role: 'lead' }, false],
+    [{ project: 'Personal' }, false],
+  ])('uses the current work project without discarding the ask persona: %j', (task, expected) => {
+    expect(isAskPlacement(task)).toBe(expected)
   })
 })
 
@@ -255,6 +275,19 @@ describe('against the real store', () => {
     // drawer's own rule), so its work is never filed into "Ask Mentor".
     const unflagged = await seedCaller({ project: 'Ask Mentor' })
     expect((await resolveCallerPlacement(unflagged.sid)).kind).toBe('ask')
+  })
+
+  it('an ask moved to a work project inherits its current project and pin tier', async () => {
+    const { task, sid } = await seedCaller({ project: 'Ask Walnut', walnutAgent: true })
+    await updateTask(task.id, { project: 'Personal' })
+    const { togglePin, setFocusTier } = await import('../../../src/core/task-manager.js')
+    await togglePin(task.id)
+    await setFocusTier(task.id, 'focus')
+    const caller = await resolveCallerPlacement(sid)
+    expect(caller).toMatchObject({ kind: 'worker', task: { project: 'Personal', pinned: true, focus_tier: 'focus' } })
+    expect(decidePlacement({}, caller)).toMatchObject({ project: 'Personal', parentTaskId: task.id })
+    expect(inheritedTier({}, caller)).toEqual({ pinned: true, focus_tier: 'focus' })
+    expect((await getTask(task.id)).walnut_agent).toBe(true)
   })
 
   it('reads the task LIVE: a moved task places by its new project and folder', async () => {

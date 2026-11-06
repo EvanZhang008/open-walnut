@@ -129,10 +129,31 @@ describe('callers that are not workers keep the old defaults', () => {
     expect(named.json.task.project).toBe('acme')
     // It also lists the ask's other open subtask: the dentist call.
     expect(named.json.placement).toEqual({
-      project: 'acme', folder_created: false, parent_task_id: ask.id,
+      project: 'acme', folder_created: false, parent_task_id: ask.id, tier: 'satellite',
       open_subtasks: [{ id: json.task.id, title: 'Track the dentist call', phase: 'TODO' }],
     })
     expect((await getTask(named.json.task.id)).parent_task_id).toBe(ask.id)
+  })
+})
+
+describe('every leader inherits its board tier', () => {
+  it.each(['Ask Walnut', ''])('an Ask or Main in project %j keeps its tier but not its project defaults', async project => {
+    const { task, sid } = await seedCaller(project, { walnutAgent: true });
+    if (!project) await updateTaskRaw(task.id, { org_role: 'main' });
+    for (const tier of ['focus', 'wait', 'satellite']) {
+      await setFocusTier(task.id, tier);
+      const response = await post({ title: `Inherited ${tier} task` }, sid);
+      expect(response.status).toBe(201);
+      const child = await getTask(response.json.task.id);
+      expect(child.pinned).toBe(true);
+      expect(child.focus_tier ?? 'satellite').toBe(tier);
+      expect(child.parent_task_id).toBe(task.id);
+      expect(['', 'Inbox']).toContain(child.project);
+      expect(child.group_id).toBeUndefined();
+    }
+    const explicit = await post({ title: 'Explicit unpinned task', pinned: false }, sid);
+    expect((await getTask(explicit.json.task.id)).pinned).not.toBe(true);
+    expect((await getTask(task.id)).walnut_agent).toBe(true);
   })
 })
 
@@ -415,6 +436,38 @@ describe('the board tier: a worker\'s new task is born where the caller sits', (
     expect((await getTask(there.json.task.id)).focus_tier).toBe('focus')
   })
 
+  it.each(['focus', 'satellite', 'wait'])('an ask moved to a work project creates its child in %s', async (tier) => {
+    const { task, sid } = await seedCaller('Ask Walnut', { walnutAgent: true })
+    await updateTaskRaw(task.id, { project: 'Personal' })
+    await setFocusTier(task.id, tier)
+    const result = await post({ title: `Work child in ${tier}` }, sid)
+    expect(result.status).toBe(201)
+    const stored = await getTask(result.json.task.id)
+    expect(stored).toMatchObject({ project: 'Personal', parent_task_id: task.id, pinned: true })
+    expect(stored.focus_tier).toBe(tier === 'satellite' ? undefined : tier)
+    expect(result.json.placement.tier).toBe(tier)
+    const overridden = await post({ title: `Explicit override from ${tier}`, pinned: false }, sid)
+    expect(overridden.status).toBe(201)
+    expect(Boolean((await getTask(overridden.json.task.id)).pinned)).toBe(false)
+  })
+
+  it('a moved ask inherits a custom tier and keeps its children in its work project', async () => {
+    const { task, sid } = await seedCaller('Ask Mentor', { walnutAgent: true })
+    await updateTaskRaw(task.id, { project: 'Personal' })
+    const { tier } = await createCustomTier('Practice')
+    await setFocusTier(task.id, tier.id)
+    const result = await post({ title: 'Custom tier child' }, sid)
+    expect(result.status).toBe(201)
+    expect(await getTask(result.json.task.id)).toMatchObject({ project: 'Personal', parent_task_id: task.id, focus_tier: tier.id })
+    const moved = await fetch(api(`/api/v1/tasks/${result.json.task.id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': sid },
+      body: JSON.stringify({ project: 'Elsewhere' }),
+    })
+    expect(moved.status).toBe(409)
+    expect((await getTask(result.json.task.id)).project).toBe('Personal')
+  })
+
   it('a Satellite caller stays Satellite; an unpinned caller\'s task is off the board too', async () => {
     const sat = await seedCaller('marina')
     const a = await post({ title: 'From Satellite' }, sat.sid)
@@ -462,13 +515,13 @@ describe('the board tier: a worker\'s new task is born where the caller sits', (
     }
   })
 
-  it('an ask never passes on its tier (asks are often parked in Wait)', async () => {
+  it('an Ask passes its tier to work filed in another project', async () => {
     const ask = await seedCaller('Ask Walnut', { walnutAgent: true })
     await setFocusTier(ask.task.id, 'wait')
     const r = await post({ title: 'Work asked for in a parked chat', project: 'marina' }, ask.sid)
     expect(r.status).toBe(201)
-    expect(r.json.placement.tier).toBeUndefined()
-    expect((await getTask(r.json.task.id)).focus_tier).toBeUndefined()
+    expect(r.json.placement.tier).toBe('wait')
+    expect((await getTask(r.json.task.id)).focus_tier).toBe('wait')
   })
 
   it('no caller (the phone, the web UI): Satellite as before', async () => {

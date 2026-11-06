@@ -130,10 +130,16 @@ describe('no inheritance', () => {
     expect(launch).toMatchObject({ cwd: '/srv/project-default', host: '' })
   })
 
-  it('from the Personal AI', async () => {
-    tasks[CALLER_TASK.id] = { ...CALLER_TASK, walnut_agent: true }
+  it('from the Personal AI in its Ask project', async () => {
+    tasks[CALLER_TASK.id] = { ...CALLER_TASK, walnut_agent: true, project: 'Ask Walnut' }
     const launch = await launchOf({ id: 't-sib', title: 'Sibling', project: 'marina' })
     expect(launch.cwd).toBe('/srv/project-default')
+  })
+
+  it('inherits the caller location after an Ask moves into a work project', async () => {
+    tasks[CALLER_TASK.id] = { ...CALLER_TASK, walnut_agent: true }
+    callerSession({ host: 'devbox', cwd: '/home/me/marina' })
+    expect(await launchOf({ id: 't-sib', title: 'Sibling', project: 'marina' })).toMatchObject({ cwd: '/home/me/marina', host: 'devbox' })
   })
 
   it('from a human or external caller', async () => {

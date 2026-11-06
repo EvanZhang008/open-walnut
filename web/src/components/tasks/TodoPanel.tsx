@@ -7834,6 +7834,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <DisplayButton {...displayProps} filters={filterBar} />
+        <button type="button" className="todo-panel-board" aria-label="Open task board" title="Board" onClick={() => window.dispatchEvent(new Event('home:open-board'))}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="1.5" y="2" width="13" height="12" rx="2" /><path d="M6 2v12M10 2v12" /></svg>
+        </button>
         <button
           type="button"
           className="todo-panel-hide"

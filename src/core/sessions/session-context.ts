@@ -98,7 +98,7 @@ import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
 import { taskDirForHost } from './task-dir-place.js'
-import { isAskTask } from './caller-placement.js'
+import { isAskPlacement, isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
@@ -543,10 +543,14 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
         : 'New work becomes one of your project\'s teams, at its top level (no folder). '
           + 'Omit project; name another only when the user asked for it, quoting their words in user_words.\n\n')
     : ask
-    // No "lands beside yours" line: an ask's work keeps the old defaults for
-    // project, folder, tier and cwd (caller-placement.ts), so it would be false.
+    // An Ask moved into a work project keeps its persona but inherits that project's placement.
     ? 'Never create or start a task, or hand work to another task, unless the '
-      + 'user asked. Follow-up work you find is yours to do here, now.\n\n'
+      + 'user asked. Follow-up work you find is yours to do here, now. '
+      + 'Every subtask inherits your pin tier unless you explicitly name another.'
+      + (task && !isAskPlacement(task)
+        ? ' Work you create lands beside yours: same project, folder and board tier, same host and directory. '
+          + 'Omit project; name another only when the user asked for it, quoting their words in user_words.'
+        : '') + '\n\n'
     : 'Split work with your own tools (todo list, subagents, agent teams), however '
       + 'big it is. A Walnut task is a separate session the user opens and steers: '
       + 'create, start or hand work to one only when the user asks for a task, names '

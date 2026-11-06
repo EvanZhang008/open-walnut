@@ -33,7 +33,7 @@ export interface UseFocusBarReturn {
    * `tier`, the unpinned ones pinned at the bottom in the order given; `null`
    * unpins them all. One request; a completed task is never newly pinned.
    */
-  setTierBulk: (taskIds: string[], tier: FocusTier | null) => Promise<void>;
+  setTierBulk: (taskIds: string[], tier: FocusTier | null, onError?: (message: string, failedIds?: string[]) => void) => Promise<void>;
   /**
    * Local-only optimistic pin into a tier (no server call). Used by quick-add so a
    * newly-created task shows up in its Focus tier the instant the user hits Enter,
@@ -187,7 +187,7 @@ export function useFocusBar(): UseFocusBarReturn {
   // them) would otherwise treat focus/wait as empty and wipe every task's tier to
   // satellite — the "Focus tasks vanish after adding a task" bug. When the tier
   // split is absent we touch only pinned + pin_order and leave focus_tier intact.
-  const applyFocusData = useCallback((data: Partial<focusApi.FocusBarData>) => {
+  const applyFocusData = useCallback((data: Partial<focusApi.FocusBarData>, onlyIds?: Set<string>) => {
     if (!data.pinned_tasks) return;
     const hasTierSplit = data.focus_tasks !== undefined || data.wait_tasks !== undefined;
     // custom_tier_tasks is typed optional ("absent on old servers"): a payload
@@ -208,6 +208,7 @@ export function useFocusBar(): UseFocusBarReturn {
     const pinnedSet = new Set(data.pinned_tasks);
     const patches: Record<string, Partial<Task>> = {};
     data.pinned_tasks.forEach((id, i) => {
+      if (onlyIds && !onlyIds.has(id)) return;
       patches[id] = {
         pinned: true,
         pin_order: i,
@@ -220,7 +221,7 @@ export function useFocusBar(): UseFocusBarReturn {
       };
     });
     for (const t of tasksRef.current) {
-      if (t.pinned && !pinnedSet.has(t.id)) {
+      if (t.pinned && !pinnedSet.has(t.id) && (!onlyIds || onlyIds.has(t.id))) {
         patches[t.id] = { pinned: false, focus_tier: undefined, pin_order: undefined };
       }
     }
@@ -318,9 +319,13 @@ export function useFocusBar(): UseFocusBarReturn {
     }
   }, [patchTasksLocal, applyFocusData, showOperationError]);
 
-  const setTierBulk = useCallback(async (taskIds: string[], tier: FocusTier | null) => {
+  const bulkGeneration = useRef(0);
+  const setTierBulk = useCallback(async (taskIds: string[], tier: FocusTier | null, onError?: (message: string, failedIds?: string[]) => void) => {
     if (taskIds.length === 0) return;
-    lastWriteRef.current = Date.now();
+    const reportError = onError ?? showOperationError;
+    const generation = ++bulkGeneration.current;
+    const writtenAt = Date.now();
+    lastWriteRef.current = writtenAt;
     const byId = new Map(tasksRef.current.map((t) => [t.id, t]));
     const orders = tasksRef.current.filter((t) => t.pinned).map((t) => t.pin_order ?? 0);
     let nextOrder = orders.length ? Math.max(...orders) + 1 : 0;
@@ -338,8 +343,7 @@ export function useFocusBar(): UseFocusBarReturn {
         ? { focus_tier: tierField(tier) }
         : { pinned: true, pin_order: nextOrder++, focus_tier: tierField(tier) };
     }
-    const ids = Object.keys(patches);
-    if (ids.length === 0) return;
+    const ids = [...new Set(taskIds)];
     // The server echoes one task:updated per changed task; the response below is the truth.
     for (const id of ids) guardEcho(`update:${id}`);
     patchTasksLocal(patches);
@@ -347,11 +351,32 @@ export function useFocusBar(): UseFocusBarReturn {
       const result = await focusApi.setTierBulk(ids, tier);
       applyFocusData(result);
       if (result.failed.length > 0) {
-        showOperationError(`${result.failed.length} of ${ids.length} tasks could not be ${tier === null ? 'unpinned' : 'pinned'}.`);
+        const failedIds = result.failed.map(f => f.id);
+        const names = failedIds.map(id => byId.get(id)?.title ?? id).join(', ');
+        reportError(`${result.failed.length} of ${ids.length} tasks could not be ${tier === null ? 'unpinned' : 'moved to that pin tier'}: ${names}.`, failedIds);
       }
     } catch {
-      showOperationError(tier === null ? 'Could not unpin those tasks. Please try again.' : 'Could not pin those tasks. Please try again.');
-      focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
+      reportError(tier === null ? 'Could not unpin those tasks. Please try again.' : 'Could not move those tasks to that pin tier. Please try again.');
+      const current = new Map(tasksRef.current.map(task => [task.id, task]));
+      const restore: Record<string, Partial<Task>> = {};
+      for (const id of Object.keys(patches)) {
+        const task = current.get(id);
+        const before = byId.get(id)!;
+        if (task && Object.entries(patches[id]).every(([key, value]) => task[key as keyof Task] === value)) {
+          restore[id] = Object.fromEntries(Object.keys(patches[id]).map(key => [key, before[key as keyof Task]]));
+        }
+      }
+      const restored = new Map(Object.keys(restore).map(id => [id, { ...current.get(id)!, ...restore[id] }]));
+      patchTasksLocal(restore);
+      void focusApi.fetchPinnedTasks().then(data => {
+        if (bulkGeneration.current !== generation || lastWriteRef.current !== writtenAt) return;
+        const eligible = new Set(Object.keys(restore).filter(id => {
+          const task = tasksRef.current.find(t => t.id === id);
+          const before = restored.get(id)!;
+          return task && task.pinned === before.pinned && task.focus_tier === before.focus_tier && task.pin_order === before.pin_order;
+        }));
+        applyFocusData(data, eligible);
+      }).catch(() => {});
     }
   }, [guardEcho, patchTasksLocal, applyFocusData, showOperationError]);
 

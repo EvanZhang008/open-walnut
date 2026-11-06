@@ -31,7 +31,7 @@ import { createHash } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { SessionPlaceNoted, SessionRecord, Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
-import { isAskTask, sameProject } from './caller-placement.js';
+import { isAskPlacement, sameProject } from './caller-placement.js';
 import { HOOK_BOUNDARY_MS, heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 
 const kit = createEnvelopeKit();
@@ -246,7 +246,7 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
 export async function statePlaceAfterCompaction(record: SessionRecord, task: Task, opts: { byHook?: boolean } = { byHook: true }): Promise<SessionPlace | null> {
   try {
     const { role } = await import('../server-role.js');
-    if (role() !== 'leader' || isAskTask(task)) return null;
+    if (role() !== 'leader' || isAskPlacement(task)) return null;
     const live = await livePlaceOf(task);
     const prompt = placeFromPrompt(record.appliedAppendSystemPrompt, task.id) ?? { project: record.project ?? '' };
     if (placeChanges(prompt, live).length === 0) return null;
@@ -283,7 +283,7 @@ export async function pendingPlaceNotice(sessionId: string): Promise<PendingPlac
     if (!record?.taskId) return null;
     const { getTask } = await import('../task-manager.js');
     const task = await getTask(record.taskId).catch(() => null);
-    if (!task || isAskTask(task)) return null;
+    if (!task || isAskPlacement(task)) return null;
     const live = await livePlaceOf(task);
     const changes = placeChanges(toldPlaceOf(record, task.id), live);
     if (changes.length === 0) return null;
