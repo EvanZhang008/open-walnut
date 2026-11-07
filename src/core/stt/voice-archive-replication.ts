@@ -11,6 +11,14 @@ const answered = new Set<string>()
 let unhook: (() => void) | undefined
 let starting: Promise<void> | undefined
 let retrying: Promise<void> | undefined
+/** Background copy work started here and not finished: deferred starts, passes and what follows them. */
+const inFlight = new Set<Promise<unknown>>()
+function tracked<T>(work: Promise<T>): Promise<T> {
+  inFlight.add(work)
+  const drop = () => { inFlight.delete(work) }
+  work.then(drop, drop)
+  return work
+}
 
 /** No archive lock is held while a network hop is in flight. */
 export async function voicePrimaryAction(operation: string, id: string, body: unknown, timeoutMs = HOP_TIMEOUT_MS): Promise<Record<string, unknown>> {
@@ -130,10 +138,11 @@ export function replicateUnlessSilent(raw: string, silenceMs: number, store: Voi
 
 export function deferVoiceReplication(id?: string): void {
   if (!isCompanion()) return
-  setImmediate(() => {
-    const work = id ? replicateVoiceRecording(id).then(() => {}) : retryVoiceArchives()
-    void work.catch(() => { log.web.warn('voice archive retry could not read storage') })
-  })
+  void tracked(new Promise<void>((resolve) => setImmediate(() => {
+    let work: Promise<void>
+    try { work = id ? replicateVoiceRecording(id).then(() => {}) : retryVoiceArchives() } catch (error) { work = Promise.reject(error) }
+    void work.catch(() => { log.web.warn('voice archive retry could not read storage') }).finally(resolve)
+  })))
 }
 /** Copied already, or still being uploaded by the phone: nothing for a pass to do. */
 const settled = (record: { state: string; primarySaved?: boolean; text?: string }) =>
@@ -184,11 +193,11 @@ function followupRound(mine: number, n: number, after: Promise<void>, needLink: 
     if (needLink && !(await linkUp())) return null
     if (mine !== epoch || !unhook) return null
     const P = retryVoiceArchives()
-    const C = P.then(() => armFollowup(mine, n))
+    const C = tracked(P.then(() => armFollowup(mine, n)))
     void C.catch(() => { log.web.warn('voice archive retry could not read storage') })
     return { P, C }
   })
-  void started.catch(() => { log.web.warn('voice archive retry could not start') })
+  void tracked(started).catch(() => { log.web.warn('voice archive retry could not start') })
   rounds?.push({ epoch: mine, n, started })
 }
 async function armFollowup(mine: number, n: number): Promise<void> {
@@ -226,6 +235,20 @@ export function stopVoiceArchiveReplication(): void {
   unhook?.(); unhook = undefined; starting = undefined
 }
 
+/**
+ * Resolves once no copy work started here is still running: copies, retry passes,
+ * deferred starts and the checks after a pass. A follow-up timer armed for later
+ * is not work yet. Lets a test wait on the copy itself, never on a clock.
+ */
+export async function _voiceReplicationIdleForTest(): Promise<void> {
+  while (inFlight.size || active.size || retrying) {
+    await Promise.allSettled([...inFlight, ...active.values(), ...(retrying ? [retrying] : [])])
+  }
+}
+/** Forget copy work an earlier test left hanging on a Mac that never answers. */
+export function _forgetVoiceReplicationForTest(): void {
+  inFlight.clear(); active.clear(); answered.clear(); retrying = undefined
+}
 export function _setFollowupClockForTest(next?: FollowupClock): void {
   clock = next ?? realClock
   rounds = next ? [] : undefined
