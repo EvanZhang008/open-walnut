@@ -184,6 +184,12 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// phone never guesses it from a clipped preview. nil on an older server, and
     /// a list with no sender at all is drawn exactly as before (`TimelineTurnShape`).
     var sentBy: String? = nil
+    /// Session transcript user rows only: the id of the queued message the row was
+    /// delivered from (additive 2026-11-06, `walnutMessageId` on the transcript), the
+    /// `qm-mobile-…` id a phone send was POSTed under. A sent bubble gives way to the row
+    /// carrying its own `clientMessageId` whatever the row's text looks like
+    /// (`SessionConversationStore.bubblesAbsorbed`). nil on an older server.
+    var walnutMessageId: String? = nil
     /// Session transcript user rows only: what Walnut added to the row besides its
     /// notes in front (additive 2026-10-29, server `src/lib/walnut-added.ts`): the
     /// context blocks it put first (its message hints too until 2026-11-01; a current
@@ -250,7 +256,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
         case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore, sentTo
-        case about, aboutTagged
+        case about, aboutTagged, walnutMessageId
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -1011,6 +1017,9 @@ struct SessionTranscript: Codable {
         /// User rows only: who sent the row, "person" | "agent" | "cli"
         /// (additive 2026-10; nil on an older server). See `ChatMessage.sentBy`.
         let sentBy: String?
+        /// User rows only: the queued message's id the row was delivered from (additive
+        /// 2026-11-06). See `ChatMessage.walnutMessageId`.
+        var walnutMessageId: String? = nil
         /// User rows only: what Walnut added besides its notes in front (additive
         /// 2026-10-29). See `ChatMessage.added`.
         var added: [WalnutAddedItem]? = nil
@@ -1045,7 +1054,8 @@ struct SessionTranscript: Codable {
              sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil,
              injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
              sentTo: [SentTarget]? = nil, detailRef: String? = nil,
-             about: [String]? = nil, aboutTagged: Bool? = nil, cliError: Bool? = nil) {
+             about: [String]? = nil, aboutTagged: Bool? = nil, cliError: Bool? = nil,
+             walnutMessageId: String? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -1066,6 +1076,7 @@ struct SessionTranscript: Codable {
             self.about = about
             self.aboutTagged = aboutTagged
             self.cliError = cliError
+            self.walnutMessageId = walnutMessageId
         }
     }
 

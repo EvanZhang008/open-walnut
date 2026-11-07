@@ -11,6 +11,7 @@
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { IMAGES_DIR } from '../constants.js';
+import { attachmentHeaderBlock } from '../lib/attachment-headers.js';
 
 /** Pictures per message, the chat's cap (MAX_IMAGES_PER_MESSAGE in web/routes/images.ts). */
 export const MAX_ANSWER_PICTURES = 5;
@@ -87,9 +88,7 @@ export async function picturesHeader(names: readonly string[] | undefined): Prom
     if (await isPictureFile(n)) paths.push(p);
   }
   if (paths.length === 0) return '';
-  // Loaded here, not at the top: the store imports this file for cleanPictureNames.
-  const { IMAGES_ATTACHED_LINE } = await import('./sessions/cloud-images.js');
-  return `${IMAGES_ATTACHED_LINE}\n${paths.map((p) => `- ${p}`).join('\n')}\n\n`;
+  return attachmentHeaderBlock('images', paths);
 }
 
 /**

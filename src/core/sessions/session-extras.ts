@@ -551,9 +551,15 @@ export async function getSessionQueuePayload(sessionId: string): Promise<{ messa
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   if (!(await getSessionByClaudeId(sessionId))) throw new SessionControlError('session not found', 404);
   const { getQueue } = await import('../session-message-queue.js');
-  const { displayQueueRow } = await import('./reference-cards.js');
   const { presentAfterTurn } = await import('./queue-after-turn.js');
-  return { messages: (await withoutWalnutRows(await getQueue(sessionId))).map(presentAfterTurn).map(displayQueueRow) };
+  // Each row says how far it got (waiting, written, taken by the CLI) and what it
+  // carries (pictures, files), with the typed words alone as `words` (queue-row-view.ts).
+  // The line state is read after the rows: a row taken and answered in between reads
+  // waiting for this one read (liveLineWordsOf).
+  const { queueRowView, liveLineWordsOf } = await import('./queue-row-view.js');
+  const rows = await withoutWalnutRows(await getQueue(sessionId));
+  const live = await liveLineWordsOf(sessionId);
+  return { messages: rows.map(presentAfterTurn).map((row) => queueRowView(row, sessionId, live)) };
 }
 
 /** Edit a still-pending queued message's text. */

@@ -34,6 +34,32 @@ enum PeerMessagePresentation {
         .joined(separator: " \u{00B7} ")
     }
 
+    /// The words of a message without what Walnut put around them: every
+    /// `<walnut-message>` / `<cross-session-message>` envelope, and any leading
+    /// `<system-reminder>` block (a message hint), taken off. The attachment headers
+    /// ("[Images attached …]", "[Files attached …]") stay, so `MessageRow.attachmentSendParts`
+    /// can read them: they must START the text, and a notice in front of them hid a
+    /// photo send from the bubble match (2026-11-06, one message drawn twice).
+    /// Text with none of these comes back unchanged.
+    static func ownWords(_ rawText: String, received: Bool = false) -> String {
+        var text = rawText
+        while true {
+            let lead = text.drop(while: { $0.isWhitespace })
+            guard lead.hasPrefix("<system-reminder>"),
+                  let end = lead.range(of: "</system-reminder>") else { break }
+            text = String(lead[end.upperBound...])
+        }
+        guard let parts = segments(text, received: received) else {
+            return text == rawText ? rawText : String(text.drop(while: { $0.isWhitespace }))
+        }
+        return parts.compactMap { part -> String? in
+            if case .text(let words) = part { return words }
+            return nil
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// What a received row shows when this build cannot read its envelope.
     static let unreadableReceived = PeerMessageDescription(sender: "Walnut", title: "Message received")
 

@@ -263,6 +263,31 @@ export function hasAnsweringLines(sessionId: string | null | undefined, pid?: nu
   return false
 }
 
+/**
+ * The ids of this session's queue rows whose line the CLI took and has not
+ * answered yet: the model has them, they are only still queued for the answer.
+ * The queue card reads them as taken (sessions/queue-row-view.ts). Memory only.
+ */
+export function takenRowIds(sessionId: string | null | undefined): Set<string> {
+  const out = new Set<string>()
+  const lines = sessionId ? answering.get(sessionId) : undefined
+  if (!lines) return out
+  for (const line of lines.values()) for (const row of line.rows) out.add(row.id)
+  return out
+}
+
+/**
+ * The ids of this session's queue rows whose line is registered for the CLI's
+ * word (written, or being written, into its stdin; not taken yet). Memory only.
+ */
+export function awaitedRowIds(sessionId: string | null | undefined): Set<string> {
+  const out = new Set<string>()
+  const lines = sessionId ? bySession.get(sessionId) : undefined
+  if (!lines) return out
+  for (const line of lines.values()) for (const row of line.rows) out.add(row.id)
+  return out
+}
+
 function drainAnswering(sessionId: string | null | undefined, pid: number | null): UntakenLine[] {
   const lines = sessionId ? answering.get(sessionId) : undefined
   if (!lines) return []

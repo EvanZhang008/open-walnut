@@ -154,7 +154,7 @@ extension MessageRow {
     /// "[Images attached …]" and the phone's "[Files attached …]"
     /// (`ComposerFile.headerLine`), in either order, each with its `- /path`
     /// lines, then the person's words. nil when the text carries neither.
-    static func attachmentSendParts(_ text: String) -> (imagePaths: [String], filePaths: [String], text: String)? {
+    nonisolated static func attachmentSendParts(_ text: String) -> (imagePaths: [String], filePaths: [String], text: String)? {
         var rest = text
         var images: [String] = []
         var files: [String] = []
@@ -174,7 +174,7 @@ extension MessageRow {
     }
 
     /// The "[Files attached …]" header alone.
-    static func fileSendParts(_ text: String) -> (paths: [String], text: String)? {
+    nonisolated static func fileSendParts(_ text: String) -> (paths: [String], text: String)? {
         guard text.hasPrefix("[Files attached") else { return nil }
         let lines = text.components(separatedBy: "\n")
         guard lines.first?.hasSuffix("]") == true else { return nil }

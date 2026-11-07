@@ -50,6 +50,7 @@ import { noteUserActivity } from './self-update/idle-gate.js';
 import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
 import { aiOnlyEnvelopes, hasAiOnly, keepAiOnly, withoutAiOnly } from '../lib/ai-only-envelope.js';
 import { forgetBriefsTold } from './sessions/app-brief.js';
+import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -619,8 +620,10 @@ export async function editMessage(
     // Its hint blocks stay (their state is already recorded); the new words are escaped.
     // A slash command stays byte-exact (the CLI reads a command only at the start).
     // An App's AI-only brief on the row stays as it was: the editor saw its fold (lib/ai-only-envelope.ts).
+    // Its pictures, files and Walnut's notices in front stay too: the queue card shows only the words
+    // (sessions/queue-edit-frame.ts).
     if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = !handOnBrief(queue, msg, queue.indexOf(msg));
-    msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, newText));
+    msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, keepLeadingFrame(msg.message, newText)));
     stored = msg.message;
     return true;
   });

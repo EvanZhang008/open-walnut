@@ -475,11 +475,12 @@ async function companionHeldRows(sessionId: string): Promise<Array<Record<string
   const rows = (await listBankedSends()).filter((op) => op.sessionId === sessionId)
   if (rows.length === 0) return []
   const why = await heldFor(sessionId)
-  const { displayQueueRow } = await import('../../core/sessions/reference-cards.js')
-  return rows.map((op) => displayQueueRow({
+  // Never written to a CLI: every held row is `waiting`.
+  const { queueRowView, NO_LINE_WORDS } = await import('../../core/sessions/queue-row-view.js')
+  return rows.map((op) => queueRowView({
     id: op.messageId, sessionId, message: op.message, status: 'held', enqueuedAt: op.at, held: true,
     ...(why ? { waitingForName: why.waitingForName, heldNote: why.heldNote } : {}),
-  }))
+  }, sessionId, NO_LINE_WORDS))
 }
 
 // PATCH /api/v1/sessions/:id/queue/:messageId { text } — edit a queued message.

@@ -315,9 +315,7 @@ struct SessionConversationView: View {
             Button("Keep going", role: .cancel) {}
             Button("Stop", role: .destructive) { Task { await store.stopTurn() } }
         } message: {
-            Text(waitingToGoIn == 1
-                 ? "Your waiting message will stay here, not sent. You can send it afterwards."
-                 : "Your \(waitingToGoIn) waiting messages will stay here, not sent. You can send them afterwards.")
+            Text(SessionQueueModel.stopQuestion(waiting: waitingToGoIn, othersWaiting: queue.othersWaiting))
         }
         // The composer's keyboard would cover a half-height sheet: whichever opens, it goes first.
         .onChange(of: anySheetShown) { _, shown in
@@ -444,8 +442,8 @@ struct SessionConversationView: View {
         await queue.endRestore(plan: plan)
     }
 
-    /// Messages waiting in line that a Stop would set aside.
-    private var waitingToGoIn: Int { queue.rows.filter { $0.status == "pending" }.count }
+    /// Messages waiting in line that a Stop would set aside, other tasks' included.
+    private var waitingToGoIn: Int { queue.waitingToGoIn }
 
     /// Stop is one tap, unless messages are waiting: those would be set aside, so it asks.
     private func requestStop() async {

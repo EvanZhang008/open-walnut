@@ -14,6 +14,7 @@ import fsp from 'node:fs/promises'
 import { IMAGES_DIR, MOBILE_STAGED_IMAGES_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { compressForApi } from '../../utils/image-compress.js'
+import { imageContextBlock } from '../../lib/attachment-headers.js'
 
 export interface ImagePayload {
   data: string       // raw base64
@@ -349,9 +350,8 @@ export function buildImageAnnotation(savedImages: Array<{ filePath: string }>): 
  * can understand (no XML tags that might confuse the CLI).
  */
 export function buildSessionImageContext(savedImages: Array<{ filePath: string }>): string {
-  if (savedImages.length === 0) return ''
-  const paths = savedImages.map(s => s.filePath).join('\n')
-  return `The user attached ${savedImages.length === 1 ? 'an image' : `${savedImages.length} images`}. Read ${savedImages.length === 1 ? 'this file' : 'these files'} for visual context:\n${paths}\n\n`
+  // One builder with its parser (lib/attachment-headers.ts), so the queue card reads it back.
+  return imageContextBlock(savedImages.map((s) => s.filePath))
 }
 
 // POST /api/images/upload — upload a base64 image, return URL

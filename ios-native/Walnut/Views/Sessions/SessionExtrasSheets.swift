@@ -116,6 +116,7 @@ struct SessionQueueSheet: View {
             managing = QueueRowRef(id: message.id)
         } label: {
             VStack(alignment: .leading, spacing: 4) {
+                QueuedRowThumbnails(paths: message.shownImagePaths)
                 Text(message.shownText)
                     .font(.subheadline)
                     .foregroundStyle(.primary)
@@ -124,7 +125,7 @@ struct SessionQueueSheet: View {
                 HStack(spacing: 6) {
                     Text(message.statusNote ?? "Queued")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(message.status == "processing" ? Theme.doneText
+                        .foregroundStyle(message.status == "processing" || message.queueStage == .written ? Theme.doneText
                                          : message.statusNote == nil ? Color.secondary : Theme.needsText)
                     if let when = message.enqueuedDate {
                         // Re-read every half minute, so "2 minutes ago" does not stand still.

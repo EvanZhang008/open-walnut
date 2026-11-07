@@ -21,6 +21,7 @@ import path from 'node:path';
 import { SEND_QUEUE_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { hostDisplayName } from '../hosts/host-display-name.js';
+import { IMAGES_ATTACHED_LINE, attachmentHeaderBlock } from '../../lib/attachment-headers.js';
 
 export interface SessionImage { data: string; mediaType: string }
 
@@ -59,14 +60,14 @@ export async function saveImagesViaBridge(host: string, sessionId: string, image
 
 /**
  * The first line of a message with pictures: byte for byte the primary box's
- * own format (the CLI is told to read the files), the dash written as an escape.
+ * own format (the CLI is told to read the files). Defined with its parser in
+ * lib/attachment-headers.ts.
  */
-export const IMAGES_ATTACHED_LINE = '[Images attached \u2014 use the Read tool to view them]';
+export { IMAGES_ATTACHED_LINE };
 
 /** The message text naming the saved files (the primary box's own format). */
 export function withImagePaths(text: string, savedPaths: string[]): string {
-  const pathList = savedPaths.map((p) => `- ${p}`).join('\n');
-  return `${IMAGES_ATTACHED_LINE}\n${pathList}\n\n${text}`;
+  return `${attachmentHeaderBlock('images', savedPaths)}${text}`;
 }
 
 /**

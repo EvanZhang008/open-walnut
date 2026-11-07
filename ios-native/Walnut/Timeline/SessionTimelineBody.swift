@@ -59,8 +59,16 @@ struct SessionTimelineBody: View {
         guard !rows.isEmpty else { return store.messages }
         return store.messages.filter { message in
             guard let id = message.clientMessageId else { return true }
-            return rows[id] == nil
+            return !Self.queueHolds(rows[id])
         }
+    }
+
+    /// A queue row keeps its message's bubble off the page only while it still waits: once
+    /// the CLI took it (`isDelivered`), the bubble is in the conversation, where the
+    /// transcript's own row replaces it.
+    static func queueHolds(_ row: SessionQueuedMessage?) -> Bool {
+        guard let row else { return false }
+        return !row.isDelivered
     }
 
     var body: some View {

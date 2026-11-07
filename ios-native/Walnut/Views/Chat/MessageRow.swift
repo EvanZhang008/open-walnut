@@ -116,7 +116,7 @@ struct MessageRow: View {
 
     /// Pure parse of the two wire formats above. `internal` (not private) so
     /// WalnutTests can exercise the real logic instead of a copied replica.
-    static func imageSendParts(_ text: String) -> (paths: [String], text: String)? {
+    nonisolated static func imageSendParts(_ text: String) -> (paths: [String], text: String)? {
         let dashed = text.hasPrefix("[Images attached")
         let bare = text.hasPrefix("The user attached")
             && text.contains("for visual context:")

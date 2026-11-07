@@ -19,6 +19,9 @@ final class SessionQueueModel {
     let sessionId: String
 
     private(set) var rows: [SessionQueuedMessage] = []
+    /// Rows still waiting to go in that the tray does not list (another task's, Walnut's):
+    /// a Stop sets them aside too, so its question counts them (`waitingToGoIn`).
+    private(set) var othersWaiting = 0
     private(set) var loaded = false
     private(set) var busyIds: Set<String> = []
     /// One line the page shows under the list: why an action did not go through.
@@ -98,13 +101,48 @@ final class SessionQueueModel {
         return min(base * pow(2, Double(min(failures, 4))), 60)
     }
 
+    /// The rows the tray lists, of what the server sent: only a person's (a row with no
+    /// sender, from an older server, counts as theirs, as on the web), and never one the
+    /// CLI already took (`isDelivered`).
+    static func shownRows(_ fetched: [SessionQueuedMessage]) -> [SessionQueuedMessage] {
+        fetched.filter { $0.isPersonsOwn && !$0.isDelivered }
+    }
+
+    /// Of what the server sent, the waiting rows the tray leaves out because someone else sent them.
+    static func othersWaitingCount(in fetched: [SessionQueuedMessage]) -> Int {
+        fetched.filter { !$0.isPersonsOwn && !$0.isDelivered && $0.status == "pending" }.count
+    }
+
+    /// Messages waiting in line that a Stop would set aside: the person's, and the ones
+    /// another task or Walnut sent, which the tray does not list.
+    var waitingToGoIn: Int { rows.filter { $0.status == "pending" }.count + othersWaiting }
+
+    /// What the Stop question says about the messages a Stop would set aside.
+    static func stopQuestion(waiting: Int, othersWaiting: Int) -> String {
+        let others = min(othersWaiting, waiting)
+        let own = waiting - others
+        if others == 0 {
+            return own == 1
+                ? "Your waiting message will stay here, not sent. You can send it afterwards."
+                : "Your \(own) waiting messages will stay here, not sent. You can send them afterwards."
+        }
+        let fromOthers = others == 1 ? "1 message from another task" : "\(others) messages from other tasks"
+        if own == 0 { return "\(fromOthers) waiting to go in will be set aside, not sent." }
+        let yours = own == 1 ? "Your waiting message" : "Your \(own) waiting messages"
+        return "\(yours) and \(fromOthers) will be set aside, not sent. You can send yours afterwards."
+    }
+
     func refresh() async {
         guard !restoring else { return }
         let started = generation
         do {
             let fetched = try await api.sessionQueue(id: sessionId)
             guard started == generation, !restoring else { return }
-            let next = withKeptTimes(fetched.filter { !isHidden($0.id) })
+            // The tray is the person's own line: a row another task or Walnut sent is not
+            // theirs to manage, and a row the CLI already took is in the conversation.
+            let next = withKeptTimes(Self.shownRows(fetched).filter { !isHidden($0.id) })
+            let others = Self.othersWaitingCount(in: fetched)
+            if others != othersWaiting { othersWaiting = others }
             failures = 0
             let left = loaded && rows.contains { row in !next.contains { $0.id == row.id } }
             if next != rows { rows = next }
@@ -251,7 +289,9 @@ final class SessionQueueModel {
         keptTimes = keptTimes.filter { id, _ in list.contains { $0.id == id } }
         return list.map { row in
             guard let at = keptTimes[row.id] else { return row }
-            return SessionQueuedMessage(id: row.id, message: row.message, status: row.status, enqueuedAt: at)
+            var kept = row
+            kept.enqueuedAt = at
+            return kept
         }
     }
 
@@ -266,9 +306,11 @@ final class SessionQueueModel {
         do {
             try await api.editQueuedMessage(sessionId: sessionId, messageId: row.id, text: words)
             if let index = rows.firstIndex(where: { $0.id == row.id }) {
-                rows[index] = SessionQueuedMessage(
-                    id: row.id, message: words, status: row.status, enqueuedAt: row.enqueuedAt
-                )
+                rows[index].message = words
+                // Show the new words at once, read off `message`, until the next read brings
+                // the server's new split. An edit changes only the words: the server keeps the
+                // row's pictures and files, so their thumbnails stay.
+                rows[index].words = nil
             }
             onEdited?(row.id, words)
             return true
@@ -318,6 +360,20 @@ final class SessionQueueModel {
             return false
         }
     }
+}
+
+/// How far a queued line got (`SessionQueuedMessage.stage`, server
+/// `src/core/sessions/queue-row-view.ts`). A new value on the server is a new case here,
+/// with its words in `SessionQueuedMessage.statusNote` (`SessionQueueTrayTests` lists
+/// them). Keep the case names and raw values as they are: a server test reads this enum
+/// and compares it with the server's list.
+enum QueueStage: String, CaseIterable, Equatable {
+    /// Not written to the CLI yet.
+    case waiting
+    /// Written to the CLI, which reads it once its current step ends.
+    case written
+    /// The CLI took it.
+    case taken
 }
 
 /// A queued message the person withdrew a moment ago (and, in `earlier`, the ones withdrawn just before it).
@@ -382,7 +438,8 @@ struct RestorePlan: Equatable {
 extension Array where Element == SessionQueuedMessage {
     /// The one line over the list: what is about to happen to the messages in it.
     func headline(turnRunning: Bool) -> String {
-        if contains(where: { $0.status == "processing" }) { return "Going out now" }
+        if contains(where: { $0.status == "processing" && $0.queueStage != .written }) { return "Going out now" }
+        if contains(where: { $0.status == "processing" && $0.queueStage == .written }) { return "After its current step" }
         if contains(where: { $0.status == "pending" }) {
             return turnRunning ? "Sends after this turn" : "Going out now"
         }
@@ -407,14 +464,41 @@ extension SessionConversationStore {
 
 extension SessionQueuedMessage {
     /// What the row says about itself when it is not simply waiting for the turn to end.
-    var statusNote: String? {
+    var statusNote: String? { Self.statusNote(status: status, stage: queueStage) }
+
+    /// The row's note by its status and how far its line got. A stage this build does not
+    /// know reads as no stage (`queueStage` is nil), so an older build keeps its old words.
+    static func statusNote(status: String, stage: QueueStage?) -> String? {
         switch status {
-        case "processing": return "Delivering…"
         case "parked": return "Not sent"
         case "held": return "Waiting for your Mac"
-        default: return nil
+        case "processing":
+            switch stage {
+            // An older server's word for everything from "taken off the line" to "answered".
+            case nil: return "Delivering\u{2026}"
+            // The server could not tell how far it got: it is on its way out.
+            case .waiting: return "Going out now"
+            case .written: return "Reaches it after its current step"
+            // Never listed (`shownRows` drops it); no word if it ever is.
+            case .taken: return nil
+            }
+        default:
+            switch stage {
+            case .written: return "Reaches it after its current step"
+            case nil, .waiting, .taken: return nil
+            }
         }
     }
+
+    /// How far the line got, nil on an older server or for a stage this build does not know.
+    var queueStage: QueueStage? { stage.flatMap(QueueStage.init(rawValue:)) }
+
+    /// The CLI took it: it belongs in the conversation, not the tray.
+    var isDelivered: Bool { delivered == true || queueStage == .taken }
+
+    /// A person sent it (a row with no sender, from an older server, counts as theirs).
+    /// The web's rule: only a row the server marks `agent` is not the person's own.
+    var isPersonsOwn: Bool { sentBy != "agent" }
 
     /// A pending or set-aside row can be edited, withdrawn or sent now (a person's Send now
     /// puts a set-aside row back in line). A row being delivered or held on the companion

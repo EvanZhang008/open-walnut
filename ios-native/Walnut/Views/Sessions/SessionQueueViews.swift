@@ -222,6 +222,7 @@ struct SessionQueueStrip: View {
                 onOpen(QueueRowRef(id: row.id))
             } label: {
                 HStack(alignment: .center, spacing: 8) {
+                    QueuedRowThumbnails(paths: row.shownImagePaths)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.shownText)
                             .font(.subheadline)
@@ -231,7 +232,8 @@ struct SessionQueueStrip: View {
                         if let note = row.statusNote {
                             Text(note)
                                 .font(.caption2.weight(.semibold))
-                                .foregroundStyle(row.status == "processing" ? Theme.doneText : Theme.needsText)
+                                .foregroundStyle(row.status == "processing" || row.queueStage == .written
+                                                 ? Theme.doneText : Theme.needsText)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -291,6 +293,64 @@ struct SessionQueueStrip: View {
                 .accessibilityIdentifier("session.queue.withdraw.\(row.id)")
             } else {
                 Color.clear.frame(width: 14, height: 44)
+            }
+        }
+    }
+}
+
+/// The pictures a queued message carries, as small thumbnails in front of its words. Loaded
+/// the way the conversation loads a sent photo (`AttachmentLoader`, /api/v1/media in the
+/// session's scope); a picture that cannot load shows a photo symbol. Nothing when it has none.
+struct QueuedRowThumbnails: View {
+    let paths: [String]
+    /// Thumbnails drawn; more read as "+N".
+    static let shown = 2
+    static let side: CGFloat = 36
+
+    var body: some View {
+        if !paths.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(Array(paths.prefix(Self.shown)), id: \.self) { path in
+                    QueuedRowThumbnail(path: path)
+                }
+                if paths.count > Self.shown {
+                    Text("+\(paths.count - Self.shown)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.secondaryOnCard)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(paths.count == 1 ? "1 photo" : "\(paths.count) photos")
+        }
+    }
+}
+
+private struct QueuedRowThumbnail: View {
+    let path: String
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: failed ? "photo.badge.exclamationmark" : "photo")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: QueuedRowThumbnails.side, height: QueuedRowThumbnails.side)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .task(id: path) {
+            if let loaded = await AttachmentLoader.shared.image(for: path) {
+                image = loaded
+            } else {
+                failed = true
             }
         }
     }
@@ -366,8 +426,7 @@ struct SessionQueuedMessageSheet: View {
 
     private var changed: Bool {
         guard let row else { return false }
-        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !words.isEmpty && words != row.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return row.isChanged(by: text)
     }
 
     var body: some View {
@@ -473,8 +532,8 @@ struct SessionQueuedMessageSheet: View {
         }
         .onAppear {
             if !seeded, let row {
-                text = row.message
-                original = row.message
+                text = row.editableText
+                original = row.editableText
                 seeded = true
                 queue.notice = nil
             }

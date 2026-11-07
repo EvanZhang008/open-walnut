@@ -30,6 +30,7 @@ import { ActiveTabPoller, readFullFile, parseJsonlLines } from '../../providers/
 import { refuseRealHomeWrite } from '../../providers/ephemeral-session-gate.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
+import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_SESSION_IMAGES = 5
@@ -138,8 +139,7 @@ export function registerSessionChatRpc(): void {
     }
 
     if (savedPaths.length > 0) {
-      const pathList = savedPaths.map(p => `- ${p}`).join('\n')
-      augmentedMessage = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${data.message}`
+      augmentedMessage = `${attachmentHeaderBlock('images', savedPaths)}${data.message}`
     }
 
     // Check if this is an embedded session — route to SubagentRunner instead of CLI queue
@@ -481,11 +481,19 @@ export function registerSessionChatRpc(): void {
     // Walnut's own quiet commands (its /compact) are no message of the person's: a reloaded panel
     // would draw one as his bubble (sessions/walnut-commands.ts).
     const { withoutWalnutRows } = await import('../../core/sessions/session-extras.js')
-    const messages = (await withoutWalnutRows(await getQueue(data.sessionId))).map(presentAfterTurn).map((m) => {
+    // How far each row got and what it carries (queue-row-view.ts). `message` stays the composed
+    // text here: the web's bubbles strip it themselves and dedup against it (queuedRowText).
+    const { queueRowFacts, liveLineWordsOf } = await import('../../core/sessions/queue-row-view.js')
+    const sid = data.sessionId
+    const rows = await withoutWalnutRows(await getQueue(sid))
+    // Read after the rows: a row taken and answered in between is still listed and
+    // reads waiting for this one read (queue-row-view.ts liveLineWordsOf).
+    const live = await liveLineWordsOf(sid)
+    const messages = rows.map(presentAfterTurn).map((m) => {
       const why = held?.get(m.id)
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
       // An App's AI-only brief riding the row shows its fold (lib/ai-only-envelope.ts); an edit keeps the real one (editMessage).
-      const shown = hasAiOnly(m.message) ? { ...m, message: redactAiOnly(m.message) } : m
+      const shown = { ...(hasAiOnly(m.message) ? { ...m, message: redactAiOnly(m.message) } : m), ...queueRowFacts(m, sid, live) }
       return holds ? { ...shown, heldReason: why } : shown
     })
     return { messages, ...(launchPrompt ? { launchPrompt } : {}) }

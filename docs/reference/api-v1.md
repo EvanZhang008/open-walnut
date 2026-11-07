@@ -250,7 +250,7 @@ path on the companion".
 | POST | `/api/v1/sessions/:id/execute-compact` | Execute a plan after a compact boundary (cloud relays) |
 | GET | `/api/v1/sessions/:id/messages/:messageId` | What became of a message the companion held (`queued`); cloud only |
 | PUT | `/api/v1/sessions/:id/uploads/:uploadId` | One chunk of a file attached to a session (a video, a PDF), saved on the session's host; resumable (cloud relays to the host) |
-| GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays). A row may carry `sentBy` (`person` \| `agent`, read from the send's source; additive, absent on older rows) |
+| GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays). A row may carry `sentBy` (`person` \| `agent`, read from the send's source; additive, absent on older rows). Additive (2026-11-06): `stage` (`waiting`: Walnut cannot vouch that it is in the CLI yet; `written`: Walnut wrote its line into the CLI's stdin, which reads it after its current step; `taken`: the CLI read it, only the answer is to come), `delivered` (`stage === 'taken'`: the chat already shows it), `words` (only what the person typed: no attachment headers, no Walnut notices in front), `images` (`[{ path, url }]`, `url` a `/api/v1/media?path=…&session=…` path) and `files` (`[{ path, name }]`). `message` keeps its meaning (the text without hint blocks and reference cards, attachment headers included), so a client that resends it as it is keeps the pictures. A `PATCH` with words alone keeps the row's attachment headers and notices; one whose text carries its own headers keeps those |
 | PATCH | `/api/v1/sessions/:id/queue/:messageId` | Edit a queued message (cloud relays) |
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
 | GET | `/api/v1/files/list?path=&host=` | One directory level of a session file tree (cloud relays) |
@@ -2332,7 +2332,11 @@ directory on that host.
   unframed text from before then still reads `"person"`. Another session's mail is `"agent"` too, in any
   tag Claude Code uses for it (`cross-session-message`, `agent-message`, `teammate-message`) and by the
   line's own `origin` (anything but `human`). A `"person"` row that also carries envelopes (a notice, another
-  session's mail) adds `personText`, the typed words alone (additive, 2026-11-02). The guards are
+  session's mail) adds `personText`, the typed words alone (additive, 2026-11-02). A user text row a
+  queued message delivered carries `walnutMessageId` (additive, 2026-11-06): that queue row's id (`qm-…`,
+  the id a client posted it under), on the primary when Walnut bound the line (echo claims) and on the
+  companion from the daemon's delivery marker, so a client replaces that message's queue card or
+  waiting bubble by id. The guards are
   `tests/core/sessions/send-sender-guard.test.ts` and `tests/core/sessions/sent-by-peer-origin.test.ts`. `sentTo`
   (additive, 2026-10-30) rides a send's tool row (`task_send` by MCP or the CLI):
   `[ { ref, taskId?, title? } ]`, its targets in order, `ref` as the call or its answer

@@ -26,6 +26,8 @@ type TranscriptRow = InjectedCarrier & {
   role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string
   agent?: string; isError?: true; sentBy?: TranscriptSentBy; personText?: string; added?: WalnutAddedItem[]; textWithoutContext?: string
   cliError?: true
+  /** The queue row id (`qm-…`) a walnut-injected line delivered (the primary's projection says the same). */
+  walnutMessageId?: string
 }
 
 export function transcriptFromJsonl(sessionId: string, main: string): Record<string, unknown> {
@@ -123,12 +125,12 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
         // A command Walnut sent itself is its notice, never the person's message; the phone draws
         // no notice rows, as the primary's projection leaves its system rows out (sessions/walnut-commands.ts).
         if (walnutCommandNotice(text)) continue
-        if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp, nonHumanOrigin(parsed.origin)))
+        if (text && !isInterruptMarker(text)) messages.push(withMessageId(userRow(text, timestamp, nonHumanOrigin(parsed.origin)), parsed))
       } else if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string }
           const text = b.type === 'text' ? b.text?.trim() : undefined
-          if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp, nonHumanOrigin(parsed.origin)))
+          if (text && !isInterruptMarker(text)) messages.push(withMessageId(userRow(text, timestamp, nonHumanOrigin(parsed.origin)), parsed))
         }
       }
     } else if (type === 'assistant' && Array.isArray(content)) {
@@ -188,6 +190,12 @@ function clip(text: string): string {
  *  every send while rich holds. Strip BEFORE clipping so the budget is spent on
  *  the human's words, and name the sender from the whole text (an envelope cut
  *  short reads as prose), by the primary's rule (transcript-sent-by.ts). */
+/** A walnut-injected line names the queue row it delivered: the phone replaces that row's card by id. */
+function withMessageId(row: TranscriptRow, parsed: Record<string, unknown>): TranscriptRow {
+  const id = parsed.subtype === 'walnut-injected' ? parsed.walnutMessageId : undefined
+  return typeof id === 'string' && id ? { ...row, walnutMessageId: id } : row
+}
+
 function userRow(text: string, timestamp: string, agentOrigin = false): TranscriptRow {
   const { text: shown } = projectUserText(text, timestamp)
   // What Walnut added besides its notes in front, as the primary's projection says it.

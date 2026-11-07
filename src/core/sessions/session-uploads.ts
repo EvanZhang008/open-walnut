@@ -13,6 +13,7 @@
  * The phone writes that text itself, so every send path (the primary's queue,
  * the companion's relay and its held sends) carries it as plain words.
  */
+import { FILES_ATTACHED_LINE, attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 
 /** One chunk: the bridge and tunnel frame budget every chunked lane here uses. */
 export const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024
@@ -24,8 +25,8 @@ export const UPLOAD_ID_RE = /^up-[A-Za-z0-9-]{8,64}$/
 
 const MAX_UPLOAD_NAME_BYTES = 200
 
-/** The first line of a message with attached files, the dash written as an escape. */
-export const FILES_ATTACHED_LINE = '[Files attached \u2014 open them from these paths]'
+/** The first line of a message with attached files (defined with its parser in lib/attachment-headers.ts). */
+export { FILES_ATTACHED_LINE }
 
 /** The daemon's rule for a file name (transfer-core.ts checkUploadName), checked before any bytes move. */
 export function isUploadName(name: unknown): name is string {
@@ -39,8 +40,7 @@ export function isUploadName(name: unknown): name is string {
 
 /** The message text naming saved files (what the phone sends). */
 export function withFilePaths(text: string, paths: string[]): string {
-  const list = paths.map((p) => `- ${p}`).join('\n')
-  return `${FILES_ATTACHED_LINE}\n${list}\n\n${text}`
+  return `${attachmentHeaderBlock('files', paths)}${text}`
 }
 
 /** "[Images attached …]" and "[Files attached …]" headers with their path lists, in any order. */

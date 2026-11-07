@@ -151,30 +151,155 @@ struct SessionControlsPayload: Codable, Equatable {
 // MARK: - Queued messages
 
 /// One queued (not yet delivered) session message from GET /v1/sessions/:id/queue.
+///
+/// Every field past `enqueuedAt` is additive (2026-11-06) and optional, so an older
+/// server's row decodes as it always did, and a row from a newer server with a value
+/// this build does not know (a new `stage`) still decodes.
 struct SessionQueuedMessage: Codable, Identifiable, Equatable {
     let id: String
-    let message: String
-    let status: String // "pending" | "processing"
-    let enqueuedAt: String?
+    /// The stored text as the session will receive it: the attachment headers and their
+    /// paths included. Undo, a resend and words put back in the message box use it as it
+    /// is, so a picture is never lost on the way; the tray shows `words` (or this text
+    /// with the headers taken off, `shownText`).
+    var message: String
+    let status: String // "pending" | "processing" | "parked" | "held"
+    var enqueuedAt: String?
+    /// The stored text as the session will receive it (headers, notes in front).
+    var rawMessage: String? = nil
+    /// Only the words the person typed (additive 2026-11-06): no notes in front, no
+    /// attachment headers. nil on an older server, where `shownText` reads them off `message`.
+    var words: String? = nil
+    /// Who sent it: "person" for words someone typed, "agent" for everything Walnut or
+    /// another task sent. nil on an older server (and on a row written without a source).
+    var sentBy: String? = nil
+    /// Pictures sent with it: the saved path, and the URL path that serves the bytes.
+    var images: [QueuedImage]? = nil
+    /// Files sent with it.
+    var files: [QueuedFile]? = nil
+    /// How far the line got: "waiting" (not written yet), "written" (written to the CLI,
+    /// which reads it after its current step), "taken" (the CLI took it). nil on an older
+    /// server; see `QueueStage`.
+    var stage: String? = nil
+    /// True once the CLI took it (stage "taken"): the row is gone from the person's point
+    /// of view, and its bubble belongs in the conversation.
+    var delivered: Bool? = nil
+
+    struct QueuedImage: Codable, Equatable {
+        let path: String
+        let url: String?
+
+        init(path: String, url: String? = nil) {
+            self.path = path
+            self.url = url
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            path = (try? c.decodeIfPresent(String.self, forKey: .path)) ?? ""
+            url = try? c.decodeIfPresent(String.self, forKey: .url)
+        }
+
+        private enum CodingKeys: String, CodingKey { case path, url }
+    }
+
+    struct QueuedFile: Codable, Equatable {
+        let path: String
+        let name: String?
+
+        init(path: String, name: String? = nil) {
+            self.path = path
+            self.name = name
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            path = (try? c.decodeIfPresent(String.self, forKey: .path)) ?? ""
+            name = try? c.decodeIfPresent(String.self, forKey: .name)
+        }
+
+        private enum CodingKeys: String, CodingKey { case path, name }
+
+        var shownName: String {
+            if let name, !name.isEmpty { return name }
+            return (path as NSString).lastPathComponent
+        }
+    }
 
     var enqueuedDate: Date? { WalnutTask.parseISO(enqueuedAt) }
+
+    /// The words and attachments the row stands for, read from whatever the server sent:
+    /// the separate fields of a current server, or the headers in the text of an older one.
+    private var sent: (words: String, imagePaths: [String], filePaths: [String]) {
+        var imagePaths = (images ?? []).map(\.path).filter { !$0.isEmpty }
+        var filePaths = (files ?? []).map(\.path).filter { !$0.isEmpty }
+        let ownWords = PeerMessagePresentation.ownWords(message)
+        let parts = MessageRow.attachmentSendParts(ownWords)
+        if let typed = words.map({ PeerMessagePresentation.ownWords($0) }) {
+            // A current server: the words as typed; the pictures from its fields, else
+            // from the headers still in `message`.
+            if imagePaths.isEmpty { imagePaths = parts?.imagePaths ?? [] }
+            if filePaths.isEmpty { filePaths = parts?.filePaths ?? [] }
+            return (typed, imagePaths, filePaths)
+        }
+        let words = ownWords
+        if let parts {
+            // An older server: the headers are still in the text.
+            if imagePaths.isEmpty { imagePaths = parts.imagePaths }
+            if filePaths.isEmpty { filePaths = parts.filePaths }
+            return (parts.text, imagePaths, filePaths)
+        }
+        return (words, imagePaths, filePaths)
+    }
+
+    /// The pictures the tray shows as thumbnails (a file that is a picture included).
+    var shownImagePaths: [String] {
+        let s = sent
+        return s.imagePaths + s.filePaths.filter { MarkdownParser.isImagePath($0) }
+    }
+
+    /// The files the tray names (pictures aside).
+    var shownFileNames: [String] {
+        let named = Dictionary((files ?? []).map { ($0.path, $0.shownName) }, uniquingKeysWith: { a, _ in a })
+        return sent.filePaths.filter { !MarkdownParser.isImagePath($0) }
+            .map { named[$0] ?? ($0 as NSString).lastPathComponent }
+    }
+
     /// What a queued row shows: the words the person wrote, without the Walnut
     /// notes that ride in front of them (a changed-instructions notice, a peer's
-    /// envelope). A row of Walnut notes alone names them instead.
+    /// envelope) and without the attachment headers. A row of Walnut notes alone
+    /// names them instead; a picture with no words reads "Photo", never the header.
     var shownText: String {
-        guard let segments = PeerMessagePresentation.segments(message) else { return message }
-        let words = segments.compactMap { segment -> String? in
-            if case .text(let text) = segment { return text }
-            return nil
-        }
-        .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = sent
+        let words = s.words.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty { return words }
-        let notes = segments.compactMap { segment -> String? in
-            if case .message(let note) = segment { return note.accessibilityLabel }
-            return nil
+        let pictures = s.imagePaths.count + s.filePaths.filter { MarkdownParser.isImagePath($0) }.count
+        let others = s.filePaths.filter { !MarkdownParser.isImagePath($0) }
+        if pictures > 0 || !others.isEmpty {
+            var parts: [String] = []
+            if pictures > 0 { parts.append(pictures == 1 ? "Photo" : "\(pictures) photos") }
+            if !others.isEmpty { parts.append(others.count == 1 ? shownFileNames.first ?? "File" : "\(others.count) files") }
+            return parts.joined(separator: " \u{00B7} ")
         }
-        return notes.isEmpty ? message : notes.joined(separator: "\n")
+        if let segments = PeerMessagePresentation.segments(message) {
+            let notes = segments.compactMap { segment -> String? in
+                if case .message(let note) = segment { return note.accessibilityLabel }
+                return nil
+            }
+            if !notes.isEmpty { return notes.joined(separator: "\n") }
+        }
+        return message
     }
+    /// What the edit box opens with, and so what a save sends: a current server's typed
+    /// `words` (it keeps the pictures and files itself), else the stored text whole, headers
+    /// included, so an older server never loses a picture to an edit.
+    var editableText: String { words ?? message }
+
+    /// The box holds words to save: not empty, and not what the row already holds.
+    func isChanged(by text: String) -> Bool {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !typed.isEmpty && typed != editableText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Only still-pending messages can be edited/deleted (409 otherwise).
     var isPending: Bool { status == "pending" }
 }

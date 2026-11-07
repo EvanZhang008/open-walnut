@@ -10,6 +10,7 @@ import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDel
 import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
 import { withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
 import { parseHinted } from '@open-walnut/hint-format';
+import { splitAttachmentHeaders } from '@open-walnut/attachment-headers';
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -97,20 +98,80 @@ function queuedRowText(raw: string): { text: string; dedupText?: string } {
  * See SessionChatHistory.tsx top-of-file doc block for the full lifecycle.
  */
 /**
- * Undo the server's image-ref augmentation for DISPLAY purposes.
+ * Undo the server's attachment augmentation for DISPLAY purposes.
  *
- * `session:send` prepends `[Images attached — use the Read tool to view them]\n`
- * + one `- <path>` line per saved image + a blank line, then the user's text
- * (src/web/routes/session-chat.ts). The disk queue therefore stores the augmented
- * form, so a bubble rehydrated from the queue would otherwise show the machine
- * preamble instead of what the user wrote. Keep this in sync with that emitter;
- * a format drift just means the prefix stays visible (no dedup breakage, since
- * the untouched string is then used as both display and dedup key).
+ * A send with pictures or files carries the headers Walnut writes for the CLI
+ * (`[Images attached …]` / `[Files attached …]`, one `- <path>` line per file,
+ * a blank line) in front of the user's text. The disk queue stores that form,
+ * so a bubble rehydrated from the queue would otherwise show the machine
+ * preamble instead of what the user wrote. One parser with the server
+ * (src/lib/attachment-headers.ts), so the two never drift.
  */
 function stripImageRefPrefix(message: string): string {
-  if (!message.startsWith('[Images attached')) return message;
-  const sep = message.indexOf('\n\n');
-  return sep === -1 ? message : message.slice(sep + 2);
+  return splitAttachmentHeaders(message).text;
+}
+
+/** A row of `session:get-queue` (src/web/routes/session-chat.ts, sessions/queue-row-view.ts). */
+export interface QueueRowWire {
+  id: string;
+  message: string;
+  status: string;
+  enqueuedAt?: string;
+  parkedReason?: string;
+  userUuid?: string;
+  heldReason?: string;
+  sentBy?: 'person' | 'agent';
+  /** waiting: not written to the CLI; written: in its stdin, read after its current step; taken: the CLI read it. */
+  stage?: 'waiting' | 'written' | 'taken';
+  /** The CLI read it: the chat already shows it from history. */
+  delivered?: boolean;
+  images?: Array<{ path: string; url: string }>;
+  files?: Array<{ path: string; name: string }>;
+}
+
+/**
+ * The bubble a reloaded panel shows for a queue row, or null for none. A row the
+ * CLI already read (`delivered`) has no bubble here: history shows it, and a
+ * bubble beside it was the count that kept growing. Its pictures show as
+ * thumbnails, never as the header text.
+ */
+export function queueRowBubble(m: QueueRowWire): OptimisticMessage | null {
+  if (m.delivered === true || m.stage === 'taken') return null;
+  // The queue stores the ENQUEUED text, which for an attachment send carries the
+  // server's headers + paths (and in rich output mode the hint blocks, and for
+  // entity pills the reference-card block). Render the user-facing part, but dedup
+  // against what HISTORY will show once this row is delivered and echoed: the
+  // server strips the hint wrappers from its projection and keeps the attachment
+  // preamble, so that (not the raw row) is the matching basis (OptimisticMessage.dedupText).
+  // A queued row also holds any notice Walnut put in front of the words
+  // (history-walnut-riders.ts): history shows those as their own card.
+  const { text: display, dedupText } = queuedRowText(m.message);
+  // 'parked' = the server stopped auto-retrying this row (permanent failure, e.g. the
+  // session's working folder was deleted). Reuse the 'failed' presentation so it keeps
+  // Retry + Discard instead of looking like an ordinary "Queued" message on its way.
+  const parked = m.status === 'parked';
+  // A row held back (behind a line still being confirmed, or behind an unanswered
+  // permission prompt) was never written: it shows as waiting, with the reason.
+  const held = (m.status === 'processing' || m.status === 'pending') && !!m.heldReason;
+  const imageUrls = (m.images ?? []).map((img) => img.url).filter((u) => typeof u === 'string' && u.length > 0);
+  return {
+    role: 'user' as const,
+    text: display,
+    timestamp: m.enqueuedAt ?? new Date().toISOString(),
+    queueId: m.id,
+    status: (held ? 'received' : m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
+    ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
+    ...(held ? { heldReason: m.heldReason } : {}),
+    ...(dedupText !== undefined ? { dedupText } : {}),
+    // No per-stage badge here: a reloaded tab is never told when the CLI reads a row it
+    // already counted delivered at its write, so a "written" note would go stale. A
+    // processing row reads Delivered as a live one does after its write.
+    ...(imageUrls.length ? { imageUrls } : {}),
+    // The pre-assigned CLI uuid: a question's follow-up keeps its place in the
+    // question tree across a reload (its own page, and a parked one marks the question failed).
+    ...(m.userUuid ? { userUuid: m.userUuid } : {}),
+    ...(m.sentBy === 'person' || m.sentBy === 'agent' ? { sentBy: m.sentBy } : {}),
+  };
 }
 
 /**
@@ -182,6 +243,22 @@ export function launchBubbleOf(p: { id: string; text: string; at: string }): Opt
   return { role: 'user', text, timestamp: p.at, queueId: p.id, status: 'delivered', launch: true };
 }
 
+/**
+ * A bubble after its words were edited. The server keeps what led the words
+ * (attachment headers, Walnut's notices: editMessage), so history will echo that
+ * frame with the new words: the dedup text follows, or the bubble would never meet
+ * its row and show twice.
+ */
+export function editedBubble(m: OptimisticMessage, newText: string): OptimisticMessage {
+  if (m.dedupText === undefined) return { ...m, text: newText };
+  const frame = m.dedupText.endsWith(m.text) ? m.dedupText.slice(0, m.dedupText.length - m.text.length) : undefined;
+  if (frame === undefined) {
+    const { dedupText: _old, ...rest } = m;
+    return { ...rest, text: newText };
+  }
+  return { ...m, text: newText, dedupText: `${frame}${newText}` };
+}
+
 /** What a panel shows before its queue answer: the launch this tab just made. */
 function seededBubbles(sessionId: string | null): OptimisticMessage[] {
   const seed = sessionId ? launchSeedFor(sessionId) : undefined;
@@ -228,7 +305,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
     if (activeSessionId) {
       wsClient.sendRpc<{
-        messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string; heldReason?: string; sentBy?: 'person' | 'agent' }>;
+        messages: QueueRowWire[];
         launchPrompt?: { id: string; text: string; at: string };
       }>(
         'session:get-queue',
@@ -241,46 +318,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
             const existing = new Set(prev.map(m => m.queueId));
             const newMsgs = (res.messages ?? [])
               .filter(m => !existing.has(m.id))
-              .map(m => {
-                // The queue stores the ENQUEUED text, which for an attachment send
-                // carries the server's `[Images attached …]` + paths prefix (and in
-                // rich output mode the `[Rich output mode: …]` instruction and/or
-                // the trailing "still on" reminder, and for entity pills the
-                // reference-card block). Render the user-facing part, but dedup
-                // against what HISTORY will show once this row is delivered and
-                // echoed: the server strips both machine wrappers from its
-                // projection and keeps the image preamble, so that (not the raw
-                // row) is the matching basis — see OptimisticMessage.dedupText
-                // and session-chat.ts's dedupText.
-                // A queued row also holds any notice Walnut put in front of the
-                // words (history-walnut-riders.ts): history shows those as their
-                // own card, so the bubble shows only what follows them.
-                const { text: display, dedupText } = queuedRowText(m.message);
-                // 'parked' = the server stopped auto-retrying this row (permanent
-                // failure, e.g. the session's working folder was deleted). Reuse the
-                // 'failed' presentation so it keeps Retry + Discard instead of looking
-                // like an ordinary "Queued" message that is still on its way.
-                const parked = m.status === 'parked';
-                // A row held back (behind a line still being confirmed, or behind an
-                // unanswered permission prompt) was never written: it shows as
-                // waiting, with the reason, not as delivered.
-                const held = (m.status === 'processing' || m.status === 'pending') && !!m.heldReason;
-                return {
-                  role: 'user' as const,
-                  text: display,
-                  timestamp: m.enqueuedAt ?? new Date().toISOString(),
-                  queueId: m.id,
-                  status: (held ? 'received' : m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
-                  ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
-                  ...(held ? { heldReason: m.heldReason } : {}),
-                  ...(dedupText !== undefined ? { dedupText } : {}),
-                  // The pre-assigned CLI uuid: a question's follow-up keeps its
-                  // place in the question tree across a reload (its own page,
-                  // and a parked one marks the question failed).
-                  ...(m.userUuid ? { userUuid: m.userUuid } : {}),
-                  ...(m.sentBy === 'person' || m.sentBy === 'agent' ? { sentBy: m.sentBy } : {}),
-                };
-              });
+              .map(queueRowBubble)
+              .filter((m): m is OptimisticMessage => m !== null);
             // The launch prompt opens the first turn, so it goes before anything
             // the user managed to send while this RPC was in flight.
             const head = launch && !existing.has(launch.queueId) ? [launch] : [];
@@ -553,7 +592,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
   const handleEditQueued = useCallback((sessionId: string, queueId: string, newText: string) => {
     setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? { ...m, text: newText } : m
+      m.queueId === queueId ? editedBubble(m, newText) : m
     ));
     wsClient.sendRpc('session:edit-queued', {
       sessionId, messageId: queueId, text: newText,

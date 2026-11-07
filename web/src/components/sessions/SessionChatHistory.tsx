@@ -135,6 +135,7 @@ import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { PartIdentity } from './part-identity';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
+import { QueuedImageThumbs } from './QueuedImageThumbs';
 
 /** A send call's targets (send-targets.ts), parsed once per call and result: a
  *  fold line reads them on every render of a long session. */
@@ -247,6 +248,8 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   /** Who sent a row this tab did not (the queue's `sentBy`, from the send's
    *  source): an agent's card folds on arrival (queuedFoldRuns). */
   sentBy?: 'person' | 'agent';
+  /** A reloaded row's pictures, as URLs the server serves (the queue's `images`). */
+  imageUrls?: string[];
 }
 
 /** Parsed envelopes by row text: a quiet fold's line reads them on every frame. */
@@ -5260,6 +5263,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           );
         })()}
         <OptimisticImagePreviews images={m.images} />
+        <QueuedImageThumbs urls={m.images?.length ? undefined : m.imageUrls} />
         <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
         {m.status === 'received' && (
           <>

@@ -471,6 +471,7 @@ extension ChatMessage {
                                inFlight: inFlight, answeredBy: answeredBy, isError: isError)
         copy.messageId = messageId
         copy.sentBy = sentBy
+        copy.walnutMessageId = walnutMessageId
         copy.pending = pending
         copy.failed = failed
         copy.localImages = localImages

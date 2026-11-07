@@ -518,6 +518,10 @@ export interface ProjectedTranscriptMessage {
   sentBy?: TranscriptSentBy
   /** A `person` row that also carries envelopes (a notice, another session's mail): only the words outside them. */
   personText?: string
+  /** User text rows only (additive, 2026-11-06): the queue row id (`qm-…`) this line delivered, when
+   *  Walnut bound it (echo-claims.ts), the same id a client posted the message under, so its waiting
+   *  bubble or queue card is replaced by this row by id rather than by text. */
+  walnutMessageId?: string
   /** User text rows only (additive, 2026-10-29): what Walnut added to the row besides
    *  its notes in front (which a client splits from `text` itself): the context blocks
    *  Walnut put first. A client shows them on every message (`ui.show_walnut_additions`,
@@ -827,6 +831,7 @@ export async function buildSessionTranscript(
         // An injected line that got here is a Walnut message the CLI delivered: read as one.
         ...(m.role === 'user' ? sentByOf(m.injected ? { ...m, injected: false } : m) : {}),
         ...(m.role === 'user' ? projectWalnutAdded(text, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
+        ...(m.role === 'user' && m.walnutMessageId ? { walnutMessageId: m.walnutMessageId } : {}),
         // The tasks the reply is about (history parse, core/org/message-about.ts), for the phone's pills.
         ...(m.role === 'assistant' && m.about?.length ? { about: m.about, ...(m.aboutTagged ? { aboutTagged: true as const } : {}) } : {}),
         // Claude Code's own error reply, drawn as its error line on the phone (history twin: session-history cliError).

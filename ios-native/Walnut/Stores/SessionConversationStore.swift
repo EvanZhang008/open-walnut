@@ -849,16 +849,34 @@ final class SessionConversationStore {
     /// Equal text alone never matches, empty words included (App Store r7 gate: a
     /// photo sent with no words was absorbed by an earlier photo's empty words while
     /// its POST was out, and when the POST failed no "Not sent" was left on screen).
-    private static func bubblesAbsorbed(
+    ///
+    /// A row that names the message it was delivered from (`walnutMessageId`, a current
+    /// server) is matched by that id first, whatever its text: it is this bubble's row
+    /// when the id is the bubble's `clientMessageId`, and never another bubble's. Only
+    /// then do the shapes and words decide, for rows without an id (an older server).
+    static func bubblesAbsorbed(
         _ bubbles: [ChatMessage], baselines: [String: Set<String>], rows: [ChatMessage]
     ) -> Set<String> {
         let userRows = rows.filter { $0.isUser && $0.kind == nil }
+        let live = bubbles.filter { $0.pending != true && $0.failed != true }
+        let bubbleIds = Set(bubbles.compactMap(\.clientMessageId))
         var used = Set<String>()
         var gone = Set<String>()
-        for bubble in bubbles where bubble.pending != true && bubble.failed != true {
+        // Its own id: the surest match there is.
+        for bubble in live {
+            guard let id = bubble.clientMessageId,
+                  let row = userRows.first(where: { !used.contains($0.id) && $0.walnutMessageId == id })
+            else { continue }
+            used.insert(row.id)
+            gone.insert(bubble.id)
+        }
+        for bubble in live where !gone.contains(bubble.id) {
             let before = baselines[bubble.id] ?? []
             guard let row = userRows.first(where: {
-                !used.contains($0.id) && !before.contains($0.id) && rowShows(bubble, row: $0)
+                !used.contains($0.id) && !before.contains($0.id)
+                    // A row another of this page's bubbles was sent as is that bubble's.
+                    && !($0.walnutMessageId.map { $0 != bubble.clientMessageId && bubbleIds.contains($0) } ?? false)
+                    && rowShows(bubble, row: $0)
             }) else { continue }
             used.insert(row.id)
             gone.insert(bubble.id)
@@ -866,13 +884,16 @@ final class SessionConversationStore {
         return gone
     }
 
-    /// Whether a transcript row has this bubble's shape and words.
-    private static func rowShows(_ bubble: ChatMessage, row: ChatMessage) -> Bool {
-        let parts = MessageRow.attachmentSendParts(row.text)
+    /// Whether a transcript row has this bubble's shape and words. The row's text is
+    /// read without the Walnut notes in front of it (a notice the server put before the
+    /// person's words): the attachment headers must start the text to be read at all.
+    static func rowShows(_ bubble: ChatMessage, row: ChatMessage) -> Bool {
+        let rowText = PeerMessagePresentation.ownWords(row.text, received: true)
+        let parts = MessageRow.attachmentSendParts(rowText)
         let hasImages = bubble.localImages?.isEmpty == false
         let hasFiles = bubble.localFiles?.isEmpty == false
         guard hasImages || hasFiles else {
-            return parts == nil && sameWords(row.text, bubble.text)
+            return parts == nil && sameWords(rowText, bubble.text)
         }
         let words = bubble.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parts {
@@ -886,7 +907,7 @@ final class SessionConversationStore {
                 // The transcript's clip can end inside a long path list: the
                 // header and the paths it kept are this send, the words are cut
                 // (and the last path may be cut too).
-                if row.text.hasSuffix("…") && parts.text.isEmpty && parts.filePaths.count <= files.count {
+                if rowText.hasSuffix("…") && parts.text.isEmpty && parts.filePaths.count <= files.count {
                     return parts.filePaths.dropLast().allSatisfy(named) && parts.filePaths.contains(where: named)
                 }
                 if parts.filePaths.count != files.count || !parts.filePaths.allSatisfy(named) { return false }
@@ -896,7 +917,7 @@ final class SessionConversationStore {
         // A server that could not save the photo sends the words alone
         // (session-send-v1.ts), so a new plain row with them is this send too.
         // Never for files: the phone writes their paths itself.
-        return !hasFiles && !words.isEmpty && sameWords(row.text.trimmingCharacters(in: .whitespacesAndNewlines), words)
+        return !hasFiles && !words.isEmpty && sameWords(rowText.trimmingCharacters(in: .whitespacesAndNewlines), words)
     }
 
     /// Equal, or the transcript's clip of it: user text is clipped + "…" (4K on a
@@ -1049,6 +1070,7 @@ final class SessionConversationStore {
                                   agent: m.agent, thinkingText: m.thinkingText,
                                   inputPreview: m.inputPreview, detailRef: m.detailRef, isError: m.isError)
             row.sentBy = m.sentBy
+            row.walnutMessageId = m.walnutMessageId
             row.added = m.added
             row.textWithoutContext = m.textWithoutContext
             row.injectedAfter = m.injectedAfter
@@ -1181,6 +1203,7 @@ final class SessionConversationStore {
             isError: m.isError
         )
         row.sentBy = m.sentBy
+        row.walnutMessageId = m.walnutMessageId
         row.added = m.added
         row.textWithoutContext = m.textWithoutContext
         row.injectedAfter = m.injectedAfter
