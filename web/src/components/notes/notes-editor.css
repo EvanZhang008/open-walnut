@@ -1023,3 +1023,20 @@ mark.notes-search-mark {
 .notes-editor .tiptap[contenteditable="false"] .notes-picture-selected .notes-image-missing {
   outline: none;
 }
+
+/* A note's zoom (NoteZoom.tsx): a click on the picture switches between the
+   whole picture and the picture filling the width, which then scrolls. */
+.lightbox-image--fillable { cursor: zoom-in; }
+.lightbox-image--filled { cursor: zoom-out; }
+.lightbox-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 5vh 0;
+}
+/* The close button and the caption stay put above the scrolling picture. */
+.lightbox-overlay--scroll .lightbox-close,
+.lightbox-overlay--scroll .lightbox-caption { z-index: 1; }

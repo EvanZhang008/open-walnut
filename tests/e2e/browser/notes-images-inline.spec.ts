@@ -177,3 +177,39 @@ test('a missing picture shows once its file is back; a cut pasted into another n
   await expect.poll(async () => (await api('GET', `/api/notes-v2/content/${other}`)).content as string, { timeout: 15_000 })
     .toContain('![rooted](../shared/map.png)')
 })
+
+test('a tall picture fills the width on a click in its zoom, and scrolls', async ({ page }) => {
+  // Round 7 review: a tall picture zoomed to fit the screen's height was no
+  // larger than in the note. The zoom opens on the whole picture; a click on it
+  // fills the width (larger than in the note) and the zoom scrolls.
+  const root = `ImgTall${Date.now()}`
+  const note = `${root}/Trips/Plan.md`
+  await api('PUT', `/api/notes-v2/content/${note}`, { content: 'seeding\n' })
+  await placeImage(note, `${root}/Trips/tall.png`, [90, 90, 200], 300, 1400)
+  await api('PUT', `/api/notes-v2/content/${note}`, { content: 'Tall\n\n![tall](tall.png)\n' })
+  const editor = await openNote(page, root, 'Tall')
+  const pic = editor.locator('img[alt="tall"]')
+  await expect.poll(() => pic.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true)
+  const inline = await pic.evaluate((i) => i.getBoundingClientRect().width)
+
+  await pic.dblclick()
+  const big = page.locator('.lightbox-image')
+  await expect.poll(() => big.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true)
+  // The whole picture first: all of it on screen.
+  await expect.poll(() => big.evaluate((i) => i.getBoundingClientRect().height)).toBeLessThanOrEqual(page.viewportSize()!.height)
+  await expect(big).toHaveClass(/lightbox-image--fillable/)
+
+  await big.click()
+  await expect(big).toHaveClass(/lightbox-image--filled/)
+  await expect.poll(() => big.evaluate((i) => i.getBoundingClientRect().width)).toBeGreaterThan(inline)
+  await page.mouse.wheel(0, 600)
+  await expect.poll(() => page.locator('.lightbox-scroll').evaluate((o) => o.scrollTop)).toBeGreaterThan(0)
+  // Still the zoom: the close button stays on screen while it scrolls.
+  await expect(page.locator('.lightbox-close')).toBeInViewport()
+
+  await big.click()
+  await expect(big).not.toHaveClass(/lightbox-image--filled/)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.lightbox-overlay')).toHaveCount(0)
+  await expect(pic).toHaveCount(1)
+})

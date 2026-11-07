@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type MouseEvent, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 
@@ -23,19 +23,32 @@ const MIN_ZOOMED_SIDE = 320;
 
 export function NoteZoom({ src, alt, caption, onClose }: NoteZoomProps) {
   // A note already shows its pictures at their own size, so a zoom grows one
-  // smaller than the screen toward filling it.
-  const [width, setWidth] = useState<number | undefined>(undefined);
+  // smaller than the screen toward filling it. It opens on the whole picture;
+  // a tall one fits by its height there, no larger than in the note (round 7
+  // review), so a click on it fills the width instead and the zoom scrolls.
+  const [size, setSize] = useState<{ fit?: number; fill?: number }>({});
+  const [filled, setFilled] = useState(false);
   const onLoad = useCallback((e: SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
     if (!img.naturalWidth || !img.naturalHeight) return;
     const longSide = Math.max(img.naturalWidth, img.naturalHeight);
-    const scale = Math.min(
-      (window.innerWidth * 0.9) / img.naturalWidth,
-      (window.innerHeight * 0.9) / img.naturalHeight,
-      Math.max(MAX_UPSCALE, MIN_ZOOMED_SIDE / longSide),
-    );
-    if (scale > 1) setWidth(Math.floor(img.naturalWidth * scale));
+    const grow = Math.max(MAX_UPSCALE, MIN_ZOOMED_SIDE / longSide);
+    const byWidth = Math.min((window.innerWidth * 0.9) / img.naturalWidth, grow);
+    const whole = Math.min(byWidth, (window.innerHeight * 0.9) / img.naturalHeight);
+    const fill = Math.floor(img.naturalWidth * byWidth);
+    setSize({
+      fit: whole > 1 ? Math.floor(img.naturalWidth * whole) : undefined,
+      // Worth a second view only when it is clearly larger.
+      fill: fill > img.naturalWidth * whole * 1.15 ? fill : undefined,
+    });
   }, []);
+  const toggleFill = useCallback((e: MouseEvent) => {
+    e.stopPropagation();
+    if (size.fill) setFilled((f) => !f);
+  }, [size.fill]);
+  const imgStyle = filled && size.fill
+    ? { width: `${size.fill}px`, maxWidth: 'none', maxHeight: 'none' }
+    : size.fit ? { width: `${size.fit}px` } : undefined;
   // Focus moves in (onto the close button) and stays there, so a key typed while
   // it is open never reaches the note. 2026-11-05 review: a typed letter replaced
   // the selected picture under the zoom.
@@ -85,17 +98,22 @@ export function NoteZoom({ src, alt, caption, onClose }: NoteZoomProps) {
     };
   }, [handleKeyDown, handleFocusIn, handleBeforeInput]);
 
+  const picture = (
+    <img
+      className={`lightbox-image${size.fill ? (filled ? ' lightbox-image--filled' : ' lightbox-image--fillable') : ''}`}
+      src={src}
+      alt={alt || 'Image preview'}
+      title={size.fill ? (filled ? 'Show the whole picture' : 'Fill the width') : undefined}
+      style={imgStyle}
+      onLoad={onLoad}
+      onClick={toggleFill}
+    />
+  );
+
   return createPortal(
-    <div ref={overlayRef} className="lightbox-overlay" role="dialog" aria-modal="true" aria-label="Image preview" onClick={close}>
+    <div ref={overlayRef} className={filled ? 'lightbox-overlay lightbox-overlay--scroll' : 'lightbox-overlay'} role="dialog" aria-modal="true" aria-label="Image preview" onClick={close}>
       <button ref={closeRef} className="lightbox-close" onClick={close} aria-label="Close image preview">&times;</button>
-      <img
-        className="lightbox-image"
-        src={src}
-        alt={alt || 'Image preview'}
-        style={width ? { width: `${width}px` } : undefined}
-        onLoad={onLoad}
-        onClick={(e) => e.stopPropagation()}
-      />
+      {filled ? <div className="lightbox-scroll">{picture}</div> : picture}
       {caption && <div className="lightbox-caption" onClick={(e) => e.stopPropagation()}>{caption}</div>}
     </div>,
     document.body,
