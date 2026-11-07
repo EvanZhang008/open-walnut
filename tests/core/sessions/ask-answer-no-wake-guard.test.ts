@@ -48,7 +48,11 @@ describe('every path that takes an answers_ask keeps the rule', () => {
   const PATHS: Record<string, (c: string) => void> = {
     // The one entry point: checks, then the gate, and only then the message.
     'src/core/sessions/session-send-core.ts': (c) => {
-      expect(c).toMatch(/prepareAskAnswer\([\s\S]*?answerReach\([\s\S]*?if \(!reach\.wakes\)[\s\S]*?commit\(\)[\s\S]*?delivery: 'recorded'[\s\S]*?performPlainSend\(/)
+      // The gate judges the session the answer would really reach (a reply's own routing).
+      expect(c).toMatch(/prepareAskAnswer\([\s\S]*?replyDestinationOf\([\s\S]*?answerReach\([\s\S]*?commit\(\)[\s\S]*?delivery: 'recorded'[\s\S]*?if \(!reach\.wakes\)[\s\S]*?liveDelivery\([\s\S]*?performPlainSend\(/)
+      // ...and the write keeps the check: only that session, still live, no Stop since.
+      expect(c).toMatch(/export async function deliverToSession[\s\S]*?if \(opts\.liveOnly\)[\s\S]*?liveSendGuard\(/)
+      expect(c).toMatch(/async function replyDestinationOf[\s\S]*?onwardAnswer\([\s\S]*?resolveReplyDestination\(/)
     },
     // The route maps the flag onto the entry point, nothing more.
     'src/web/routes/messages-v1.ts': (c) => { expect(c).toContain('answersAsk: b.answers_ask === true') },
@@ -99,6 +103,7 @@ describe('every delivery about an answered ask asks the gate', () => {
       const name = /function (\w+)/.exec(p)?.[1]
       expect(p.indexOf('answerReach('), `${name} sends without the gate`).toBeGreaterThan(-1)
       expect(p.indexOf('answerReach('), `${name} sends before the gate`).toBeLessThan(p.search(SEND))
+      expect(p, `${name} sends without binding the check to the write`).toContain('liveSendGuard(')
     }
   })
 

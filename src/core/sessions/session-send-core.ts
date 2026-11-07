@@ -110,6 +110,9 @@ export interface SessionSendInput {
   answersAsk?: boolean;
   /** With answersAsk on an ask only the user approves: their own words it acts on. */
   userWords?: string;
+  /** Internal (answers_ask): deliver only into this session while it runs, bound to the stop fence
+   *  read when it was checked (ask-answer.ts liveSendGuard); never through the route. */
+  liveOnly?: import('./ask-answer.js').LiveDelivery;
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
   callerSid?: string;
   /** Walnut itself sends this (a start that continues a task's conversation, on behalf of a routine, a
@@ -373,9 +376,17 @@ export async function resolveCaller(callerSid: string | undefined): Promise<Call
  */
 export async function deliverToSession(
   target: SessionRecord,
-  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean; endsWait?: boolean },
+  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean; endsWait?: boolean; liveOnly?: import('./ask-answer.js').LiveDelivery },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
   const sid = target.claudeSessionId;
+  // An answer for the user goes only into the live session it was checked against (ask-answer.ts).
+  let guard: { stopFence: string | null; stillWanted: () => boolean } | undefined;
+  if (opts.liveOnly) {
+    const { AnswerNotLiveError, liveSendGuard } = await import('./ask-answer.js');
+    if (opts.liveOnly.sid !== sid) throw new AnswerNotLiveError(sid);
+    guard = await liveSendGuard(opts.liveOnly);
+    if (!guard.stillWanted()) throw new AnswerNotLiveError(sid);
+  }
   const leaderAnswersQuestion = opts.fromLeader === true && target.pendingPermission?.toolName === 'AskUserQuestion';
   if (target.pendingPermission && !leaderAnswersQuestion) {
     const { enqueueMessage } = await import('../session-message-queue.js');
@@ -383,7 +394,7 @@ export async function deliverToSession(
     const sentBy = queueSentBy(opts.source);
     const parked = await withTimeout(
       // Escaped like every queued send (hints/hint-format.ts); no hint rides a parked row.
-      enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}) }),
+      enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}), ...(guard ? { stopFence: guard.stopFence } : {}) }),
       DELIVERY_TIMEOUT_MS,
     );
     if (!parked) throw new SendError('delivery_failed', 'enqueue timed out — retry', 503);
@@ -398,6 +409,7 @@ export async function deliverToSession(
       ...(opts.messageId ? { messageId: opts.messageId } : {}),
       ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
       ...(opts.endsWait ? { endsWait: true } : {}),
+      ...(guard ?? {}),
     }),
     DELIVERY_TIMEOUT_MS,
   );
@@ -596,31 +608,27 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw new SendError('bad_request', 'answers_ask needs a task\'s session or the person as the sender');
   }
   let targetTaskId: string | undefined;
-  // The sessions an answer would reach: a send's target session, or every session of the asker.
-  let reachable: SessionRecord[] = [];
-  let resolved: ResolvedTarget | undefined;
   let asked: SessionRequest | undefined;
+  let destination: SessionRecord | undefined;
   if (input.inReplyTo) {
     asked = await getSessionRequest(input.inReplyTo);
     if (asked) {
-      const { getSessionByClaudeId, getSessionsForTask } = await import('../session-tracker.js');
-      const askerRecord = await getSessionByClaudeId(asked.fromSessionId).catch(() => undefined);
-      targetTaskId = askerRecord?.taskId;
-      reachable = [...(askerRecord ? [askerRecord] : []), ...(targetTaskId ? await getSessionsForTask(targetTaskId).catch(() => []) : [])];
+      const { getSessionByClaudeId } = await import('../session-tracker.js');
+      targetTaskId = (await getSessionByClaudeId(asked.fromSessionId).catch(() => undefined))?.taskId;
     }
   } else if (input.to) {
     // A target that cannot be reached fails here as the send would, never as a plain send; a task
     // with no session at all is still answered (recorded), never started.
     try {
-      resolved = await resolveSendTarget(input.to);
+      const resolved = await resolveSendTarget(input.to);
       targetTaskId = resolved.taskId ?? resolved.session.taskId;
-      reachable = [resolved.session];
+      destination = resolved.session;
     } catch (err) {
       if (!(err instanceof SendError && err.code === 'task_has_no_session' && typeof err.detail?.taskId === 'string')) throw err;
       targetTaskId = err.detail.taskId;
     }
   }
-  const { prepareAskAnswer, AskAnswerError, answerReach } = await import('./ask-answer.js');
+  const { prepareAskAnswer, AskAnswerError, answerReach, liveDelivery, notDeliveredLive } = await import('./ask-answer.js');
   const words = input.text?.trim() || (typeof input.reply?.result === 'string' ? input.reply.result : '');
   let prepared: Awaited<ReturnType<typeof prepareAskAnswer>>;
   try {
@@ -629,28 +637,55 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
     throw err;
   }
+  // An answer to a request goes where performReply would send it: past the asker for a request it
+  // carries, or the asker's live fork (reply-routing.ts). The gate judges that very session.
+  if (asked && caller.kind === 'session') destination = await replyDestinationOf(asked, caller.record.claudeSessionId);
   // A COMPLETE task, or one whose session is not running, is never woken by an answer: it is
   // recorded and taken off the user's Needs you (2026-11-06: an answer resumed a stopped session).
-  // A request that carries another one is answered past this asker, for that one's (performReply).
-  const reach = asked?.carries?.length ? { wakes: true as const }
-    : answerReach(prepared.target, reachable, { force: input.force === true && !!input.reason?.trim() });
+  const forced = input.force === true && !!input.reason?.trim();
+  const reach = answerReach(prepared.target, destination ? [destination] : [], { force: forced });
+  const recordOnly = async (why: 'complete' | 'stopped'): Promise<SessionSendResult> => {
+    if (asked) await settleAnswerNotDelivered(asked, caller, input);
+    await prepared.commit();
+    log.session.info('answers_ask: recorded, not delivered', { taskId: prepared.target.id, why, requestId: asked?.id });
+    const sid = destination?.claudeSessionId ?? asked?.fromSessionId ?? '';
+    return {
+      delivery: 'recorded', notWoken: why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
+      target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
+      ...(asked ? { repliedTo: asked.id } : {}),
+    };
+  };
   if (!reach.wakes) {
     if (input.handsOn) {
       throw new SendError('bad_request', `hands_on needs "${prepared.target.title}" (${prepared.target.id}) to work on the request, and it is ${reach.why === 'complete' ? 'complete' : 'not running'}: answer without hands_on, then task_start it with the request.`, 409, { taskId: prepared.target.id });
     }
-    if (asked) await settleAnswerNotDelivered(asked, caller, input);
-    await prepared.commit();
-    log.session.info('answers_ask: recorded, not delivered (the task is not running)', { taskId: prepared.target.id, why: reach.why, requestId: asked?.id });
-    const sid = resolved?.session.claudeSessionId ?? asked?.fromSessionId ?? '';
-    return {
-      delivery: 'recorded', notWoken: reach.why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
-      target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
-      ...(asked ? { repliedTo: asked.id } : {}),
-    };
+    return recordOnly(reach.why);
   }
-  const result = await performPlainSend({ ...input, answersAsk: false, text: input.text?.trim() ? `${prepared.line}\n\n${input.text}` : prepared.line });
+  // Delivered only into the session just checked, while it still runs and no Stop came since; a
+  // forced answer may resume it, as a forced message does.
+  const liveOnly = !forced && destination ? await liveDelivery(destination.claudeSessionId) : undefined;
+  let result: DeliveredSendResult;
+  try {
+    result = await performPlainSend({
+      ...input, answersAsk: false, ...(liveOnly ? { liveOnly } : {}),
+      text: input.text?.trim() ? `${prepared.line}\n\n${input.text}` : prepared.line,
+    });
+  } catch (err) {
+    // It stopped between the check and the write: nothing was queued, so it is only recorded.
+    if (liveOnly && await notDeliveredLive(err)) return recordOnly('stopped');
+    throw err;
+  }
   await prepared.commit();
   return result;
+}
+
+/** Where an answer to `request` from `replierSid` goes (performReply's own routing), or undefined. */
+async function replyDestinationOf(request: SessionRequest, replierSid: string): Promise<SessionRecord | undefined> {
+  const { onwardAnswer } = await import('./reply-handoff.js');
+  const onward = await onwardAnswer(request, replierSid);
+  if (onward) return onward.destination.session;
+  const { resolveReplyDestination } = await import('./reply-routing.js');
+  return (await resolveReplyDestination(request.fromSessionId, { exclude: [replierSid] }))?.session;
 }
 
 /** Whether the caller answers this request: its target, or the task it was handed on to (request-handoff.ts). */
@@ -823,6 +858,7 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     const fromLeader = await callerLeads(caller, taskId);
     ({ delivery, messageId } = await deliverToSession(target.session, {
       busText: body, enqueueText, source, taskId, messageId: input.messageId, fromLeader,
+      ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
     }));
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
@@ -983,7 +1019,7 @@ async function performReply(
         // Parked on this answer since the first one: the line is what ends its wait.
         const { statusText } = await import('./status-push.js');
         const text = statusText([line]);
-        ({ delivery, messageId } = await deliverToSession(origin, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true }));
+        ({ delivery, messageId } = await deliverToSession(origin, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true, ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}) }));
       } else {
         // Read with its next message (or now, mid-turn): the answer itself is already there.
         const { tellOrRide } = await import('./status-push.js');
@@ -1006,6 +1042,7 @@ async function performReply(
         busText: replyBody, enqueueText: wrapped, source: 'peer', endsWait: true,
         taskId: origin.taskId, messageId: input.messageId,
         fromLeader: await callerLeads(caller, origin.taskId),
+        ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
       }));
     }
 

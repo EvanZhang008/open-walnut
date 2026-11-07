@@ -86,6 +86,42 @@ export function answerReach(
   return sessions.some((s) => !s.archived && isLiveSessionStatus(s.process_status)) ? { wakes: true } : { wakes: false, why: 'stopped' };
 }
 
+/** The one live session an answer was checked against, and its stop fence when it was checked. */
+export interface LiveDelivery { sid: string; stopFence: string | null }
+
+/** The answer's session was no longer the live one it was checked against when its row was stored. */
+export class AnswerNotLiveError extends Error {
+  constructor(readonly sid: string) { super(`session ${sid.slice(0, 8)} no longer takes the answer live`); this.name = 'AnswerNotLiveError'; }
+}
+
+/** The gate's check, read again where the row is stored (sendMessageToSession's stillWanted, stopFence). */
+export async function liveDelivery(sid: string): Promise<LiveDelivery> {
+  const { sessionStops } = await import('./session-stop.js');
+  return { sid, stopFence: await sessionStops.fence(sid) };
+}
+
+/** The send options that keep an answer from going into a session that stopped since it was checked. */
+export async function liveSendGuard(live: LiveDelivery): Promise<{ stopFence: string | null; stillWanted: () => boolean }> {
+  const { getSessionByClaudeIdSync } = await import('../session-tracker.js');
+  return {
+    // A Stop confirmed after the check supersedes the row (enqueueMessage, and the runner's dispatch).
+    stopFence: live.stopFence,
+    // Read synchronously right before the row is stored: no await between it and the write.
+    stillWanted: () => {
+      const rec = getSessionByClaudeIdSync(live.sid);
+      return !!rec && !rec.archived && isLiveSessionStatus(rec.process_status);
+    },
+  };
+}
+
+/** Whether a send failed only because its session was no longer live (nothing was queued). */
+export async function notDeliveredLive(err: unknown): Promise<boolean> {
+  if (err instanceof AnswerNotLiveError) return true;
+  const { SendNoLongerWantedError } = await import('../session-message-queue.js');
+  const { isSessionStopSuperseded } = await import('./session-stop.js');
+  return err instanceof SendNoLongerWantedError || isSessionStopSuperseded(err);
+}
+
 export interface PreparedAnswer {
   /** Walnut's line that leads the answer: the one time the asker is told. */
   line: string;
@@ -168,6 +204,7 @@ export async function tellFoldAnswered(task: Pick<Task, 'id' | 'title'>, fold: S
   if (!self || !answerReach(self, sessions).wakes) return;
   const target = pickDeliverySession(sessions);
   if (!target) return;
+  const guard = await liveSendGuard(await liveDelivery(target.claudeSessionId));
   const { buildWalnutMessage } = await import('../peers/walnut-message-tag.js');
   const { sendMessageToSession } = await import('../session-message-queue.js');
   const { WAIT_UNTIL_SEND_SOURCE } = await import('../task-wait-until.js');
@@ -176,8 +213,14 @@ export async function tellFoldAnswered(task: Pick<Task, 'id' | 'title'>, fold: S
     answer ? `${answer.byTitle} answered it for the user: "${answer.text.replace(/\s+/g, ' ').slice(0, 400)}".` : 'The user answered it in that task: read its answer there (task_history, or task_send it).',
     'Carry on with that answer, and do not ask the user again.',
   ].join('\n');
-  await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
-    kind: 'notification', attrs: { from: 'Walnut', note: 'your ask was answered in a teammate' }, body,
-  }), { source: WAIT_UNTIL_SEND_SOURCE, taskId: task.id });
+  try {
+    await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
+      kind: 'notification', attrs: { from: 'Walnut', note: 'your ask was answered in a teammate' }, body,
+    }), { source: WAIT_UNTIL_SEND_SOURCE, taskId: task.id, ...guard });
+  } catch (err) {
+    // Stopped meanwhile: it reads the fold in its status when it is next started.
+    if (await notDeliveredLive(err)) return;
+    throw err;
+  }
   log.task.info('same-ask: a teammate told its folded ask was answered', { taskId: task.id, holder: fold.id });
 }

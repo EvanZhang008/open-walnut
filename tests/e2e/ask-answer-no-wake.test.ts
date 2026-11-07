@@ -32,6 +32,7 @@ import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
 import { createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
+import { deliverToSession } from '../../src/core/sessions/session-send-core.js'
 
 const LEAD_SID = 'eeeeeeee-aaaa-4bbb-8ccc-dddddddddddd'
 const PROJECT = 'Orchard'
@@ -127,6 +128,59 @@ describe('a task that is not running', () => {
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.json)).toContain('task_start')
     expect((await getTask(t.id)).ask_answered).toBeUndefined()
+  })
+})
+
+describe('an answer to a request goes where the reply would, and is judged there (review of c4abd775f)', () => {
+  it('a request handed on to two tasks answers back to the stopped asker: recorded, not delivered', async () => {
+    const ask = 'Switch the orchard importer to the new schema now?'
+    const t = await asking('Importer schema', ask, 'stopped')
+    const outer = await asking('Importer owner', 'Is the orchard importer schema ready for review?', 'idle')
+    const owed = await createSessionRequest({ fromSessionId: outer.sid, toSessionId: t.sid, toTaskId: t.id, fromTaskId: outer.id, text: 'Is the schema switch ready?' })
+    const other = await asking('Schema helper', 'Pick the orchard schema helper library?', 'idle')
+    // The asker hands the outer request to two tasks: the answer comes back to it (reply-handoff.ts).
+    const rq = await createSessionRequest({ fromSessionId: t.sid, toSessionId: LEAD_SID, toTaskId: lead, fromTaskId: t.id, text: ask, handsOn: [owed.id] })
+    await createSessionRequest({ fromSessionId: t.sid, toSessionId: other.sid, toTaskId: other.id, fromTaskId: t.id, text: ask, handsOn: [owed.id] })
+    const r = await answer({ in_reply_to: rq.id, text: 'Yes, switch it.' })
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(r.json).toMatchObject({ delivery: 'recorded', notWoken: 'stopped' })
+    expect(sentTo).not.toContain(t.sid)
+  })
+
+  it('a live fork of the stopped asker gets the answer, as a reply would reach it', async () => {
+    const ask = 'Publish the orchard changelog draft today?'
+    const t = await asking('Changelog', ask, 'stopped')
+    const forkTask = (await addTask({ title: 'Changelog fork', project: PROJECT } as never)).task.id
+    const forkSid = 'ffffffff-1111-4bbb-8ccc-dddddddddddd'
+    await createSessionRecord(forkSid, forkTask, PROJECT, WALNUT_HOME)
+    await updateSessionRecord(forkSid, { process_status: 'idle', forkedFromSessionId: t.sid } as never)
+    const rq = await createSessionRequest({ fromSessionId: t.sid, toSessionId: LEAD_SID, toTaskId: lead, fromTaskId: t.id, text: ask })
+    const r = await answer({ in_reply_to: rq.id, text: 'Publish it.' })
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(r.json.delivery).toBe('queued')
+    expect(r.json.targetSessionId).toBe(forkSid)
+    expect(sentTo).toContain(forkSid)
+    expect(sentTo).not.toContain(t.sid)
+  })
+})
+
+describe('the write itself keeps the check (review of c4abd775f)', () => {
+  it('a session that stopped since the check, or a Stop since it, takes nothing', async () => {
+    const t = await asking('Write boundary', 'Rotate the orchard api token tonight?', 'idle')
+    const rec = (await getSessionByClaudeId(t.sid))!
+    const before = (await getQueue(t.sid)).length
+    // Stopped after the check: refused before any row is stored.
+    await updateSessionRecord(t.sid, { process_status: 'stopped' } as never)
+    await expect(deliverToSession(rec, { busText: 'x1', enqueueText: 'x1', source: 'peer', liveOnly: { sid: t.sid, stopFence: null } }))
+      .rejects.toThrow(/no longer takes the answer live/)
+    // Still running, but a Stop came after the check: its fence moved, so the row is superseded.
+    await updateSessionRecord(t.sid, { process_status: 'idle' } as never)
+    await expect(deliverToSession(rec, { busText: 'x2', enqueueText: 'x2', source: 'peer', liveOnly: { sid: t.sid, stopFence: 'stop-after-the-check' } }))
+      .rejects.toThrow(/predates the latest stop/)
+    // Another session than the one checked is never written either.
+    await expect(deliverToSession(rec, { busText: 'x3', enqueueText: 'x3', source: 'peer', liveOnly: { sid: LEAD_SID, stopFence: null } }))
+      .rejects.toThrow(/no longer takes the answer live/)
+    expect((await getQueue(t.sid)).length).toBe(before)
   })
 })
 
