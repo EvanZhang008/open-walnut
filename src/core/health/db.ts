@@ -15,6 +15,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { sqliteFileGone } from '../../lib/sqlite-wiped.js'
 import { log } from '../../logging/index.js'
 
 export function healthDir(): string {
@@ -124,7 +125,11 @@ export class HealthStoreUnavailable extends Error {
 /** The shared handle, opened lazily. Throws on a replica: it keeps nothing. */
 export function getHealthDb(): DatabaseType {
   if (CLOUD_MODE) throw new HealthStoreUnavailable('health data lives on the primary box only')
-  if (db) return db
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(healthDbPath())) return db
+    closeHealthDb()
+  }
   fs.mkdirSync(healthDir(), { recursive: true, mode: 0o700 })
   const handle = new Database(healthDbPath())
   handle.pragma('journal_mode = WAL')

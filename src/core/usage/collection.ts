@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import { USAGE_DB_FILE } from '../../constants.js';
+import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
 import { ResponseUsageStore, type UsageEvidence, type UsageOwner, type SourceCheck } from './response-store.js';
 import { getConfig } from '../config-manager.js';
 import { listSessions } from '../session-tracker.js';
@@ -18,6 +19,11 @@ let inflight: Promise<unknown> | undefined;
 let state: { running: boolean; id?: string; since?: string; until?: string; startedAt?: string; finishedAt?: string; error?: string } = { running: false };
 
 export function responseUsageStore() {
+  // A test wiped the data home under the store's handle; it would still serve that test's rows.
+  if (store && sqliteFileGone(USAGE_DB_FILE)) {
+    try { store.close(); } catch { /* reopened below */ }
+    store = undefined;
+  }
   return store ??= new ResponseUsageStore(USAGE_DB_FILE);
 }
 export function collectionState() { return state; }

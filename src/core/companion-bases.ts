@@ -19,6 +19,7 @@ import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
+import { sqliteFileGone } from '../lib/sqlite-wiped.js'
 import { log } from '../logging/index.js'
 
 export function companionBasesPath(): string {
@@ -32,7 +33,12 @@ const memory = new Map<string, Record<string, unknown>>()
 const MEMORY_MAX = 5_000
 
 function open(): DatabaseType | null {
-  if (db) return db
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(companionBasesPath())) return db
+    try { db.close() } catch { /* reopened below */ }
+    db = null
+  }
   if (failed) return null
   try {
     fs.mkdirSync(path.dirname(companionBasesPath()), { recursive: true })

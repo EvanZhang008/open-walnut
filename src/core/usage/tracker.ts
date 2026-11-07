@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { computeCost } from './pricing.js';
 import { log } from '../../logging/index.js';
+import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
 import type { RecordParams, UsageRecord, UsageSummary, DailyCost, UsageByGroup, UsagePeriod, UsageFilter, UsageOverview } from './types.js';
 
 /**
@@ -40,7 +41,11 @@ export class UsageTracker {
 
   /** Lazily open and initialize the database. */
   private getDb(): DatabaseType {
-    if (this.db) return this.db;
+    if (this.db) {
+      // A test wiped the data home under the handle; it would still serve that test's rows.
+      if (!sqliteFileGone(this.dbPath)) return this.db;
+      this.close();
+    }
 
     fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
 

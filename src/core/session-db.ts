@@ -21,6 +21,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
+import { sqliteFileGone } from '../lib/sqlite-wiped.js';
 import type { SessionRecord } from './types.js';
 
 /** SQLite file path. Sits next to the legacy sessions.json in WALNUT_HOME. */
@@ -147,6 +148,13 @@ let initAttempted = false;
 // Rethrown on every call after a failed open — see task-db.ts for rationale
 // (silent null degrades every caller to an uninformative "null.prepare").
 let initError: unknown = null;
+/** Bumped on every open: a cache built on an earlier handle is stale (data_version is per connection). */
+let generation = 0;
+
+/** Which open of the database the shared handle is (see `generation`). */
+export function dbGeneration(): number {
+  return generation;
+}
 
 /**
  * Return the shared SQLite handle, lazily opening + initializing it on the
@@ -165,7 +173,11 @@ let initError: unknown = null;
  * unboundedly between restarts (same problem tasks.sqlite-wal hit at 80 MB).
  */
 export function getDb(): DatabaseType | null {
-  if (db) return db;
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(SESSION_DB_PATH)) return db;
+    closeDb();
+  }
   if (initAttempted) throw initError; // previous open failed; rethrow the real cause (no hot-loop retry)
   initAttempted = true;
 
@@ -202,6 +214,7 @@ export function getDb(): DatabaseType | null {
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
     guardCopyHandle(handle, 'sessions');
     db = handle;
+    generation += 1;
     log.session.info('session-db opened', { path: SESSION_DB_PATH });
     log.session.info('session-db: WAL checkpoint on open', { result: checkpoint });
     return db;

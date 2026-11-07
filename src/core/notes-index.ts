@@ -17,6 +17,7 @@ import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
+import { sqliteFileGone } from '../lib/sqlite-wiped.js'
 import { log } from '../logging/index.js'
 import { bootPolicy } from './boot-policy.js'
 
@@ -156,7 +157,11 @@ END;
  * here we simply (re)create tables and record the version.
  */
 export function getNotesIndexDb(): DatabaseType | null {
-  if (db) return db
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(NOTES_INDEX_PATH)) return db
+    closeNotesIndexDb()
+  }
   if (initAttempted) return db
   initAttempted = true
   // A host replica keeps no notes index (its notes live in the daemon's copy,

@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database, { type Database as DatabaseType } from '../../lib/sqlite.js';
 import { WALNUT_HOME } from '../../constants.js';
+import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
 import { log } from '../../logging/index.js';
 
 /** The host a write came through: a daemon's host key, or LOCAL_HOST for this server's own clients. */
@@ -85,8 +86,13 @@ function ledgerFile(): string {
 }
 
 function open(): DatabaseType | null {
-  if (db) return db;
   const file = ledgerFile();
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(file)) return db;
+    try { db.close(); } catch { /* reopened below */ }
+    db = null;
+  }
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const handle = new Database(file);

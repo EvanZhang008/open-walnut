@@ -34,6 +34,7 @@ import { GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } f
 import { isFollower } from '../server-role.js';
 import { log } from '../../logging/index.js';
 import { utilityQosForkExec } from '../../lib/background-qos.js';
+import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
 import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
@@ -241,6 +242,8 @@ let handle: SearchIndex | null = null;
 /** The handle was opened with an embedder. Without one a pass "drains" at once
  *  (nothing can be embedded), so its floor proves nothing and is never saved. */
 let handleEmbeds = false;
+/** The file `handle` was opened on. */
+let handlePath = '';
 
 /** Writes that moved a doc's text or vectors, for the index copy's manifest
  *  (core/replication/search-replica*.ts). Called inside the write: take note only. */
@@ -265,11 +268,14 @@ export function searchV2IndexOpen(): boolean {
 }
 
 export function getSearchV2Index(): SearchIndex {
+  // A test wiped the data home under the handle; it would still serve that test's docs.
+  if (handle && sqliteFileGone(handlePath)) resetSearchV2IndexForTests();
   if (!handle) {
     const embedder = buildEmbedderConfig();
     handleEmbeds = embedder !== undefined;
+    handlePath = searchV2IndexPath();
     handle = createSearchIndex({
-      dbPath: searchV2IndexPath(),
+      dbPath: handlePath,
       kinds: SEARCH_V2_KIND_WEIGHTS,
       embedder,
       logger: (level, msg, data) => log.memory[level](msg, data),

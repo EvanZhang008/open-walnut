@@ -15,7 +15,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sessionDbTx } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -69,7 +69,16 @@ async function ensureSessionInit(): Promise<void> {
 // (enrichWithLiveStatus) and stays fresh. Env-gated for instant prod revert.
 const STORE_CACHE_ENABLED = process.env.WALNUT_STORE_CACHE !== '0';
 let sessionStoreCache: SessionRecord[] | null = null;
-let sessionStoreCacheDataVersion: number | null = null;
+let sessionStoreCacheDataVersion: string | null = null;
+
+/**
+ * The version a snapshot is trusted at: which open of the database (a reopened
+ * handle starts its own `data_version` count, so a match across opens means
+ * nothing) and `PRAGMA data_version`, which moves when another connection commits.
+ */
+function storeVersion(db: NonNullable<ReturnType<typeof getDb>>): string {
+  return `${dbGeneration()}:${db.pragma('data_version', { simple: true }) as number}`;
+}
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */
 function invalidateSessionStoreCache(): void {
@@ -116,8 +125,7 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
     return;
   }
   if (ids.size === 0) return;
-  const current = db.pragma('data_version', { simple: true }) as number;
-  if (current !== sessionStoreCacheDataVersion) {
+  if (storeVersion(db) !== sessionStoreCacheDataVersion) {
     invalidateSessionStoreCache();
     return;
   }
@@ -459,8 +467,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
   if (!db) {
     throw new Error('readStore: SQLite handle is null');
   }
-  const dataVersion = () =>
-    db.pragma('data_version', { simple: true }) as number;
+  const dataVersion = () => storeVersion(db);
   const currentDataVersion = dataVersion();
   if (sessionStoreCache === null
     || sessionStoreCacheDataVersion !== currentDataVersion) {
@@ -469,7 +476,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
     // always describe the same database state.
     let before = currentDataVersion;
     let rows: Record<string, any>[];
-    let after: number;
+    let after: string;
     do {
       before = dataVersion();
       rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];

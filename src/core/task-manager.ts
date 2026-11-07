@@ -26,7 +26,7 @@ import {
   type TaskQuerySort,
 } from './task-query.js';
 import { registry } from './integration-registry.js';
-import { getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
+import { dbGeneration, getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { isFollower, isHostReplica, placement } from './server-role.js';
 import { stampedFieldTimes as stampFieldTimesPure, type FieldStamp } from './task-field-times.js';
@@ -158,7 +158,7 @@ let taskStoreCache: TaskStore | null = null;
 // cache, and writeStore()'s full-snapshot delete-diff then ERASES the rows the
 // other process created (2026-08-04 task-loss incident — a stray second server
 // on :3467 silently deleted every task created via :3456).
-let taskStoreCacheDataVersion: number | null = null;
+let taskStoreCacheDataVersion: string | null = null;
 /** id → task of the cached snapshot, built on first use and dropped whenever the
  *  snapshot changes. getTask() is called from ~40 files; without this each call
  *  cloned and scanned the whole board to return one row. */
@@ -225,7 +225,7 @@ interface RowShadow {
  */
 type RowFingerprint = readonly unknown[];
 let rowShadow: RowShadow | null = null;
-let rowShadowDataVersion: number | null = null;
+let rowShadowDataVersion: string | null = null;
 /** Shadow built inside the current transaction, published only on commit. */
 let pendingRowShadow: RowShadow | null = null;
 
@@ -256,9 +256,14 @@ function boundRow(fingerprint: RowFingerprint): Record<string, unknown> {
 
 type SqliteHandle = Pick<import('../lib/sqlite.js').Database, 'pragma'>;
 
-function readDataVersion(handle: SqliteHandle): number | null {
+/**
+ * The version the cache and the shadow are trusted at: which open of the database
+ * (a reopened handle starts its own `data_version` count, so a match across opens
+ * means nothing) and `PRAGMA data_version`.
+ */
+function readDataVersion(handle: SqliteHandle): string | null {
   try {
-    return handle.pragma('data_version', { simple: true }) as number;
+    return `${dbGeneration()}:${handle.pragma('data_version', { simple: true }) as number}`;
   } catch {
     return null; // pragma unavailable — behave as if un-shadowed (full rewrite)
   }
@@ -749,7 +754,7 @@ async function loadStore(): Promise<TaskStore> {
     if (current !== null && current === taskStoreCacheDataVersion) {
       return taskStoreCache;
     }
-    log.task.warn('task store cache dropped: external process wrote the DB', {
+    log.task.warn('task store cache dropped: another connection wrote the DB, or it was reopened', {
       cachedDataVersion: taskStoreCacheDataVersion, currentDataVersion: current,
     });
     invalidateTaskStoreCache();

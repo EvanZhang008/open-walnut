@@ -20,6 +20,7 @@ import { TASKS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
+import { sqliteFileGone } from '../lib/sqlite-wiped.js';
 import type { Task } from './types.js';
 import { migratePhase } from './phase.js';
 import { normalizeTags, tagsAreNormal } from './tag-model.js';
@@ -112,6 +113,13 @@ let initAttempted = false;
 // while the real cause (e.g. a database file that cannot be opened) is
 // logged exactly once and lost.
 let initError: unknown = null;
+/** Bumped on every open: a cache built on an earlier handle is stale (data_version is per connection). */
+let generation = 0;
+
+/** Which open of the database the shared handle is (see `generation`). */
+export function dbGeneration(): number {
+  return generation;
+}
 
 /**
  * Return the shared SQLite handle, lazily opening + initializing it on the
@@ -128,7 +136,11 @@ let initError: unknown = null;
  *   - foreign_keys=ON           → future-proof for child tables.
  */
 export function getDb(): DatabaseType | null {
-  if (db) return db;
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(TASK_DB_PATH)) return db;
+    closeDb();
+  }
   if (initAttempted) throw initError; // previous open failed; rethrow the real cause (no hot-loop retry)
   initAttempted = true;
 
@@ -177,6 +189,7 @@ export function getDb(): DatabaseType | null {
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
     guardCopyHandle(handle, 'tasks');
     db = handle;
+    generation += 1;
     log.task.info('task-db opened', { path: TASK_DB_PATH });
     log.task.info('task-db: WAL checkpoint on open', { result: checkpoint });
     return db;

@@ -14,6 +14,7 @@ import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { sqliteFileGone } from '../../lib/sqlite-wiped.js'
 
 export function placesDir(): string {
   return path.join(WALNUT_HOME, 'places')
@@ -75,7 +76,11 @@ export function placesStoreExists(): boolean {
 /** The shared handle, opened lazily. Throws on a replica: it keeps nothing. */
 export function getPlacesDb(): DatabaseType {
   if (CLOUD_MODE) throw new PlacesStoreUnavailable('places live on the primary box only')
-  if (db) return db
+  if (db) {
+    // A test wiped the data home under the handle; it would still serve that test's rows.
+    if (!sqliteFileGone(placesDbPath())) return db
+    closePlacesDb()
+  }
   fs.mkdirSync(placesDir(), { recursive: true, mode: 0o700 })
   const handle = new Database(placesDbPath())
   handle.pragma('journal_mode = WAL')
