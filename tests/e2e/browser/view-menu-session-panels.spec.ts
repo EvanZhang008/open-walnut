@@ -97,7 +97,7 @@ test('the Display menu shows the column count and a pick moves the strip at once
   // The row sits right under the tab bar switch (the View row above both) and reads the current value.
   await openViewMenu(page)
   const keys = await page.locator('.fb-menu .dm-settings > [data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')))
-  expect(keys).toEqual(['view', 'quick-views', 'session-panels'])
+  expect(keys).toEqual(['view', 'quick-views', 'status-lines', 'session-panels'])
   await expect(panelsRow(page)).toContainText('Session columns')
   await expect(panelsRow(page).locator('button')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
   await expect(checked(page)).toHaveText(['3'])

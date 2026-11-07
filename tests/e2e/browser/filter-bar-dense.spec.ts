@@ -56,7 +56,10 @@ test.describe('Owner: dense board', () => {
     await expandMoreFilters(page)
     await expect(filterDimRow(page, 'source').locator('.fb-prop-summary')).toHaveText('Any')
     await expect(filterDimRow(page, 'priority')).toHaveCount(0)
-    const homeH = (await box(filterMenu(page))).height
+    // What page one holds, not the box: with More filters open and the display rows below
+    // (Show task status line among them), page one alone can reach the 520 cap too.
+    const bodyContentH = () => filterMenu(page).locator('.fb-menu-body').evaluate((el) => el.scrollHeight)
+    const homeContentH = await bodyContentH()
     await openFilterPage(page, 'project')
     // More than six values: the search box takes focus and names the property.
     await expect(filterSearch(page)).toBeFocused()
@@ -73,7 +76,8 @@ test.describe('Owner: dense board', () => {
     const menuH = (await box(filterMenu(page))).height
     const avail = await page.evaluate(() => window.innerHeight)
     expect(menuH).toBeLessThanOrEqual(Math.min(520, avail))
-    expect(menuH).toBeGreaterThan(homeH)
+    // The Project page holds more than page one, and the capped box scrolls it.
+    expect(await bodyContentH()).toBeGreaterThan(homeContentH)
     expect(await filterMenu(page).locator('.fb-menu-body').evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(true)
     // The search box filters the rows; the box follows its content per keystroke.
     await filterSearch(page).fill('Project 20')
