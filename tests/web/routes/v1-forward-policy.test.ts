@@ -55,7 +55,9 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/tasks/t1', 'task-copy'],
     ['GET', '/tasks/meta/tags', 'task-copy'],
     ['GET', '/focus', 'task-copy'],
-    ['GET', '/tasks/t1/transfer-options-x', 'task-copy'],
+    ['GET', '/tasks/t1/brief', 'task-copy'],
+    ['GET', '/tasks/t1/agent-memory', 'task-copy'],
+    ['GET', '/tasks/t1/watch', 'task-copy'],
     ['GET', '/sessions', 'paged'],
     ['GET', '/sessions/abc/transcript', 'paged'],
     ['GET', '/sessions/abc/history', 'paged'],
@@ -94,6 +96,12 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['PUT', '/tasks/t1/board/cards/t2'],
     // The transfer options read the hosts and their profiles, which the task copy does not hold.
     ['GET', '/tasks/t1/transfer-options'],
+    ['GET', '/tasks/t1/transfer-options-x'],
+    ['GET', '/tasks/t1/threads'],
+    ['GET', '/tasks/t1/threads/th-1'],
+    ['GET', '/tasks/t1/sessions'],
+    ['GET', '/tasks/t1/wake-sources'],
+    ['GET', '/tasks/t1/brief/extra'],
     ['HEAD', '/tasks/t1/transfer-options'],
     // The vocabulary is the Mac's word list (stage 4d): read and added there while it answers.
     ['GET', '/stt/vocab'],

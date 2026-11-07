@@ -46,6 +46,12 @@ interface CompanionRoute {
  * Paths are relative to /api/v1. Everything not listed here goes to the Mac
  * while it answers: new routes need nothing to work through the companion.
  */
+/** A task's own reads the companion's task copy answers: each reads the task record alone. */
+export const TASK_COPY_READS = ['agent-memory', 'brief', 'watch'] as const
+
+/** A read under one task (`/tasks/<id>/<sub>...`, not `/tasks/meta/...`) of anything but TASK_COPY_READS. */
+const TASK_COPY_ELSEWHERE = new RegExp(`^/tasks/(?!meta/)[^/]+/(?!(?:${TASK_COPY_READS.join('|')})$)`)
+
 const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // The companion holds these streams, and the sends that feed them go from it
   // to the host's daemon directly (a session's host is not always the Mac).
@@ -87,9 +93,11 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // The companion's exact copy of the task store: its reads are as fresh as the
   // Mac's. Its writes go to the Mac while it answers (one writer, replica plan
   // WP13); away, the companion's own route applies them and queues them by field.
-  // A board and a task's transfer options read more than the task store (the
-  // boards, the hosts and their profiles): the Mac answers those.
-  { methods: ['GET'], re: /^\/(tasks|focus)(\/|$)/, unless: /^\/tasks\/[^/]+\/(board(\/|$)|transfer-options$)/, why: 'task-copy' },
+  // Only a task's reads made from its record alone stay here (TASK_COPY_READS); every
+  // other read under a task (its board, threads, sessions, wake sources, transfer
+  // options) is of a store the copy does not keep, so the Mac answers it (2026-11-06:
+  // the copy answered a VP's Threads with none, and the phone said there were none).
+  { methods: ['GET'], re: /^\/(tasks|focus)(\/|$)/, unless: TASK_COPY_ELSEWHERE, why: 'task-copy' },
   // Long pages with their own paged relays.
   { methods: ['GET'], re: /^\/sessions$/, why: 'paged' },
   { methods: ['GET'], re: /^\/sessions\/[^/]+\/(transcript|history)$/, why: 'paged' },
