@@ -14,7 +14,6 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   acquireSync,
-  describeHolder,
   reapOrphanFixtureServer,
   release,
   startLeaseHeartbeat,
@@ -69,12 +68,8 @@ export function engageGate(port: number): void {
 
   const started = Date.now()
   const lease = acquireSync(port)
-  if (lease) {
-    const waited = Math.round((Date.now() - started) / 1000)
-    console.log(`[pw-concurrency] holding :${port}${waited > 1 ? ` after ${waited}s in queue` : ''}`)
-  } else {
-    console.warn(`[pw-concurrency] running WITHOUT the :${port} lease — ${describeHolder(port)} may interfere`)
-  }
+  const waited = Math.round((Date.now() - started) / 1000)
+  console.log(`[pw-concurrency] holding :${port}${waited > 1 ? ` after ${waited}s in queue` : ''}`)
 
   // Now that no other run may own the port, any listener still on it is debris
   // from a killed run. Reap before webServer's reuseExistingServer sees it.

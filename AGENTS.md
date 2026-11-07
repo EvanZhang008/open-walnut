@@ -739,7 +739,8 @@ starts it; CI installs Node for it). The fixture servers it tests run on bun lik
 
 - **Exclusive lease on :3457** — a second run *queues* instead of interleaving. Seeing
   `[pw-concurrency] another Playwright run holds :3457 … Queuing` is correct behavior,
-  not a hang. It self-heals (dead holder / 45-min TTL) and fails open.
+  not a hang. It self-heals (dead holder / 45-min TTL), and it never runs beside a live
+  holder: after `PW_LEASE_WAIT_MIN` (120) it stops with an error and nothing runs.
 - **`workers` capped at 4** (was `undefined` = half the cores = 7). Override with `PW_WORKERS`.
 - **Orphan sweep** — reaps a fixture server left by a SIGKILLed run before
   `reuseExistingServer` can silently attach to it.

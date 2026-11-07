@@ -19,7 +19,7 @@ import path from 'node:path'
 const leaseDir = path.join(os.tmpdir(), `walnut-pw-gate-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 process.env.PW_LEASE_DIR = leaseDir
 
-const { tryAcquire, release, perRunWorkers, waitForCapacitySync, startLeaseHeartbeat, LEASE_TTL_MS, LEASE_DIR } =
+const { tryAcquire, acquireSync, leaseWaitMs, release, perRunWorkers, waitForCapacitySync, startLeaseHeartbeat, LEASE_TTL_MS, LEASE_DIR } =
   await import('../e2e/browser/pw-concurrency.js')
 
 const PORT = 34571
@@ -53,6 +53,24 @@ describe('playwright admission gate', () => {
 
     release(first)
     expect(tryAcquire(PORT)).toBeTruthy()
+  })
+
+  it('never runs beside a live holder: the wait ends in an error, the lease stays its holder\'s', () => {
+    // 2026-11-07: after 20 minutes the gate went on without the lease while the
+    // holder was alive, and a WebKit run shared :3457 with it.
+    const held = tryAcquire(PORT)
+    expect(held).toBeTruthy()
+    const before = fs.readFileSync(leaseFileFor(PORT), 'utf8')
+    expect(() => acquireSync(PORT, 1_500)).toThrow(/still holds it, alive: this run did not start/)
+    expect(fs.readFileSync(leaseFileFor(PORT), 'utf8')).toBe(before)
+    release(held)
+    expect(acquireSync(PORT, 1_500)).toBeTruthy()
+  })
+
+  it('waits two hours for a live holder unless PW_LEASE_WAIT_MIN says otherwise', () => {
+    expect(leaseWaitMs({})).toBe(120 * 60_000)
+    expect(leaseWaitMs({ PW_LEASE_WAIT_MIN: '30' })).toBe(30 * 60_000)
+    expect(leaseWaitMs({ PW_LEASE_WAIT_MIN: 'x' })).toBe(120 * 60_000)
   })
 
   it('releases the lease so the next run can proceed', () => {

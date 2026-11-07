@@ -205,22 +205,34 @@ export function waitForCapacitySync(timeoutMs = 10 * 60_000): void {
   )
 }
 
+/** How long a run waits for a live holder of the port: PW_LEASE_WAIT_MIN, else 2 hours. */
+export function leaseWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  const min = Number(env.PW_LEASE_WAIT_MIN)
+  return (Number.isFinite(min) && min > 0 ? min : 120) * 60_000
+}
+
 /**
- * Block until the fixture port is ours. Returns null if it gives up — fail open,
- * loudly. Synchronous on purpose (see file header).
+ * Block until the fixture port is ours. Synchronous on purpose (see file header).
+ *
+ * Never runs beside a live holder: a holder that died or stopped its heartbeat is
+ * reclaimed by tryAcquire, and a live one is waited for until timeoutMs, then this
+ * throws and the run does not start. It used to proceed after 20 minutes, and a
+ * WebKit run then started beside a live run's fixture server at load 294
+ * (2026-11-07); two runs on one port stop each other's server.
  */
-export function acquireSync(port: number, timeoutMs = 20 * 60_000): string | null {
+export function acquireSync(port: number, timeoutMs = leaseWaitMs()): string {
   const deadline = Date.now() + timeoutMs
   let announced = false
   for (;;) {
     const held = tryAcquire(port)
     if (held) return held
     if (Date.now() > deadline) {
-      console.warn(
-        `[pw-concurrency] waited ${Math.round(timeoutMs / 60_000)}m for :${port}; proceeding anyway — ` +
-          `expect interference from ${describeHolder(port)}. Clear with: scripts/pw-cleanup.sh clean`,
+      throw new Error(
+        `[pw-concurrency] waited ${Math.round(timeoutMs / 60_000)}m for :${port}, and ` +
+          `${describeHolder(port)} still holds it, alive: this run did not start (two runs on one ` +
+          `fixture port stop each other's server). Run it again once that run ends ` +
+          `(scripts/pw-cleanup.sh status shows it); PW_LEASE_WAIT_MIN sets the wait.`,
       )
-      return null
     }
     if (!announced) {
       announced = true
