@@ -79,7 +79,7 @@ export async function computeChatStats(
   const cachedStats = cachedStatsMap.get(cacheKey)
   const cachedMtime = cachedMtimeMap.get(cacheKey)
   const laneNow = getLaneWindow(conversationId)
-  if (cachedStats && cachedMtime === lastUpdated && (!laneNow || laneNow.window === cachedStats.contextWindow)) {
+  if (cachedStats && cachedMtime === lastUpdated && (!laneNow || (laneNow.window === cachedStats.contextWindow && laneNow.estimate === !!cachedStats.contextWindowEstimate))) {
     return cachedStats
   }
 

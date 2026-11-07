@@ -330,12 +330,15 @@ export function recallModelWindowAnyHost(model: string | undefined): number | un
 
 /**
  * The window of a model for a place with no session of its own to read (an engine handoff's
- * budget, a gateway's model list, the chat stats before the lane reported): a window the CLI
- * reported for it on this host, else on any host, else the name rule as an estimate, else null.
+ * budget, a gateway's model list): a window the CLI reported for it on that host (exact), else, for
+ * a place with no host of its own (`host` null), the newest one any host reported, which is only an
+ * estimate (the same alias can name another model elsewhere), else the name rule as an estimate.
  */
 export function knownModelWindow(host: string | null | undefined, model: string | undefined): ResolvedContextWindow | null {
-  const exact = recallModelWindow(host, model) ?? recallModelWindowAnyHost(model)
-  if (exact !== undefined) return resolved(exact, 'host-model-cache')
+  const here = host != null ? recallModelWindow(host, model) : undefined
+  if (here !== undefined) return resolved(here, 'host-model-cache')
+  const elsewhere = host == null ? recallModelWindowAnyHost(model) : undefined
+  if (elsewhere !== undefined) return { ...resolved(elsewhere, 'host-model-cache'), estimate: true }
   const guess = windowFromModelString(model)
   return guess !== undefined ? resolved(guess, 'model-string') : null
 }

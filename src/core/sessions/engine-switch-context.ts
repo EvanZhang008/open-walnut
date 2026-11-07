@@ -326,7 +326,7 @@ export async function targetWindowTokens(
   try {
     // A window the CLI reported for this model (on this host, else any), else its name's estimate.
     const { knownModelWindow } = await import('../../providers/context-window.js');
-    const known = model ? knownModelWindow(host, model) : null;
+    const known = model ? knownModelWindow(host || '__local__', model) : null;
     if (known && !known.estimate) return known.window;
     named = known?.window;
   } catch { /* defaults below */ }

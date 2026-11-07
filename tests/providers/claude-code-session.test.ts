@@ -2759,6 +2759,8 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       // The CLI's own resolution of auto-compact (settings, legacy file, environment): with it off,
       // the badge is measured against the hard stop.
       autoCompactEnabled: false,
+      // No model in this payload: a reading never checked against a model switch.
+      model: null,
     });
   });
 
@@ -2841,6 +2843,30 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
     // Once the CLI reports it at a turn end, it is exact.
     s._cliRawContextWindow = 1_000_000;
     expect(s.contextReadout(10_000).contextWindowEstimate).toBeUndefined();
+  });
+
+  // Review 2026-11-07: a get_context_usage asked before a model switch and answered after it carried
+  // the old model's window under the new model's name, exact, into the cache.
+  it('a usage read answered after a model switch is not taken as the new model\'s window', async () => {
+    resetContextWindowCaches();
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = session as any;
+    s._initModel = 'claude-haiku-4-5';
+    s.seedCliContextWindow('test');
+    await new Promise((r) => setTimeout(r, 5));
+    const env = JSON.parse(writes[0]!);
+    // The switch lands first (the init line of a resume on another model).
+    s._initModel = 'global.anthropic.claude-opus-5-5';
+    s._windowGen++;
+    feed(session, { type: 'control_response', response: { subtype: 'success', request_id: env.request_id,
+      response: { categories: [], totalTokens: 30_000, maxTokens: 200_000, rawMaxTokens: 200_000, autocompactSource: 'auto', model: 'claude-haiku-4-5', percentage: 15 } } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(s._cliUnclampedWindow).toBeUndefined();
+    expect(s._cliContextWindow).toBeUndefined();
+    expect(recallModelWindow(null, 'claude-opus-5-5')).toBeUndefined();
+    expect(s.contextReadout(30_000)).toMatchObject({ contextWindow: 1_000_000, contextWindowEstimate: true });
+    resetContextWindowCaches();
   });
 
   it('a [1m] request caches its window apart from the plain model', () => {

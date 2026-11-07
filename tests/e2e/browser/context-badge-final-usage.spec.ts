@@ -75,6 +75,8 @@ test('the context badge follows each request\'s final usage, through a failure a
   let panel = await openTask(page, taskId, sid)
   const pct = panel.locator('.session-detail-context-pct')
   await expect(pct).toHaveText('27%', { timeout: 25_000 })
+  // The window is the one the CLI reported at the turn end, not the model name's estimate (2026-11-07).
+  await expect(pct).toHaveAttribute('title', /\/ 1M \(model max\)/, { timeout: 10_000 })
 
   const history = panel.locator('.session-history')
   for (const [n, spec, expected] of [
@@ -101,6 +103,7 @@ test('the context badge follows each request\'s final usage, through a failure a
   await page.reload()
   panel = await openTask(page, taskId, sid)
   await expect(panel.locator('.session-detail-context-pct')).toHaveText('9%', { timeout: 25_000 })
+  await expect(panel.locator('.session-detail-context-pct')).toHaveAttribute('title', /\(model max\)/)
   await panel.screenshot({ path: `${SHOTS}/${engine}-after-reload.png` })
   expect(errors).toEqual([])
 })

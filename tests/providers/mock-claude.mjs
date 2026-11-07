@@ -1377,7 +1377,9 @@ if (outputFormat === 'stream-json') {
         emit(wrap({ type: 'message_stop' }));
         persistMockTurn(sid, effectiveMessage, { message: { ...assistant, stop_reason: 'end_turn', usage: final } },
           process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
-        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: final });
+        // Every real result carries the CLI's own window for the model (result.modelUsage).
+        const modelUsage = { [modelFlag || 'mock-model']: { contextWindow: Number(process.env.MOCK_CONTEXT_WINDOW) || 1_000_000 } };
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: final, modelUsage });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
         armSnapshotNextTurn();
       };

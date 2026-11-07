@@ -389,6 +389,8 @@ export interface CliContextUsage {
   /** Whether the CLI compacts on its own, as it resolves the switch itself: its settings, the legacy
    *  ~/.claude.json and DISABLE_AUTO_COMPACT in its environment (2.1.2xx+). */
   autoCompactEnabled?: boolean | null
+  /** The model the CLI measured against (its own id, the init line's form). */
+  model?: string | null
 }
 
 /** control_response: CLI's reply to a Walnut-initiated control_request (e.g.
@@ -1405,6 +1407,9 @@ export class ClaudeCodeSession {
    *  "auto" or "unknown-model"): then it is the model's own window, known before any turn ends.
    *  Cleared on model change. */
   private _cliUnclampedWindow: number | undefined
+  /** Moves on every model change, so a window read for the model before it (a get_context_usage
+   *  answered after a switch) is never taken as the new model's. */
+  private _windowGen = 0
   /** The most tokens this session has been seen holding on its current model: a window can never
    *  be smaller, so it is a floor under every guess. Cleared on model change. */
   private _maxContextTokensSeen = 0
@@ -6450,6 +6455,7 @@ export class ClaudeCodeSession {
               this._cliContextWindow = undefined
               this._recordWindowHint = undefined
               this._cliUnclampedWindow = undefined
+              this._windowGen++
               this._maxContextTokensSeen = 0
             }
             this._initModel = rawModel
@@ -9590,6 +9596,7 @@ export class ClaudeCodeSession {
       rawMaxTokens: typeof payload.rawMaxTokens === 'number' ? payload.rawMaxTokens : null,
       autocompactSource: typeof payload.autocompactSource === 'string' ? payload.autocompactSource : null,
       autoCompactEnabled: typeof payload.isAutoCompactEnabled === 'boolean' ? payload.isAutoCompactEnabled : null,
+      model: typeof payload.model === 'string' ? payload.model : null,
     }
   }
 
@@ -9776,7 +9783,12 @@ export class ClaudeCodeSession {
    *
    *  Fire-and-forget safe; an unreadable CLI just leaves the badge as it was. */
   private seedCliContextWindow(reason: string): void {
+    const gen = this._windowGen
     void this.getContextUsage().then((cu) => {
+      // An answer for the model before a switch says nothing about this one's windows (the read after
+      // the switch brings those). The auto-compact setting is the host's and still holds.
+      const sameModel = gen === this._windowGen
+        && (!cu?.model || !this._initModel || shortModelId(cu.model).toLowerCase() === shortModelId(this._initModel).toLowerCase())
       // The CLI's own answer on auto-compact (settings, legacy file and environment alike): with it
       // off, the readout below is measured against the hard stop (2026-11-05: get_settings left the
       // legacy switch and the environment out, and the badge read 89% at the stop).
@@ -9793,7 +9805,7 @@ export class ClaudeCodeSession {
       // Nothing clamped the window (no CLAUDE_CODE_AUTO_COMPACT_WINDOW, no setting, no experiment): the
       // CLI's resolver then hands back the model's own window (CLI 2.1.312 resolveAutoCompactWindow:
       // "auto" and "unknown-model" return the window unchanged). Exact, before any turn has ended.
-      if (cu?.maxTokens && cu.maxTokens > 0 && (cu.autocompactSource === 'auto' || cu.autocompactSource === 'unknown-model')) {
+      if (sameModel && cu?.maxTokens && cu.maxTokens > 0 && (cu.autocompactSource === 'auto' || cu.autocompactSource === 'unknown-model')) {
         if (cu.maxTokens !== this._cliUnclampedWindow) {
           log.session.info('model context window read from get_context_usage (unclamped)', {
             sessionId: this.claudeSessionId, taskId: this.taskId, reason, contextWindow: cu.maxTokens, source: cu.autocompactSource,
@@ -9802,7 +9814,7 @@ export class ClaudeCodeSession {
         this._cliUnclampedWindow = cu.maxTokens
         rememberModelWindow(this._host, this.windowCacheModel(), cu.maxTokens, 'cli-context-usage')
       }
-      if (cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
+      if (sameModel && cu?.maxTokens && cu.maxTokens > 0 && cu.maxTokens !== this._cliContextWindow) {
         log.session.info('cli effective (auto-compact) window seeded', {
           sessionId: this.claudeSessionId, taskId: this.taskId, reason,
           maxTokens: cu.maxTokens, prev: this._cliContextWindow ?? null,
@@ -10005,6 +10017,7 @@ export class ClaudeCodeSession {
         this._cliContextWindow = undefined
         this._recordWindowHint = undefined
         this._cliUnclampedWindow = undefined
+        this._windowGen++
         this._maxContextTokensSeen = 0
         this.seedCliContextWindow('model-change')
         // Read-back truth outside the cached catalog ⇒ the allowlist/overrides

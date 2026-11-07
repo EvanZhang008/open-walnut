@@ -264,7 +264,11 @@ describe('the window from the real source', () => {
     // A proxy model the name rule cannot name at all.
     expect(knownModelWindow('__local__', 'gpt-6.1-sol')).toBeNull();
     rememberModelWindow('clouddev', 'openai.gpt-6.1-sol', 400_000);
-    expect(knownModelWindow('__local__', 'gpt-6.1-sol')).toEqual({ window: 400_000, source: 'host-model-cache', estimate: false });
+    expect(knownModelWindow('clouddev', 'gpt-6.1-sol')).toEqual({ window: 400_000, source: 'host-model-cache', estimate: false });
+    // Another host's alias may name another model there: never taken for this host's.
+    expect(knownModelWindow('__local__', 'gpt-6.1-sol')).toBeNull();
+    // A place with no host of its own reads it, as an estimate.
+    expect(knownModelWindow(null, 'gpt-6.1-sol')).toEqual({ window: 400_000, source: 'host-model-cache', estimate: true });
     expect(recallModelWindowAnyHost('gpt-6.1-sol')).toBe(400_000);
     expect(knownModelWindow(null, 'claude-opus-5-5')).toEqual({ window: EXTENDED_WINDOW, source: 'model-string', estimate: true });
   });
