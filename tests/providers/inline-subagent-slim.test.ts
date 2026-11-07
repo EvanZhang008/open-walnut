@@ -54,8 +54,7 @@ async function run(opts: Partial<Parameters<typeof runInlineSubagent>[0]>): Prom
   const proc = fakeProc();
   spawnMock.mockReturnValueOnce(proc);
   const done = runInlineSubagent({ prompt: 'p', toolUseId: 'tu-slim', systemPrompt: 'tiny', ...opts });
-  // Let the runner attach listeners, then finish the child cleanly.
-  await new Promise((r) => setTimeout(r, 10));
+  await vi.waitFor(() => expect(proc.listenerCount('close')).toBeGreaterThan(0));
   proc.emit('exit', 0);
   proc.emit('close', 0);
   await done;

@@ -1,7 +1,7 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { createPortal } from 'react-dom';
-import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, pointerWithin, rectIntersection, type CollisionDetection, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, pointerWithin, rectIntersection, type CollisionDetection, type DragEndEvent, type Modifier } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
 import { shownState } from '@open-walnut/user-status';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -23,10 +23,14 @@ function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, ti
   const state = shownState(taskUserState(task));
   const drag = useDraggable({ id: task.id, data: { family }, disabled: mode !== 'pin' || moving });
   const closed = folded.includes(task.id);
-  return <article ref={drag.setNodeRef} className={`home-board-card${depth ? ' home-board-child' : ''}${drag.isDragging ? ' is-dragging' : ''}`} data-board-task={task.id} data-state={state} style={{ '--board-depth': Math.min(depth, 4) } as CSSProperties}>
+  return <article ref={drag.setNodeRef} className={`home-board-card${depth ? ' home-board-child' : ''}${drag.isDragging ? ' is-dragging' : ''}`} data-board-task={task.id} data-state={state} data-draggable={mode === 'pin' && !moving} onPointerDown={e => {
+    const target = e.target as Element;
+    if (e.pointerType !== 'mouse' || target.closest('[data-board-task]') !== e.currentTarget || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+    drag.listeners?.onPointerDown?.(e);
+  }} style={{ '--board-depth': Math.min(depth, 4) } as CSSProperties}>
     <div className="home-board-card-top">
       <button type="button" className="home-board-title" onClick={() => onOpen(task)}>{task.title}</button>
-      {mode === 'pin' && <button type="button" className="home-board-drag" disabled={moving} aria-label={`Drag ${task.title}`} title="Drag to another pin tier" {...drag.attributes} {...drag.listeners}>⠿</button>}
+      {mode === 'pin' && <button ref={drag.setActivatorNodeRef} type="button" className="home-board-drag" disabled={moving} aria-label={`Drag ${task.title}`} title="Drag to another pin tier" {...drag.attributes} {...drag.listeners}>⠿</button>}
     </div>
     <div className="home-board-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(task)}</span>{mode === 'status' && <span>{tierLabel(task)}</span>}
       {mode === 'pin' && <button type="button" disabled={moving} aria-label={`Move ${task.title} to pin tier`} onClick={e => onMove(task, e.currentTarget)}>Move</button>}
@@ -73,10 +77,19 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   const retryMove = useRef<{ ids: string[]; tier: string } | null>(null);
   const moveInFlight = useRef(false);
   const moveEpoch = useRef(0);
+  const movedTask = useRef<{ id: string; tier: string } | null>(null);
   const [doneLimit, setDoneLimit] = useState(30);
   const shown = useContext(RouteShownContext) ?? true;
   const picker = useCursorFlyout<BoardFamily>();
   const sheetRef = useRef<HTMLElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const keepGrabVisible = useCallback<Modifier>(({ activatorEvent, activeNodeRect, transform }) => {
+    const height = previewRef.current?.offsetHeight;
+    if (!(activatorEvent instanceof PointerEvent) || !activeNodeRect || !height) return transform;
+    const offset = activatorEvent.clientY - activeNodeRect.top;
+    return offset > height - 8 ? { ...transform, y: transform.y + offset - height / 2 } : transform;
+  }, []);
+  const previewModifiers = useMemo(() => [keepGrabVisible], [keepGrabVisible]);
   const previousFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!fullscreen.isFullscreen) return;
@@ -130,6 +143,44 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     columns.forEach(column => column.projects.forEach(project => project.families.forEach(add)));
     return result;
   }, [columns]);
+  useLayoutEffect(() => {
+    const moved = movedTask.current;
+    if (!moved || !shown || !fullscreen.isFullscreen || mode !== 'pin') return;
+    const card = sheetRef.current?.querySelector<HTMLElement>(`[data-board-column="${CSS.escape(moved.tier)}"] [data-board-task="${CSS.escape(moved.id)}"]`);
+    if (!card) {
+      const ancestors = (nodes: BoardFamily[], parents: string[] = []): string[] | undefined => {
+        for (const family of nodes) {
+          if (family.task.id === moved.id) return parents;
+          const found = ancestors(family.children, [...parents, family.task.id]);
+          if (found !== undefined) return found;
+        }
+      };
+      const path = ancestors(columns.filter(c => c.id === moved.tier).flatMap(c => c.projects.flatMap(p => p.families)));
+      if (!path?.some(id => visibleFolds.includes(id))) { movedTask.current = null; return; }
+      if (searching) setSearchFold({ query, ids: visibleFolds.filter(id => !path.includes(id)) });
+      else setFolded(ids => ids.filter(id => !path.includes(id)));
+      return;
+    }
+    movedTask.current = null;
+    const title = card.querySelector<HTMLElement>('.home-board-title');
+    const column = card.closest<HTMLElement>('[data-board-column]');
+    if (!title || !column) return;
+    const body = column.querySelector<HTMLElement>('.home-board-column-body');
+    const header = column.querySelector<HTMLElement>('header');
+    if (!body || !header) return;
+    const titleBox = title.getBoundingClientRect();
+    const bodyBox = body.getBoundingClientRect();
+    const top = Math.max(bodyBox.top, header.getBoundingClientRect().bottom) + 8;
+    const bottom = bodyBox.bottom - 8;
+    if (titleBox.top < top || titleBox.height > bottom - top) body.scrollTop += titleBox.top - top;
+    else if (titleBox.bottom > bottom) body.scrollTop += titleBox.bottom - bottom;
+    const strip = column.parentElement!;
+    const stripBox = strip.getBoundingClientRect();
+    const left = stripBox.left + 8;
+    const right = stripBox.right - 8;
+    if (titleBox.left < left || titleBox.width > right - left) strip.scrollLeft += titleBox.left - left;
+    else if (titleBox.right > right) strip.scrollLeft += titleBox.right - right;
+  }, [columns, mode, shown, fullscreen.isFullscreen, searching, query, visibleFolds, setFolded]);
   useEffect(() => {
     const open = () => fullscreen.enterFullscreen();
     window.addEventListener('home:open-board', open);
@@ -137,6 +188,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   }, [fullscreen.enterFullscreen]);
   useEffect(() => {
     moveEpoch.current++;
+    movedTask.current = null;
     setMoveError(null);
     retryMove.current = null;
     if (!fullscreen.isFullscreen) { dragCancelled.current = true; setQuery(''); picker.close(); setDragging(null); }
@@ -144,6 +196,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   useEffect(() => {
     if (shown && fullscreen.isFullscreen && mode === 'pin') return;
     moveEpoch.current++;
+    movedTask.current = null;
     retryMove.current = null;
     setMoveError(null);
     if (dragging) {
@@ -158,12 +211,14 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   const sendMove = useCallback((ids: string[], tier: string) => {
     if (moveInFlight.current) return;
     const epoch = ++moveEpoch.current;
+    movedTask.current = { id: ids[0], tier };
     moveInFlight.current = true;
     retryMove.current = { ids, tier };
     setMoveError(null);
     setMoving(true);
     void focus.setTierBulk(ids, tier === 'unpinned' ? null : tier, (message, failedIds) => {
       if (moveEpoch.current !== epoch) return;
+      movedTask.current = null;
       if (failedIds) retryMove.current = { ids: failedIds, tier };
       setMoveError(message);
     }).finally(() => { moveInFlight.current = false; setMoving(false); });
@@ -201,10 +256,12 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     else setFolded(toggle);
   };
   useEffect(() => { if (fullscreen.isFullscreen && mode === 'status' && query.trim()) ensureAllTasks(); }, [fullscreen.isFullscreen, mode, query, ensureAllTasks]);
-  const total = columns.reduce((n, c) => n + c.count, 0) + (mode === 'status' && !query.trim() ? completedHidden : 0);
+  const total = columns.filter(c => c.id !== 'done').reduce((n, c) => n + c.count, 0);
+  const completed = (columns.find(c => c.id === 'done')?.count ?? 0) + (query.trim() ? 0 : completedHidden);
   if (!fullscreen.isFullscreen) return null;
   return <>{fullscreen.FullscreenBackdrop}{createPortal(<section ref={sheetRef} className={`home-board-sheet${fullscreen.fullscreenClass}`} onPointerDownCapture={e => {
-    if ((e.target as Element).closest('.home-board-drag')) pointerHeld.current = true;
+    const target = e.target as Element;
+    if (e.isPrimary && e.button === 0 && mode === 'pin' && !moving && (target.closest('.home-board-drag') || (e.pointerType === 'mouse' && target.closest('[data-board-task]') && !target.closest('button, a, input, textarea, select, [contenteditable="true"]')))) pointerHeld.current = true;
   }} onKeyDownCapture={e => {
     if (e.defaultPrevented || (e.key === 'Escape' && dragging)) return;
     if (e.key === 'Escape' && picker.state) { e.preventDefault(); e.stopPropagation(); picker.close(); return; }
@@ -215,7 +272,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     if (e.shiftKey && current <= 0) { e.preventDefault(); items.at(-1)?.focus(); }
     else if (!e.shiftKey && current === items.length - 1) { e.preventDefault(); items[0]?.focus(); }
   }} role="dialog" aria-modal="true" aria-label="Task board" data-testid="home-board" data-mode={mode}>
-    <header className="home-board-head"><h1>Board</h1><span className="home-board-count">{total} {mode === 'pin' ? `open ${total === 1 ? 'task' : 'tasks'}` : total === 1 ? 'task' : 'tasks'}</span>
+    <header className="home-board-head"><h1>Board</h1><span className="home-board-count">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
       <div className="home-board-controls"><div className="home-board-switch" aria-label="Group board"><button type="button" aria-pressed={mode === 'pin'} onClick={() => setMode('pin')}>By pin</button><button type="button" aria-pressed={mode === 'status'} onClick={() => setMode('status')}>By status</button></div>
         <input data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} onChange={e => setQuery(e.target.value)} />
         <button type="button" className="home-board-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
@@ -228,7 +285,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     }}>Retry</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier. Subtasks in the same tier move with their leader, across projects.' : 'Grouped by project. Status follows each task’s live state.'}</div>
     {loading ? <p className="home-board-empty">Loading your tasks…</p> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
       <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={mode} onOpen={onOpen} onMove={onMove} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
-      <DragOverlay dropAnimation={null} style={{ pointerEvents: 'none' }}>{dragging && <div className="home-board-card home-board-drag-preview">{dragging.task.title}</div>}</DragOverlay>
+      <DragOverlay dropAnimation={null} modifiers={previewModifiers} style={{ pointerEvents: 'none' }}>{dragging && <div ref={previewRef} className="home-board-card home-board-drag-preview">{dragging.task.title}</div>}</DragOverlay>
     </DndContext>}
     {shown && picker.state && <OptionPickerFlyout anchorPoint={picker.state.point} anchorRef={picker.noTrigger} options={columns.map(c => ({ value: c.id, label: c.label }))} current={homeBoardTier(picker.state.payload.task, focus.customTiers)} ariaLabel="Move to pin tier" onPick={tier => move(picker.state!.payload, tier)} onClose={picker.close} />}
   </section>, document.body)}</>;

@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { loadHome } from './draft-helpers';
 import { isolateUiPrefs } from './todo-panel-helpers';
 import { keepTaskFramesTo } from './task-list-stub';
 
@@ -16,7 +15,9 @@ async function create(request: APIRequestContext, title: string, fields: Record<
 }
 async function open(page: Page) {
   await isolateUiPrefs(page);
-  await loadHome(page);
+  await page.setContent(`<a href="http://localhost:${process.env.PW_TEST_PORT ?? 3457}/">Open Walnut</a>`);
+  await page.getByRole('link', { name: 'Open Walnut', exact: true }).click();
+  await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: 'Open task board', exact: true }).click();
   await expect(page.getByTestId('home-board')).toBeVisible();
   await page.getByRole('button', { name: 'By pin', exact: true }).click();
@@ -139,6 +140,30 @@ test('Move changes the tier for the whole visible family, not project or parent'
   await expect(column(page, 'focus').locator(`[data-board-task="${ids.leader}"]`)).toBeVisible();
 });
 
+test('dragging a child body saves its descendants without moving its leader', async ({ page, request }) => {
+  const leader = await create(request, 'Board body leader');
+  const child = await create(request, 'Board body child', { parent_task_id: leader });
+  const grandchild = await create(request, 'Board body grandchild', { parent_task_id: child });
+  await open(page);
+  const body = card(page, child).locator(':scope > .home-board-meta > .home-board-state');
+  await body.scrollIntoViewIfNeeded();
+  await expect(body).toBeInViewport();
+  const start = (await body.boundingBox())!;
+  expect(await body.evaluate(el => { const box = el.getBoundingClientRect(); return document.elementFromPoint(box.x + 5, box.y + box.height / 2)?.closest('[data-board-task]')?.getAttribute('data-board-task'); })).toBe(child);
+  const end = (await column(page, 'satellite').locator('h2').boundingBox())!;
+  await page.mouse.move(start.x + 5, start.y + start.height / 2);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(start.x + 25, start.y + start.height / 2, { steps: 4 });
+    await expect(page.getByTestId('home-board').locator('.home-board-drag-preview')).toHaveText('Board body child');
+    await page.mouse.move(end.x + 35, end.y + 70, { steps: 12 });
+  } finally { await page.mouse.up(); }
+  for (const id of [child, grandchild]) await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task.focus_tier ?? 'satellite').toBe('satellite');
+  expect((await (await request.get(`/api/tasks/${leader}`)).json()).task.focus_tier).toBe('focus');
+  expect((await (await request.get(`/api/tasks/${child}`)).json()).task.parent_task_id).toBe(leader);
+  await expect(column(page, 'satellite').locator(`[data-board-task="${child}"]`)).toBeVisible();
+});
+
 test('drag, failed write recovery in quiet mode, unpinned move, empty search and narrow theme', async ({ page, request }) => {
   await page.route('**/api/quiet', route => route.fulfill({ json: { active: true, allowPermissions: false, holds: [{ source: 'user', since: Date.now(), reason: 'Focus' }] } }));
   await open(page);
@@ -160,7 +185,7 @@ test('drag, failed write recovery in quiet mode, unpinned move, empty search and
     else await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
     await page.mouse.move(start!.x + start!.width / 2, start!.y + start!.height / 2);
     await page.mouse.down();
-    await page.mouse.move(start!.x + 15, start!.y + 15, { steps: 4 });
+    await page.mouse.move(start!.x + start!.width / 2 + 12, start!.y + start!.height / 2 + 8, { steps: 4 });
     await expect(board.locator('.home-board-drag-preview')).toBeVisible();
     await page.waitForTimeout(2500);
     expect(await strip.evaluate(el => el.scrollLeft)).toBe(0);
@@ -175,7 +200,7 @@ test('drag, failed write recovery in quiet mode, unpinned move, empty search and
   }
   await page.mouse.move(start!.x + start!.width / 2, start!.y + start!.height / 2);
   await page.mouse.down();
-  await page.mouse.move(start!.x + 15, start!.y + 15, { steps: 4 });
+  await page.mouse.move(start!.x + start!.width / 2 + 12, start!.y + start!.height / 2 + 8, { steps: 4 });
   await page.mouse.move(end!.x + 35, end!.y + 70, { steps: 15 });
   await page.mouse.up();
   await expect(column(page, 'satellite').locator(`[data-board-task="${ids.leader}"]`)).toBeVisible();
@@ -302,6 +327,82 @@ test('late move failures cannot cross a close, reopen or read-only mode change',
   } finally { await page.unroute('**/api/focus/batch'); }
 });
 
+test('moving into a dense offscreen column reveals the task inside a folded family', async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const visibilityProject = `${project} visibility`;
+  for (let i = 0; i < 28; i++) await create(request, `Board visibility filler ${i}`, { project: visibilityProject, focus_tier: 'satellite' });
+  const parent = await create(request, 'Board visibility parent', { project: visibilityProject, focus_tier: 'satellite' });
+  const sibling = await create(request, 'Board visibility sibling', { project: visibilityProject, focus_tier: 'satellite', parent_task_id: parent });
+  const child = await create(request, 'Board visibility child', { project: visibilityProject, parent_task_id: parent });
+  const grandchild = await create(request, 'Board visibility grandchild', { project: visibilityProject, parent_task_id: child });
+  await page.setViewportSize({ width: 700, height: 800 });
+  await open(page);
+  await page.getByRole('textbox', { name: 'Search board tasks' }).fill(visibilityProject);
+  await page.getByRole('button', { name: 'Subtasks of Board visibility parent', exact: true }).click();
+  await expect(card(page, sibling)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Move Board visibility child to pin tier', exact: true }).click();
+  await page.getByRole('option', { name: 'Satellite', exact: true }).click();
+  await expect(card(page, parent).locator(`[data-board-task="${child}"]`)).toBeAttached();
+  await expect(card(page, child).locator(`[data-board-task="${grandchild}"]`)).toBeAttached();
+  await expect.poll(() => card(page, child).locator('.home-board-title').first().evaluate(el => {
+    const title = el.getBoundingClientRect();
+    const col = el.closest('[data-board-column]')!;
+    const body = col.querySelector('.home-board-column-body')!.getBoundingClientRect();
+    const head = col.querySelector('header')!.getBoundingClientRect();
+    const strip = el.closest('.home-board-columns')!.getBoundingClientRect();
+    return title.top >= Math.max(body.top, head.bottom) && title.bottom <= body.bottom && title.left >= strip.left && title.right <= strip.right;
+  })).toBe(true);
+  for (const id of [child, grandchild]) {
+    const task = (await (await request.get(`/api/tasks/${id}`)).json()).task;
+    expect(task.focus_tier ?? 'satellite').toBe('satellite');
+    expect(task.project).toBe(visibilityProject);
+  }
+  expect((await (await request.get(`/api/tasks/${child}`)).json()).task.parent_task_id).toBe(parent);
+  await page.getByRole('button', { name: 'Close board', exact: true }).click();
+  await page.getByRole('button', { name: 'Open task board', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search board tasks' }).fill(visibilityProject);
+  await expect(card(page, child)).toBeAttached();
+  const longTitle = `Board oversized title ${'readable '.repeat(100)}`;
+  const tall = await create(request, longTitle, { project: visibilityProject });
+  await page.setViewportSize({ width: 250, height: 450 });
+  await card(page, tall).getByRole('button', { name: `Move ${longTitle} to pin tier`, exact: true }).click();
+  await page.getByRole('option', { name: 'Satellite', exact: true }).click();
+  await expect.poll(() => card(page, tall).locator('.home-board-title').evaluate(el => {
+    const title = el.getBoundingClientRect(), col = el.closest('[data-board-column]')!;
+    const body = col.querySelector('.home-board-column-body')!.getBoundingClientRect();
+    const head = col.querySelector('header')!.getBoundingClientRect(), strip = el.closest('.home-board-columns')!.getBoundingClientRect();
+    return title.top >= Math.max(body.top, head.bottom) && title.top < body.bottom && title.left >= strip.left && title.left < strip.right;
+  })).toBe(true);
+});
+
+test('retrying a filtered descendant does not leave a delayed scroll target', async ({ page, request }) => {
+  const filteredProject = `${project} filtered visibility`;
+  for (let i = 0; i < 28; i++) await create(request, `Board filtered filler ${i}`, { project: filteredProject, focus_tier: 'satellite' });
+  const leader = await create(request, 'Board filtered leader', { project: filteredProject });
+  const child = await create(request, 'Board filtered descendant', { project: filteredProject, parent_task_id: leader });
+  await open(page);
+  const board = page.getByTestId('home-board');
+  await board.getByRole('textbox', { name: 'Search board tasks' }).fill('Board filtered leader');
+  await page.route('**/api/focus/batch', async route => {
+    const data = route.request().postDataJSON();
+    const response = await request.post('/api/focus/batch', { data: { ...data, task_ids: [leader] } });
+    const json = await response.json();
+    await route.fulfill({ json: { ...json, failed: [{ id: child, error: 'Controlled refusal' }] } });
+  });
+  await board.getByRole('button', { name: 'Move Board filtered leader to pin tier', exact: true }).click();
+  await page.getByRole('option', { name: 'Satellite', exact: true }).click();
+  await expect(board.getByRole('alert')).toContainText('Board filtered descendant');
+  await page.unroute('**/api/focus/batch');
+  await column(page, 'satellite').locator('.home-board-column-body').evaluate(el => { el.scrollTop = 0; });
+  await board.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(board.getByRole('alert')).toHaveCount(0);
+  await expect.poll(async () => (await (await request.get(`/api/tasks/${child}`)).json()).task.focus_tier ?? 'satellite').toBe('satellite');
+  await board.getByRole('textbox', { name: 'Search board tasks' }).fill('');
+  await expect(card(page, child)).toBeAttached();
+  expect(await card(page, child).evaluate(el => el.getBoundingClientRect().top > el.closest('[data-board-column]')!.querySelector('.home-board-column-body')!.getBoundingClientRect().bottom)).toBe(true);
+  expect(await column(page, 'satellite').locator('.home-board-column-body').evaluate(el => el.scrollTop)).toBe(0);
+});
+
 test('partial batch failure keeps saved successes and reports the refused descendant', async ({ page, request }) => {
   const leader = await create(request, 'Board partial leader');
   const child = await create(request, 'Board partial child', { parent_task_id: leader });
@@ -366,11 +467,13 @@ test('completed totals stay stable when the archive contains hidden organization
   });
   await open(page);
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('');
+  const openCount = await page.locator('.home-board-count').innerText();
   await page.getByRole('button', { name: 'By status', exact: true }).click();
   const doneCount = column(page, 'done').locator('.home-board-column-head > span');
   const expected = fullPage!.tasks.filter(t => !['main', 'lead'].includes(t.org_role ?? '') && !t.plugin_only && (t.phase === 'COMPLETE' || t.status === 'done')).length;
   // The server's hidden count, which leaves the organization nodes out, matches the full list.
   await expect(doneCount).toHaveText(String(expected));
+  await expect(page.locator('.home-board-count')).toHaveText(`${openCount} · ${expected} completed`);
   const before = await doneCount.textContent();
   const total = await page.locator('.home-board-count').textContent();
   await column(page, 'done').getByRole('button', { name: 'Show more completed tasks', exact: true }).click();

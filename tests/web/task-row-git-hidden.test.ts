@@ -12,10 +12,18 @@ function filesUnder(dir: string, extension: string): string[] {
 }
 
 const components = filesUnder(path.join(root, 'web/src/components'), '.tsx');
-const rows = components.filter((file) => /\/(tasks|org|board|boards)\//.test(file));
+const isTaskRow = (file: string) => /^(tasks|org|board|boards)\//.test(path.relative(path.join(root, 'web/src/components'), file).split(path.sep).join('/'));
+const rows = components.filter(isTaskRow);
 const gitRendering = /GitGlance(?:Pill|Line)|useSessionGitGlance|git-glance-(?:pill|line)|gitSessionId/;
 
 describe('task rows keep git information inside Changed, never inline', () => {
+  it('uses only component-relative directories to classify every row surface', () => {
+    for (const dir of ['tasks', 'org', 'board', 'boards']) {
+      expect(isTaskRow(path.join(root, 'web/src/components', dir, 'FutureRow.tsx'))).toBe(true);
+    }
+    expect(isTaskRow(path.join(root, 'web/src/components/sessions/GitGlance.tsx'))).toBe(false);
+  });
+
   it('enumerates every task-row surface, including new components', () => {
     expect(rows.length).toBeGreaterThan(30);
     for (const file of rows) {

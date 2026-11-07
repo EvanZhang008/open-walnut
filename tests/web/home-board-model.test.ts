@@ -17,6 +17,27 @@ describe('Home board grouping', () => {
     expect(portals).toContain('task-kebab-project-flyout');
     for (const name of portals) expect(glass).not.toContain(`.${name}`);
   });
+  it('uses the column body for vertical scrolling and keeps its header static', () => {
+    const css = fs.readFileSync(path.resolve(__dirname, '../../web/src/styles/home-board.css'), 'utf8');
+    const rule = (name: string) => css.match(new RegExp(`\\.${name} \\{([^}]+)\\}`))![1];
+    expect(rule('home-board-columns')).not.toContain('contain: layout');
+    expect(rule('home-board-column')).not.toContain('overflow-y: auto');
+    expect(rule('home-board-column')).not.toContain('contain: paint');
+    expect(rule('home-board-column-head')).not.toContain('position: sticky');
+    expect(rule('home-board-column-body')).toContain('overflow-y: auto');
+    expect(css).not.toMatch(/translateZ|will-change/);
+    expect(rule('home-board-drag-preview')).toContain('width: 100%');
+    expect(rule('home-board-drag-preview')).toContain('box-sizing: border-box');
+    const sheet = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/tasks/HomeBoardSheet.tsx'), 'utf8');
+    expect(sheet).not.toContain('scrollIntoView');
+    expect(sheet).toContain("column.querySelector<HTMLElement>('.home-board-column-body')");
+    expect(sheet).toContain('Math.max(bodyBox.top, header.getBoundingClientRect().bottom) + 8');
+    expect(sheet).toContain('bodyBox.bottom - 8');
+    expect(sheet).toContain('body.scrollTop');
+    expect(sheet).not.toContain('column.scrollTop');
+    expect(sheet).toContain('strip.scrollLeft');
+    expect(sheet).toContain("pointerEvents: 'none'");
+  });
   it('groups pin columns by project and nests every depth once', () => {
     const tasks = [task('leader', { pinned: true, focus_tier: 'focus' }), task('child', { pinned: true, focus_tier: 'focus', parent_task_id: 'leader' }), task('grandchild', { pinned: true, focus_tier: 'focus', parent_task_id: 'child' }), task('other', { project: 'Project B', pinned: true, focus_tier: 'focus' })];
     const column = tier(tasks, 'focus');

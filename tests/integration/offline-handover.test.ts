@@ -461,6 +461,7 @@ describe('runOfflineHandover over journal v2', () => {
       expect(d.pending.size).toBe(3)
       expect((await task(other)).priority).not.toBe('backlog')
       await until(() => d.pending.size === 0)
+      await runOfflineHandover(d.conn)
       const drains = d.calls.filter((c) => c.cmd === 'offline.drain').length
       expect(drains).toBeGreaterThanOrEqual(4)
       expect((await task(other)).priority).toBe('backlog')
