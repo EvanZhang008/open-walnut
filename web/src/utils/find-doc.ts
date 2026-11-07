@@ -20,6 +20,7 @@
  */
 import { EditorView } from '@codemirror/view';
 import { cmActiveFrom, cmSelectSearchIndex, cmCloseSearch, cmNavSearch, cmSearchStatus, cmSelectSearchAt, cmUpdateSearch } from './cm-search';
+import { nearestToOthers } from './find-near-words';
 import { FIND_DOC_ATTR, PageFindController, type FindStatus } from './page-find';
 
 export { FIND_DOC_ATTR } from './page-find';
@@ -31,8 +32,9 @@ export interface FindEngine {
   readonly kind: 'dom' | 'cm';
   setQuery(query: string, caseSensitive: boolean): FindStatus;
   /** Search, then choose the match a hit came from: the one at `context`
-   *  (the hit's own text) inside `near` (the block it was found in). */
-  setQueryNear(query: string, caseSensitive: boolean, near: Node | null, context?: string): FindStatus;
+   *  (the hit's own text) inside `near` (the block it was found in), or the
+   *  one next to `others` (more words the reader typed). */
+  setQueryNear(query: string, caseSensitive: boolean, near: Node | null, context?: string, others?: string[]): FindStatus;
   refresh(): FindStatus;
   nav(dir: 1 | -1): FindStatus;
   /** Choose the n-th match (1-based), scrolled into view. */
@@ -170,9 +172,18 @@ class CmFindEngine implements FindEngine {
     } catch { /* the view is gone */ }
     return this.status;
   }
-  setQueryNear(query: string, caseSensitive: boolean, _near: Node | null, context?: string): FindStatus {
+  setQueryNear(query: string, caseSensitive: boolean, _near: Node | null, context?: string, others?: string[]): FindStatus {
     this.setQuery(query, caseSensitive);
-    const at = context ? contextOffset(this.view.state.doc.toString(), context, query.length) : -1;
+    const text = this.view.state.doc.toString();
+    let at = context ? contextOffset(text, context, query.length) : -1;
+    if (others?.length && query) {
+      const hay = caseSensitive ? text : text.toLowerCase();
+      const needle = caseSensitive ? query : query.toLowerCase();
+      const hits: number[] = [];
+      for (let i = hay.indexOf(needle); i !== -1 && hits.length < 2000; i = hay.indexOf(needle, i + needle.length)) hits.push(i);
+      const best = nearestToOthers(text, hits, others, caseSensitive);
+      if (best >= 0) at = hits[best]!;
+    }
     try { cmSelectSearchAt(this.view, Math.max(0, at)); } catch { /* the view is gone */ }
     return this.status;
   }

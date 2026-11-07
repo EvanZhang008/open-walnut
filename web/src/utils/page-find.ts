@@ -20,6 +20,7 @@
  * indexOf loop.
  */
 
+import { nearestToOthers } from './find-near-words';
 import { liveRange, rangeViewPosition, revealRange, type OverflowCache } from './page-find-geometry';
 
 export { liveRange } from './page-find-geometry';
@@ -266,7 +267,7 @@ export class PageFindController {
    * `near`. Then bring it into view. Used when another surface opens the bar
    * with a query (utils/find-doc.ts requestPageFind).
    */
-  setQueryNear(query: string, caseSensitive: boolean, near: Node | null, context?: string): FindStatus {
+  setQueryNear(query: string, caseSensitive: boolean, near: Node | null, context?: string, others?: string[]): FindStatus {
     this.setQuery(query, caseSensitive);
     const n = this.ranges.length;
     if (!n) return this.status();
@@ -279,11 +280,39 @@ export class PageFindController {
       const inside = this.ranges.filter((r) => near.contains(r.startContainer)).length;
       if (i >= 0 && inside > 1 && context) pick = i + Math.min(inside - 1, copiesBefore(near, query, context, caseSensitive));
     }
+    // The reader typed more words than the bar searches: the copy next to them.
+    const beside = others?.length ? this.nearOthers(near, others, caseSensitive) : -1;
+    if (beside >= 0) pick = beside;
     this.active = pick;
     this.paint();
     const r = this.ranges[pick];
     if (r) revealRange(r, this.beforeScroll);
     return this.status();
+  }
+
+  /** The match next to the other typed words: in the hit's block when they
+   *  are there, else anywhere in the document; -1 when they are nowhere. */
+  private nearOthers(near: Node | null, others: string[], caseSensitive: boolean): number {
+    const has = (el: Node) => {
+      const t = caseSensitive ? el.textContent ?? '' : (el.textContent ?? '').toLowerCase();
+      return others.some((w) => t.includes(caseSensitive ? w : w.toLowerCase()));
+    };
+    const scope = near?.isConnected && has(near) && this.ranges.some((r) => near.contains(r.startContainer)) ? near : this.root;
+    const cands: number[] = [];
+    const offsets: number[] = [];
+    const span = document.createRange();
+    for (let i = 0; i < this.ranges.length && cands.length < 500; i++) {
+      const r = this.ranges[i]!;
+      if (!scope.contains(r.startContainer)) continue;
+      try {
+        span.setStart(scope, 0);
+        span.setEnd(r.startContainer, r.startOffset);
+      } catch { continue; }
+      cands.push(i);
+      offsets.push(span.toString().length);
+    }
+    const best = nearestToOthers(scope.textContent ?? '', offsets, others, caseSensitive);
+    return best >= 0 ? cands[best]! : -1;
   }
 
   /** The DOM changed: the next run re-walks it. */

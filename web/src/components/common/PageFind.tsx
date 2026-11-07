@@ -27,6 +27,7 @@ import {
   FIND_DOC_ATTR, PAGE_FIND_REQUEST, docAround, docLabel, docShows, engineFor, engineKindFor, primaryDoc, regionAround, scrollerOf,
   type FindEngine, type PageFindRequest,
 } from '@/utils/find-doc';
+import { otherWords } from '@/utils/find-near-words';
 import { log } from '@/utils/log';
 import '@/styles/page-find.css';
 
@@ -78,6 +79,9 @@ function canTakeFocus(el: HTMLElement | null): el is HTMLElement {
   return !!el && el.isConnected && el.getClientRects().length > 0;
 }
 
+/** The frame of a searched document while the bar is open over it. */
+const STRIP_CLASS = 'page-find-strip';
+
 function frameOf(scope: Scope): Element {
   return scope.kind === 'doc' ? scrollerOf(scope.root) : scope.root;
 }
@@ -100,7 +104,9 @@ function barPosition(scope: Scope): { top: number; right: number } {
   const header = scope.root.closest('.session-panel')?.querySelector('.session-panel-header');
   const hb = header?.getBoundingClientRect();
   const under = hb && hb.bottom > r.top && hb.top < r.top + 160 ? hb.bottom : r.top;
-  return { top: Math.max(8, under + 6), right: Math.max(8, window.innerWidth - r.right + 18) };
+  // A document's bar sits in its strip (STRIP_CLASS), above the text.
+  const gap = scope.kind === 'doc' ? 4 : 6;
+  return { top: Math.max(8, under + gap), right: Math.max(8, window.innerWidth - r.right + 18) };
 }
 
 export function PageFind() {
@@ -154,8 +160,20 @@ export function PageFind() {
   // gives back is not pulled into a field about to go.
   const releaseHoldRef = useRef<(() => void) | null>(null);
 
+  // A document's bar sits in a strip of its own above the text (STRIP_CLASS),
+  // never over the note's first lines (2026-11-07: it covered the top right).
+  const stripRef = useRef<Element | null>(null);
+  const reserveStrip = useCallback((frame: Element | null) => {
+    if (stripRef.current === frame) return;
+    stripRef.current?.classList.remove(STRIP_CLASS);
+    frame?.classList.add(STRIP_CLASS);
+    stripRef.current = frame;
+  }, []);
+  useEffect(() => () => reserveStrip(null), [reserveStrip]);
+
   const close = useCallback((opts: { restore?: boolean } = {}) => {
     releaseHoldRef.current?.();
+    reserveStrip(null);
     ctrlRef.current?.close();
     ctrlRef.current = null;
     setOpen(false);
@@ -172,17 +190,19 @@ export function PageFind() {
       back = root ? editableIn(root) : null;
     }
     if (back?.isConnected) back.focus({ preventScroll: true });
-  }, []);
+  }, [reserveStrip]);
 
   /** Search `next` from now on (a new engine only for a new root). */
   const applyScope = useCallback((next: Scope) => {
+    // Before the engine reveals a match, so it lands below the strip.
+    reserveStrip(next.kind === 'doc' ? frameOf(next) : null);
     if (ctrlRef.current?.root !== next.root) {
       ctrlRef.current?.close();
       ctrlRef.current = engineFor(next.root, next.kind, beforeScroll);
     }
     setScope(next);
     setPos(barPosition(next));
-  }, []);
+  }, [reserveStrip]);
 
   const openFind = useCallback(() => {
     const active = document.activeElement as HTMLElement | null;
@@ -268,7 +288,9 @@ export function PageFind() {
       // the search marked); none: the typed words, counting "No results".
       const q = queries.find((x) => ctrl.setQuery(x, cs).count > 0) ?? queries[0] ?? '';
       // Counted here, so the debounced count below finds it done and keeps the pick.
-      setStatus(ctrl.setQueryNear(q, cs, req.near ?? null, req.context));
+      // The typed words were not found as typed: the copy next to the rest of them.
+      const others = q === queries[0] ? [] : otherWords(queries[0] ?? '', q);
+      setStatus(ctrl.setQueryNear(q, cs, req.near ?? null, req.context, others));
       setQuery(q);
       setOpen(true);
       // The field takes the keys (Enter = next match, never a newline in the note).

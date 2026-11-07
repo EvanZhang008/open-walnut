@@ -77,6 +77,24 @@ function kiteBody(): string {
   ].join('\n')
 }
 
+const heronNote = () => `${tag()}-heron-log`
+/** Three copies of "heron" in ONE short paragraph, so a search hit's snippet
+ *  marks all of them: only the last is next to "marsh". */
+const HERON_LINE = 'A heron by the gate, a heron on the roof and a heron over the marsh at dusk.'
+function heronBody(): string {
+  return ['# Heron log', '', ...padding(30, 500).flatMap((p) => [p, '']), HERON_LINE, '', ...padding(5, 600).flatMap((p) => [p, ''])].join('\n')
+}
+
+/** The bar and the first pixel of the note's own text: the bar must end above it. */
+function barAndText(page: Page) {
+  return page.evaluate(() => {
+    const bar = document.querySelector('.page-find')!.getBoundingClientRect()
+    const frame = document.querySelector('.notes-editor-pane .notes-editor-content')!
+    const top = frame.getBoundingClientRect().top + parseFloat(getComputedStyle(frame).borderTopWidth)
+    return { barBottom: bar.bottom, textTop: top }
+  })
+}
+
 async function put(page: Page, name: string, content: string): Promise<void> {
   const res = await page.request.put(`/api/notes-v2/content/${name}.md`, { data: { content } })
   expect(res.ok(), await res.text()).toBe(true)
@@ -89,8 +107,13 @@ async function openNotes(page: Page, opts: { scratchpad?: boolean } = {}): Promi
     // Home's Scratchpad with words in it: its editor stays mounted, hidden,
     // ahead of the note in the document while Notes is open.
     const pad = page.locator('.global-notes-section .tiptap')
-    if (!(await pad.isVisible())) await page.getByRole('button', { name: 'Scratchpad' }).first().click()
-    await expect(pad).toBeVisible({ timeout: 20_000 })
+    // The rail's Scratchpad button toggles it; a layout another spec left on the
+    // shared fixture server can start it open, closed, or still loading.
+    await expect(page.getByRole('button', { name: 'Scratchpad', exact: true })).toBeVisible({ timeout: 20_000 })
+    await expect(async () => {
+      if (!(await pad.isVisible())) await page.getByRole('button', { name: 'Scratchpad', exact: true }).click()
+      await expect(pad).toBeVisible({ timeout: 3_000 })
+    }).toPass({ timeout: 20_000 })
     await pad.click()
     await page.keyboard.type(' scratch words', { delay: 10 })
   }
@@ -173,6 +196,7 @@ test.beforeEach(async ({ page }) => {
   await put(page, mainNote(), ledgerBody())
   await put(page, sideNote(), 'Nothing to see here.')
   await put(page, kiteNote(), kiteBody())
+  await put(page, heronNote(), heronBody())
 })
 
 test('Cmd+F in a note counts, paints and steps through the note only', async ({ page }) => {
@@ -417,6 +441,54 @@ test('a Notes search hit for a note open in its raw view chooses the hit\'s copy
   await expect(page.locator('.notes-raw-view .cm-line', { has: page.locator('.cm-searchMatch-selected') })).toContainText('violet kite drifted')
   await expect(findInput(page)).toBeFocused()
   await shot(page, 'raw-from-search')
+})
+
+test('a hit for several words chooses the copy next to the other words, and the bar covers none of the note', async ({ page }) => {
+  await openNotes(page)
+  const input = page.locator('.notes-search-input').first()
+  const openHit = async () => {
+    await input.click()
+    await input.fill('')
+    await input.fill('marsh heron')
+    const hit = page.locator('.notes-search-results .notes-search-result', { hasText: 'heron' })
+    await expect(hit.first()).toBeVisible({ timeout: 20_000 })
+    await hit.first().click()
+    await expect(findInput(page)).toHaveValue('heron', { timeout: 10_000 })
+  }
+  await openHit()
+  await expect(page.locator(NOTE)).toContainText('Heron log', { timeout: 20_000 })
+  // Its snippet marks the paragraph's three herons (the title holds a fourth);
+  // the one beside "marsh" is the last.
+  await expect(label(page)).toHaveText('4/4')
+  await expect.poll(async () => (await activeMatch(page))?.offset).toBe(HERON_LINE.indexOf('heron over'))
+  await expect.poll(async () => (await activeMatch(page))?.inView).toBe(true)
+  // The bar sits in a strip above the text, not over it.
+  const r = await barAndText(page)
+  expect(r.barBottom).toBeLessThanOrEqual(r.textTop)
+  await shot(page, 'heron-rendered')
+  // Closing gives the strip back.
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.page-find')).toHaveCount(0)
+  expect(await page.locator('.notes-editor-pane .notes-editor-content').evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('0px')
+
+  // The raw view: the same copy, in the source.
+  await page.locator('.notes-raw-toggle-btn').click()
+  await expect(page.locator('.notes-raw-view .cm-content')).toBeVisible()
+  await openHit()
+  await expect(label(page)).toHaveText('4/4')
+  await expect.poll(() => page.locator('.notes-raw-view .cm-searchMatch-selected').evaluate((el) => {
+    // The text right after the chosen match, across CodeMirror's spans.
+    const line = el.closest('.cm-line')!
+    const all = (line as HTMLElement).innerText
+    const before = document.createRange()
+    before.setStart(line, 0)
+    before.setEndAfter(el)
+    return all.slice(before.toString().length, before.toString().length + 10)
+  })).toBe(' over the ')
+  const raw = await barAndText(page)
+  expect(raw.barBottom).toBeLessThanOrEqual(raw.textTop)
+  await shot(page, 'heron-raw')
+  await page.locator('.notes-raw-toggle-btn').click()
 })
 
 test('a word selected in the note fills the bar', async ({ page }) => {

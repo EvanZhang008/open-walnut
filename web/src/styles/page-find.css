@@ -14,4 +14,12 @@
 }
 .page-find .fv-search-input { flex: 0 1 220px; }
 
+/* A document's frame while the bar is open over it: the bar sits in this strip
+   (PageFind barPosition), so it covers none of the document's own text. A
+   border, not padding, because the frame is its own scroller: padding would
+   scroll away with the text. */
+.page-find-strip {
+  border-top: var(--page-find-strip, 46px) solid transparent !important;
+}
+
 /* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
