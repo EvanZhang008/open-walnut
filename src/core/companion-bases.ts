@@ -19,7 +19,7 @@ import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
-import { sqliteFileGone } from '../lib/sqlite-wiped.js'
+import { reopenIfWiped } from '../lib/sqlite-wiped.js'
 import { log } from '../logging/index.js'
 
 export function companionBasesPath(): string {
@@ -34,24 +34,32 @@ const MEMORY_MAX = 5_000
 
 function open(): DatabaseType | null {
   if (db) {
-    // A test wiped the data home under the handle; it would still serve that test's rows.
-    if (!sqliteFileGone(companionBasesPath())) return db
-    try { db.close() } catch { /* reopened below */ }
-    db = null
+    db = reopenIfWiped(companionBasesPath(), db, openBases, (old) => old.close())
+    return db
   }
   if (failed) return null
   try {
-    fs.mkdirSync(path.dirname(companionBasesPath()), { recursive: true })
-    const d = new Database(companionBasesPath())
-    d.pragma('journal_mode = WAL')
-    d.pragma('busy_timeout = 2000')
-    d.exec('CREATE TABLE IF NOT EXISTS bases (id TEXT PRIMARY KEY, row TEXT NOT NULL, at INTEGER NOT NULL)')
-    db = d
-    return d
+    db = openBases()
+    return db
   } catch (err) {
     failed = true
     log.task.warn('companion bases: the store could not be opened, bases are kept in memory until a restart', { err: String(err) })
     return null
+  }
+}
+
+/** Open the store (open, and a test's reopen after a wipe). */
+function openBases(): DatabaseType {
+  fs.mkdirSync(path.dirname(companionBasesPath()), { recursive: true })
+  const d = new Database(companionBasesPath())
+  try {
+    d.pragma('journal_mode = WAL')
+    d.pragma('busy_timeout = 2000')
+    d.exec('CREATE TABLE IF NOT EXISTS bases (id TEXT PRIMARY KEY, row TEXT NOT NULL, at INTEGER NOT NULL)')
+    return d
+  } catch (err) {
+    try { d.close() } catch { /* the open failed anyway */ }
+    throw err
   }
 }
 

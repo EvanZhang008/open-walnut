@@ -21,7 +21,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
-import { sqliteFileGone } from '../lib/sqlite-wiped.js';
+import { reopenIfWiped } from '../lib/sqlite-wiped.js';
 import type { SessionRecord } from './types.js';
 
 /** SQLite file path. Sits next to the legacy sessions.json in WALNUT_HOME. */
@@ -174,16 +174,28 @@ export function dbGeneration(): number {
  */
 export function getDb(): DatabaseType | null {
   if (db) {
-    // A test wiped the data home under the handle; it would still serve that test's rows.
-    if (!sqliteFileGone(SESSION_DB_PATH)) return db;
-    closeDb();
+    const live = reopenIfWiped(SESSION_DB_PATH, db, openShared, closeShared);
+    if (live !== db) { db = live; generation += 1; }
+    return db;
   }
   if (initAttempted) throw initError; // previous open failed; rethrow the real cause (no hot-loop retry)
   initAttempted = true;
-
   try {
-    fs.mkdirSync(path.dirname(SESSION_DB_PATH), { recursive: true });
-    const handle = new Database(SESSION_DB_PATH);
+    db = openShared();
+    generation += 1;
+    return db;
+  } catch (err) {
+    initError = err;
+    log.session.error('session-db open failed', { path: SESSION_DB_PATH, err: String(err) });
+    throw err;
+  }
+}
+
+/** Open and initialize the shared handle (getDb, and a test's reopen after a wipe). */
+function openShared(): DatabaseType {
+  fs.mkdirSync(path.dirname(SESSION_DB_PATH), { recursive: true });
+  const handle = new Database(SESSION_DB_PATH);
+  try {
     handle.pragma('journal_mode = WAL');
     handle.pragma('busy_timeout = 5000');
     // See task-db.ts for the wal_autocheckpoint rationale — on-stop/on-compact
@@ -213,16 +225,22 @@ export function getDb(): DatabaseType | null {
 
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
     guardCopyHandle(handle, 'sessions');
-    db = handle;
-    generation += 1;
     log.session.info('session-db opened', { path: SESSION_DB_PATH });
     log.session.info('session-db: WAL checkpoint on open', { result: checkpoint });
-    return db;
+    return handle;
   } catch (err) {
-    initError = err;
-    log.session.error('session-db open failed', { path: SESSION_DB_PATH, err: String(err) });
+    try { handle.close(); } catch { /* the open failed anyway */ }
     throw err;
   }
+}
+
+/** Close a shared handle a test's wipe replaced, with the apply connection on its file. */
+function closeShared(old: DatabaseType): void {
+  if (applyHandle) {
+    try { applyHandle.close(); } catch { /* replaced anyway */ }
+    applyHandle = null;
+  }
+  old.close();
 }
 
 /** The follower apply connection of this store on a host replica (replica/copy-guard.ts). */

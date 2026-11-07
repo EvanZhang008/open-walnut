@@ -14,7 +14,7 @@ import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
-import { sqliteFileGone } from '../../lib/sqlite-wiped.js'
+import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 
 export function placesDir(): string {
   return path.join(WALNUT_HOME, 'places')
@@ -77,10 +77,15 @@ export function placesStoreExists(): boolean {
 export function getPlacesDb(): DatabaseType {
   if (CLOUD_MODE) throw new PlacesStoreUnavailable('places live on the primary box only')
   if (db) {
-    // A test wiped the data home under the handle; it would still serve that test's rows.
-    if (!sqliteFileGone(placesDbPath())) return db
-    closePlacesDb()
+    db = reopenIfWiped(placesDbPath(), db, openPlacesDb, (old) => old.close())
+    return db
   }
+  db = openPlacesDb()
+  return db
+}
+
+/** Open and initialize the store (getPlacesDb, and a test's reopen after a wipe). */
+function openPlacesDb(): DatabaseType {
   fs.mkdirSync(placesDir(), { recursive: true, mode: 0o700 })
   const handle = new Database(placesDbPath())
   handle.pragma('journal_mode = WAL')
@@ -90,7 +95,6 @@ export function getPlacesDb(): DatabaseType {
   handle.pragma('secure_delete = ON')
   handle.exec(SCHEMA)
   try { fs.chmodSync(placesDbPath(), 0o600) } catch { /* best effort */ }
-  db = handle
   return handle
 }
 

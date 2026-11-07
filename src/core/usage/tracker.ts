@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { computeCost } from './pricing.js';
 import { log } from '../../logging/index.js';
-import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
+import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
 import type { RecordParams, UsageRecord, UsageSummary, DailyCost, UsageByGroup, UsagePeriod, UsageFilter, UsageOverview } from './types.js';
 
 /**
@@ -42,18 +42,22 @@ export class UsageTracker {
   /** Lazily open and initialize the database. */
   private getDb(): DatabaseType {
     if (this.db) {
-      // A test wiped the data home under the handle; it would still serve that test's rows.
-      if (!sqliteFileGone(this.dbPath)) return this.db;
-      this.close();
+      this.db = reopenIfWiped(this.dbPath, this.db, () => this.openFresh(), (old) => old.close());
+      return this.db;
     }
+    this.db = this.openFresh();
+    return this.db;
+  }
 
+  /** Open and initialize the database file (getDb, and a test's reopen after a wipe). */
+  private openFresh(): DatabaseType {
     fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
 
-    this.db = new Database(this.dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('busy_timeout = 5000');
+    const db = new Database(this.dbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
 
-    this.db.exec(`
+    db.exec(`
       CREATE TABLE IF NOT EXISTS usage (
         id TEXT PRIMARY KEY,
         timestamp TEXT NOT NULL,
@@ -78,18 +82,18 @@ export class UsageTracker {
     `);
 
     // Idempotent migration: add parent_source column for existing databases
-    try { this.db.exec('ALTER TABLE usage ADD COLUMN parent_source TEXT'); } catch { /* column already exists */ }
+    try { db.exec('ALTER TABLE usage ADD COLUMN parent_source TEXT'); } catch { /* column already exists */ }
     // Idempotent migration: add agent_id so spend is attributable per agent (the "By Agent"
     // dashboard view). Old rows have NULL agent_id → surfaced as "unknown".
-    try { this.db.exec('ALTER TABLE usage ADD COLUMN agent_id TEXT'); } catch { /* column already exists */ }
+    try { db.exec('ALTER TABLE usage ADD COLUMN agent_id TEXT'); } catch { /* column already exists */ }
     // Idempotent migration: per-turn speed for CLI session rows (Walnut-side timing).
     // ttft_ms = turn start → first content delta; generation_ms = summed per-message
     // message_start → message_stop windows (tool runs excluded), so
     // output_tokens / generation_ms is the model's decode speed.
-    try { this.db.exec('ALTER TABLE usage ADD COLUMN ttft_ms INTEGER'); } catch { /* column already exists */ }
-    try { this.db.exec('ALTER TABLE usage ADD COLUMN generation_ms INTEGER'); } catch { /* column already exists */ }
+    try { db.exec('ALTER TABLE usage ADD COLUMN ttft_ms INTEGER'); } catch { /* column already exists */ }
+    try { db.exec('ALTER TABLE usage ADD COLUMN generation_ms INTEGER'); } catch { /* column already exists */ }
 
-    return this.db;
+    return db;
   }
 
   /**

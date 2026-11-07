@@ -6,13 +6,18 @@
  * and wrote the previous test's rows through it (2026-11-07: in
  * tests/web/routes/api-v1-session-lifecycle.test.ts a stop one test left pending was retried
  * 5 s later inside a later test, and that test's fake daemon received it). Each store now
- * asks `sqliteFileGone` (src/lib/sqlite-wiped.ts) before reusing its handle, and the session
- * and task caches carry the handle's generation, since a reopened handle starts its own
+ * hands its handle out through `reopenIfWiped` (src/lib/sqlite-wiped.ts), and the session and
+ * task caches carry the handle's generation, since a reopened handle starts its own
  * `data_version` count.
  *
+ * The reopen opens the fresh handle first and closes the old one only once that worked: a write
+ * that ends while a test's afterEach is still removing the home must not trade a working handle
+ * for a failed open (2026-11-07: closing first left the store failed, and four later tests of
+ * tests/providers/turn-speed-edges.test.ts failed with "unable to open database file").
+ *
  * The last block is the class guard: every module that opens a SQLite file is listed here,
- * either as one that keeps a handle (and whose getter must ask `sqliteFileGone`) or as exempt
- * with the reason. A new `new Database(` fails until it is listed.
+ * either as one that keeps a handle (and whose getter must go through `reopenIfWiped`) or as
+ * exempt with the reason. A new `new Database(` fails until it is listed.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
@@ -31,6 +36,7 @@ import { addTask, getTask, listTasks } from '../../src/core/task-manager.js'
 import { dbGeneration as sessionDbGeneration } from '../../src/core/session-db.js'
 import { dbGeneration as taskDbGeneration } from '../../src/core/task-db.js'
 import { SessionStopCoordinator, type SessionStopConnection } from '../../src/core/sessions/session-stop.js'
+import { reopenIfWiped } from '../../src/lib/sqlite-wiped.js'
 
 /** What the tests in this repo do between cases. */
 async function wipeHome(): Promise<void> {
@@ -107,6 +113,73 @@ describe('a wiped data home', () => {
   })
 })
 
+describe('a store reached while the wipe is still going on', () => {
+  it('keeps the handle it has when a fresh open fails, and opens afresh once the home is back', async () => {
+    await createSessionRecord('race-s1', 'task-r1', 'proj', '/tmp', { initialProcessStatus: 'stopped' })
+    const { task } = await addTask({ title: 'Race probe' })
+    const sessionGen = sessionDbGeneration()
+    const taskGen = taskDbGeneration()
+
+    // The step between the rm and the reopen, made deterministic: the files are gone and no
+    // folder can be made where the home was, so every fresh open fails.
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
+    await fsp.writeFile(WALNUT_HOME, 'not a folder')
+
+    // The handles there were serve on, and the stores are not left failed.
+    expect((await getSessionByClaudeId('race-s1'))?.claudeSessionId).toBe('race-s1')
+    expect((await getTask(task.id)).id).toBe(task.id)
+    expect(sessionDbGeneration()).toBe(sessionGen)
+    expect(taskDbGeneration()).toBe(taskGen)
+
+    // The next test's home: both stores open it afresh.
+    await fsp.rm(WALNUT_HOME, { force: true })
+    await fsp.mkdir(WALNUT_HOME, { recursive: true })
+    expect(await getSessionByClaudeId('race-s1')).toBeNull()
+    await expect(getTask(task.id)).rejects.toThrow()
+    expect(sessionDbGeneration()).toBe(sessionGen + 1)
+    expect(taskDbGeneration()).toBe(taskGen + 1)
+  })
+
+  it('opens and recreates nothing once the home is gone (the test is over)', async () => {
+    await createSessionRecord('race-s2', 'task-r2', 'proj', '/tmp', { initialProcessStatus: 'stopped' })
+    const sessionGen = sessionDbGeneration()
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
+
+    expect((await getSessionByClaudeId('race-s2'))?.claudeSessionId).toBe('race-s2')
+    expect(sessionDbGeneration()).toBe(sessionGen)
+    expect(fs.existsSync(WALNUT_HOME)).toBe(false)
+  })
+})
+
+describe('reopenIfWiped', () => {
+  const file = () => path.join(WALNUT_HOME, 'probe.sqlite')
+
+  it('opens the fresh handle before it closes the old one', () => {
+    const steps: string[] = []
+    const got = reopenIfWiped(file(), 'old', () => { steps.push('open'); return 'new' }, (old) => { steps.push(`close ${old}`) })
+    expect(got).toBe('new')
+    expect(steps).toEqual(['open', 'close old'])
+  })
+
+  it('keeps the old handle, unclosed, when the fresh open fails', () => {
+    const steps: string[] = []
+    const got = reopenIfWiped(file(), 'old', () => { steps.push('open'); throw new Error('unable to open database file') }, (old) => { steps.push(`close ${old}`) })
+    expect(got).toBe('old')
+    expect(steps).toEqual(['open'])
+  })
+
+  it('touches nothing while the file is there, or once the home is gone', async () => {
+    const steps: string[] = []
+    const open = () => { steps.push('open'); return 'new' }
+    const close = () => { steps.push('close') }
+    await fsp.writeFile(file(), '')
+    expect(reopenIfWiped(file(), 'old', open, close)).toBe('old')
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
+    expect(reopenIfWiped(file(), 'old', open, close)).toBe('old')
+    expect(steps).toEqual([])
+  })
+})
+
 // ── Class guard ────────────────────────────────────────────────────────────
 
 const REPO = path.resolve(import.meta.dirname, '../..')
@@ -114,8 +187,8 @@ const OPENS_SQLITE = /\bnew Database\(/
 
 /**
  * Modules that open a SQLite file under the data home and keep the handle in a long-lived
- * singleton: the file with the `new Database(` → the module whose getter asks
- * `sqliteFileGone` before reusing the handle (the same file, or the one holding the singleton).
+ * singleton: the file with the `new Database(` → the module whose getter hands the handle out
+ * through `reopenIfWiped` (the same file, or the one holding the singleton).
  */
 const KEEPS_A_HANDLE: Record<string, string> = {
   'src/core/session-db.ts': 'src/core/session-db.ts',
@@ -173,16 +246,22 @@ describe('every SQLite opener under src/ is classified', () => {
     expect(unlisted, [
       'A module opens a SQLite file and is not listed in tests/core/test-home-wipe-isolation.test.ts.',
       'If it keeps the handle in a long-lived singleton on a file under the data home, make its getter',
-      'call sqliteFileGone(path) from src/lib/sqlite-wiped.ts before reusing the handle (close it and',
-      'open again when that says yes), then add it to KEEPS_A_HANDLE. Otherwise add it to EXEMPT with why.',
+      'hand the kept handle out through reopenIfWiped(path, handle, open, close) from src/lib/sqlite-wiped.ts',
+      '(it opens the fresh handle before closing the old one), then add it to KEEPS_A_HANDLE.',
+      'Otherwise add it to EXEMPT with why.',
     ].join(' ')).toEqual([])
   })
 
-  it('each module that keeps a handle asks sqliteFileGone before reusing it', () => {
+  it('each module that keeps a handle reopens it through reopenIfWiped, never by closing first', () => {
     const missing = Object.entries(KEEPS_A_HANDLE)
-      .filter(([, holder]) => !/\bsqliteFileGone\(/.test(fs.readFileSync(path.join(REPO, holder), 'utf8')))
+      .filter(([, holder]) => !/\breopenIfWiped\(/.test(fs.readFileSync(path.join(REPO, holder), 'utf8')))
       .map(([file, holder]) => `${file} (checked in ${holder})`)
     expect(missing).toEqual([])
+    // The close-then-open check this replaced may not come back anywhere.
+    const closeFirst = sourceFiles(path.join(REPO, 'src'))
+      .filter((file) => /\bsqliteFileGone\b/.test(fs.readFileSync(file, 'utf8')))
+      .map((file) => path.relative(REPO, file))
+    expect(closeFirst).toEqual([])
   })
 
   it('no entry outlives its opener', () => {

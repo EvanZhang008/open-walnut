@@ -34,7 +34,7 @@ import { GLOBAL_SKILLS_DIR, IS_EPHEMERAL, MEMORY_DIR, NOTES_DIR, WALNUT_HOME } f
 import { isFollower } from '../server-role.js';
 import { log } from '../../logging/index.js';
 import { utilityQosForkExec } from '../../lib/background-qos.js';
-import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
+import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
 import { createIncrementalQueue, type IncrementalQueue } from './incremental-queue.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
@@ -268,25 +268,37 @@ export function searchV2IndexOpen(): boolean {
 }
 
 export function getSearchV2Index(): SearchIndex {
-  // A test wiped the data home under the handle; it would still serve that test's docs.
-  if (handle && sqliteFileGone(handlePath)) resetSearchV2IndexForTests();
-  if (!handle) {
-    const embedder = buildEmbedderConfig();
-    handleEmbeds = embedder !== undefined;
-    handlePath = searchV2IndexPath();
-    handle = createSearchIndex({
-      dbPath: handlePath,
-      kinds: SEARCH_V2_KIND_WEIGHTS,
-      embedder,
-      logger: (level, msg, data) => log.memory[level](msg, data),
-      onDocChange: (docId) => { for (const listener of docChangeListeners) listener(docId); },
-    });
-    // A version gate emptied doc_vec (embed-model swap or passage-policy bump).
-    // Arm a FULL pass now: the periodic self-heal would otherwise take up to an
-    // hour to notice, during which the semantic lane has no vectors at all.
-    if (handle.vectorsWiped) vectorPass.requireFullPass();
+  if (handle) {
+    const live = reopenIfWiped(handlePath, handle, openSearchIndex, (old) => old.close());
+    if (live === handle) return handle;
+    // A fresh index for a wiped home: its vector pass starts over, as after resetSearchV2IndexForTests.
+    vecPassSaved = false;
+    vectorPass = createVectorPassPlanner();
+    handle = live;
+  } else {
+    handle = openSearchIndex();
   }
+  // A version gate emptied doc_vec (embed-model swap or passage-policy bump).
+  // Arm a FULL pass now: the periodic self-heal would otherwise take up to an
+  // hour to notice, during which the semantic lane has no vectors at all.
+  if (handle.vectorsWiped) vectorPass.requireFullPass();
   return handle;
+}
+
+/** Open the index file (getSearchV2Index, and a test's reopen after a wipe). */
+function openSearchIndex(): SearchIndex {
+  const embedder = buildEmbedderConfig();
+  const dbPath = searchV2IndexPath();
+  const opened = createSearchIndex({
+    dbPath,
+    kinds: SEARCH_V2_KIND_WEIGHTS,
+    embedder,
+    logger: (level, msg, data) => log.memory[level](msg, data),
+    onDocChange: (docId) => { for (const listener of docChangeListeners) listener(docId); },
+  });
+  handleEmbeds = embedder !== undefined;
+  handlePath = dbPath;
+  return opened;
 }
 
 /** Close the index and stop its embedding workers (the companion turning its

@@ -15,7 +15,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
-import { sqliteFileGone } from '../../lib/sqlite-wiped.js'
+import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 import { log } from '../../logging/index.js'
 
 export function healthDir(): string {
@@ -126,10 +126,18 @@ export class HealthStoreUnavailable extends Error {
 export function getHealthDb(): DatabaseType {
   if (CLOUD_MODE) throw new HealthStoreUnavailable('health data lives on the primary box only')
   if (db) {
-    // A test wiped the data home under the handle; it would still serve that test's rows.
-    if (!sqliteFileGone(healthDbPath())) return db
-    closeHealthDb()
+    db = reopenIfWiped(healthDbPath(), db, openHealthDb, (old) => old.close())
+    return db
   }
+  return openHealthDb()
+}
+
+/**
+ * Open and initialize the store (getHealthDb, and a test's reopen after a wipe). It is the
+ * shared handle while its meta checks run, since they read through getHealthDb(); a failed
+ * open puts back the handle there was.
+ */
+function openHealthDb(): DatabaseType {
   fs.mkdirSync(healthDir(), { recursive: true, mode: 0o700 })
   const handle = new Database(healthDbPath())
   handle.pragma('journal_mode = WAL')
@@ -139,13 +147,14 @@ export function getHealthDb(): DatabaseType {
   handle.pragma('secure_delete = ON')
   handle.exec(SCHEMA)
   try { fs.chmodSync(healthDbPath(), 0o600) } catch { /* best effort */ }
+  const prior = db
   db = handle
   try {
     if (!getMeta('storeId')) setMeta('storeId', newStoreId())
     dropSeriesOfAnOlderStore(handle)
   } catch (err) {
     // Not cached half-opened: the next call opens again and runs these checks again.
-    db = null
+    db = prior
     try { handle.close() } catch { /* already closed */ }
     throw err
   }

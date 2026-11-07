@@ -30,7 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database, { type Database as DatabaseType } from '../../lib/sqlite.js';
 import { WALNUT_HOME } from '../../constants.js';
-import { sqliteFileGone } from '../../lib/sqlite-wiped.js';
+import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
 import { log } from '../../logging/index.js';
 
 /** The host a write came through: a daemon's host key, or LOCAL_HOST for this server's own clients. */
@@ -88,14 +88,25 @@ function ledgerFile(): string {
 function open(): DatabaseType | null {
   const file = ledgerFile();
   if (db) {
-    // A test wiped the data home under the handle; it would still serve that test's rows.
-    if (!sqliteFileGone(file)) return db;
-    try { db.close(); } catch { /* reopened below */ }
-    db = null;
+    db = reopenIfWiped(file, db, () => openLedger(file), (old) => old.close());
+    return db;
   }
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const handle = new Database(file);
+    db = openLedger(file);
+    return db;
+  } catch (err) {
+    log.web.error('applied-ops ledger: could not open its file; op ids are remembered in memory until a restart', {
+      file, error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/** Open the ledger file (open, and a test's reopen after a wipe). */
+function openLedger(file: string): DatabaseType {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const handle = new Database(file);
+  try {
     // Answers may name task content: owner-only, like the rest of WALNUT_HOME's caches.
     for (const f of [file, `${file}-wal`, `${file}-shm`]) { try { fs.chmodSync(f, 0o600); } catch { /* not there yet */ } }
     handle.pragma('journal_mode = WAL');
@@ -113,13 +124,10 @@ function open(): DatabaseType | null {
       PRIMARY KEY (host_key, home, minted)
     ) WITHOUT ROWID;`);
     for (const f of [`${file}-wal`, `${file}-shm`]) { try { fs.chmodSync(f, 0o600); } catch { /* not there yet */ } }
-    db = handle;
-    return db;
+    return handle;
   } catch (err) {
-    log.web.error('applied-ops ledger: could not open its file; op ids are remembered in memory until a restart', {
-      file, error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+    try { handle.close(); } catch { /* the open failed anyway */ }
+    throw err;
   }
 }
 

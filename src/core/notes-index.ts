@@ -17,7 +17,7 @@ import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
-import { sqliteFileGone } from '../lib/sqlite-wiped.js'
+import { reopenIfWiped } from '../lib/sqlite-wiped.js'
 import { log } from '../logging/index.js'
 import { bootPolicy } from './boot-policy.js'
 
@@ -158,9 +158,8 @@ END;
  */
 export function getNotesIndexDb(): DatabaseType | null {
   if (db) {
-    // A test wiped the data home under the handle; it would still serve that test's rows.
-    if (!sqliteFileGone(NOTES_INDEX_PATH)) return db
-    closeNotesIndexDb()
+    db = reopenIfWiped(NOTES_INDEX_PATH, db, openNotesIndexDb, (old) => old.close())
+    return db
   }
   if (initAttempted) return db
   initAttempted = true
@@ -168,8 +167,21 @@ export function getNotesIndexDb(): DatabaseType | null {
   // WP6): a notes route there reads as an empty index and never creates the file.
   if (!bootPolicy('notes-indexer')) return null
   try {
-    fs.mkdirSync(path.dirname(NOTES_INDEX_PATH), { recursive: true })
-    const handle = new Database(NOTES_INDEX_PATH)
+    db = openNotesIndexDb()
+    return db
+  } catch (err) {
+    log.memory.error('notes-index: failed to open DB', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
+/** Open and initialize the sidecar (getNotesIndexDb, and a test's reopen after a wipe). */
+function openNotesIndexDb(): DatabaseType {
+  fs.mkdirSync(path.dirname(NOTES_INDEX_PATH), { recursive: true })
+  const handle = new Database(NOTES_INDEX_PATH)
+  try {
     handle.pragma('journal_mode = WAL')
     handle.pragma('busy_timeout = 5000')
     handle.pragma('synchronous = NORMAL')
@@ -181,13 +193,10 @@ export function getNotesIndexDb(): DatabaseType | null {
       .some((c) => c.name === 'headings')
     if (!hasHeadings) handle.exec(`ALTER TABLE notes ADD COLUMN headings TEXT NOT NULL DEFAULT ''`)
     setMeta(handle, 'schema_version', String(NOTES_INDEX_SCHEMA_VERSION))
-    db = handle
-    return db
+    return handle
   } catch (err) {
-    log.memory.error('notes-index: failed to open DB', {
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
+    try { handle.close() } catch { /* the open failed anyway */ }
+    throw err
   }
 }
 
