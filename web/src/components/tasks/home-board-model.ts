@@ -6,6 +6,8 @@ import type { CustomTierDef } from '@/api/focus';
 import { resolveParentRef } from './task-tree-index';
 
 export type HomeBoardMode = 'pin' | 'status';
+/** The board's top switch: a column board, or the Sort cards (QuickSortView). */
+export type HomeBoardView = HomeBoardMode | 'sort';
 export interface BoardFamily { task: Task; children: BoardFamily[]; parent?: Task }
 export interface BoardProject { key: string; label: string; count: number; families: BoardFamily[] }
 export interface HomeBoardColumn { id: string; label: string; count: number; projects: BoardProject[] }

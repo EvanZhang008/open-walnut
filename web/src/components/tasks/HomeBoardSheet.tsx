@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, pointerWithin, rectIntersection, type CollisionDetection, type DragEndEvent, type Modifier } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
 import { shownState } from '@open-walnut/user-status';
+import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -11,11 +12,14 @@ import { usePageView } from '@/utils/view-memory';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { ICON_CLOSE, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
-import { boardMoveIds, buildHomeBoard, homeBoardTier, type BoardFamily, type HomeBoardColumn, type HomeBoardMode } from './home-board-model';
+import { QuickSortView } from './QuickSortView';
+import { SnoozeDateFlyout, SnoozeRows } from './SnoozeChoices';
+import { isSnoozed, snoozeUntilText } from './quick-sort-model';
+import { boardMoveIds, buildHomeBoard, homeBoardTier, type BoardFamily, type HomeBoardColumn, type HomeBoardMode, type HomeBoardView } from './home-board-model';
 import '@/styles/home-board.css';
 
-function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, tierLabel, moving }: {
-  family: BoardFamily; mode: HomeBoardMode; onOpen: (task: Task) => void;
+function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
+  family: BoardFamily; mode: HomeBoardMode; onOpen: (task: Task) => void; snoozed: (task: Task) => boolean;
   onMove: (task: Task, origin: HTMLElement) => void; depth?: number; tierLabel: (task: Task) => string;
   folded: readonly string[]; onFold: (id: string) => void; moving: boolean;
 }) {
@@ -23,6 +27,7 @@ function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, ti
   const state = shownState(taskUserState(task));
   const drag = useDraggable({ id: task.id, data: { family }, disabled: mode !== 'pin' || moving });
   const closed = folded.includes(task.id);
+  const until = task.start_date && snoozed(task) ? snoozeUntilText(task.start_date) : '';
   return <article ref={drag.setNodeRef} className={`home-board-card${depth ? ' home-board-child' : ''}${drag.isDragging ? ' is-dragging' : ''}`} data-board-task={task.id} data-state={state} data-draggable={mode === 'pin' && !moving} onPointerDown={e => {
     const target = e.target as Element;
     if (e.pointerType !== 'mouse' || target.closest('[data-board-task]') !== e.currentTarget || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
@@ -33,12 +38,13 @@ function BoardTask({ family, mode, onOpen, onMove, depth = 0, folded, onFold, ti
       {mode === 'pin' && <button ref={drag.setActivatorNodeRef} type="button" className="home-board-drag" disabled={moving} aria-label={`Drag ${task.title}`} title="Drag to another pin tier" {...drag.attributes} {...drag.listeners}>⠿</button>}
     </div>
     <div className="home-board-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(task)}</span>{mode === 'status' && <span>{tierLabel(task)}</span>}
+      {until && <span className="home-board-snoozed" data-board-snoozed>Snoozed until {until}</span>}
       {mode === 'pin' && <button type="button" disabled={moving} aria-label={`Move ${task.title} to pin tier`} onClick={e => onMove(task, e.currentTarget)}>Move</button>}
     </div>
     {!depth && parent && <div className="home-board-parent" title={parent.title}>Under {parent.title}</div>}
     {children.length > 0 && <div className="home-board-family">
       <button type="button" className="home-board-family-toggle" aria-expanded={!closed} aria-label={`Subtasks of ${task.title}`} onClick={() => onFold(task.id)}>{closed ? ICON_CHEVRON_RIGHT : ICON_CHEVRON_DOWN}{children.length} {children.length === 1 ? 'subtask' : 'subtasks'}</button>
-      {!closed && children.map(child => <BoardTask key={child.task.id} family={child} mode={mode} onOpen={onOpen} onMove={onMove} depth={depth + 1} folded={folded} onFold={onFold} tierLabel={tierLabel} moving={moving} />)}
+      {!closed && children.map(child => <BoardTask key={child.task.id} family={child} mode={mode} onOpen={onOpen} onMove={onMove} depth={depth + 1} folded={folded} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozed} />)}
     </div>}
   </article>;
 }
@@ -59,10 +65,10 @@ function BoardColumn({ column, mode, doneLimit, onMoreDone, ...props }: { column
 }
 
 export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => void }) {
-  const { tasks, loading, error, refetch, ensureAllTasks, completedHidden } = useTasksContext();
+  const { tasks, loading, error, refetch, ensureAllTasks, completedHidden, update, setPhase } = useTasksContext();
   const focus = useFocusBarContext();
   const fullscreen = useFullscreen({ keepAcrossRoutes: true, place: 'home-board|tasks' });
-  const [mode, setMode] = usePageView<HomeBoardMode>('home-board', 'group', 'pin', (v): v is HomeBoardMode => v === 'pin' || v === 'status');
+  const [mode, setMode] = usePageView<HomeBoardView>('home-board', 'group', 'pin', (v): v is HomeBoardView => v === 'pin' || v === 'status' || v === 'sort');
   const [folded, setFolded] = usePageView<string[]>('home-board', 'folded', [], (v): v is string[] => Array.isArray(v) && v.every(s => typeof s === 'string'));
   const [query, setQuery] = useState('');
   const [searchFold, setSearchFold] = useState<{ query: string; ids: string[] }>({ query: '', ids: [] });
@@ -81,6 +87,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   const [doneLimit, setDoneLimit] = useState(30);
   const shown = useContext(RouteShownContext) ?? true;
   const picker = useCursorFlyout<BoardFamily>();
+  const datePicker = useCursorFlyout<Task>();
   const sheetRef = useRef<HTMLElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const keepGrabVisible = useCallback<Modifier>(({ activatorEvent, activeNodeRect, transform }) => {
@@ -136,7 +143,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     const labels: Record<string, string> = { focus: 'Focus', satellite: 'Satellite', wait: 'Parked', unpinned: 'Unpinned' };
     return focus.customTiers.find(c => c.id === tier)?.label ?? labels[tier] ?? tier;
   };
-  const columns = useMemo(() => fullscreen.isFullscreen ? buildHomeBoard(tasks, focus.customTiers, mode, query, doneLimit) : [], [fullscreen.isFullscreen, tasks, focus.customTiers, mode, query, doneLimit]);
+  const columns = useMemo(() => fullscreen.isFullscreen && mode !== 'sort' ? buildHomeBoard(tasks, focus.customTiers, mode, query, doneLimit) : [], [fullscreen.isFullscreen, tasks, focus.customTiers, mode, query, doneLimit]);
   const families = useMemo(() => {
     const result = new Map<string, BoardFamily>();
     const add = (family: BoardFamily) => { result.set(family.task.id, family); family.children.forEach(add); };
@@ -191,7 +198,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     movedTask.current = null;
     setMoveError(null);
     retryMove.current = null;
-    if (!fullscreen.isFullscreen) { dragCancelled.current = true; setQuery(''); picker.close(); setDragging(null); }
+    if (!fullscreen.isFullscreen) { dragCancelled.current = true; setQuery(''); picker.close(); datePicker.close(); setDragging(null); }
   }, [fullscreen.isFullscreen, mode]);
   useEffect(() => {
     if (shown && fullscreen.isFullscreen && mode === 'pin') return;
@@ -205,7 +212,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
       event.preventDefault();
       document.dispatchEvent(event);
     }
-    picker.close();
+    picker.close(); datePicker.close();
   }, [shown, fullscreen.isFullscreen, mode, dragging]);
   useEffect(() => { setDoneLimit(30); setSearchFold({ query, ids: [] }); }, [query]);
   const sendMove = useCallback((ids: string[], tier: string) => {
@@ -256,7 +263,12 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     else setFolded(toggle);
   };
   useEffect(() => { if (fullscreen.isFullscreen && mode === 'status' && query.trim()) ensureAllTasks(); }, [fullscreen.isFullscreen, mode, query, ensureAllTasks]);
-  const total = columns.filter(c => c.id !== 'done').reduce((n, c) => n + c.count, 0);
+  const byId = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
+  const snoozedNow = useCallback((task: Task) => isSnoozed(task, byId, Date.now()), [byId]);
+  const sortTiers = useMemo(() => [{ id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' }, { id: 'wait', label: 'Parked' }, ...focus.customTiers.map(t => ({ id: t.id, label: t.label })), { id: 'unpinned', label: 'Unpinned' }], [focus.customTiers]);
+  const boardMode: HomeBoardMode = mode === 'status' ? 'status' : 'pin';
+  const snoozeFromMenu = (task: Task, date: string | null) => { update(task.id, { start_date: date ?? '' }); };
+  const total = mode === 'sort' ? tasks.filter(t => !isHiddenFromTaskLists(t) && taskUserState(t) !== 'done').length : columns.filter(c => c.id !== 'done').reduce((n, c) => n + c.count, 0);
   const completed = (columns.find(c => c.id === 'done')?.count ?? 0) + (query.trim() ? 0 : completedHidden);
   if (!fullscreen.isFullscreen) return null;
   return <>{fullscreen.FullscreenBackdrop}{createPortal(<section ref={sheetRef} className={`home-board-sheet${fullscreen.fullscreenClass}`} onPointerDownCapture={e => {
@@ -264,16 +276,16 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
     if (e.isPrimary && e.button === 0 && mode === 'pin' && !moving && (target.closest('.home-board-drag') || (e.pointerType === 'mouse' && target.closest('[data-board-task]') && !target.closest('button, a, input, textarea, select, [contenteditable="true"]')))) pointerHeld.current = true;
   }} onKeyDownCapture={e => {
     if (e.defaultPrevented || (e.key === 'Escape' && dragging)) return;
-    if (e.key === 'Escape' && picker.state) { e.preventDefault(); e.stopPropagation(); picker.close(); return; }
+    if (e.key === 'Escape' && (picker.state || datePicker.state)) { e.preventDefault(); e.stopPropagation(); picker.close(); datePicker.close(); return; }
     if (e.key === 'Escape' && searching) { e.preventDefault(); e.stopPropagation(); setQuery(''); return; }
-    if (e.key !== 'Tab' || picker.state) return;
+    if (e.key !== 'Tab' || picker.state || datePicker.state) return;
     const items = [...(sheetRef.current?.querySelectorAll<HTMLElement>('button, input') ?? [])].filter(el => el.getClientRects().length && !el.hasAttribute('disabled'));
     const current = items.indexOf(document.activeElement as HTMLElement);
     if (e.shiftKey && current <= 0) { e.preventDefault(); items.at(-1)?.focus(); }
     else if (!e.shiftKey && current === items.length - 1) { e.preventDefault(); items[0]?.focus(); }
   }} role="dialog" aria-modal="true" aria-label="Task board" data-testid="home-board" data-mode={mode}>
     <header className="home-board-head"><h1>Board</h1><span className="home-board-count">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
-      <div className="home-board-controls"><div className="home-board-switch" aria-label="Group board"><button type="button" aria-pressed={mode === 'pin'} onClick={() => setMode('pin')}>By pin</button><button type="button" aria-pressed={mode === 'status'} onClick={() => setMode('status')}>By status</button></div>
+      <div className="home-board-controls"><div className="home-board-switch" aria-label="Group board"><button type="button" aria-pressed={mode === 'pin'} onClick={() => setMode('pin')}>By pin</button><button type="button" aria-pressed={mode === 'status'} onClick={() => setMode('status')}>By status</button><button type="button" aria-pressed={mode === 'sort'} onClick={() => setMode('sort')} title="Decide a few tasks at a time, one tap each">Sort</button></div>
         <input data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} onChange={e => setQuery(e.target.value)} />
         <button type="button" className="home-board-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
       </div>
@@ -282,11 +294,25 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
       const retry = retryMove.current;
       if (moveError && retry && mode === 'pin') sendMove(retry.ids, retry.tier);
       else refetch();
-    }}>Retry</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier. Subtasks in the same tier move with their leader, across projects.' : 'Grouped by project. Status follows each task’s live state.'}</div>
-    {loading ? <p className="home-board-empty">Loading your tasks…</p> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
-      <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={mode} onOpen={onOpen} onMove={onMove} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
+    }}>Retry</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier, snooze or mark done. Subtasks in the same tier move with their leader, across projects.' : mode === 'sort' ? 'Decide each card in one tap. Keys: 1 to 9 pin tier, S snooze, D done, X skip, ← → pick a card, ⌘Z undo.' : 'Grouped by project. Status follows each task’s live state.'}</div>
+    {loading ? <p className="home-board-empty">Loading your tasks…</p> : mode === 'sort' ? <QuickSortView query={query} tiers={sortTiers} onOpen={onOpen} active={shown} /> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
+      <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={boardMode} onOpen={onOpen} onMove={onMove} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozedNow} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
       <DragOverlay dropAnimation={null} modifiers={previewModifiers} style={{ pointerEvents: 'none' }}>{dragging && <div ref={previewRef} className="home-board-card home-board-drag-preview">{dragging.task.title}</div>}</DragOverlay>
     </DndContext>}
-    {shown && picker.state && <OptionPickerFlyout anchorPoint={picker.state.point} anchorRef={picker.noTrigger} options={columns.map(c => ({ value: c.id, label: c.label }))} current={homeBoardTier(picker.state.payload.task, focus.customTiers)} ariaLabel="Move to pin tier" onPick={tier => move(picker.state!.payload, tier)} onClose={picker.close} />}
+    {shown && picker.state && <OptionPickerFlyout anchorPoint={picker.state.point} anchorRef={picker.noTrigger} options={columns.map(c => ({ value: c.id, label: c.label }))} current={homeBoardTier(picker.state.payload.task, focus.customTiers)} ariaLabel="Move to pin tier" onPick={tier => move(picker.state!.payload, tier)} onClose={picker.close}
+      footer={(() => {
+        const { payload: family, point, origin } = picker.state!;
+        const task = family.task;
+        return <>
+          <SnoozeRows onSnooze={date => { snoozeFromMenu(task, date); picker.close(); }}
+            onPickDate={() => { picker.close(); datePicker.open(task, point, origin); }}
+            onClear={snoozedNow(task) && task.start_date ? () => { snoozeFromMenu(task, null); picker.close(); } : undefined} />
+          <button type="button" className="task-kebab-project-opt snooze-row board-move-done" data-board-done onClick={e => { e.stopPropagation(); setPhase(task.id, 'COMPLETE'); picker.close(); }}>
+            <span className="task-kebab-project-check" /><span className="task-kebab-project-opt-name">Mark done</span>
+          </button>
+        </>;
+      })()} />}
+    {shown && datePicker.state && <SnoozeDateFlyout point={datePicker.state.point} anchorRef={datePicker.noTrigger} date={datePicker.state.payload.start_date}
+      onPick={date => snoozeFromMenu(datePicker.state!.payload, date)} onClose={datePicker.close} />}
   </section>, document.body)}</>;
 }

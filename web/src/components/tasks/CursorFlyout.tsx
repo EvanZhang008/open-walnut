@@ -12,7 +12,7 @@
  * on purpose: the outside-press and scroll closers everywhere already exempt
  * `.task-kebab-project-flyout`, and one look across every picker a menu can open.
  */
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
@@ -87,7 +87,7 @@ export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
 export interface FlyoutOption<V extends string> { value: V; label: string }
 
 /** A short, fixed list (no filter box): the current option carries a check and holds the focus. */
-export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, options, current, ariaLabel, onPick, onClose }: {
+export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, options, current, ariaLabel, onPick, onClose, footer }: {
   anchorPoint: CursorPoint;
   anchorRef: RefObject<HTMLElement | null>;
   options: ReadonlyArray<FlyoutOption<V>>;
@@ -95,6 +95,8 @@ export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, o
   ariaLabel: string;
   onPick: (value: V) => void;
   onClose: () => void;
+  /** More actions under the options (the board's Move menu: its snooze and done rows). */
+  footer?: ReactNode;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(true, anchorRef, listRef, {
@@ -151,6 +153,7 @@ export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, o
           <span className="task-kebab-project-opt-name">{option.label}</span>
         </button>
       ))}
+      {footer && <div className="task-kebab-flyout-footer">{footer}</div>}
     </div>,
     document.body,
   );

@@ -1,0 +1,77 @@
+/* The board's Sort mode (QuickSortView) and the snooze rows of its Move menu (SnoozeChoices). */
+.quick-sort { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding: 14px 18px 18px; border-radius: 0 0 12px 12px; background: var(--bg-secondary); }
+.quick-sort-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.quick-sort-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.quick-sort-chips button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border: 1px solid var(--border); border-radius: 99px; background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; }
+.quick-sort-chips button b { font-variant-numeric: tabular-nums; }
+.quick-sort-chips button[aria-pressed="true"] { border-color: var(--fg); background: var(--fg); color: var(--bg); }
+.quick-sort-scope { font-size: 13px; font-weight: 600; }
+.quick-sort-view { margin-left: auto; }
+.quick-sort-progress { height: 6px; border-radius: 6px; background: var(--border); overflow: hidden; }
+.quick-sort-progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--success, #34c759)); transition: width .25s ease; }
+.quick-sort-progress-text { display: flex; justify-content: space-between; margin-top: -4px; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.quick-sort-error { width: auto; }
+.quick-sort-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; align-items: stretch; }
+.quick-sort-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg); }
+.quick-sort-card.is-current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 18px rgba(0, 122, 255, .14); }
+.quick-sort-card-proj { color: var(--fg-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.quick-sort-card-title { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 15px; font-weight: 600; line-height: 1.4; text-align: left; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+button.quick-sort-card-title { cursor: pointer; }
+button.quick-sort-card-title:hover { color: var(--accent); }
+.quick-sort-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--fg-muted); font-size: 11.5px; }
+.quick-sort-card-line { padding: 6px 8px; border-radius: 8px; background: var(--bg-secondary); color: var(--fg); font-size: 12px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.quick-sort-card-list { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.5; }
+/* The line is clipped with an ellipsis, which would clip an outside list marker: the dot is text. */
+.quick-sort-card-list li { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.quick-sort-card-list li::before { content: '•'; margin-right: 6px; color: var(--fg-muted); }
+.quick-sort-card-list li.more { color: var(--fg-muted); }
+.quick-sort-card-list li.more::before { content: none; }
+.quick-sort-mix { display: flex; height: 7px; border-radius: 6px; overflow: hidden; background: var(--border); }
+.quick-sort-mix i { display: block; min-width: 3px; }
+.quick-sort-mix .tier-focus { background: var(--accent); }
+.quick-sort-mix .tier-satellite { background: var(--tier-satellite, #5856d6); }
+.quick-sort-mix .tier-wait { background: var(--tier-wait, #ff9f0a); }
+.quick-sort-mix .tier-custom { background: var(--tier-custom, #bf5af2); }
+.quick-sort-mix .tier-unpinned { background: var(--fg-muted); opacity: .35; }
+.quick-sort-actions { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+.quick-sort-tiers { display: flex; flex-wrap: wrap; gap: 6px; }
+.quick-sort-tiers .quick-sort-btn { flex: 1 1 28%; }
+.quick-sort-moves { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.quick-sort-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 38px; padding: 5px 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.2; cursor: pointer; overflow-wrap: anywhere; }
+.quick-sort-btn small { font-size: 10px; font-weight: 400; color: var(--fg-muted); }
+.quick-sort-btn:hover { border-color: currentColor; }
+.quick-sort-btn.tier-focus { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.quick-sort-btn.tier-satellite { color: var(--tier-satellite, #5856d6); background: color-mix(in srgb, var(--tier-satellite, #5856d6) 8%, var(--bg)); }
+.quick-sort-btn.tier-wait { color: color-mix(in srgb, var(--tier-wait, #ff9f0a) 75%, var(--fg)); background: color-mix(in srgb, var(--tier-wait, #ff9f0a) 10%, var(--bg)); }
+.quick-sort-btn.tier-custom { color: var(--tier-custom, #bf5af2); background: color-mix(in srgb, var(--tier-custom, #bf5af2) 8%, var(--bg)); }
+.quick-sort-btn.tier-unpinned { color: var(--fg-muted); }
+.quick-sort-btn.is-snooze { background: var(--bg-secondary); }
+.quick-sort-btn.is-done { color: var(--success, #29846b); background: color-mix(in srgb, var(--success, #34c759) 9%, var(--bg)); }
+.quick-sort-btn.is-skip { color: var(--fg-muted); font-weight: 400; }
+.quick-sort-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; font-size: 12.5px; }
+.quick-sort-confirm span { flex: 1 0 100%; }
+.quick-sort-confirm .quick-sort-btn { flex: 1; }
+.quick-sort-empty { padding: 40px 12px; text-align: center; color: var(--fg-muted); }
+.quick-sort-empty h2 { margin: 0 0 6px; color: var(--fg); font-size: 17px; }
+.quick-sort-empty button { margin-top: 10px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-size: 12.5px; }
+.quick-sort-foot { display: flex; flex-direction: column; gap: 8px; }
+.quick-sort-toast { display: flex; align-items: center; gap: 12px; width: max-content; max-width: 100%; padding: 7px 12px; border-radius: 9px; background: var(--fg); color: var(--bg); font-size: 12.5px; }
+.quick-sort-toast span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.quick-sort-toast button { flex: none; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.quick-sort-toast kbd { flex: none; font: 11px ui-monospace, monospace; opacity: .6; }
+.quick-sort-tally { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--fg-muted); }
+.quick-sort-tally span + span { padding: 1px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); }
+.home-board-snoozed { color: var(--fg-muted); }
+/* Snooze rows in a flyout (the board's Move menu, a Sort card's Snooze). */
+.task-kebab-flyout-footer { display: flex; flex-direction: column; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+.snooze-rows { display: flex; flex-direction: column; }
+.snooze-rows-head { padding: 6px 10px 2px 28px; color: var(--fg-muted); font-size: 10.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.snooze-row-hint { margin-left: auto; padding-left: 12px; flex: none; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.board-move-done { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 7px; color: var(--success, #29846b); }
+.snooze-date-flyout { min-width: 260px; max-width: 320px; padding: 4px 8px 8px; }
+.snooze-date-flyout .snooze-rows-head { padding-left: 4px; }
+@media (max-width: 700px) {
+  .quick-sort { padding: 10px; }
+  .quick-sort-cards { grid-template-columns: 1fr; }
+  .quick-sort-view { margin-left: 0; }
+}
