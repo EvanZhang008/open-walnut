@@ -61,6 +61,38 @@ export function isExternalCallerSid(sid: string): boolean {
 }
 
 /**
+ * caller-proof-v1: a daemon that reads the process on its gateway socket (socket-peer-pid.ts)
+ * tells the server whether that process runs inside the session it names, as `callerProof` on the
+ * relayed payload. Only the daemon writes it: whatever a caller put there is dropped first, in
+ * both twins, and the server reads it only from a daemon that advertises this capability.
+ */
+export const CALLER_PROOF_CAPABILITY = 'caller-proof-v1';
+/** The ops whose server side reads the proof: the rest relay as before, with no process lookup. */
+export const CALLER_PROOF_OPS: readonly string[] = ['approval_request', 'approval_consume'];
+
+export interface CallerProof {
+  v: 1
+  /** The asking process descends from the session's own process (its CLI or ACP worker). */
+  verified: boolean
+  pid?: number
+  /** The name of the process that started the asker, and its command line. */
+  process?: string
+  ranBy?: string
+}
+
+/** The payload with no `callerProof` of the caller's own. Pure. */
+export function withoutCallerProof<T extends Record<string, unknown>>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || !('callerProof' in payload)) return payload;
+  const { callerProof: _dropped, ...rest } = payload;
+  return rest as T;
+}
+
+/** Whether this relayed payload is one the daemon checks the asking process for. Pure. */
+export function wantsCallerProof(capability: string, payload: Record<string, unknown> | undefined): boolean {
+  return capability === 'tools.call' && typeof payload?.name === 'string' && CALLER_PROOF_OPS.includes(payload.name);
+}
+
+/**
  * Hard cap on a single NDJSON request line (bytes). Oversized → reject + close.
  *
  * 28MB, not the original 256KB: one `walnut tools call human_inbox_send` is ONE

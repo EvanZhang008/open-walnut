@@ -50,6 +50,7 @@ import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, 
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
+import { CALLER_PROOF_CAPABILITY } from './gateway-core.js'
 import type { SshTarget } from './session-io.js'
 import {
   localDaemon,
@@ -2645,10 +2646,16 @@ export class DaemonConnection {
     try {
       const { handleGatewayCapability } = await import('../core/peers/capability-router.js')
       const [{ withAnswerBy }, { gatewayHubTimeoutMs }] = await Promise.all([import('../lib/answer-by.js'), import('./gateway-core.js')])
+      let body = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : undefined
+      // A daemon too old to read its socket's peer passes on whatever the caller wrote there.
+      if (body && 'callerProof' in body && !this.hasCapability(CALLER_PROOF_CAPABILITY)) {
+        const { callerProof: _dropped, ...rest } = body
+        body = rest
+      }
       const outcome = await withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => handleGatewayCapability(
         capability,
         callerSid,
-        typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : undefined,
+        body,
         this.hostKey,
       // Fresh: this relay's own deadline, never one of a call still running in whose context the link was made.
       ), { fresh: true })

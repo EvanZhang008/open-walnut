@@ -78,6 +78,8 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { descendsFrom, parentName, parseProcessTable, shortProgram } from './caller-proof-core.js'
+import { socketPeerPid, socketPeerPidReady } from './socket-peer-pid.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
@@ -208,8 +210,12 @@ import {
   relayMayResendTo,
   helloReadOps,
   EXTERNAL_CALLER_SID,
+  CALLER_PROOF_CAPABILITY,
   isDaemonCliKeyword,
   isExternalCallerSid,
+  wantsCallerProof,
+  withoutCallerProof,
+  type CallerProof,
   parseGatewayLine,
   resolveGatewayCallerSid,
   SHIM_CORE_BASENAME,
@@ -2528,7 +2534,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
 
 /** What this daemon's hello advertises: also what its serves file records. */
 function helloCapabilities(): string[] {
-  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : [])]
+  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : []), ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : [])]
 }
 
 /** This Walnut's per-Walnut pushes: an older server sends them naming no home. */
@@ -5506,7 +5512,7 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
 }
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
-function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void) {
+function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd?: number) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
@@ -5533,7 +5539,45 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   if (isExternalCallerSid(callerSid)) {
     logMsg('info', 'gateway: external caller (no session env)', { op: req.op })
   }
-  sendGatewayRequest(req.op, callerSid, req.args, respond, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
+  const plan = gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now())
+  // caller-proof-v1: only this daemon writes callerProof. For an approval it reads the process on
+  // the socket now, while the caller still holds it, and tells the server whether it runs inside
+  // the session it names (keep in sync with daemon-source.ts, which sends none).
+  const args = withoutCallerProof(req.args)
+  if (!isExternalCallerSid(callerSid) && wantsCallerProof(req.op, args)) {
+    const peer = socketPeerPid(fd)
+    void gatewayCallerProof(peer, callerSid).then((callerProof) =>
+      sendGatewayRequest(req.op, callerSid, { ...args, callerProof }, respond, plan))
+    return
+  }
+  sendGatewayRequest(req.op, callerSid, args, respond, plan)
+}
+
+/**
+ * Whether the process on the gateway socket (`peer`) runs inside session `sid`: it descends from
+ * the process this daemon runs for that session, its Claude Code CLI or its ACP worker. Never
+ * throws; a peer it could not read, or a session with no live process here, is not verified.
+ */
+async function gatewayCallerProof(peer: number | undefined, sid: string): Promise<CallerProof> {
+  if (!peer) return { v: 1, verified: false }
+  const own = [sessions.get(sid)?.pid, acp.workers.get(sid)?.proc?.pid]
+    .filter((p): p is number => typeof p === 'number' && p > 1 && p !== process.pid)
+  const ps = await new Promise<string | null>((resolve) => {
+    execFile('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 2_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } },
+      (err, stdout) => resolve(err && !stdout ? null : String(stdout ?? '')))
+  })
+  if (!ps) return { v: 1, verified: false, pid: peer }
+  const table = parseProcessTable(ps)
+  const parent = table.get(peer)?.ppid
+  const args = parent && parent > 1 ? await new Promise<string | null>((resolve) => {
+    execFile('ps', ['-o', 'args=', '-p', String(parent)], { timeout: 2_000 }, (err, stdout) => resolve(err ? null : String(stdout ?? '').trim()))
+  }) : null
+  const proc = parentName(table, peer)
+  return {
+    v: 1, verified: own.length > 0 && descendsFrom(table, peer, own), pid: peer,
+    ...(proc ? { process: proc } : {}),
+    ...(args ? { ranBy: shortProgram(args.split('\n')[0]!).slice(0, 300) } : {}),
+  }
 }
 
 /** Second listener: owner-only unix socket, raw NDJSON, one request per conn. */
@@ -5596,7 +5640,7 @@ function startGatewayListener() {
           d.done = true
           const line = Buffer.concat(d.chunks).toString('utf-8')
           d.chunks = []
-          handleGatewayLine(line, (resp) => reply(socket, resp))
+          handleGatewayLine(line, (resp) => reply(socket, resp), socket.fd)
         },
         drain(socket) { pump(socket) },
         error() { /* client went away — pending timer self-cleans */ },

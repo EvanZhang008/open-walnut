@@ -63,7 +63,7 @@ export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
  * trust class the self-call carries (src/lib/caller-origin.ts): the receiving
  * route may LOWER trust on it, never raise it.
  */
-interface CallerProvenance { sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string }
+interface CallerProvenance { sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string; proof?: string }
 
 /**
  * Who is calling, for ops whose server side stamps provenance (the human inbox
@@ -136,6 +136,8 @@ async function rawRequest(
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
         ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
+        // A host daemon's word on the asking process, by a token only this process holds (relay-proof.ts).
+        ...(prov.proof ? { 'x-walnut-caller-proof': prov.proof } : {}),
         // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
         ...(!prov.sid && prov.sender ? { [CALLER_KIND_HEADER]: 'automation', [SENDER_LABEL_HEADER]: prov.sender } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
@@ -242,6 +244,8 @@ export interface ExecuteOpOptions {
   /** Recheck a frozen human plan immediately before each mutation self-call. */
   beforeMutation?: () => Promise<void>
   callerHost?: string
+  /** A relayed caller proof's token (core/approvals/relay-proof.ts): only the gateway relay sets it. */
+  callerProof?: string
   /**
    * REQUIRED: who this call acts for (src/lib/caller-origin.ts). `__local__` only
    * for a caller on this Mac; a gateway call passes its host, a route passes the
@@ -361,6 +365,7 @@ export async function executeOp(
     beforeMutation: options.beforeMutation,
     origin,
     ...(options.sender ? { sender: options.sender } : {}),
+    ...(options.callerProof ? { proof: options.callerProof } : {}),
   }))
 }
 

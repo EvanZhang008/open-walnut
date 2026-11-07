@@ -68,7 +68,7 @@ commands there never count as a session's). The result is the requester's `ident
 |---|---|---|
 | `verified` | the asking process descends from that session's process | "seen inside this task's session" |
 | `unverified`, `check: outside` | Walnut looked, and the asking process is not inside that session (another session's id, a forged one) | "unverified: the asking process is not inside this session" |
-| `unverified`, `check: unchecked` | Walnut could not look: the call came through a host's daemon (a remote host, or a session's Walnut tools on this Mac, which reach Walnut through the daemon's socket), no `lsof`/`ss`, a timeout, or the session has no live process | "not checked: Walnut could not look at the asking process" |
+| `unverified`, `check: unchecked` | Walnut could not look: no `lsof`/`ss`, a timeout, the session has no live process, or the call came through a host daemon too old to say (below) | "not checked: Walnut could not look at the asking process" |
 | `none` | no session named: a cron job, a hand-started script | "Session: unknown", with the host, folder, command, the process that started it and the user |
 
 The match is on the whole connection (both addresses, both ports), so a process that binds the
@@ -78,12 +78,20 @@ session's process. A request that claims a host's relay (`x-walnut-origin: host:
 the server's own self-call is read as the sending process's own ask on this machine, with no
 session.
 
+A call through a host daemon's gateway socket (a remote host, the gateway `walnut` on a session's
+PATH, a session's Walnut tools) is checked by that daemon (`caller-proof-v1`,
+`src/providers/socket-peer-pid.ts`): it reads the process on the other end of its socket from the
+kernel (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux), walks its parents to the CLI or ACP
+worker it runs for that session, and puts its answer on the relayed call as `callerProof`. Only the
+daemon writes it: both daemon builds drop one the caller sent, the server reads it only from a daemon
+that advertises the capability, and the approvals route reads it only by a token the relay made in
+the server's own memory (`src/core/approvals/relay-proof.ts`), never from a header another process
+can send. A daemon too old for it, or one that cannot load libc (the JS build), reads "not checked".
+
 A plain approval asks in every case, the screen saying which. A single-use approval (below) fails
 closed: creating it and spending it (`approval_consume`) each need the asking process seen inside
-its session, checked again on each call, else `403 unverified_session`. That covers a check
-Walnut could not make, so a single-use ask through a daemon's socket (a remote host, or the gateway
-`walnut` on a session's PATH) is refused until the daemon names the process on its end; run it from
-the session's shell with the `walnut` CLI reaching Walnut over HTTP.
+its session, checked again on each call, else `403 unverified_session`, so a check Walnut could not
+make refuses too.
 
 ## Where the ask shows up
 

@@ -16,11 +16,13 @@
  * process whose socket is exactly this connection's client end (both addresses and both ports).
  */
 import { execFile } from 'node:child_process'
+import { MAX_DEPTH, descendsFrom, parentName, parseProcessTable, shortProgram } from '../../providers/caller-proof-core.js'
+
+export { descendsFrom, parentName, parseProcessTable, shortProgram }
 
 export type CallerIdentity = 'verified' | 'unverified' | 'none'
 
 const RUN_MS = 2_000
-const MAX_DEPTH = 40
 
 function run(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
@@ -28,37 +30,6 @@ function run(cmd: string, args: string[]): Promise<string | null> {
       resolve(err && !stdout ? null : String(stdout ?? ''))
     })
   })
-}
-
-/** `ps -axo pid=,ppid=,comm=` as pid -> {ppid, comm}. Pure. */
-export function parseProcessTable(out: string): Map<number, { ppid: number; comm: string }> {
-  const table = new Map<number, { ppid: number; comm: string }>()
-  for (const line of out.split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s*(.*)$/.exec(line)
-    if (m) table.set(Number(m[1]), { ppid: Number(m[2]), comm: m[3]!.trim() })
-  }
-  return table
-}
-
-/** Whether `pid` is `ancestor` or one of its descendants. Pure. */
-export function descendsFrom(table: Map<number, { ppid: number }>, pid: number, ancestors: readonly number[]): boolean {
-  const want = new Set(ancestors.filter((p) => p > 1))
-  if (!want.size) return false
-  let cur = pid
-  for (let i = 0; i < MAX_DEPTH && cur > 1; i++) {
-    if (want.has(cur)) return true
-    const row = table.get(cur)
-    if (!row) return false
-    cur = row.ppid
-  }
-  return false
-}
-
-/** The name of the process that started `pid`, e.g. "python3" for a script's `walnut approve`. Pure. */
-export function parentName(table: Map<number, { ppid: number; comm: string }>, pid: number): string | undefined {
-  const parent = table.get(pid)?.ppid
-  const comm = parent ? table.get(parent)?.comm : undefined
-  return comm ? comm.split('/').pop() : undefined
 }
 
 /** One TCP connection as the server sees it: the client's end, then the server's. */
@@ -159,15 +130,6 @@ export function selfAndAbove(table: Map<number, { ppid: number }>, self: number)
   let cur = self
   for (let i = 0; i < MAX_DEPTH && cur > 1 && !out.has(cur); i++) { out.add(cur); cur = table.get(cur)?.ppid ?? 0 }
   return out
-}
-
-/**
- * A command line with its program named by its file name: `/opt/.../Python release.py wait` reads
- * `Python release.py wait`. A program path with a space in it is left whole. Pure.
- */
-export function shortProgram(line: string): string {
-  const m = /^(\/\S+\/)([^/\s]+)(\s|$)/.exec(line)
-  return m ? line.slice(m[1]!.length) : line
 }
 
 /** The command line of the process that started `pid` (a script's `walnut approve`), cut short. */

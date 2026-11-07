@@ -142,9 +142,25 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
   const local = claimed || (origin === LOCAL_ORIGIN && !header(req, 'x-walnut-caller-host'))
   const notSession = await localDaemonPids()
   if (out.sessionId) {
-    // A host's relay (the remote daemons, and this Mac's own for a session's Walnut tools) is not
-    // checked here yet: the daemon would have to name the process on its socket.
-    if (!local || !conn) { out.identity = 'unverified'; out.check = 'unchecked'; return }
+    // A host's relay (a remote daemon, or this Mac's own for a session's Walnut tools): the daemon
+    // read the process on its gateway socket and said whether it runs inside the session
+    // (caller-proof-v1). Only a token this process made names that word (relay-proof.ts).
+    if (!local) {
+      const { relayProofOf } = await import('../../core/approvals/relay-proof.js')
+      const held = relayProofOf(header(req, 'x-walnut-caller-proof'))
+      if (held && held.sid === out.sessionId) {
+        out.identity = held.proof.verified ? 'verified' : 'unverified'
+        if (!held.proof.verified) out.check = held.proof.pid ? 'outside' : 'unchecked'
+        if (held.proof.process) out.process = held.proof.process
+        if (held.proof.ranBy) {
+          const { redactSensitiveText } = await import('../../logging/redact.js')
+          out.ranBy = redactSensitiveText(held.proof.ranBy)
+        }
+        return
+      }
+      out.identity = 'unverified'; out.check = 'unchecked'; return
+    }
+    if (!conn) { out.identity = 'unverified'; out.check = 'unchecked'; return }
     const seen = await localCallerIdentity({ conn, sessionId: out.sessionId, sessionPids, notSession })
     out.identity = seen.identity
     if (seen.check) out.check = seen.check

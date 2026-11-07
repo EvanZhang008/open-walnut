@@ -263,8 +263,11 @@ async function handleToolsCall(
   const { parseTestRunLabel, testRunMarkingEnabled, withTestRun } = await import('../test-run.js');
   const label = parseTestRunLabel(payload.testRun);
   const testRun = label && await testRunMarkingEnabled() ? label : undefined;
+  // The daemon's word on the asking process (caller-proof-v1), for the approvals route to read.
+  const { holdRelayProof } = await import('../approvals/relay-proof.js');
+  const proofToken = holdRelayProof(payload.callerProof, callerSid, host);
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
-    callerSid, callerHost: host, origin: hostOrigin(host),
+    callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}),
   }));
   if (!r.ok) return err('internal', r.message, r.result === undefined ? undefined : { detail: r.result });
   // GatewayResponse.result must be an object — wrap non-object op results.
