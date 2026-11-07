@@ -83,6 +83,7 @@ import { copyTextRobust } from '@/utils/clipboard';
 import { usePreviewFrame } from '@/components/common/preview-frame';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
+import { useHidesHighlights } from '@/hooks/useHidesHighlights';
 import '@/styles/live-edit.css';
 import '@/styles/file-doc-bar.css';
 
@@ -306,6 +307,9 @@ export function FileContentView({
   const [showSource, setShowSource] = useState(false);
   // Fullscreen the preview (md/html) — CSS-fixed overlay, no remount.
   const [fullscreen, setFullscreen] = useState(false);
+  // Full screen hides the sheet under this one (fullscreen-tab.css) by visibility: its
+  // chat's marks must not paint on this document in WebKit.
+  useHidesHighlights(fullscreen);
   // Media playback speed — applied to the <video>/<audio> element directly.
   const [playbackRate, setPlaybackRate] = useState(1);
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);

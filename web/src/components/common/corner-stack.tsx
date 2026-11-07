@@ -116,7 +116,7 @@ function syncAround(sidebarRight: number, columnRight: number): void {
   // in that same place, over the sheet's backdrop and above the sheet (corner-stack.css), never
   // over its composer (2026-11-06, the user: "no matter if its full screen or this, fix just here
   // at left").
-  const sheet = [...document.querySelectorAll('.open-walnut-fullscreen')].find(shown);
+  const sheet = [...document.querySelectorAll('.open-walnut-fullscreen')].find(sheetShown);
   const center = document.querySelector('.notification-panel');
   const centerOpen = !!center && shown(center);
   // The notification center is the list of every notice: open, it lists the approvals too and opens
@@ -463,6 +463,11 @@ function syncRoom(): void {
  * or the sheet closes.
  */
 let insetSheet: HTMLElement | null = null;
+/** A sheet on show: also one hidden under a sheet opened over it (fullscreen-tab.css), which
+ *  keeps its place and its inset, so leaving the top sheet does not move it. */
+function sheetShown(el: Element): boolean {
+  return shown(el) || el.matches(':has(.file-content-view.fv-fullscreen, .side-question-popover.open-walnut-fullscreen)');
+}
 /** The sheet's left edge as it would be with no inset. */
 function sheetBaseLeft(sheet: Element): number {
   return sheet.getBoundingClientRect().left - cornerSheetInsetOf(sheet);
@@ -473,7 +478,7 @@ function releaseInset(): void {
 }
 function syncSheetInset(): void {
   if (!stack) return;
-  const sheet = [...document.querySelectorAll<HTMLElement>('.open-walnut-fullscreen')].find(shown) ?? null;
+  const sheet = [...document.querySelectorAll<HTMLElement>('.open-walnut-fullscreen')].find(sheetShown) ?? null;
   const parts = [...stack.querySelectorAll('.corner-slot > *')].map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
   if (!sheet || parts.length === 0 || stack.classList.contains('is-tucked')) { releaseInset(); return; }
   if (insetSheet !== sheet) releaseInset();

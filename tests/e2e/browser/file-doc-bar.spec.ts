@@ -220,6 +220,25 @@ test('⋯ holds every rare action as an overlay, and Fullscreen enters and leave
   expect(sheet.x + sheet.width).toBeLessThan(vp.width - 4)
   expect(sheet.y + sheet.height).toBeLessThan(vp.height - 4)
   await expect(page.locator('.fv-fullscreen-backdrop')).toBeVisible()
+  // Round at every corner, like the bottom ones (2026-11-07): the session sheet under
+  // this one is not drawn (in the Mac app its square top corners showed through
+  // ours), and nothing of either sheet paints past a rounded corner.
+  const underSheets = await page.locator('.open-walnut-fullscreen:has(.file-content-view.fv-fullscreen)')
+    .evaluateAll((els) => els.map((el) => getComputedStyle(el).visibility))
+  expect(underSheets.length, 'the session column is a sheet under this one').toBeGreaterThan(0)
+  expect(underSheets.every((v) => v === 'hidden'), 'a sheet under a sheet is not drawn').toBe(true)
+  const pokingOut = await page.evaluate(({ x, y, width, height }) => {
+    const hits: string[] = []
+    for (const [px, py] of [[x + 1.5, y + 1.5], [x + width - 1.5, y + 1.5], [x + 1.5, y + height - 1.5], [x + width - 1.5, y + height - 1.5]]) {
+      for (const el of document.elementsFromPoint(px, py)) {
+        if (!el.closest('.open-walnut-fullscreen, .file-content-view.fv-fullscreen')) continue
+        const cs = getComputedStyle(el)
+        if (cs.visibility !== 'hidden' && !/rgba\([^)]*,\s*0\)|transparent/.test(cs.backgroundColor)) hits.push(`${el.className} at ${Math.round(px)},${Math.round(py)}`)
+      }
+    }
+    return hits
+  }, sheet)
+  expect(pokingOut, 'no painted box of a sheet reaches past its rounded corner').toEqual([])
   const fsDoc = (await page.locator('.fv-fullscreen .ProseMirror').boundingBox())!
   expect(Math.abs(fsDoc.x + fsDoc.width / 2 - (sheet.x + sheet.width / 2))).toBeLessThan(40)
   // The line above the text starts where the text starts.

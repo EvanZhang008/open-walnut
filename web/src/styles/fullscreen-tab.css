@@ -72,3 +72,17 @@ html .file-content-view.fv-fullscreen {
 html .fv-fullscreen-backdrop {
   left: var(--fullscreen-left, 0px);
 }
+/* A sheet opened over a sheet (the Files view's full screen, or the threads sheet,
+   inside a session that is full screen) covers the same area, so the sheet under it
+   is not drawn. Drawn, it showed through the top sheet's rounded corners, and in the
+   Mac app (WebKit, composited) its top corners are square: the top sheet looked
+   square at the top and round at the bottom (2026-11-07, the user: "this corner need
+   all to be sole like bottom"). Its contents stay laid out and keep their state.
+   Each top sheet re-checks the marks it hides when it turns (useHidesHighlights in
+   FileContentView and SideQuestionDrawer). */
+html .open-walnut-fullscreen:has(.file-content-view.fv-fullscreen, .side-question-popover.open-walnut-fullscreen) {
+  visibility: hidden;
+}
+html .open-walnut-fullscreen :is(.file-content-view.fv-fullscreen, .side-question-popover.open-walnut-fullscreen) {
+  visibility: visible;
+}

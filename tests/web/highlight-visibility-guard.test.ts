@@ -135,6 +135,8 @@ const REFRESHES: Record<string, string> = {
   'web/src/styles/globals.css :: .main-page-wrapper-hidden': 'web/src/App.tsx',
   'web/src/styles/task-board.css :: .session-panel-chat-col.is-board-peek > :not(.board-task-peek):not(.peek-tab-bar)': 'web/src/components/sessions/SessionPanel.tsx',
   'web/src/styles/fullscreen-tab.css :: html .open-walnut-fullscreen-away, html .open-walnut-fullscreen-away *': 'web/src/hooks/useFullscreen.tsx',
+  // The sheet under a sheet: the Files view's full screen turns it here; the threads sheet in SideQuestionDrawer.
+  'web/src/styles/fullscreen-tab.css :: html .open-walnut-fullscreen:has(.file-content-view.fv-fullscreen, .side-question-popover.open-walnut-fullscreen)': 'web/src/components/common/FileContentView.tsx',
   'web/src/styles/globals.css :: .session-panel-input:has(.side-question-popover.open-walnut-fullscreen)': 'web/src/components/sessions/SideQuestionDrawer.tsx',
 };
 

@@ -404,6 +404,9 @@
 .file-content-view.fv-fullscreen .sfe-tree-toggle,
 .file-content-view.fv-fullscreen .sfe-nav-group,
 .file-content-view.fv-fullscreen .session-chat-collapse-btn { display: none; }
+/* The line above the document is part of the sheet, so it takes the sheet's colour:
+   the page colour it has in the pane is black in dark mode, against a grey sheet. */
+.file-content-view.fv-fullscreen .fv-doc-bar { background: transparent; }
 .file-content-view.fv-fullscreen .fv-wysiwyg-editor .ProseMirror,
 .file-content-view.fv-fullscreen .fv-md-preview {
   max-width: 780px;
