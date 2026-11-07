@@ -57,7 +57,20 @@ describe('loop-hold tests judge the loop thread CPU, not a wall-clock gap', () =
 })
 
 describe('measureLoopHold', () => {
-  const busy = (ms: number): void => { const end = Date.now() + ms; while (Date.now() < end) { /* hold the loop */ } }
+  // Holds the loop for `ms` of the loop thread's own CPU (wall time where no per-thread clock
+  // exists): a wall-clock spin on a loaded host got under 100 ms of CPU in 150 ms (2026-11-07).
+  const threadCpuMs = (): number | undefined => {
+    const f = (process as unknown as { threadCpuUsage?: () => NodeJS.CpuUsage }).threadCpuUsage
+    if (typeof f !== 'function') return undefined
+    const t = f.call(process)
+    return (t.user + t.system) / 1000
+  }
+  const busy = (ms: number): void => {
+    const cpu0 = threadCpuMs()
+    const end = Date.now() + ms
+    if (cpu0 === undefined) { while (Date.now() < end) { /* hold the loop */ } return }
+    while (threadCpuMs()! - cpu0 < ms) { /* hold the loop */ }
+  }
 
   it('counts work that holds the loop thread', async () => {
     const { holdMs } = await measureLoopHold(async () => {
