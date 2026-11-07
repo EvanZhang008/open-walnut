@@ -11,7 +11,11 @@
  *   and the strip shows while the agent holds it, with Stop;
  * - Save as todo files the words as a todo without starting anything;
  * - the tabs and the search are Home's own, over a list of more than 100 tasks;
- * - a task with no conversation opens its detail in the panel, never a new tab;
+ * - a task with no conversation opens its detail in the panel, never a new tab, and so do the
+ *   parent and the subtasks its detail links to;
+ * - Act in this tab hands over only the tab Send was pressed in (moved to another tab while the task
+ *   starts, nothing is handed over); Save as todo saves once, whatever the clicks; a question the
+ *   popup handed over that Walnut could not start comes back in the side panel's composer;
  * - the relay pill opens the relay panel: agents on and off, the tab in use with Stop, Stop all;
  * - the asks stay one ≡ away;
  * - dark mode.
@@ -19,7 +23,7 @@
  * Screenshots (EXT_FIRST_SHOTS, default test-results/extension-first-page) at 400 px, light and dark.
  * Fake data only.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { askView, openPanel, selectText, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
@@ -102,6 +106,27 @@ const listTop = (p: Page) => frame(p).evaluate(() => {
 async function historyRows(sid: string): Promise<Array<{ role: string; text: string }>> {
   const r = await (await lab.doc.request.get(`${lab.base}/api/sessions/${sid}/history`)).json()
   return (Array.isArray(r) ? r : r.messages ?? []) as Array<{ role: string; text: string }>
+}
+/** A task made by a test here (deleted after the file). */
+async function makeTask(data: Record<string, unknown>): Promise<string> {
+  const r = await lab.doc.request.post(`${lab.base}/api/v1/tasks`, { data })
+  expect(r.ok(), await r.text()).toBe(true)
+  const j = await r.json() as Record<string, any>
+  const id = String(j.task?.id ?? j.id)
+  made.push(id)
+  return id
+}
+/** Requests to `url` wait until the returned release is called (POSTs only). */
+async function holdPosts(url: string): Promise<{ count: () => number; release: () => void; done: () => Promise<void> }> {
+  let release!: () => void
+  const held = new Promise<void>((r) => { release = r })
+  let n = 0
+  const route = async (r: Route) => {
+    if (r.request().method() === 'POST') { n++; await held }
+    await r.continue()
+  }
+  await lab.ctx.route(url, route)
+  return { count: () => n, release: () => release(), done: async () => { release(); await lab.ctx.unroute(url, route) } }
 }
 async function getTask(id: string): Promise<Record<string, any>> {
   const j = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${id}`)).json() as Record<string, any>
@@ -293,6 +318,44 @@ test('× leaves the page out; Save as todo files the words and starts nothing', 
   await expect(v.getByTestId('ext-home')).toBeVisible()
 })
 
+test('Save as todo saves once: a double click makes one todo, and Send waits while it saves', async () => {
+  test.setTimeout(150_000)
+  const v = askView(panel)
+  const words = 'Order the spare keyboard for the lab'
+  const box = v.locator('[data-testid="ext-home-composer"] textarea')
+  const save = v.locator('[data-testid="ext-home-composer"] .draft-later-btn')
+  const saving = await holdPosts('**/api/tasks')
+  const starts: string[] = []
+  const onReq = (r: { url: () => string; method: () => string }) => { if (r.method() === 'POST' && r.url().includes('/api/sessions/quick-start')) starts.push(r.url()) }
+  lab.ctx.on('request', onReq)
+  try {
+    await box.click()
+    await panel.keyboard.type(words)
+    await save.dblclick()
+    await expect(v.getByTestId('ext-home-saving')).toBeVisible({ timeout: 20_000 })
+    await expect(save).toBeDisabled()
+    // Send while it saves starts nothing, and the words stay in the box.
+    await box.click()
+    await panel.keyboard.press('Enter')
+    await panel.waitForTimeout(1_500)
+    await expect(v.getByTestId('ext-home-starting')).toHaveCount(0)
+    await expect(box).toHaveValue(words)
+    expect(saving.count()).toBe(1)
+    saving.release()
+    await expect(v.getByTestId('ext-home-saved')).toContainText(words, { timeout: 30_000 })
+  } finally {
+    await saving.done()
+    lab.ctx.off('request', onReq)
+  }
+  await panel.waitForTimeout(2_000)
+  const r = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks`)).json() as Record<string, any>
+  const list = ((Array.isArray(r) ? r : r.tasks ?? r.items ?? []) as Array<Record<string, any>>).filter((t) => t.title === words)
+  for (const t of list) made.push(String(t.id))
+  expect(list).toHaveLength(1)
+  expect(starts).toHaveLength(0)
+  await expect(v.getByTestId('ext-home')).toBeVisible()
+})
+
 test('a task with no conversation opens its detail in the panel', async () => {
   test.setTimeout(120_000)
   const v = askView(panel)
@@ -304,6 +367,36 @@ test('a task with no conversation opens its detail in the panel', async () => {
   await expect(v.getByTestId('ext-task-headline')).toContainText('Ops')
   expect(lab.ctx.pages().length).toBe(pages)
   await shots(panel, 'panel-task-detail')
+  await v.getByTestId('ext-task-back').click()
+  await expect(v.getByTestId('ext-home')).toBeVisible()
+})
+
+test('a task\'s detail opens its subtask and its parent in the panel too, never Walnut\'s whole app', async () => {
+  test.setTimeout(150_000)
+  const parentTitle = 'Plan the lab move for the spring'
+  const childTitle = 'Label the cables before the lab move'
+  const parent = await makeTask({ title: parentTitle, project: 'Ops' })
+  const rep = await lab.doc.request.put(`${lab.base}/api/v1/tasks/${parent}/report`, { data: { state: 'needs', ask: 'Which room do we move to?' } })
+  expect(rep.ok(), await rep.text()).toBe(true)
+  const child = await makeTask({ title: childTitle, project: 'Ops' })
+  const adopt = await lab.doc.request.patch(`${lab.base}/api/v1/tasks/${child}`, { data: { parent_task_id: parent } })
+  expect(adopt.ok(), await adopt.text()).toBe(true)
+  const v = askView(panel)
+  const pages = lab.ctx.pages().length
+  await v.locator('.todo-pinned-card').filter({ hasText: parentTitle }).locator('.todo-pinned-title').click()
+  const detail = v.getByTestId('ext-task-detail')
+  await expect(detail).toBeVisible({ timeout: 30_000 })
+  await expect(v.getByTestId('ext-task-title')).toHaveText(parentTitle)
+  // Its subtask, then the subtask's parent: each opens here, with Back, in the panel's own view.
+  await detail.locator('.tdp-task-row').filter({ hasText: childTitle }).click({ timeout: 30_000 })
+  await expect(v.getByTestId('ext-task-title')).toHaveText(childTitle, { timeout: 30_000 })
+  await expect(detail).toBeVisible()
+  expect(frame(panel).url()).toContain('view=ext-panel')
+  await detail.locator('.tdp-task-row').filter({ hasText: parentTitle }).click({ timeout: 30_000 })
+  await expect(v.getByTestId('ext-task-title')).toHaveText(parentTitle, { timeout: 30_000 })
+  expect(frame(panel).url()).toContain('view=ext-panel')
+  await expect(v.getByTestId('ext-task-back')).toBeVisible()
+  expect(lab.ctx.pages().length).toBe(pages)
   await v.getByTestId('ext-task-back').click()
   await expect(v.getByTestId('ext-home')).toBeVisible()
 })
@@ -348,6 +441,45 @@ test('Act in this tab hands the tab over: the strip and the relay show it, Stop 
   await expect(strip).toHaveCount(0, { timeout: 20_000 })
   await expect(v.getByTestId('ext-relay-pill')).toHaveText('Relay off', { timeout: 20_000 })
   await expect.poll(async () => (await agentOwners()).length, { timeout: 20_000 }).toBe(0)
+})
+
+test('Act in this tab hands over only the tab Send was pressed in: moved to another tab meanwhile, nothing is handed over', async () => {
+  test.setTimeout(240_000)
+  const v = askView(panel)
+  await expect(v.getByTestId('ext-home')).toBeVisible()
+  const docTab = await sw(lab).evaluate(async () => (await chrome.tabs.query({ active: true, url: 'http://docs.example.test/notes*' }))[0]?.id ?? 0)
+  expect(docTab).toBeGreaterThan(0)
+  const other = await sw(lab).evaluate(async (o: { w: number; url: string }) => (await chrome.tabs.create({ windowId: o.w, url: o.url, active: false })).id ?? 0, { w: lab.docWindow, url: lab.site('docs.example.test', '/other') })
+  const start = await holdPosts('**/api/sessions/quick-start')
+  try {
+    await v.getByTestId('ext-home-act').click()
+    await expect(v.getByTestId('ext-home-act')).toBeChecked()
+    await v.locator('[data-testid="ext-home-composer"] textarea').click()
+    await panel.keyboard.type('Check the upload retries on this page')
+    await panel.keyboard.press('Enter')
+    await expect(v.getByTestId('ext-home-starting')).toBeVisible({ timeout: 30_000 })
+    await expect.poll(start.count, { timeout: 30_000 }).toBe(1)
+    // The person moves to another tab before Walnut has started the task.
+    await sw(lab).evaluate((id: number) => chrome.tabs.update(id, { active: true }), other)
+    await expect(v.getByTestId('ext-panel-include')).toContainText('Another page', { timeout: 20_000 })
+    start.release()
+    await expect(v.getByTestId('ext-task-head')).toBeVisible({ timeout: 60_000 })
+    const session = v.getByTestId('ask-object-session')
+    await expect(session).toBeVisible({ timeout: 60_000 })
+    const taskId = await taskOfSession((await session.getAttribute('data-session-id')) ?? '')
+    made.push(taskId)
+    // The task page says why it has no tab; neither the tab moved to nor the one left was handed over.
+    await expect(v.getByText('You moved to another tab while the task started')).toBeVisible({ timeout: 20_000 })
+    await panel.waitForTimeout(3_000)
+    expect(await agentOwners()).not.toContain(`task:${taskId}`)
+    await shots(panel, 'panel-act-moved')
+  } finally {
+    await start.done()
+    await sw(lab).evaluate(async (t: { a: number; b: number }) => { await chrome.tabs.update(t.a, { active: true }); await chrome.tabs.remove(t.b) }, { a: docTab, b: other })
+  }
+  await expect(v.getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 20_000 })
+  await v.getByTestId('ext-task-back').click()
+  await expect(v.getByTestId('ext-home')).toBeVisible()
 })
 
 test('the relay panel turns agents on and off, and Stop all ends every agent tab', async () => {
@@ -458,4 +590,62 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   await expect(s).toBeVisible({ timeout: 60_000 })
   made.push(await taskOfSession((await s.getAttribute('data-session-id')) ?? ''))
   await sp.close()
+})
+
+test('a question the popup handed over that Walnut could not start comes back in the side panel\'s composer', async () => {
+  test.setTimeout(240_000)
+  let refuse = true
+  const route = async (r: Route) => {
+    if (refuse && r.request().method() === 'POST') {
+      refuse = false
+      await r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Walnut is busy, try again' }) })
+      return
+    }
+    await r.continue()
+  }
+  await lab.ctx.route('**/api/sessions/quick-start', route)
+  let sp: Page | undefined
+  try {
+    const opened = lab.ctx.waitForEvent('page')
+    await sw(lab).evaluate((w: number) => chrome.windows.create({ url: chrome.runtime.getURL(`popup-ask.html?window=${w}`), type: 'popup', width: 400, height: 600 }), lab.docWindow)
+    const pop = await opened
+    await pop.setViewportSize({ width: 400, height: 600 })
+    const pv = askView(pop)
+    await expect(pv.getByTestId('ext-home')).toBeVisible({ timeout: 60_000 })
+    await expect(pv.getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
+    const words = 'Compare the two standing desks for the lab'
+    await pv.locator('[data-testid="ext-home-composer"] textarea').click()
+    await pop.keyboard.type(words)
+    const side = lab.ctx.waitForEvent('page')
+    await pop.keyboard.press('Enter')
+    sp = await side
+    await sp.setViewportSize({ width: 400, height: 760 })
+    // The side panel already open in this window may take the question before the new one does
+    // (the background hands it to one panel only): whichever shows it is the one to read.
+    const panels = [panel, sp]
+    let at = -1
+    await expect.poll(async () => {
+      for (const [i, p] of panels.entries()) if (await askView(p).getByTestId('ext-home-error').count()) { at = i; return i }
+      return -1
+    }, { timeout: 90_000 }).not.toBe(-1)
+    const took = panels[at]
+    const sv = askView(took)
+    // Walnut refused it: the side panel says so, and the words are back in its composer.
+    await expect(sv.getByTestId('ext-home-error')).toContainText('could not start it')
+    const box = sv.locator('[data-testid="ext-home-composer"] textarea')
+    await expect(box).toHaveValue(words, { timeout: 20_000 })
+    await shots(took, 'panel-handoff-refused')
+    // Send again: now it starts.
+    await box.click()
+    await took.keyboard.press('End')
+    await took.keyboard.press('Enter')
+    await expect(sv.getByTestId('ext-task-head')).toBeVisible({ timeout: 90_000 })
+    await expect(sv.getByTestId('ext-task-title')).toHaveText(words)
+    const s = sv.getByTestId('ask-object-session')
+    await expect(s).toBeVisible({ timeout: 60_000 })
+    made.push(await taskOfSession((await s.getAttribute('data-session-id')) ?? ''))
+  } finally {
+    await lab.ctx.unroute('**/api/sessions/quick-start', route)
+    await sp?.close()
+  }
 })

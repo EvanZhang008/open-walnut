@@ -386,13 +386,15 @@ interface Props {
    * extension's New task): no folder bar, no picker, no "pick a folder" notice, and no hint line.
    */
   ownFolder?: boolean;
+  /** The host is writing (a save as todo or a start on its way): Save as todo waits, so one click makes one todo. */
+  saveBusy?: boolean;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, saveBusy = false,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -987,7 +989,8 @@ export function DraftSessionPanel({
           sendSlot={!isBound && !isFork && !isWalnut ? (
             <button
               className="draft-later-btn"
-              disabled={!text.trim()}
+              disabled={!text.trim() || saveBusy}
+              aria-busy={saveBusy || undefined}
               onClick={() => { void onSaveAsTask(draft.id, text); }}
               title="Save as todo: creates a todo from this text (first line becomes the title). No session starts."
               aria-label="Save as todo"

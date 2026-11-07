@@ -95,3 +95,17 @@ export function homeSnapOf(root: ParentNode): HomeSnap | null {
   const heading = cut(headLabel ? `${headLabel}${headCount ? ` (${headCount})` : ''}` : '', 40);
   return { tabs, ...(heading ? { heading } : {}), rows };
 }
+
+/** The task page's line when the tab Send was pressed in is no longer the one on show. */
+export const ACT_TAB_MOVED = 'You moved to another tab while the task started, so it was given no tab. Turn on Act in this tab to give it this one.';
+
+/**
+ * Whether a task the first page started takes the tab on show: only when Act in this tab was on for
+ * the tab Send was pressed in (`actTab`) and that tab is still the one on show (`tabNow`). A switch
+ * in between hands over nothing (`moved`): the person allowed that tab, not this one, and the
+ * task's context names that one (review round 5, #1).
+ */
+export function actCarriesTo(started: { act: boolean; actTab?: number } | undefined, tabNow: number | undefined): 'carry' | 'moved' | 'none' {
+  if (!started?.act || started.actTab === undefined) return 'none';
+  return started.actTab === tabNow ? 'carry' : 'moved';
+}

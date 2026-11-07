@@ -18,7 +18,7 @@ import { createTask } from '@/api/tasks';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { useAskObjectDraft } from '@/components/chat/useAskObjectDraft';
 import { objectContextHints, storeObjectContext } from '@/components/chat/ask-object-session';
-import { discardDraft } from '@/utils/drafts';
+import { discardDraft, readDraft, writeDraft } from '@/utils/drafts';
 import { draftComposerKey } from '@/components/sessions/draft-column';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
@@ -38,8 +38,12 @@ const HOME_DRAFT_ID = 'ext-home';
 const noop = () => { /* the first page has no folder, project or task fields */ };
 const known = () => true;
 
-/** What a send made: the task, its session, and what went with the first message. */
-export interface HomeLaunched { taskId: string; sessionId?: string; act: boolean; question: string; attached: Attached; pageUrl: string }
+/**
+ * What a send made: the task, its session, and what went with the first message. `actTab` is the
+ * tab the person turned Act in this tab on for when they pressed Send: only that tab may be handed
+ * over, and only while it is still the one on show (review round 5, #1).
+ */
+export interface HomeLaunched { taskId: string; sessionId?: string; act: boolean; actTab?: number; question: string; attached: Attached; pageUrl: string }
 /** A first message the popup handed over, sent once with the popup's choices. */
 export interface HomePreset { id: string; text: string; page: boolean; act: boolean; sel: string }
 
@@ -79,8 +83,11 @@ export function ExtHome(p: Props) {
   const [starting, setStarting] = useState('');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState<Task | null>(null);
+  /** A Save as todo on its way: Save waits, and Send keeps its words (one lock with the launch). */
+  const [saving, setSaving] = useState(false);
   /** Moves after a save as todo, so the composer starts empty again. */
   const [composerNo, setComposerNo] = useState(0);
+  /** One write at a time from this composer: a launch or a save as todo (review round 5, #4). */
   const flight = useRef(false);
 
   const launch = useCallback(async (text: string, images: ImageAttachment[] | undefined, choice: { page: boolean; act: boolean; sel: string }): Promise<boolean> => {
@@ -90,7 +97,9 @@ export function ExtHome(p: Props) {
     setStarting(question); setError(''); setSaved(null);
     try {
       const pg = page;
-      const acting = choice.act && p.tab !== undefined;
+      // The tab on show when Send was pressed: the one the person allowed, whatever is on show later.
+      const actTab = choice.act ? p.tab : undefined;
+      const acting = actTab !== undefined;
       const sel = choice.sel.trim();
       const withPage = !!pg && choice.page;
       let block = '';
@@ -98,9 +107,9 @@ export function ExtHome(p: Props) {
       if (pg && (withPage || sel)) {
         const body = withPage ? await p.pageText(pg, false).catch(() => ({})) : {};
         block = pageContextBlock({ url: pg.url, ...(pg.title ? { title: pg.title } : {}), ...(sel ? { selection: sel } : {}) },
-          { ...body, ...(acting ? { tab: p.tab } : {}), ...(withPage ? {} : { selectionOnly: true }) });
+          { ...body, ...(acting ? { tab: actTab } : {}), ...(withPage ? {} : { selectionOnly: true }) });
       } else if (acting) {
-        block = actLine(p.tab!);
+        block = actLine(actTab!);
         name = ACT_CONTEXT_NAME;
       }
       const contextId = await storeObjectContext(name, block, (path, b) => apiPost<{ id: string }>(path, b));
@@ -112,7 +121,7 @@ export function ExtHome(p: Props) {
       log.info('ext-home', 'task started from the panel', { taskId: r.taskId, sessionId: r.sessionId ?? null, withPage, acting, selChars: sel.length });
       const attached: Attached = { ...(withPage ? { page: { title: pg!.title ?? hostOf(pg!.url), host: hostOf(pg!.url) } } : {}), ...(sel ? { sel, ...(withPage ? {} : { from: pg?.title ?? hostOf(pg?.url ?? '') }) } : {}) };
       setStarting('');
-      p.onLaunched({ taskId: r.taskId, ...(r.sessionId ? { sessionId: r.sessionId } : {}), act: acting, question, attached, pageUrl: withPage ? pg!.url : '' });
+      p.onLaunched({ taskId: r.taskId, ...(r.sessionId ? { sessionId: r.sessionId } : {}), act: acting, ...(acting ? { actTab } : {}), question, attached, pageUrl: withPage ? pg!.url : '' });
       if (sel) setLeftOut(sel);
       // The next task starts as a new one does: with this page, not acting.
       setPageOn(true); setActOn(false);
@@ -140,17 +149,38 @@ export function ExtHome(p: Props) {
     return launch(text, images, choice);
   }, [launch, page, pageOn, actOn, quote, p.canAct, p.surface]);
 
-  // The popup's question, sent once, with the popup's choices.
+  /**
+   * Words that did not become a task go back into the composer, after anything typed there since,
+   * with the page chip as they chose it: a popup's question the side panel could not start would
+   * otherwise be gone, since the popup closed (review round 5, #2).
+   */
+  const giveBack = useCallback((text: string, withPage: boolean) => {
+    const key = draftComposerKey(HOME_DRAFT_ID);
+    const there = readDraft(key).trim();
+    writeDraft(key, there && there !== text.trim() ? `${there}\n\n${text}` : text);
+    setComposerNo((n) => n + 1);
+    setPageOn(withPage);
+  }, []);
+
+  // The popup's question, sent once, with the popup's choices; not started, its words come back.
   const { preset, onPresetTaken } = p;
   useEffect(() => {
     if (!preset || !page && preset.page) return;
     onPresetTaken(preset.id);
-    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel });
-  }, [preset, page, launch, onPresetTaken, p.canAct]);
+    const busy = flight.current;
+    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }).then((ok) => {
+      if (ok) return;
+      log.info('ext-home', 'handed question not started: back in the composer', { busy });
+      if (busy) setError('another task was still starting. Your words are back in the box: send them again.');
+      giveBack(preset.text, preset.page);
+    });
+  }, [preset, page, launch, onPresetTaken, p.canAct, giveBack]);
 
   const saveTodo = useCallback(async (_id: string, text: string) => {
     const input = homeTodoInput({ draft: draft.draftRef.current, text, page, withPage: !!page && pageOn, tierKnown: draft.tierKnown });
-    if (!input) return;
+    if (!input || flight.current) return;
+    flight.current = true;
+    setSaving(true);
     setError('');
     try {
       const task = await createTask(input);
@@ -161,6 +191,9 @@ export function ExtHome(p: Props) {
       setSaved(task);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      flight.current = false;
+      setSaving(false);
     }
   }, [draft.draftRef, draft.tierKnown, page, pageOn]);
   // The saved line goes after a while; Open on it opens the todo here.
@@ -198,7 +231,7 @@ export function ExtHome(p: Props) {
       {!p.hidden && <>
       {p.header}
       {p.approvals}
-      <div className="ext-home-composer" data-testid="ext-home-composer" aria-busy={!!starting}>
+      <div className="ext-home-composer" data-testid="ext-home-composer" aria-busy={!!starting || saving}>
         <DraftSessionPanel
           key={composerNo}
           draft={draft.draft}
@@ -212,6 +245,7 @@ export function ExtHome(p: Props) {
           isKnownProject={known}
           plainChat
           ownFolder
+          saveBusy={saving || !!starting}
           placeholder={HOME_PLACEHOLDER}
           composerPill={pills}
           composerBar={actSwitch}
@@ -219,6 +253,7 @@ export function ExtHome(p: Props) {
       </div>
       {/* In the page's own column under the composer box (inside it they overflowed onto the search box). */}
       <div className="ext-home-notes">
+        {saving && <p className="ext-home-note" role="status" data-testid="ext-home-saving"><span className="spinner" /> Saving as a todo…</p>}
         {starting && <p className="ext-home-note" role="status" data-testid="ext-home-starting"><span className="spinner" /> Starting the task…</p>}
         {error && <p className="ext-home-note ext-panel-error" role="alert" data-testid="ext-home-error">Walnut could not start it: {error}</p>}
         {saved && (

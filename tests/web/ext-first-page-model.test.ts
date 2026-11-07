@@ -15,7 +15,7 @@ vi.mock('../../web/src/utils/log', () => ({
   log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
 }));
 
-import { HOME_PLACEHOLDER, HOME_SNAP_ROWS, HOME_SNAP_TABS, homeLaunchBody, homeSnapOf, homeTodoInput, isPanelMode, taskPageTitle } from '../../web/src/popout/ext-home-model';
+import { ACT_TAB_MOVED, HOME_PLACEHOLDER, actCarriesTo, HOME_SNAP_ROWS, HOME_SNAP_TABS, homeLaunchBody, homeSnapOf, homeTodoInput, isPanelMode, taskPageTitle } from '../../web/src/popout/ext-home-model';
 import { readRelay, relayGroups, relayPillOf, relayTabName, taskOfOwner, type RelayState } from '../../web/src/popout/ext-relay-model';
 import { readInbound } from '../../web/src/popout/ext-panel-model';
 import { initialAskDraft } from '../../web/src/components/chat/ask-object-draft';
@@ -178,5 +178,21 @@ describe('the browser relay word', () => {
     expect(relayTabName({ tab: 3, owner: 'task:a' }, 4)).toBe('Tab 3');
     expect(taskOfOwner('task:t-refund')).toBe('t-refund');
     expect(taskOfOwner('other')).toBe('');
+  });
+});
+
+describe('Act in this tab on a task the first page started (review round 5, #1)', () => {
+  it('hands over the tab Send was pressed in, and only while it is still on show', () => {
+    expect(actCarriesTo({ act: true, actTab: 11 }, 11)).toBe('carry');
+    // Moved to another tab while the task started: that tab was never allowed.
+    expect(actCarriesTo({ act: true, actTab: 11 }, 12)).toBe('moved');
+    expect(actCarriesTo({ act: true, actTab: 11 }, undefined)).toBe('moved');
+    expect(ACT_TAB_MOVED).toContain('another tab');
+  });
+  it('hands over nothing without a yes for a tab', () => {
+    expect(actCarriesTo(undefined, 11)).toBe('none');
+    expect(actCarriesTo({ act: false }, 11)).toBe('none');
+    // A yes with no tab named (an older launch record) is never applied to the tab on show.
+    expect(actCarriesTo({ act: true }, 11)).toBe('none');
   });
 });

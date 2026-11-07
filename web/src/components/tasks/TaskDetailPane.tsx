@@ -70,10 +70,15 @@ interface TaskDetailPaneProps {
   onOpenSession?: (sessionId: string) => void;
   onOpenTriageForTask?: (taskId: string) => void;
   onFocusChild?: (task: Task) => void;
+  /**
+   * A linked task (a transfer or a dependency) that is not in `allTasks`. Default: Home opens it.
+   * A host with no Home behind it (the browser extension's panel) opens it its own way.
+   */
+  onOpenTaskId?: (taskId: string) => void;
   style?: CSSProperties;
 }
 
-export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, style }: TaskDetailPaneProps) {
+export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenTriageForTask, onFocusChild, onOpenTaskId, style }: TaskDetailPaneProps) {
   const navigate = useNavigate();
   const integrations = useIntegrations();
   // Re-render on live status changes (the session row reads the status store).
@@ -139,6 +144,12 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     [allTasks, task.parent_task_id],
   );
   const openTask = (t: Task) => (onFocusChild ? onFocusChild(t) : openTaskOnHome(t.id, navigate));
+  const openLinked = (id: string) => {
+    const t = allTasks?.find((x) => x.id === id);
+    if (t) openTask(t);
+    else if (onOpenTaskId) onOpenTaskId(id);
+    else openTaskOnHome(id, navigate);
+  };
 
   // One session per task: the task's own session, then the ones it held before
   // that rule ("Earlier sessions", history only). The server's records for the
@@ -223,7 +234,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
       <div className="tdp-body">
         <div className="tdp-main">
-          <TransferLinks task={task} onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else openTaskOnHome(id, navigate); }} className="tdp-transfer" />
+          <TransferLinks task={task} onOpenTask={openLinked} className="tdp-transfer" />
           <StartQueueLine task={task} onError={reportError} />
 
           {hasSessions && (
@@ -270,7 +281,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             task={task}
             detail={detail}
             onChanged={reloadDetail}
-            onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else openTaskOnHome(id, navigate); }}
+            onOpenTask={openLinked}
             onError={reportError}
           />
 

@@ -123,8 +123,10 @@ export function ExtTaskPageHead({ taskId, tasks, onBack, keyed, vault, keyPresse
 }
 
 /** A task with no conversation yet, opened from the first page: its detail here, never a Walnut tab. */
-export function ExtTaskPageDetail({ taskId, tasks, onOpenSession, onClose }: {
-  taskId: string; tasks: readonly Task[]; onOpenSession: (taskId: string, sessionId: string) => void; onClose: () => void;
+export function ExtTaskPageDetail({ taskId, tasks, onOpenSession, onOpenTask, onClose }: {
+  taskId: string; tasks: readonly Task[]; onOpenSession: (taskId: string, sessionId: string) => void;
+  /** A task the detail links to (parent, subtask, dependency): opened in this frame too. */
+  onOpenTask: OpenTask; onClose: () => void;
 }) {
   const task = tasks.find((t) => t.id === taskId);
   const loading = <p className="ext-home-loading muted" role="status"><span className="spinner" /> Loading the task…</p>;
@@ -132,7 +134,7 @@ export function ExtTaskPageDetail({ taskId, tasks, onOpenSession, onClose }: {
     <div className="ext-panel-detail" data-testid="ext-task-detail">
       <Suspense fallback={loading}>
         {task
-          ? <ExtTaskDetail task={task} onOpenSession={(sid) => onOpenSession(task.id, sid)} onClose={onClose} />
+          ? <ExtTaskDetail task={task} onOpenSession={(sid) => onOpenSession(task.id, sid)} onOpenTask={onOpenTask} onClose={onClose} />
           : tasks.length ? <p className="ext-home-loading muted" role="status">This task is not on your board any more.</p> : loading}
       </Suspense>
     </div>

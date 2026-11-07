@@ -50,7 +50,7 @@ import { ContinueList } from './ExtContinueList';
 import type { HomeLaunched, HomePreset } from './ExtHome';
 import type { OpenTask } from './ExtHomeTasks';
 import { ExtFirstPage, ExtTaskPageDetail, ExtTaskPageHead, taskNameOf, useRelayWord } from './ExtFirstPage';
-import { isPanelMode, type PanelMode } from './ext-home-model';
+import { ACT_TAB_MOVED, actCarriesTo, isPanelMode, type PanelMode } from './ext-home-model';
 import { sessionOfTask, useExtAsks } from './useExtAsks';
 import { ExtAskApprovals, useExtApprovals } from './ExtApprovals';
 import { keepAsks, keptAsks } from './ext-continue-kept';
@@ -219,6 +219,8 @@ function ExtPanel() {
   }, []);
   /** New chat while this conversation acts in the tab: the new one gets the tab once it has a task. */
   const carryAct = useRef(false);
+  /** A first-page task was allowed a tab the person had left by the time it started: say so there. */
+  const actMoved = useRef(false);
   const scope = useMemo(() => ({ agentId: convAgentId, key }), [convAgentId, key]);
   const mine = record ? `task:${record.taskId}` : '';
 
@@ -233,8 +235,8 @@ function ExtPanel() {
   // only a selection made after the switch shows there; back on the agent it was made for, it
   // shows again (round 4 code review, L5).
   useEffect(() => {
-    setActChoice(carryAct.current ? true : null); setActError(''); adoptedFor.current = ''; heldSelection.current = '';
-    carryAct.current = false; actNote.current = undefined; attachedByWords.current.clear();
+    setActChoice(carryAct.current ? true : null); setActError(actMoved.current ? ACT_TAB_MOVED : ''); adoptedFor.current = ''; heldSelection.current = '';
+    carryAct.current = false; actMoved.current = false; actNote.current = undefined; attachedByWords.current.clear();
     // A task the first page started: its first bubble shows what it took from the page.
     if (launchAttach.current) { attachedByWords.current.set(launchAttach.current.words, launchAttach.current.att); launchAttach.current = null; }
     const sel = ctxRef.current?.page?.selection?.trim() ?? '';
@@ -309,7 +311,12 @@ function ExtPanel() {
     if (!keyRef.current) return;
     const k = nextConversation(TASK_POINTER);
     writeAskSession({ agentId: GENERAL_AGENT_ID, key: k }, { taskId, ...(sessionId ? { sessionId } : {}), asked: [], at: Date.now() });
-    carryAct.current = !!started?.act;
+    // Only the tab Send was pressed in, and only while it is still on show: never the act switch's
+    // yes applied to a tab the person moved to meanwhile (review round 5, #1).
+    const carry = actCarriesTo(started, ctxRef.current?.tab);
+    carryAct.current = carry === 'carry';
+    actMoved.current = carry === 'moved';
+    if (carry === 'moved') log.info('ext-panel', 'act in this tab not carried: the tab changed while the task started', { taskId, actTab: started?.actTab ?? null, tab: ctxRef.current?.tab ?? null });
     handChoice.current = null;
     if (started) {
       if (started.question && (started.attached.page || started.attached.sel)) launchAttach.current = { words: started.question, att: started.attached };
@@ -813,7 +820,7 @@ function ExtPanel() {
     {mode !== 'home' && actError && <p className="ext-panel-note ext-panel-error" role="alert">{actError}</p>}
     {/* A new chat opens as the popup did: the asks to continue over the composer. */}
     {fresh && <ContinueList className="is-panel" rows={asks.rows} kept={keptRows} max={4} loading={!asks.rowsReady} onPick={(id, sid) => pickAsk(id, sid)} />}
-    {mode === 'task' && detailId && <ExtTaskPageDetail taskId={detailId} tasks={allTasks} onOpenSession={openTask} onClose={goHome} />}
+    {mode === 'task' && detailId && <ExtTaskPageDetail taskId={detailId} tasks={allTasks} onOpenSession={openTask} onOpenTask={onOpenTask} onClose={goHome} />}
     {mode !== 'home' && !(mode === 'task' && detailId) && (
       <div className="ext-panel-chat">
         <UserRowAttachmentsContext.Provider value={attachmentsOf}>
