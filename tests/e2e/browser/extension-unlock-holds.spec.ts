@@ -1,7 +1,8 @@
 /**
  * The extension's unlock holds (packages/browser-extension/src/walnut-api.ts keeps its vault session
  * in IndexedDB; bg-autolock.ts): unlocked in the popup, it stays unlocked after its service worker
- * restarts and after the browser itself restarts (the same profile launched again), with the default
+ * restarts, after the browser itself restarts (the same profile launched again) and after an update of
+ * the extension (a newer version loaded again), with the default
  * auto-lock "Walnut's setting"; a person's own "When the browser closes" still locks at the next
  * start. The popup's settings say how long it stays unlocked. Fake data only.
  */
@@ -76,7 +77,7 @@ test.beforeAll(async ({}, info) => {
 
 test.afterAll(async () => { await ctx?.close() })
 
-test('unlocked once, the extension stays unlocked across a service worker restart and a browser restart', async () => {
+test('unlocked once, the extension stays unlocked across a service worker restart, a browser restart and an extension update', async () => {
   test.setTimeout(180_000)
   const p = await popup()
   await p.getByLabel('Master password').fill(MASTER)
@@ -99,6 +100,25 @@ test('unlocked once, the extension stays unlocked across a service worker restar
   await expect(unlockedView(p3)).toBeVisible({ timeout: 30_000 })
   await expect(lockedView(p3)).toHaveCount(0)
   await p3.close()
+
+  // The extension updates: a newer version on disk, loaded by Chrome. storage.session empties, as on
+  // every update, and the unlock still holds (2026-11-07: the person was asked again). Chrome takes an
+  // unpacked extension's new files at its next start (runtime.reload of one loaded by
+  // --load-extension does not come back here), which is also how a store update waiting for a
+  // relaunch is applied.
+  const mf = path.join(extDir, 'manifest.json')
+  const manifest = JSON.parse(fs.readFileSync(mf, 'utf8')) as { version: string }
+  const parts = manifest.version.split('.').map(Number)
+  parts[parts.length - 1] += 1
+  manifest.version = parts.join('.')
+  await ctx.close()
+  fs.writeFileSync(mf, JSON.stringify(manifest))
+  await launch()
+  const p4 = await popup()
+  expect(await p4.evaluate(() => (globalThis as unknown as { chrome: { runtime: { getManifest(): { version: string } } } }).chrome.runtime.getManifest().version)).toBe(manifest.version)
+  await expect(unlockedView(p4)).toBeVisible({ timeout: 30_000 })
+  await expect(lockedView(p4)).toHaveCount(0)
+  await p4.close()
 })
 
 test('the popup settings say how long it stays unlocked; "When the browser closes" locks at the next start', async () => {
