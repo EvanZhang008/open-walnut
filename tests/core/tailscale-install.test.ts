@@ -199,8 +199,7 @@ describe('startTailscaleInstall', () => {
   it('a run past the deadline ends the whole process group and fails with a sentence', async () => {
     seams({ timeoutMs: 30 })
     await startTailscaleInstall()
-    await new Promise((r) => setTimeout(r, 60))
-    expect(safeKillProcessGroup).toHaveBeenCalledWith(424242, 'SIGTERM')
+    await vi.waitFor(() => { expect(safeKillProcessGroup).toHaveBeenCalledWith(424242, 'SIGTERM') }, { timeout: 10_000, interval: 10 })
     await children[0].exit(null, 'SIGTERM')
     expect((await tailscaleInstallState()).job).toMatchObject({
       state: 'failed', error: 'Homebrew did not finish within 15 minutes, so the install was stopped.',
@@ -216,8 +215,9 @@ describe('startTailscaleInstall', () => {
     await tick()
     child.emit('exit', 0, null) // no `close`: something still holds stdout
     expect((await tailscaleInstallState()).job?.state).toBe('running')
-    await new Promise((r) => setTimeout(r, 40))
-    expect((await tailscaleInstallState()).job).toMatchObject({ state: 'done', log: ['tailscale-app was successfully installed!'] })
+    await vi.waitFor(async () => {
+      expect((await tailscaleInstallState()).job).toMatchObject({ state: 'done', log: ['tailscale-app was successfully installed!'] })
+    }, { timeout: 10_000, interval: 10 })
     expect(openApp).toHaveBeenCalledTimes(1)
     // A late close changes nothing and opens nothing twice.
     child.emit('close', 0, null)

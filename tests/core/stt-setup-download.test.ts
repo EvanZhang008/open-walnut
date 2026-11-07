@@ -7,7 +7,7 @@
  * Content-Length reports megabytes instead of staying silent, and a download
  * whose client went away stops and leaves no partial file behind.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -116,8 +116,7 @@ describe('eventQueue', () => {
     const seen: number[] = [];
     const drained = (async () => { for await (const n of q.drain()) seen.push(n); })();
     q.push(1);
-    await new Promise((r) => setTimeout(r, 10));
-    expect(seen).toEqual([1]);
+    await vi.waitFor(() => { expect(seen).toEqual([1]); }, { timeout: 10_000, interval: 10 });
     q.push(2);
     q.close();
     q.push(3); // after close: dropped

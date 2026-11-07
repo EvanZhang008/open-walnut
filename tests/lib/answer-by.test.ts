@@ -59,9 +59,9 @@ describe('the deadline scope', () => {
       await new Promise((r) => setTimeout(r, 1))
       expect(ambientAnswerBy()).toBe(at)
     })
-    await new Promise((r) => setTimeout(r, 80))
+    // The leftover timer has run once it set `inner`.
+    await vi.waitFor(() => expect(inner).toBe(at + 5_000), { timeout: 10_000, interval: 10 })
     expect(later).toBeUndefined()
-    expect(inner).toBe(at + 5_000)
     // A synchronous scope ends when it returns; a throwing one too.
     let leaked: (() => number | undefined) | null = null
     withAnswerBy(at, () => { leaked = () => ambientAnswerBy() })

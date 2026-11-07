@@ -277,7 +277,8 @@ describe('the ordinary turn', () => {
     await writeConversation([{ user: 'q', assistant: 'a', engine: FOREIGN }])
     getOrCreateLaneSession.mockResolvedValue({ sessionId: SID, created: true, engine: 'claude' })
     const turn = runLaneTurn(AGENT, CONV, 'first', { source: 'api-v1', timeoutMs: 2_000 })
-    await new Promise((r) => setTimeout(r, 30))
+    // The turn subscribes before it resolves the lane, so the result emitted below is heard.
+    await vi.waitFor(() => { expect(getOrCreateLaneSession).toHaveBeenCalled() }, { timeout: 10_000, interval: 10 })
     bus.emit(EventNames.SESSION_RESULT, { sessionId: SID, result: 'ok' } as never, ['main-ai'], { source: 'test' })
     await turn
     expect(sendMessageToSession).not.toHaveBeenCalled()

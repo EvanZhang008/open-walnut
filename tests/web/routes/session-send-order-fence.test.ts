@@ -413,10 +413,12 @@ describe('G10 a stop asked while the withdraw was out', () => {
     const { noteStopRequested } = await import('../../../src/core/sessions/cloud-stop-fence.js')
     mac.onWithdraw = async () => { await noteStopRequested(SID) }
     await flushSendQueue()
-    await new Promise((r) => setTimeout(r, 50))
-    await flushSendQueue()
+    // Flush again until the phone's status says not_sent; the message must never reach the CLI.
+    await vi.waitFor(async () => {
+      await flushSendQueue()
+      expect((await statusOf('qm-mobile-g100000000001')).body.state).toBe('not_sent')
+    }, { timeout: 20_000, interval: 50 })
     expect(count('g10')).toBe(0)
-    expect((await statusOf('qm-mobile-g100000000001')).body.state).toBe('not_sent')
   }, 40_000)
 })
 

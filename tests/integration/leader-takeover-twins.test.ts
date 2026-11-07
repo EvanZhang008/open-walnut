@@ -20,7 +20,7 @@
  * Hygiene: every dir is a temp dir; daemons are stopped by the pid they wrote
  * into their own dir; the fake primary is ours and is killed at the end.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -428,7 +428,7 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     primary!.kill('SIGUSR1') // heartbeat off; the trusted sockets keep answering
     await sleep(3 * T)
     expect(leader.isLeading()).toBe(false)
-    expect(leader.status().lastDecision).toMatch(/still hears the primary/)
+    await vi.waitFor(() => { expect(leader.status().lastDecision).toMatch(/still hears the primary/) }, { timeout: 10_000, interval: 50 })
     primary!.kill('SIGUSR1') // heartbeat on
     await sleep(1_000)
   }, 60_000)

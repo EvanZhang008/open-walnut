@@ -6,7 +6,7 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { guardedPath } from '../setup/exec-guard.js'
 import { CLT_STUBS, cltInstalled, cltMessage, cltStubRun, loginPath, pathHelperOrder, type CltFs } from '../../src/providers/host-exec-clt.js'
 
@@ -121,8 +121,7 @@ describe('the PATH a run gets is the login shell\'s', () => {
     const get = loginPath({ spawn: sh.spawn as never, killGroup: sh.killGroup, plan, env: GUARDED, home: '/Users/me' })
     expect(get()).toBe(pathHelperOrder(GUARDED))
     expect(get().split(':').slice(0, 2)).toEqual(['/usr/local/bin', '/usr/bin'])
-    await new Promise((r) => setTimeout(r, 60))
-    expect(get()).toBe('/opt/homebrew/bin:/usr/bin:/bin')
+    await vi.waitFor(() => { expect(get()).toBe('/opt/homebrew/bin:/usr/bin:/bin') }, { timeout: 10_000, interval: 10 })
     expect(sh.spawned).toHaveLength(1)
     expect(sh.spawned[0].args.join(' ')).toContain('"$PATH"')
   })
@@ -132,8 +131,8 @@ describe('the PATH a run gets is the login shell\'s', () => {
     const sh = fakeShell(null)
     const get = loginPath({ spawn: sh.spawn as never, killGroup: sh.killGroup, plan, env: GUARDED, home: '/h', now: () => t })
     expect(get()).toBe(pathHelperOrder(GUARDED))
-    await new Promise((r) => setTimeout(r, 5_100))
-    expect(sh.killed).toHaveLength(1)
+    // The 5 s probe timer is real: wait for its kill rather than a fixed 5.1 s.
+    await vi.waitFor(() => { expect(sh.killed).toHaveLength(1) }, { timeout: 9_000, interval: 50 })
     t += 60_000
     expect(get()).toBe(pathHelperOrder(GUARDED))
     expect(sh.spawned).toHaveLength(1)

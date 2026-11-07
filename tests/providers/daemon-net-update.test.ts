@@ -220,10 +220,12 @@ describe('NetDaemonUpdater', () => {
     const { u, update } = updater({ autofixOff: async () => 'config' })
     u.schedule(0)
     await vi.waitFor(() => expect(u.state.phase).toBe('held'))
-    u.schedule(0)
-    await new Promise((r) => setTimeout(r, 30))
-    u.schedule(0)
-    await new Promise((r) => setTimeout(r, 30))
+    // Each scheduled check replaces the state when it ends: wait for it to end held again.
+    for (let i = 0; i < 2; i++) {
+      const prev = u.state
+      u.schedule(0)
+      await vi.waitFor(() => { expect(u.state).not.toBe(prev); expect(u.state.phase).toBe('held') }, { timeout: 10_000, interval: 10 })
+    }
     expect(update).not.toHaveBeenCalled()
     expect(warn.mock.calls.filter(([m]) => /held by the host setting/.test(String(m)))).toHaveLength(1)
     const asked = await u.request()
@@ -400,9 +402,13 @@ describe('NetDaemonUpdater', () => {
     expect((await u.request()).skip).toBe('current')
     Object.assign(conn, { daemonVersion: OLD })
     for (let i = 0; i < 2; i++) {
+      // The scheduled check replaces the state when it ends.
+      const prev = u.state
       u.schedule(0)
-      await new Promise((r) => setTimeout(r, 30))
-      expect(u.state).toMatchObject({ phase: 'skipped', skip: 'contested' })
+      await vi.waitFor(() => {
+        expect(u.state).not.toBe(prev)
+        expect(u.state).toMatchObject({ phase: 'skipped', skip: 'contested' })
+      }, { timeout: 10_000, interval: 10 })
     }
     expect(update).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls.filter(([, f]) => (f as { skip?: string })?.skip === 'contested')).toHaveLength(1)
@@ -474,8 +480,7 @@ describe('NetDaemonUpdater', () => {
     const { u, update } = updater({ source, target: async () => 'linux-x64' })
     expect(await u.request()).toMatchObject({ phase: 'skipped', skip: 'no-binary' })
     u.schedule(0)
-    await new Promise((r) => setTimeout(r, 30))
-    expect(u.state).toMatchObject({ phase: 'skipped', skip: 'cooldown' })
+    await vi.waitFor(() => expect(u.state).toMatchObject({ phase: 'skipped', skip: 'cooldown' }), { timeout: 10_000, interval: 10 })
     expect(source).toHaveBeenCalledTimes(1)
     expect(update).not.toHaveBeenCalled()
     u.stop()

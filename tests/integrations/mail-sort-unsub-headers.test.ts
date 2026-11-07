@@ -8,7 +8,7 @@
  * Batch: one item at a time through `MailUnsubscribe.run` with three arguments, Stop after the
  * running item, one event per item.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { UnsubCandidateRow } from '../../src/integrations/mail/sort-store.js'
 import { BATCH_MAX_ITEMS, MailUnsubBatches, parseBatchItems } from '../../src/integrations/mail/sort-unsub-batch.js'
 import {
@@ -176,7 +176,8 @@ describe('the batch', () => {
       run: async (_a, messageId) => { calls.push(messageId); await new Promise((resolve) => setTimeout(resolve, 30)); return { status: 'done', method: 'one-click', at: 1, message: 'Done.' } },
     })
     const batch = batches.start(Array.from({ length: 4 }, (_, i) => ({ accountId: MARINA, messageId: `INBOX:1:${i}`, method: 'one-click' as const })))
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Stop while the first item runs (its 30 ms hold), not after a fixed wait a loaded machine overruns.
+    await vi.waitFor(() => expect(calls).toEqual(['INBOX:1:0']), { timeout: 10_000, interval: 1 })
     batches.stop(batch.batchId)
     await batches.idle()
     expect(calls).toEqual(['INBOX:1:0'])

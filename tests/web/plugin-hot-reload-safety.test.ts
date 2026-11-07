@@ -375,9 +375,9 @@ describe('a teardown that never finishes stays contained', () => {
     ])
     expect(lateCleanup).not.toHaveBeenCalled()
 
-    await new Promise((resolve) => setTimeout(resolve, 60))
-
     // The context is already disposed, so the late resource is disposed on arrival.
+    await vi.waitFor(() => { expect(lateCleanup).toHaveBeenCalledOnce() }, { timeout: 10_000, interval: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 60))
     expect(lateCleanup).toHaveBeenCalledOnce()
   })
 

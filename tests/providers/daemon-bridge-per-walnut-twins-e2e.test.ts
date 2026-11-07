@@ -9,7 +9,7 @@
  * loopback. A "server" is a plain socket that names its Walnut with
  * leader.configure, as a Walnut server does.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket, WebSocketServer } from '#ws'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -244,10 +244,13 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
 
     // A named link with no server of its Walnut: nothing goes to the other Walnut.
     a.ws.terminate()
-    await sleep(400)
-    const none = await linkA.rpc({ cmd: 'session.message', sessionId: 'sid-a', message: 'hi', messageId: 'qm-mobile-scope-2' })
+    // The daemon drops A's socket on its close event, which answers nothing: ask until it has.
+    const none = await vi.waitFor(async () => {
+      const answer = await linkA.rpc({ cmd: 'session.message', sessionId: 'sid-a', message: 'hi', messageId: 'qm-mobile-scope-2' })
+      expect(String(answer.error)).toMatch(/^session\.message: no primary server connected/)
+      return answer
+    }, { timeout: 20_000, interval: 100 })
     expect(none.ok).toBe(false)
-    expect(String(none.error)).toMatch(/^session\.message: no primary server connected/)
     expect(b.events('message-request')).toHaveLength(0)
 
     // A feed event goes up the pushing Walnut's own link only.
@@ -291,10 +294,10 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     expect(fs.existsSync(path.join(dir, 'bridge.json'))).toBe(true)
     // A names the same companion: the link moves to A as it is.
     expect(await configure(a, cloudA.url, HOME_A)).toMatchObject({ ok: true, connected: true })
+    await waitFor(() => !fs.existsSync(path.join(dir, 'bridge.json')), 10_000, 'the copy taken over')
     await sleep(500)
     expect(cloudA.links).toHaveLength(1)
     expect(inherited.open).toBe(true)
-    expect(fs.existsSync(path.join(dir, 'bridge.json'))).toBe(false)
     // It is A's link now: its relays go to A.
     inherited.send({ cmd: 'session.message', sessionId: 'sid-a', message: 'hello', messageId: 'qm-mobile-inherit-1' })
     await waitFor(() => a.events('message-request').length === 1, 10_000, 'A got the relay')
@@ -517,9 +520,11 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     expect(bystander.events('message-request')).toHaveLength(0)
     // Gone with its socket: nothing else takes it.
     pusher.ws.terminate()
-    await sleep(400)
-    const none = await link.rpc({ cmd: 'session.message', sessionId: 'sid-a', message: 'hi', messageId: 'qm-mobile-unbound-2' })
-    expect(String(none.error)).toMatch(/^session\.message: no primary server connected/)
+    // The daemon drops the pusher's socket on its close event, which answers nothing: ask until it has.
+    await vi.waitFor(async () => {
+      const none = await link.rpc({ cmd: 'session.message', sessionId: 'sid-a', message: 'hi', messageId: 'qm-mobile-unbound-2' })
+      expect(String(none.error)).toMatch(/^session\.message: no primary server connected/)
+    }, { timeout: 20_000, interval: 100 })
     expect(bystander.events('message-request')).toHaveLength(0)
   }, 60_000)
 })

@@ -300,8 +300,7 @@ describe('readProtectedFile', () => {
 
       const refused = await pr.runProtectedReader('read', '/refused', { dst: path.join(dir, 'no') });
       expect(refused.code).toBe(3);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(fs.existsSync(path.join(dir, 'no'))).toBe(false);
+      await vi.waitFor(() => { expect(fs.existsSync(path.join(dir, 'no'))).toBe(false); }, { timeout: 10_000, interval: 10 });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

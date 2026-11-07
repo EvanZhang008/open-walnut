@@ -142,7 +142,7 @@ describe('from this server\'s checkout', () => {
     const said: Record<string, string[]> = { x64: [], musl: [], arm: [] }
     const first = Promise.all([src.file('linux-x64', (m) => said.x64!.push(m)), src.file('linux-arm64-musl', (m) => said.musl!.push(m))])
     // Asked while that build runs (after the window): its own build, after that one, never two at once.
-    await new Promise((r) => setTimeout(r, 120))
+    await vi.waitFor(() => { expect(calls).toHaveLength(1) }, { timeout: 10_000, interval: 10 })
     const late = src.file('linux-arm64', (m) => said.arm!.push(m))
     const [[x64, musl], arm] = await Promise.all([first, late])
     expect(calls.map((c) => c.targets)).toEqual([['linux-arm64-musl', 'linux-x64'], ['linux-arm64']])

@@ -178,13 +178,14 @@ describe('GPU and disk', () => {
 
   it('an asker gets the last GPU reading at once while a fresh one is read', async () => {
     let release: (() => void) | null = null
+    let freshAnswered = false
     const { v, clock } = rig({
       platform: 'linux',
       execFile: ((file, _a, _o, cb) => {
         if (file !== 'nvidia-smi') return cb(new Error('no'), '')
         if (release === null) return cb(null, '30\n')
         const r = release; release = () => {}; void r
-        setTimeout(() => cb(null, '90\n'), 50)
+        setTimeout(() => { cb(null, '90\n'); freshAnswered = true }, 50)
       }) as Exec as never,
     })
     await v.tick()
@@ -192,7 +193,7 @@ describe('GPU and disk', () => {
     clock.t += 30_000
     const s = await v.stats()
     expect(s.gpuUtil).toBe(0.3) // the last one, at once
-    await new Promise((r) => setTimeout(r, 120))
+    await vi.waitFor(() => { expect(freshAnswered).toBe(true) }, { timeout: 10_000, interval: 10 })
     clock.t += 10_000
     expect((await v.stats()).gpuUtil).toBe(0.9)
   })

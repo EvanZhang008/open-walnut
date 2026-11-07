@@ -269,7 +269,8 @@ describe('a round', () => {
     let syncs = 0
     const slow: ReplicaTarget = { hostKey: 'slow', send: async (cmd, params) => { if (cmd === 'replica.sync') { syncs++; if (syncs === 1) await gate } return target.send(cmd, params) } }
     const first = syncHostReplica(slow)
-    await new Promise((r) => setTimeout(r, 20))
+    // The first round is in progress once it is held at the gate.
+    await vi.waitFor(() => { expect(syncs).toBe(1) }, { timeout: 10_000, interval: 10 })
     expect(await syncHostReplica(slow)).toEqual([])
     release()
     await first

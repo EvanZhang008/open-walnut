@@ -78,8 +78,13 @@ function ranInDaemon(info: { pid: number; ppid: number }): void {
 describe('one-shot claude runs go through the local daemon', () => {
   it('warm micro-Claude: the daemon pool answers, with the session id, partial text and cost', async () => {
     const spec = { system: 'tiny contract', model: 'haiku', tools: [] as string[], partial: true }
+    // The prewarm is fire-and-forget: wait for the daemon's answer, which comes once its pooled child is spawned.
+    const send = vi.spyOn(conn, 'send')
     prewarmMicroClaude(spec)
-    await new Promise((r) => setTimeout(r, 1500)) // the pooled child boots and prints its init line
+    await vi.waitFor(() => { expect(send.mock.calls.some(([cmd]) => cmd === 'oneshot.prewarm')).toBe(true) }, { timeout: 10_000, interval: 10 })
+    const prewarmAt = send.mock.calls.findIndex(([cmd]) => cmd === 'oneshot.prewarm')
+    expect(await send.mock.results[prewarmAt].value).toMatchObject({ ok: true })
+    send.mockRestore()
     const deltas: string[] = []
     const blocks: StreamingBlock[] = []
     const first = await runWarmMicroClaude({
@@ -98,7 +103,7 @@ describe('one-shot claude runs go through the local daemon', () => {
     expect(first.sessionId).toBe(`fake-${info.pid}`)
 
     // The run booted its replacement: the next call is warm too, on another child.
-    await new Promise((r) => setTimeout(r, 1500))
+    // The daemon pools the replacement before it answers oneshot.run, so no wait is needed.
     const second = await runWarmMicroClaude({ ...spec, prompt: 'again', timeoutMs: 20_000, toolUseId: 'tu-2', onTextDelta: () => {} })
     expect(second.warm).toBe(true)
     const info2 = infoOf(second.response)

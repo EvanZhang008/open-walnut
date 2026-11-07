@@ -116,8 +116,12 @@ describe('a process that exits while it takes a lock', () => {
   it('leaves alone the lock another holder has while it waits, and takes nothing after', async () => {
     const other = `${process.pid}-0123456789ab`; // a live holder: this pid, another token
     fs.mkdirSync(path.join(lock, 'owner', other), { recursive: true });
+    const mkdirSpy = vi.spyOn(fsp, 'mkdir');
     const waiter = withFileLock(store, async () => 'in');
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    // It is waiting once it has tried to make the lock dir (it is tracked by then).
+    await vi.waitFor(() => {
+      expect(mkdirSpy.mock.calls.some((c) => String(c[0]) === lock)).toBe(true);
+    }, { timeout: 10_000, interval: 5 });
     releaseHeldLocksSync();
     expect(holderToken()).toBe(other);
     await expect(waiter).rejects.toThrow(/given back at exit/);

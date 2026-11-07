@@ -5,7 +5,7 @@
  * for the hung mount; budgets are shortened so the suite stays fast, and one
  * case runs the real 1.5s / 6s defaults.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createFsLs, type FsLsDirent, type FsLsStat } from '../../src/providers/fs-ls-core.js'
 
 function dirent(name: string, kind: 'dir' | 'file' | 'link'): FsLsDirent {
@@ -132,8 +132,9 @@ describe('fs.ls budgets', () => {
     expect((await ls.list('/a', false)).entries).toEqual([{ name: 'p2', type: 'unknown', symlink: true, timedOut: true }])
     expect(statCalls).toEqual(['/a/p1'])
     release(DIR_STAT)                                // the NAS came back
-    await new Promise((r) => setTimeout(r, 5))
-    expect((await ls.list('/a', false)).entries).toEqual([{ name: 'p2', type: 'dir', symlink: true }])
+    await vi.waitFor(async () => {
+      expect((await ls.list('/a', false)).entries).toEqual([{ name: 'p2', type: 'dir', symlink: true }])
+    }, { timeout: 10_000, interval: 10 })
   })
 
   it('every slot held by a hung stat: a waiter gives up after one timeout of no progress, not at the listing budget', async () => {

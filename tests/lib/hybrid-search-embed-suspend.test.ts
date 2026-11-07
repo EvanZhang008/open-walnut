@@ -12,7 +12,7 @@
  * The worker is the stop-protocol fixture (fixtures/busy-embed-worker.cjs),
  * which marks each finished job and its own clean exit in a file.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -73,12 +73,13 @@ describe('embedder suspend', () => {
   });
 
   it('a run in flight finishes before its worker exits (never cut mid-run)', async () => {
-    const e = make({ holdMs: 400 });
+    const e = make({ holdMs: 400, markPid: true });
     const run = e.embedPassages(['a slow passage']);
     run.catch(() => {});
-    await new Promise((r) => setTimeout(r, 100));
+    // The worker is up (its job went over IPC right after the fork), so the run is in flight.
+    await vi.waitFor(() => expect(marks().some((m) => m.startsWith('pid '))).toBe(true), { timeout: 10_000, interval: 10 });
     await e.suspend();
-    expect(marks()).toEqual(['done 1', 'exit-clean']);
+    expect(marks().filter((m) => !m.startsWith('pid '))).toEqual(['done 1', 'exit-clean']);
     await expect(run).rejects.toThrow('embed worker terminated');
   });
 

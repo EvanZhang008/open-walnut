@@ -144,9 +144,7 @@ describe('getOrCreateLaneSession', () => {
       // for the event, not for the (never-arriving) record.
       const pending = getOrCreateLaneSession('general', 'conv-codex-default', { firstMessage: 'hello there' })
         .catch(() => undefined)
-      for (let i = 0; i < 100 && started.length < 1; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
+      await vi.waitFor(() => { expect(started.length).toBeGreaterThanOrEqual(1) }, { timeout: 10_000, interval: 10 })
       const start = started.at(-1)
       expect(start?.engine).toBe('codex')
       // ACP has no system-prompt channel: without the persona on the message a

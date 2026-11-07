@@ -75,7 +75,8 @@ describe('createAsyncStartTimeReader', () => {
     })
     let settled = false
     const pending = read(4100).then((v) => { settled = true; return v })
-    await new Promise((r) => setTimeout(r, 10))
+    // ps is running once the fake exec holds its callback; the read must still be pending then.
+    await vi.waitFor(() => { expect(finish).not.toBeNull() }, { timeout: 10_000, interval: 10 })
     expect(settled).toBe(false)
     finish!()
     expect(await pending).toBe('Mon Sep 28 10:00:00 2026')

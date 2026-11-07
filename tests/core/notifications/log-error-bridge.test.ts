@@ -161,7 +161,10 @@ describe('log-error → notification bridge', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + shift);
     try {
       logger.error('flaky sync failed', { error: 'timeout' });
-      await new Promise(r => setTimeout(r, 200));
+      // The fold is written before it is broadcast; hold the shifted clock until then.
+      await vi.waitFor(() => {
+        expect(events.map(e => e.name)).toEqual(['notification:new', 'notification:updated']);
+      }, { timeout: 10_000, interval: 10 });
     } finally {
       nowSpy.mockRestore();
     }
@@ -203,8 +206,9 @@ describe('log-error → notification bridge', () => {
     await recoverNotifications(['route:GET /api/flappy']);
     releaseAbsorbedKeys(['route:GET /api/flappy']);
     logger.error('GET /api/flappy → 500', meta);
-    await new Promise(r => setTimeout(r, 200));
-    expect(events).toEqual(['notification:new', 'notification:updated']);
+    await vi.waitFor(() => {
+      expect(events).toEqual(['notification:new', 'notification:updated']);
+    }, { timeout: 10_000, interval: 10 });
     const { feed } = await listNotifications();
     expect(feed).toHaveLength(1);
     expect(feed[0].count).toBe(2);
@@ -769,8 +773,9 @@ describe('causeKey derivation through the sink', () => {
     await recoverNotifications(['host:devbox']);
     releaseAbsorbedKeys(['host:devbox']);
     logger.error('transport start failed', meta);
-    await new Promise(r => setTimeout(r, 200));
-    expect(events).toEqual(['notification:new', 'notification:updated']);
+    await vi.waitFor(() => {
+      expect(events).toEqual(['notification:new', 'notification:updated']);
+    }, { timeout: 10_000, interval: 10 });
     const { feed } = await listNotifications();
     expect(feed).toHaveLength(1);
     expect(feed[0].count).toBe(2);
@@ -802,9 +807,8 @@ describe('a host outage folds into one plain card', () => {
     session.error('transport start failed', { host: 'devbox', taskId: 't1', error: down('devbox') });
     session.error('transport start failed', { host: 'devbox', taskId: 't2', error: down('devbox') });
     session.error('session turn failed', { host: 'devbox', sessionId: 's9', error: down('devbox') });
-    await new Promise(r => setTimeout(r, 250));
-
-    const { feed } = await listNotifications();
+    // The repeats are absorbed synchronously at log time; only the first card is written async.
+    const feed = await feedAfterFlush();
     expect(feed).toHaveLength(1);
     expect(feed[0].dedupKey).toBe('logerr:cause:host:devbox');
     expect(feed[0].title).toBe('Cannot connect to devbox');

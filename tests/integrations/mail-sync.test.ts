@@ -633,8 +633,7 @@ describe('a route budget', () => {
       });
       expect(await withBudget(slowFailure, 5, (outcome) => late.push(outcome))).toBeUndefined();
 
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      expect(late).toHaveLength(1);
+      await vi.waitFor(() => expect(late).toHaveLength(1), { timeout: 10_000, interval: 10 });
       expect((late[0] as { error?: Error }).error?.message).toContain('long after the 202');
       expect(rejections).toEqual([]);
 
@@ -642,8 +641,7 @@ describe('a route budget', () => {
       // only place anyone will ever see it.
       const slowValue = new Promise<string>((resolve) => { setTimeout(() => resolve('done'), 20); });
       expect(await withBudget(slowValue, 5, (outcome) => late.push(outcome))).toBeUndefined();
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      expect(late[1]).toEqual({ value: 'done' });
+      await vi.waitFor(() => expect(late[1]).toEqual({ value: 'done' }), { timeout: 10_000, interval: 10 });
 
       // And work that finishes inside the budget is returned, with nothing reported late.
       expect(await withBudget(Promise.resolve('fast'), 5_000, (outcome) => late.push(outcome))).toBe('fast');
@@ -1385,8 +1383,10 @@ describe('a delete that lands in the middle of a tick', () => {
     let release = () => undefined as void;
     marks().gate = new Promise<void>((resolve) => { release = () => resolve() });
     marks().messages.INBOX = [message(1, 'Mid tick'), message(2, 'Also mid tick'), message(3, 'Arrived late')];
+    const pollsBefore = marks().polls.length;
     const tick = mailSyncForTesting()!.runTick({ force: true });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The poll records itself before it parks on the gate.
+    await vi.waitFor(() => expect(marks().polls.length).toBeGreaterThan(pollsBefore), { timeout: 10_000, interval: 10 });
 
     const removed = await sendJson<{ ok: boolean }>('DELETE', `/accounts/${encodeURIComponent(ACCOUNT_ID)}`);
     expect([200, 202]).toContain(removed.status);

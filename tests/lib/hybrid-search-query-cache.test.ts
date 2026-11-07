@@ -174,8 +174,10 @@ describe('query-embedding LRU', () => {
     try {
       expect((await embedder.embedQuery('warm the worker', 5_000))?.source).toBe('worker');
       expect(await embedder.embedQuery('orbit telemetry', 25)).toBeNull();
-      await new Promise((r) => setTimeout(r, 1_200)); // the stalled job lands
-      expect((await embedder.embedQuery('orbit telemetry', 25))?.source).toBe('cache');
+      // The stalled job lands about 1 s later; ask until its answer is in the cache.
+      await vi.waitFor(async () => {
+        expect((await embedder.embedQuery('orbit telemetry', 25))?.source).toBe('cache');
+      }, { timeout: 10_000, interval: 50 });
     } finally {
       await embedder.dispose();
     }

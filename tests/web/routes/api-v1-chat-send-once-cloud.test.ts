@@ -41,6 +41,8 @@ import { resetChatTurnRelayState } from '../../../src/web/routes/chat-turn-relay
 
 /** The send-once memory's reset, when the tree has it (an older tree keeps none). */
 let resetSendOnce: () => void = () => {}
+/** What the send-once memory knows of a message id, when the tree has it. */
+let priorSendState: (agentId: string, conversationId: string, messageId: string) => string | undefined = () => undefined
 
 let server: HttpServer
 let port: number
@@ -232,8 +234,13 @@ beforeAll(async () => {
   port = addr.port
   deviceToken = (await createDevice('chat-send-once-cloud-phone')).token
   try {
-    const mod = await import('../../../src/web/routes/chat-send-once.js') as { _resetChatSendOnceForTesting?: () => void }
+    const mod = await import('../../../src/web/routes/chat-send-once.js') as {
+      _resetChatSendOnceForTesting?: () => void
+      priorChatSend?: (agentId: string, conversationId: string, messageId: string) => { state: string } | undefined
+    }
     if (mod._resetChatSendOnceForTesting) resetSendOnce = mod._resetChatSendOnceForTesting
+    const prior = mod.priorChatSend
+    if (prior) priorSendState = (a, c, m) => prior(a, c, m)?.state
   } catch { /* a tree without the send-once memory: nothing to reset */ }
 }, 60_000)
 
@@ -305,8 +312,10 @@ describe('a chat retry on the companion runs when the first attempt\'s turn neve
       const first = await postWithId(conv.id, 'taken', 'qm-cloud-taken-1')
       expect(first.status).toBe(202)
       await primary.waitForTurnUplinks(1)
-      // The relay's accept reply rides the next tick: let it land.
-      await new Promise((r) => setTimeout(r, 100))
+      // The relay's accept reply rides the next tick: wait until it landed.
+      await vi.waitFor(() => {
+        expect(priorSendState('general', conv.id, 'qm-cloud-taken-1')).toBe('started')
+      }, { timeout: 10_000, interval: 10 })
 
       const repeat = await postWithId(conv.id, 'taken', 'qm-cloud-taken-1')
       expect(repeat).toEqual({ status: 202, body: { turnId: first.body.turnId, duplicate: true } })

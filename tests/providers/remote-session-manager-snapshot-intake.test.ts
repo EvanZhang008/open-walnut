@@ -58,8 +58,7 @@ describe('RemoteSessionManager snapshot intake (real handleDaemonEvent via MockD
 
   it('routes a matching-sid snapshot event to applySnapshot with source daemon-push', async () => {
     daemon.emitEvent('snapshot', { sid: 'sid-snap', snapshot: SNAP })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(applySnapshotMock).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => { expect(applySnapshotMock).toHaveBeenCalledTimes(1) }, { timeout: 10_000, interval: 10 })
     expect(applySnapshotMock).toHaveBeenCalledWith('sid-snap', SNAP, 'daemon-push')
   })
 
@@ -81,18 +80,16 @@ describe('RemoteSessionManager snapshot intake (real handleDaemonEvent via MockD
     // The daemon may still emit events tagged with the OLD sid while the
     // rename is in flight — they must land on the NEW record.
     daemon.emitEvent('snapshot', { sid: 'sid-snap', snapshot: SNAP })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(applySnapshotMock).toHaveBeenCalledWith('sid-snap-renamed', SNAP, 'daemon-push')
+    await vi.waitFor(() => { expect(applySnapshotMock).toHaveBeenCalledWith('sid-snap-renamed', SNAP, 'daemon-push') }, { timeout: 10_000, interval: 10 })
   })
 
   it('a rejecting applySnapshot never throws out of the event handler', async () => {
     applySnapshotMock.mockRejectedValueOnce(new Error('projection exploded') as never)
     daemon.emitEvent('snapshot', { sid: 'sid-snap', snapshot: SNAP })
-    await new Promise((r) => setTimeout(r, 50))
+    await vi.waitFor(() => { expect(applySnapshotMock).toHaveBeenCalledTimes(1) }, { timeout: 10_000, interval: 10 })
     // Handler survived — a following event is still processed.
     daemon.emitEvent('snapshot', { sid: 'sid-snap', snapshot: { ...SNAP, v: 600 } })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(applySnapshotMock).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => { expect(applySnapshotMock).toHaveBeenCalledTimes(2) }, { timeout: 10_000, interval: 10 })
   })
 
   it('unknown ev types remain ignored (old-walnut compat)', async () => {

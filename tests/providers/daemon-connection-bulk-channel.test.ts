@@ -105,6 +105,8 @@ describe('DaemonConnection bulk channel', () => {
     const received: unknown[] = []
     conn.onEvent((e) => { if (e.ev === 'session_state') received.push(e) })
     daemon.emitSessionState('sid-1', 'dead', { exitCode: 3 })
+    await waitFor(() => received.length > 0, 10_000, 'session_state dispatch')
+    // Then give the second socket's copy time to (wrongly) dispatch too.
     await new Promise((r) => setTimeout(r, 100))
     expect(received).toHaveLength(1)
   })

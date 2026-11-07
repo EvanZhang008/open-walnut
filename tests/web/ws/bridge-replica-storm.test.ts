@@ -226,7 +226,9 @@ describe('a transcript storm costs one bridge read', () => {
 
       // A new transcript line reaches the session: the next read is fresh.
       daemon.jsonl(SID, { type: 'assistant', message: { content: [{ type: 'text', text: 'more' }] } })
-      await sleep(100)
+      // A delta right behind it: once the phone hears it, the server has taken the line before it.
+      daemon.jsonl(SID, { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'after more' } } })
+      await sse.waitFor((e) => e.event === 'text-delta' && e.data.delta === 'after more')
       const after = await Promise.all(Array.from({ length: 30 }, () => transcript(SID)))
       expect(reads(daemon, SID)).toBe(2)
       expect(after.every((r) => r.body.messages?.[1]?.text === 'answer 2')).toBe(true)
@@ -265,7 +267,7 @@ describe('bridge presence on the phone stream', () => {
       await sleep(OFFLINE_ANNOUNCE_DELAY_MS + 500)
       expect(presenceEvents(sse)).toHaveLength(1)
       // The redial still re-attached the page (its jsonl reaches the phone).
-      expect(daemon.received.some((m) => m.cmd === 'attach' && m.sid === SID)).toBe(true)
+      await vi.waitFor(() => expect(daemon.received.some((m) => m.cmd === 'attach' && m.sid === SID)).toBe(true), { timeout: 10_000, interval: 10 })
 
       // A real outage: gone past the grace window.
       await daemon.close()
@@ -357,13 +359,10 @@ describe('the replica end of a paced daemon uplink', () => {
     const info = vi.spyOn(log.ws, 'info')
     const daemon = await connectFakeDaemon({ uplink: true })
     try {
-      await sleep(200)
-      const peer = daemon.received.find((m) => m.cmd === 'bridge.peer')
-      expect(peer?.chunkBytes).toBe(REPLICA_CHUNK_BYTES)
+      await vi.waitFor(() => expect(daemon.received.find((m) => m.cmd === 'bridge.peer')?.chunkBytes).toBe(REPLICA_CHUNK_BYTES), { timeout: 10_000, interval: 10 })
 
       daemon.send({ ev: 'bridge-ping', ts: Date.now(), seq: 41 })
-      await sleep(200)
-      expect(daemon.received.some((m) => m.cmd === 'ping' && m.ackSeq === 41)).toBe(true)
+      await vi.waitFor(() => expect(daemon.received.some((m) => m.cmd === 'ping' && m.ackSeq === 41)).toBe(true), { timeout: 10_000, interval: 10 })
 
       const r = await transcript(SID)
       expect(r.status).toBe(200)

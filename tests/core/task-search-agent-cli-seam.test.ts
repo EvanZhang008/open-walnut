@@ -106,8 +106,9 @@ describe('claude -p default engine wiring', () => {
         return { response: '{"results":[]}', durationMs: 5, warm: true };
       });
       await runTaskSearchAgent('which task adds docx progress', { progressId: 'pw-cli-1' });
-      await new Promise((r) => setTimeout(r, 50));
-      expect(seen.map((e) => e.kind)).toEqual(['seed', 'answering', 'search', 'search_done', 'answering']);
+      await vi.waitFor(() => {
+        expect(seen.map((e) => e.kind)).toEqual(['seed', 'answering', 'search', 'search_done', 'answering']);
+      }, { timeout: 10_000, interval: 10 });
       expect(seen.every((e) => e.id === 'pw-cli-1')).toBe(true);
       expect(seen[2]).toMatchObject({ kind: 'search', q: 'docx 预览' });
       expect(seen[3]).toMatchObject({ kind: 'search_done', q: 'docx 预览', count: 2 });
@@ -135,9 +136,10 @@ describe('claude -p default engine wiring', () => {
         return { response: '{"results":[]}', durationMs: 5, warm: true };
       });
       await runTaskSearchAgent('which task adds docx curl shapes', { progressId: 'pw-cli-2' });
-      await new Promise((r) => setTimeout(r, 50));
-      const searches = seen.filter((e) => e.kind === 'search').map((e) => e.q);
-      expect(searches).toEqual(['docx preview', 'stt 快捷键', 'voice shortcut']);
+      await vi.waitFor(() => {
+        const searches = seen.filter((e) => e.kind === 'search').map((e) => e.q);
+        expect(searches).toEqual(['docx preview', 'stt 快捷键', 'voice shortcut']);
+      }, { timeout: 10_000, interval: 10 });
     } finally {
       bus.unsubscribe('web-ui');
     }

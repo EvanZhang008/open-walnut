@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocket } from 'ws';
 import {
@@ -167,8 +167,10 @@ describe('WebSocket connection', () => {
 
   it('disconnected client does not receive events and no errors', async () => {
     const ws = await connectClient();
+    const open = clientCount();
     ws.close();
-    await delay(100);
+    // The server has dropped the client.
+    await vi.waitFor(() => expect(clientCount()).toBeLessThan(open), { timeout: 10_000, interval: 10 });
 
     // Should not throw
     expect(() => {

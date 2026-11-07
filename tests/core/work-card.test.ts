@@ -7,7 +7,7 @@
  * the `liveactivity` push type on the `.push-type.liveactivity` topic, and no other path to
  * the sender. The source checks at the end fail the day a card push could become a banner.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -422,8 +422,10 @@ describe('the service', () => {
   it('a test run reads the numbers alone: no tick, no push, no stretch of the user\'s', async () => {
     const f = fakeDeps({ tasks: async () => [task('w', status('working'))] as Task[] })
     try {
-      await startWorkCard(f.deps)
-      await new Promise((r) => setTimeout(r, 2500))
+      const svc = await startWorkCard(f.deps)
+      // The user's first (debounced) tick pushes the card: let it land before counting.
+      await vi.waitFor(() => { expect(f.sends.length).toBeGreaterThan(0) }, { timeout: 10_000, interval: 20 })
+      await svc.idle()
       const before = f.sends.length
       const view = await withTestRun('spec-1', () => workCardNow())
       expect(view.active).toBe(false)

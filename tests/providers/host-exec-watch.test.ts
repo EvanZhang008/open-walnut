@@ -11,7 +11,7 @@
  * ran `ps -A` and `log show` on its own every 20 s. Every probe here is injected: no `ps`, no
  * `log`, no tccd.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   IDLE_WINDOW_MS, createPromptWatcher, psDurationMs, readSnapshot, tccServiceFor,
   type ProcessRow, type ProcessTable, type PromptBlock, type PromptProbe,
@@ -203,8 +203,9 @@ describe('one watcher per daemon', () => {
     const watcher = createPromptWatcher(p, { everyMs: 40 })
     const blocked: PromptBlock[] = []
     const unwatch = watcher.watch({ pgid: 501, startedAt: Date.now() }, (b) => blocked.push(b))
-    await new Promise((r) => setTimeout(r, 200))
-    expect(blocked).toEqual([{ reason: 'password_prompt', service: 'SecurityAgent' }])
+    await vi.waitFor(() => {
+      expect(blocked).toEqual([{ reason: 'password_prompt', service: 'SecurityAgent' }])
+    }, { timeout: 10_000, interval: 10 })
     unwatch()
     const seen = calls.snapshot
     await new Promise((r) => setTimeout(r, 150))

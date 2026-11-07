@@ -3,7 +3,7 @@
  * the target as it came over whatever connection the target gives, with the
  * forward headers added, and a read that failed on one target can go to the next.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import http from 'node:http'
 import net from 'node:net'
 import type { AddressInfo } from 'node:net'
@@ -144,8 +144,7 @@ describe('forwardUpgrade', () => {
     expect(answer).toMatch(/^HTTP\/1\.1 401/)
     expect(answer).toContain('{"error":"unauthorized"}')
     // Nothing holds it once the answer is passed on (on a daemon stream it would linger to the link's end).
-    await new Promise((r) => setTimeout(r, 50))
-    expect(link!.destroyed).toBe(true)
+    await vi.waitFor(() => { expect(link!.destroyed).toBe(true) }, { timeout: 10_000, interval: 10 })
   })
 })
 
@@ -217,7 +216,8 @@ describe('a browser that goes away (the host server and a host replica alike)', 
     expect(await status('/a')).toBe(504)
     expect(fails).toEqual(['handshake_timeout'])
     const b = status('/b')
-    await new Promise((r) => setTimeout(r, 200))
+    // The second upgrade reached the front server and its forward started.
+    await vi.waitFor(() => { expect(fwds[1]).toBeDefined() }, { timeout: 10_000, interval: 10 })
     expect(fwds[1]!.settled()).toBe(false)
     expect(fwds[1]!.cancel()).toBe(true)
     expect(fwds[1]!.settled()).toBe(true)

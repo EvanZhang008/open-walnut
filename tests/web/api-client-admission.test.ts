@@ -151,9 +151,11 @@ describe('fetch admission control', () => {
     expect(getFetchQueueStats().queued).toBe(1); // still waiting, not timed out
 
     pending.shift()!.resolve(jsonResponse({}));
-    await new Promise((r) => setTimeout(r, 20));
-    const idx = fetchMock.mock.calls.findIndex((c) => String(c[0]) === '/api/waited');
-    expect(idx).toBeGreaterThanOrEqual(0);
+    await vi.waitFor(() => {
+      const idx = fetchMock.mock.calls.findIndex((c) => String(c[0]) === '/api/waited');
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(pending.some((p) => p.url === '/api/waited')).toBe(true);
+    }, { timeout: 10_000, interval: 5 });
     // Answer within its (fresh) 150ms budget.
     pending.find((p) => p.url === '/api/waited')!.resolve(jsonResponse({ ok: true }));
     pending = pending.filter((p) => p.url !== '/api/waited');

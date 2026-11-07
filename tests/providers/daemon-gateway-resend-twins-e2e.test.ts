@@ -151,6 +151,14 @@ async function waitFor(check: () => boolean, ms = 8_000): Promise<boolean> {
   return check()
 }
 
+/** True once a daemon log line in daemonDir carries `text`. */
+function daemonLogHas(text: string): boolean {
+  if (!fs.existsSync(daemonDir)) return false
+  return fs.readdirSync(daemonDir)
+    .filter((f) => /^daemon-.*\.log$/.test(f) && !f.startsWith('daemon-exit-'))
+    .some((f) => { try { return fs.readFileSync(path.join(daemonDir, f), 'utf8').includes(text) } catch { return false } })
+}
+
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-resend-twins-src-'))
   scriptPath = path.join(dir, 'daemon.cjs')
@@ -191,7 +199,8 @@ for (const twin of TWINS) {
     it('a call waiting for a server when the daemon stops is told so, not cut off', async () => {
       await boot(twin)
       const call = externalCall(20_000)
-      await new Promise((r) => setTimeout(r, 800))
+      // The call is waiting for a server before the daemon stops.
+      expect(await waitFor(() => daemonLogHas('gateway: no server connected, waiting for one'), 15_000)).toBe(true)
       proc!.kill('SIGTERM')
       const { resp, ms } = await call
       expect(resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })

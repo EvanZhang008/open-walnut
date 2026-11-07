@@ -242,7 +242,7 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
       await waitFor(() => {
         const snaps = snapshotsOf(rec.events)
         return snaps.length > 0 && snaps[snaps.length - 1].snapshot.cliState === 'idle'
-      }, 4000)
+      }, 10_000)
       await new Promise((r) => setTimeout(r, 300))
 
       const snaps = snapshotsOf(rec.events)
@@ -353,10 +353,13 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
     try {
       const pid = await startSleepSession(ws, sid)
       appendLines(sid, [userLine('turn for getState')])
-      // Let the tailer fold the line.
-      await new Promise((r) => setTimeout(r, 400))
+      // Wait for the tailer to fold the line.
+      let res: Record<string, unknown> = {}
+      await waitFor(async () => {
+        res = await rpc(ws, { cmd: 'getState', sid })
+        return (res.snapshot as SessionSnapshot | undefined)?.turnActive === true
+      }, 10_000)
 
-      const res = await rpc(ws, { cmd: 'getState', sid })
       expect(res.ok).toBe(true)
       const snap = res.snapshot as SessionSnapshot
       expect(snap, 'getState must include a snapshot field').toBeTruthy()
@@ -615,7 +618,7 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
 
       // Settle a turn so we have a stable baseline snapshot (and one push).
       appendLines(sid, [userLine('baseline turn'), resultLine(), stateLine('idle')])
-      await waitFor(() => snapshotsOf(rec.events).at(-1)?.snapshot.cliState === 'idle', 4000)
+      await waitFor(() => snapshotsOf(rec.events).at(-1)?.snapshot.cliState === 'idle', 10_000)
       await new Promise((r) => setTimeout(r, 200))
       const baselineCount = snapshotsOf(rec.events).length
       expect(baselineCount).toBeGreaterThan(0)
@@ -628,6 +631,11 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
         appendLines(sid, [assistantFlood(), assistantFlood()])
         await new Promise((r) => setTimeout(r, 150))
       }
+      // Wait for the tailer to consume the whole flood, then give a (wrong) push time to land.
+      await waitFor(async () => {
+        const st = await rpc(ws, { cmd: 'getState', sid })
+        return ((st.snapshot as SessionSnapshot | undefined)?.v ?? 0) >= fs.statSync(jsonlPath).size
+      }, 10_000)
       await new Promise((r) => setTimeout(r, 300))
       // The daemon HAS consumed them (v moved) but pushed nothing.
       const afterFlood = await rpc(ws, { cmd: 'getState', sid })
@@ -638,7 +646,7 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
 
       // A real state change pushes exactly once more.
       appendLines(sid, [stateLine('running')])
-      await waitFor(() => snapshotsOf(rec.events).length > baselineCount, 4000)
+      await waitFor(() => snapshotsOf(rec.events).length > baselineCount, 10_000)
       await new Promise((r) => setTimeout(r, 300))
       const snaps = snapshotsOf(rec.events)
       expect(snaps.length, 'a real state change must push exactly once').toBe(baselineCount + 1)

@@ -156,10 +156,13 @@ describe('GET /api/diagnostics', () => {
     const gate = new Promise<void>((r) => { release = r })
     const sqlite = vi.fn(async () => { await gate; return { ok: true } })
     const a = app(() => ({ collector: 'server', probes: { ...probes, sqlite }, env: ENV, localTimeoutMs: 5_000 }))
-    const first = request(a).get('/api/diagnostics').then((r) => r)
-    const second = request(a).get('/api/diagnostics?format=text').then((r) => r)
+    // Counts the requests that reached the router, so the gate opens only once both joined.
+    let arrived = 0
+    const counted = express().use((_req, _res, next) => { arrived++; next() }, a)
+    const first = request(counted).get('/api/diagnostics').then((r) => r)
+    const second = request(counted).get('/api/diagnostics?format=text').then((r) => r)
     await vi.waitFor(() => expect(sqlite).toHaveBeenCalledTimes(1))
-    await new Promise((r) => setTimeout(r, 50))
+    await vi.waitFor(() => expect(arrived).toBe(2), { timeout: 10_000, interval: 10 })
     release()
     const [r1, r2] = await Promise.all([first, second])
     expect(sqlite).toHaveBeenCalledTimes(1)

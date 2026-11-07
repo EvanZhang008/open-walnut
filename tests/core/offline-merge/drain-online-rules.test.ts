@@ -207,8 +207,9 @@ describe('a session\'s away write takes what its op takes online', () => {
     expect({ phase: t.phase, summary: t.summary ?? '', title: t.title }).toEqual({ phase: 'TODO', summary: '', title: 'Session scope' })
     const refused = allEntries().filter((e) => e.taskId === id)
     expect(refused.map((e) => e.reason ?? '')).toEqual([expect.stringContaining('status'), expect.stringContaining('summary')])
-    await new Promise((r) => setTimeout(r, 30))
-    expect(told.filter((x) => x.sid === SID).map((x) => x.text).join('\n')).toMatch(/does not take status[\s\S]*does not take summary/)
+    await vi.waitFor(() => {
+      expect(told.filter((x) => x.sid === SID).map((x) => x.text).join('\n')).toMatch(/does not take status[\s\S]*does not take summary/)
+    }, { timeout: 10_000, interval: 10 })
   })
 
   it('task_complete from a session sets only the phase; the same fields from an actor that is not a session still land', async () => {
@@ -344,8 +345,7 @@ describe('an away create follows the online create rules (create-rules.ts)', () 
     await drain([sessionCreate('mintrules0000000000c1', { title: 'Too deep' })])
     expect(await getTask('mintrules0000000000c1').catch(() => null)).toBeNull()
     expect(allEntries().some((e) => /levels deep|subtask/i.test(String(e.reason ?? '')))).toBe(true)
-    await new Promise((r) => setTimeout(r, 30))
-    expect(told.some((x) => x.sid === SID)).toBe(true)
+    await vi.waitFor(() => { expect(told.some((x) => x.sid === SID)).toBe(true) }, { timeout: 10_000, interval: 10 })
   })
 
   it('a worker\'s create naming another project (it cannot carry the user\'s words away) is refused, listed and told; a device create there is made', async () => {
@@ -354,8 +354,9 @@ describe('an away create follows the online create rules (create-rules.ts)', () 
     await drain([sessionCreate('mintrules0000000000f1', { title: 'Filed in the wrong place' }, { project: 'Other' })])
     expect(await getTask('mintrules0000000000f1').catch(() => null)).toBeNull()
     expect(allEntries().filter((e) => e.taskId === 'mintrules0000000000f1').map((e) => String(e.reason ?? ''))).toEqual([expect.stringMatching(/user_words/)])
-    await new Promise((r) => setTimeout(r, 30))
-    expect(told.filter((x) => x.sid === SID).map((x) => x.text).join('\n')).toMatch(/user_words/)
+    await vi.waitFor(() => {
+      expect(told.filter((x) => x.sid === SID).map((x) => x.text).join('\n')).toMatch(/user_words/)
+    }, { timeout: 10_000, interval: 10 })
     // The same project named by the worker's own: made, beside the caller.
     await drain([sessionCreate('mintrules0000000000f2', { title: 'Filed at home' }, { project: 'acme' })])
     expect((await getTask('mintrules0000000000f2')).parent_task_id).toBe(lead)

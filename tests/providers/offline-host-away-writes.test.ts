@@ -9,7 +9,7 @@
  *   - a Board outside this host's copy is checked against the base the replica sent
  *   - a person's message asked again under its message id is delivered once
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   JHOME, SID_A, TASK_A, DEVICE, journalTmpDir, cleanupJournalDirs, journalHost, jslice,
 } from '../helpers/offline-journal-harness.js'
@@ -79,7 +79,7 @@ describe('offline host: retries after a lost answer', () => {
     const h = journalHost(journalTmpDir(), { now: T0 }, { deliver: async (_sid, body) => { got.push(body); await gate; return { ok: true } } })
     h.host.configure(jslice())
     const first = h.host.deliverHuman(JHOME, SID_A, 'Ship it', 'qm-away-0001')
-    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => { expect(got).toEqual(['Ship it']) }, { timeout: 10_000, interval: 5 })
     // The replica's timeout fired: the same message id again, the first not answered yet.
     const second = h.host.deliverHuman(JHOME, SID_A, 'Ship it', 'qm-away-0001')
     await new Promise((r) => setTimeout(r, 10))

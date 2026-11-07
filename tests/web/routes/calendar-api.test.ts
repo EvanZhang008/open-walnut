@@ -199,10 +199,12 @@ describe('PATCH /api/calendar/events/:id', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start: '2026-08-04T10:00:00', end: '2026-08-04T10:30:00' }),
     });
-    await new Promise((r) => setTimeout(r, 20)); // async bus delivery
-    const updated = busEvents.filter((e) => e.name === EventNames.CALENDAR_UPDATED);
-    expect(updated.length).toBeGreaterThan(0);
-    expect(updated[0].destinations).toContain('web-ui');
+    // async bus delivery
+    await vi.waitFor(() => {
+      const updated = busEvents.filter((e) => e.name === EventNames.CALENDAR_UPDATED);
+      expect(updated.length).toBeGreaterThan(0);
+      expect(updated[0].destinations).toContain('web-ui');
+    }, { timeout: 10_000, interval: 10 });
   });
 
   it('maps readonly → 409, unknown id → 404, bad dates → 400', async () => {
@@ -433,8 +435,9 @@ describe('PUT /api/calendar/sources/eventkit', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden_calendar_ids: ['cal-home'] }),
     });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(busEvents.some((e) => e.name === EventNames.CALENDAR_UPDATED)).toBe(true);
+    await vi.waitFor(() => {
+      expect(busEvents.some((e) => e.name === EventNames.CALENDAR_UPDATED)).toBe(true);
+    }, { timeout: 10_000, interval: 10 });
     // restore
     await fetch(apiUrl('/api/calendar/sources/eventkit'), {
       method: 'PUT',
@@ -504,8 +507,9 @@ describe('PATCH /api/calendar/events/:id/visibility', () => {
     await readEvents();
     busEvents = [];
     await setVisibility('ev-standup', { hidden: true });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(busEvents.some((e) => e.name === EventNames.CALENDAR_UPDATED)).toBe(true);
+    await vi.waitFor(() => {
+      expect(busEvents.some((e) => e.name === EventNames.CALENDAR_UPDATED)).toBe(true);
+    }, { timeout: 10_000, interval: 10 });
   });
 
   it('a repeated hide changes nothing, and concurrent hides keep both ids', async () => {

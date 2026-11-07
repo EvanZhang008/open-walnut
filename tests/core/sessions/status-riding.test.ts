@@ -96,8 +96,8 @@ describe('a move a notice told is not told again', () => {
   it('a stop writes the save still waiting before it clears', async () => {
     rideNotice('s', 't9', 'completed', notice('LAST'), Date.now())
     stopRiding()
-    await new Promise((r) => setTimeout(r, 300))
-    expect(await loadRiding()).toBe(1)
+    // The stop's save is fire-and-forget: poll until it is on disk.
+    await vi.waitFor(async () => expect(await loadRiding()).toBe(1), { timeout: 10_000, interval: 10 })
     expect(pendingRiding('s')!.text).toContain('LAST')
   })
 })

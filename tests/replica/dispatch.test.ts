@@ -843,6 +843,8 @@ describe('a browser that goes away', () => {
     sent.end('{}')
     await until(() => mac.seen.some((x) => x.url === '/hang/w2'))
     sent.destroy()
+    // Once the cancel is through, nothing marked the Mac suspect.
+    await until(() => dispatcher.counts().inFlight === 0)
     await new Promise((r) => setTimeout(r, 200))
     expect(state.suspects).toEqual([])
     expect(dispatcher.counts().inFlight).toBe(0)

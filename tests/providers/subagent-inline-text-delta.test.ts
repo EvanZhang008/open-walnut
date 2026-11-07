@@ -76,9 +76,8 @@ describe('inline-subagent text-delta threading', () => {
       makeAssistant(SID, 'msg_sub', 'Now I have the two distinct enums.', PARENT),
       makeAssistant(SID, 'msg_main2', '主对话继续'),
     ])
-    await new Promise(r => setTimeout(r, 50))
+    await vi.waitFor(() => { expect(deltas).toHaveLength(3) }, { timeout: 10_000, interval: 10 })
 
-    expect(deltas).toHaveLength(3)
     expect(deltas[0]).toMatchObject({ delta: '主对话中文回答' })
     expect(deltas[0].parentToolUseId).toBeUndefined()
     expect(deltas[1]).toMatchObject({ delta: 'Now I have the two distinct enums.', parentToolUseId: PARENT })
@@ -92,10 +91,12 @@ describe('inline-subagent text-delta threading', () => {
       makeInit(SID + '-2'),
       makeAssistant(SID + '-2', 'msg_main', 'main only'),
       makeAssistant(SID + '-2', 'msg_sub', 'SUBAGENT LEAK', PARENT),
+      makeAssistant(SID + '-2', 'msg_main_end', 'main end'),
     ])
-    await new Promise(r => setTimeout(r, 50))
-    const fullText = (session as unknown as { fullText: string }).fullText
-    expect(fullText).toContain('main only')
-    expect(fullText).not.toContain('SUBAGENT LEAK')
+    // The last main line is read only after the subagent's line before it.
+    const textOf = () => (session as unknown as { fullText: string }).fullText
+    await vi.waitFor(() => { expect(textOf()).toContain('main end') }, { timeout: 10_000, interval: 10 })
+    expect(textOf()).toContain('main only')
+    expect(textOf()).not.toContain('SUBAGENT LEAK')
   })
 })

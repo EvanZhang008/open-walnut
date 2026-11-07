@@ -56,10 +56,9 @@ describe('outputFile survives the session-id rename', () => {
     session.send('hello')
 
     // Wait for the spawn to resolve and set the sentinel.
-    for (let i = 0; i < 100 && !session.outputFile; i++) {
-      await new Promise((r) => setTimeout(r, 20))
-    }
-    expect(session.outputFile, 'spawn should publish a remote:// sentinel').toMatch(/^remote:\/\//)
+    await vi.waitFor(() => {
+      expect(session.outputFile, 'spawn should publish a remote:// sentinel').toMatch(/^remote:\/\//)
+    }, { timeout: 10_000, interval: 10 })
 
     // Now let the init event (and its renameForSession) land. The value must NOT
     // revert to null — polling rather than one fixed sleep so this pins the

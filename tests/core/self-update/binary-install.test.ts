@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   extractTarEntry, installFileVersion, markRunning, pidAlive, processesRunFrom, pruneVersions, registryBaseFor, rollBack, swapLink, takeLock, undoRollBack, versionInUse, versionsRunning,
 } from '../../../src/core/self-update/binary-install.js'
@@ -310,8 +310,7 @@ describe('the layout helpers', () => {
     expect(await processesRunFrom(app)).toBe(false)
     const child = spawn(runner, [], { stdio: 'ignore' })
     try {
-      await new Promise((r) => setTimeout(r, 200))
-      expect(await processesRunFrom(app)).toBe(true)
+      await vi.waitFor(async () => expect(await processesRunFrom(app)).toBe(true), { timeout: 10_000, interval: 50 })
       expect(await pruneVersions(install.root, ['0.7.0'], { running: [], appInUse: true })).toEqual([])
       // ps not asked (the default): kept too.
       expect(await pruneVersions(install.root, ['0.7.0'], { running: [] })).toEqual([])

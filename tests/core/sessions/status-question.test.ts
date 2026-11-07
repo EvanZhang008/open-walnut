@@ -79,9 +79,10 @@ describe('the status question', () => {
     await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 300))
     expect(fake.askSideQuestion).not.toHaveBeenCalled()
     await armStatusQuestion(task.id, SID)
-    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 500))
-    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
-    expect(isReportPending(SID)).toBe(false)
+    await vi.waitFor(() => {
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+      expect(isReportPending(SID)).toBe(false)
+    }, { timeout: STATUS_SETTLE_MS + 7_000, interval: 10 })
   }, 20_000)
 
   it('a turn running when the window ends is not asked mid-turn; its own end asks', async () => {
@@ -95,8 +96,7 @@ describe('the status question', () => {
       expect(isReportPending(SID)).toBe(false)
     } finally { active.delete(SID) }
     await armStatusQuestion(task.id, SID)
-    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 500))
-    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(fake.askSideQuestion).toHaveBeenCalledTimes(1), { timeout: STATUS_SETTLE_MS + 7_000, interval: 10 })
   }, 20_000)
 
   it('a turn end while an ask is in flight is asked again once it settles', async () => {
@@ -104,13 +104,15 @@ describe('the status question', () => {
     let release!: () => void
     fake.askSideQuestion.mockImplementationOnce(() => new Promise<string>((r) => { release = () => r(ANSWER) }))
     const first = askStatus(task.id, SID, Date.now() - 60_000, 'reconcile')
-    await new Promise((r) => setTimeout(r, 50))
+    // The first question is out (and `release` is set).
+    await vi.waitFor(() => expect(fake.askSideQuestion).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 10 })
     expect(await askStatus(task.id, SID, Date.now())).toBe(false)
     release()
     await first
-    await new Promise((r) => setTimeout(r, 300))
-    expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
-    expect(isReportPending(SID)).toBe(false)
+    await vi.waitFor(() => {
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
+      expect(isReportPending(SID)).toBe(false)
+    }, { timeout: 10_000, interval: 10 })
   })
 
   it('an engine switch stopping the session waits for a question in flight and asks no new one', async () => {
@@ -120,7 +122,8 @@ describe('the status question', () => {
     let release!: () => void
     fake.askSideQuestion.mockImplementationOnce(() => new Promise<string>((r) => { release = () => r(ANSWER) }))
     const first = askStatus(task.id, SID, Date.now() - 60_000, 'reconcile')
-    await new Promise((r) => setTimeout(r, 50))
+    // The first question is out (and `release` is set).
+    await vi.waitFor(() => expect(fake.askSideQuestion).toHaveBeenCalledTimes(1), { timeout: 10_000, interval: 10 })
     let settled = false
     const settling = settleStatusQuestion(SID, 5_000).then(() => { settled = true })
     await new Promise((r) => setTimeout(r, 100))
@@ -152,10 +155,11 @@ describe('the status question', () => {
     const fake = fakeSession('I am not sure what you mean.')
     await armStatusQuestion(task.id, SID)
     expect(statusQuestionOwns(SID)).toBe(true)
-    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 500))
-    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
-    expect(statusQuestionOwns(SID)).toBe(false)
-    expect(isReportPending(SID)).toBe(false)
+    await vi.waitFor(() => {
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+      expect(statusQuestionOwns(SID)).toBe(false)
+      expect(isReportPending(SID)).toBe(false)
+    }, { timeout: STATUS_SETTLE_MS + 10_000, interval: 10 })
     // The next turn is its again.
     fakeSession(ANSWER)
     await armStatusQuestion(task.id, SID)

@@ -4,7 +4,7 @@
  * what starts a download (only a person, a feature, or the server's upgrade),
  * how automatic retries back off, and what a selftest may not do.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -174,8 +174,7 @@ describe('component status', () => {
     const seen: string[] = [];
     const off = onComponentStatus((s) => { if (s.name === 'images') seen.push(s.state); });
     const done = ensureComponent('images', 'user');
-    await new Promise((r) => setTimeout(r, 200));
-    expect(componentStatus('images').state).toBe('waiting');
+    await vi.waitFor(() => { expect(componentStatus('images').state).toBe('waiting'); }, { timeout: 10_000, interval: 10 });
     await other.release();
     expect((await done).state).toBe('ready');
     off();

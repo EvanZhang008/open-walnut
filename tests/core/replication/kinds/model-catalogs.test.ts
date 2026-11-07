@@ -69,8 +69,12 @@ describe('the leader', () => {
   it('a catalog write brings a round', async () => {
     const soon = vi.fn()
     const stop = MODEL_CATALOGS_KIND.watch(soon)
-    await new Promise((r) => setTimeout(r, 20)) // the watch subscribes after its lazy import
-    await saveHostModelCatalog('devbox', [SONNET], '/home/acme', 2_000)
+    // The watch subscribes after its lazy import: write until one is heard (a write
+    // before the subscription is not), then exactly that one counted.
+    await vi.waitFor(async () => {
+      await saveHostModelCatalog('devbox', [SONNET], '/home/acme', 2_000)
+      expect(soon).toHaveBeenCalled()
+    }, { timeout: 10_000, interval: 10 })
     expect(soon).toHaveBeenCalledTimes(1)
     stop()
     await saveHostModelCatalog('devbox', [SONNET], '/home/acme', 3_000)

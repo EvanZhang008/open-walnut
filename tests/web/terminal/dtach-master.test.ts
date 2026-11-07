@@ -142,6 +142,11 @@ function running(pid: number): Promise<boolean> {
   return new Promise((resolve) => execFile('ps', ['-o', 'stat=', '-p', String(pid)], (err, out) => resolve(!err && !!out.trim() && !out.trim().startsWith('Z'))))
 }
 
+/** Does this pid's argv (ps reads it) name `needle`? A bystander is only a real bystander once it does. */
+function names(pid: number, needle: string): Promise<boolean> {
+  return new Promise((resolve) => execFile('ps', ['-o', 'args=', '-p', String(pid)], (err, out) => resolve(!err && out.includes(needle))))
+}
+
 /** A detached dtach master (`-n`) on `sock`; `record` starts the shell through the pid record as spawn.ts does. */
 async function startMaster(sock: string, record: boolean): Promise<void> {
   const cmd = record ? ['/bin/sh', '-c', dtachRecordScript(dtachPidFileFor(sock)), '/bin/sh'] : ['/bin/sh', '-l']
@@ -185,7 +190,7 @@ describe('stopping a real dtach master', () => {
     // The regression: each of these matched `pkill -f <socket>`.
     const lister = bystander(`ls ${sock} >/dev/null 2>&1`)
     const lookalike = bystander(':', '-A', sock, '-z')
-    await sleep(200)
+    await until('the bystanders to run', async () => (await names(lister.pid!, sock)) && (await names(lookalike.pid!, sock)))
 
     const res = await stopDtachMaster(localShellRunner, sock)
     expect(res).toMatchObject({ outcome: 'stopped', source: 'recorded', signalled: [master] })
@@ -219,7 +224,7 @@ describe('stopping a real dtach master', () => {
     await startMaster(sock, false)
     expect(fs.existsSync(dtachPidFileFor(sock))).toBe(false)
     const lister = bystander(`cat ${sock} >/dev/null 2>&1`)
-    await sleep(200)
+    await until('the bystander to run', () => names(lister.pid!, sock))
 
     const res = await stopDtachMaster(localShellRunner, sock)
     expect(res).toMatchObject({ outcome: 'stopped', source: 'socket-owner' })

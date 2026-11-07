@@ -413,6 +413,8 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     }
     expect(await resend('dd-word', 'run me', wordUuid, 'qm-4')).toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'completed' })
     expect(await resend('dd-rec', 'hold me', recUuid, 'qm-5')).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
+    expect(await waitFor(() => received(dirs).length >= 2)).toBe(true)
+    // Then time for a copy that was (wrongly) written again to arrive.
     await new Promise((r) => setTimeout(r, 300))
     expect(received(dirs).map((r) => r.content).sort()).toEqual(['hold me', 'run me'])
   }, 90_000)

@@ -147,9 +147,8 @@ describe('runPeriodic (tick hygiene)', () => {
       sawOverBudget = ctx.overBudget();
     });
     handle.kick();
-    await new Promise(r => setTimeout(r, 200));
+    await vi.waitFor(() => { expect(sawOverBudget).toBe(true); }, { timeout: 10_000, interval: 10 });
     handle.stop();
-    expect(sawOverBudget).toBe(true);
   });
 
   // Regression: schedule() re-armed without clearing the pending handle, and it

@@ -1534,12 +1534,7 @@ describe('applySnapshot — turn-start phase pullback', () => {
   }
 
   async function expectPhaseEventually(taskId: string, phase: string): Promise<void> {
-    const deadline = Date.now() + 3000
-    while (Date.now() < deadline) {
-      if ((await getTask(taskId)).phase === phase) return
-      await new Promise((r) => setTimeout(r, 25))
-    }
-    expect((await getTask(taskId)).phase).toBe(phase)
+    await vi.waitFor(async () => { expect((await getTask(taskId)).phase).toBe(phase) }, { timeout: 10_000, interval: 25 })
   }
 
   async function expectPhaseStays(taskId: string, phase: string): Promise<void> {
@@ -2093,12 +2088,7 @@ describe('projectProcessStatus — detached background work', () => {
     const after = await getSessionByClaudeId(sid)
     expect(after?.process_status).toBe('running')
     // Phase pullback rides the same running projection (fire-and-forget).
-    const deadline = Date.now() + 3000
-    while (Date.now() < deadline) {
-      if ((await getTask(task.id)).phase === 'IN_PROGRESS') break
-      await new Promise((r) => setTimeout(r, 25))
-    }
-    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    await vi.waitFor(async () => { expect((await getTask(task.id)).phase).toBe('IN_PROGRESS') }, { timeout: 10_000, interval: 25 })
   })
 })
 
@@ -2167,12 +2157,7 @@ describe('projectProcessStatus — armed ScheduleWakeup', () => {
     }), 'daemon-push')
     expect(res).toMatchObject({ outcome: 'applied', projected: 'running' })
     expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
-    const deadline = Date.now() + 3000
-    while (Date.now() < deadline) {
-      if ((await getTask(task.id)).phase === 'IN_PROGRESS') break
-      await new Promise((r) => setTimeout(r, 25))
-    }
-    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    await vi.waitFor(async () => { expect((await getTask(task.id)).phase).toBe('IN_PROGRESS') }, { timeout: 10_000, interval: 25 })
   })
 
   // The equal-v tiebreaker normally refuses a stream-derived projection at an

@@ -543,8 +543,11 @@ describe('progress on a slow link that is alive', () => {
   it('the probe counts the bulk socket: on one shared link the main socket hears nothing while a reply streams, and the link is alive', async () => {
     const c = await connectWithBulk()
     proxy.setMode('slow', { delayMs: 5, bytesPerSec: 128 * 1024, shared: true })
+    const bulkHeard = () => (c as unknown as { _bulkHeardBytes: number })._bulkHeardBytes
+    const bulkBefore = bulkHeard()
     const read = c.send('fs.readRange', { path: `${dir}/big.bin`, start: 0, length: 384 * 1024 })
-    await new Promise((r) => setTimeout(r, 800))
+    // Probe once the reply is streaming on the shared link.
+    await waitFor(() => bulkHeard() > bulkBefore, 10_000, 'the bulk reply to start streaming')
     const heard = c.heardBytes
     // The pong waits behind ~500KB of base64 on the shared queue: only the bulk socket's bytes arrive.
     expect(await c.probeLiveness(1_500)).toBe(true)
@@ -603,9 +606,11 @@ describe('progress on a slow link that is alive', () => {
   it('a main-socket reply in line behind a bulk reply on one link outlives its timeout; with nothing ahead of it, its timeout stands', async () => {
     const c = await connectWithBulk()
     proxy.setMode('slow', { delayMs: 5, bytesPerSec: 128 * 1024, shared: true })
+    const bulkHeard = () => (c as unknown as { _bulkHeardBytes: number })._bulkHeardBytes
     // About 4s of base64 on the shared link, ahead of anything sent after it.
+    let bulkBefore = bulkHeard()
     const big = c.send('fs.readRange', { path: `${dir}/big.bin`, start: 0, length: 384 * 1024 })
-    await new Promise((r) => setTimeout(r, 300))
+    await waitFor(() => bulkHeard() > bulkBefore, 10_000, 'the bulk reply to start streaming')
     const t0 = Date.now()
     const list = await c.send('fs.ls', { path: dir }, 800)
     expect(list.ok).toBe(true)
@@ -614,10 +619,11 @@ describe('progress on a slow link that is alive', () => {
 
     // The daemon never answers it: it waits while the bulk reply ahead of it
     // arrives, then its own timeout stands.
+    bulkBefore = bulkHeard()
     const big2 = c.send('fs.readRange', { path: `${dir}/big.bin`, start: 0, length: 256 * 1024 })
     let bigAt = 0
     void big2.then(() => { bigAt = Date.now() })
-    await new Promise((r) => setTimeout(r, 300))
+    await waitFor(() => bulkHeard() > bulkBefore, 10_000, 'the second bulk reply to start streaming')
     daemon.swallowNextCommand('fs.ls')
     const err = await c.send('fs.ls', { path: dir }, 800).then(() => null, (e: Error) => e)
     const errAt = Date.now()

@@ -404,10 +404,11 @@ describe('a task created from the phone (cloud outbox op) is defaulted like any 
     } as never);
     expect(outcome).toEqual({ applied: true, reason: 'created' });
 
-    // The push is fire-and-forget on this path; let it settle.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The push is fire-and-forget on this path; wait for it.
+    await vi.waitFor(() => {
+      expect(pushed.map((t) => t.sprint)).toEqual(['Sprint 42']);
+    }, { timeout: 10_000, interval: 10 });
     expect(hookCalls).toEqual([{ taskId: 'phone-task-1', reason: 'created' }]);
     expect((await getTask('phone-task-1'))?.sprint).toBe('Sprint 42');
-    expect(pushed.map((t) => t.sprint)).toEqual(['Sprint 42']);
   });
 });

@@ -202,7 +202,8 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
     // Ended the way a CLI ends on its own (the pid is the stand-in this test started).
     process.kill(pid, 'SIGTERM')
     expect(await waitFor(() => commandLine(pid).trim() === '')).toBe(true)
-    await new Promise((r) => setTimeout(r, 1500)) // the daemon reaps it
+    // The daemon reaps it.
+    expect(await waitFor(() => d.events.some((e) => e.ev === 'session_state' && e.sid === sid && e.state === 'dead'))).toBe(true)
     const pathArgs = args.map((a) => (a === MCP ? '/etc/walnut-mcp.json' : a))
     const second = await rpc(d, { cmd: 'start', sid, cwd: root, message: '', resume: true, mode: 'default', args: pathArgs })
     expect(second).toMatchObject({ ok: true })

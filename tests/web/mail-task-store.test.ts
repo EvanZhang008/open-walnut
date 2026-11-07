@@ -106,8 +106,9 @@ describe('digest-sent invalidates the letter list without fetching it', () => {
     expect(calls.filter((call) => call.url.includes('/human-inbox'))).toHaveLength(before);
 
     ensureLetters();
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(calls.filter((call) => call.url.includes('/human-inbox'))).toHaveLength(before + 1);
+    await vi.waitFor(() => {
+      expect(calls.filter((call) => call.url.includes('/human-inbox'))).toHaveLength(before + 1);
+    }, { timeout: 10_000, interval: 5 });
   });
 });
 

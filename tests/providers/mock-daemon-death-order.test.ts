@@ -107,7 +107,9 @@ describe('mock daemon: a death is reported after the lines written before it', (
     const sid = 'death-order-simulated'
     const result = await deadReaderSession(sid)
     daemon.simulateDeath(sid, 0)
-    await new Promise((r) => setTimeout(r, 100))
+    await vi.waitFor(() => {
+      expect(frames.some((f) => f.ev === 'session_state' && f.sid === sid && f.state === 'dead')).toBe(true)
+    }, { timeout: 10_000, interval: 10 })
     const line = frames.findIndex((f) => f.ev === 'jsonl' && f.sid === sid && f.line === result)
     const death = frames.findIndex((f) => f.ev === 'session_state' && f.sid === sid && f.state === 'dead')
     expect(line).toBeGreaterThanOrEqual(0)

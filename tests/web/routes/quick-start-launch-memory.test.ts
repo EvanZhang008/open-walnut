@@ -112,14 +112,11 @@ describe('quick-start launch memory', () => {
     const res = await quickStart({ cwd: CWD, message: 'again' });
     expect(res.status).toBe(200);
     // Poll for the CLEAR (lastLaunch gone)
-    let cleared = false;
-    for (let i = 0; i < 50; i++) {
+    await vi.waitFor(async () => {
       const wd = await request(createApp()).get('/api/sessions/working-dirs');
       const dir = (wd.body.dirs as Array<{ cwd: string; lastLaunch?: unknown }>).find(d => d.cwd === CWD);
-      if (dir && dir.lastLaunch === undefined) { cleared = true; break; }
-      await new Promise(r => setTimeout(r, 20));
-    }
-    expect(cleared).toBe(true);
+      expect(dir && dir.lastLaunch === undefined).toBe(true);
+    }, { timeout: 10_000, interval: 20 });
   });
 
   it('retry (taskId set) does not overwrite the remembered config', async () => {

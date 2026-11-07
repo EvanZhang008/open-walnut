@@ -213,14 +213,11 @@ describe('git smart HTTP data hub (cloud mode)', () => {
     }
     // gc is spawn-and-forget; give the last one a moment to finish.
     const packDir = path.join(hubRepo, 'objects', 'pack');
-    let packs = 0;
-    for (let waited = 0; waited < 10_000; waited += 500) {
-      packs = (await fs.readdir(packDir)).filter((f) => f.endsWith('.pack')).length;
-      if (packs <= 8) break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
     // Without the gc hook this is 12+ (one pack per push); with it, ≤8.
-    expect(packs).toBeLessThanOrEqual(8);
+    await vi.waitFor(async () => {
+      const packs = (await fs.readdir(packDir)).filter((f) => f.endsWith('.pack')).length;
+      expect(packs).toBeLessThanOrEqual(8);
+    }, { timeout: 30_000, interval: 100 });
   }, 60_000);
 
   it('refuses a push with 503 while the disk watermark is critical; fetch still works', async () => {

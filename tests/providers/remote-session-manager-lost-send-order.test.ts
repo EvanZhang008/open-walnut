@@ -96,8 +96,8 @@ describe('RemoteSessionManager: a later line waits for a settling one', () => {
     const m = manager(f.conn)
     const settled: string[] = []
     const a = m.writeMessage('first', marked('first', 'qm-1')).then((ok) => { settled.push('first'); return ok })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(f.conn.connected).toBe(false)
+    // The first send lost its link: down until the fake relinks 300 ms later.
+    await vi.waitFor(() => { expect(f.conn.connected).toBe(false) }, { timeout: 10_000, interval: 5 })
     // The link is down now: without the wait this answered false at once.
     const b = m.writeMessage('second', marked('second', 'qm-2')).then((ok) => { settled.push('second'); return ok })
     await expect(a).resolves.toBe(true)

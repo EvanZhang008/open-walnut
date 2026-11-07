@@ -395,10 +395,7 @@ describe('walnut-plugin dev against a real watcher', () => {
         path.join(root, 'src', 'server.ts'),
         `${await fs.readFile(path.join(root, 'src', 'server.ts'), 'utf8')}\nexport const touched = true\n`,
       )
-      const deadline = Date.now() + 15_000
-      while (syncs() < 2 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
+      await vi.waitFor(() => { expect(syncs()).toBeGreaterThanOrEqual(2) }, { timeout: 10_000, interval: 50 })
       expect(syncs()).toBe(2)
       expect(test.output).toContain('rebuilt')
     } finally {

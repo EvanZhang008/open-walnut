@@ -158,10 +158,9 @@ describe('presence: the view as the daemon link parses it', () => {
     links.push(link)
     expect(link.lastFrameAt()).toBeNull()
     link.start()
-    for (let i = 0; i < 100 && link.lastFrameAt() === null; i++) await new Promise((r) => setTimeout(r, 20))
+    await vi.waitFor(() => { expect(link.lastFrameAt()).not.toBeNull() }, { timeout: 10_000, interval: 10 })
     const first = link.lastFrameAt()!
-    await new Promise((r) => setTimeout(r, 200))
-    expect(link.lastFrameAt()!).toBeGreaterThan(first)
+    await vi.waitFor(() => { expect(link.lastFrameAt()!).toBeGreaterThan(first) }, { timeout: 10_000, interval: 10 })
   })
 })
 

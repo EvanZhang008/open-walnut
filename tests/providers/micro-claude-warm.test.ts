@@ -82,6 +82,11 @@ function feedToolUse(proc: FakeProc, id: string): void {
   }) + '\n');
 }
 
+/** Waits until procs[i] took the prompt on stdin, so the run is attached to that child. */
+async function prompted(procs: FakeProc[], i = 0): Promise<void> {
+  await vi.waitFor(() => { expect(procs[i]?.stdin.write).toHaveBeenCalled(); }, { timeout: 10_000, interval: 5 });
+}
+
 beforeEach(() => {
   _resetWarmPoolForTesting();
   spawnMock.mockReset();
@@ -93,7 +98,7 @@ describe('warm micro-claude pool', () => {
     const procs: FakeProc[] = [];
     spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
     const done = runWarmMicroClaude({ ...SPEC, prompt: 'find it', timeoutMs: 5_000, toolUseId: 'tu-w1' });
-    await new Promise((r) => setTimeout(r, 10));
+    await prompted(procs);
     feedResult(procs[0]);
     const run = await done;
     expect(run.response).toBe('{"results":[]}');
@@ -126,10 +131,11 @@ describe('warm micro-claude pool', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
 
     const done = runWarmMicroClaude({ ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w2' });
-    await new Promise((r) => setTimeout(r, 10));
     // The POOLED proc got the prompt; a replacement spawn already happened.
-    expect(procs[0].stdin.write).toHaveBeenCalledTimes(1);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(procs[0]?.stdin.write).toHaveBeenCalledTimes(1);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    }, { timeout: 10_000, interval: 5 });
     feedResult(procs[0]);
     expect((await done).warm).toBe(true);
   });
@@ -139,7 +145,7 @@ describe('warm micro-claude pool', () => {
     spawnMock.mockImplementation(() => { const p = fakeProc(); procs.push(p); return p; });
     prewarmMicroClaude(SPEC);
     const done = runWarmMicroClaude({ ...SPEC, model: 'haiku', prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w3' });
-    await new Promise((r) => setTimeout(r, 10));
+    await prompted(procs, 1);
     expect(procs[0].stdin.write).not.toHaveBeenCalled(); // pooled sonnet child untouched
     feedResult(procs[1]);
     expect((await done).warm).toBe(false);
@@ -151,7 +157,7 @@ describe('warm micro-claude pool', () => {
     prewarmMicroClaude(SPEC); // no effort
     expect(spawnMock.mock.calls[0][1]).not.toContain('--effort');
     const done = runWarmMicroClaude({ ...SPEC, effort: 'medium', prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w4' });
-    await new Promise((r) => setTimeout(r, 10));
+    await prompted(procs, 1);
     expect(procs[0].stdin.write).not.toHaveBeenCalled(); // different effort, not reused
     const args = spawnMock.mock.calls[1][1] as string[];
     expect(args[args.indexOf('--effort') + 1]).toBe('medium');
@@ -167,11 +173,11 @@ describe('warm micro-claude pool', () => {
       ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w4',
       onBlock: (b) => blocks.push(b.type),
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await prompted(procs);
     feedToolUse(procs[0], 'b1');
     feedToolUse(procs[0], 'b2');
     feedToolUse(procs[0], 'b3');
-    await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => { expect(blocks.filter((b) => b === 'tool_call')).toHaveLength(3); }, { timeout: 10_000, interval: 5 });
     // Tool budgets are prompt-only (user call): stdin carries the ONE prompt
     // message and nothing else, however many tools the child runs.
     expect(procs[0].stdin.write).toHaveBeenCalledTimes(1);
@@ -206,7 +212,7 @@ describe('warm micro-claude pool', () => {
       await new Promise((r) => setTimeout(r, 10));
 
       const done = runWarmMicroClaude({ ...SPEC, prompt: 'q', timeoutMs: 5_000, toolUseId: 'tu-w6' });
-      await new Promise((r) => setTimeout(r, 10));
+      await prompted(procs);
       feedResult(procs[0]);
       const run = await done;
       expect(run.warm).toBe(true);

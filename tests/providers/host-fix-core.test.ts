@@ -1108,8 +1108,7 @@ describe('cancel(): a stopping daemon stops the fix in flight at once', () => {
   it('during the claude probe (its own child, not ours): the fix answers at once and asks no second probe', async () => {
     const h = releaseHost({ releases: { [V]: { binary: binaryOf(V) } }, probeHang: true })
     const done = h.fix.run('install-claude-native')
-    await new Promise((r) => setTimeout(r, 5))
-    expect(h.probes).toEqual(['claude'])
+    await vi.waitFor(() => { expect(h.probes).toEqual(['claude']) }, { timeout: 10_000, interval: 5 })
     expect(h.fix.cancel()).toBe(true)
     expect(await done).toMatchObject({ ok: false, error: 'cancelled' })
     expect(h.probes).toEqual(['claude'])
@@ -1122,7 +1121,10 @@ describe('cancel(): a stopping daemon stops the fix in flight at once', () => {
     const h = fakeHost({ bins: { sudo: '/usr/bin/sudo', yum: '/usr/bin/yum' }, script: () => new Promise<Reply>((resolve) => { release = resolve }) })
     const fix = createHostFix({ ...h.deps, kill: (pid, sig) => { kills.push([pid, sig]) } })
     const done = fix.run('install-compiler')
-    await new Promise((r) => setTimeout(r, 10))
+    // Wait until the fix reached its hanging package-manager call.
+    await vi.waitFor(() => {
+      expect(h.calls.filter((c) => c.args[1] !== 'command -v "$1"')).not.toEqual([])
+    }, { timeout: 10_000, interval: 5 })
     expect(fix.running).toBe('install-compiler')
     expect(fix.cancel()).toBe(false)
     h.bins.gcc = '/usr/bin/gcc'
@@ -1460,7 +1462,10 @@ describe('guards', () => {
       script: () => new Promise<Reply>((resolve) => { release = resolve }),
     })
     const first = h.fix.run('install-compiler')
-    await new Promise((r) => setTimeout(r, 10))
+    // Wait until the first fix reached its hanging package-manager call.
+    await vi.waitFor(() => {
+      expect(h.calls.filter((c) => c.args[1] !== 'command -v "$1"')).not.toEqual([])
+    }, { timeout: 10_000, interval: 5 })
     expect(h.fix.running).toBe('install-compiler')
     expect(await h.fix.run('install-claude-native')).toMatchObject({ ok: false, error: 'busy' })
     h.bins.gcc = '/usr/bin/gcc'

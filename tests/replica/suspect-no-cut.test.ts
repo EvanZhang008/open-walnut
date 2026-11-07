@@ -11,7 +11,7 @@
  * chooseReplicaRoute. Only the follower link is the test's (the daemon's view
  * and the streams to the Mac), so a front.ts edit that cuts on a mark fails here.
  */
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -177,7 +177,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 describe('a suspect mark steers new requests only', { timeout: 20_000 }, () => {
   it('a write a live Mac answers survives one dropped read beside it, and the read is answered here', async () => {
     const write = call('PATCH', '/api/acme/t1/slow/1500')
-    await sleep(200)
+    // The write is at the Mac before the read beside it drops.
+    await vi.waitFor(() => { expect(applied).toContain('PATCH /api/acme/t1/slow/1500') }, { timeout: 10_000, interval: 10 })
     const read = await call('GET', '/api/acme/drop')
     expect(read.json).toEqual({ from: 'replica' })
     // The mark steers: presence says unreachable, new requests stay here.
@@ -218,7 +219,7 @@ describe('a suspect mark steers new requests only', { timeout: 20_000 }, () => {
     const closed = new Promise<number>((resolve) => ws.once('close', (code) => resolve(code)))
     await new Promise<void>((resolve, reject) => { ws.once('open', () => resolve()); ws.once('error', reject) })
     const write = call('POST', '/api/acme/t2/slow/5000')
-    await sleep(200)
+    await vi.waitFor(() => { expect(applied).toContain('POST /api/acme/t2/slow/5000') }, { timeout: 10_000, interval: 10 })
     await call('GET', '/api/acme/drop')
     expect(look().why).toBe('unreachable')
     expect(aways).toBe(0)

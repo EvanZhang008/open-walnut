@@ -97,6 +97,6 @@ describe('the companion with WALNUT_CAPABILITIES=public-door', () => {
     expect(logs.has('backup leader: watching the primary')).toBe(false)
     expect(await getBackupLeader()).toBeNull()
     expect(logs.has('cron started')).toBe(false)
-    expect(logs.has('integration plugins loaded')).toBe(true)
+    await vi.waitFor(() => { expect(logs.has('integration plugins loaded')).toBe(true) }, { timeout: 10_000, interval: 25 })
   })
 })

@@ -398,10 +398,12 @@ for (const twin of twinsToRun) {
       expect(await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
       expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { offline: true } })
       primary.close()
-      await sleep(200)
       // The server gone: kept only on the Mac, in so many words (4f), never a plain miss.
-      const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
-      expect(r).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+      // Poll until the host has seen the link close (a call before that times out at the hub).
+      await vi.waitFor(async () => {
+        const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
+        expect(r).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+      }, { timeout: 20_000, interval: 50 })
       // A note written here needs the Mac the same way.
       const w = await gatewayCall(d, 'note_write', { path: 'Projects/New idea', content: '# New idea\n' })
       expect(w).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })

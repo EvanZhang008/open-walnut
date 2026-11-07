@@ -448,7 +448,7 @@ describe('an open tunnel', () => {
     ws.on('message', (d) => { received += (d as Buffer).length })
     try {
       await new Promise((r) => setTimeout(r, 900)) // four heartbeats
-      expect(received).toBeGreaterThan(64 * 1024)
+      await vi.waitFor(() => { expect(received).toBeGreaterThan(64 * 1024) }, { timeout: 10_000, interval: 10 })
       expect(ws.readyState).toBe(WebSocket.OPEN)
     } finally {
       ws.terminate()
@@ -478,8 +478,9 @@ describe('an open tunnel', () => {
       stalledMs = Date.now() - t0
     })
     try {
+      // Wait for the stall itself, then let the beats after it pass.
+      await vi.waitFor(() => { expect(stalledMs).toBeGreaterThanOrEqual(600) }, { timeout: 10_000, interval: 10 })
       await new Promise((r) => setTimeout(r, 1_300))
-      expect(stalledMs).toBeGreaterThanOrEqual(600)
       expect(ws.readyState).toBe(WebSocket.OPEN)
     } finally {
       ws.terminate()

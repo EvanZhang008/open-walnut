@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -175,8 +175,8 @@ describe('acquireDaemonInstanceLock — owner', () => {
     if (result.kind !== 'owner') throw new Error('expected owner')
     const lingering = stub.serve({ close: false })
     const wellBehaved = stub.serve({ close: true })
-    await new Promise((resolve) => setTimeout(resolve, 60))
-    expect(lingering.destroyed()).toBe(true)
+    await vi.waitFor(() => { expect(lingering.destroyed()).toBe(true) }, { timeout: 10_000, interval: 10 })
+    // Past the deadline that cut the lingering one: the closed socket was not cut.
     expect(wellBehaved.destroyed()).toBe(false)
     expect(DAEMON_LOCK_DEADLINE_MS).toBe(2000)
   })

@@ -4,7 +4,7 @@
  * (src/lib/link-stream.ts), in memory. Frames go through a microtask, the way
  * a socket delivers them later than they were sent.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import http from 'node:http'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -64,10 +64,11 @@ describe('a stream through the daemon', () => {
     const got = readAll(s)
     s.end(big)
     expect((await got).equals(big)).toBe(true)
-    await new Promise((r) => setTimeout(r, 50))
-    expect(h.relay.count()).toBe(0)
-    expect(h.follower.ep!.size()).toBe(0)
-    expect(h.primary.ep!.size()).toBe(0)
+    await vi.waitFor(() => {
+      expect(h.relay.count()).toBe(0)
+      expect(h.follower.ep!.size()).toBe(0)
+      expect(h.primary.ep!.size()).toBe(0)
+    }, { timeout: 10_000, interval: 10 })
     echo.close()
   })
 
@@ -89,8 +90,7 @@ describe('a stream through the daemon', () => {
     let read = 0
     far!.on('data', (b: Buffer) => { read += b.length })
     far!.resume()
-    await new Promise((r) => setTimeout(r, 50))
-    expect(read).toBe(written)
+    await vi.waitFor(() => { expect(read).toBe(written) }, { timeout: 10_000, interval: 10 })
     expect(s.write(chunk)).toBe(true)
     s.destroy()
   })
@@ -148,9 +148,10 @@ describe('a stream through the daemon', () => {
     const stream = await h.follower.ep!.open('primary')
     const error = new Promise<Error>(resolve => stream.once('error', resolve))
     expect((await error).message).toBe('the host entry is closed')
-    await new Promise(resolve => setTimeout(resolve, 10))
-    expect(h.relay.count()).toBe(0)
-    expect(h.primary.ep!.size()).toBe(0)
+    await vi.waitFor(() => {
+      expect(h.relay.count()).toBe(0)
+      expect(h.primary.ep!.size()).toBe(0)
+    }, { timeout: 10_000, interval: 10 })
   })
 
   it('an open to nobody, or one the other side refuses, fails with the reason', async () => {
@@ -188,8 +189,7 @@ describe('a stream through the daemon', () => {
     s.on('error', () => {})
     s.destroy(new Error('the browser went away'))
     expect((await gotErr).message).toBe('the browser went away')
-    await new Promise((r) => setTimeout(r, 10))
-    expect(h.relay.count()).toBe(0)
+    await vi.waitFor(() => { expect(h.relay.count()).toBe(0) }, { timeout: 10_000, interval: 10 })
   })
 
   it('the daemon refuses an id that is not an opener id, a reused one, and data before accept', () => {

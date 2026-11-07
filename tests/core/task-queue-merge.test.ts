@@ -61,11 +61,11 @@ function daemon(hostKey: string, records: Array<Record<string, unknown>>) {
 
 async function drainHost(records: Array<Record<string, unknown>>): Promise<void> {
   const d = daemon('marina', records)
-  for (let i = 0; i < 8 && d.pending.length; i++) {
-    await runOfflineHandover(d.conn as never).catch(() => undefined)
-    await new Promise((r) => setTimeout(r, 15))
-  }
-  expect(d.pending).toHaveLength(0)
+  // Drain again until the host's journal is empty (a drain may still hold its lock).
+  await vi.waitFor(async () => {
+    if (d.pending.length) await runOfflineHandover(d.conn as never).catch(() => undefined)
+    expect(d.pending).toHaveLength(0)
+  }, { timeout: 10_000, interval: 15 })
 }
 
 /** A host journal record: the session on the host set `fields` at host time `at`. */

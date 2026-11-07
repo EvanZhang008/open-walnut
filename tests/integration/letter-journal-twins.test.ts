@@ -11,7 +11,7 @@
  * Hygiene: every dir is a temp dir; every daemon is stopped by the pid it wrote into its
  * own temp dir, the mock CLI by the pids it logged.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -153,6 +153,10 @@ function gateway(sock: string, op: 'tools.call' | 'tools.list', args: Record<str
   })
 }
 const send = (d: Daemon, args: Record<string, unknown>) => gateway(d.sock, 'tools.call', { name: 'human_inbox_send', args })
+/** The host saw the Mac go: a read it relayed to the closed Mac never answers, one answered here does. */
+const macGone = (d: Daemon) => vi.waitFor(async () => {
+  expect((await gateway(d.sock, 'tools.list', {})).ok).toBe(true)
+}, { timeout: 30_000, interval: 50 })
 
 function slice(): HostSlice {
   return {
@@ -207,7 +211,7 @@ async function run(d: Daemon): Promise<void> {
   let mac = await macConnects(d, OLD_DRAINS)
   await startSession(d, mac)
   mac.close()
-  await sleep(300)
+  await macGone(d)
   const old = await send(d, LETTER)
   expect(old, JSON.stringify(old)).toMatchObject({ ok: false, error: { code: 'hub_unreachable', message: expect.stringMatching(/^"human_inbox_send" needs the Walnut server/) } })
   const oldList = await gateway(d.sock, 'tools.list', {})
@@ -217,7 +221,7 @@ async function run(d: Daemon): Promise<void> {
   // A Mac that drains letters leads, then goes away.
   mac = await macConnects(d, JOURNAL_V2_DRAINS)
   mac.close()
-  await sleep(300)
+  await macGone(d)
   const list = await gateway(d.sock, 'tools.list', {})
   expect((list.result.ops as Array<{ name: string }>).map((o) => o.name)).toContain('human_inbox_send')
   const r = await send(d, LETTER)

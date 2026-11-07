@@ -11,7 +11,7 @@
  * PATH, never accepts a node_modules binary), and `reason` is set only when the
  * engine is genuinely unusable.
  */
-import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -332,9 +332,11 @@ describe('probeEngines', () => {
     expect(first.get('custom')?.installed).toBe(false)
 
     release?.('0.26.0')
-    await new Promise((r) => setTimeout(r, 20))
-    const second = await probeEngines(opts)
-    expect(second.get('gemini')).toEqual({ installed: true, version: '0.26.0', reason: null })
+    // The fresh cache serves each poll without a spawn, until the version fill lands.
+    await vi.waitFor(async () => {
+      const second = await probeEngines(opts)
+      expect(second.get('gemini')).toEqual({ installed: true, version: '0.26.0', reason: null })
+    }, { timeout: 10_000, interval: 10 })
   })
 
   it('WALNUT_ENGINE_PROBE_ALL=1 forces installed and spawns nothing', async () => {

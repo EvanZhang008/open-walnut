@@ -488,7 +488,8 @@ describe('host server manager', () => {
     const host = fakeHost()
     host.pollsUntilReady = 1_000
     const run = m.connected(host)
-    await new Promise((r) => setTimeout(r, 20))
+    // The install fails once it was launched and is being polled.
+    await vi.waitFor(() => { expect(host.calls).toContain('launch') }, { timeout: 10_000, interval: 10 })
     host.installState = 'failed'
     await run
     expect(m.view('devbox')).toMatchObject({ phase: 'error', install: { state: 'failed', logTail: 'boom' } })

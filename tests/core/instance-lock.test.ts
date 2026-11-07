@@ -116,9 +116,12 @@ describe('foreign DB-holder detection (lsof layer)', () => {
     const { spawn } = await import('node:child_process');
     const holder = spawn('tail', ['-f', DB_FILE], { stdio: 'ignore' });
     try {
-      await new Promise((r) => setTimeout(r, 300)); // let tail open the fd
-      const holders = await listForeignDbHolders();
-      expect(holders.some((h) => h.pid === holder.pid)).toBe(true);
+      // Wait until tail has opened the fd and lsof sees it.
+      let holders: Awaited<ReturnType<typeof listForeignDbHolders>> = [];
+      await vi.waitFor(async () => {
+        holders = await listForeignDbHolders();
+        expect(holders.some((h) => h.pid === holder.pid)).toBe(true);
+      }, { timeout: 10_000, interval: 50 });
       expect(holders.some((h) => h.pid === process.pid)).toBe(false);
 
       const unregister = registerManagedDbHolder(holder.pid!);

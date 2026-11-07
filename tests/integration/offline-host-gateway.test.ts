@@ -475,7 +475,11 @@ describe.each(twins)('same-host messages while the server answers, on the real %
     await waitFor(() => {
       try { return fs.readFileSync(path.join(d.dir, 'streams', `${C}.jsonl`), 'utf8').includes('"can_use_tool"') } catch { return false }
     }, 10_000, 'C asks for a permission')
-    await new Promise((r) => setTimeout(r, 300))
+    // The daemon holds the prompt as pending (what makes a message the server's to park).
+    await vi.waitFor(async () => {
+      const st = data(await cmd(server, { cmd: 'getState', sid: C }))
+      expect((st.snapshot as { cliState?: string } | undefined)?.cliState).toBe('waiting')
+    }, { timeout: 10_000, interval: 25 })
     const second = await gateway(d.sock, A, 'task_send', { to: TASK_C, text: 'While you wait' })
     expect(second.ok && second.result.fromHub).toBe(true)
     expect(inboxOf(d.dir, C).some((m) => m.content.includes('While you wait'))).toBe(false)

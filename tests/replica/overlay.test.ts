@@ -11,7 +11,7 @@
  * save is no ack; a record written after an ask began is not taken for acked; the
  * awaiting marks survive a restart of the replica.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { JHOME, TASK_A, TASK_B, DEVICE, journalTmpDir, cleanupJournalDirs, journalHost, jslice } from '../helpers/offline-journal-harness.js'
@@ -260,8 +260,11 @@ describe('overlay: creates, boards, restarts', () => {
     await o.refresh()
     r.ack([a.seq])
     await o.refresh()
-    await new Promise((res) => setTimeout(res, 300))
-    expect(fs.existsSync(file)).toBe(true)
+    // The save is debounced: wait for the write that holds the awaiting mark.
+    await vi.waitFor(() => {
+      expect(fs.existsSync(file)).toBe(true)
+      expect((JSON.parse(fs.readFileSync(file, 'utf8')) as { entries: unknown[] }).entries).toHaveLength(1)
+    }, { timeout: 10_000, interval: 10 })
     expect(fs.statSync(file).mode & 0o777).toBe(0o600)
     o.close()
     const again = r.make()

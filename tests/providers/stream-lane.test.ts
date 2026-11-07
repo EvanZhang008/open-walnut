@@ -168,7 +168,7 @@ describe('StreamLane', () => {
     d.refuse = true
     state.kill!()
     await waitFor(() => d.frames.filter((f) => f.cmd === 'stream.lane').length >= 3, 5_000, 'the refused dial')
-    await sleep(50)
+    await waitFor(() => (l as unknown as { failing: boolean }).failing, 5_000, 'the refusal to land')
     const t1 = Date.now()
     expect(await l.waitReady(5_000)).toBe(false)
     expect(Date.now() - t1).toBeLessThan(100)
@@ -204,6 +204,7 @@ describe('StreamLane', () => {
     await sleep(20)
     l.stop()
     release()
+    await waitFor(() => stopped >= 1, 5_000, 'the late forward to be stopped')
     await sleep(100)
     expect(stopped).toBe(1)
     expect(l.ready).toBe(false)

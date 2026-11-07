@@ -14,7 +14,7 @@
  * The worker here answers the start, then stops reading and exits while a
  * request larger than the pipe buffer is still being written.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -91,8 +91,11 @@ describe('ACP worker stdin EPIPE', () => {
       await new Promise((r) => setTimeout(r, 25))
     }
     expect(logs.some((l) => l.msg === 'acp: worker exited')).toBe(true)
-    // Give the rejected write and the stream's destroy their ticks.
-    await new Promise((r) => setTimeout(r, 300))
+    // The rejected write and the stream's destroy have run once the close is logged and the worker dropped.
+    await vi.waitFor(() => {
+      expect(stdinClosed(logs)).toMatchObject({ sid: 'epipe-exit', code: 'EPIPE' })
+      expect(acp.workers.has('epipe-exit')).toBe(false)
+    }, { timeout: 10_000, interval: 10 })
 
     expect(codes()).toEqual([])
     expect(await within(big, 3_000)).toMatchObject({ ok: false })
@@ -107,9 +110,8 @@ describe('ACP worker stdin EPIPE', () => {
     expect(answer).toMatchObject({ ok: false, error: { kind: 'internal' } })
     expect((answer as { error: { message: string } }).error.message).toMatch(/worker stdin write failed/)
     // The write callback runs first; the stream's 'error' event follows a tick later.
-    await new Promise((r) => setTimeout(r, 200))
+    await vi.waitFor(() => expect(stdinClosed(logs)).toMatchObject({ sid: 'epipe-stay', code: 'EPIPE' }), { timeout: 10_000, interval: 10 })
     expect(codes()).toEqual([])
-    expect(stdinClosed(logs)).toMatchObject({ sid: 'epipe-stay', code: 'EPIPE' })
     // Still the worker's to reap: the process lives, so nothing tore it down.
     expect(acp.workers.has('epipe-stay')).toBe(true)
   }, 20_000)
@@ -120,6 +122,11 @@ describe('ACP worker stdin EPIPE', () => {
     // kills the worker's process group: every byte still in the pipe fails with EPIPE.
     const aborted = await within(acp.acpOp('epipe-abort', 'cancel', { commandId: 'c1' }), 10_000)
     expect(aborted).not.toBe('still pending')
+    await vi.waitFor(() => {
+      expect(acp.workers.has('epipe-abort')).toBe(false)
+      expect(logs.some((l) => l.msg === 'acp: worker exited')).toBe(true)
+    }, { timeout: 10_000, interval: 10 })
+    // Time for a stray EPIPE from the bytes still in the pipe to surface.
     await new Promise((r) => setTimeout(r, 300))
     expect(codes()).toEqual([])
     expect(await within(big, 3_000)).toMatchObject({ ok: false })

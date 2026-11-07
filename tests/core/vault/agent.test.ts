@@ -4,7 +4,7 @@
  * for one use, a task grant, the denial pause, the rate limit, fields, ambiguity, and the
  * sealed agent log and policy. Fake data only.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -164,7 +164,8 @@ describe('the policy', () => {
     let answer!: () => void
     const slowWaiter: ApprovalWaiter = () => new Promise((res) => { answer = () => res({ status: 'approved', used: true }) })
     const w = code(agentWait(r.requestId, r.waitToken, 12_000, 'ask', slowWaiter))
-    await new Promise((res) => setTimeout(res, 5))
+    // The wait is parked on the approval once the waiter has been called.
+    await vi.waitFor(() => { expect(answer).toBeTypeOf('function') }, { timeout: 10_000, interval: 5 })
     endAllGrants()
     answer()
     expect(await w).toBe('withdrawn')

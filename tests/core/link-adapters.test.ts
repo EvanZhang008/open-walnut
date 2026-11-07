@@ -3,7 +3,7 @@
  * replica plan WP13): `heard()` counts frames, never socket state; requests and
  * events go through as they are; each opens streams only where its daemon lets it.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { PassThrough, type Duplex } from 'node:stream'
 import { createDaemonConnectionLink, type DaemonConnectionLike } from '../../src/core/link/daemon-connection-link.js'
 import { createBridgeLink, type BridgeRegistryLike } from '../../src/core/link/bridge-link.js'
@@ -62,8 +62,7 @@ describe('the DaemonConnection Link', () => {
     const states: unknown[] = []
     const off = link.on('state', (s) => states.push(s))
     f.conn.connected = false
-    await new Promise((r) => setTimeout(r, 40))
-    expect(states).toEqual(['down'])
+    await vi.waitFor(() => { expect(states).toEqual(['down']) }, { timeout: 10_000, interval: 10 })
     off()
     await link.openStream('follower', 'replica')
     expect(f.opened).toEqual([{ to: 'follower', purpose: 'replica' }])
@@ -82,9 +81,8 @@ describe('the DaemonConnection Link', () => {
     offA()
     offA()
     f.conn.connected = false
-    await new Promise((r) => setTimeout(r, 40))
+    await vi.waitFor(() => { expect(b).toEqual(['down']) }, { timeout: 10_000, interval: 10 })
     expect(a).toEqual([])
-    expect(b).toEqual(['down'])
     offB()
     link.close()
   })

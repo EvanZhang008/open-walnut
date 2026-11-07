@@ -6,7 +6,7 @@
  * /tmp/maestro-ios.lock, and pw-cleanup's run records are a temp dir (PW_RUNS_DIR).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -343,7 +343,13 @@ describe('pw-cleanup.sh reaps only what this repo recorded', () => {
     const live = fakeBrowser('live-1')
     const unrecorded = fakeBrowser('nobody-1')
     const unmarked = fakeBrowser()
-    await new Promise((r) => setTimeout(r, 400))
+    // Each stub must have exec'd its browser script before its owner is read.
+    await vi.waitFor(() => {
+      for (const p of [owned, live, unrecorded, unmarked]) {
+        const ps = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(p)], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+        expect(ps.stdout).toContain('fake-browser.js')
+      }
+    }, { timeout: 10_000, interval: 20 })
 
     const owners = source(`for p in ${owned} ${live} ${unrecorded} ${unmarked}; do echo "$p=$(browser_owner "$p")"; done`)
     expect(owners.out).toContain(`${owned}=owned`)

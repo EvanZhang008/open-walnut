@@ -7,7 +7,7 @@
  *
  * MACHINE SAFETY: every file lives in one temp dir; nothing spawns.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -183,8 +183,8 @@ describe('upload.part', () => {
     await timed.uploadPart({ uploadId: done, name: 'f.bin', size: 5, offset: 0, data: b64(Buffer.from('12345')) }, root)
     clock += 25 * 60 * 60 * 1000
     await start(live)
-    await new Promise((r) => setTimeout(r, 200))
-    expect(fs.existsSync(path.join(root, stale))).toBe(false)
+    // The sweep runs in the background of the first chunk.
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(root, stale))).toBe(false) }, { timeout: 10_000, interval: 10 })
     expect(fs.existsSync(path.join(root, live, 'f.bin.walnut-part'))).toBe(true)
     expect(fs.existsSync(path.join(root, done, 'f.bin'))).toBe(true)
   })

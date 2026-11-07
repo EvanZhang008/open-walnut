@@ -199,8 +199,9 @@ describe('idle reaping', () => {
     const res = await core.ensureCodeServer()
     const future = Date.now() + core.VSCODE_IDLE_KILL_MS + 60_000
     expect(core.reapIdleCodeServer(future)).toBe(true)
-    await new Promise((r) => setTimeout(r, 300))
-    await expect(httpGet(res.port!, '/healthz')).rejects.toThrow()
+    await vi.waitFor(async () => {
+      await expect(httpGet(res.port!, '/healthz')).rejects.toThrow()
+    }, { timeout: 8_000, interval: 50 })
     expect(fss.existsSync(path.join(tempHome, '.open-walnut', 'code-server', 'instance.json'))).toBe(false)
   })
 
@@ -224,9 +225,10 @@ describe('stopCodeServer', () => {
     const core = await loadCore()
     const res = await core.ensureCodeServer()
     core.stopCodeServer()
-    await new Promise((r) => setTimeout(r, 300))
-    await expect(httpGet(res.port!, '/healthz')).rejects.toThrow()
-    expect((await core.codeServerStatus()).running).toBe(false)
+    await vi.waitFor(async () => {
+      await expect(httpGet(res.port!, '/healthz')).rejects.toThrow()
+      expect((await core.codeServerStatus()).running).toBe(false)
+    }, { timeout: 8_000, interval: 50 })
   })
 })
 

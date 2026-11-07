@@ -3,7 +3,7 @@
  * three bridge log writers. Fixtures are neutral (documentation IP ranges,
  * example.test names, no real networks).
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -348,8 +348,10 @@ describe('samplers that must not store or hang', () => {
     expect(again.error).toBe('previous lookup still running')
     expect(calls).toBe(1)
     release([{ address: '192.0.2.10' }])
-    await new Promise((r) => setTimeout(r, 10))
-    const ok = await sampleDns('bridge.example.test', { timeoutMs: 150, lookup: (async () => [{ address: '192.0.2.10' }]) as any })
-    expect(ok).toMatchObject({ addrs: ['192.0.2.10'] })
+    // Once the hung lookup settles, the next one runs.
+    await vi.waitFor(async () => {
+      const ok = await sampleDns('bridge.example.test', { timeoutMs: 150, lookup: (async () => [{ address: '192.0.2.10' }]) as any })
+      expect(ok).toMatchObject({ addrs: ['192.0.2.10'] })
+    }, { timeout: 10_000, interval: 10 })
   })
 })

@@ -6,7 +6,7 @@
  * between them is left out. The tree is compared with the leader's own disk
  * walk (core/notes-tree.ts scanTree) over the same notes written to a vault.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -189,8 +189,10 @@ describe('links, backlinks, tags, list and search', () => {
     let bodies: Record<string, string> = { 'Alpha.md': '# Alpha\n', 'Beta.md': '# Beta\nsee [[Alpha]]\n' }
     let release: (() => void) | null = null
     let holdNext = true
+    let lists = 0
     const reader: NotesCopyReader = {
       list: async () => {
+        lists++
         const entries = Object.entries(bodies).map(([k, b]) => ({ k, h: h(b), n: b.length }))
         return { entries, asOf: null, manifestHash: h(entries.map((e) => e.k + e.h).join('|')) }
       },
@@ -210,7 +212,8 @@ describe('links, backlinks, tags, list and search', () => {
     bodies = { 'Alpha.md': '# Alpha\n', 'Beta.md': '# Beta\nno link\n', 'Gamma.md': '# Gamma\n[[Alpha]]\n' }
     t += 1001
     const second = src.backlinks('Alpha')
-    await new Promise((r) => setTimeout(r, 10))
+    // Caller 2 has asked for the new manifest before the old build is let go.
+    await vi.waitFor(() => { expect(lists).toBe(2) }, { timeout: 10_000, interval: 10 })
     release!()
     expect((await first).backlinks.map((b) => b.path)).toEqual(['Beta.md'])
     expect((await second).backlinks.map((b) => b.path)).toEqual(['Gamma.md'])

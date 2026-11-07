@@ -1676,13 +1676,14 @@ describe('healStalePendingPermissions (incident a172ce49)', () => {
 
     // The live-tab settle event: allowed:false for old consumers, expired:true
     // as the thing that says nobody decided. Emitted after the tx commits, so
-    // give the setImmediate a tick.
-    await new Promise(r => setTimeout(r, 50));
-    const ev = seen.find(e => e.requestId === 'req-notif-1');
-    expect(ev).toMatchObject({
-      sessionId: 'die-with-notif', taskId: 'task-n1', requestId: 'req-notif-1',
-      allowed: false, expired: true,
-    });
+    // wait for the setImmediate.
+    await vi.waitFor(() => {
+      const ev = seen.find(e => e.requestId === 'req-notif-1');
+      expect(ev).toMatchObject({
+        sessionId: 'die-with-notif', taskId: 'task-n1', requestId: 'req-notif-1',
+        allowed: false, expired: true,
+      });
+    }, { timeout: 10_000, interval: 10 });
   });
 
   it('boot heal expires the notification too, with NO bus event', async () => {

@@ -17,7 +17,7 @@
  * is a bare WS client. Every daemon is killed by the pid it wrote into its own
  * temp dir.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -328,6 +328,8 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     await fireAndLeave(['c1', 'c2'])
     await sleep(GRACE_MS + 7_000)
     expect(spawns()).toHaveLength(2)
+    // The host's try is recorded on the fire (poll: the record is written after the try).
+    await vi.waitFor(() => { expect(pending().find((f) => f.seq === 2)?.hostTriedAt).toEqual(expect.any(Number)) }, { timeout: 10_000, interval: 50 })
     const fire = pending().find((f) => f.seq === 2)!
     expect(fire.host).toBeUndefined()
     expect(fire.hostTriedAt).toEqual(expect.any(Number))

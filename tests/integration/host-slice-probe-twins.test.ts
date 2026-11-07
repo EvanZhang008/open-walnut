@@ -9,7 +9,7 @@
  * when bun is installed), its WS, its agent-gateway socket. The Walnut server is a
  * bare WS client. Every daemon is killed by the pid it wrote into its own temp dir.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -190,10 +190,12 @@ describe.each(twins)('host.slice probe on the real %s daemon', (twin) => {
       const held = await cmd(ws, { cmd: 'host.slice', home: HOME, hash: 'h-gz-1', asOf: T0 })
       expect(data(held).have).toBe(true)
     } finally { ws.close() }
-    await new Promise((r) => setTimeout(r, 300))
-    const g = await gateway(d.sock, A, 'task_get', { id: TASK_A })
-    expect(g.ok, JSON.stringify(g)).toBe(true)
-    if (g.ok) expect(JSON.stringify(g.result)).toContain('Gzipped work')
+    // Poll until the host answers from the new copy.
+    await vi.waitFor(async () => {
+      const g = await gateway(d.sock, A, 'task_get', { id: TASK_A })
+      expect(g.ok, JSON.stringify(g)).toBe(true)
+      if (g.ok) expect(JSON.stringify(g.result)).toContain('Gzipped work')
+    }, { timeout: 15_000, interval: 50 })
     // Back to the copy the other cases read.
     const ws2 = await connectWs(d.port)
     try { expect((await cmd(ws2, { cmd: 'host.slice', slice: slice() })).ok).toBe(true) } finally { ws2.close() }
@@ -227,10 +229,11 @@ describe.each(twins)('host.slice probe on the real %s daemon', (twin) => {
       void gateway(d.sock, A, 'task_get', { id: TASK_A }).catch(() => {})
       await waitFor(() => seen.some((m) => m.includes('task_get')), 10_000, 'the call relayed to the bound socket')
     } finally { ws.close() }
-    await new Promise((r) => setTimeout(r, 300))
-    // Away again: the copy answers, as of the probe's time.
-    const g = await gateway(d.sock, A, 'task_get', { id: TASK_A })
-    expect(g.ok, JSON.stringify(g)).toBe(true)
-    if (g.ok) expect(JSON.stringify(g.result)).toContain(new Date(T0 + 3_600_000).toISOString().slice(0, 16))
+    // Away again: the copy answers, as of the probe's time (poll until the host saw the close).
+    await vi.waitFor(async () => {
+      const g = await gateway(d.sock, A, 'task_get', { id: TASK_A })
+      expect(g.ok, JSON.stringify(g)).toBe(true)
+      if (g.ok) expect(JSON.stringify(g.result)).toContain(new Date(T0 + 3_600_000).toISOString().slice(0, 16))
+    }, { timeout: 15_000, interval: 50 })
   }, 30_000)
 })

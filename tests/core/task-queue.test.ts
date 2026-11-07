@@ -345,10 +345,9 @@ describe('flushTaskQueue', () => {
     relayReply = { ok: true, result: { applied: true, reason: 'created' } };
     await queue.dispatchTaskOp({ type: 'create', task: snapshot({ id: 'live-1' }) as never });
     // The flush is fire-and-forget inside dispatch — give it a tick.
-    for (let i = 0; i < 40 && (await queue.queuedTaskOpCount()) > 0; i++) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(await queue.queuedTaskOpCount()).toBe(0);
+    await vi.waitFor(async () => {
+      expect(await queue.queuedTaskOpCount()).toBe(0);
+    }, { timeout: 10_000, interval: 25 });
   });
 
   it('a new op for a task with an older op still queued goes behind it, in order (WP13)', async () => {
@@ -363,10 +362,9 @@ describe('flushTaskQueue', () => {
     relayCalls.length = 0;
     relayReply = { ok: true, result: { applied: true, reason: 'updated' } };
     await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'ord-1', title: 'newer' }) as never, touched: ['title'] });
-    for (let i = 0; i < 40 && (await queue.queuedTaskOpCount()) > 0; i++) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(await queue.queuedTaskOpCount()).toBe(0);
+    await vi.waitFor(async () => {
+      expect(await queue.queuedTaskOpCount()).toBe(0);
+    }, { timeout: 10_000, interval: 25 });
     const sent = relayCalls.map((c) => (c.params as { op: { task: { title: string }; flush?: string; sentAt?: number } }).op);
     expect(sent.map((o) => o.task.title)).toEqual(['older', 'newer']);
     // One flush, one name: the Mac merges them as one drain (one letter); each carries this box's clock.
@@ -482,17 +480,15 @@ describe('startTaskQueueFlush drain triggers', () => {
     const handle = queue.startTaskQueueFlush();
     try {
       // The hook registration is async (dynamic import of the transport module).
-      for (let i = 0; i < 40 && !bridgeConnectedHandler; i++) {
-        await new Promise((r) => setTimeout(r, 25));
-      }
-      expect(typeof bridgeConnectedHandler).toBe('function');
+      await vi.waitFor(() => {
+        expect(typeof bridgeConnectedHandler).toBe('function');
+      }, { timeout: 10_000, interval: 25 });
 
       relayReply = { ok: true, result: { applied: true, reason: 'created' } };
       bridgeConnectedHandler?.();
-      for (let i = 0; i < 40 && (await queue.queuedTaskOpCount()) > 0; i++) {
-        await new Promise((r) => setTimeout(r, 25));
-      }
-      expect(await queue.queuedTaskOpCount()).toBe(0);
+      await vi.waitFor(async () => {
+        expect(await queue.queuedTaskOpCount()).toBe(0);
+      }, { timeout: 10_000, interval: 25 });
     } finally {
       handle.stop();
     }

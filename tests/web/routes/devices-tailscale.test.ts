@@ -227,10 +227,11 @@ describe('POST /api/devices/tailscale/install', () => {
 
     const child = children[0]
     child.stdout.write('==> Downloading Tailscale\n==> Installing Cask tailscale-app\n')
-    await new Promise((r) => setTimeout(r, 20))
-    const mid = await get('/api/devices/tailscale')
-    expect(mid.body.installed).toBe(false)
-    expect(mid.body.install.job).toMatchObject({ state: 'running', log: ['==> Downloading Tailscale', '==> Installing Cask tailscale-app'] })
+    await vi.waitFor(async () => {
+      const mid = await get('/api/devices/tailscale')
+      expect(mid.body.installed).toBe(false)
+      expect(mid.body.install.job).toMatchObject({ state: 'running', log: ['==> Downloading Tailscale', '==> Installing Cask tailscale-app'] })
+    }, { timeout: 10_000, interval: 10 })
 
     cli = CLI
     child.stdout.end()

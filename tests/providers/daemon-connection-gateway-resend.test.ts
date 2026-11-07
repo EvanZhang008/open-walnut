@@ -188,7 +188,7 @@ describe('an answer the daemon does not ack', () => {
     const { c, pings, drop } = stalled({ sending: true })
     void c.handleGatewayRequest(relay(9))
     await new Promise((r) => setTimeout(r, 600))
-    expect(pings.length).toBeGreaterThan(1)
+    await vi.waitFor(() => expect(pings.length).toBeGreaterThan(1), { timeout: 5_000, interval: 10 })
     expect(drop).not.toHaveBeenCalled()
   })
 

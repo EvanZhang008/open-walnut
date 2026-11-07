@@ -16,7 +16,7 @@
  * never /tmp/open-walnut, never the real /tmp/open-walnut-streams. Sleep
  * processes stand in for the CLI; everything is killed in afterEach/afterAll.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -216,12 +216,9 @@ describe('sweepDeadStreams (real daemon, fast test clock)', () => {
     })
     // The 60s first-pass setTimeout is irrelevant here: the 500ms interval
     // starts at listen time, so a sweep pass lands within ~1s.
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline && fs.existsSync(path.join(streamsDir, 'reap-me.jsonl'))) {
-      await new Promise((r) => setTimeout(r, 200))
-    }
-
-    expect(fs.existsSync(path.join(streamsDir, 'reap-me.jsonl'))).toBe(false)
+    await vi.waitFor(() => {
+      expect(fs.existsSync(path.join(streamsDir, 'reap-me.jsonl'))).toBe(false)
+    }, { timeout: 10_000, interval: 200 })
     expect(fs.existsSync(path.join(streamsDir, 'reap-me.pgid'))).toBe(false)
     expect(fs.existsSync(path.join(streamsDir, 'fresh-sid.jsonl'))).toBe(true)
     expect(fs.existsSync(path.join(streamsDir, 'live-old.jsonl'))).toBe(true)
@@ -245,7 +242,9 @@ describe('fresh-spawn streamEpoch (real daemon)', () => {
 
     // Kill the CLI stand-in and relaunch the same sid fresh (no resume).
     await rpc(ws, { cmd: 'stop', sid }, 15_000)
-    await new Promise((r) => setTimeout(r, 500))
+    await vi.waitFor(async () => {
+      expect((await rpc(ws, { cmd: 'getState', sid })).alive).not.toBe(true)
+    }, { timeout: 10_000, interval: 50 })
     const start2 = await rpc(ws, { cmd: 'start', sid, args: ['/bin/sleep', '60'], cwd: os.tmpdir(), message: 'hi again' })
     expect(start2.ok).toBe(true)
 

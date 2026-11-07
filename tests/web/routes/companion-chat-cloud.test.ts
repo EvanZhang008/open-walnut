@@ -178,9 +178,11 @@ describe('the list from the copy, with the box\'s own changes on top', () => {
     macConversations = [...macConversations, { agent: 'general', meta: meta(id, 'Acme from the phone, as the Mac titled it', ago(1)) }]
     await round()
     expect((await titles())[id]).toBe('Acme from the phone, as the Mac titled it')
-    await new Promise((r) => setTimeout(r, 100))
-    const edits = JSON.parse(await fs.readFile(editsFile, 'utf8').catch(() => '{"edits":[]}')).edits as Array<{ id: string }>
-    expect(edits.map((e) => e.id)).not.toContain(id)
+    // The list lets the edit go in the background (companion-conversations.ts prune).
+    await vi.waitFor(async () => {
+      const edits = JSON.parse(await fs.readFile(editsFile, 'utf8').catch(() => '{"edits":[]}')).edits as Array<{ id: string }>
+      expect(edits.map((e) => e.id)).not.toContain(id)
+    }, { timeout: 10_000, interval: 10 })
   })
 
   it('a rename and a pin made here show over the copy; a delete hides the copy\'s row', async () => {
@@ -208,8 +210,9 @@ describe('the list from the copy, with the box\'s own changes on top', () => {
     const now = await titles()
     expect(now[LANE]).toBe('Acme launch, renamed on the phone')
     expect(now[MAC_ONLY]).toBe('Acme budget, from the Mac')
-    await new Promise((r) => setTimeout(r, 100))
-    expect(await fs.readFile(editsFile, 'utf8').catch(() => null)).toBeNull()
+    await vi.waitFor(async () => {
+      expect(await fs.readFile(editsFile, 'utf8').catch(() => null)).toBeNull()
+    }, { timeout: 10_000, interval: 10 })
   })
 })
 

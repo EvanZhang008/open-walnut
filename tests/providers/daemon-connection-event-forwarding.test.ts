@@ -37,8 +37,7 @@ describe('L2.2 DaemonConnection event forwarding', () => {
     const received: DaemonEvent[] = []
     conn.onEvent((e) => received.push(e))
     daemon.emitSessionState('abc', 'dead', { exitCode: 17, reason: 'test-reason' })
-    await new Promise((r) => setTimeout(r, 30))
-    expect(received).toHaveLength(1)
+    await vi.waitFor(() => { expect(received).toHaveLength(1) }, { timeout: 10_000, interval: 10 })
     expect(received[0]).toMatchObject({
       ev: 'session_state',
       sid: 'abc',
@@ -53,10 +52,11 @@ describe('L2.2 DaemonConnection event forwarding', () => {
     const h1 = vi.fn(); const h2 = vi.fn(); const h3 = vi.fn()
     conn.onEvent(h1); conn.onEvent(h2); conn.onEvent(h3)
     daemon.emitEvent('jsonl', { sid: 'x', line: '{"type":"user"}' })
-    await new Promise((r) => setTimeout(r, 30))
-    expect(h1).toHaveBeenCalledTimes(1)
-    expect(h2).toHaveBeenCalledTimes(1)
-    expect(h3).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(h1).toHaveBeenCalledTimes(1)
+      expect(h2).toHaveBeenCalledTimes(1)
+      expect(h3).toHaveBeenCalledTimes(1)
+    }, { timeout: 10_000, interval: 10 })
   })
 
   // D3 — a throwing handler does not block the others
@@ -66,9 +66,10 @@ describe('L2.2 DaemonConnection event forwarding', () => {
     conn.onEvent(bad)
     conn.onEvent(good)
     daemon.emitEvent('jsonl', { sid: 'x', line: 'hello' })
-    await new Promise((r) => setTimeout(r, 30))
-    expect(bad).toHaveBeenCalledTimes(1)
-    expect(good).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => {
+      expect(bad).toHaveBeenCalledTimes(1)
+      expect(good).toHaveBeenCalledTimes(1)
+    }, { timeout: 10_000, interval: 10 })
   })
 
   // D4 — unsubscribe stops delivery
@@ -76,8 +77,7 @@ describe('L2.2 DaemonConnection event forwarding', () => {
     const handler = vi.fn()
     const unsub = conn.onEvent(handler)
     daemon.emitEvent('jsonl', { sid: 'x', line: 'first' })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(handler).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => { expect(handler).toHaveBeenCalledTimes(1) }, { timeout: 10_000, interval: 10 })
     unsub()
     daemon.emitEvent('jsonl', { sid: 'x', line: 'second' })
     await new Promise((r) => setTimeout(r, 20))
@@ -105,7 +105,8 @@ describe('L2.2 DaemonConnection event forwarding', () => {
     conn.onEvent(handler)
     conn.onEvent(handler) // same reference — must be ignored
     daemon.emitEvent('jsonl', { sid: 'x', line: '{"type":"stream_event"}' })
-    await new Promise((r) => setTimeout(r, 30))
+    // A duplicate registration would dispatch in the same tick as the first call.
+    await vi.waitFor(() => { expect(handler).toHaveBeenCalled() }, { timeout: 10_000, interval: 10 })
     expect(handler).toHaveBeenCalledTimes(1)
   })
 

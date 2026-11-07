@@ -299,17 +299,16 @@ describe('single-timeline real pipeline — evidence contract', () => {
     await publishStreamsFile(sid)
     let messages: SessionHistoryMessage[] = []
     let hidden = new Set<number>()
-    for (let i = 0; i < 30; i++) {
+    await vi.waitFor(async () => {
       messages = await fetchHistory(sid)
       const r = computeRenderFilter({
         blocks: full.blocks, messages, watermark: 0, isStreaming: false,
         historyEvidence: buildHistoryEvidence(messages),
       })
       hidden = r.hidden
-      const textIdx = full.blocks.findIndex((b) => b.type === 'text' && b.content.includes(MARKER))
-      if (textIdx >= 0 && hidden.has(textIdx)) break
-      await new Promise((r2) => setTimeout(r2, 300))
-    }
+      const idx = full.blocks.findIndex((b) => b.type === 'text' && b.content.includes(MARKER))
+      expect(idx >= 0 && hidden.has(idx)).toBe(true)
+    }, { timeout: 30_000, interval: 300 })
     const textIdx = full.blocks.findIndex((b) => b.type === 'text' && b.content.includes(MARKER))
     expect(textIdx).toBeGreaterThanOrEqual(0)
     // THE contract: the real parser's msgId matches the streamed msgId.
@@ -349,17 +348,14 @@ describe('single-timeline real pipeline — evidence contract', () => {
 
     // Post-history: hidden via toolUseId evidence from the REAL parser.
     await publishStreamsFile(sid)
-    let absorbed = false
-    for (let i = 0; i < 30; i++) {
+    await vi.waitFor(async () => {
       const messages = await fetchHistory(sid)
       const { hidden } = computeRenderFilter({
         blocks, messages, watermark: 0, isStreaming: false,
         historyEvidence: buildHistoryEvidence(messages),
       })
-      if (hidden.has(toolIdx)) { absorbed = true; break }
-      await new Promise((r) => setTimeout(r, 300))
-    }
-    expect(absorbed).toBe(true)
+      expect(hidden.has(toolIdx)).toBe(true)
+    }, { timeout: 30_000, interval: 300 })
   }, 40_000)
 
   it('B3: the compaction notice is absorbed by the real parser\'s system row — one "Context compacted", even after compaction wiped the surrounding evidence', async () => {

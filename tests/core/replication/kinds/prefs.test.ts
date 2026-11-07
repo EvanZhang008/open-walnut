@@ -245,8 +245,12 @@ describe('the leader starts a round when the prefs change', () => {
     let n = 0
     const stop = PREFS_KIND.watch(() => { n++ })
     try {
-      await new Promise((r) => setTimeout(r, 50)) // the watch hooks in after its imports
-      await fetch(`${base}/api/ui-prefs`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prefs: { 'open-walnut-sidebar-width': { v: '7', ts: 199_999 } } }) })
+      // The watch hooks in after its imports: save until one is heard (a save before
+      // that is not), then exactly that one counted.
+      await vi.waitFor(async () => {
+        await fetch(`${base}/api/ui-prefs`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prefs: { 'open-walnut-sidebar-width': { v: '7', ts: 199_999 } } }) })
+        expect(n).toBeGreaterThan(0)
+      }, { timeout: 10_000, interval: 10 })
       expect(n).toBe(1)
       await fetch(`${base}/api/favorites/projects/Marina`, { method: 'POST' })
       expect(n).toBe(2)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { followMainReply, MID_TURN_NEXT_MS, type FollowLine } from '../../src/web/routes/quick-main-follow.js'
 
@@ -102,9 +102,9 @@ describe('quick input: Main reply follow', () => {
     emit(EventNames.SESSION_MESSAGES_DELIVERED, { count: 1, messageIds: ['qm-join'], turnGen: 6 })
     emit(EventNames.SESSION_TEXT_DELTA, { delta: 'both answered' })
     emit(EventNames.SESSION_RESULT, { result: 'both answered', turnGen: 6 })
-    await new Promise((r) => setTimeout(r, MID_TURN_NEXT_MS + 200))
+    // It ends only once the MID_TURN_NEXT_MS window passed with no next turn.
+    await vi.waitFor(() => { expect(f.ended()).toBe(true) }, { timeout: MID_TURN_NEXT_MS + 10_000, interval: 20 })
     expect(f.lines).toEqual([{ type: 'text', delta: 'both answered' }, { type: 'result', text: 'both answered' }])
-    expect(f.ended()).toBe(true)
   })
 
   it('stop() ends it quietly and later events are ignored', async () => {

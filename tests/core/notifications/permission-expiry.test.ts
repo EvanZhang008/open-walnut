@@ -248,11 +248,9 @@ describe('expireStaleErrorNotifications', () => {
     } as never);
 
     // Fire-and-forget (the caller is an in-transaction mutator) → poll.
-    for (let i = 0; i < 40; i++) {
-      if (await resolvedOfKey('error:session:sess-dying:runtime')) break;
-      await new Promise(r => setTimeout(r, 25));
-    }
-    expect(await resolvedOfKey('error:session:sess-dying:runtime')).toBe('expired');
+    await vi.waitFor(async () => {
+      expect(await resolvedOfKey('error:session:sess-dying:runtime')).toBe('expired');
+    }, { timeout: 10_000, interval: 25 });
     // …and the sweep then finds nothing left to do.
     expect((await expireStaleErrorNotifications()).deadSession).toBe(0);
   });

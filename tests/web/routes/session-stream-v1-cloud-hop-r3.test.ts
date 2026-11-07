@@ -110,7 +110,8 @@ describe('1. a later send never runs before an earlier accepted one', () => {
       return { ok: true, result: { messageId: p.messageId } }
     })
     const first = post({ text: 'first', messageId: 'qm-mobile-ord300000001' }).then((r) => r)
-    await sleep(150)
+    // The first is being handed over before the second arrives.
+    await vi.waitFor(() => expect(calls('session.message').some((c) => c[2].messageId === 'qm-mobile-ord300000001')).toBe(true), { timeout: 10_000, interval: 10 })
     const second = await post({ text: 'second', messageId: 'qm-mobile-ord300000002' })
     expect((await first).status).toBe(202)
     expect(second.status).toBe(202)
@@ -129,7 +130,8 @@ describe('1. a later send never runs before an earlier accepted one', () => {
       return { ok: true, result: { messageId: p.messageId } }
     })
     const first = post({ text: 'first', messageId: 'qm-mobile-ord300000003' }).then((r) => r)
-    await sleep(150)
+    // The first is being handed over before the second arrives.
+    await vi.waitFor(() => expect(calls('session.message').some((c) => c[2].messageId === 'qm-mobile-ord300000003')).toBe(true), { timeout: 10_000, interval: 10 })
     const second = await post({ text: 'second', messageId: 'qm-mobile-ord300000004' })
     expect((await first).body).toMatchObject({ queued: true })
     expect(second.body).toMatchObject({ queued: true })
@@ -138,10 +140,12 @@ describe('1. a later send never runs before an earlier accepted one', () => {
     macBack = true
     // The first relay, still out, lands now. The sweep leaves a row whose relay
     // is out alone until it answers (it would only hand it over twice).
-    for (let i = 0; i < 100 && !macQueue.includes('first'); i++) await sleep(20)
-    await sleep(100)
-    await flushSendQueue()
-    expect(macQueue).toEqual(['first', 'second'])
+    await vi.waitFor(() => expect(macQueue).toContain('first'), { timeout: 10_000, interval: 10 })
+    // Flush until the drain hands the second over once the first relay has answered.
+    await vi.waitFor(async () => {
+      await flushSendQueue()
+      expect(macQueue).toEqual(['first', 'second'])
+    }, { timeout: 15_000, interval: 50 })
   }, 30_000)
 })
 
