@@ -128,18 +128,46 @@ final class WorkCardTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 100_000)
         let v = view(state(2, 0, 0))
         let early = now.addingTimeInterval(-3600)
-        XCTAssertTrue(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: v, now: now))
+        XCTAssertTrue(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: v, now: now, startedIn: "i", runningIn: "i"))
         // Still on the lock screen (ended by iOS, not removed): not the user.
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: true, view: v, now: now))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: true, view: v, now: now, startedIn: "i", runningIn: "i"))
         // The server ended that stretch and a new one runs: the card ended, nobody removed it.
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s0", startedAt: early, stillOnScreen: false, view: v, now: now))
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: view(state(0, 0, 0), active: false, stretch: nil), now: now))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s0", startedAt: early, stillOnScreen: false, view: v, now: now, startedIn: "i", runningIn: "i"))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: view(state(0, 0, 0), active: false, stretch: nil), now: now, startedIn: "i", runningIn: "i"))
         // iOS ends a card after eight hours on its own.
         let old = now.addingTimeInterval(-WorkCardPlan.systemLimit - 1)
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: old, stillOnScreen: false, view: v, now: now))
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: nil, startedAt: early, stillOnScreen: false, view: v, now: now))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: old, stillOnScreen: false, view: v, now: now, startedIn: "i", runningIn: "i"))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: nil, startedAt: early, stillOnScreen: false, view: v, now: now, startedIn: "i", runningIn: "i"))
         // A card whose start this install lost is started again rather than kept off.
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: nil, stillOnScreen: false, view: v, now: now))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: nil, stillOnScreen: false, view: v, now: now, startedIn: "i", runningIn: "i"))
+    }
+
+    func testACardAnUpdateOrARestartTookAwayWasNotRemovedByTheUser() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let v = view(state(2, 0, 0))
+        let early = now.addingTimeInterval(-3600)
+        func gone(_ startedIn: String?, _ runningIn: String?) -> Bool {
+            WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: v, now: now,
+                                      startedIn: startedIn, runningIn: runningIn)
+        }
+        // The same install and boot: the user swiped it away.
+        XCTAssertTrue(gone("/apps/A|boot1", "/apps/A|boot1"))
+        // Walnut was updated or reinstalled since (iOS gave it a new folder): iOS ended the card.
+        XCTAssertFalse(gone("/apps/A|boot1", "/apps/B|boot1"))
+        // The phone restarted after the card began.
+        XCTAssertFalse(gone("/apps/A|boot1", "/apps/A|boot2"))
+        // Not known (a card from a build that did not note it, or a boot that could not be read).
+        XCTAssertFalse(gone(nil, "/apps/B|boot1"))
+        XCTAssertFalse(gone(nil, nil))
+        XCTAssertFalse(gone("/apps/A|boot1", nil))
+    }
+
+    func testThisInstallAndBootAreKnownAndStable() {
+        let here = WorkCardController.runningIn
+        XCTAssertNotNil(here)
+        XCTAssertEqual(here, WorkCardController.runningIn)
+        XCTAssertTrue(here?.hasPrefix(Bundle.main.bundlePath + "|") == true)
+        XCTAssertGreaterThan(here?.split(separator: "|").last?.count ?? 0, 8)
     }
 
     func testCardsGoneBecauseLiveActivitiesWentOffWereNotRemovedByTheUser() {
@@ -147,7 +175,7 @@ final class WorkCardTests: XCTestCase {
         let early = now.addingTimeInterval(-3600)
         XCTAssertTrue(WorkCardPlan.removedByUser(startedAt: early, now: now, allowed: true))
         XCTAssertFalse(WorkCardPlan.removedByUser(startedAt: early, now: now, allowed: false))
-        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: view(state(2, 0, 0)), now: now, allowed: false))
+        XCTAssertFalse(WorkCardPlan.wasDismissed(memoStretch: "s1", startedAt: early, stillOnScreen: false, view: view(state(2, 0, 0)), now: now, allowed: false, startedIn: "i", runningIn: "i"))
     }
 
     // MARK: - What the user is told

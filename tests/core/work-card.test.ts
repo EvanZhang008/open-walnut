@@ -627,6 +627,19 @@ describe('the source: a card push has one silent way out', () => {
 })
 
 describe('the phone reads the same fields', () => {
+  it('every swipe check on the phone knows the install and the boot, so an update or a restart is no swipe', () => {
+    // 2026-11-07: reinstalling the app ended its card, and the next launch took that for the
+    // user's swipe and kept the card off for the rest of the stretch.
+    const swift = fs.readFileSync(path.join(ROOT, 'ios-native/Walnut/Core/WorkCardController.swift'), 'utf8')
+    const calls = [...swift.matchAll(/WorkCardPlan\.wasDismissed\(([^]*?)\)\s*\{/g)].map((m) => m[1])
+    expect(calls.length).toBeGreaterThan(0)
+    for (const args of calls) expect(args).toMatch(/startedIn: defaults\.string\(forKey: Self\.startedInKey\), runningIn: Self\.runningIn/)
+    expect(swift).toMatch(/defaults\.set\(Self\.runningIn, forKey: Self\.startedInKey\)/)
+    // The install (its folder, new on every install and update) and the boot session, never a clock.
+    expect(swift).toMatch(/kern\.bootsessionuuid/)
+    expect(swift).toMatch(/Bundle\.main\.bundlePath/)
+  })
+
   it('ContentState in the iOS card model has exactly the fields the server pushes', () => {
     const swift = fs.readFileSync(path.join(ROOT, 'ios-native/Shared/WorkCard.swift'), 'utf8')
     const block = swift.slice(swift.indexOf('struct ContentState'), swift.indexOf('var sinceDate'))

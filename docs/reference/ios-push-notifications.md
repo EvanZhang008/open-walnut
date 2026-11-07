@@ -348,6 +348,11 @@ list in the app. The counts are the Org's (`src/core/push/work-card.ts`).
   its token off the server. Until then the server keeps sending to that token, which Apple
   accepts and drops; nothing shows. A card token registered more than 8 hours ago belongs to a
   card iOS has ended already: the server stops sending to it and takes it off the rows.
+- **A card gone without a swipe.** Updating or reinstalling Walnut, or restarting the phone,
+  also ends the card while the app is not running. The app notes the install and the boot that
+  started the card (`workCard.startedIn`: the app's folder, which iOS renews on every install
+  and update, and `kern.bootsessionuuid`) and takes a gone card for a swipe only when both are
+  the same now: after an update, a reinstall or a restart it starts the card again.
 - **The title under the counts** carries its task's id (`needsTaskId`): a tap on it opens that
   task over the Needs you list (`walnut://work?list=needs&task=<id>`).
 - **Silent.** A card payload carries `aps.event`, `aps.timestamp`, `aps.content-state`

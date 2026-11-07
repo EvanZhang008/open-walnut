@@ -45,12 +45,17 @@ enum WorkCardPlan {
 
     /// The card this app started is gone from the lock screen though the server never ended
     /// it, its stretch still runs, and iOS's own time limit is not what ended it: the user
-    /// swiped it away.
+    /// swiped it away. iOS also takes the card away when Walnut is updated or reinstalled, or
+    /// the phone restarts, and that is no swipe: `startedIn` is the install and boot that
+    /// started the card, `runningIn` this one (`WorkCardController.runningIn`). One not known
+    /// (an older build did not note it, or it could not be read) is not taken as a swipe either.
     static func wasDismissed(
         memoStretch: String?, startedAt: Date?, stillOnScreen: Bool,
-        view: WalnutAPI.WorkCardView, now: Date, allowed: Bool = true
+        view: WalnutAPI.WorkCardView, now: Date, allowed: Bool = true,
+        startedIn: String?, runningIn: String?
     ) -> Bool {
         guard let memoStretch, !stillOnScreen, view.active, view.stretch == memoStretch else { return false }
+        guard let startedIn, startedIn == runningIn else { return false }
         return removedByUser(startedAt: startedAt, now: now, allowed: allowed)
     }
 
@@ -138,6 +143,9 @@ final class WorkCardController {
     nonisolated static let enabledKey = "workCard.enabled"
     private nonisolated static let idKey = "workCard.activityId"
     private nonisolated static let startedKey = "workCard.startedAt"
+    /// The install and boot that started the card: an update, a reinstall or a restart in
+    /// between ends it, which is no swipe.
+    private nonisolated static let startedInKey = "workCard.startedIn"
     private nonisolated static let stretchKey = "workCard.stretch"
     private nonisolated static let dismissedKey = "workCard.dismissedStretch"
     private nonisolated static let uploadedKey = "workCard.uploaded"
@@ -152,6 +160,15 @@ final class WorkCardController {
     nonisolated static let staleSoon: TimeInterval = 15 * 60
     /// An ended card stays on the lock screen this long with its last numbers.
     nonisolated static let dismissAfter: TimeInterval = 15 * 60
+    /// This install and this boot of the phone: the app's folder (iOS gives every install and
+    /// update a new one) and the boot session id. Nil when the boot cannot be read.
+    nonisolated static let runningIn: String? = {
+        var size = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else { return nil }
+        var buf = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.bootsessionuuid", &buf, &size, nil, 0) == 0 else { return nil }
+        return "\(Bundle.main.bundlePath)|\(String(cString: buf))"
+    }()
 
     /// The last numbers read, for the lists a card link opens.
     private(set) var lastView: WalnutAPI.WorkCardView?
@@ -310,7 +327,11 @@ final class WorkCardController {
         guard let memoId = defaults.string(forKey: Self.idKey), memoId != card?.id else { return }
         let onScreen = Activity<WorkCardAttributes>.activities.contains { $0.id == memoId && $0.activityState != .dismissed }
         let started = defaults.object(forKey: Self.startedKey) as? Date
-        if WorkCardPlan.wasDismissed(memoStretch: defaults.string(forKey: Self.stretchKey), startedAt: started, stillOnScreen: onScreen, view: view, now: Date(), allowed: allowed) {
+        if WorkCardPlan.wasDismissed(
+            memoStretch: defaults.string(forKey: Self.stretchKey), startedAt: started, stillOnScreen: onScreen,
+            view: view, now: Date(), allowed: allowed,
+            startedIn: defaults.string(forKey: Self.startedInKey), runningIn: Self.runningIn
+        ) {
             defaults.set(defaults.string(forKey: Self.stretchKey), forKey: Self.dismissedKey)
             AppLog.info("workcard", "the card was removed by the user; it stays off until the next stretch", [:])
         }
@@ -331,6 +352,7 @@ final class WorkCardController {
             )
             defaults.set(card.id, forKey: Self.idKey)
             defaults.set(Date(), forKey: Self.startedKey)
+            defaults.set(Self.runningIn, forKey: Self.startedInKey)
             defaults.set(view.stretch, forKey: Self.stretchKey)
             AppLog.info("workcard", "card started", ["working": String(view.state.working), "needs": String(view.state.needs)])
             watch(card)
@@ -388,7 +410,7 @@ final class WorkCardController {
     }
 
     private func forgetCard() {
-        for key in [Self.idKey, Self.startedKey, Self.stretchKey, Self.uploadedKey] { defaults.removeObject(forKey: key) }
+        for key in [Self.idKey, Self.startedKey, Self.startedInKey, Self.stretchKey, Self.uploadedKey] { defaults.removeObject(forKey: key) }
         tokenWatch?.cancel()
         stateWatch?.cancel()
         tokenWatch = nil
@@ -407,6 +429,7 @@ final class WorkCardController {
         if defaults.string(forKey: Self.idKey) != card.id {
             defaults.set(card.id, forKey: Self.idKey)
             defaults.removeObject(forKey: Self.startedKey)
+            defaults.removeObject(forKey: Self.startedInKey)
         }
         tokenWatch?.cancel()
         stateWatch?.cancel()
