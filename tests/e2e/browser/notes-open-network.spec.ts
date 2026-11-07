@@ -86,7 +86,7 @@ async function openFromTree(page: Page, folder: string, name: string) {
   const arrowClass = (await folderEl.locator('.notes-tree-arrow').getAttribute('class')) ?? ''
   if (!arrowClass.includes('expanded')) await folderEl.click()
   await page.locator('.notes-tree-file', { hasText: name }).first().click()
-  await expect(page.locator('.notes-editor .tiptap').first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toBeVisible({ timeout: 10_000 })
 }
 
 // Serial: the tests seed the same two notes, and a re-seed landing while another
@@ -113,7 +113,7 @@ test('a note switch fetches only its content; re-opening never writes back; an e
   // indentation, fence info strings) and write that once; what must never happen
   // is a write whose bytes equal the disk, which is every open after this one.
   await openFromTree(page, FOLDER, 'Nested List')
-  await expect(page.locator('.notes-editor .tiptap').first()).toContainText('Lost session during restart')
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toContainText('Lost session during restart')
   // Long enough for the 500 ms autosave window AND the corpora's debounced
   // refresh after a save (1.5 s): a normalization write here legitimately
   // refreshes the list/tags once, and that must not be mistaken for a per-switch
@@ -130,7 +130,7 @@ test('a note switch fetches only its content; re-opening never writes back; an e
   // Switch: one content fetch, no corpora, no write.
   let mark = hits.length
   await openFromTree(page, FOLDER, 'Plain Note')
-  await expect(page.locator('.notes-editor .tiptap').first()).toContainText('sentinel-b')
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toContainText('sentinel-b')
   await page.waitForTimeout(1500)
   const sinceSwitch = hits.slice(mark)
   expect(only(sinceSwitch, 'GET', '/api/notes-v2/content').map((h) => decodeURIComponent(h.url))).toEqual([
@@ -158,7 +158,7 @@ test('a note switch fetches only its content; re-opening never writes back; an e
   await page.reload()
   await page.waitForLoadState('networkidle')
   mark = hits.length
-  await expect(page.locator('.notes-editor .tiptap').first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toBeVisible({ timeout: 15_000 })
   await page.waitForTimeout(1500)
   expect(only(hits.slice(mark), 'PUT', '/api/notes-v2/content'), 'reload re-opened the note and wrote it back').toEqual([])
   expect(await readNote(NOTE_A)).toBe(settledBytes)
@@ -167,7 +167,7 @@ test('a note switch fetches only its content; re-opening never writes back; an e
   await openFromTree(page, FOLDER, 'Nested List')
   await page.waitForTimeout(800)
   mark = hits.length
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await editor.click()
   await page.keyboard.press('End')
   await page.keyboard.type(' edited-by-probe')
@@ -183,7 +183,7 @@ test('a note the page already holds paints from cache before the server answers'
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await gotoNotes(page)
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await openFromTree(page, FOLDER, 'Nested List')
   await expect(editor).toContainText('Lost session during restart')
   await openFromTree(page, FOLDER, 'Plain Note')
@@ -220,7 +220,7 @@ test('an edit made right before switching notes is saved by the departing editor
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await gotoNotes(page)
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await openFromTree(page, FOLDER, 'Plain Note')
   await expect(editor).toContainText('sentinel-b')
   await page.waitForTimeout(1500) // first-open normalization settles
@@ -264,7 +264,7 @@ test('resting the pointer on a tree row fetches its note ahead of the click', as
   // it landed, paints from it and revalidates once: never two loads racing.
   const beforeClick = hits.length
   await row.click()
-  await expect(page.locator('.notes-editor .tiptap').first()).toContainText('sentinel-c')
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toContainText('sentinel-c')
   await page.waitForTimeout(800)
   expect(only(hits.slice(beforeClick), 'GET', '/api/notes-v2/content').length).toBeLessThanOrEqual(1)
   assertNoCrash()

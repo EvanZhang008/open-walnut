@@ -18,7 +18,7 @@ test('image walkthrough', async ({ page }) => {
   const editor = await openNote(page, root)
   await expect.poll(() => drawn(page), { timeout: 10_000 }).toBe(5)
   await page.waitForTimeout(1500)
-  const scroller = page.locator('.notes-editor-content').first()
+  const scroller = page.locator('.notes-editor-pane .notes-editor-content').first()
   for (const alt of ['bare', 'encoded', 'up']) {
     await editor.locator(`img[alt="${alt}"]`).scrollIntoViewIfNeeded()
     await page.waitForTimeout(900)

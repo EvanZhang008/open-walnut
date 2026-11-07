@@ -39,7 +39,7 @@ async function openSeededNote(page: Page) {
   await page.locator('.notes-tree-folder', { hasText: FOLDER }).click()
   await page.locator(`[data-drop-folder="${FOLDER}"] .notes-tree-file`, { hasText: 'Pdf Note' }).click()
 
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await expect(editor).toBeVisible({ timeout: 5000 })
   await expect(editor).toContainText('lease docs')
   return editor

@@ -39,10 +39,10 @@ async function openNoteFromTree(page: Page, folder: string, name: string, opts?:
   if (!(await file.isVisible().catch(() => false))) await folderEl.click()
   // Single click replaces the active tab; ⌘/Ctrl-click opens a NEW tab.
   await file.click(opts?.newTab ? { modifiers: ['ControlOrMeta'] } : {})
-  await expect(page.locator('.notes-editor .tiptap').first()).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toBeVisible({ timeout: 5000 })
 }
 
-const scrollBox = (page: Page) => page.locator('.notes-editor-content').first()
+const scrollBox = (page: Page) => page.locator('.notes-editor-pane .notes-editor-content').first()
 
 test('opens at top; remembers scroll across home↔notes; raw toggle keeps location; tabs survive refresh', async ({ page }) => {
   await seedNotes()
@@ -55,7 +55,7 @@ test('opens at top; remembers scroll across home↔notes; raw toggle keeps locat
   // re-activate Long Note via the tab strip.
   await openNoteFromTree(page, 'ScrollTest', 'Other Note', { newTab: true })
   await page.locator('.notes-tab', { hasText: 'Long Note' }).click()
-  await expect(page.locator('.notes-editor .tiptap').first()).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toBeVisible({ timeout: 5000 })
 
   // (1) fresh open lands at top, NOT bottom
   const box = scrollBox(page)
@@ -72,7 +72,7 @@ test('opens at top; remembers scroll across home↔notes; raw toggle keeps locat
   await page.locator('a[href="/"]').first().click()
   await page.waitForLoadState('networkidle')
   await gotoNotes(page)
-  await expect(page.locator('.notes-editor .tiptap').first()).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toBeVisible({ timeout: 5000 })
   await page.waitForTimeout(500)
   const restoredTop = await scrollBox(page).evaluate((el) => el.scrollTop)
   expect(Math.abs(restoredTop - savedTop)).toBeLessThan(savedTop * 0.15 + 40)
@@ -99,7 +99,7 @@ test('opens at top; remembers scroll across home↔notes; raw toggle keeps locat
   await page.waitForLoadState('networkidle')
   await expect(page.locator('.notes-tab', { hasText: 'Long Note' })).toBeVisible({ timeout: 5000 })
   await expect(page.locator('.notes-tab', { hasText: 'Other Note' })).toBeVisible()
-  await expect(page.locator('.notes-editor .tiptap').first()).toBeVisible()
+  await expect(page.locator('.notes-editor-pane .notes-editor .tiptap').first()).toBeVisible()
   await page.waitForTimeout(600)
   const afterReloadTop = await scrollBox(page).evaluate((el) => el.scrollTop)
   expect(Math.abs(afterReloadTop - savedTop)).toBeLessThan(savedTop * 0.15 + 40)

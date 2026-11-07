@@ -50,7 +50,7 @@ async function openSeededNote(page: Page, folder: string) {
   await page.locator('.notes-tree-folder', { hasText: folder }).click()
   await page.locator(`[data-drop-folder="${folder}"] .notes-tree-file`, { hasText: 'Image Note' }).click()
 
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await expect(editor).toBeVisible({ timeout: 5000 })
   await expect(editor).toContainText('before paste')
   return editor
@@ -63,7 +63,7 @@ async function pasteImage(page: Page) {
     const dt = new DataTransfer()
     dt.items.add(file)
     const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true })
-    document.querySelector('.notes-editor .tiptap')?.dispatchEvent(event)
+    document.querySelector('.notes-editor-pane .notes-editor .tiptap')?.dispatchEvent(event)
   }, PNG_B64)
   await expect(page.locator('.notes-wikiembed-view img')).toBeVisible({ timeout: 10_000 })
 }

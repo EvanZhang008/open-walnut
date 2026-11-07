@@ -411,7 +411,7 @@ test('the notes editor opens a handled link in its plugin, once', async ({ page 
   const { links } = fixture
   await page.locator('a[href="/notes"]').first().click()
   await page.locator('.notes-tree-file', { hasText: 'Chat links' }).first().click()
-  const editor = page.locator('.ProseMirror').first()
+  const editor = page.locator('.notes-editor-pane .ProseMirror').first()
   await expect(editor.getByRole('link', { name: 'the thread reply' })).toBeVisible({ timeout: 30_000 })
   const before = tabs().length
   await editor.getByRole('link', { name: 'the thread reply' }).click()

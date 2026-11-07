@@ -90,14 +90,16 @@ export async function openNote(page: Page, root: string, firstLine = 'Image form
   await page.locator('.notes-tree-folder', { hasText: root }).click()
   await page.locator(`[data-drop-folder="${root}"] .notes-tree-folder`, { hasText: 'Trips' }).click()
   await page.locator(`[data-drop-folder="${root}/Trips"] .notes-tree-file`, { hasText: 'Plan' }).click()
-  const editor = page.locator('.notes-editor .tiptap').first()
+  // The Notes page's own pane: Home stays mounted on every route, and a Scratchpad another
+  // test left open there keeps its editor in the DOM first (tests/web/notes-page-editor-scope-guard.test.ts).
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await expect(editor).toContainText(firstLine, { timeout: 10_000 })
   return editor
 }
 
 /** Every visible <img> in the editor that finished loading with real pixels. */
 export async function drawn(page: Page): Promise<number> {
-  return page.locator('.notes-editor .tiptap img').evaluateAll((imgs) =>
+  return page.locator('.notes-editor-pane .notes-editor .tiptap img').evaluateAll((imgs) =>
     (imgs as HTMLImageElement[]).filter((i) => !i.hidden && i.complete && i.naturalWidth > 0).length)
 }
 

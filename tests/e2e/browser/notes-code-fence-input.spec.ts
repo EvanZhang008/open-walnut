@@ -31,7 +31,7 @@ async function openNote(page: Page) {
   const file = page.locator('.notes-tree-file', { hasText: name }).first()
   if (!(await file.isVisible().catch(() => false))) await folderEl.click()
   await file.click()
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await expect(editor).toBeVisible({ timeout: 5000 })
   // No wait for TipTap's `autofocus: 'start'` here: a note already open in a tab
   // (a retry reopens the same one) does not remount, so nothing focuses it, and a

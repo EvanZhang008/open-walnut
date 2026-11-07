@@ -37,7 +37,7 @@ async function openNote(page: Page) {
   const file = page.locator('.notes-tree-file', { hasText: name }).first()
   if (!(await file.isVisible().catch(() => false))) await folderEl.click()
   await file.click()
-  const editor = page.locator('.notes-editor .tiptap').first()
+  const editor = page.locator('.notes-editor-pane .notes-editor .tiptap').first()
   await expect(editor).toBeVisible({ timeout: 5000 })
   // TipTap applies `autofocus: 'start'` on a 0ms timer after mount. On a loaded
   // machine that timer can fire AFTER our first click and yank the caret to the
