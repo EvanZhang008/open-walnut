@@ -24,6 +24,7 @@ export interface BrowserViewState {
 
 export interface BrowserFrame {
   tab: number;
+  device?: string;
   shown: boolean;
   why?: string;
   image?: string;
@@ -88,9 +89,15 @@ export function agoLine(at: string | undefined, now: number): string {
   return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
 }
 
-/** The tab the view follows: the one picked while it is still there, else the newest. */
-export function followedTab(tabs: BrowserViewTab[], picked: number | null): BrowserViewTab | undefined {
-  return tabs.find((t) => t.tab === picked) ?? tabs[tabs.length - 1];
+/**
+ * A tab as one browser's own: its id is unique within that browser only, so two connected browsers
+ * can each have a tab 42 (review 2026-11-07: the view showed one and stopped the other).
+ */
+export const tabKey = (t: { device: string; tab: number }): string => `${t.device}:${t.tab}`;
+
+/** The tab the view follows: the one picked (browser and tab) while it is still there, else the newest. */
+export function followedTab(tabs: BrowserViewTab[], picked: string | null): BrowserViewTab | undefined {
+  return tabs.find((t) => tabKey(t) === picked) ?? tabs[tabs.length - 1];
 }
 
 /** How long after a frame's answer the next one is asked for. */

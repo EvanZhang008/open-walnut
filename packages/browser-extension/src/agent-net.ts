@@ -17,13 +17,21 @@
 import { more } from './agent-api'
 import { ext, isFirefox } from './ext'
 import { CdpError, dropDebugger, holdDebugger, type Send } from './cdp'
-import { AgentError, filledHere, nearPerson, originOf, where, type AgentTab, type WireCommand } from './agent-shared'
-import { NET_MAX, bodyOut, fold, listConsole, listRequests, newRecord, type NetRecord } from './net-record'
+import { AgentError, agentTabs, allowed, filledHere, filledOrigins, nearPerson, originOf, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
+import { walnutAddress } from './walnut-address'
+import { NET_MAX, bodyOut, fold, listConsole, listRequests, maskEntry, newRecord, urlsOf, type ConsoleEntry, type Judge, type NetEntry, type NetRecord } from './net-record'
 import { REAL_INPUT_SWITCH, trustedReady } from './agent-trusted'
 
 export const NET_OPS = new Set(['network', 'network_body', 'network_request_body', 'console'])
 
 const records = new Map<number, NetRecord & { send: Send }>()
+/**
+ * Each tab's recording generation: a Stop (or close, give-back, agents off) moves it on, so a start
+ * still attaching then lets go when it comes back (review 2026-11-07: the debugger stayed on a tab
+ * already given back).
+ */
+const generation = new Map<number, number>()
+const genOf = (tabId: number) => generation.get(tabId) ?? 0
 /** Tabs where the person cancelled the debugging bar: no agent records there again. */
 const cancelled = new Set<number>()
 let listening = false
@@ -42,6 +50,11 @@ function listen(): void {
     if (reason === 'canceled_by_user') cancelled.add(source.tabId)
   })
   ext.tabs.onRemoved.addListener((tabId) => { records.delete(tabId); dropDebugger(tabId); cancelled.delete(tabId) })
+  // The person turned real input off (the debugger permission went): every recording ends with it.
+  ext.permissions.onRemoved?.addListener((p) => {
+    if (!p.permissions?.includes('debugger')) return
+    for (const tabId of [...records.keys()]) void stopRecording(tabId)
+  })
 }
 
 /** Why this tab may not record, or nothing. */
@@ -63,11 +76,18 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
   listen()
   const dbg = more.debugger!
   const target = { tabId }
+  const gen = genOf(tabId)
   try {
     await dbg.attach(target, '1.3')
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err)
     throw new AgentError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
+  }
+  // Stopped (or no longer this owner's) while the browser attached: let go, record nothing.
+  const stale = async () => genOf(tabId) !== gen || (await agentTabs.get(tabId))?.owner !== rec.owner
+  if (await stale()) {
+    await dbg.detach(target).catch(() => undefined)
+    throw new AgentError('The tab was given back while its recording started: nothing is recorded.', 'not_your_tab')
   }
   const send: Send = (method, params) => dbg.sendCommand(target, method, params ?? {})
   const r = { ...newRecord(), send }
@@ -82,11 +102,17 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
     await stopRecording(tabId)
     throw new AgentError(`The browser would not record that tab: ${err instanceof Error ? err.message : String(err)}`, 'debugger_busy')
   }
+  if (await stale()) {
+    if (records.get(tabId) === r) await stopRecording(tabId)
+    throw new AgentError('The tab was given back while its recording started: nothing is recorded.', 'not_your_tab')
+  }
   return true
 }
 
 /** The tab records no more: its debugger let go (a tab given back, Stop, the agents switched off). */
 export async function stopRecording(tabId: number): Promise<boolean> {
+  // Any start still attaching is over too.
+  generation.set(tabId, genOf(tabId) + 1)
   const r = records.get(tabId)
   if (!r) return false
   records.delete(tabId)
@@ -109,41 +135,71 @@ export async function netAct(c: WireCommand, tabId: number, rec: AgentTab): Prom
   }
   const startedNow = await startRecording(tabId, rec)
   const r = records.get(tabId)!
-  const tab = await ext.tabs.get(tabId).catch(() => null)
-  // One look per site: a listing checks every request's address and page.
-  const seen = new Map<string, boolean>()
-  const filledOn = async (u: string | undefined) => {
+  // One look per site: a listing judges every request's addresses.
+  const filled = new Set(await filledOrigins(rec.owner))
+  const isFilled = (u: string | undefined) => !!u && filled.has(originOf(u))
+  const off = new Map<string, boolean>()
+  const offSite = async (u: string): Promise<boolean> => {
+    // data: and blob: carry no site of their own: their page is judged.
+    if (!/^https?:/i.test(u)) return false
     const o = originOf(u)
-    if (!o) return false
-    if (!seen.has(o)) seen.set(o, await filledHere(rec.owner, o))
-    return seen.get(o)!
+    if (!off.has(o)) off.set(o, !allowed(c.allow, u) || !!walnutAddress(c.allow.walnut, u) || await walnutCheck.isWalnutPage(u))
+    return off.get(o)!
   }
+  /**
+   * What an agent may see of a request: nothing when any address it names (where it went, the page
+   * that sent it, where it was redirected from) is a site agents may not use or Walnut's own (review
+   * 2026-11-07: a body of a site not allowed came back); its addresses masked when any is a site
+   * Walnut signed the agent in on.
+   */
+  const judged = new Map<string, Judge>()
+  for (const e of r.requests.values()) {
+    const urls = urlsOf(e)
+    let j: Judge = 'show'
+    for (const u of urls) if (await offSite(u)) { j = 'drop'; break }
+    if (j === 'show' && urls.some(isFilled)) j = 'mask'
+    judged.set(e.id, j)
+  }
+  const judge = (e: NetEntry): Judge => judged.get(e.id) ?? 'drop'
   const since = new Date(r.since).toISOString()
   const fresh = startedNow ? { started_now: true, note: 'Recording started now: what the page did before is not in it. Navigate to the page again (or open it with record) to record its load.' } : {}
   switch (c.action) {
     case 'network': {
-      const hidden = new Set<string>()
-      for (const e of r.requests.values()) for (const u of [e.url, e.page]) if (u && await filledOn(u)) hidden.add(u)
       const out = listRequests(r, {
         url: typeof a.url === 'string' ? a.url : undefined, method: typeof a.method === 'string' ? a.method : undefined,
         status: typeof a.status === 'number' || typeof a.status === 'string' ? a.status : undefined,
         type: typeof a.type === 'string' ? a.type : undefined, limit: typeof a.limit === 'number' ? a.limit : undefined, includeStatic: a.include_static === true,
-      }, (u) => hidden.has(u))
+      }, judge)
       return { recording: true, since, ...fresh, ...out, kept: NET_MAX, ...(r.dropped.requests ? { dropped: r.dropped.requests } : {}), ...(await where(tabId)) }
     }
     case 'console': {
-      if (await filledOn(tab?.url)) throw new AgentError('console is not read on a site where Walnut signed you in: a page may log what was typed, the password too.', 'filled_here')
-      const out = listConsole(r, { level: typeof a.level === 'string' ? a.level : undefined, limit: typeof a.limit === 'number' ? a.limit : undefined })
-      return { recording: true, since, ...fresh, ...out, ...(r.dropped.console ? { dropped: r.dropped.console } : {}), ...(await where(tabId)) }
+      // Each message by the page that logged it, not the page the tab shows now: a sign-in page's
+      // console stays closed after the agent moves on (review 2026-11-07). A message whose page the
+      // browser did not name counts as from a signed-in site once there is one.
+      const keepOf = new Map<string, boolean>()
+      for (const m of r.console) {
+        const k = m.origin ?? ''
+        if (keepOf.has(k)) continue
+        keepOf.set(k, m.origin ? !filled.has(m.origin) && !(await offSite(m.origin)) : filled.size === 0)
+      }
+      const out = listConsole(r, { level: typeof a.level === 'string' ? a.level : undefined, limit: typeof a.limit === 'number' ? a.limit : undefined }, (m: ConsoleEntry) => keepOf.get(m.origin ?? '') ?? false)
+      return {
+        recording: true, since, ...fresh, ...out, ...(r.dropped.console ? { dropped: r.dropped.console } : {}),
+        ...(out.withheld ? { withheld_note: `${out.withheld} message(s) withheld: logged by a page Walnut signed you in on, or by a site agents may not use.` } : {}),
+        ...(await where(tabId)),
+      }
     }
     case 'network_body': case 'network_request_body': {
       const id = reqIdOf(a)
       const e = r.requests.get(id)
       if (!e) throw new AgentError(`No request ${id} in this tab's recording (network lists them; the oldest go after ${NET_MAX}).`, 'no_such_request')
+      const j = judge(e)
+      if (j === 'drop') throw new AgentError('That request went to (or came from) a site agents may not use, or Walnut itself: its body is not read.', 'request_site_not_allowed')
       const max = typeof a.max_chars === 'number' ? a.max_chars : undefined
-      const head = { request_id: id, url: e.url, method: e.method, ...(e.status !== undefined ? { status: e.status } : {}), ...(e.mime ? { mime: e.mime } : {}) }
+      const seen = j === 'mask' ? maskEntry(e) : e
+      const head = { request_id: id, url: seen.url, method: e.method, ...(e.status !== undefined ? { status: e.status } : {}), ...(e.mime ? { mime: e.mime } : {}) }
       if (c.action === 'network_request_body') {
-        if (await filledOn(e.url) || await filledOn(e.page) || await filledOn(tab?.url)) {
+        if (j === 'mask' || await filledHere(rec.owner, (await ext.tabs.get(tabId).catch(() => null))?.url ?? '')) {
           throw new AgentError('A request\'s body is not read on a site where Walnut signed you in: the sign-in itself sent the password.', 'filled_here')
         }
         if (!e.hasBody) return { ...head, body: '', length: 0, note: 'That request sent no body.' }

@@ -23,6 +23,12 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
         next: `Call ${String(args.action)} again with the same arguments, request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through (the ask stays open ${String(body.waitsMinutes ?? 10)} minutes). Do not ask them in chat as well.`,
       }
     }
+    if (body.code === 'fresh_sign_in_needs_ok') {
+      return {
+        outcome: String(body.error ?? 'Waiting for the person to approve a new sign-in.'),
+        next: `Call fill_login again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
+      }
+    }
     if (args.action === 'fill_login') {
       return {
         outcome: `Waiting for the person to approve signing in with "${(body.item as { title?: string } | undefined)?.title ?? 'the login'}" (a notification on their Mac and phone).`,
@@ -119,7 +125,7 @@ defineOp({
     + '`tab` may be left out after you used one. A site agents have not used yet may ask the user first (needs_ok): call the same action again (wait_ms up to 25000 holds for the answer). '
     + 'Every open, take, navigate and back names the window (Walnut\'s agent window, behind theirs, not minimized; or the person\'s own) and the tab (id, title, address): '
     + 'say which in your first line to the user when you start using the browser. An open or navigate to a site the person already has open in a tab of their own lists those tabs (person_tabs): '
-    + 'ask them to hand that tab over, or take it, instead of signing in again; fill_login there answers site_open_in_person_tab unless they asked for a fresh sign-in (fresh_sign_in: true). '
+    + 'ask them to hand that tab over, or take it, instead of signing in again; fill_login there answers site_open_in_person_tab; when they asked you for a fresh sign-in, fresh_sign_in: true asks them to approve it (needs_ok, call again with request), and only their yes fills. '
     + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
     + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
@@ -158,7 +164,7 @@ defineOp({
     item: z.string().max(200).optional().describe('fill_login: the login (its id, name or username) when the site has several'),
     request: z.string().max(100).optional().describe('fill_login, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their approval'),
     purpose: z.string().max(200).optional().describe('fill_login: why, in a few words the user reads on the approval'),
-    fresh_sign_in: z.boolean().optional().describe('fill_login: the person asked you for a new sign-in here, although they have this site open in a tab of their own'),
+    fresh_sign_in: z.boolean().optional().describe('fill_login: ask the person to approve a new sign-in here, although they have this site open in a tab of their own (only their yes fills)'),
     trusted: z.boolean().optional().describe('click / hover / type / press / upload: real mouse and keys through the browser\'s debugger (the user turns it on)'),
     accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false)'),
     expression: z.string().max(100_000).optional().describe('evaluate: JavaScript to run in the page (its value comes back as JSON)'),

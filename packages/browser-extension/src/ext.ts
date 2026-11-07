@@ -54,6 +54,7 @@ export interface ExtApi {
   permissions: {
     request(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
     contains(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
+    onRemoved?: Event<(p: { origins?: string[]; permissions?: string[] }) => void>
   }
   /** Putting the content script into a tab that has none (page-reach.ts). */
   scripting?: { executeScript(o: { target: { tabId: number; allFrames?: boolean; frameIds?: number[] }; files: string[] }): Promise<unknown[]> }

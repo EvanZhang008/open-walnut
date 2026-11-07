@@ -24,6 +24,9 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import * as hub from '../../src/core/browser-control/hub.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
+import { _resetFreshSignInForTesting } from '../../src/core/browser-control/fresh-sign-in.js'
+import { answerMessage, keyIdOf } from '../../src/core/approvals/digest.js'
+import crypto from 'node:crypto'
 
 let base = ''
 
@@ -40,14 +43,17 @@ interface Seen { action: string; args: Record<string, any> }
 const PIXEL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ=='
 
 /** A browser with the person's own tabs, and agent tabs in Walnut's agent window. */
-function fakeExtension(token: string) {
+function fakeExtension(token: string, opts: { start?: number; image?: string; seed?: Array<[number, { url: string; owner: string; title: string; window: 'agent' | 'person' }]> } = {}) {
   const seen: Seen[] = []
-  const tabs = new Map<number, { url: string; owner: string; title: string; window: 'agent' | 'person' }>()
+  const tabs = new Map<number, { url: string; owner: string; title: string; window: 'agent' | 'person' }>(opts.seed ?? [])
+  const image = opts.image ?? PIXEL
+  /** How the browser answers the list of every tab: as it should, an error, a list of the agents' tabs only, or one without the asking tab. */
+  const list = { mode: 'ok' as 'ok' | 'fail' | 'partial' | 'missing' }
   const persons = [
     { id: 11, url: 'https://www.bank.example.test/accounts', title: 'Accounts', active: true },
     { id: 12, url: 'https://news.other.test/', title: 'News' },
   ]
-  let next = 200
+  let next = opts.start ?? 200
   let on = true
   let reportTitles = true
   const auth = { authorization: `Bearer ${token}` }
@@ -63,7 +69,10 @@ function fakeExtension(token: string) {
         t.url = c.args.url
         return { ok: true, result: { tab: c.args.tab, url: t.url, title: t.title, window: t.window, windowState: 'normal' } }
       }
-      case 'tabs': return {
+      case 'tabs': if (c.args.all && list.mode === 'fail') return { ok: false, error: { message: 'busy', code: 'browser_error' } }
+      if (c.args.all && list.mode === 'partial') return { ok: true, result: { tabs: [...tabs].map(([id, t]) => ({ id, url: t.url, owner: t.owner })) } }
+      if (c.args.all && list.mode === 'missing') return { ok: true, result: { all: true, tabs: persons } }
+      return {
         ok: true,
         result: c.args.all
           ? { all: true, tabs: [...persons, ...[...tabs].map(([id, t]) => ({ id, url: t.url, title: t.title, owner: t.owner }))] }
@@ -72,7 +81,7 @@ function fakeExtension(token: string) {
       case 'view_frame': {
         const t = tabs.get(c.args.tab)
         if (!t) return { ok: false, error: { message: 'gone', code: 'not_your_tab' } }
-        return { ok: true, result: { tab: c.args.tab, url: t.url, title: t.title, window: t.window, windowState: 'normal', shown: true, image: PIXEL, at: new Date().toISOString() } }
+        return { ok: true, result: { tab: c.args.tab, url: t.url, title: t.title, window: t.window, windowState: 'normal', shown: true, image, at: new Date().toISOString() } }
       }
       case 'view_stop': {
         const had = tabs.delete(c.args.tab)
@@ -99,7 +108,7 @@ function fakeExtension(token: string) {
       }
     }
   })()
-  return { seen, tabs, persons, auth, quiet: () => { reportTitles = false }, stop: async () => { on = false; await loop } }
+  return { seen, tabs, persons, auth, list, quiet: () => { reportTitles = false }, stop: async () => { on = false; await loop } }
 }
 
 async function pair(): Promise<{ token: string; name: string }> {
@@ -214,24 +223,71 @@ describe('a session in the person\'s browser', () => {
     expect((await http('POST', '/browser/act', { action: 'nope', tab: agentTab }, SESSION())).body.code).toBe('bad_action')
   })
 
-  it('fill_login on a site the person has open in their own tab is refused with the step; a fresh sign-in they asked for goes on to the vault', async () => {
+  it('fill_login on a site the person has open in their own tab is refused with the step', async () => {
     const r = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab }, SESSION())
     expect(r.status, JSON.stringify(r.body)).toBe(409)
     expect(r.body.code).toBe('site_open_in_person_tab')
     expect(r.body.person_tabs).toEqual([{ id: 11, title: 'Accounts', active: true }])
     expect(r.body.error).toMatch(/already has example\.test open in tab 11/)
     expect(r.body.error).toMatch(/hand that tab over/)
-    expect(r.body.error).toMatch(/fresh_sign_in: true/)
+    expect(r.body.error).toMatch(/fresh_sign_in: true: that asks them to approve it/)
     // Nothing was filled.
     expect(ext.seen.some((c) => c.action === 'fill_login')).toBe(false)
-    // With the person's own ask for a fresh sign-in, the vault decides (here: nothing set up), not this rule.
-    const fresh = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, fresh_sign_in: true }, SESSION())
-    expect(fresh.body.code).not.toBe('site_open_in_person_tab')
-    // The person closed their bank tab: no refusal from this rule either.
+    // The person closed their bank tab: no refusal from this rule.
     ext.persons.splice(0, 1)
     const after = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab }, SESSION())
     expect(after.body.code).not.toBe('site_open_in_person_tab')
     ext.persons.unshift({ id: 11, url: 'https://www.bank.example.test/accounts', title: 'Accounts', active: true })
+  })
+
+  it('a session\'s fresh_sign_in only asks the person: nothing fills until they approve with proof, and the yes is for that tab alone', async () => {
+    _resetFreshSignInForTesting()
+    const ask = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, fresh_sign_in: true }, SESSION())
+    expect(ask.status, JSON.stringify(ask.body)).toBe(202)
+    expect(ask.body).toMatchObject({ status: 'needs_ok', code: 'fresh_sign_in_needs_ok', site: 'example.test' })
+    expect(ext.seen.some((c) => c.action === 'fill_login')).toBe(false)
+    // Asked again: the same ask, not a second one.
+    expect((await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, fresh_sign_in: true }, SESSION())).body.request).toBe(ask.body.request)
+    // The approval names the site and the person's tab.
+    const approval = (await http('GET', `/approvals/${ask.body.request}`)).body.approval
+    expect(approval.what).toMatch(/sign in again on example\.test\? You already have it open \(tab 11 \("Accounts"\)\)/)
+    // A plain approve from this machine (what the agent itself could send) is no proof.
+    expect((await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve' })).status).toBe(403)
+    expect((await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, request: ask.body.request }, SESSION())).status).toBe(202)
+    // The person's phone signs a yes.
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+    const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    const phone = await http('POST', '/api/devices', { name: 'browser-view-e2e-phone' })
+    expect((await http('POST', '/approvals/keys', { publicKey: spki, name: 'Test iPhone', kind: 'iphone' }, { authorization: `Bearer ${phone.body.token}` })).status).toBe(200)
+    const digest = approval.digest as string
+    const signature = crypto.sign('sha256', Buffer.from(answerMessage(digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
+    expect((await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature })).status).toBe(200)
+    // Through to the vault now (nothing set up here, so the vault answers), past this rule.
+    const through = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab, request: ask.body.request }, SESSION())
+    expect(['site_open_in_person_tab', 'fresh_sign_in_needs_ok', 'same_site_unchecked', 'no_such_request']).not.toContain(through.body.code)
+    // Another tab of the task on the same site has no yes.
+    const second = await http('POST', '/browser/act', { action: 'open', url: 'https://login.bank.example.test/' }, SESSION())
+    expect(second.status).toBe(200)
+    const other = await http('POST', '/browser/act', { action: 'fill_login', tab: second.body.tab }, SESSION())
+    expect(other.body.code).toBe('site_open_in_person_tab')
+    // The ask is used: it cannot be brought again.
+    expect((await http('POST', '/browser/act', { action: 'fill_login', tab: second.body.tab, request: ask.body.request }, SESSION())).body.code).not.toBe('ok')
+    await http('POST', '/browser/act', { action: 'close', tab: second.body.tab }, SESSION())
+    _resetFreshSignInForTesting()
+  })
+
+  it('a same-site check that cannot be made fills nothing: an error, a list of the agents\' tabs only, a list without this tab', async () => {
+    for (const mode of ['fail', 'partial', 'missing'] as const) {
+      ext.list.mode = mode
+      const r = await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab }, SESSION())
+      expect(r.status, `${mode}: ${JSON.stringify(r.body)}`).toBe(503)
+      expect(r.body.code).toBe('same_site_unchecked')
+      expect(r.body.error).toMatch(/fills nothing yet/)
+    }
+    ext.list.mode = 'ok'
+    expect(ext.seen.some((c) => c.action === 'fill_login')).toBe(false)
+    // Once the browser answers again, the rule decides as before.
+    expect((await http('POST', '/browser/act', { action: 'fill_login', tab: agentTab }, SESSION())).body.code).toBe('site_open_in_person_tab')
   })
 
   it('a frame is the person\'s only; two viewers share one capture', async () => {
@@ -251,6 +307,31 @@ describe('a session in the person\'s browser', () => {
     // Another task's tab, or no such tab: none.
     expect((await http('GET', `/browser/view/frame?task=other-task&tab=${agentTab}`)).status).toBe(404)
     expect((await http('GET', `/browser/view/frame?task=${taskId}`)).status).toBe(400)
+  })
+
+  it('a test run sees none of the person\'s browser and stops nothing', async () => {
+    const TEST = { 'x-walnut-test-run': 'webdriver-probe' }
+    const before = ext.seen.length
+    expect((await http('GET', `/browser/view?task=${taskId}`, undefined, TEST)).body).toMatchObject({ tabs: [], testRun: true })
+    const frame = await http('GET', `/browser/view/frame?task=${taskId}&tab=${agentTab}`, undefined, TEST)
+    expect(frame.status).toBe(409)
+    expect(frame.body.code).toBe('test_run')
+    expect(frame.body.image).toBeUndefined()
+    const stop = await http('POST', '/browser/view/stop', { task: taskId, tab: agentTab }, TEST)
+    expect(stop.status).toBe(409)
+    expect(ext.seen.slice(before).filter((c) => c.action === 'view_frame' || c.action === 'view_stop')).toHaveLength(0)
+    expect((await http('GET', `/browser/view?task=${taskId}`)).body.tabs).toHaveLength(1)
+  })
+
+  it('Stop is the person\'s: a session (this task\'s or another\'s) is refused and the tab stays the task\'s', async () => {
+    const before = ext.seen.length
+    for (const caller of [SESSION(), { 'x-walnut-caller-sid': 'another-session-id' }]) {
+      const r = await http('POST', '/browser/view/stop', { task: taskId, tab: agentTab }, caller)
+      expect(r.status).toBe(403)
+      expect(r.body.code).toBe('human_only')
+    }
+    expect(ext.seen.slice(before).some((c) => c.action === 'view_stop')).toBe(false)
+    expect((await http('GET', `/browser/view?task=${taskId}`)).body.tabs).toEqual([expect.objectContaining({ tab: agentTab })])
   })
 
   it('a restarted server learns the tab, its title and window back from the next report', async () => {
@@ -282,5 +363,36 @@ describe('a session in the person\'s browser', () => {
     expect((await http('GET', `/browser/view?task=${taskId}`)).body.ended).toBeUndefined()
     await http('POST', '/browser/act', { action: 'close', tab: r.body.tab }, SESSION())
     expect((await http('GET', `/browser/view?task=${taskId}`)).body).toMatchObject({ tabs: [], ended: { why: 'closed' } })
+  })
+
+  it('two browsers with the same tab id: a frame or Stop names the browser, and each goes to its own', async () => {
+    const r = await http('POST', '/browser/act', { action: 'open', url: 'https://shop.elsewhere.test/' }, SESSION())
+    expect(r.status).toBe(200)
+    const id = r.body.tab as number
+    const devA = (await http('GET', `/browser/view?task=${taskId}`)).body.tabs[0].device as string
+    const B_PIXEL = 'data:image/jpeg;base64,/9j/BBBB'
+    const second = fakeExtension((await pair()).token, { image: B_PIXEL, seed: [[id, { url: 'https://docs.elsewhere.test/', owner: `task:${taskId}`, title: 'Docs', window: 'agent' }]] })
+    try {
+      await expect.poll(async () => (await http('GET', `/browser/view?task=${taskId}`)).body.tabs?.length ?? 0, { timeout: 5000 }).toBe(2)
+      const tabs = (await http('GET', `/browser/view?task=${taskId}`)).body.tabs as Array<{ tab: number; device: string; title: string }>
+      const devB = tabs.find((t) => t.device !== devA)!.device
+      expect(tabs.find((t) => t.device === devB)!.title).toBe('Docs')
+      // The tab id alone is two tabs: the route asks which browser.
+      const which = await http('GET', `/browser/view/frame?task=${taskId}&tab=${id}`)
+      expect(which.status).toBe(409)
+      expect(which.body.code).toBe('which_browser')
+      const fb = await http('GET', `/browser/view/frame?task=${taskId}&tab=${id}&device=${encodeURIComponent(devB)}`)
+      expect(fb.body).toMatchObject({ device: devB, image: B_PIXEL, title: 'Docs' })
+      const fa = await http('GET', `/browser/view/frame?task=${taskId}&tab=${id}&device=${encodeURIComponent(devA)}`)
+      expect(fa.body).toMatchObject({ device: devA, image: PIXEL })
+      expect((await http('POST', '/browser/view/stop', { task: taskId, tab: id })).status).toBe(409)
+      const stop = await http('POST', '/browser/view/stop', { task: taskId, tab: id, device: devB })
+      expect(stop.body).toMatchObject({ stopped: true, device: devB })
+      expect(second.seen.some((c) => c.action === 'view_stop')).toBe(true)
+      expect(ext.seen.some((c) => c.action === 'view_stop' && c.args.tab === id)).toBe(false)
+      expect((await http('GET', `/browser/view?task=${taskId}`)).body.tabs).toEqual([expect.objectContaining({ tab: id, device: devA })])
+    } finally {
+      await second.stop()
+    }
   })
 })

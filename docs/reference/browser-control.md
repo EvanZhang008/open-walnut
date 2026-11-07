@@ -110,8 +110,9 @@ extension's Settings, reached from the key's popover in the side panel or the to
   open in one of your own tabs (the same registrable domain, the vault's site key) lists those
   tabs in its answer and tells the agent to ask you for that tab ("Act in tab" in the side panel)
   or take it when you are not on it, and not to sign in again. `fill_login` there is refused
-  (`site_open_in_person_tab`) unless the agent says you asked for a fresh sign-in
-  (`fresh_sign_in: true`).
+  (`site_open_in_person_tab`). An agent's `fresh_sign_in: true` only asks you: an approval on your
+  Mac and phone, bound to that task, browser, tab and site, and only your yes lets one fill
+  through. When Walnut cannot list your tabs to check, it fills nothing and says to try again.
 - **An agent tab is quiet.** Each tab an agent opens is muted before its page loads, and media in
   it that starts by itself is paused (a play right after the agent's own click or key still
   plays). Your own tabs, handed over or taken, keep their sound.
@@ -122,8 +123,13 @@ extension's Settings, reached from the key's popover in the side panel or the to
   mouse and keys" switch as `evaluate`, works only in a tab an agent opened (never yours), and
   Chrome shows its debugging bar on that tab while it records; its Cancel ends the recording
   there. The listing keeps the latest 500 requests and 300 console messages; bodies stay in the
-  browser until asked for, 200,000 characters each by default. On a site where Walnut signed the
-  agent in, request bodies and the console are not given and addresses lose their query.
+  browser until asked for, 200,000 characters each by default. Each request is judged by every
+  address it names (where it went, the page that sent it, each redirect): one that touches a site
+  agents may not use, or Walnut itself, is left out and its body is never read. Where one of those
+  addresses is a site Walnut signed the agent in on, its request body is not given and every
+  address loses its query (filters run on what is shown, so a hidden query cannot be guessed).
+  A console message is judged by the page that logged it, so a sign-in page's console stays closed
+  after the agent moves on.
 - **`upload {selector}`** reaches a file field a page hides behind a button of its own;
   **`resize`** sizes Walnut's agent window (or its page, `viewport`), never yours.
 

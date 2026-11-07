@@ -7,7 +7,7 @@
  * needs the debugger uses the recording's session instead of a second attach (cdp.ts).
  */
 import { describe, expect, it } from 'vitest'
-import { CONSOLE_MAX, NET_MAX, bodyOut, fold, listConsole, listRequests, newRecord } from '../../../packages/browser-extension/src/net-record'
+import { CONSOLE_MAX, NET_MAX, bodyOut, fold, listConsole, listRequests, maskUrl, newRecord } from '../../../packages/browser-extension/src/net-record'
 import { cdpClick, debuggerHeld, dropDebugger, holdDebugger, withDebugger } from '../../../packages/browser-extension/src/cdp'
 
 const sent = (id: string, url: string, extra: Record<string, unknown> = {}) => ({
@@ -60,9 +60,44 @@ describe('the record of a tab', () => {
     const r = newRecord(0)
     fold(r, 'Network.requestWillBeSent', sent('1', 'https://login.example.test/auth?user=a&pw=hunter2', { documentURL: 'https://login.example.test/' }))
     fold(r, 'Network.requestWillBeSent', sent('2', 'https://cdn.other.test/a.js?v=3', { documentURL: 'https://shop.other.test/' }))
-    const out = listRequests(r, {}, (u) => u.startsWith('https://login.example.test/')).requests
+    const out = listRequests(r, {}, (e) => (e.url.startsWith('https://login.example.test/') ? 'mask' : 'show')).requests
     expect(out[0].url).toBe('https://login.example.test/auth?…')
     expect(out[1].url).toBe('https://cdn.other.test/a.js?v=3')
+  })
+
+  it('masks the page address and the redirect chain too: a GET sign-in puts the password in all three', () => {
+    const r = newRecord(0)
+    fold(r, 'Network.requestWillBeSent', sent('1', 'https://login.example.test/auth?pw=hunter2', { type: 'Document', documentURL: 'https://login.example.test/auth?pw=hunter2' }))
+    fold(r, 'Network.requestWillBeSent', sent('1', 'https://login.example.test/home', { type: 'Document', documentURL: 'https://login.example.test/home', redirectResponse: { status: 302 } }))
+    fold(r, 'Network.requestWillBeSent', sent('2', 'https://login.example.test/app.js', { documentURL: 'https://login.example.test/auth?pw=hunter2#t' }))
+    expect(r.requests.get('1')?.chain).toEqual(['https://login.example.test/auth?pw=hunter2'])
+    const out = listRequests(r, {}, () => 'mask')
+    expect(JSON.stringify(out)).not.toContain('hunter2')
+    expect(out.requests[0]).toMatchObject({ url: 'https://login.example.test/home', page: 'https://login.example.test/home', chain: ['https://login.example.test/auth?…'] })
+    expect(out.requests[1].page).toBe('https://login.example.test/auth?…')
+    expect(maskUrl('https://x.test/a#frag')).toBe('https://x.test/a#…')
+  })
+
+  it('filters what the agent may see, never the hidden part: a guess at a hidden query matches nothing', () => {
+    const r = newRecord(0)
+    fold(r, 'Network.requestWillBeSent', sent('1', 'https://login.example.test/auth?pw=hunter2'))
+    fold(r, 'Network.requestWillBeSent', sent('2', 'https://elsewhere.test/x'))
+    const judge = (e: { url: string }) => (e.url.startsWith('https://login.') ? 'mask' as const : e.url.includes('elsewhere') ? 'drop' as const : 'show' as const)
+    for (const guess of ['pw=h', 'pw=x', 'pw=hunter2', 'elsewhere']) expect(listRequests(r, { url: guess }, judge).matched).toBe(0)
+    expect(listRequests(r, { url: 'auth?' }, judge).matched).toBe(1)
+    const all = listRequests(r, {}, judge)
+    expect(all).toMatchObject({ total: 1, withheld: 1 })
+  })
+
+  it('names the page that logged each console message, and lists only those it keeps', () => {
+    const r = newRecord(0)
+    fold(r, 'Runtime.executionContextCreated', { context: { id: 4, origin: 'https://login.example.test' } })
+    fold(r, 'Runtime.consoleAPICalled', { type: 'log', executionContextId: 4, args: [{ type: 'string', value: 'a' }], stackTrace: { callFrames: [{ url: 'https://login.example.test/app.js?k=secret', lineNumber: 2 }] } })
+    fold(r, 'Runtime.exceptionThrown', { exceptionDetails: { executionContextId: 4, text: 'b' } })
+    fold(r, 'Runtime.consoleAPICalled', { type: 'log', executionContextId: 9, args: [{ type: 'string', value: 'c' }] })
+    expect(r.console.map((m) => m.origin)).toEqual(['https://login.example.test', 'https://login.example.test', undefined])
+    expect(listConsole(r, {}).messages[0].where).toBe('https://login.example.test/app.js?…:3')
+    expect(listConsole(r, {}, (m) => !m.origin)).toMatchObject({ total: 1, withheld: 2 })
   })
 
   it('keeps the newest requests and console messages, and counts what went', () => {

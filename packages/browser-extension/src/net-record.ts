@@ -33,22 +33,45 @@ export interface NetEntry {
   hasBody?: boolean
   /** The page that sent it. */
   page?: string
+  /** The addresses it was redirected from, oldest first: each is judged like its address (agent-net.ts). */
+  chain?: string[]
   /** The debugger's own clock at the send (seconds), for the timing. */
   t0?: number
 }
 
-export interface ConsoleEntry { level: string; text: string; at: number; source: string; where?: string }
+/** `origin`: the page (execution context) that logged it, when the browser said; a message with none is judged as unknown. */
+export interface ConsoleEntry { level: string; text: string; at: number; source: string; where?: string; origin?: string }
 
 export interface NetRecord {
   since: number
   requests: Map<string, NetEntry>
   console: ConsoleEntry[]
   dropped: { requests: number; console: number }
+  /** Each execution context's origin (Runtime.executionContextCreated), to tell which page logged a message. */
+  contexts: Map<number, string>
 }
 
 export function newRecord(now = Date.now()): NetRecord {
-  return { since: now, requests: new Map(), console: [], dropped: { requests: 0, console: 0 } }
+  return { since: now, requests: new Map(), console: [], dropped: { requests: 0, console: 0 }, contexts: new Map() }
 }
+
+/**
+ * An address as an agent may see it when its site is one Walnut signed the agent in on: no query and
+ * no fragment (a sign-in sent over GET carries the password there). The one masking every address
+ * field of a listing goes through (review 2026-11-07: the page address kept it).
+ */
+export function maskUrl(u: string): string {
+  const i = u.search(/[?#]/)
+  return i < 0 ? u : `${u.slice(0, i)}${u[i] === '?' ? '?…' : '#…'}`
+}
+
+/** Every address field of an entry, masked. */
+export function maskEntry<E extends { url: string; page?: string; chain?: string[] }>(e: E): E {
+  return { ...e, url: maskUrl(e.url), ...(e.page ? { page: maskUrl(e.page) } : {}), ...(e.chain ? { chain: e.chain.map(maskUrl) } : {}) }
+}
+
+/** Every address an entry names: where it went, the page that sent it, where it was redirected from. */
+export const urlsOf = (e: { url: string; page?: string; chain?: string[] }): string[] => [e.url, ...(e.page ? [e.page] : []), ...(e.chain ?? [])]
 
 const cut = (s: unknown, n: number) => (typeof s === 'string' ? (s.length > n ? `${s.slice(0, n)}…` : s) : undefined)
 
@@ -81,7 +104,10 @@ export function fold(r: NetRecord, method: string, p: Record<string, any> = {}, 
         ...(typeof p.timestamp === 'number' ? { t0: p.timestamp } : {}),
       }
       // A redirect reuses the id: the entry follows it to the new address.
-      if (had && p.redirectResponse) { r.requests.set(id, { ...entry, at: had.at, t0: had.t0, redirects: (had.redirects ?? 0) + 1 }); return }
+      if (had && p.redirectResponse) {
+        r.requests.set(id, { ...entry, at: had.at, t0: had.t0, redirects: (had.redirects ?? 0) + 1, chain: [...new Set([...(had.chain ?? []), had.url, ...(had.page && had.page !== entry.page ? [had.page] : [])])].slice(-20) })
+        return
+      }
       r.requests.delete(id)
       r.requests.set(id, entry)
       while (r.requests.size > NET_MAX) { r.requests.delete(r.requests.keys().next().value as string); r.dropped.requests++ }
@@ -111,18 +137,26 @@ export function fold(r: NetRecord, method: string, p: Record<string, any> = {}, 
       if (method === 'Network.loadingFailed') e.failed = cut(p.canceled ? 'canceled' : p.errorText ?? 'failed', 200)
       return
     }
+    case 'Runtime.executionContextCreated': {
+      const ctx = (p.context ?? {}) as { id?: number; origin?: string }
+      if (typeof ctx.id === 'number' && typeof ctx.origin === 'string') r.contexts.set(ctx.id, ctx.origin)
+      if (r.contexts.size > 500) r.contexts.delete(r.contexts.keys().next().value as number)
+      return
+    }
     case 'Runtime.consoleAPICalled': {
       const args = Array.isArray(p.args) ? p.args : []
       const frame = p.stackTrace?.callFrames?.[0] as { url?: string; lineNumber?: number } | undefined
       const level = p.type === 'warning' ? 'warn' : typeof p.type === 'string' ? p.type : 'log'
+      const origin = typeof p.executionContextId === 'number' ? r.contexts.get(p.executionContextId) : undefined
       pushConsole(r, { level, text: args.map(argText).join(' '), at: typeof p.timestamp === 'number' ? Math.round(p.timestamp) : now, source: 'console',
-        ...(frame?.url ? { where: `${cut(frame.url, 300)}:${(frame.lineNumber ?? 0) + 1}` } : {}) })
+        ...(frame?.url ? { where: `${cut(frame.url, 300)}:${(frame.lineNumber ?? 0) + 1}` } : {}), ...(origin ? { origin } : {}) })
       return
     }
     case 'Runtime.exceptionThrown': {
-      const d = (p.exceptionDetails ?? {}) as { text?: string; exception?: { description?: string }; url?: string; lineNumber?: number }
+      const d = (p.exceptionDetails ?? {}) as { text?: string; exception?: { description?: string }; url?: string; lineNumber?: number; executionContextId?: number }
+      const origin = typeof d.executionContextId === 'number' ? r.contexts.get(d.executionContextId) : undefined
       pushConsole(r, { level: 'error', text: d.exception?.description ?? d.text ?? 'An uncaught error', at: now, source: 'exception',
-        ...(d.url ? { where: `${cut(d.url, 300)}:${(d.lineNumber ?? 0) + 1}` } : {}) })
+        ...(d.url ? { where: `${cut(d.url, 300)}:${(d.lineNumber ?? 0) + 1}` } : {}), ...(origin ? { origin } : {}) })
       return
     }
     case 'Log.entryAdded': {
@@ -148,33 +182,49 @@ function statusMatches(s: number | undefined, want: number | string): boolean {
   return Number.isInteger(n) && s === n
 }
 
+/** What an agent may see of an entry: all of it, its addresses masked, or nothing (agent-net.ts decides). */
+export type Judge = 'show' | 'mask' | 'drop'
+
 /**
- * The requests that match, newest last, at most `limit` (default 50, at most NET_MAX). Addresses
- * of requests sent from or to a site where Walnut signed the agent in lose their query (`hide`):
- * a sign-in sent over GET would carry the password there.
+ * The requests that match, newest last, at most `limit` (default 50, at most NET_MAX). Each entry is
+ * first judged (`judge`: a site agents may not use is dropped, one Walnut signed the agent in on is
+ * masked), and the filters run on what the agent may see, never on the hidden part: a filter on a
+ * hidden query could be guessed a character at a time from the counts (review 2026-11-07).
  */
-export function listRequests(r: NetRecord, f: NetFilter, hide: (url: string) => boolean = () => false): { requests: Array<Omit<NetEntry, 't0'>>; total: number; matched: number } {
-  const all = [...r.requests.values()]
+export function listRequests(r: NetRecord, f: NetFilter, judge: (e: NetEntry) => Judge = () => 'show'): { requests: Array<Omit<NetEntry, 't0'>>; total: number; matched: number; withheld: number } {
+  let withheld = 0
+  const seen: Array<Omit<NetEntry, 't0'>> = []
+  for (const e of r.requests.values()) {
+    const j = judge(e)
+    if (j === 'drop') { withheld++; continue }
+    const { t0: _t, ...rest } = e
+    seen.push(j === 'mask' ? maskEntry(rest) : rest)
+  }
   const method = f.method?.toUpperCase()
   const type = f.type?.toLowerCase()
-  const hits = all.filter((e) => (f.includeStatic || !STATIC.has(e.type ?? ''))
+  const hits = seen.filter((e) => (f.includeStatic || !STATIC.has(e.type ?? ''))
     && (!f.url || e.url.includes(f.url))
     && (!method || e.method === method)
     && (!type || (e.type ?? '').toLowerCase() === type)
     && (f.status === undefined || f.status === '' || statusMatches(e.status, f.status)))
   const limit = Math.min(NET_MAX, Math.max(1, Math.floor(f.limit ?? 50)))
-  const requests = hits.slice(-limit).map(({ t0: _t, ...e }) => (hide(e.url) || (e.page && hide(e.page)) ? { ...e, url: e.url.split('?')[0] + (e.url.includes('?') ? '?…' : '') } : e))
-  return { requests, total: all.length, matched: hits.length }
+  return { requests: hits.slice(-limit), total: seen.length, matched: hits.length, withheld }
 }
 
 const LEVELS = ['debug', 'log', 'info', 'warn', 'error']
-/** The console messages at `level` or above (debug < log < info < warn < error), newest last. */
-export function listConsole(r: NetRecord, f: { level?: string; limit?: number }): { messages: ConsoleEntry[]; total: number } {
+/**
+ * The console messages at `level` or above (debug < log < info < warn < error), newest last, of
+ * those `keep` lets through (agent-net.ts: none from a page Walnut signed the agent in on, kept per
+ * message by the page that logged it, so navigating away does not open them; review 2026-11-07).
+ * A message's place loses its query, as an address does.
+ */
+export function listConsole(r: NetRecord, f: { level?: string; limit?: number }, keep: (m: ConsoleEntry) => boolean = () => true): { messages: ConsoleEntry[]; total: number; withheld: number } {
   const lv = f.level ? LEVELS.indexOf(f.level === 'warning' ? 'warn' : f.level) : -1
   const rank = (l: string) => { const i = LEVELS.indexOf(l); return i < 0 ? 1 : i }
-  const hits = lv < 0 ? r.console : r.console.filter((m) => rank(m.level) >= lv)
+  const kept = r.console.filter(keep)
+  const hits = lv < 0 ? kept : kept.filter((m) => rank(m.level) >= lv)
   const limit = Math.min(CONSOLE_MAX, Math.max(1, Math.floor(f.limit ?? 100)))
-  return { messages: hits.slice(-limit), total: r.console.length }
+  return { messages: hits.slice(-limit).map((m) => (m.where ? { ...m, where: maskUrl(m.where.replace(/:\d+$/, '')) + (/:\d+$/.exec(m.where)?.[0] ?? '') } : m)), total: kept.length, withheld: r.console.length - kept.length }
 }
 
 export const BODY_MAX = 200_000

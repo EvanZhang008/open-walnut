@@ -80,6 +80,8 @@ export async function viewFrame(c: WireCommand, busy: (tabId: number) => boolean
   const shot = await tryCapture(async () => {
     const now = await ext.tabs.get(tabId).catch(() => null)
     if (!now) return null
+    // The page or window moved while this frame waited for the gate.
+    if ((now.url ?? '') !== url || now.windowId !== tab.windowId) return 'changed' as const
     if (!now.active) {
       if (personsTab(rec) || !inAgentWindow) return 'behind' as const
       await ext.tabs.update(tabId, { active: true })
@@ -89,12 +91,20 @@ export async function viewFrame(c: WireCommand, busy: (tabId: number) => boolean
     // What was on screen must be this tab still (a page's popup, another agent's tab brought up meanwhile).
     const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
     if (shown?.id !== tabId) return 'changed' as const
+    // Still this owner's tab, on the same page in the same window, after the capture: else the
+    // picture may show a page the task does not hold (Stop, a give-back, a move to a Walnut page;
+    // review 2026-11-07).
+    const owner = await agentTabs.get(tabId)
+    if (owner?.owner !== rec.owner) return null
+    const after = await ext.tabs.get(tabId).catch(() => null)
+    if (!after) return null
+    if ((after.url ?? '') !== url || after.windowId !== tab.windowId) return 'changed' as const
     framedAt.set(tabId, Date.now())
     if (framedAt.size > 50) for (const [id, at] of framedAt) if (Date.now() - at > WATCHED_MS) framedAt.delete(id)
     return image
   })
   if (shot === undefined) return none('busy')
-  if (shot === null) throw new AgentError('That tab was closed.', 'not_your_tab')
+  if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
   if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
   return { ...(await where(tabId)), shown: true, image: await shrink(shot), at: new Date().toISOString(), ...(rec.handed ? { handed: true } : rec.taken ? { taken: true } : {}) }
 }

@@ -52,6 +52,10 @@ export async function noteFilled(owner: string, url: string): Promise<void> {
   const had = (await filled.get(k)) ?? []
   if (!had.includes(o)) await filled.set(k, [...had, o].slice(-50))
 }
+/** Every site an owner signed in on with fill_login (origins). */
+export async function filledOrigins(owner: string): Promise<string[]> {
+  return (await filled.get(ownerKey(owner))) ?? []
+}
 export async function filledHere(owner: string, url: string): Promise<boolean> {
   return ((await filled.get(ownerKey(owner))) ?? []).includes(originOf(url))
 }

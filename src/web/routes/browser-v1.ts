@@ -440,19 +440,49 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     let f = await s.readSites()
     const w = await import('../../core/browser-control/where-words.js')
     // A sign-in on a site the person already has open in a tab of their own: never a second one
-    // behind their back (2026-11-07), unless they asked for it (fresh_sign_in).
-    if (action === 'fill_login' && b.fresh_sign_in !== true && left() > 20_000) {
+    // behind their back (2026-11-07). Only the person lets one go ahead: their own request, or their
+    // yes on the ask an agent's fresh_sign_in starts (fresh-sign-in.ts). A check that cannot be made
+    // refuses, never lets it through (review 2026-11-07: a failed tab list skipped it).
+    let freshScope: { owner: string; device: string; tab: number; site: string } | undefined
+    if (action === 'fill_login') {
+      const fresh = await import('../../core/browser-control/fresh-sign-in.js')
+      const retry = (why: string) => new h.BrowserError(`Walnut could not check whether the person has this site open in a tab of their own (${why}), so it fills nothing yet. Call fill_login again in a moment.`, 503, 'same_site_unchecked')
+      if (left() < 15_000) throw retry('no time left in this call')
       const listing = await allTabsOf(c.device, owner, { ...s.allowOf(f), walnut: own })
-      const mine = listing?.find((t) => t.id === tab)
-      if (mine && typeof mine.url === 'string') {
-        const theirs = w.sameSiteTabs(listing, mine.url)
-        if (theirs.length) {
-          log.web.info('browser fill_login refused: the person has the site open', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
-          throw new h.BrowserError(w.signInRefusal(w.siteOf(mine.url), theirs), 409, 'site_open_in_person_tab', { site: w.siteOf(mine.url), person_tabs: theirs })
+      // Agents only in the tab the person handed over: they hand it over in front of them, and see the sign-in there.
+      const handedOnly = 'error' in listing && listing.error === 'agents_tab_only' && handed.has(tabKey(c.device, tab!))
+      if ('error' in listing && !handedOnly) throw retry(listing.error)
+      const all = 'tabs' in listing ? listing.tabs : []
+      const mine = all.find((t) => t.id === tab)
+      if (!handedOnly && (!mine || typeof mine.url !== 'string')) throw retry('the browser did not list this tab')
+      const theirs = mine && typeof mine.url === 'string' ? w.sameSiteTabs(all, mine.url) : []
+      if (theirs.length && !personCaller(req)) {
+        const site = w.siteOf(mine!.url!)
+        const scope = { owner, device: c.device, tab: tab!, site }
+        const request = typeof b.request === 'string' ? b.request : undefined
+        if (request && fresh.isFreshAsk(request)) {
+          const ans = await fresh.answerFreshSignIn({ ...scope, id: request, holdMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)) })
+          if (!ans.ok) { if (ans.status === 202) { res.status(202).json(ans.body); return undefined } throw new h.BrowserError(String(ans.body.error), ans.status, String(ans.body.code)) }
         }
+        if (!fresh.hasGrant(scope)) {
+          if (b.fresh_sign_in === true) {
+            log.web.info('browser fill_login asks the person for a new sign-in', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
+            res.status(202).json(await fresh.askFreshSignIn({ ...scope, theirs, requester, testRun: ambientTestRun() }))
+            return undefined
+          }
+          log.web.info('browser fill_login refused: the person has the site open', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
+          throw new h.BrowserError(w.signInRefusal(site, theirs), 409, 'site_open_in_person_tab', { site, person_tabs: theirs })
+        }
+        freshScope = scope
       }
     }
-    if (action === 'fill_login') return fillLoginAct(req, res, b, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own } })
+    if (action === 'fill_login') {
+      // The vault's own ask has its own request: the new-sign-in ask's id is not passed on.
+      const vb = freshScope && typeof b.request === 'string' && (await import('../../core/browser-control/fresh-sign-in.js')).isFreshAsk(b.request) ? { ...b, request: undefined } : b
+      const out = await fillLoginAct(req, res, vb, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own } })
+      if (freshScope && (out as { filled?: unknown } | undefined)?.filled) (await import('../../core/browser-control/fresh-sign-in.js')).useGrant(freshScope)
+      return out
+    }
     // A step that buys, sends or deletes the person approved: it goes to the page with the approval's mark.
     const outward = await import('../../core/browser-control/outward-asks.js')
     if (OUTWARD_ACTS.has(action) && typeof b.request === 'string' && b.request && tab !== undefined) {
@@ -476,7 +506,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // The person's own tabs on the site this open or navigate goes to, read before it goes (the
     // answer names them, so the agent asks for that tab instead of signing in again).
     const theirs = (action === 'open' || action === 'navigate') && typeof args.url === 'string' && left() > 55_000
-      ? w.sameSiteTabs(await allTabsOf(c.device, owner, { ...s.allowOf(f), walnut: own }, 6000), args.url)
+      ? await allTabsOf(c.device, owner, { ...s.allowOf(f), walnut: own }, 6000).then((l) => ('tabs' in l ? w.sameSiteTabs(l.tabs, String(args.url)) : undefined))
       : undefined
     // A close ends the tab for the agent: so says the view, also when the browser's report comes in first.
     const undoEnd = action === 'close' && tab !== undefined
@@ -534,14 +564,16 @@ const WHERE_ACTS = new Set<Action>(['open', 'navigate', 'back', 'take'])
  * Every tab of the browser, the person's too (title, address, whose), for the same-site check; nothing
  * when the browser answers no list (agents only in a handed tab, an older extension, no time).
  */
-async function allTabsOf(device: string, owner: string, allow: import('../../core/browser-control/hub.js').WireCommand['allow'], ms = 8000): Promise<Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }> | undefined> {
+async function allTabsOf(device: string, owner: string, allow: import('../../core/browser-control/hub.js').WireCommand['allow'], ms = 8000): Promise<{ tabs: Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }> } | { error: string }> {
   const h = await hub()
   try {
-    const r = await h.send(device, 'tabs', { all: true, owner }, allow, ms) as { tabs?: Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }> }
-    return Array.isArray(r?.tabs) ? r.tabs : undefined
+    const r = await h.send(device, 'tabs', { all: true, owner }, allow, ms) as { tabs?: Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }>; all?: boolean }
+    // Only a list that says it is every tab counts: one of the agents' tabs alone shows none of the person's.
+    return Array.isArray(r?.tabs) && r.all === true ? { tabs: r.tabs } : { error: 'no_full_list' }
   } catch (err) {
-    log.web.info('browser tab list for the same-site check failed', { device, code: err instanceof h.BrowserError ? err.code : 'error' })
-    return undefined
+    const code = err instanceof h.BrowserError ? err.code : 'error'
+    log.web.info('browser tab list for the same-site check failed', { device, code })
+    return { error: code }
   }
 }
 

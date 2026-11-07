@@ -18,7 +18,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useBrowserView } from './useBrowserView';
 import {
-  FRAME_EVERY_MS, FRAME_RETRY_MS, agoLine, endedLine, followedTab, noPictureLine, windowLine,
+  FRAME_EVERY_MS, FRAME_RETRY_MS, agoLine, endedLine, followedTab, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
 } from './browser-view-model';
 import '@/styles/session-browser-card.css';
@@ -28,18 +28,18 @@ interface CardPrefs {
   folded: boolean;
   /** The picture drawn large. */
   large: boolean;
-  /** The tab followed when the task has several (null: the newest). */
-  tab: number | null;
+  /** The tab followed when the task has several, as browser:tab (null: the newest). */
+  pick: string | null;
   /** The end notice the person dismissed (its time). */
   dismissed: string | null;
 }
 
-const PREFS: CardPrefs = { folded: false, large: false, tab: null, dismissed: null };
+const PREFS: CardPrefs = { folded: false, large: false, pick: null, dismissed: null };
 const isPrefs = (v: unknown): v is CardPrefs => {
   if (!v || typeof v !== 'object') return false;
   const p = v as Record<string, unknown>;
   return typeof p.folded === 'boolean' && typeof p.large === 'boolean'
-    && (p.tab === null || typeof p.tab === 'number') && (p.dismissed === null || typeof p.dismissed === 'string');
+    && (p.pick === null || typeof p.pick === 'string') && (p.dismissed === null || typeof p.dismissed === 'string');
 };
 
 /** Whether `el` is on screen (the page visible and the element in view). */
@@ -73,26 +73,29 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const onScreen = useOnScreen(shotEl);
 
   const tabs = state?.tabs ?? [];
-  const followed = followedTab(tabs, prefs.tab);
+  const followed = followedTab(tabs, prefs.pick);
   const followedId = followed?.tab;
+  const followedDevice = followed?.device;
+  // The picture belongs to this task, browser and tab: any of them changing starts it afresh.
+  const shownKey = followed ? `${taskId}|${tabKey(followed)}` : undefined;
   const watching = !!followed && !prefs.folded && onScreen;
 
-  // A new tab followed: no picture of the old one under its title.
-  const shownTab = useRef<number | undefined>(undefined);
+  // A new tab followed (another browser's, another task's): no picture of the old one under its title.
+  const shownTab = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (shownTab.current !== followedId) { shownTab.current = followedId; setFrame(null); setPicture(null); setTrouble(null); }
-  }, [followedId]);
+    if (shownTab.current !== shownKey) { shownTab.current = shownKey; setFrame(null); setPicture(null); setTrouble(null); }
+  }, [shownKey]);
 
   // The picture loop: one request at a time, the next one FRAME_EVERY_MS after the answer.
   useEffect(() => {
-    if (!watching || followedId === undefined) return undefined;
+    if (!watching || followedId === undefined || followedDevice === undefined) return undefined;
     let alive = true;
     let timer: number | undefined;
     const ctl = new AbortController();
     const tick = async () => {
       let wait = FRAME_EVERY_MS;
       try {
-        const f = await apiGet<BrowserFrame>('/api/v1/browser/view/frame', { task: taskId, tab: String(followedId) },
+        const f = await apiGet<BrowserFrame>('/api/v1/browser/view/frame', { task: taskId, tab: String(followedId), device: followedDevice },
           { signal: ctl.signal, priority: 'low', timeoutMs: 12_000, quietStatuses: [404, 409] });
         if (!alive) return;
         setFrame(f);
@@ -109,7 +112,7 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
     };
     void tick();
     return () => { alive = false; ctl.abort(); if (timer) window.clearTimeout(timer); };
-  }, [watching, followedId, taskId, reread]);
+  }, [watching, followedId, followedDevice, taskId, reread]);
 
   // "3 s ago" stays true while the card is on screen.
   useEffect(() => {
@@ -119,18 +122,18 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   }, [watching]);
 
   const stop = useCallback(async () => {
-    if (followedId === undefined) return;
+    if (followedId === undefined || followedDevice === undefined) return;
     setStopping(true);
     try {
-      await apiPost('/api/v1/browser/view/stop', { task: taskId, tab: followedId });
-      log.info('session-panel', 'browser view stop', { taskId, tab: followedId });
+      await apiPost('/api/v1/browser/view/stop', { task: taskId, tab: followedId, device: followedDevice });
+      log.info('session-panel', 'browser view stop', { taskId, tab: followedId, device: followedDevice });
     } catch (err) {
       setTrouble(err instanceof Error ? err.message : String(err));
     } finally {
       setStopping(false);
       reread();
     }
-  }, [taskId, followedId, reread]);
+  }, [taskId, followedId, followedDevice, reread]);
 
   if (!state) return null;
 
@@ -147,8 +150,9 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
     );
   }
 
-  const title = frame?.tab === followed.tab && frame.title ? frame.title : followed.title;
-  const url = frame?.tab === followed.tab && frame.url ? frame.url : followed.url;
+  const mineFrame = frame?.tab === followed.tab && (frame.device === undefined || frame.device === followed.device);
+  const title = mineFrame && frame?.title ? frame.title : followed.title;
+  const url = mineFrame && frame?.url ? frame.url : followed.url;
   const where = windowLine({ window: frame?.window ?? followed.window, windowState: frame?.windowState ?? followed.windowState, handed: frame?.handed, taken: frame?.taken });
   const noPicture = trouble ?? (followed.connected ? (followed.pictures ? noPictureLine(frame, !!picture) : noPictureLine({ why: 'no_permission' }, false)) : 'The browser does not answer right now.');
   const live = !!frame?.shown && !trouble;
@@ -184,9 +188,9 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
       {tabs.length > 1 && (
         <div className="session-browser-tabs" role="tablist" aria-label="The task's tabs">
           {tabs.map((t) => (
-            <button key={`${t.device}:${t.tab}`} type="button" role="tab" aria-selected={t.tab === followed.tab}
-              className={`session-browser-tab${t.tab === followed.tab ? ' is-on' : ''}`}
-              onClick={() => setPrefs((p) => ({ ...p, tab: t.tab }))}>{t.title || t.url || `tab ${t.tab}`}</button>
+            <button key={tabKey(t)} type="button" role="tab" aria-selected={tabKey(t) === tabKey(followed)}
+              className={`session-browser-tab${tabKey(t) === tabKey(followed) ? ' is-on' : ''}`}
+              onClick={() => setPrefs((p) => ({ ...p, pick: tabKey(t) }))}>{t.title || t.url || `tab ${t.tab}`}{tabs.some((o) => o !== t && o.tab === t.tab) ? ` · ${t.browser}` : ''}</button>
           ))}
         </div>
       )}

@@ -82,7 +82,7 @@ export function personTabsNote(site: string, tabs: PersonTab[]): string {
 /** fill_login refused: the person has the site open in a tab of their own. */
 export function signInRefusal(site: string, tabs: PersonTab[]): string {
   return `The person already has ${site} open in ${listTabs(tabs)}, so Walnut does not sign in there again behind them. `
-    + `${HAND_OVER_STEP} Only when they asked you for a fresh sign-in here, call fill_login again with fresh_sign_in: true.`
+    + `${HAND_OVER_STEP} Only when they asked you for a fresh sign-in here, call fill_login again with fresh_sign_in: true: that asks them to approve it (on their Mac and phone), and only their yes fills.`
 }
 
 export const siteOf = (url: string): string => siteKey(url)?.domain ?? ''

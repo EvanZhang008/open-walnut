@@ -3,7 +3,7 @@
  * window, why there is no picture now, why the last tab went, and which tab the view follows.
  */
 import { describe, expect, it } from 'vitest'
-import { agoLine, endedLine, followedTab, noPictureLine, windowLine, type BrowserViewTab } from '../../web/src/components/sessions/browser-view-model'
+import { agoLine, endedLine, followedTab, noPictureLine, tabKey, windowLine, type BrowserViewTab } from '../../web/src/components/sessions/browser-view-model'
 
 const tab = (n: number): BrowserViewTab => ({ device: 'extension-aaaaaa', browser: 'Chrome', tab: n, connected: true, pictures: true })
 
@@ -36,9 +36,18 @@ describe('the Browser view\'s words', () => {
 
   it('follows the picked tab while it is there, else the newest', () => {
     expect(followedTab([tab(1), tab(2)], null)?.tab).toBe(2)
-    expect(followedTab([tab(1), tab(2)], 1)?.tab).toBe(1)
-    expect(followedTab([tab(1), tab(2)], 9)?.tab).toBe(2)
+    expect(followedTab([tab(1), tab(2)], 'extension-aaaaaa:1')?.tab).toBe(1)
+    expect(followedTab([tab(1), tab(2)], 'extension-aaaaaa:9')?.tab).toBe(2)
     expect(followedTab([], null)).toBeUndefined()
+  })
+
+  it('tells two browsers\' tab 42 apart (the browser and the tab, never the tab alone)', () => {
+    const a = { ...tab(42), device: 'extension-aaaaaa', title: 'A' }
+    const b = { ...tab(42), device: 'extension-bbbbbb', title: 'B' }
+    expect(tabKey(a)).not.toBe(tabKey(b))
+    expect(followedTab([a, b], tabKey(a))?.title).toBe('A')
+    expect(followedTab([a, b], tabKey(b))?.title).toBe('B')
+    expect(followedTab([a, b], null)?.title).toBe('B')
   })
 
   it('reads how long ago', () => {

@@ -32,7 +32,8 @@ tabs (`person_tabs`: id, title, whether they are on it) and says so. If they are
 there, ask them to hand that tab over ("Act in tab" in Walnut's side panel, on that tab), or
 `take` it when they are not on it. **Do not sign in again in a tab of your own.** `fill-login`
 there answers `site_open_in_person_tab`; only when the user asked you for a fresh sign-in, run
-it again with `--fresh-sign-in` (op: `fresh_sign_in: true`).
+it again with `--fresh-sign-in` (op: `fresh_sign_in: true`): that asks them to approve it on
+their Mac and phone, and only their yes fills (the shell command waits for it).
 
 ## The loop
 

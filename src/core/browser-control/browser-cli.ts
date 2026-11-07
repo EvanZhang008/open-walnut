@@ -212,7 +212,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'recording_cancelled', 'person_window'])
+const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
