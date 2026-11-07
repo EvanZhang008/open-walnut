@@ -92,7 +92,8 @@ scripts/ios-fleet-test.sh run -- xcodebuild -version            # any command, W
 ```
 
 The Mac may be someone's computer in use, so a run keeps out of their way: it
-refuses to start while the Mac's load is over 0.75 per CPU (the script then tries
+refuses to start while under a quarter of the Mac's CPU is idle (`--min-idle`, 25%;
+the load is only a backstop at 4 per CPU, since it counts threads, not CPU used) (the script then tries
 the next Mac, and when every Mac is busy it waits its turn: up to `--wait` minutes,
 30 by default, so start it in the background when it may wait), boots its own simulator ("Walnut Fleet Test") headless with
 `simctl` (no Simulator window, nothing takes focus), builds at utility priority

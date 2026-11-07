@@ -3,7 +3,7 @@
 # task that runs on another host. The caller sends the sources (src.tgz, unpacked into
 # <run-dir>/src), runs this through host_exec, and fetches <run-dir>/out.tgz back.
 #
-#   remote-run.sh <run-dir> <unit|ui|build|run> [--video] [--keep-xcresult] [--max-load N] [--udid U] [-- ARGS...]
+#   remote-run.sh <run-dir> <unit|ui|build|run> [--video] [--keep-xcresult] [--min-idle P] [--max-load N] [--udid U] [-- ARGS...]
 #
 #   unit   xcodebuild test -only-testing:WalnutTests ARGS
 #   ui     tests/ui/run-ui-tests.sh ARGS (the pairing-aware XCUITest runner)
@@ -11,8 +11,9 @@
 #   run    ARGS is a command, run in ios-native with WALNUT_SIM_UDID set
 #
 # The Mac may be someone else's computer in use, so the run stays out of their way:
-#   - it refuses to start (exit 75, "BUSY") while the load per CPU is over --max-load
-#     (default 0.75), a call is on (mac-share.sh), or another fleet run holds this Mac's test
+#   - it refuses to start (exit 75, "BUSY") while under --min-idle percent of the CPU is idle
+#     (default 25, over 5 seconds) or the load per CPU is over --max-load (default 4, a backstop:
+#     the load counts threads, not CPU used), a call is on (mac-share.sh), or another fleet run holds this Mac's test
 #     simulator;
 #   - xcodebuild runs at utility QoS and nice 10 with half the cores, so the person's
 #     own apps keep the machine;
@@ -31,18 +32,20 @@
 set -uo pipefail
 
 RUN_DIR=${1:?run dir}; MODE=${2:?mode}; shift 2
-VIDEO=0; KEEP_XCRESULT=0; MAX_LOAD=0.75; ASKED_UDID=""
+VIDEO=0; KEEP_XCRESULT=0; MIN_IDLE=25; MAX_LOAD=4; ASKED_UDID=""
 while [ $# -gt 0 ]; do
   case $1 in
     --video) VIDEO=1 ;;
     --udid) ASKED_UDID=$2; shift ;;
     --keep-xcresult) KEEP_XCRESULT=1 ;;
     --max-load) MAX_LOAD=$2; shift ;;
+    --min-idle) MIN_IDLE=$2; shift ;;
     --) shift; break ;;
     *) echo "remote-run: unknown option $1" >&2; exit 64 ;;
   esac
   shift
 done
+case $MIN_IDLE in ''|*[!0-9]*) echo "remote-run: --min-idle takes a whole percent" >&2; exit 64 ;; esac
 
 # The login shell host_exec runs this from reads the Mac owner's profile, which may name
 # their own simulator (ios-native/README.md tells developers to export one): never use it.
@@ -101,9 +104,8 @@ SIM_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/sim-
 
 CPUS=$(sysctl -n hw.ncpu)
 LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
-if awk -v l="$LOAD1" -v c="$CPUS" -v m="$MAX_LOAD" 'BEGIN { exit !(l / c > m) }'; then
-  refuse 75 "BUSY: load $LOAD1 on $CPUS CPUs is over $MAX_LOAD per CPU; try another Mac or later" busy
-fi
+WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD")
+[ -z "$WHY" ] || refuse 75 "BUSY: $WHY; try another Mac or later" busy
 # Simulator open = someone uses simulators here, and a device booted now would open its window.
 if pgrep -x Simulator >/dev/null 2>&1; then
   refuse 75 "BUSY: Simulator is open on this Mac; try another Mac or later" busy

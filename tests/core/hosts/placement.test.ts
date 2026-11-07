@@ -63,6 +63,11 @@ describe('judgeHost', () => {
     expect(small.busy || big.busy).toBe(false);
     expect(big.score).toBeGreaterThan(small.score);
   });
+  it('reports the cores idle now beside the load, which counts threads, not CPU used', () => {
+    // 2026-11-07 on the Mac: load 53 on 14 CPUs with 45% of the CPU idle.
+    expect(judgeHost('m', 'm', load({ load1: 53, cpuBusy: 0.55 }), 0, 20, caps).freeCpus).toBe(6.3);
+    expect(judgeHost('m', 'm', load({ cpuBusy: null }), 0, 20, caps).freeCpus).toBeNull();
+  });
   it('a host that did not answer is unknown, never room', () => {
     expect(judgeHost('c', 'c', undefined, 0, 20, caps, 'no answer in 4 s')).toMatchObject({ known: false, busy: true, score: 0, reasons: ['its load is unknown (no answer in 4 s)'] });
   });

@@ -25,6 +25,16 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  type Capacity,
+  capacityVerdict,
+  cpuIdlePct,
+  loadPerCore,
+  MAX_LOAD_PER_CORE,
+  MIN_IDLE_PCT,
+  pctFromEnv,
+  positiveFromEnv,
+} from './cpu-idle'
 
 const GATE_DIR = process.env.WALNUT_VITEST_GATE_DIR ?? path.join(os.tmpdir(), 'walnut-vitest-gate')
 /**
@@ -52,14 +62,17 @@ const POLL_MS = 3_000
  * load 60-95 (14 cores) from security agents + recovery storms; admitting a
  * test run at that point was the last straw that starved Finder, upon which
  * loginwindow tore down the user's whole GUI session ("all my apps closed").
- * So: with the slot in hand, still wait while 1-min loadavg exceeds the cap.
+ * So: with the slot in hand, still wait while the machine has no CPU to spare.
  * Fail-open stays (a busy-forever box must not block tests permanently), but
  * the wait gives recovery storms time to drain instead of piling on.
+ *
+ * It waits on free CPU (under WALNUT_MIN_IDLE_PCT, 20%, idle), with the load only a
+ * backstop (4 per core, or WALNUT_VITEST_MAX_LOAD as a 1-minute load): the load
+ * alone sat at 27 to 53 on the Mac with 30 to 48% of its CPU idle (2026-11-07), so
+ * the old bar of load 20 waited out its 10 minutes on every run (tests/setup/cpu-idle.ts).
  */
-const MAX_LOAD = (() => {
-  const n = Number(process.env.WALNUT_VITEST_MAX_LOAD)
-  return Number.isFinite(n) && n > 0 ? n : 20
-})()
+const MIN_IDLE = pctFromEnv(process.env.WALNUT_MIN_IDLE_PCT, MIN_IDLE_PCT)
+const MAX_LOAD = positiveFromEnv(process.env.WALNUT_VITEST_MAX_LOAD, 0)
 const LOAD_WAIT_TIMEOUT_MS = 10 * 60_000
 
 /** One logical invocation. test-parallel exports this so all 6 tiers share a slot. */
@@ -120,13 +133,18 @@ function register(): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** 1-minute load average, or 0 if unreadable (fail open). */
-function loadAvg1m(): number {
+/** Idle CPU over two seconds and the load, unreadable parts failing open. */
+async function capacity(): Promise<Capacity> {
+  const cores = Math.max(1, os.cpus().length)
+  let idlePct: number | null = null
+  let perCore = 0
   try {
-    return os.loadavg()[0] ?? 0
+    idlePct = await cpuIdlePct(2_000)
+    perCore = loadPerCore()
   } catch {
-    return 0
+    /* fail open */
   }
+  return { idlePct, loadPerCore: perCore, cores }
 }
 
 /** Wait for the machine itself to calm down before starting a run. */
@@ -134,20 +152,25 @@ async function waitForSaneLoad(): Promise<void> {
   const deadline = Date.now() + LOAD_WAIT_TIMEOUT_MS
   let announced = false
   for (;;) {
-    const load = loadAvg1m()
-    if (load <= MAX_LOAD) {
-      if (announced) console.log(`[vitest-gate] load ${load.toFixed(1)} ≤ ${MAX_LOAD} — starting`)
+    const c = await capacity()
+    const v = capacityVerdict(c, {
+      minIdlePct: MIN_IDLE,
+      maxLoadPerCore: MAX_LOAD > 0 ? MAX_LOAD / c.cores : MAX_LOAD_PER_CORE,
+    })
+    if (v.ok) {
+      if (announced) console.log(`[vitest-gate] ${v.why}: starting`)
       return
     }
     if (Date.now() >= deadline) {
-      console.warn(`[vitest-gate] load still ${load.toFixed(1)} after ${LOAD_WAIT_TIMEOUT_MS / 60_000}min — proceeding anyway (fail open)`)
+      console.warn(`[vitest-gate] still busy (${v.why}) after ${LOAD_WAIT_TIMEOUT_MS / 60_000}min: proceeding anyway (fail open)`)
       return
     }
     if (!announced) {
       announced = true
       console.log(
-        `[vitest-gate] machine load ${load.toFixed(1)} > ${MAX_LOAD} — waiting for it to drain before starting tests ` +
-        `(starving the GUI tears down the user's session; see 2026-08-09 incidents). WALNUT_VITEST_MAX_LOAD overrides.`,
+        `[vitest-gate] machine busy (${v.why}): waiting for it to drain before starting tests ` +
+        `(starving the GUI tears down the user's session; see 2026-08-09 incidents). ` +
+        `WALNUT_MIN_IDLE_PCT and WALNUT_VITEST_MAX_LOAD override.`,
       )
     }
     await sleep(POLL_MS)

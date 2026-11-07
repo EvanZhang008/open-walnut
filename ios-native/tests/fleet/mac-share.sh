@@ -102,3 +102,21 @@ fleet_take_lent() {
 }
 # fleet_give_back <lock dir>: give the lent simulator back and forget the lease. Idempotent.
 fleet_give_back() { walnut_sim_release; rm -f "$1/lease"; }
+
+# fleet_idle_pct: the share of this Mac's CPU idle over 5 seconds (iostat), nothing when unreadable.
+fleet_idle_pct() {
+  /usr/sbin/iostat -n 0 -c 2 -w "${1:-5}" 2>/dev/null | awk 'END { if ($3 ~ /^[0-9.]+$/) print $3 }'
+}
+
+# fleet_cpu_busy IDLE LOAD1 CPUS MIN_IDLE MAX_LOAD: prints why the Mac is too busy for a run, nothing
+# when it has room. What a run needs is free CPU: the load counts runnable threads, and on a Mac with
+# endpoint agents it sat at 27 to 53 on 14 cores with 30 to 48% of the CPU idle (2026-11-07), so a
+# bar of 0.75 load per CPU never opened. The load stays a backstop (MAX_LOAD per CPU). An idle share
+# that could not be read (empty) does not block.
+fleet_cpu_busy() {
+  awk -v i="$1" -v l="$2" -v c="$3" -v mi="$4" -v ml="$5" 'BEGIN {
+    if (c < 1) c = 1
+    if (l / c > ml) { printf "load %s on %d CPUs is over %s per CPU\n", l, c, ml; exit }
+    if (i != "" && i + 0 < mi + 0) printf "only %d%% of the CPU is idle (%.1f of %d cores), under %s%%\n", i, i * c / 100, c, mi
+  }'
+}

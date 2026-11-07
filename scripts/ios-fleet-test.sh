@@ -2,8 +2,9 @@
 # Build and test the iOS app on a Mac of the fleet, from a task on any host (a Linux
 # devbox included), the way a Linux test runs anywhere. Walnut does the moving:
 #
-#   1. pick a Mac: host_list's hosts tagged `ios` that are connected, least loaded first
-#      (host_load), skipping any over --max-load per CPU; or the one --host names. When no
+#   1. pick a Mac: host_list's hosts tagged `ios` that are connected, most free CPU first
+#      (host_load's cpuBusy), skipping any with under --min-idle percent of its CPU idle or
+#      over --max-load per CPU; or the one --host names. When no
 #      Mac can take it now (each busy, offline, or running another run), it waits its
 #      turn, up to --wait minutes, and asks again every minute. The
 #      Mac Walnut runs on (`__local__`) comes last, after every other Mac, and the run
@@ -29,7 +30,11 @@
 #   --video          record the simulator's screen while the tests run (run.mp4); for ui:
 #                    unit tests do not drive the screen, so a unit video shows the app idle
 #   --keep-xcresult  bring the whole result bundle back too (it can be large)
-#   --max-load N     refuse a Mac whose load per CPU is over N (default 0.75)
+#   --min-idle P     refuse a Mac with under P percent of its CPU idle (default 25)
+#   --max-load N     refuse a Mac whose load per CPU is over N (default 4). Only a backstop: the
+#                    load counts runnable threads, not CPU used, and a Mac with endpoint agents sat
+#                    at 2 to 4 per CPU with 30 to 48% of its CPU idle (2026-11-07), so the old
+#                    default of 0.75 kept a run waiting for 110 minutes on a Mac with room
 #   --wait MIN       when no Mac can take the run now, wait up to MIN minutes for one
 #                    (default 30; 0 gives up at once). A wait outlasts a tool call's
 #                    foreground limit: start the script in the background to wait
@@ -59,7 +64,7 @@ set -uo pipefail
 die() { printf 'ios-fleet: %s\n' "$1" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
-HOST=""; MAX_LOAD=0.75; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
+HOST=""; MIN_IDLE=25; MAX_LOAD=4; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
 KEY_LINES='^(remote-run:|FLEET_RESULT|\*\* (BUILD|TEST)|Test Case .* failed|.*: error: )'
 while [ $# -gt 0 ]; do
   case $1 in
@@ -67,6 +72,7 @@ while [ $# -gt 0 ]; do
     --video|--keep-xcresult) FLAGS+=("$1") ;;
     --udid) FLAGS+=(--udid "$2"); shift ;;
     --max-load) MAX_LOAD=$2; shift ;;
+    --min-idle) MIN_IDLE=$2; shift ;;
     --wait) WAIT_MIN=$2; shift ;;
     --clean) CLEAN=1 ;;
     --verbose) VERBOSE=1 ;;
@@ -77,6 +83,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 case $WAIT_MIN in ''|*[!0-9]*) die "--wait takes whole minutes" 64 ;; esac
+case $MIN_IDLE in ''|*[!0-9]*) die "--min-idle takes a whole percent (0 to 100)" 64 ;; esac
+[ "$MIN_IDLE" -le 100 ] || die "--min-idle takes a whole percent (0 to 100)" 64
+awk -v m="$MAX_LOAD" 'BEGIN { exit !(m ~ /^[0-9]+(\.[0-9]+)?$/ && m > 0) }' || die "--max-load takes a number of load per CPU" 64
 [ ${#WAIT_MIN} -le 4 ] || die "--wait takes at most 9999 minutes" 64
 WAIT_MIN=$((10#$WAIT_MIN))   # 10#: "08" is eight minutes, not a bad octal number
 # A queue, not a race: the Macs are shared (one is someone else's computer), so a run that
@@ -179,7 +188,7 @@ job_log_rest() { # $1 = host, $2 = job id, $3 = bytes already read, $4 = local l
   done
 }
 
-# The Macs to try, best first: connected, tagged ios, under the load cap.
+# The Macs to try, best first: connected, tagged ios, with free CPU and under the load backstop.
 candidates() {
   local hosts loads
   hosts=$(op_again host_list '{}') || return 1
@@ -193,9 +202,9 @@ candidates() {
   local hosts_f loads_f
   hosts_f=$(mktemp) loads_f=$(mktemp)
   printf '%s' "$hosts" > "$hosts_f"; printf '%s' "$loads" > "$loads_f"
-  python3 - "$MAX_LOAD" "$hosts_f" "$loads_f" <<'PY'
+  python3 - "$MAX_LOAD" "$hosts_f" "$loads_f" "$MIN_IDLE" <<'PY'
 import json, sys
-cap = float(sys.argv[1]); hosts = json.load(open(sys.argv[2]))["hosts"]; loads = {h["host"]: h for h in json.load(open(sys.argv[3]))["hosts"]}
+cap = float(sys.argv[1]); min_idle = float(sys.argv[4]); hosts = json.load(open(sys.argv[2]))["hosts"]; loads = {h["host"]: h for h in json.load(open(sys.argv[3]))["hosts"]}
 # No host tagged ios at all (an offline one keeps its tags): nothing to wait for.
 if not any("ios" in ((h.get("capabilities") or {}).get("tags") or []) for h in hosts):
     sys.exit(3)
@@ -205,11 +214,19 @@ for h in hosts:
         continue
     l = loads.get(h["host"], {})
     per = l.get("loadPerCpu")
+    busy = l.get("cpuBusy")
+    idle = None if busy is None else (1 - busy) * 100
+    free = None if busy is None else round((1 - busy) * (l.get("cpus") or 1), 1)
     note = f"{h['label']} ({h['host']}): " + (f"load {per} per CPU" if per is not None else "load unknown")
+    if idle is not None:
+        note += f", {round(idle)}% CPU idle" + (f" ({free} cores)" if l.get("cpus") else "")
     if per is None or per > cap:
-        print("SKIP\t" + note + (f", over {cap}" if per is not None else ""), file=sys.stderr); continue
-    rows.append((per, h["host"], note))
-# Every other Mac first, least loaded first; this Walnut's own Mac only after them.
+        print("SKIP\t" + note + (f", over {cap:g} per CPU" if per is not None else ""), file=sys.stderr); continue
+    if idle is not None and idle < min_idle:
+        print("SKIP\t" + note + f", under {min_idle:g}% idle", file=sys.stderr); continue
+    # Most free cores first; a Mac whose idle CPU did not come back after those, least loaded first.
+    rows.append(((free is None, -(free or 0), per), h["host"], note))
+# Every other Mac first; this Walnut's own Mac only after them.
 others = [r for r in rows if r[1] != "__local__"]
 for per, host, note in sorted(rows, key=lambda r: (r[1] == "__local__", r[0])):
     if host == "__local__":
@@ -255,8 +272,8 @@ WAIT_START=$(date +%s); WAIT_SAID=0
 wait_turn() {
   local waited=$(( $(date +%s) - WAIT_START ))
   if [ "$waited" -ge "$WAIT_SECS" ]; then
-    [ "$WAIT_SECS" -gt 0 ] && die "$1, and none could take it in the $(dur "$WAIT_SECS") this run waited; try again later, or pass --wait or --max-load" 75
-    die "$1; try again later, or pass --wait or --max-load" 75
+    [ "$WAIT_SECS" -gt 0 ] && die "$1, and none could take it in the $(dur "$WAIT_SECS") this run waited; try again later, or pass --wait, --min-idle or --max-load" 75
+    die "$1; try again later, or pass --wait, --min-idle or --max-load" 75
   fi
   if [ "$WAIT_SAID" = 0 ]; then
     say "$1; waiting for one (up to $(dur "$WAIT_SECS"), asking again every ${WAIT_POLL} s; --wait 0 does not wait)"; WAIT_SAID=1
@@ -319,7 +336,7 @@ while IFS=$'\t' read -r H NOTE; do
         || die "could not send the sources to $H"
       say "$(printf '%s' "$sent" | js 'print(d.get("outcome") or "sent")')" ;;
   esac
-  SCRIPT="D=\"\$HOME/$REMOTE_REL\"; mkdir -p \"\$D/src\" && tar -xzf \"\$D/src.tgz\" -C \"\$D/src\" && exec /bin/bash \"\$D/src/ios-native/tests/fleet/remote-run.sh\" \"\$D\" $(q "$MODE" ${FLAGS[@]+"${FLAGS[@]}"} --max-load "$MAX_LOAD" -- ${ARGS[@]+"${ARGS[@]}"})"
+  SCRIPT="D=\"\$HOME/$REMOTE_REL\"; mkdir -p \"\$D/src\" && tar -xzf \"\$D/src.tgz\" -C \"\$D/src\" && exec /bin/bash \"\$D/src/ios-native/tests/fleet/remote-run.sh\" \"\$D\" $(q "$MODE" ${FLAGS[@]+"${FLAGS[@]}"} --min-idle "$MIN_IDLE" --max-load "$MAX_LOAD" -- ${ARGS[@]+"${ARGS[@]}"})"
   started=$(op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "background": True, "timeout_ms": 7200000}))' "$H" "$SCRIPT")") \
     || die "could not start the run on $H"
   JOB=$(printf '%s' "$started" | js 'print(d.get("jobId") or "")')

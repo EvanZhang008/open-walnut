@@ -14,8 +14,10 @@
 #   WALNUT_LARGE_RUN_CHECKLISTS="<files>"  the implementers' checklists the wp-ref-lint reads beside the plan
 #   WALNUT_LARGE_RUN_OUT=<dir>    where the logs and the seed list go (default /tmp/replica-plan/large-run-<stamp>)
 #   WALNUT_HEAVY_SLOT=<script>    the heavy-slot wrapper (default $HOME/tmp-evidence/heavy-slot.sh); missing: the run fails
-#   WALNUT_LARGE_RUN_MAX_LOAD=<n> wait while the 1 min load is above n (default: twice the cores; a
-#                                 load-generating probe pushes it far past that), at most 20 min
+#   WALNUT_LARGE_RUN_MIN_IDLE=<p> wait while under p percent of the CPU is idle (default 20), at most 20 min
+#   WALNUT_LARGE_RUN_MAX_LOAD=<n> also wait while the 1 min load is above n (default: 4 per core, a
+#                                 backstop: the load counts runnable threads, not CPU used, and sat at
+#                                 2 to 4 per core on the Mac with 30 to 48% of its CPU idle, 2026-11-07)
 #
 # Before it starts: the wp-ref-lint (every WPn mention names its owner), bun is
 # REQUIRED (the standalone twin: a missing bun FAILS this run, the quick tier may
@@ -67,6 +69,17 @@ find_bun() {
 
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4; }
 load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' || awk '{print $1}' /proc/loadavg; }
+# Idle CPU percent over 5 seconds (iostat on macOS, /proc/stat on Linux); nothing when unreadable.
+idle_pct() {
+  if [[ -r /proc/stat ]]; then
+    local a b
+    a=$(awk '/^cpu / {print $5 + $6, $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9}' /proc/stat); sleep 5
+    b=$(awk '/^cpu / {print $5 + $6, $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9}' /proc/stat)
+    awk -v a="$a" -v b="$b" 'BEGIN { split(a, x, " "); split(b, y, " "); if (y[2] > x[2]) printf "%d\n", 100 * (y[1] - x[1]) / (y[2] - x[2]) }'
+  else
+    iostat -n 0 -c 2 -w 5 2>/dev/null | awk 'END { if ($3 ~ /^[0-9.]+$/) print $3 }'
+  fi
+}
 
 # A fresh 31-bit seed (no Math.random in tests; the shell picks the base, mulberry32 runs from it).
 fresh_seed() { echo $(( ((RANDOM << 16) | (RANDOM << 1) | (RANDOM & 1)) & 0x7fffffff )); }
@@ -86,16 +99,21 @@ BUN="$(find_bun || true)"
 say "bun: $BUN"
 say "playwright and fixture state (scripts/pw-cleanup.sh status):"
 bash scripts/pw-cleanup.sh status 2>&1 | sed 's/^/  /' | tee -a "$OUT/summary.txt"
-max_load="${WALNUT_LARGE_RUN_MAX_LOAD:-$(( $(cores) * 2 ))}"
+max_load="${WALNUT_LARGE_RUN_MAX_LOAD:-$(( $(cores) * 4 ))}"
+min_idle="${WALNUT_LARGE_RUN_MIN_IDLE:-20}"
 waited=0
 while :; do
-  l="$(load1)"
-  if awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then break; fi
-  (( waited >= 1200 )) && fail_now "the load stayed above $max_load for 20 min (now $l): another run is generating load"
-  (( waited % 120 == 0 )) && say "load $l above $max_load, waiting (another agent's probe may be running)"
-  sleep 30; waited=$((waited + 30))
+  l="$(load1)"; i="$(idle_pct)"
+  why=""
+  if ! awk -v l="$l" -v m="$max_load" 'BEGIN { exit !(l <= m) }'; then why="load $l above $max_load"
+  elif [[ -n "$i" ]] && awk -v i="$i" -v m="$min_idle" 'BEGIN { exit !(i < m) }'; then why="only ${i}% of the CPU idle, under ${min_idle}%"
+  fi
+  [[ -z "$why" ]] && break
+  (( waited >= 1200 )) && fail_now "the machine stayed busy for 20 min ($why): another run is generating load"
+  (( waited % 120 == 0 )) && say "$why, waiting (another agent's probe may be running)"
+  sleep 25; waited=$((waited + 30))
 done
-say "load $(load1) (at most $max_load), $(cores) cores"
+say "${i:-?}% of the CPU idle (at least $min_idle), load $l (at most $max_load), $(cores) cores"
 
 export WALNUT_REQUIRE_BUN=1
 export REPLICA_CLUSTER_TWINS=source,standalone

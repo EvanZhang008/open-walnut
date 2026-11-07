@@ -79,6 +79,8 @@ export interface HostLoadView {
   load1?: number;
   loadPerCpu?: number;
   cpuBusy?: number | null;
+  /** Cores idle now (cpus x (1 - cpuBusy)): the free CPU a gate judges by, the load being threads. */
+  freeCpus?: number | null;
   memAvailShare?: number | null;
   diskFreeBytes?: number | null;
   /** Sessions in a turn on it, plus the starts admitted there that are not running yet. */
@@ -191,7 +193,8 @@ export function judgeHost(
   const perCpu = Math.round((load1 / cpus) * 100) / 100;
   const memShare = load.memAvailBytes != null && load.memTotalBytes > 0 ? Math.round((load.memAvailBytes / load.memTotalBytes) * 1000) / 1000 : null;
   Object.assign(view, {
-    cpus, load1, loadPerCpu: perCpu, cpuBusy: load.cpuBusy, memAvailShare: memShare, diskFreeBytes: load.diskFreeBytes, at: load.at,
+    cpus, load1, loadPerCpu: perCpu, cpuBusy: load.cpuBusy,
+    freeCpus: load.cpuBusy != null ? Math.round(cpus * (1 - load.cpuBusy) * 10) / 10 : null, memAvailShare: memShare, diskFreeBytes: load.diskFreeBytes, at: load.at,
     ...(load.memTotalBytes > 0 ? { memTotalBytes: load.memTotalBytes } : {}),
   });
   if (perCpu >= caps.loadPerCpu) view.reasons.push(`load ${load1} on ${cpus} CPUs (${perCpu} per CPU, cap ${caps.loadPerCpu})`);

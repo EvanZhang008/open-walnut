@@ -237,9 +237,17 @@ describe('playwright admission gate', () => {
     delete process.env.CI
     try {
       const started = Date.now()
-      expect(() => waitForCapacitySync(1_000, () => 999)).toThrow(/still overloaded .*: this run did not start/)
+      const at = (idlePct: number | null, loadPerCore: number) => () => ({ idlePct, loadPerCore, cores: 14 })
+      expect(() => waitForCapacitySync(1_000, at(50, 999))).toThrow(/still overloaded .*: this run did not start/)
       expect(Date.now() - started).toBeLessThan(20_000)
-      expect(() => waitForCapacitySync(1_000, () => 0)).not.toThrow()
+      expect(() => waitForCapacitySync(1_000, at(90, 0))).not.toThrow()
+      // Free CPU decides, not the load: the 2026-11-07 Mac (load 53 on 14 cores, 45% idle) starts,
+      // a machine with its CPU used up waits whatever its load.
+      expect(() => waitForCapacitySync(1_000, at(45, 53 / 14))).not.toThrow()
+      expect(() => waitForCapacitySync(1_000, at(5, 0.5))).toThrow(/only 5% of the CPU is idle/)
+      // An idle CPU that cannot be read does not block; the load backstop still does.
+      expect(() => waitForCapacitySync(1_000, at(null, 1))).not.toThrow()
+      expect(() => waitForCapacitySync(1_000, at(null, 5))).toThrow(/over 4 per core/)
     } finally {
       if (prev !== undefined) process.env.PW_IGNORE_LOAD = prev
       if (prevCi !== undefined) process.env.CI = prevCi

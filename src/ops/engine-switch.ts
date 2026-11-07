@@ -125,7 +125,7 @@ defineOp({
   name: 'host_load',
   title: 'How busy each host is',
   description:
-    'Every host work can run on (this Mac and each enabled host): load average per CPU, CPU busy share, memory available, free disk, sessions in a turn against the host\'s limit, '
+    'Every host work can run on (this Mac and each enabled host): load average per CPU, CPU busy share and the cores idle now (`freeCpus`: judge free CPU by these, the load counts threads, not CPU used), memory available, free disk, sessions in a turn against the host\'s limit, '
     + 'whether it is over a placement cap and why, and a room score. A first task_start that names no host goes by these numbers: it keeps the host it would use unless that host '
     + 'is over a cap and another has room (Mac-only work, such as iOS or the Mac app, stays on the Mac). Use it before moving work with task_move.',
   input: {},

@@ -34,6 +34,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { assertMacBrakes, realCi } from '../../setup/mac-brakes.js'
+import {
+  type Capacity,
+  capacityVerdict,
+  cpuIdlePctSync,
+  loadPerCore,
+  MAX_LOAD_PER_CORE,
+  MIN_IDLE_PCT,
+  pctFromEnv,
+} from '../../setup/cpu-idle.js'
 
 /** Lease dir, shared by every Playwright run for this user. */
 export const LEASE_DIR = process.env.PW_LEASE_DIR ?? path.join(os.tmpdir(), 'walnut-pw-lease')
@@ -162,14 +171,15 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * Above this load-per-core, adding 4 browsers is what turns "slow" into "wedged".
- * 4× overcommit is already deep into thrashing on this box; the fixture's own boot
- * (measured 20s idle → 70s at load 133) blows the webServer budget well before it.
+ * Free CPU is what a run needs, so the wait is on idle CPU (MIN_IDLE_PCT, 20%, with
+ * WALNUT_MIN_IDLE_PCT to change it), sampled over two seconds. The load stays only as a
+ * backstop: above 4 per core adding 4 browsers is what turns "slow" into "wedged", and
+ * the fixture's own boot (measured 20s idle, 70s at load 133) blows the webServer budget.
+ * The load alone misleads on the Mac: it sat at 27 to 53 on 14 cores with 30 to 48% of
+ * the CPU idle (2026-11-07), endpoint agents keeping threads runnable at little CPU.
  */
-const LOAD_PER_CORE_CEILING = 4
-
-function loadPerCore(): number {
-  return os.loadavg()[0] / Math.max(1, os.cpus().length)
+function measureCapacity(): Capacity {
+  return { idlePct: cpuIdlePctSync(2_000), loadPerCore: loadPerCore(), cores: Math.max(1, os.cpus().length) }
 }
 
 /**
@@ -183,25 +193,30 @@ function loadPerCore(): number {
  * fails on timeouts that are not product bugs. Run it again once the machine is
  * calmer; PW_IGNORE_LOAD=1 skips the wait (CI and clouddev's containers set it).
  */
-export function waitForCapacitySync(timeoutMs = 10 * 60_000, perCore: () => number = loadPerCore): void {
+export function waitForCapacitySync(timeoutMs = 10 * 60_000, measure: () => Capacity = measureCapacity): void {
   if (process.env.PW_IGNORE_LOAD === '1' || process.env.CI) return
-  const cores = Math.max(1, os.cpus().length)
-  if (perCore() <= LOAD_PER_CORE_CEILING) return
+  const bars = {
+    minIdlePct: pctFromEnv(process.env.WALNUT_MIN_IDLE_PCT, MIN_IDLE_PCT),
+    maxLoadPerCore: MAX_LOAD_PER_CORE,
+  }
+  let v = capacityVerdict(measure(), bars)
+  if (v.ok) return
 
   const deadline = Date.now() + timeoutMs
   console.log(
-    `[pw-concurrency] machine is overloaded (load ${os.loadavg()[0].toFixed(0)} on ${cores} cores) — ` +
-      `waiting for it to settle before starting browsers. Check with: scripts/pw-cleanup.sh status`,
+    `[pw-concurrency] machine is overloaded (${v.why}): waiting for it to settle before starting browsers. ` +
+      `Check with: scripts/pw-cleanup.sh status`,
   )
   while (Date.now() < deadline) {
     sleepSync(Math.min(5_000, Math.max(100, deadline - Date.now())))
-    if (perCore() <= LOAD_PER_CORE_CEILING) {
-      console.log(`[pw-concurrency] load settled to ${os.loadavg()[0].toFixed(0)} — starting`)
+    v = capacityVerdict(measure(), bars)
+    if (v.ok) {
+      console.log(`[pw-concurrency] settled (${v.why}): starting`)
       return
     }
   }
   throw new Error(
-    `[pw-concurrency] still overloaded (load ${os.loadavg()[0].toFixed(0)} on ${cores} cores) after ` +
+    `[pw-concurrency] still overloaded (${v.why}) after ` +
       `${Math.round(timeoutMs / 60_000)}m: this run did not start (its browsers would fail on timeouts ` +
       `that are not product bugs). Run it again once the machine is calmer (scripts/pw-cleanup.sh status).`,
   )

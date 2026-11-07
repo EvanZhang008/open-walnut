@@ -20,6 +20,10 @@ let taskDir = ''
 
 interface Mac {
   host: string; label?: string; tags?: string[]; connected?: boolean; loadPerCpu?: number | null
+  /** host_load's CPU busy share and core count (absent: not reported, as an older daemon). */
+  cpuBusy?: number | null; cpus?: number
+  /** Its CPU busy share at each host_load call in turn (the last one repeats). */
+  busySeq?: (number | null)[]
   result?: { exit: number; state: string; xcode?: string; runtime?: string }
   /** The fetch of out.tgz fails this many times first (a dropped answer from a loaded Mac), with this error. */
   fetchFails?: number; fetchError?: string
@@ -52,7 +56,7 @@ const turn = (name) => { const f = path.join(dir, 'turn-' + name); const n = fs.
 if (op === 'host_list' && turn('list') < listFails) { process.stderr.write('walnut: hub_timeout: primary server timed out'); process.exit(1) }
 if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
 const at = (seq, n) => seq[Math.min(n, seq.length - 1)]
-if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; return { host: m.host, known: l != null, loadPerCpu: l } }) }) }
+if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; const b = m.busySeq ? at(m.busySeq, n) : m.cpuBusy; return { host: m.host, known: l != null, loadPerCpu: l, cpuBusy: b ?? null, cpus: m.cpus } }) }) }
 if (op === 'host_copy') {
   // As the real op: a copy from or to this computer itself is refused. From a devbox,
   // Walnut's own Mac is another host and the copy goes through (localIsRemote).
@@ -178,7 +182,7 @@ describe('ios-fleet-test.sh', () => {
     ], outTgz())
     const r = run(['--video', 'unit', '--', '-only-testing:WalnutTests/BoardTests'], bin)
     expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('not using mac-busy (mac-busy): load 4.2 per CPU, over 0.75')
+    expect(r.stderr).toContain('not using mac-busy (mac-busy): load 4.2 per CPU, over 4 per CPU')
     expect(r.stderr).toContain('using mac-mini (mac-mini): load 0.3 per CPU')
     // The send came back running; the script waited for its end before starting the run.
     const ops = r.calls.map((c) => c.op)
@@ -196,7 +200,7 @@ describe('ios-fleet-test.sh', () => {
     expect(start.args.host).toBe('mac-mini')
     const line = (start.args.argv as string[])[2]
     expect(line).toContain('.local/state/open-walnut/tasks/task-1/ios-fleet/')
-    expect(line).toMatch(/remote-run\.sh" "\$D" unit --video --max-load 0\.75 -- -only-testing:WalnutTests\/BoardTests/)
+    expect(line).toMatch(/remote-run\.sh" "\$D" unit --video --min-idle 25 --max-load 4 -- -only-testing:WalnutTests\/BoardTests/)
     // Followed from the start to the end, then fetched and unpacked into the task directory.
     expect(r.calls.filter((c) => c.op === 'host_exec_read').map((c) => c.args.offset)).toEqual([0, 24, 38])
     // The terminal gets the lines that matter; the whole log is run.log.
@@ -229,12 +233,12 @@ describe('ios-fleet-test.sh', () => {
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini', 'mac-two'])
     const alone = fakeWalnut([
       { host: '__local__', loadPerCpu: 0.2 },
-      { host: 'mac-mini', loadPerCpu: 3.1 },
+      { host: 'mac-mini', loadPerCpu: 3.1, cpuBusy: 0.9, cpus: 10 },
       { host: 'laptop', loadPerCpu: 0.1, connected: false },
     ], outTgz())
     const r2 = run(['unit'], alone)
     expect(r2.status, r2.stderr).toBe(0)
-    expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 3.1 per CPU, over 0.75')
+    expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 3.1 per CPU, 10% CPU idle (1.0 cores), under 25% idle')
     expect(r2.stderr).toMatch(/using __local__ \(__local__\): load 0\.2 per CPU; no other iOS Mac can take the run/)
     // Run on that Mac itself, host_copy refuses a copy to itself (same_host), and then sources
     // out and results back are copied on this computer (2026-11-04: "could not send the
@@ -257,19 +261,59 @@ describe('ios-fleet-test.sh', () => {
     expect(r.stderr).toContain('Passed: 41 passed')
   })
 
-  it('an edit to the script while it runs does not change the run (bash reads the whole script first)', () => {
-    // 2026-11-04: a commit to this script during a 7-minute run made bash read the rest of
-    // the new file from the old offset: "syntax error near unexpected token done", exit 2,
-    // after the tests had passed on the Mac.
-    const copy = path.join(dir, 'ios-fleet-test.sh')
-    fs.copyFileSync(SCRIPT, copy)
-    fs.writeFileSync(path.join(dir, 'edit-script'), copy)
-    const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz()), copy)
-    expect(fs.readFileSync(copy, 'utf8'), r.stderr).toContain('an inserted comment')
-    expect(r.stderr).not.toMatch(/syntax error|command not found/)
+  // 2026-11-07: a unit run (3a2e35ef) waited 110 minutes for this Mac's load to fall under 0.75 per
+  // CPU while 30 to 48% of its CPU was idle: the load counts endpoint agents' runnable threads.
+  it('free CPU picks the Mac: most idle cores first, a load of 3.8 per CPU with room is used, the load only a backstop', () => {
+    const macs = [
+      { host: 'mac-a', loadPerCpu: 0.2, cpuBusy: 0.7, cpus: 8 },
+      { host: 'mac-b', loadPerCpu: 3.8, cpuBusy: 0.55, cpus: 14 },
+      { host: 'mac-c', loadPerCpu: 0.1, cpuBusy: 0.8, cpus: 10 },
+      { host: 'mac-d', loadPerCpu: 4.5, cpuBusy: 0.1, cpus: 14 },
+    ]
+    // Each run reads only its own calls (the fake appends to one file in the test's directory).
+    const fresh = () => fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    const r = run(['unit'], fakeWalnut(macs, outTgz()))
     expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('results: ')
+    expect(r.stderr).toContain('using mac-b (mac-b): load 3.8 per CPU, 45% CPU idle (6.3 cores)')
+    expect(r.stderr).toContain('not using mac-c (mac-c): load 0.1 per CPU, 20% CPU idle (2.0 cores), under 25% idle')
+    expect(r.stderr).toContain('not using mac-d (mac-d): load 4.5 per CPU, 90% CPU idle (12.6 cores), over 4 per CPU')
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-b'])
+    // --min-idle moves the bar, and the Mac half gets the same bar.
+    fresh()
+    const r2 = run(['--min-idle', '50', '--wait', '0', 'unit'], fakeWalnut(macs, outTgz()))
+    expect(r2.status).toBe(75)
+    expect(r2.stderr).toContain('not using mac-b (mac-b): load 3.8 per CPU, 45% CPU idle (6.3 cores), under 50% idle')
+    fresh()
+    const r3 = run(['--min-idle', '10', 'unit'], fakeWalnut(macs, outTgz()))
+    expect(r3.status, r3.stderr).toBe(0)
+    expect((r3.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toContain('unit --min-idle 10 --max-load 4 --')
+    // A bar that is not a number is refused before anything runs.
+    for (const bad of [['--min-idle', 'soon'], ['--min-idle', '150'], ['--max-load', 'x']]) {
+      fresh()
+      const rb = run([...bad, 'unit'], fakeWalnut(macs, outTgz()))
+      expect(rb.status, rb.stderr).toBe(64)
+      expect(rb.calls.map((c) => c.op)).not.toContain('host_copy')
+    }
+    // A Mac whose daemon reports no CPU share goes after those that do, by load, and is not refused for it.
+    fresh()
+    const r4 = run(['unit'], fakeWalnut([{ host: 'mac-old', loadPerCpu: 0.1 }, { host: 'mac-a', loadPerCpu: 2, cpuBusy: 0.5, cpus: 8 }], outTgz()))
+    expect(r4.status, r4.stderr).toBe(0)
+    expect(r4.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-a'])
   })
+
+  it('an edit to the script while it runs does not change the run (bash reads the whole script first)', () => {
+  // 2026-11-04: a commit to this script during a 7-minute run made bash read the rest of
+  // the new file from the old offset: "syntax error near unexpected token done", exit 2,
+  // after the tests had passed on the Mac.
+  const copy = path.join(dir, 'ios-fleet-test.sh')
+  fs.copyFileSync(SCRIPT, copy)
+  fs.writeFileSync(path.join(dir, 'edit-script'), copy)
+  const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz()), copy)
+  expect(fs.readFileSync(copy, 'utf8'), r.stderr).toContain('an inserted comment')
+  expect(r.stderr).not.toMatch(/syntax error|command not found/)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stderr).toContain('results: ')
+})
 
   it('the run says how long it took there, on the UTC clock', () => {
     const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz()))
@@ -376,18 +420,18 @@ describe('ios-fleet-test.sh', () => {
   })
 
   it('no Mac can take it: says why and exits 75 without sending anything', () => {
-    const bin = fakeWalnut([{ host: 'mac-busy', loadPerCpu: 2 }, { host: 'devbox', tags: ['linux'], loadPerCpu: 0 }], outTgz())
+    const bin = fakeWalnut([{ host: 'mac-busy', loadPerCpu: 2, cpuBusy: 0.95 }, { host: 'devbox', tags: ['linux'], loadPerCpu: 0 }], outTgz())
     const r = run(['unit'], bin)
     expect(r.status).toBe(75)
     expect(r.stderr).toContain('no iOS Mac can take a run now')
-    expect(r.stderr).toContain('try again later, or pass --wait or --max-load')
+    expect(r.stderr).toContain('try again later, or pass --wait, --min-idle or --max-load')
     expect(r.calls.map((c) => c.op)).not.toContain('host_copy')
   })
 
   it('every Mac busy: it waits its turn, says so once, and runs on the first Mac that frees up', () => {
     // 2026-11-04: a UI test run failed at once (exit 75) while another task's run held the
     // only free Mac; the Macs are shared, so a run queues instead of racing.
-    const bin = fakeWalnut([{ host: 'mac-mini', loadSeq: [2, 2, 2, 0.1] }], outTgz())
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 2, busySeq: [0.9, 0.85, 0.9, 0.1] }], outTgz())
     const r = run(['ui'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60', IOS_FLEET_WAIT_POLL_SECS: '0' })
     expect(r.status, r.stderr).toBe(0)
     expect(r.stderr).toContain('no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime); waiting for one (up to 1 min, asking again every 0 s; --wait 0 does not wait)')
@@ -431,7 +475,7 @@ describe('ios-fleet-test.sh', () => {
   it('a Mac that said busy goes after one that just became free', () => {
     const bin = fakeWalnut([
       { host: 'mac-a', loadPerCpu: 0.1, result: { exit: 75, state: 'busy' } },
-      { host: 'mac-c', loadSeq: [3, 0.3], result: { exit: 0, state: 'passed' } },
+      { host: 'mac-c', loadSeq: [5, 0.3], result: { exit: 0, state: 'passed' } },
     ], outTgz())
     const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
     expect(r.status, r.stderr).toBe(0)
@@ -440,7 +484,7 @@ describe('ios-fleet-test.sh', () => {
 
   it('a reason that only changes its load figure is not printed again on every check', () => {
     const bin = fakeWalnut([
-      { host: 'mac-hot', loadSeq: [2, 2.5, 3.1] },
+      { host: 'mac-hot', loadSeq: [4.5, 5, 6.1] },
       { host: 'mac-mini', loadPerCpu: 0.1, resultSeq: [{ exit: 75, state: 'busy' }, { exit: 75, state: 'busy' }, { exit: 0, state: 'passed' }] },
     ], outTgz())
     const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
@@ -476,10 +520,10 @@ describe('ios-fleet-test.sh', () => {
   })
 
   it('the wait has an end: none free within --wait exits 75 and says how long it waited', () => {
-    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 3 }], outTgz())
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 3, cpuBusy: 0.95 }], outTgz())
     const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '1', IOS_FLEET_WAIT_POLL_SECS: '0.2' })
     expect(r.status).toBe(75)
-    expect(r.stderr).toContain('none could take it in the 1 s this run waited; try again later, or pass --wait or --max-load')
+    expect(r.stderr).toContain('none could take it in the 1 s this run waited; try again later, or pass --wait, --min-idle or --max-load')
     expect(r.calls.map((c) => c.op)).not.toContain('host_copy')
     expect(run(['--wait', 'soon', 'unit'], bin).status).toBe(64)
   })
@@ -719,6 +763,20 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     r = ui('')
     expect(r.stdout).toContain('simulator lease held')
     expect(r.stdout).not.toContain('held by the caller')
+  })
+
+  it('the Mac half is busy on free CPU, the load only a backstop (fleet_cpu_busy)', () => {
+    const busy = (...a: string[]) => sh(`fleet_cpu_busy ${a.map((x) => `'${x}'`).join(' ')}`).stdout.trim()
+    // The 2026-11-07 Mac: load 53 on 14 CPUs, 45% idle: room.
+    expect(busy('45', '53', '14', '25', '4')).toBe('')
+    expect(busy('20', '1', '14', '25', '4')).toBe('only 20% of the CPU is idle (2.8 of 14 cores), under 25%')
+    expect(busy('90', '60', '14', '25', '4')).toBe('load 60 on 14 CPUs is over 4 per CPU')
+    // An idle share that could not be read does not block.
+    expect(busy('', '10', '14', '25', '4')).toBe('')
+    // The Mac half reads it before it takes anything.
+    const src = fs.readFileSync(REMOTE, 'utf8')
+    expect(src).toContain('WHY=$(fleet_cpu_busy "$(fleet_idle_pct 5)" "$LOAD1" "$CPUS" "$MIN_IDLE" "$MAX_LOAD")')
+    expect(src.indexOf('WHY=$(fleet_cpu_busy')).toBeLessThan(src.indexOf('CALL=$(fleet_call_now)'))
   })
 
   it('the Mac half asks before it takes a simulator, and never powers a lent one itself', () => {
