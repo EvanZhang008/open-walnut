@@ -31,6 +31,7 @@ const quiet: TargetFacts = {
 /** Each sign, alone. */
 const ONLY: Record<TargetSign, Partial<TargetFacts>> = {
   'a turn running now': { inTurn: true },
+  'work of it running after its turn': { outliving: ['background'] },
   'a turn begun since the ask': { turnStartedAt: ASKED + 60_000 },
   'a turn ended since the ask': { report: { at: before, turn_ended_at: after } },
   'its status report since the ask': { report: { at: after, turn_ended_at: before, by: 'self' } },
@@ -55,6 +56,35 @@ describe('a target at work is never told silent: every sign since the ask counts
 
   it('the 2026-11-07 case: a turn begun before the ask, ended after it with a report, reads as at work', () => {
     expect(targetSignSince({ ...quiet, turnStartedAt: ASKED - 60_000, report: { at: after, turn_ended_at: after } })).not.toBeNull()
+  })
+
+  it('2026-11-07 23:47: idle between turns, background jobs and a review running, a turn ended after the ask', () => {
+    const askedAt = Date.parse('2026-11-07T22:32:18Z')
+    const facts: TargetFacts = {
+      since: askedAt, inTurn: false, processStatus: 'running', outliving: ['background'],
+      report: { at: '2026-11-07T23:46:43Z', turn_ended_at: '2026-11-07T23:46:29Z' }, taskId: 'target-task', sessionIds: [SID],
+      rows: [row({ id: 'rq-this', toTaskId: 'target-task', createdAt: iso(askedAt) }), row({ fromSessionId: SID, toTaskId: 'its-reviewer', createdAt: '2026-11-07T23:44:51Z' })],
+      requestId: 'rq-this',
+    }
+    expect(targetSignSince(facts)).not.toBeNull()
+    // Each of them alone keeps it from reading silent.
+    expect(targetSignSince({ ...facts, report: { at: before, turn_ended_at: before }, rows: facts.rows.slice(0, 1) })).toBe('work of it running after its turn')
+    expect(targetSignSince({ ...facts, outliving: [], rows: facts.rows.slice(0, 1) })).toBe('a turn ended since the ask')
+    expect(targetSignSince({ ...facts, outliving: [], report: { at: before, turn_ended_at: before } })).toBe('a message it sent since the ask')
+    // A /loop between its fires runs nothing.
+    expect(targetSignSince({ ...quiet, outliving: ['loop'] })).toBeNull()
+  })
+
+  it('2026-11-07 23:39: idle, with the review round it sent out after the ask', () => {
+    const askedAt = Date.parse('2026-11-07T22:32:11Z')
+    expect(targetSignSince({
+      ...quiet, since: askedAt, processStatus: 'idle', inTurn: null, turnStartedAt: undefined, report: undefined,
+      rows: [
+        row({ id: 'rq-this', toTaskId: 'target-task', createdAt: iso(askedAt) }),
+        row({ fromSessionId: SID, toTaskId: 'its-reviewer', status: 'replied', createdAt: '2026-11-07T23:01:42Z' }),
+        row({ fromSessionId: SID, toTaskId: 'its-reviewer', createdAt: '2026-11-07T23:36:06Z' }),
+      ],
+    })).toBe('a message it sent since the ask')
   })
 
   it('a sign from before the ask, or its own request, says nothing of the ask', () => {

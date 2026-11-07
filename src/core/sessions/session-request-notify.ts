@@ -605,10 +605,12 @@ export const SILENT_AFTER_MS = 10 * 60_000;
  * (remindSilent) goes only when none shows. 2026-11-07: a task whose turn began before the ask,
  * read it mid-turn and ended 45 minutes later with a status report naming the ask was read as
  * "has not taken up the work", and so was one that had messaged its asker an hour before: only a
- * turn running now or one begun since the ask counted.
+ * turn running now or one begun since the ask counted. Later that night two more: one idle between
+ * turns with background jobs and a review running, one idle with a review round it had sent out.
  */
 export const TARGET_SIGNS = [
   'a turn running now',
+  'work of it running after its turn',
   'a turn begun since the ask',
   'a turn ended since the ask',
   'its status report since the ask',
@@ -625,6 +627,11 @@ export interface TargetFacts {
   inTurn: boolean | null;
   /** Its session's process status (running, idle, stopped, error), when it has one. */
   processStatus?: string;
+  /**
+   * Its own work that runs on after its turn (runner.outlivingWorkOf: background commands and
+   * subagents, a team, an armed wakeup); a /loop between its fires runs nothing.
+   */
+  outliving?: readonly import('./outliving-work.js').OutlivingSource[];
   /** When its last turn began (epoch ms; lastTurnSpeed.startedAt), absent when unseen. */
   turnStartedAt?: number;
   /**
@@ -646,6 +653,7 @@ export interface TargetFacts {
 export function targetSignSince(f: TargetFacts): TargetSign | null {
   const after = (iso: string | undefined): boolean => { const t = Date.parse(iso ?? ''); return Number.isFinite(t) && t >= f.since; };
   if (f.processStatus === 'running' && f.inTurn !== false) return 'a turn running now';
+  if ((f.outliving ?? []).some((s) => s !== 'loop')) return 'work of it running after its turn';
   if ((f.turnStartedAt ?? 0) > f.since) return 'a turn begun since the ask';
   const ownReport = !f.report?.by || f.report.by === 'self';
   if (ownReport && after(f.report?.turn_ended_at)) return 'a turn ended since the ask';
@@ -691,6 +699,7 @@ export async function remindSilent(now = Date.now()): Promise<number> {
       since: asked,
       inTurn: session?.process_status === 'running' ? runner?.isInTurn(session.claudeSessionId) ?? null : false,
       ...(session?.process_status ? { processStatus: session.process_status } : {}),
+      outliving: session ? runner?.outlivingWorkOf(session.claudeSessionId) ?? [] : [],
       ...(session?.lastTurnSpeed?.startedAt ? { turnStartedAt: session.lastTurnSpeed.startedAt } : {}),
       ...(task.status_report ? { report: task.status_report } : {}),
       taskId: task.id,
