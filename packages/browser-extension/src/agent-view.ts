@@ -66,6 +66,8 @@ export async function viewFrame(c: WireCommand, busy: (tabId: number) => boolean
   const at = await where(tabId)
   const none = (why: NoFrame) => ({ ...at, shown: false, why, ...(rec.handed ? { handed: true } : rec.taken ? { taken: true } : {}) })
   const url = tab.url ?? ''
+  // The same holding of the tab as when the frame began (Stop and a new hand-over make another).
+  const sameHolding = (now: typeof rec | undefined) => now?.owner === rec.owner && (now?.grant ?? '') === (rec.grant ?? '')
   if (!/^https?:\/\//i.test(url)) return none('not_web')
   if (await walnutCheck.isWalnutPage(url) || walnutAddress(c.allow.walnut, url)) return none('walnut_page')
   if (!(await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false))) return none('no_permission')
@@ -95,7 +97,7 @@ export async function viewFrame(c: WireCommand, busy: (tabId: number) => boolean
     // picture may show a page the task does not hold (Stop, a give-back, a move to a Walnut page;
     // review 2026-11-07).
     const owner = await agentTabs.get(tabId)
-    if (owner?.owner !== rec.owner) return null
+    if (!sameHolding(owner)) return null
     const after = await ext.tabs.get(tabId).catch(() => null)
     if (!after) return null
     if ((after.url ?? '') !== url || after.windowId !== tab.windowId) return 'changed' as const
@@ -106,5 +108,10 @@ export async function viewFrame(c: WireCommand, busy: (tabId: number) => boolean
   if (shot === undefined) return none('busy')
   if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
   if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
-  return { ...(await where(tabId)), shown: true, image: await shrink(shot), at: new Date().toISOString(), ...(rec.handed ? { handed: true } : rec.taken ? { taken: true } : {}) }
+  const image = await shrink(shot)
+  // The last look, after the picture was made small: still this holding, on the same page.
+  const last = await ext.tabs.get(tabId).catch(() => null)
+  if (!sameHolding(await agentTabs.get(tabId)) || !last) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
+  if ((last.url ?? '') !== url || last.windowId !== tab.windowId) return none('changed')
+  return { ...(await where(tabId)), shown: true, image, at: new Date().toISOString(), ...(rec.handed ? { handed: true } : rec.taken ? { taken: true } : {}) }
 }

@@ -27,7 +27,7 @@ export interface ControllerInfo {
    * The agent tabs it holds and who opened each (the owner key went with `open`): a restarted
    * server learns them back from the next poll.
    */
-  tabs?: Array<{ id: number; owner: string } & TabFacts>
+  tabs?: Array<{ id: number; owner: string; grant?: string } & TabFacts>
 }
 
 /** What Walnut knows of an agent tab besides its owner: from the extension's reports and each act's answer. */
@@ -83,6 +83,16 @@ const pending = new Map<string, Pending>()
 /** `${device}:${tabId}` → the owner key (task or session) that opened it. */
 const tabOwners = new Map<string, string>()
 const tabSetAt = new Map<string, number>()
+/**
+ * Each holding of a tab, numbered: a new owner, or the same owner holding it again after a
+ * release (the extension's `grant` in its reports tells a re-handover the hub never saw end), gets
+ * a new number. A Stop and a frame act only on the holding they started on (review 2026-11-07: a
+ * late Stop released the next task's tab; a re-handover showed the last holding's picture).
+ */
+const tabGens = new Map<string, number>()
+const tabGrants = new Map<string, string>()
+let genSeq = 0
+const newGen = (k: string) => { tabGens.set(k, ++genSeq) }
 /**
  * Tabs a report of their browser has listed. One of them missing from a later report is gone (closed,
  * or one the extension let go of, such as Walnut's own page), at once; only a tab known from an
@@ -147,6 +157,10 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
       const k = `${info.device}:${t.id}`
       reported.add(k)
       const before = tabOwners.get(k)
+      const grant = typeof t.grant === 'string' ? t.grant.slice(0, 80) : undefined
+      const regranted = !!grant && tabGrants.has(k) && tabGrants.get(k) !== grant
+      if (grant) tabGrants.set(k, grant)
+      if (before !== t.owner || regranted || !tabGens.has(k)) newGen(k)
       if (before !== t.owner) { tabOwners.set(k, t.owner); tabSetAt.set(k, Date.now()); ended.delete(t.owner); tabsChanged(before); tabsChanged(t.owner) }
       tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(t) })
       tabReported.add(k)
@@ -341,6 +355,8 @@ function forgetTab(k: string, fallback: TabEndWhy = 'gone'): void {
   const owner = tabOwners.get(k)
   tabOwners.delete(k)
   tabSetAt.delete(k)
+  tabGens.delete(k)
+  tabGrants.delete(k)
   tabReported.delete(k)
   tabFacts.delete(k)
   if (!owner) return
@@ -353,6 +369,7 @@ export function ownTab(device: string, tabId: number, owner: string, facts?: Tab
   const before = tabOwners.get(k)
   tabOwners.set(k, owner)
   tabSetAt.set(k, Date.now())
+  if (before !== owner || !tabGens.has(k)) newGen(k)
   if (facts) tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(facts) })
   // Known from this answer: a report read before it may still lack the tab.
   tabReported.delete(k)
@@ -366,6 +383,19 @@ export function ownTab(device: string, tabId: number, owner: string, facts?: Tab
 
 export function releaseTab(device: string, tabId: number, why: TabEndWhy = 'gone'): void {
   forgetTab(`${device}:${tabId}`, why)
+}
+
+/** Which holding of the tab this is now (undefined: nobody holds it). */
+export function tabGen(device: string, tabId: number): number | undefined {
+  return tabGens.get(`${device}:${tabId}`)
+}
+
+/** Release the tab only if `owner` still holds it in the same holding `gen`: true when it did. */
+export function releaseTabIf(device: string, tabId: number, owner: string, gen: number | undefined, why: TabEndWhy = 'gone'): boolean {
+  const k = `${device}:${tabId}`
+  if (tabOwners.get(k) !== owner || tabGens.get(k) !== gen) return false
+  forgetTab(k, why)
+  return true
 }
 
 export interface ViewTab extends TabFacts {
@@ -416,6 +446,8 @@ export function _resetBrowserHubForTesting(): void {
   pending.clear()
   tabOwners.clear()
   tabSetAt.clear()
+  tabGens.clear()
+  tabGrants.clear()
   tabReported.clear()
   tabFacts.clear()
   ended.clear()

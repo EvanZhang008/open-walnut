@@ -65,6 +65,22 @@ export function maskUrl(u: string): string {
   return i < 0 ? u : `${u.slice(0, i)}${u[i] === '?' ? '?…' : '#…'}`
 }
 
+/**
+ * Every address in an answer whose site `masks` names, wherever it sits (fields, the tab's own
+ * address, a console message's text), masked in one pass; a body is data and kept as it came
+ * (review 2026-11-07: the tab's own address next to a masked listing still carried the password).
+ */
+export function maskUrlsIn<T>(o: T, masks: (url: string) => boolean): T {
+  const one = (s: string) => s.replace(/https?:\/\/[^\s"'<>()\]\[]+/gi, (u) => (masks(u) ? maskUrl(u) : u))
+  const walk = (v: unknown, key?: string): unknown => {
+    if (typeof v === 'string') return key === 'body' ? v : one(v)
+    if (Array.isArray(v)) return v.map((x) => walk(x))
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, walk(x, k)]))
+    return v
+  }
+  return walk(o) as T
+}
+
 /** Every address field of an entry, masked. */
 export function maskEntry<E extends { url: string; page?: string; chain?: string[] }>(e: E): E {
   return { ...e, url: maskUrl(e.url), ...(e.page ? { page: maskUrl(e.page) } : {}), ...(e.chain ? { chain: e.chain.map(maskUrl) } : {}) }
@@ -73,6 +89,7 @@ export function maskEntry<E extends { url: string; page?: string; chain?: string
 /** Every address an entry names: where it went, the page that sent it, where it was redirected from. */
 export const urlsOf = (e: { url: string; page?: string; chain?: string[] }): string[] => [e.url, ...(e.page ? [e.page] : []), ...(e.chain ?? [])]
 
+const urlOrigin = (u: string): string => { try { const o = new URL(u).origin; return o === 'null' ? '' : o } catch { return '' } }
 const cut = (s: unknown, n: number) => (typeof s === 'string' ? (s.length > n ? `${s.slice(0, n)}…` : s) : undefined)
 
 /** A logged value as text: a string as it is, anything else by what the debugger calls it. */
@@ -161,8 +178,10 @@ export function fold(r: NetRecord, method: string, p: Record<string, any> = {}, 
     }
     case 'Log.entryAdded': {
       const e = (p.entry ?? {}) as { level?: string; text?: string; url?: string; lineNumber?: number; source?: string; timestamp?: number }
+      // Its place is the address it names: judged like a page's (a browser message with none is unknown).
+      const origin = e.url ? urlOrigin(e.url) : ''
       pushConsole(r, { level: e.level === 'warning' ? 'warn' : e.level ?? 'info', text: e.text ?? '', at: typeof e.timestamp === 'number' ? Math.round(e.timestamp) : now,
-        source: e.source ?? 'browser', ...(e.url ? { where: `${cut(e.url, 300)}${typeof e.lineNumber === 'number' ? `:${e.lineNumber + 1}` : ''}` } : {}) })
+        source: e.source ?? 'browser', ...(e.url ? { where: `${cut(e.url, 300)}${typeof e.lineNumber === 'number' ? `:${e.lineNumber + 1}` : ''}` } : {}), ...(origin ? { origin } : {}) })
       return
     }
   }

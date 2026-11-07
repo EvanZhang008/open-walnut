@@ -96,11 +96,14 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       const owner = `task:${taskId}`
       const known = pickTab(h, owner, tab, deviceOf(req.query.device))
       if (!known.connected) throw new h.BrowserError(`${known.browser} does not answer right now.`, 409, 'browser_not_connected')
-      // Per owner too: a tab another task took a moment ago never gets this one's picture.
-      const key = `${owner}\0${known.device}:${tab}`
+      // Per holding: a tab another task took, or this task holds again after a Stop, never gets
+      // the picture of an earlier holding (review 2026-11-07).
+      const gen = h.tabGen(known.device, tab)
+      const stillHeld = () => h.tabOwner(known.device, tab) === owner && h.tabGen(known.device, tab) === gen
+      const key = `${owner}\0${known.device}:${tab}\0${gen ?? ''}`
       const held = frames.get(key)
       if (held && (held.done === undefined || Date.now() - held.done < FRAME_SHARE_MS)) return held.p.then((o) => {
-        if (h.tabOwner(known.device, tab) !== owner) throw new h.BrowserError('That tab is not this task\'s now.', 404, 'not_your_tab')
+        if (!stillHeld()) throw new h.BrowserError('That tab is not this task\'s now.', 404, 'not_your_tab')
         return o
       })
       // Shared from this moment on, before anything is awaited: a second viewer's request joins it.
@@ -111,7 +114,7 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
         (out) => {
           const o = (out ?? {}) as Record<string, unknown>
           // The tab may have gone to the person or another task while the picture was taken: then none.
-          if (h.tabOwner(known.device, tab) !== owner) throw new h.BrowserError('That tab is not this task\'s now.', 404, 'not_your_tab')
+          if (!stillHeld()) throw new h.BrowserError('That tab is not this task\'s now.', 404, 'not_your_tab')
           h.noteTab(known.device, tab, o)
           return { ...o, tab, device: known.device, browser: known.browser }
         },
@@ -151,9 +154,13 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
       const s = await sites()
       const allow = { ...s.allowOf(await s.readSites()), walnut: await d.walnutAddresses(req) }
       let out: Record<string, unknown> = {}
+      // Only this holding is stopped: the browser and the hub both compare before they let go
+      // (review 2026-11-07: a late Stop released the tab the next task had taken meanwhile).
+      const gen = h.tabGen(known.device, tab)
+      for (const k of [...frames.keys()]) if (k.startsWith(`${owner}\0${known.device}:${tab}\0`)) frames.delete(k)
       const undo = h.endingTab(known.device, tab, 'stopped')
       try {
-        out = (await h.send(known.device, 'view_stop', { tab }, allow, 10_000) ?? {}) as Record<string, unknown>
+        out = (await h.send(known.device, 'view_stop', { tab, owner }, allow, 10_000) ?? {}) as Record<string, unknown>
       } catch (err) {
         undo()
         if (err instanceof h.BrowserError && err.code === 'bad_action') {
@@ -161,7 +168,11 @@ export function mountBrowserView(r: Router, d: ViewDeps): void {
         }
         throw err
       }
-      h.releaseTab(known.device, tab, 'stopped')
+      if (out.stopped === false) {
+        undo()
+        return { ok: true, ...out, tab, device: known.device, stopped: false }
+      }
+      if (!h.releaseTabIf(known.device, tab, owner, gen, 'stopped')) undo()
       log.web.info('browser view stop', { device: known.device, owner, tab, by: 'person' })
       return { ok: true, ...out, tab, device: known.device, stopped: true }
     })

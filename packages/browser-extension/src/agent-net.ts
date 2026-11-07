@@ -19,8 +19,11 @@ import { ext, isFirefox } from './ext'
 import { CdpError, dropDebugger, holdDebugger, type Send } from './cdp'
 import { AgentError, agentTabs, allowed, filledHere, filledOrigins, nearPerson, originOf, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
 import { walnutAddress } from './walnut-address'
-import { NET_MAX, bodyOut, fold, listConsole, listRequests, maskEntry, newRecord, urlsOf, type ConsoleEntry, type Judge, type NetEntry, type NetRecord } from './net-record'
+import { siteKey } from '../../../src/core/vault/url-match'
+import { NET_MAX, bodyOut, fold, listConsole, listRequests, maskEntry, maskUrlsIn, newRecord, urlsOf, type ConsoleEntry, type Judge, type NetEntry, type NetRecord } from './net-record'
 import { REAL_INPUT_SWITCH, trustedReady } from './agent-trusted'
+
+const siteOf = (u: string): string => siteKey(u)?.domain ?? ''
 
 export const NET_OPS = new Set(['network', 'network_body', 'network_request_body', 'console'])
 
@@ -34,6 +37,8 @@ const generation = new Map<number, number>()
 const genOf = (tabId: number) => generation.get(tabId) ?? 0
 /** Tabs where the person cancelled the debugging bar: no agent records there again. */
 const cancelled = new Set<number>()
+/** Tabs whose debugger attach is under way: a Cancel then still counts (review 2026-11-07). */
+const attaching = new Set<number>()
 let listening = false
 
 function listen(): void {
@@ -44,10 +49,13 @@ function listen(): void {
     if (r) fold(r, method, params as Record<string, unknown> | undefined)
   })
   more.debugger.onDetach?.addListener((source, reason) => {
-    if (typeof source?.tabId !== 'number' || !records.has(source.tabId)) return
-    records.delete(source.tabId)
-    dropDebugger(source.tabId)
-    if (reason === 'canceled_by_user') cancelled.add(source.tabId)
+    const tabId = source?.tabId
+    if (typeof tabId !== 'number' || (!records.has(tabId) && !attaching.has(tabId))) return
+    // Whatever was starting or recording there is over: a start still under way sees it.
+    generation.set(tabId, genOf(tabId) + 1)
+    records.delete(tabId)
+    dropDebugger(tabId)
+    if (reason === 'canceled_by_user') cancelled.add(tabId)
   })
   ext.tabs.onRemoved.addListener((tabId) => { records.delete(tabId); dropDebugger(tabId); cancelled.delete(tabId) })
   // The person turned real input off (the debugger permission went): every recording ends with it.
@@ -77,17 +85,27 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
   const dbg = more.debugger!
   const target = { tabId }
   const gen = genOf(tabId)
+  attaching.add(tabId)
   try {
     await dbg.attach(target, '1.3')
   } catch (err) {
     const m = err instanceof Error ? err.message : String(err)
     throw new AgentError(/already attached/i.test(m) ? 'Another debugger (DevTools?) is open on that tab: close it and try again.' : `The browser would not attach its debugger: ${m}`, 'debugger_busy')
+  } finally {
+    attaching.delete(tabId)
   }
-  // Stopped (or no longer this owner's) while the browser attached: let go, record nothing.
-  const stale = async () => genOf(tabId) !== gen || (await agentTabs.get(tabId))?.owner !== rec.owner
+  // Stopped, cancelled, or no longer this holding while the browser attached: let go, record nothing.
+  const gone = () => (cancelled.has(tabId)
+    ? new AgentError('The person cancelled Chrome\'s debugging bar on this tab, which ends recording there. Ask them before you record again (in a new tab).', 'recording_cancelled')
+    : new AgentError('The tab was given back while its recording started: nothing is recorded.', 'not_your_tab'))
+  const stale = async () => {
+    if (genOf(tabId) !== gen || cancelled.has(tabId)) return true
+    const now = await agentTabs.get(tabId)
+    return now?.owner !== rec.owner || (!!rec.grant && now?.grant !== rec.grant)
+  }
   if (await stale()) {
     await dbg.detach(target).catch(() => undefined)
-    throw new AgentError('The tab was given back while its recording started: nothing is recorded.', 'not_your_tab')
+    throw gone()
   }
   const send: Send = (method, params) => dbg.sendCommand(target, method, params ?? {})
   const r = { ...newRecord(), send }
@@ -104,7 +122,8 @@ export async function startRecording(tabId: number, rec: AgentTab): Promise<bool
   }
   if (await stale()) {
     if (records.get(tabId) === r) await stopRecording(tabId)
-    throw new AgentError('The tab was given back while its recording started: nothing is recorded.', 'not_your_tab')
+    else await dbg.detach(target).catch(() => undefined)
+    throw gone()
   }
   return true
 }
@@ -135,9 +154,12 @@ export async function netAct(c: WireCommand, tabId: number, rec: AgentTab): Prom
   }
   const startedNow = await startRecording(tabId, rec)
   const r = records.get(tabId)!
-  // One look per site: a listing judges every request's addresses.
-  const filled = new Set(await filledOrigins(rec.owner))
-  const isFilled = (u: string | undefined) => !!u && filled.has(originOf(u))
+  // A site Walnut signed this owner in on, by its site (a sign-in on login.example.test may post to
+  // auth.example.test): its addresses lose their query everywhere in the answer, its request
+  // bodies are not given, and its pages' console stays closed.
+  const filledAt = new Set(await filledOrigins(rec.owner))
+  const filledSites = new Set([...filledAt].map((o) => siteOf(o)).filter(Boolean))
+  const isFilled = (u: string | undefined) => !!u && /^https?:/i.test(u) && filledSites.has(siteOf(u))
   const off = new Map<string, boolean>()
   const offSite = async (u: string): Promise<boolean> => {
     // data: and blob: carry no site of their own: their page is judged.
@@ -152,15 +174,19 @@ export async function netAct(c: WireCommand, tabId: number, rec: AgentTab): Prom
    * 2026-11-07: a body of a site not allowed came back); its addresses masked when any is a site
    * Walnut signed the agent in on.
    */
-  const judged = new Map<string, Judge>()
-  for (const e of r.requests.values()) {
+  const judgeOne = async (e: NetEntry): Promise<Judge> => {
     const urls = urlsOf(e)
-    let j: Judge = 'show'
-    for (const u of urls) if (await offSite(u)) { j = 'drop'; break }
-    if (j === 'show' && urls.some(isFilled)) j = 'mask'
-    judged.set(e.id, j)
+    for (const u of urls) if (await offSite(u)) return 'drop'
+    return urls.some(isFilled) ? 'mask' : 'show'
   }
-  const judge = (e: NetEntry): Judge => judged.get(e.id) ?? 'drop'
+  // Keyed by the entry itself, never its id: a redirect puts a new entry under the same id, and a
+  // verdict on the old addresses must not let the new ones through (review 2026-11-07). An entry
+  // that came in after the judging is left out.
+  const judged = new Map<NetEntry, Judge>()
+  for (const e of [...r.requests.values()]) judged.set(e, await judgeOne(e))
+  const judge = (e: NetEntry): Judge => judged.get(e) ?? 'drop'
+  // One masking pass over everything the answer says (the tab's own address included).
+  const masked = <T,>(o: T): T => maskUrlsIn(o, isFilled)
   const since = new Date(r.since).toISOString()
   const fresh = startedNow ? { started_now: true, note: 'Recording started now: what the page did before is not in it. Navigate to the page again (or open it with record) to record its load.' } : {}
   switch (c.action) {
@@ -170,30 +196,34 @@ export async function netAct(c: WireCommand, tabId: number, rec: AgentTab): Prom
         status: typeof a.status === 'number' || typeof a.status === 'string' ? a.status : undefined,
         type: typeof a.type === 'string' ? a.type : undefined, limit: typeof a.limit === 'number' ? a.limit : undefined, includeStatic: a.include_static === true,
       }, judge)
-      return { recording: true, since, ...fresh, ...out, kept: NET_MAX, ...(r.dropped.requests ? { dropped: r.dropped.requests } : {}), ...(await where(tabId)) }
+      return masked({ recording: true, since, ...fresh, ...out, kept: NET_MAX, ...(r.dropped.requests ? { dropped: r.dropped.requests } : {}), ...(await where(tabId)) })
     }
     case 'console': {
       // Each message by the page that logged it, not the page the tab shows now: a sign-in page's
-      // console stays closed after the agent moves on (review 2026-11-07). A message whose page the
-      // browser did not name counts as from a signed-in site once there is one.
+      // console (its origin) stays closed after the agent moves on. A message whose page the browser did not
+      // name, or names only as an opaque origin (a sandboxed frame, data:), is not given: an
+      // unknown place is no allowed one (review 2026-11-07).
       const keepOf = new Map<string, boolean>()
       for (const m of r.console) {
         const k = m.origin ?? ''
         if (keepOf.has(k)) continue
-        keepOf.set(k, m.origin ? !filled.has(m.origin) && !(await offSite(m.origin)) : filled.size === 0)
+        keepOf.set(k, /^https?:\/\//i.test(k) && !filledAt.has(k) && !(await offSite(k)))
       }
       const out = listConsole(r, { level: typeof a.level === 'string' ? a.level : undefined, limit: typeof a.limit === 'number' ? a.limit : undefined }, (m: ConsoleEntry) => keepOf.get(m.origin ?? '') ?? false)
-      return {
+      return masked({
         recording: true, since, ...fresh, ...out, ...(r.dropped.console ? { dropped: r.dropped.console } : {}),
-        ...(out.withheld ? { withheld_note: `${out.withheld} message(s) withheld: logged by a page Walnut signed you in on, or by a site agents may not use.` } : {}),
+        ...(out.withheld ? { withheld_note: `${out.withheld} message(s) withheld: logged by a page Walnut signed you in on, by a site agents may not use, or by a page the browser did not name.` } : {}),
         ...(await where(tabId)),
-      }
+      })
     }
     case 'network_body': case 'network_request_body': {
       const id = reqIdOf(a)
       const e = r.requests.get(id)
       if (!e) throw new AgentError(`No request ${id} in this tab's recording (network lists them; the oldest go after ${NET_MAX}).`, 'no_such_request')
-      const j = judge(e)
+      const j = judged.get(e) ?? await judgeOne(e)
+      // Still the request that was judged: a redirect meanwhile is another one (the agent lists again).
+      const same = () => { if (r.requests.get(id) !== e) throw new AgentError('That request moved on (a redirect) while Walnut checked it: list the requests again (network).', 'request_changed') }
+      same()
       if (j === 'drop') throw new AgentError('That request went to (or came from) a site agents may not use, or Walnut itself: its body is not read.', 'request_site_not_allowed')
       const max = typeof a.max_chars === 'number' ? a.max_chars : undefined
       const seen = j === 'mask' ? maskEntry(e) : e
@@ -202,13 +232,17 @@ export async function netAct(c: WireCommand, tabId: number, rec: AgentTab): Prom
         if (j === 'mask' || await filledHere(rec.owner, (await ext.tabs.get(tabId).catch(() => null))?.url ?? '')) {
           throw new AgentError('A request\'s body is not read on a site where Walnut signed you in: the sign-in itself sent the password.', 'filled_here')
         }
-        if (!e.hasBody) return { ...head, body: '', length: 0, note: 'That request sent no body.' }
+        if (!e.hasBody) return masked({ ...head, body: '', length: 0, note: 'That request sent no body.' })
+        same()
         const got = await r.send('Network.getRequestPostData', { requestId: id }).catch((err: unknown) => { throw noBody(err) }) as { postData?: string }
-        return { ...head, ...bodyOut({ body: got.postData }, max) }
+        same()
+        return masked({ ...head, ...bodyOut({ body: got.postData }, max) })
       }
       if (e.failed) throw new AgentError(`That request failed (${e.failed}): it has no body.`, 'no_body')
+      same()
       const got = await r.send('Network.getResponseBody', { requestId: id }).catch((err: unknown) => { throw noBody(err) }) as { body?: string; base64Encoded?: boolean }
-      return { ...head, ...bodyOut(got, max) }
+      same()
+      return masked({ ...head, ...bodyOut(got, max) })
     }
   }
   throw new AgentError(`Unknown action ${c.action}.`, 'bad_action')

@@ -21,6 +21,9 @@ const fake = {
   beforeCapture: () => {},
   shownId: 7,
   permRemoved: [] as Array<(p: { permissions?: string[] }) => void>,
+  detached: [] as Array<(source: { tabId?: number }, reason: string) => void>,
+  /** Runs once inside the next debugger command (a redirect that lands while a body is read). */
+  duringSend: null as null | (() => void),
 }
 const ev = () => ({ addListener() {}, removeListener() {} })
 const tab = () => ({ id: 7, windowId: 3, active: true, url: fake.url, title: 'Page' })
@@ -44,17 +47,21 @@ const tab = () => ({ id: 7, windowId: 3, active: true, url: fake.url, title: 'Pa
     detach: async () => { fake.log.push('detach') },
     sendCommand: async (_t: unknown, method: string) => {
       fake.log.push(method)
+      if (fake.duringSend && method.startsWith('Network.get')) { const f = fake.duringSend; fake.duringSend = null; f() }
       if (method === 'Network.getResponseBody') return { body: 'response body' }
       if (method === 'Network.getRequestPostData') return { postData: 'a=1' }
       return {}
     },
     onEvent: { addListener: (fn: Listener) => fake.events.push(fn), removeListener() {} },
-    onDetach: ev(),
+    onDetach: { addListener: (fn: (source: { tabId?: number }, reason: string) => void) => fake.detached.push(fn), removeListener() {} },
   },
 }
 
 const { startRecording, stopRecording, netAct } = await import('../../../packages/browser-extension/src/agent-net')
-const { agentTabs, noteFilled } = await import('../../../packages/browser-extension/src/agent-shared')
+const { agentTabs, noteFilled, walnutCheck } = await import('../../../packages/browser-extension/src/agent-shared')
+/** Runs once inside the next Walnut-page check (a redirect that lands while a request is judged). */
+let duringCheck: null | (() => void) = null
+walnutCheck.isWalnutPage = async () => { await Promise.resolve(); if (duringCheck) { const f = duringCheck; duringCheck = null; f() } return false }
 const { debuggerHeld } = await import('../../../packages/browser-extension/src/cdp')
 const { viewFrame } = await import('../../../packages/browser-extension/src/agent-view')
 
@@ -73,6 +80,8 @@ beforeEach(async () => {
   fake.url = 'https://login.example.test/'
   fake.log = []
   fake.attachWait = null
+  fake.duringSend = null
+  duringCheck = null
   fake.beforeCapture = () => {}
   fake.shownId = 7
 })
@@ -119,6 +128,57 @@ describe('network reads keep the site rules', () => {
   })
 })
 
+describe('a body read is of the request that was judged', () => {
+  it('a redirect to a site agents may not use while the request is judged reads no body', async () => {
+    fake.url = 'https://shop.example.test/'
+    await startRecording(7, rec)
+    sent('go', 'https://shop.example.test/go', 'https://shop.example.test/')
+    duringCheck = () => {
+      sent('go', 'https://bank.other.test/statement', 'https://bank.other.test/statement', { redirectResponse: { status: 302 } })
+      emit('Network.responseReceived', { requestId: 'go', response: { status: 200 } })
+    }
+    expect(['request_site_not_allowed', 'request_changed']).toContain(await code(netAct(cmd('network_body', { request_id: 'go' }), 7, rec)))
+    expect(fake.log).not.toContain('Network.getResponseBody')
+  })
+
+  it('a redirect while the browser hands the body over gives no body', async () => {
+    fake.url = 'https://shop.example.test/'
+    await startRecording(7, rec)
+    sent('go', 'https://shop.example.test/go', 'https://shop.example.test/')
+    emit('Network.responseReceived', { requestId: 'go', response: { status: 200 } })
+    await netAct(cmd('network'), 7, rec)
+    fake.duringSend = () => sent('go', 'https://bank.other.test/statement', 'https://bank.other.test/statement', { redirectResponse: { status: 302 } })
+    expect(await code(netAct(cmd('network_body', { request_id: 'go' }), 7, rec))).toBe('request_changed')
+  })
+
+  it('a listing never shows a request that came in or moved while it was judged', async () => {
+    fake.url = 'https://shop.example.test/'
+    await startRecording(7, rec)
+    sent('go', 'https://shop.example.test/go', 'https://shop.example.test/')
+    duringCheck = () => sent('go', 'https://bank.other.test/statement', 'https://bank.other.test/statement', { redirectResponse: { status: 302 } })
+    const out = await netAct(cmd('network'), 7, rec) as { requests: unknown[] }
+    expect(JSON.stringify(out.requests)).not.toContain('bank.other.test')
+  })
+})
+
+describe('every address in an answer is masked on a signed-in site', () => {
+  it('the tab\'s own address and a console message\'s text lose their query too', async () => {
+    await startRecording(7, rec)
+    await noteFilled(OWNER, 'https://login.example.test/')
+    fake.url = 'https://login.example.test/auth?pw=hunter2'
+    emit('Runtime.executionContextCreated', { context: { id: 3, origin: 'https://shop.example.test' } })
+    emit('Runtime.consoleAPICalled', { type: 'log', executionContextId: 3, args: [{ type: 'string', value: 'came from https://login.example.test/auth?pw=hunter2' }] })
+    sent('n', 'https://login.example.test/auth?pw=hunter2', 'https://login.example.test/auth?pw=hunter2', { type: 'Document' })
+    // A sign-in on login.example.test may post to another host of the site.
+    sent('p', 'https://auth.example.test/session?pw=hunter2', 'https://auth.example.test/session?pw=hunter2', { type: 'Document' })
+    for (const action of ['network', 'console']) {
+      const out = await netAct(cmd(action), 7, rec)
+      expect(JSON.stringify(out), action).not.toContain('hunter2')
+    }
+    expect(JSON.stringify(await netAct(cmd('network_body', { request_id: 'n' }), 7, rec))).not.toContain('hunter2')
+  })
+})
+
 describe('the console of a signed-in page', () => {
   it('stays unreadable after the agent moves to another page', async () => {
     await startRecording(7, rec)
@@ -138,9 +198,28 @@ describe('the console of a signed-in page', () => {
   it('reads a page\'s console when Walnut signed in nowhere', async () => {
     fake.url = 'https://shop.example.test/'
     await startRecording(7, rec)
-    emit('Runtime.consoleAPICalled', { type: 'log', args: [{ type: 'string', value: 'plain' }] })
+    emit('Runtime.executionContextCreated', { context: { id: 2, origin: 'https://shop.example.test' } })
+    emit('Runtime.consoleAPICalled', { type: 'log', executionContextId: 2, args: [{ type: 'string', value: 'plain' }] })
+    emit('Log.entryAdded', { entry: { level: 'error', text: 'Failed to load resource: 404', source: 'network', url: 'https://shop.example.test/missing.js' } })
     const out = await netAct(cmd('console'), 7, rec) as { messages: Array<{ text: string }> }
-    expect(out.messages.map((m) => m.text)).toEqual(['plain'])
+    expect(out.messages.map((m) => m.text)).toEqual(['plain', 'Failed to load resource: 404'])
+  })
+
+  it('gives no message from an unknown or opaque place, a site agents may not use, or Walnut, signed in or not', async () => {
+    fake.url = 'https://shop.example.test/'
+    await startRecording(7, rec)
+    emit('Runtime.executionContextCreated', { context: { id: 5, origin: 'null' } })
+    emit('Runtime.executionContextCreated', { context: { id: 6, origin: 'https://bank.other.test' } })
+    emit('Runtime.consoleAPICalled', { type: 'log', args: [{ type: 'string', value: 'no-context' }] })
+    emit('Runtime.consoleAPICalled', { type: 'log', executionContextId: 5, args: [{ type: 'string', value: 'opaque-frame' }] })
+    emit('Runtime.consoleAPICalled', { type: 'log', executionContextId: 6, args: [{ type: 'string', value: 'other-site-frame' }] })
+    emit('Runtime.exceptionThrown', { exceptionDetails: { text: 'exception-without-context' } })
+    emit('Log.entryAdded', { entry: { level: 'error', text: 'bank-token-123', source: 'network', url: 'https://bank.other.test/statement' } })
+    emit('Log.entryAdded', { entry: { level: 'error', text: 'walnut-token-456', source: 'network', url: 'https://walnut.example.test/api/tasks' } })
+    emit('Log.entryAdded', { entry: { level: 'warning', text: 'no-url-browser-note', source: 'intervention' } })
+    const out = await netAct(cmd('console'), 7, rec) as { messages: unknown[]; withheld: number }
+    expect(out.messages).toEqual([])
+    expect(out.withheld).toBe(7)
   })
 })
 
@@ -169,6 +248,25 @@ describe('Stop while the recording starts', () => {
     attached()
     expect(await code(starting)).toBe('not_your_tab')
     expect(debuggerHeld(7)).toBe(false)
+  })
+})
+
+describe('Cancel on the debugging bar while the debugger attaches', () => {
+  it('is kept: the start ends, and no agent records in that tab again', async () => {
+    // A tab of its own: a Cancel is for good in that tab.
+    (fake.session.agentTabs as Record<string, unknown>)['9'] = rec
+    let attached!: () => void
+    fake.attachWait = new Promise<void>((r) => { attached = r })
+    const starting = startRecording(9, rec)
+    await new Promise((r) => setTimeout(r, 5))
+    fake.detached.forEach((fn) => fn({ tabId: 9 }, 'canceled_by_user'))
+    attached()
+    expect(await code(starting)).toBe('recording_cancelled')
+    expect(debuggerHeld(9)).toBe(false)
+    fake.attachWait = null
+    const attachesBefore = fake.log.filter((m) => m === 'attach').length
+    expect(await code(startRecording(9, rec))).toBe('recording_cancelled')
+    expect(fake.log.filter((m) => m === 'attach').length).toBe(attachesBefore)
   })
 })
 

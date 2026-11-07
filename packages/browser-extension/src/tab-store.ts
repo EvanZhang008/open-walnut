@@ -23,6 +23,18 @@ export function tabStore<T>(key: string) {
     update: (tabId: number, f: (v: T) => T) => write((a) => { const v = a[String(tabId)]; if (v !== undefined) a[String(tabId)] = f(v) }),
     /** Every entry `stale` says is done, decided inside the write (a newer one set meanwhile stays). */
     sweep: (stale: (v: T) => boolean) => write((a) => { for (const k of Object.keys(a)) if (stale(a[k])) delete a[k] }),
+    /** Set an entry only if `ok` accepts what is there now, decided inside the write: true when it was set. */
+    setIf: async (tabId: number, ok: (cur: T | undefined) => boolean, v: T): Promise<boolean> => {
+      let done = false
+      await write((a) => { if (ok(a[String(tabId)])) { a[String(tabId)] = v; done = true } })
+      return done
+    },
+    /** Delete an entry only if `ok` accepts it, decided inside the write: true when it was deleted. */
+    deleteIf: async (tabId: number, ok: (cur: T) => boolean): Promise<boolean> => {
+      let done = false
+      await write((a) => { const v = a[String(tabId)]; if (v !== undefined && ok(v)) { delete a[String(tabId)]; done = true } })
+      return done
+    },
     async keys(): Promise<number[]> { await chain; return Object.keys(await all()).map(Number) },
   }
 }

@@ -23,8 +23,27 @@ export class AgentError extends Error {
  * `fromPerson`: opened from one of the person's tabs (its page can reach theirs through `opener`).
  * `viaHanded`: opened from a tab the person handed over (agent-tab-kind.ts), which agents may use as that tab.
  */
-export interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean; viaHanded?: boolean }
-export const agentTabs = tabStore<AgentTab>('agentTabs')
+export interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean; viaHanded?: boolean; grant?: string }
+const rawAgentTabs = tabStore<AgentTab>('agentTabs')
+/** One holding of a tab, named: every new hold of it gets its own, so work started for one holding can tell when it ended. */
+export const newGrant = (): string => `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+/**
+ * `grant` names the holding (review 2026-11-07): a set is always a new holding (a fresh grant
+ * unless the caller made one for it); `update` keeps the holding; `setIf` / `deleteIf` act only
+ * on the holding they name, so a pending open, a late Stop or a frame never acts on the next one.
+ */
+export const agentTabs = {
+  ...rawAgentTabs,
+  set: (tabId: number, v: AgentTab) => rawAgentTabs.set(tabId, { ...v, grant: v.grant ?? newGrant() }),
+}
+
+/**
+ * Agents switched off this many times: work that started before a switch-off does not hand a tab
+ * to an agent after it.
+ */
+let offCount = 0
+export const agentsOffCount = () => offCount
+export const noteAgentsOff = () => { offCount++ }
 
 /** The person's own tab (handed or taken): given back on close, never closed, never moved. */
 export const personsTab = (rec: AgentTab | undefined) => !!(rec?.handed || rec?.taken)

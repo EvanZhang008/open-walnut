@@ -33,6 +33,12 @@ export interface FillInput {
   waitMs: number
   requester: AgentRequester
   testRun?: string
+  /**
+   * The site the route's same-site check (and a fresh sign-in's yes) was for: a page on another
+   * site by the time the fill reads it is refused, never filled with that site's login (review
+   * 2026-11-07: the page moved from A to B between the check and the fill, and B's login went in).
+   */
+  site?: string
 }
 
 export type FillOutcome = { status: 200 | 202; body: Record<string, unknown> }
@@ -108,6 +114,12 @@ async function pick(url: string, named: string | undefined, agents: AgentsSwitch
 
 const originOf = (u: string): string => { try { return new URL(u).origin } catch { return '' } }
 
+async function onCheckedSite(input: FillInput, url: string): Promise<void> {
+  if (!input.site) return
+  const { siteOf } = await import('./where-words.js')
+  if (siteOf(url) !== input.site) throw new BrowserError(`The tab moved off ${input.site} after Walnut checked it: nothing was filled. Call fill_login again.`, 409, 'page_changed')
+}
+
 async function fill(deps: FillDeps, tab: number, url: string, item: { id: string; title: string }, values: Record<string, string>): Promise<FillOutcome> {
   // The item as it is now: its sites must still be this page's (it may have been edited or trashed since the ask).
   const { getItem } = await import('../vault/store.js')
@@ -136,9 +148,11 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
     // The page must still be where the person approved it for.
     const url = await tabUrl(deps, input.owner, input.tab)
     if (!originOf(url) || originOf(url) !== originOf(p.url)) throw new BrowserError('The tab moved to another site while the person was asked: nothing was filled.', 409, 'page_changed')
+    await onCheckedSite(input, url)
     return fill(deps, input.tab, url, p.item, w.values)
   }
   const url = await tabUrl(deps, input.owner, input.tab)
+  await onCheckedSite(input, url)
   const view = await pick(url, input.item, agents)
   const item = { id: view.id, title: view.title }
   const fields = ['username', 'password'].filter((f) => view.fields.includes(f))

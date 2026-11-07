@@ -116,10 +116,11 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
     const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
     const h = await hub()
     // Each agent tab, who holds it, and where it is (address, title, window: the task's Browser view; hub.ts cuts them to size).
-    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown; url?: unknown; title?: unknown; window?: unknown; windowState?: unknown }>)
+    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown; grant?: unknown; url?: unknown; title?: unknown; window?: unknown; windowState?: unknown }>)
       .filter((t) => typeof t?.id === 'number' && typeof t?.owner === 'string')
       .map((t) => ({
         id: t.id as number, owner: t.owner as string,
+        ...(typeof t.grant === 'string' ? { grant: t.grant } : {}),
         ...(typeof t.url === 'string' ? { url: t.url } : {}),
         ...(typeof t.title === 'string' ? { title: t.title } : {}),
         ...(t.window === 'agent' || t.window === 'person' ? { window: t.window as 'agent' | 'person' } : {}),
@@ -443,7 +444,11 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // behind their back (2026-11-07). Only the person lets one go ahead: their own request, or their
     // yes on the ask an agent's fresh_sign_in starts (fresh-sign-in.ts). A check that cannot be made
     // refuses, never lets it through (review 2026-11-07: a failed tab list skipped it).
-    let freshScope: { owner: string; device: string; tab: number; site: string } | undefined
+    let freshClaim: import('../../core/browser-control/fresh-sign-in.js').Claim | undefined
+    // The ask's id was this rule's, not the vault's: it is not passed on (decided before answering it removes it).
+    let freshAskHandled = false
+    // The site the same-site check judged: the fill refuses a page that moved off it meanwhile.
+    let checkedSite: string | undefined
     if (action === 'fill_login') {
       const fresh = await import('../../core/browser-control/fresh-sign-in.js')
       const retry = (why: string) => new h.BrowserError(`Walnut could not check whether the person has this site open in a tab of their own (${why}), so it fills nothing yet. Call fill_login again in a moment.`, 503, 'same_site_unchecked')
@@ -456,15 +461,18 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       const mine = all.find((t) => t.id === tab)
       if (!handedOnly && (!mine || typeof mine.url !== 'string')) throw retry('the browser did not list this tab')
       const theirs = mine && typeof mine.url === 'string' ? w.sameSiteTabs(all, mine.url) : []
+      if (mine && typeof mine.url === 'string') checkedSite = w.siteOf(mine.url) || undefined
       if (theirs.length && !personCaller(req)) {
         const site = w.siteOf(mine!.url!)
         const scope = { owner, device: c.device, tab: tab!, site }
         const request = typeof b.request === 'string' ? b.request : undefined
         if (request && fresh.isFreshAsk(request)) {
+          freshAskHandled = true
           const ans = await fresh.answerFreshSignIn({ ...scope, id: request, holdMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)) })
           if (!ans.ok) { if (ans.status === 202) { res.status(202).json(ans.body); return undefined } throw new h.BrowserError(String(ans.body.error), ans.status, String(ans.body.code)) }
         }
-        if (!fresh.hasGrant(scope)) {
+        freshClaim = fresh.claimGrant(scope)
+        if (!freshClaim) {
           if (b.fresh_sign_in === true) {
             log.web.info('browser fill_login asks the person for a new sign-in', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
             res.status(202).json(await fresh.askFreshSignIn({ ...scope, theirs, requester, testRun: ambientTestRun() }))
@@ -473,14 +481,23 @@ browserV1Router.post('/browser/act', (req, res, next) => {
           log.web.info('browser fill_login refused: the person has the site open', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
           throw new h.BrowserError(w.signInRefusal(site, theirs), 409, 'site_open_in_person_tab', { site, person_tabs: theirs })
         }
-        freshScope = scope
       }
     }
     if (action === 'fill_login') {
       // The vault's own ask has its own request: the new-sign-in ask's id is not passed on.
-      const vb = freshScope && typeof b.request === 'string' && (await import('../../core/browser-control/fresh-sign-in.js')).isFreshAsk(b.request) ? { ...b, request: undefined } : b
-      const out = await fillLoginAct(req, res, vb, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own } })
-      if (freshScope && (out as { filled?: unknown } | undefined)?.filled) (await import('../../core/browser-control/fresh-sign-in.js')).useGrant(freshScope)
+      const vb = freshAskHandled ? { ...b, request: undefined } : b
+      const fresh = await import('../../core/browser-control/fresh-sign-in.js')
+      let out: unknown
+      try {
+        out = await fillLoginAct(req, res, vb, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own }, site: checkedSite })
+      } catch (err) {
+        // A refusal before anything reached the page gives the yes back; a browser that did not
+        // answer may have filled, so its yes is spent.
+        if (freshClaim && err instanceof h.BrowserError && err.status < 500 && err.code !== 'browser_timeout') fresh.restoreGrant(freshClaim)
+        throw err
+      }
+      // Still waiting (the vault asks about the login itself): the yes waits with it.
+      if (freshClaim && !(out as { filled?: unknown } | undefined)?.filled) fresh.restoreGrant(freshClaim)
       return out
     }
     // A step that buys, sends or deletes the person approved: it goes to the page with the approval's mark.
@@ -584,6 +601,8 @@ async function allTabsOf(device: string, owner: string, allow: import('../../cor
 async function fillLoginAct(req: Request, res: Response, b: Record<string, unknown>, at: {
   device: string; label: string; owner: string; tab: number; requester: import('../../core/vault/agent.js').AgentRequester
   allow: import('../../core/browser-control/hub.js').WireCommand['allow']
+  /** The site the same-site check judged; the fill refuses a page on another one. */
+  site?: string
 }): Promise<unknown> {
   const h = await hub()
   const { isFollower, role } = await import('../../core/server-role.js')
@@ -597,6 +616,7 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
     const out = await fillLogin({
       owner: at.owner, tab: at.tab, item: str(b.item, 200), request: str(b.request, 100), purpose: str(b.purpose, 200),
       waitMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)), requester: at.requester, testRun: ambientTestRun(),
+      ...(at.site ? { site: at.site } : {}),
     }, {
       send: (action, args, ms) => h.send(at.device, action, args, at.allow, ms),
       agents: v.agentsSwitch, createApproval: v.createApproval, waitApproval: v.waitApproval,

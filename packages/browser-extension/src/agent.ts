@@ -18,7 +18,7 @@ import { ApiError, call, connection } from './walnut-api'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { pageCheck, reachPage } from './page-reach'
 import {
-  AgentError, WALNUT_PAGE, agentTabs, allowFor, checkPage, forgetTampered, loaded, mark, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
+  AgentError, WALNUT_PAGE, agentTabs, agentsOffCount, allowFor, checkPage, forgetTampered, loaded, mark, newGrant, noteAgentsOff, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
   type AgentTab, type WireCommand,
 } from './agent-shared'
 import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
@@ -152,15 +152,28 @@ async function act(cmd: WireCommand): Promise<unknown> {
       const owner = ownerArg(a)
       const who = typeof a.who === 'string' ? a.who : undefined
       // record: the tab records its requests and console from before its page loads (agent-net.ts).
+      // One holding from the blank tab on: if the person takes it back (Stop, the side panel) or
+      // turns agents off while it opens, the open ends there and never hands the tab back to the
+      // agent (review 2026-11-07: a pending open with record wrote its owner again after a Stop).
       let recordOut: Record<string, unknown> = {}
+      const grant = newGrant()
+      const offAt = agentsOffCount()
+      let held = false
+      const taken = () => new AgentError('The person took that tab back (or turned agents off) while it opened: it is theirs now.', 'not_your_tab')
       const t = await openInAgentWindow(ext, url, a.record === true ? async (id) => {
-        const rec = { owner, ...(who ? { who } : {}), history: [url] }
+        const rec = { owner, ...(who ? { who } : {}), history: [url], grant }
         await agentTabs.set(id, rec)
-        recordOut = await startRecording(id, rec).then(() => ({ recording: true }),
-          (err: unknown) => ({ recording: false, record_refused: { code: err instanceof AgentError ? err.code : 'browser_error', message: err instanceof Error ? err.message : String(err) } }))
+        held = true
+        recordOut = await startRecording(id, rec).then(() => ({ recording: true }), (err: unknown) => {
+          // A recording ended by the person ends the open too; any other refusal leaves a plain tab.
+          if (err instanceof AgentError && (err.code === 'not_your_tab' || err.code === 'recording_cancelled')) throw taken()
+          return { recording: false, record_refused: { code: err instanceof AgentError ? err.code : 'browser_error', message: err instanceof Error ? err.message : String(err) } }
+        })
       } : undefined)
       if (t.id === undefined) throw new AgentError('The browser did not open the tab.', 'open_failed')
-      await agentTabs.set(t.id, { owner, ...(who ? { who } : {}), history: [url] })
+      const ours = await agentTabs.setIf(t.id, (cur) => agentsOffCount() === offAt && (held ? cur?.grant === grant : cur === undefined),
+        { owner, ...(who ? { who } : {}), history: [url], grant })
+      if (!ours) { await stopRecording(t.id); throw taken() }
       await sleep(100)
       await loaded(t.id)
       // What loaded may be Walnut itself under another address (its tunnel, a host's own server).
@@ -287,7 +300,9 @@ async function viewAct(c: WireCommand): Promise<unknown> {
   const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
   const rec = await agentTabs.get(tabId)
   if (!rec) return { tab: tabId, stopped: false }
-  await agentTabs.delete(tabId)
+  // Only the holding the person saw: a tab another task took since stays its (Walnut names the owner).
+  const want = typeof c.args.owner === 'string' ? c.args.owner : undefined
+  if (!(await agentTabs.deleteIf(tabId, (cur) => !want || cur.owner === want))) return { tab: tabId, stopped: false }
   await stopRecording(tabId)
   await mark(tabId, false)
   await stopIfNoReach()
@@ -312,12 +327,12 @@ async function run(c: WireCommand): Promise<void> {
 }
 
 /** The agent tabs, who holds each, and where each is (a restarted Walnut shows them in the task's Browser view at once). */
-async function report(): Promise<Array<{ id: number; owner: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }>> {
-  const out: Array<{ id: number; owner: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }> = []
+async function report(): Promise<Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }>> {
+  const out: Array<{ id: number; owner: string; grant?: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }> = []
   for (const id of await agentTabs.keys()) {
     const o = await agentTabs.get(id)
     const t = o ? await ext.tabs.get(id).catch(() => null) : null
-    if (o && t) out.push({ id, owner: o.owner, url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)), ...(personsTab(o) ? { handed: true } : {}) })
+    if (o && t) out.push({ id, owner: o.owner, ...(o.grant ? { grant: o.grant } : {}), url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)), ...(personsTab(o) ? { handed: true } : {}) })
     else await agentTabs.delete(id)
   }
   return out
@@ -361,6 +376,7 @@ export async function agentLoop(): Promise<void> {
 
 /** The person turned agents off: Walnut hears it, and every agent tab is theirs again. */
 export async function agentOff(): Promise<void> {
+  noteAgentsOff()
   await call('POST', '/browser/off', {}, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
   for (const id of await agentTabs.keys()) { await mark(id, false); await agentTabs.delete(id); await stopRecording(id) }
 }
@@ -476,3 +492,6 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
   ext.runtime.onStartup?.addListener(() => { void agentLoop() })
   void agentLoop()
 }
+
+/** For tests: one command as the loop runs it, and the person's Browser view commands. */
+export { act as _actForTesting, viewAct as _viewActForTesting }
