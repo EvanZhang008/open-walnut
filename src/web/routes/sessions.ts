@@ -344,7 +344,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId, overrideReadiness } = req.body as {
+    const { cwd: rawCwdIn, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId, overrideReadiness, ownTaskDir } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -389,6 +389,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       agentId?: string
       /** "Start anyway" on the draft's gate bar: skip an overridable readiness refusal. */
       overrideReadiness?: boolean
+      /** No folder (`cwd` empty, this machine, a new task): the task starts in its own task
+       *  directory (the browser extension's New task has no folder picker). */
+      ownTaskDir?: boolean
     }
 
     const isWalnutAgent = walnutAgent === true
@@ -417,7 +420,11 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         return
       }
     }
-    if (!isWalnutAgent && (!rawCwd || typeof rawCwd !== 'string')) {
+    // The task's own directory: a new task on this machine with no folder named. Older clients
+    // never send the flag, so every other launch still needs its cwd.
+    const inOwnTaskDir = ownTaskDir === true && !isWalnutAgent && !host && !existingTaskId && !rawCwdIn && intent === undefined && createCwd !== true
+    const rawCwd = inOwnTaskDir ? '' : rawCwdIn
+    if (!isWalnutAgent && !inOwnTaskDir && (!rawCwd || typeof rawCwd !== 'string')) {
       res.status(400).json({ error: 'cwd is required' })
       return
     }
@@ -706,6 +713,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         // Hints the first message asks for (the side panel's object-context), beside the words.
         ...(requestedHints ? { hints: requestedHints } : {}),
+        ...(inOwnTaskDir ? { ownTaskDir: true } : {}),
         existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
         // A session that makes this request is not a person: its first line is framed (sessions/send-frame.ts).
         source: routeSource('quick-start', req.headers), requestTs,
@@ -735,7 +743,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // key is "whatever is remembered" (applied above), 'default' is the
       // explicit reset that clears it.
       const rawPickerModel = typeof rawModel === 'string' && rawModel && rawModel !== 'default' ? rawModel : undefined
-      if (!existingTaskId && !isFixWalnut && !isWalnutAgent) {
+      // A task's own directory is no folder the person picked: nothing to remember for it.
+      if (!existingTaskId && !isFixWalnut && !isWalnutAgent && !inOwnTaskDir) {
         recordLaunchPrefs(cwd, host ?? null, {
           model: rawPickerModel,
           // LaunchPrefs stores the persisted shape (explicit non-default engine

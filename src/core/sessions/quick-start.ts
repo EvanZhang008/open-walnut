@@ -144,6 +144,13 @@ export interface QuickStartParams {
    * started in it afterwards (core/workspaces/launch.ts).
    */
   deferStart?: boolean;
+  /**
+   * A new task with no folder (`cwd` empty, this machine) starts in its own task directory
+   * (src/lib/task-dir.ts), made right after the task is filed: the browser extension's New
+   * task, which has no folder picker. A host, an existing task or an Ask Walnut launch
+   * ignores it (each has its own place).
+   */
+  ownTaskDir?: boolean;
 }
 
 export class QuickStartError extends Error {
@@ -218,9 +225,12 @@ export function continuedSessionOf(task: Task): string | undefined {
 
 export async function quickStartSession(params: QuickStartParams): Promise<Task> {
   const {
-    message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
+    message, messagePrefix, host, model, mode, existingTaskId, taskMeta,
     source, requestTs = Date.now(), preassignedSessionId, walnutAgent,
   } = params;
+  let { cwd } = params;
+  // The task's own directory is known only once the task has its id (below).
+  const inOwnTaskDir = params.ownTaskDir === true && !cwd && !host && !existingTaskId && !walnutAgent;
 
   // Host gate FIRST, before any write (existing task, project metadata, addTask,
   // TASK_CREATED): a refused Start leaves nothing on the board to roll back.
@@ -528,6 +538,15 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       if (err instanceof InvalidProjectNameError) throw new QuickStartError(err.message, 400);
       if (err instanceof ProjectSourceConflictError) throw new QuickStartError(err.message, 409);
       throw err;
+    }
+    if (inOwnTaskDir) {
+      // The folder the task runs in is its own directory, named after its id, so it is made
+      // and recorded now, with the placeholder the launch auto-title looks for (its basename).
+      const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
+      const made = await ensureTaskDirOnHost(task.id, '__local__');
+      if ('error' in made) throw new QuickStartError(`The new task's own directory could not be made: ${made.error}`, made.status);
+      cwd = made.path;
+      ({ task } = await updateTask(task.id, { cwd, ...(params.taskTitle?.trim() ? {} : { title: defaultSessionTaskTitle(cwd) }) }, { source }));
     }
     // One rare follow-up write left: `unread` doesn't ride AddTaskInput. The
     // tier no longer needs one — it rode the create above.
