@@ -281,3 +281,48 @@ describe('computeLaneRows (subagents, one row per model)', () => {
     expect(computeLaneRows([lane({ status: 'failed', endedAt: T0 + 5000 }), lane({ id: 'b', status: 'done', endedAt: T0 + 6000 })], T0 + 9000)[0]!.status).toBe('failed');
   });
 });
+
+const { turnModelSlot } = await import('../../web/src/components/sessions/turn-speed-format');
+const { formatModelName } = await import('../../web/src/utils/model-name');
+
+describe('turnModelSlot (a model switched mid-turn)', () => {
+  const name = (m: string | undefined) => formatModelName(m) || undefined;
+
+  it('one model: its name, nothing pending', () => {
+    expect(turnModelSlot(final(), 'global.anthropic.claude-opus-5-5', name)).toEqual({ label: 'Opus 5.5' });
+  });
+
+  it('a turn that ran on two models names both in order', () => {
+    const speed = final({ model: 'claude-opus-5-5', models: ['claude-fable-5-1', 'claude-opus-5-5'] });
+    expect(turnModelSlot(speed, 'global.anthropic.claude-opus-5-5', name)).toEqual({ label: 'Fable 5.1 → Opus 5.5' });
+  });
+
+  it('a switch and back reads in time order and ends on the current model (A -> B -> A, A -> B -> A -> C)', () => {
+    const aba = final({ model: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5-5'] });
+    expect(turnModelSlot(aba, 'claude-opus-5-5', name)).toEqual({ label: 'Opus 5.5 → Fable 5.1 → Opus 5.5' });
+    const abac = live({ model: 'claude-sonnet-5-5', models: ['claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'] });
+    expect(turnModelSlot(abac, 'claude-sonnet-5-5', name)).toEqual({ label: 'Opus 5.5 → Fable 5.1 → Opus 5.5 → Sonnet 5.5' });
+    // Switched back to Fable after the last call: the pending note names it.
+    expect(turnModelSlot(live({ model: 'claude-opus-5-5', models: ['claude-fable-5-1', 'claude-opus-5-5'] }), 'claude-fable-5-1', name))
+      .toEqual({ label: 'Fable 5.1 → Opus 5.5', next: 'Fable 5.1' });
+  });
+
+  it('switched while the turn runs, before the next call: the old model plus the one taking over', () => {
+    // The 2026-11-06 card: Current Opus 5.5, Live opus-5-5, this turn on Fable 5.1 so far.
+    const speed = live({ model: 'claude-fable-5-1', messages: 2, outputTokens: 1758 });
+    expect(turnModelSlot(speed, 'global.anthropic.claude-opus-5-5', name)).toEqual({ label: 'Fable 5.1', next: 'Opus 5.5' });
+  });
+
+  it('a final never shows a pending switch; the 1M suffix and an alias are not a switch', () => {
+    expect(turnModelSlot(final({ model: 'claude-fable-5-1' }), 'global.anthropic.claude-opus-5-5', name).next).toBeUndefined();
+    expect(turnModelSlot(live({ model: 'claude-opus-5-5' }), 'global.anthropic.claude-opus-5-5[1m]', name).next).toBeUndefined();
+    expect(turnModelSlot(live({ model: 'claude-opus-5-5' }), 'opus', name).next).toBeUndefined();
+    // An alias of another family is a switch all the same (the picker's fallback rows save aliases).
+    expect(turnModelSlot(live({ model: 'claude-fable-5-1' }), 'opus', name).next).toBe('Opus');
+    expect(turnModelSlot(live({ model: 'claude-opus-5-5' }), undefined, name).next).toBeUndefined();
+  });
+
+  it('a turn that named no model leaves the label empty for the caller to fill', () => {
+    expect(turnModelSlot(live({ model: undefined }), 'claude-opus-5-5', name)).toEqual({ label: '' });
+  });
+});

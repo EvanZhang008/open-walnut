@@ -105,7 +105,14 @@ export class TurnSpeedMeter {
   /** Characters ÷ 4 of messages that closed without a usage count. */
   private estimatedTokens = 0;
   private messages = 0;
-  private model: string | undefined;
+  /** The turn's main-lane models in the order it ran on them, one entry per
+   *  run of calls on one model (A, B, A for a switch and back). A switch mid-turn
+   *  (the model picker's live apply) changes the model from the next call on,
+   *  so one turn can run on two models (2026-11-06: a turn on Fable 5.1 went on
+   *  on Opus 5.5 after a switch, and the row named only the first). */
+  private models: string[] = [];
+  /** The model of the turn's latest main-lane call: the one it runs on now. */
+  private lastModel: string | undefined;
   private open: OpenMessage | undefined;
   private costUsd = 0;
   /** Set when the turn began before this meter saw it (attach mid-turn), a
@@ -130,7 +137,8 @@ export class TurnSpeedMeter {
     this.outputTokens = 0;
     this.estimatedTokens = 0;
     this.messages = 0;
-    this.model = undefined;
+    this.models = [];
+    this.lastModel = undefined;
     this.open = undefined;
     this.costUsd = 0;
     this.partial = false;
@@ -171,7 +179,10 @@ export class TurnSpeedMeter {
     // shape here must not throw inside the stream handler.
     const name = typeof model === 'string' && model ? model : undefined;
     this.open = { model: name, startedAt: now, chars: 0, usage: usage && typeof usage === 'object' ? usage : {} };
-    if (!this.model && name) this.model = name;
+    // A run of calls on one model is one entry; a switch back is a new one, so the
+    // list reads in time order and always ends on the model the turn runs on now.
+    if (name && this.models[this.models.length - 1] !== name) this.models.push(name);
+    if (name) this.lastModel = name;
   }
 
   /** Any content_block_delta (text, thinking, tool input). `chars` feeds the
@@ -244,7 +255,8 @@ export class TurnSpeedMeter {
       outputTokens: this.outputTokens,
       ...(this.estimatedTokens > 0 ? { estimatedTokens: this.estimatedTokens } : {}),
       messages: this.messages,
-      ...(this.model ? { model: this.model } : {}),
+      ...(this.lastModel ? { model: this.lastModel } : {}),
+      ...(this.models.length > 1 ? { models: [...this.models] } : {}),
       inFlight: !!open,
       inFlightChars: open?.chars ?? 0,
       inFlightMs: open ? Math.max(0, now - open.startedAt) : 0,

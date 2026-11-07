@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { SessionTurnSpeed } from '@open-walnut/core';
 import { turnSpeedStore, useTurnSpeed } from '@/stores/turn-speed-store';
 import { formatModelName } from '@/utils/model-name';
-import { computeReadout, computeLaneRows } from './turn-speed-format';
+import { computeReadout, computeLaneRows, turnModelSlot } from './turn-speed-format';
 import '@/styles/session-speed.css';
 
 /**
@@ -89,9 +89,15 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
   const clock = now || Date.now();
   const r = computeReadout(speed, clock);
   const lanes = computeLaneRows(speed.lanes, clock);
-  const model = modelLabel?.(speed.model) || formatModelName(speed.model ?? session?.model) || 'Model';
+  // An ACP engine's ids are named by its catalog (modelLabel), which the record's
+  // model may not match, so only a Claude Code session is told of a pending switch.
+  const slot = turnModelSlot(speed, modelLabel ? undefined : session?.model,
+    (m) => modelLabel?.(m) || formatModelName(m) || undefined);
+  const model = slot.label || formatModelName(session?.model) || 'Model';
   const title = [
     'Measured by Walnut from the CLI stream.',
+    speed.models && speed.models.length > 1 ? 'The model was switched during this turn: the row names each model it ran on, in order; the numbers cover all of them.' : '',
+    slot.next ? `Switched to ${slot.next}: it takes over from this turn's next model call.` : '',
     'first: your message to the first visible token (a fresh session includes its startup). tok/s: CLI output tokens, thinking included, over the time the model spent generating (tool runs excluded).',
     r.partial ? 'This turn was only partly observed (server attached mid-turn), so tok/s covers what it saw.' : '',
     speed.tokenScope === 'last-call'
@@ -115,10 +121,15 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       data-testid="session-speed-readout"
       data-live={r.live ? 'true' : 'false'}
       title={title}
-      aria-label={`Turn speed: ${model}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}`}
+      aria-label={`Turn speed: ${model}${slot.next ? `, ${slot.next} from the next call` : ''}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}`}
     >
       <span className="session-speed-kicker">{r.live ? 'This turn' : 'Last turn'}</span>
       <span className="session-speed-model" data-testid="speed-model">{model}</span>
+      {slot.next && (
+        <span className="session-speed-stat session-speed-label" data-testid="speed-next-model">
+          {'\u2192'} {slot.next} next call
+        </span>
+      )}
       <span className={`session-speed-stat${r.tokensEstimated ? ' is-estimate' : ''}`} data-testid="speed-tokens">
         {r.tokens}{speed.tokenScope === 'last-call' && <span className="session-speed-label"> last call</span>}
       </span>

@@ -3023,8 +3023,13 @@ export interface SessionTurnSpeed {
   outputTokens: number;
   /** API messages finished so far. */
   messages: number;
-  /** Model of the turn's first message (the main lane). */
+  /** Model of the turn's latest main-lane message: the one it runs on now. */
   model?: string;
+  /** The turn's main-lane models in the order it ran on them, one entry per run
+   *  of calls on one model (a switch and back reads A, B, A), so the last entry
+   *  is `model`. Present only when the turn switched (a model switch mid-turn
+   *  applies from the next call). Absent on a one-model turn and from older servers. */
+  models?: string[];
   /** A message is streaming right now. */
   inFlight: boolean;
   /** Text/thinking characters streamed in the open message, for the client's

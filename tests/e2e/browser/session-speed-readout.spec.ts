@@ -453,6 +453,59 @@ test('a subagent on another model gets its own row under the main one, live then
   await expect(picker(page).getByTestId('speed-lane').getByTestId('speed-lane-model')).toHaveText('Haiku 5.5')
 })
 
+// 2026-11-06: a turn began on Fable 5.1, the user switched to Opus in this
+// picker while it ran, and the row kept naming Fable 5.1 alone for the whole
+// turn (most of it on Opus) right under "Current: Opus 5.5". A switch applies
+// from the turn's next model call: until then the row says which model takes
+// over, and once it has, it names both, in order.
+test('a model switched mid-turn: the row says it takes the next call, then names both models', async ({ page, request }) => {
+  const TASK = await newTask(request, 'Speed readout mid-turn switch')
+  await page.goto('/')
+  await page.waitForLoadState('domcontentloaded')
+  const before = await sessionIdsFor(request, TASK)
+  await startRealSession(page, WARM_UP, TASK, 'claude-fable-5-1')
+  const sid = await waitForNewSessionId(request, TASK, before)
+
+  await seedColumns(page, [sid])
+  await page.goto('/')
+  const col = columnFor(page, sid)
+  await expect(col.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
+  // 500ms pauses: the first call takes ~2.5s, then a 10s tool run leaves room for the switch.
+  await sendSpeedTurn(page, request, sid, 'chunk-delay:500 stream-partial-speed')
+  await openPicker(page, col)
+  const r = readoutIn(page)
+  await expect(r.getByTestId('speed-tokens')).toHaveText('30 tok', { timeout: 30_000 })
+  await expect(r).toHaveAttribute('data-live', 'true')
+  await expect(r.getByTestId('speed-model')).toHaveText('Fable 5.1')
+  await expect(r.getByTestId('speed-next-model')).toHaveCount(0)
+
+  // The switch, through the picker's own row, while the tool runs.
+  await picker(page).locator('.model-picker-col-models .model-picker-row')
+    .filter({ has: page.locator('.model-picker-row-name', { hasText: /^Opus$/ }) }).click()
+  await expect(picker(page)).toHaveCount(0)
+  await openPicker(page, col)
+  // Still the same turn, still all on Fable so far: the row says Opus takes the next call.
+  await expect(r).toHaveAttribute('data-live', 'true')
+  await expect(r.getByTestId('speed-model')).toHaveText('Fable 5.1')
+  await expect(r.getByTestId('speed-next-model')).toHaveText(/^\u2192 Opus.* next call$/, { timeout: 10_000 })
+  await clipShot(page, 'switch-pending')
+
+  // The answer ran on Opus: the row names both models, in order, and the pending note is gone.
+  await expect(r).toHaveAttribute('data-live', 'false', { timeout: 60_000 })
+  await expect(r.getByTestId('speed-model')).toHaveText(/^Fable 5\.1 \u2192 Opus/)
+  await expect(r.getByTestId('speed-next-model')).toHaveCount(0)
+  await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
+  await clipShot(page, 'switch-final')
+  await closePicker(page)
+
+  // Cold load: the record keeps both.
+  await page.reload()
+  const colAfter = columnFor(page, sid)
+  await expect(colAfter.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
+  await openPicker(page, colAfter)
+  await expect(readoutIn(page).getByTestId('speed-model')).toHaveText(/^Fable 5\.1 \u2192 Opus/, { timeout: 30_000 })
+})
+
 test('a session with no measured turn shows no readout', async ({ page, request }) => {
   const SID = 'pw-normal-session'
   // The premise: this seeded session has never run a turn this server measured.

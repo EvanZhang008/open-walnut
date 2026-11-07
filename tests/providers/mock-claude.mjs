@@ -2180,8 +2180,10 @@ if (outputFormat === 'stream-json') {
             await pause(gap * 20);
             emitStream({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: 'ok' }] }, session_id: outputSessionId });
           }
-          // Message 2: the answer.
-          emitStream(wrap({ type: 'message_start', message: { id: msg2, role: 'assistant', content: [], model, usage: { input_tokens: 14, cache_read_input_tokens: 812, cache_creation_input_tokens: 0, output_tokens: 1 } } }));
+          // Message 2: the answer. A model switch made during the tool run
+          // (apply_flag_settings) applies from this call on, as in the real CLI.
+          const model2 = modelFlag || model;
+          emitStream(wrap({ type: 'message_start', message: { id: msg2, role: 'assistant', content: [], model: model2, usage: { input_tokens: 14, cache_read_input_tokens: 812, cache_creation_input_tokens: 0, output_tokens: 1 } } }));
           await pause();
           emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
           for (const t of second) {
@@ -2191,7 +2193,7 @@ if (outputFormat === 'stream-json') {
           emitStream(wrap({ type: 'content_block_stop', index: 0 }));
           emitStream({
             type: 'assistant',
-            message: { id: msg2, role: 'assistant', model, content: [{ type: 'text', text: second.join('') }], stop_reason: 'end_turn', usage: { input_tokens: 14, output_tokens: 20 } },
+            message: { id: msg2, role: 'assistant', model: model2, content: [{ type: 'text', text: second.join('') }], stop_reason: 'end_turn', usage: { input_tokens: 14, output_tokens: 20 } },
             session_id: outputSessionId,
           });
           emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 14, cache_read_input_tokens: 812, output_tokens: 20 } }));

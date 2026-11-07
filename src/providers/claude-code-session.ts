@@ -1246,6 +1246,7 @@ export class ClaudeCodeSession {
     const tps = tokensPerSecond(speed)
     log.session.info('turn speed', {
       sessionId: sid, taskId: this.taskId, model: speed.model,
+      ...(speed.models ? { models: speed.models } : {}),
       ttftMs: speed.ttftMs, generationMs: speed.generationMs,
       outputTokens: speed.turnOutputTokens ?? speed.outputTokens,
       tokensPerSecond: tps === null ? null : Math.round(tps * 10) / 10,

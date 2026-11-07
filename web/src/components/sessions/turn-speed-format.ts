@@ -142,6 +142,56 @@ export function computeReadout(speed: SessionTurnSpeed, now: number): SpeedReado
  *     excluded), "~" while the tokens are;
  *   - time: the first start to the last end (or now while one runs).
  */
+export interface TurnModelSlot {
+  /** Every model the turn ran on, in order: "Opus 5.5", "Fable 5.1 → Opus 5.5";
+   *  "" when the turn named none (the caller falls back to the session's model). */
+  label: string;
+  /** While the turn runs: the model a switch made after its latest call takes
+   *  from the next call on, when it differs from that call's. */
+  next?: string;
+}
+
+/** A display name without its window suffix: "Opus 5.5 1M" and "Opus 5.5" are one model. */
+const baseName = (name: string) => name.replace(/\s+1M$/i, '');
+const familyOf = (name: string) => name.split(/\s+/)[0]!.toLowerCase();
+const hasVersion = (name: string) => /\d/.test(baseName(name));
+
+/** Two display names of one model? An alias with no version ("Opus") matches
+ *  any version of its family, so a session saved as an alias never reads as a
+ *  switch away from the version the CLI resolved it to. */
+function sameModel(a: string, b: string): boolean {
+  if (hasVersion(a) && hasVersion(b)) return baseName(a) === baseName(b);
+  return familyOf(a) === familyOf(b);
+}
+
+/**
+ * The model slot of the main row. A switch in the model picker applies from
+ * the turn's next model call (2026-11-06: a turn that began on Fable 5.1 was
+ * switched to Opus 5.5 mid-turn; the row went on naming Fable 5.1 alone while
+ * the picker above it said Opus 5.5). So the slot names every model the turn
+ * ran on, and while it runs, the switched-to model still waiting for its call.
+ * `sessionModel` is the session's current model (its record); pass it only
+ * when `name` can read it (a Claude Code id).
+ */
+export function turnModelSlot(
+  speed: Pick<SessionTurnSpeed, 'model' | 'models' | 'final'>,
+  sessionModel: string | undefined,
+  name: (model: string | undefined) => string | undefined,
+): TurnModelSlot {
+  const ids = speed.models?.length ? speed.models : (speed.model ? [speed.model] : []);
+  const labels: string[] = [];
+  for (const id of ids) {
+    const label = name(id) || id;
+    if (labels[labels.length - 1] !== label) labels.push(label);
+  }
+  const label = labels.join(' \u2192 ');
+  if (speed.final || !speed.model || !sessionModel) return { label };
+  const now = name(speed.model);
+  const switched = name(sessionModel);
+  if (!now || !switched || sameModel(now, switched)) return { label };
+  return { label, next: switched };
+}
+
 export interface LaneReadout {
   /** Row key: the model id, or the lane id when the model is not known yet. */
   key: string;

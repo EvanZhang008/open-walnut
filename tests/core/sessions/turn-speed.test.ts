@@ -718,3 +718,77 @@ describe('tokensPerSecond', () => {
     expect(tokensPerSecond({ outputTokens: 1, generationMs: 4 })).toBe(250);
   });
 });
+
+/**
+ * A model switch mid-turn (the picker's live apply) takes effect from the
+ * turn's next model call, so one turn can run on two models. 2026-11-06: a turn
+ * began on Fable 5.1, the user switched to Opus 5.5 while it ran, and the row
+ * kept naming Fable 5.1 for the rest of the turn, all of it on Opus.
+ */
+describe('TurnSpeedMeter: a turn that ran on two models', () => {
+  const FABLE = 'claude-fable-5-1';
+  const OPUS = 'claude-opus-5-5';
+
+  function call(m: TurnSpeedMeter, at: number, model: string, tokens: number): void {
+    m.messageStart(at, model, { input_tokens: 10 });
+    m.delta(at + 100, 20);
+    m.messageUsage({ output_tokens: tokens });
+    m.messageStop(at + 1000);
+  }
+
+  it('names the latest call\'s model and lists every model in first-use order', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(0);
+    call(m, 1000, FABLE, 1178);
+    call(m, 5000, FABLE, 580);
+    // Before the switch reaches a call, the turn is truthfully one model.
+    expect(m.snapshot(6500)).toMatchObject({ model: FABLE, outputTokens: 1758 });
+    expect(m.snapshot(6500).models).toBeUndefined();
+    call(m, 9000, OPUS, 465);
+    const live = m.snapshot(10_500);
+    expect(live.model).toBe(OPUS);
+    expect(live.models).toEqual([FABLE, OPUS]);
+    call(m, 12_000, OPUS, 822);
+    const final = m.finish(14_000, { turnOutputTokens: 1178 + 580 + 465 + 822, durationMs: 14_000 });
+    expect(final.model).toBe(OPUS);
+    expect(final.models).toEqual([FABLE, OPUS]);
+    expect(final.partial).toBeUndefined();
+  });
+
+  it('a switch and back lists the runs in time order, ending on the current model; the next turn starts clean', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(0);
+    call(m, 1000, OPUS, 10);
+    call(m, 2000, OPUS, 10);
+    call(m, 3000, FABLE, 10);
+    call(m, 5000, OPUS, 10);
+    expect(m.snapshot(7000)).toMatchObject({ model: OPUS, models: [OPUS, FABLE, OPUS] });
+    m.finish(8000, {});
+    m.startTurn(9000);
+    call(m, 10_000, FABLE, 10);
+    const next = m.snapshot(11_500);
+    expect(next.model).toBe(FABLE);
+    expect(next.models).toBeUndefined();
+  });
+
+  // Class guard: no field of the turn's main row may describe only its first
+  // call. After a turn whose calls ran on two models, every top-level string
+  // field of the snapshot that names a model must name the latest one, and the
+  // first model may appear only in the `models` list. A new field copied from
+  // the first call (a provider, a region, a window) fails here.
+  it('guard: no snapshot field reports the first call alone', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(0);
+    call(m, 1000, FABLE, 10);
+    call(m, 3000, OPUS, 10);
+    for (const snap of [m.snapshot(4500), m.finish(5000, { turnOutputTokens: 20 })]) {
+      for (const [key, value] of Object.entries(snap)) {
+        if (key === 'models' || key === 'lanes') continue;
+        expect(JSON.stringify(value) ?? '', `field ${key} still names the first call's model`).not.toContain(FABLE);
+      }
+      expect(snap.models).toEqual([FABLE, OPUS]);
+      // The list always ends on the model the turn runs on now.
+      expect(snap.models![snap.models!.length - 1]).toBe(snap.model);
+    }
+  });
+});
