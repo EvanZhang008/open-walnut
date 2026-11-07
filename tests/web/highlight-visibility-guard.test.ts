@@ -185,6 +185,7 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   // Reserves the width of the other label (Show/Hide, Copy/Copied) so the button never resizes (8c4167e3b).
   'web/src/styles/corner-stack.css :: :is(.notice-details-toggle, .notice-cmd-copy-words)::after': SLOT,
   'web/src/components/tasks/LinkHoverCard.tsx :: inline (1)': PLACING,
+  'web/src/popout/ExtRelay.tsx :: inline (1)': PLACING,
   'web/src/components/passwords/ItemEditor.tsx :: inline (1)': PLACING,
   'web/src/components/passwords/VaultBrowser.tsx :: inline (2)': PLACING,
   'web/src/components/content/CeoComposer.tsx :: inline (1)': PLACING,

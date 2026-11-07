@@ -8,11 +8,12 @@
  * What it does not do here: open Home's detail pane or session columns. A row opens in the frame
  * (`onOpen`): a task's conversation, or its detail for one with none yet.
  */
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useOrdering } from '@/hooks/useOrdering';
 import { resolveTaskSessionId, taskOfSession } from '@/utils/session-status';
@@ -36,8 +37,7 @@ export default function ExtHomeTasks({ onOpen }: { onOpen: OpenTask }) {
   const onCreate = useCallback((input: { title: string; priority: string; project?: string }) => create({ title: input.title, priority: input.priority, project: input.project }), [create]);
   // A row's click (TodoPanel handleTaskClick, the search rows through it): a task with a session
   // opens its conversation (onOpenSession, then a focus with `openDetail: false`, left alone here).
-  const tasksRef = useRef(tasks);
-  tasksRef.current = tasks;
+  const tasksRef = useCommittedRef(tasks);
   const onOpenSession = useCallback((sessionId: string) => {
     const task = taskOfSession(tasksRef.current, sessionId);
     if (task) onOpen(task, { sessionId });
