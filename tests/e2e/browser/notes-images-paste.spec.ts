@@ -19,8 +19,11 @@ test('a picture pasted from the clipboard is saved beside the note and drawn', a
   await page.evaluate(() => document.addEventListener('paste', (e) => {
     (window as unknown as { pasteTypes: string[] }).pasteTypes = [...(e.clipboardData?.types ?? [])]
   }, true))
-  await clickCaretInto(editor.locator('p', { hasText: 'Image forms' }))
-  await page.keyboard.press('End')
+  // The line's end, by a click at its right edge: End on macOS scrolls to the
+  // note's end and leaves the caret where it was.
+  const line = editor.locator('p', { hasText: 'Image forms' })
+  const box = (await line.boundingBox())!
+  await clickCaretInto(line, { position: { x: box.width - 4, y: box.height / 2 } })
   // What a screenshot tool leaves on the clipboard: a PNG and nothing else.
   const wrote = await page.evaluate(async (b64) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))

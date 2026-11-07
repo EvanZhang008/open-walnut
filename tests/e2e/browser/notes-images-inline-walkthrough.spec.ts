@@ -52,8 +52,11 @@ test('paste and tall zoom walkthrough', async ({ page }) => {
   await page.waitForTimeout(1200)
 
   // A screenshot on the clipboard, pasted into the note.
-  await clickCaretInto(editor.locator('p', { hasText: 'Paste here' }))
-  await page.keyboard.press('End')
+  // The line's end, by a click at its right edge: End on macOS scrolls to the
+  // note's end and leaves the caret where it was.
+  const line = editor.locator('p', { hasText: 'Paste here' })
+  const box = (await line.boundingBox())!
+  await clickCaretInto(line, { position: { x: box.width - 4, y: box.height / 2 } })
   const wrote = await page.evaluate(async (b64) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
     try {
@@ -65,6 +68,8 @@ test('paste and tall zoom walkthrough', async ({ page }) => {
     await page.keyboard.press('ControlOrMeta+v')
     await expect.poll(() => editor.locator('img').evaluateAll((imgs) =>
       (imgs as HTMLImageElement[]).filter((i) => i.complete && i.naturalWidth === 320).length), { timeout: 10_000 }).toBe(1)
+    // Drawn where it was pasted, on screen.
+    await expect(editor.locator('img.notes-wikiembed-img')).toBeInViewport()
   }
   await page.waitForTimeout(2000)
 
