@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { presetPanelDesign } from './status-section-helpers'
 
 export interface PanelLab {
   ctx: BrowserContext
@@ -68,6 +69,10 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
   // The panel's view choices (the page it was left on, the agent, Home's tab) are mirrored to
   // ui-prefs, and the fixture serves every spec: this browser keeps them to itself.
   await ctx.route('**/api/ui-prefs', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}' }))
+  // The extension's first page is Home's own task panel in Home's layout. Home opens By project
+  // for a new person (2026-11-06); these specs check the Flat status rows, the layout the person
+  // picked on his own Home, so the browser starts on Flat as his does (ui-prefs stay here, above).
+  await presetPanelDesign(ctx, 'status')
   let worker = ctx.serviceWorkers()[0]
   if (!worker) worker = await ctx.waitForEvent('serviceworker')
   worker.on('console', (m) => { if (m.type() === 'error') console.log(`[background error] ${m.text()}`) })

@@ -36,7 +36,8 @@ const stamp = Date.now().toString(36)
 const WORK_TITLE = 'Lab Shop (work)'
 const WORK_USER = 'alex.work@lab.test'
 /** How long the slowed live vault answer takes (the R2-9 case). */
-const SLOW_MS = 8000
+// Long enough that a loaded runner (load 90+, 2026-11-07) still opens the drawer before the answer comes.
+const SLOW_MS = 30_000
 
 let lab: PanelLab
 let itemId = ''

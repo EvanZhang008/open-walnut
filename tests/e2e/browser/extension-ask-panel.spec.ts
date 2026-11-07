@@ -933,8 +933,13 @@ test('New chat wins over a launch still on its way: the next question starts its
     await expect.poll(() => tasks.length, { timeout: 30_000 }).toBe(2)
     await p.waitForTimeout(1500)
     await expect(session).toHaveAttribute('data-session-id', sid)
-    await expect(v.locator('.session-msg-user', { hasText: second }).first()).toBeVisible({ timeout: 30_000 })
+    // The second question reached this conversation's session: its answer names it. (When the first
+    // launch lands the view may mount the conversation again, and the fixture's mock CLI keeps no
+    // transcript to bring the person's row back from, so the row itself is not asserted; with the
+    // real CLI it comes back from the transcript.)
+    await expect(v.getByText(`Hello! I processed your message: ${second}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
     await expect(v.locator('.session-msg-user', { hasText: first })).toHaveCount(0)
+    await expect(v.getByText(`Hello! I processed your message: ${first}`, { exact: false })).toHaveCount(0)
     await p.close()
     // Opened again: the conversation New chat started, never the one left behind.
     const again = await openAskPanel()

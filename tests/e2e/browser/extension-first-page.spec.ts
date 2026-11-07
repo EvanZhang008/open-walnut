@@ -35,7 +35,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { askView, openPanel, selectText, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
 import { holdVaultLock } from './vault-lock'
-import { presetPanelDesign } from './status-section-helpers'
 import { ensureVaultSetUp } from './vault-session-helper'
 
 test.describe.configure({ mode: 'serial' })
@@ -90,10 +89,6 @@ async function openFirstPage(): Promise<Page> {
 test.beforeAll(async ({}, info) => {
   test.setTimeout(400_000)
   lab = await startPanelLab(String(info.project.use.baseURL ?? 'http://localhost:3457'), 'first-page')
-  // The first page is Home's own task panel in Home's layout. Home now opens By project for a new
-  // person (main, 2026-11-06); this spec checks the Flat status rows, the layout the person picked
-  // on his own Home, so it picks Flat as he did (the harness keeps ui-prefs to this browser).
-  await presetPanelDesign(lab.ctx, 'status')
   // A person who has Passwords: the key and the Passwords entry read a locked vault, never "set it up".
   await ensureVaultSetUp(lab.doc, lab.base)
   const post = async (data: Record<string, unknown>): Promise<string> => {
