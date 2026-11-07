@@ -243,16 +243,30 @@ describe('placeAskChip', () => {
     expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(756);
   });
 
-  it('a table cell never puts it right of the cell (the next cell\'s words are there)', () => {
-    const cell = box(20, 100, 200, 120);
-    const spot = placeAskChip(cell, box(20, 100, 199, 120), HOST, true);
-    expect(spot.left + ASK_CHIP_WIDTH).toBeLessThanOrEqual(200);
-    expect(spot.top).toBeGreaterThanOrEqual(120);
-  });
-
   it('no known last line: still never over the block when there is room beside it', () => {
     const block = box(20, 100, 600, 180);
     expect(overlaps(block, placeAskChip(block, null, HOST))).toBe(false);
+  });
+
+  it('a full-width block with a full last line: under it when the gap is clear, over it when the next line is in the way', () => {
+    const block = box(20, 200, 740, 260);
+    const last = box(20, 240, 739, 260);
+    const clearBelow = placeAskChip(block, last, HOST, { near: [box(20, 300, 700, 320)] });
+    expect(clearBelow.top).toBeGreaterThanOrEqual(260);
+    const tight = [box(20, 168, 740, 188), box(20, 270, 740, 290)];
+    const spot = placeAskChip(block, last, HOST, { near: [tight[1], box(20, 150, 740, 170)] });
+    // Under covers the next line (270..290 against 262..282); over (178..198) is clear of the line before (150..170).
+    expect(spot.top + ASK_CHIP_HEIGHT).toBeLessThanOrEqual(200);
+    expect(overlaps(box(20, 150, 740, 170), spot)).toBe(false);
+    // Both ways covered: the one covering less.
+    const least = placeAskChip(block, last, HOST, { near: tight });
+    expect([262, 178]).toContain(least.top);
+  });
+
+  it('a last line past the view\'s right edge (a wide code block): not after it, clamped over its words', () => {
+    const block = box(20, 100, 1200, 120);
+    const spot = placeAskChip(block, box(20, 100, 900, 120), HOST);
+    expect(spot.top).toBeGreaterThanOrEqual(120);
   });
 
   it('a last line below the view: not after it (unseen), beside or around the block instead', () => {

@@ -108,7 +108,8 @@ export const ASKABLE_BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, pre, block
 
 /**
  * The block under the pointer, when it is one worth asking about: inside `body`,
- * not part of the thread layer or a card, and holding some text. `li` wins over
+ * not part of the thread layer or a card, and holding some text; a table cell
+ * gives its row. `li` wins over
  * the `p` inside it only when the `p` is the whole item (the common markdown
  * shape), so the Ask covers the item the reader sees.
  */
@@ -118,6 +119,10 @@ export function askableBlockOf(target: Element | null, body: Element): Element |
   const block = target.closest(ASKABLE_BLOCK_SELECTOR);
   if (!block || !body.contains(block) || block === body) return null;
   if (!(block.textContent ?? '').trim()) return null;
+  // A table's cell asks about its row: a cell alone ("Mon", "14 ms") says
+  // little, and a row leaves room for the Ask beside the table (2026-11-07).
+  const row = block.closest('tr');
+  if (row && body.contains(row)) return row;
   const parent = block.parentElement;
   if (block.tagName === 'P' && parent?.tagName === 'LI' && parent.children.length === 1) return parent;
   return block;
@@ -138,58 +143,129 @@ export const ASK_CHIP_HEIGHT = 20;
 const ASK_CHIP_GAP = 6;
 
 /**
- * Where the hovered block's inline Ask goes, never over the block's words when
- * the view shows a place for it:
+ * Where the hovered block's inline Ask goes, off every word it can see: the
+ * block's own and the lines just before and after it (`near`):
  *  - after the end of its last line, when that line is on screen and leaves room
- *    for it in the block;
- *  - else right of the block, when the block is not a table cell (a cell's right
- *    is the next cell's text) and the view has room there;
- *  - else under the block's right end (the gap before the next block), else over
- *    its first line's right end, whichever is on screen;
- *  - else (a block taller than the view) on its top-right corner, kept on screen.
+ *    for it inside both the block and the view;
+ *  - else right of the block, when the view has room there (a table row's
+ *    right is its table's);
+ *  - else under the block's right end, else over its first line's right end, when
+ *    that gap is on screen and clear of the next (previous) line;
+ *  - else whichever of those two covers less of that line (the gap between two
+ *    blocks is often narrower than the chip), and a block taller than the view on
+ *    both ends gets its top-right corner, kept on screen.
  * `lastLine`: the box of the block's last line of text, null when not known.
  * 2026-11-07: it always sat on the block's top-right corner, over the last word
  * of a full first line ("27" of "2026-10-27"), and a drag that started there
  * selected nothing.
  */
 export function placeAskChip(
-  block: HostRect, lastLine: HostRect | null, host: { width: number; height: number }, cell = false,
+  block: HostRect, lastLine: HostRect | null, host: { width: number; height: number },
+  opts: { near?: HostRect[] } = {},
 ): { top: number; left: number } {
   const H = ASK_CHIP_HEIGHT;
+  const W = ASK_CHIP_WIDTH;
+  const near = opts.near ?? [];
   const onScreen = (top: number) => top >= 0 && top + H <= host.height;
   const clampTop = (top: number) => Math.max(0, Math.min(top, host.height - H));
-  const clampLeft = (left: number) => Math.max(0, Math.min(left, host.width - ASK_CHIP_WIDTH - 4));
+  const clampLeft = (left: number) => Math.max(0, Math.min(left, host.width - W - 4));
   const at = (top: number, left: number) => ({ top: Math.round(top), left: Math.round(left) });
+  const covered = (top: number, left: number) => near.reduce((sum, r) => {
+    const w = Math.min(left + W, r.right) - Math.max(left, r.left);
+    const h = Math.min(top + H, r.bottom) - Math.max(top, r.top);
+    return sum + (w > 0 && h > 0 ? w * h : 0);
+  }, 0);
   const centred = (line: HostRect) => line.top + (line.bottom - line.top - H) / 2;
-  if (lastLine && onScreen(centred(lastLine)) && lastLine.right + ASK_CHIP_GAP + ASK_CHIP_WIDTH <= block.right) {
-    return at(centred(lastLine), clampLeft(lastLine.right + ASK_CHIP_GAP));
+  if (lastLine && onScreen(centred(lastLine))) {
+    const left = lastLine.right + ASK_CHIP_GAP;
+    if (left + W <= block.right && left + W + 4 <= host.width) return at(centred(lastLine), left);
   }
-  if (!cell && block.right + ASK_CHIP_GAP + ASK_CHIP_WIDTH + 4 <= host.width) {
+  if (block.right + ASK_CHIP_GAP + W + 4 <= host.width) {
     const first = { ...block, bottom: Math.min(block.bottom, block.top + H) };
     const line = lastLine && onScreen(centred(lastLine)) ? lastLine : first;
     return at(clampTop(centred(line)), block.right + ASK_CHIP_GAP);
   }
-  const right = clampLeft(block.right - ASK_CHIP_WIDTH);
-  if (onScreen(block.bottom + 2)) return at(block.bottom + 2, right);
-  if (onScreen(block.top - H - 2)) return at(block.top - H - 2, right);
-  return at(clampTop(block.top), right);
+  const right = clampLeft(block.right - W);
+  const spots = [block.bottom + 2, block.top - H - 2].filter(onScreen);
+  if (!spots.length) return at(clampTop(block.top), right);
+  const clear = spots.find((top) => covered(top, right) === 0);
+  if (clear !== undefined) return at(clear, right);
+  return at(spots.reduce((a, b) => (covered(b, right) < covered(a, right) ? b : a)), right);
 }
 
-/** The block's last line of text, in the coordinates of its own document: the
- *  lowest line's box, from the left of its first piece to the right of its last. */
-export function lastLineRect(block: Element): DOMRect | null {
-  const range = block.ownerDocument.createRange();
-  range.selectNodeContents(block);
-  const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
-  if (!rects.length) return null;
-  const bottom = Math.max(...rects.map((r) => r.bottom));
-  // The lowest line's pieces: their middles lie within its height of its foot.
-  const lineHeight = Math.min(...rects.filter((r) => r.bottom === bottom).map((r) => r.height));
-  const lowest = rects.filter((r) => r.top + r.height / 2 > bottom - lineHeight);
-  const left = Math.min(...lowest.map((r) => r.left));
-  const right = Math.max(...lowest.map((r) => r.right));
-  const top = Math.min(...lowest.map((r) => r.top));
+/** Text nodes worth a line box: not blank, not inside the thread layer or a card. */
+function wordsNode(n: Node): boolean {
+  if (!(n.nodeValue ?? '').trim()) return false;
+  return !n.parentElement?.closest('.fv-thread-layer, .thread-card');
+}
+
+/** One line's box from line-box pieces: the first or the last line of them. */
+function lineOf(rects: DOMRect[], which: 'first' | 'last'): DOMRect | null {
+  const pieces = rects.filter((r) => r.width > 0 && r.height > 0);
+  if (!pieces.length) return null;
+  const line = which === 'last'
+    ? (() => {
+      const bottom = Math.max(...pieces.map((r) => r.bottom));
+      const lh = Math.min(...pieces.filter((r) => r.bottom === bottom).map((r) => r.height));
+      return pieces.filter((r) => r.top + r.height / 2 > bottom - lh);
+    })()
+    : (() => {
+      const top = Math.min(...pieces.map((r) => r.top));
+      const lh = Math.min(...pieces.filter((r) => r.top === top).map((r) => r.height));
+      return pieces.filter((r) => r.top + r.height / 2 < top + lh);
+    })();
+  const left = Math.min(...line.map((r) => r.left));
+  const right = Math.max(...line.map((r) => r.right));
+  const top = Math.min(...line.map((r) => r.top));
+  const bottom = Math.max(...line.map((r) => r.bottom));
   return new DOMRect(left, top, right - left, bottom - top);
+}
+
+function textRects(nodes: Node[]): DOMRect[] {
+  const out: DOMRect[] = [];
+  for (const n of nodes) {
+    const range = n.ownerDocument!.createRange();
+    range.selectNodeContents(n);
+    out.push(...Array.from(range.getClientRects()));
+  }
+  return out;
+}
+
+/** The block's last line of text, in the coordinates of its own document. Text
+ *  boxes only: a range over the block also returns its child blocks' whole
+ *  boxes (a list item's paragraph, a nested list), as wide as the block. */
+export function lastLineRect(block: Element): DOMRect | null {
+  const walker = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  const nodes: Node[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) if (wordsNode(n)) nodes.push(n);
+  // The last few text nodes hold the last line (a line seldom spans more).
+  return lineOf(textRects(nodes.slice(-8)), 'last');
+}
+
+/** The lines of text just before and just after the block inside `body` (the
+ *  words the chip must not cover when it goes over or under the block). */
+export function neighbourLines(block: Element, body: Element): DOMRect[] {
+  const doc = block.ownerDocument;
+  const out: DOMRect[] = [];
+  const walker = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  walker.currentNode = block;
+  for (let n = walker.previousNode(); n; n = walker.previousNode()) {
+    if (!wordsNode(n)) continue;
+    const line = lineOf(textRects([n]), 'last');
+    if (line) out.push(line);
+    break;
+  }
+  // After the block's own text: from its last descendant on.
+  let last: Node = block;
+  while (last.lastChild) last = last.lastChild;
+  walker.currentNode = last;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (block.contains(n) || !wordsNode(n)) continue;
+    const line = lineOf(textRects([n]), 'first');
+    if (line) out.push(line);
+    break;
+  }
+  return out;
 }
 
 /** A box in the file view's coordinates (the host's top-left is 0,0). */

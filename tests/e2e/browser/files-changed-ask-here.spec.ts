@@ -111,37 +111,60 @@ async function textRects(root: Locator, phrase: string, nth = 0, scroll = true):
 }
 
 /** Hovers each block of `root` on screen (on its first word, as a reader
- *  reaches for it) and checks the inline Ask lands off that block's words.
- *  Returns how many
- *  blocks were looked at, and how many of them wrap (a full first line, where
- *  the chip covered its last word: 2026-11-07). */
+ *  reaches for it) and checks the inline Ask shows next to that block and off
+ *  every word on screen: the block's own and its neighbours'. Returns how many
+ *  blocks were looked at, and how many of them wrap (a full first line, where the chip covered
+ *  its last word: 2026-11-07). */
 async function chipOffWords(page: Page, view: Locator, root: Locator): Promise<{ seen: number; wrapped: number }> {
   const chip = view.locator('.fv-ask-block')
   const vh = page.viewportSize()!.height
-  const blocks = root.locator('p, h1, h2, h3, td')
-  const n = Math.min(await blocks.count(), 16)
+  type Box = { left: number; right: number; top: number; bottom: number }
+  // Every line box of text in the view (the chip is outside `root`, or in its layer: skipped).
+  const allWords = async (): Promise<Box[]> => (await root.evaluate((el) => {
+    const out: Array<{ left: number; right: number; top: number; bottom: number }> = []
+    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!(n.nodeValue ?? '').trim() || n.parentElement?.closest('.fv-thread-layer, .thread-card')) continue
+      const r = el.ownerDocument.createRange()
+      r.selectNodeContents(n)
+      for (const q of Array.from(r.getClientRects())) {
+        if (q.width > 0 && q.height > 0) out.push({ left: q.left, right: q.right, top: q.top, bottom: q.bottom })
+      }
+    }
+    return out
+  }))
+  const blocks = root.locator('p, li, h1, h2, h3, tr, pre')
+  const n = Math.min(await blocks.count(), 20)
   let seen = 0
   let wrapped = 0
   for (let i = 0; i < n; i++) {
-    const words = (await blocks.nth(i).evaluate((el) => {
+    const own = (await blocks.nth(i).evaluate((el) => {
       const r = el.ownerDocument.createRange()
       r.selectNodeContents(el)
-      return Array.from(r.getClientRects()).filter((q) => q.width > 0 && q.height > 0)
-        .map((q) => ({ left: q.left, right: q.right, top: q.top, bottom: q.bottom }))
+      const b = el.getBoundingClientRect()
+      return {
+        box: { left: b.left, right: b.right, top: b.top, bottom: b.bottom },
+        lines: Array.from(r.getClientRects()).filter((q) => q.width > 0 && q.height > 0 && q.height < 40)
+          .map((q) => ({ left: q.left, right: q.right, top: q.top, bottom: q.bottom })),
+      }
     }))
-    if (!words.length || words[0].top < 80 || words[words.length - 1].bottom > vh - 40) continue
-    const first = words[0]
+    const { box, lines } = own
+    if (!lines.length || box.top < 80 || box.bottom > vh - 40) continue
+    const first = lines[0]
     await page.mouse.move(first.left + 3, (first.top + first.bottom) / 2, { steps: 2 })
     await expect(chip).toBeVisible({ timeout: 3_000 })
-    // The chip follows the pointer a frame later.
-    await page.waitForTimeout(150)
+    // Settled where it goes for THIS block (it follows the pointer a frame later).
+    await expect.poll(async () => {
+      const c = await chip.boundingBox()
+      return !!c && c.y + c.height >= box.top - 30 && c.y <= box.bottom + 30 && c.x <= box.right + 60 && c.x + c.width >= box.left
+    }, { message: `the inline Ask settles beside block ${i}`, timeout: 3_000 }).toBe(true)
     const c = (await chip.boundingBox())!
-    for (const w of words) {
+    for (const w of await allWords()) {
       const hit = c.x < w.right - 0.5 && c.x + c.width > w.left + 0.5 && c.y < w.bottom - 0.5 && c.y + c.height > w.top + 0.5
-      expect(hit, `the inline Ask on block ${i} covers its words (chip ${JSON.stringify(c)}, words ${JSON.stringify(w)})`).toBe(false)
+      expect(hit, `the inline Ask for block ${i} covers words (chip ${JSON.stringify(c)}, words ${JSON.stringify(w)})`).toBe(false)
     }
     seen++
-    if (new Set(words.map((w) => Math.round(w.top))).size > 1) wrapped++
+    if (new Set(lines.map((w) => Math.round(w.top))).size > 1) wrapped++
   }
   return { seen, wrapped }
 }

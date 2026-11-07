@@ -39,7 +39,7 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { buildTextIndex, locateQuote, quoteFromRange, quoteFromText, rangeForQuote, rangePieces, type QuoteLines, type QuoteSkip } from '@/utils/text-quote-anchor';
 import { DIFF_FILE_TEXT_SKIP } from '@/utils/diff-passage';
 import {
-  ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, lastLineRect, placeAskChip, placeFileCard,
+  ASK_CHIP_HEIGHT, ASK_CHIP_WIDTH, askableBlockOf, blockQuoteOf, cardNaturalHeight, fileQuestionMarks, fileQuestionRows, lastLineRect, neighbourLines, placeAskChip, placeFileCard,
   rectInHost, toHostRect, type HostRect,
 } from '@/utils/file-thread';
 import { FileQuestionRail } from '@/components/common/FileQuestionRail';
@@ -592,7 +592,9 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const prev = hoverRef.current;
       if (prev && prev.el === block && Math.abs(prev.rect.top - rect.top) < 1 && Math.abs(prev.rect.right - rect.right) < 1) return;
       const line = lastLineRect(block);
-      const spot = placeAskChip(rect, line ? toHostRect(line, hostBox, null) : null, { width: root.clientWidth, height: hostBox.height }, block.matches('td, th'));
+      const near = neighbourLines(block, b).map((r) => toHostRect(r, hostBox, null));
+      const spot = placeAskChip(rect, line ? toHostRect(line, hostBox, null) : null, { width: root.clientWidth, height: hostBox.height },
+        { near });
       setHover({ el: block, rect, spot });
     });
     const onMove = (e: PointerEvent) => pick.call({ x: e.clientX, y: e.clientY });
