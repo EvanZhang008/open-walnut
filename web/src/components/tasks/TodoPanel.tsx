@@ -7497,8 +7497,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // hits only (no focus-override row, no descendant context rows). All counts
   // the list hits, which already hold every pin that passes the chips.
   sectionCounts.all = isSearchMode ? (searchResultCount ?? 0) : matchedIds.size + topSectionHits.total;
+  // A search on Recent counts the Recent rows it leaves, not the all-task hits.
   const filterCount = loading ? null
-    : isSearchMode ? (searchResultCount ?? 0)
+    : isSearchMode ? (effectiveSection === 'recent' ? visibleRecentTasks.length : (searchResultCount ?? 0))
     : (sectionCounts[effectiveSection] ?? 0);
   // 5.3: chips are set and nothing matches: say so, with one way back.
   const showFilterEmpty = !isSearchMode && filterCount === 0 && homeFilters.chips.length > 0;
@@ -8091,6 +8092,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {/* Nothing opened yet (a new install, a cleared browser): say what the list is for. */}
           {recentVisible && recentTasks.length === 0 && !loading && !isSearchMode && (
             <p className="todo-pinned-empty" data-testid="todo-recent-empty">Tasks you open show up here, newest first.</p>
+          )}
+          {/* A search on Recent that no opened task matches (a typo, a task never opened): say so,
+              with the way to the same search over every task. */}
+          {recentVisible && effectiveSection === 'recent' && isSearchMode && visibleRecentTasks.length === 0 && !loading && (
+            <div className="todo-filter-empty" data-testid="todo-recent-search-empty" role="status">
+              <div className="todo-filter-empty-title">No task you opened matches</div>
+              <button type="button" className="todo-filter-empty-clear" onClick={() => setSearchSection('all')}>
+                Search all tasks
+              </button>
+            </div>
           )}
           {recentVisible && visibleRecentTasks.length > 0 && (
             <div className={`todo-pinned-section${!isFolded('recent') ? ' todo-pinned-section-recent' : ''}${isAll ? '' : ' todo-pinned-section-solo'}`}>
