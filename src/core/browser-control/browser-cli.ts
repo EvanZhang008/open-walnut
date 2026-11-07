@@ -27,7 +27,7 @@ export const BROWSER_USAGE = [
   '       walnut browser screenshot [<file>] [--full] [--tab N]   (default: a .jpg in $WALNUT_TASK_DIR/shots; a .png name saves a PNG)',
   '       walnut browser upload <ref> <file>... [--tab N]          (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
   '       walnut browser downloads [--wait] [--ms N]',
-  '       walnut browser fill-login [--item <id|name>] [--tab N]   (signs in with the saved login; you never see the password)',
+  '       walnut browser fill-login [--item <id|name>] [--fresh-sign-in] [--tab N]   (signs in with the saved login; you never see the password)',
   '       walnut browser dialog accept|dismiss [--text T] [--tab N]   (real input)',
   '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
   '  Refs: e12 in the page, f3:e12 inside a frame. --json prints the whole result. A site agents have not used yet waits for the',
@@ -88,6 +88,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--url') args.url = val()
       else if (w === '--text') args.dialogText = val()
       else if (w === '--item') args.item = val()
+      else if (w === '--fresh-sign-in') args.fresh_sign_in = true
       else if (w === '--ref') args.ref = val()
       else if (w === '--file' || w === '--path') {
         const key = w === '--file' ? 'files' : 'paths'
@@ -184,7 +185,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only'])
+const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
@@ -301,6 +302,11 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)
   if (action === 'text') return typeof b.text === 'string' ? b.text : ''
   const where = [typeof b.tab === 'number' ? `tab ${b.tab}` : '', typeof b.url === 'string' ? b.url : '', typeof b.title === 'string' ? `"${b.title}"` : ''].filter(Boolean).join('  ')
+  // Which window and tab, and the person's own tabs on the site (where-words.ts), each on a line of its own.
+  if (typeof b.where === 'string') {
+    const theirs = typeof b.person_tabs_note === 'string' ? `\n${b.person_tabs_note}` : ''
+    return `ok  ${b.where}${theirs}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+  }
   const opened = b.opened as { tab?: number; url?: string } | undefined
   const also = opened && typeof opened.tab === 'number' ? `\nOpened a new tab: ${opened.tab}  ${opened.url ?? ''} (this task's too: --tab ${opened.tab})` : ''
   return `ok${where ? `  ${where}` : ''}${also}${typeof b.note === 'string' ? `\n${b.note}` : ''}`

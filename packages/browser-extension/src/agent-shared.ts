@@ -8,6 +8,7 @@ import { siteKey } from '../../../src/core/vault/url-match'
 import { tabStore } from './tab-store'
 import { walnutAddress } from './walnut-address'
 import { injectContent, pageCheck, reachPage, toPage, type ReachError } from './page-reach'
+import { windowOf } from './agent-window'
 
 export interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[] } }
 
@@ -162,7 +163,11 @@ export async function ownTab(args: Record<string, unknown>): Promise<{ tabId: nu
   return { tabId, tab, rec }
 }
 
-export const where = async (tabId: number) => { const t = await ext.tabs.get(tabId).catch(() => ({} as Tab)); return { tab: tabId, url: t.url, title: t.title } }
+/** A tab as every answer names it: its id, address and title, and which window it is in (Walnut's agent window or the person's). */
+export const where = async (tabId: number) => {
+  const t = await ext.tabs.get(tabId).catch(() => ({} as Tab))
+  return { tab: tabId, url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)) }
+}
 
 type PageReply = { ok: boolean; result?: Record<string, unknown>; error?: { message: string; code: string; extra?: Record<string, unknown> } }
 

@@ -27,8 +27,20 @@ export interface ControllerInfo {
    * The agent tabs it holds and who opened each (the owner key went with `open`): a restarted
    * server learns them back from the next poll.
    */
-  tabs?: Array<{ id: number; owner: string }>
+  tabs?: Array<{ id: number; owner: string } & TabFacts>
 }
+
+/** What Walnut knows of an agent tab besides its owner: from the extension's reports and each act's answer. */
+export interface TabFacts {
+  url?: string
+  title?: string
+  /** Walnut's agent window, or one of the person's (a tab handed over or taken). */
+  window?: 'agent' | 'person'
+  windowState?: string
+}
+
+/** Why an owner has no browser tab any more (the task's Browser view says so). */
+export type TabEndWhy = 'closed' | 'given_back' | 'stopped' | 'gone' | 'browser_left'
 
 interface Controller extends ControllerInfo {
   lastSeen: number
@@ -86,6 +98,39 @@ type GoneWhy = 'off' | 'disconnected'
 const gone = new Map<string, { label: string; at: number; why: GoneWhy }>()
 const GONE_MS = 30 * 60_000
 
+const tabFacts = new Map<string, TabFacts>()
+/** An owner whose last tab went, and why, for half an hour. */
+const ended = new Map<string, { at: number; why: TabEndWhy }>()
+const ENDED_MS = 30 * 60_000
+/** Told when an owner's set of tabs changes (a tab came, went, or moved to it): the route announces it to the web. */
+const tabListeners = new Set<(owner: string) => void>()
+
+export function onTabsChanged(fn: (owner: string) => void): () => void {
+  tabListeners.add(fn)
+  return () => { tabListeners.delete(fn) }
+}
+
+function tabsChanged(owner: string | undefined): void {
+  if (!owner) return
+  for (const fn of tabListeners) { try { fn(owner) } catch { /* a listener's own trouble */ } }
+}
+
+function cleanFacts(f: TabFacts): TabFacts {
+  return {
+    ...(typeof f.url === 'string' ? { url: f.url.slice(0, 4000) } : {}),
+    ...(typeof f.title === 'string' ? { title: f.title.slice(0, 300) } : {}),
+    ...(f.window === 'agent' || f.window === 'person' ? { window: f.window } : {}),
+    ...(typeof f.windowState === 'string' ? { windowState: f.windowState.slice(0, 20) } : {}),
+  }
+}
+
+/** What an act's answer or a frame says of a tab (its address and title now, its window). */
+export function noteTab(device: string, tabId: number, facts: TabFacts): void {
+  const k = `${device}:${tabId}`
+  if (!tabOwners.has(k)) return
+  tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(facts) })
+}
+
 /** The extension asks for work: the queued commands, or wait for one up to `waitMs`. */
 export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCommand[]> {
   const c: Controller = controllers.get(info.device) ?? { device: info.device, label: info.label, browser: info.browser, version: info.version, caps: info.caps, lastSeen: 0, queue: [] }
@@ -101,12 +146,14 @@ export function poll(info: ControllerInfo, waitMs = POLL_MAX_MS): Promise<WireCo
       if (!Number.isInteger(t.id) || typeof t.owner !== 'string' || !t.owner) continue
       const k = `${info.device}:${t.id}`
       reported.add(k)
-      if (tabOwners.get(k) !== t.owner) { tabOwners.set(k, t.owner); tabSetAt.set(k, Date.now()) }
+      const before = tabOwners.get(k)
+      if (before !== t.owner) { tabOwners.set(k, t.owner); tabSetAt.set(k, Date.now()); ended.delete(t.owner); tabsChanged(before); tabsChanged(t.owner) }
+      tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(t) })
       tabReported.add(k)
     }
     for (const k of [...tabOwners.keys()]) {
       if (!k.startsWith(`${info.device}:`) || reported.has(k)) continue
-      if (tabReported.has(k) || Date.now() - (tabSetAt.get(k) ?? 0) > TAB_REPORT_GRACE_MS) forgetTab(k)
+      if (tabReported.has(k) || Date.now() - (tabSetAt.get(k) ?? 0) > TAB_REPORT_GRACE_MS) forgetTab(k, 'gone')
     }
   }
   // A second poll (the background restarted) takes over: the first one gets nothing.
@@ -137,7 +184,7 @@ export function answer(device: string, id: string, ok: boolean, result: unknown,
   else {
     const code = error?.code || 'browser_error'
     // The extension no longer holds that tab (the person took it back, or closed it).
-    if (code === 'not_your_tab' && typeof p.tab === 'number') releaseTab(device, p.tab)
+    if (code === 'not_your_tab' && typeof p.tab === 'number') releaseTab(device, p.tab, 'gone')
     p.reject(new BrowserError(error?.message || 'The browser could not do that.', code === 'not_your_tab' ? 403 : 409, code, error?.extra ?? {}))
   }
   return true
@@ -168,7 +215,7 @@ export function disconnect(device: string, why: GoneWhy = 'off'): void {
     clearTimeout(p.timer)
     p.reject(goneError(why))
   }
-  for (const k of [...tabOwners.keys()]) if (k.startsWith(`${device}:`)) forgetTab(k)
+  for (const k of [...tabOwners.keys()]) if (k.startsWith(`${device}:`)) forgetTab(k, 'browser_left')
 }
 
 /** With no browser connected, the one that left on purpose most recently (the last half hour), for the words. */
@@ -275,22 +322,81 @@ export function send(device: string, action: string, args: Record<string, unknow
 
 // ── tabs ──
 
-function forgetTab(k: string): void {
+/**
+ * A tab whose end is under way (Stop, an agent's close), and why: the extension's next report,
+ * which may come in before the command's own answer, then ends it for that reason, not as gone.
+ */
+const ending = new Map<string, TabEndWhy>()
+
+/** The tab is about to end for `why`; the returned call takes it back (the command failed). */
+export function endingTab(device: string, tabId: number, why: TabEndWhy): () => void {
+  const k = `${device}:${tabId}`
+  ending.set(k, why)
+  return () => { if (ending.get(k) === why) ending.delete(k) }
+}
+
+function forgetTab(k: string, fallback: TabEndWhy = 'gone'): void {
+  const why = ending.get(k) ?? fallback
+  ending.delete(k)
+  const owner = tabOwners.get(k)
   tabOwners.delete(k)
   tabSetAt.delete(k)
   tabReported.delete(k)
+  tabFacts.delete(k)
+  if (!owner) return
+  if (![...tabOwners.values()].includes(owner)) ended.set(owner, { at: Date.now(), why })
+  tabsChanged(owner)
 }
 
-export function ownTab(device: string, tabId: number, owner: string): void {
+export function ownTab(device: string, tabId: number, owner: string, facts?: TabFacts): void {
   const k = `${device}:${tabId}`
+  const before = tabOwners.get(k)
   tabOwners.set(k, owner)
   tabSetAt.set(k, Date.now())
+  if (facts) tabFacts.set(k, { ...tabFacts.get(k), ...cleanFacts(facts) })
   // Known from this answer: a report read before it may still lack the tab.
   tabReported.delete(k)
+  if (before !== owner) {
+    ended.delete(owner)
+    if (before && ![...tabOwners.values()].includes(before)) ended.set(before, { at: Date.now(), why: 'gone' })
+    tabsChanged(before)
+    tabsChanged(owner)
+  }
 }
 
-export function releaseTab(device: string, tabId: number): void {
-  forgetTab(`${device}:${tabId}`)
+export function releaseTab(device: string, tabId: number, why: TabEndWhy = 'gone'): void {
+  forgetTab(`${device}:${tabId}`, why)
+}
+
+export interface ViewTab extends TabFacts {
+  device: string
+  /** "Walnut extension (Chrome on Mac)". */
+  browser: string
+  tab: number
+  /** The browser polled within CONNECTED_MS (a frame can be asked for). */
+  connected: boolean
+  /** It can take pictures (the extension has the screenshot permission). */
+  pictures: boolean
+}
+
+/**
+ * An owner's browser tabs as the task's Browser view shows them, and, with none left, why the
+ * last one went (half an hour). Title, address and window come from the extension's own reports.
+ */
+export function viewOf(owner: string, now = Date.now()): { tabs: ViewTab[]; ended?: { at: string; why: TabEndWhy } } {
+  const live = new Set(connected(now).map((c) => c.device))
+  const tabs: ViewTab[] = []
+  for (const [k, o] of tabOwners) {
+    if (o !== owner) continue
+    const i = k.lastIndexOf(':')
+    const device = k.slice(0, i)
+    const c = controllers.get(device)
+    tabs.push({ device, browser: c?.label ?? device, tab: Number(k.slice(i + 1)), connected: live.has(device), pictures: !!c?.caps.includes('screenshot'), ...tabFacts.get(k) })
+  }
+  if (tabs.length) return { tabs }
+  const e = ended.get(owner)
+  if (e && now - e.at > ENDED_MS) ended.delete(owner)
+  return { tabs, ...(e && now - e.at <= ENDED_MS ? { ended: { at: new Date(e.at).toISOString(), why: e.why } } : {}) }
 }
 
 export function tabOwner(device: string, tabId: number): string | undefined {
@@ -311,5 +417,8 @@ export function _resetBrowserHubForTesting(): void {
   tabOwners.clear()
   tabSetAt.clear()
   tabReported.clear()
+  tabFacts.clear()
+  ended.clear()
+  ending.clear()
   gone.clear()
 }

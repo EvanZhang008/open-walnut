@@ -154,7 +154,7 @@
   position: relative;
   margin-top: var(--sp-header-h, 76px);
 }
-.session-panel:has(> .session-error-banner, > .session-action-panel) .session-panel-chat-col.has-peek-bar {
+.session-panel:has(> .session-error-banner, > .session-action-panel, > .session-browser-card) .session-panel-chat-col.has-peek-bar {
   margin-top: 0;
 }
 .session-panel-chat-col.has-peek-bar .session-history {

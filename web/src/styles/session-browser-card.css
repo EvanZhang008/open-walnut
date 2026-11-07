@@ -1,0 +1,131 @@
+/* The task's Browser view in the session panel (components/sessions/SessionBrowserCard.tsx). */
+.session-browser-card {
+  margin: 6px 10px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--card-bg, var(--bg-secondary));
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.session-browser-card--folded,
+.session-browser-card--ended {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+}
+.session-browser-fold-text,
+.session-browser-ended-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-browser-muted { color: var(--fg-muted); }
+.session-browser-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px 6px 10px;
+}
+.session-browser-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--success, #2e9e5b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #2e9e5b) 22%, transparent);
+}
+.session-browser-card--folded .session-browser-dot,
+.session-browser-card--ended .session-browser-dot { margin-top: 0; }
+.session-browser-dot--idle { background: var(--warning, #c98a14); box-shadow: none; }
+.session-browser-dot--off { background: var(--fg-muted); box-shadow: none; }
+.session-browser-names { flex: 1 1 auto; min-width: 0; }
+.session-browser-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-browser-url {
+  color: var(--fg-secondary, var(--fg-muted));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-browser-where { color: var(--fg-muted); font-size: 11px; }
+.session-browser-actions { flex: 0 0 auto; display: flex; gap: 4px; }
+.session-browser-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-browser-btn:hover { background: var(--bg-hover, var(--bg-tertiary)); }
+.session-browser-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-browser-btn:disabled { opacity: 0.6; cursor: default; }
+.session-browser-btn--stop { color: var(--error, #c0392b); border-color: color-mix(in srgb, var(--error, #c0392b) 45%, var(--border)); }
+.session-browser-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 6px;
+  overflow-x: auto;
+}
+.session-browser-tab {
+  max-width: 180px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-secondary, var(--fg));
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-browser-tab.is-on { border-color: var(--accent); color: var(--fg); background: var(--accent-subtle, transparent); }
+.session-browser-shot {
+  margin: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-tertiary, var(--bg));
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.session-browser-card--large .session-browser-shot { height: min(62vh, 640px); }
+.session-browser-shot img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+}
+.session-browser-shot img.is-stale { opacity: 0.55; filter: grayscale(0.4); }
+.session-browser-empty { color: var(--fg-muted); padding: 12px 16px; text-align: center; }
+.session-browser-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding: 4px 10px 7px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  min-height: 1.4em;
+}
+.session-browser-note { color: var(--fg-secondary, var(--fg-muted)); }

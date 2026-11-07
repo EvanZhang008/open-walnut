@@ -90,6 +90,29 @@ extension's Settings, reached from the key's popover in the side panel or the to
 - **No test runs.** A request from a test run (`x-walnut-test-run`) is refused before it
   reaches the browser.
 
+- **You see where it works, live.** Walnut's agent window is a normal window behind yours: never
+  focused, never minimized (`packages/browser-extension/src/agent-window.ts`). Every `open`,
+  `take`, `navigate` and `back` names the window and the tab (id, title, address), and an agent
+  says which in its first line to you. While a task's session holds a tab, its session panel
+  shows the **Browser view**: a live picture of that tab (about one a second while you look at
+  it, none while nobody does), its title and address, which window it is in, and **Stop**, which
+  ends the agent's use of the tab (it stays open). The picture is the screenshot path
+  (`captureVisibleTab`), so it works on a window behind yours and takes no focus; a tab of yours
+  is pictured only while it is on screen (Walnut never switches your tabs), and a frame waits
+  for nothing an agent is doing (`agent-view.ts`, `capture-gate.ts`). Hide folds the view to one
+  line. When the last tab goes, the view says why. Frames are for you only (not masked): an
+  agent takes a screenshot instead, which draws a shown password as dots. Routes:
+  `GET /api/v1/browser/view`, `GET /api/v1/browser/view/frame`, `POST /api/v1/browser/view/stop`
+  (`src/web/routes/browser-view-v1.ts`); the web hears `browser:tabs` when a task's tabs change.
+  The phone has no Browser view yet: it would need the same frame route polled from the iOS
+  session screen.
+- **Never a second sign-in behind your back.** An `open` or `navigate` to a site you already have
+  open in one of your own tabs (the same registrable domain, the vault's site key) lists those
+  tabs in its answer and tells the agent to ask you for that tab ("Act in tab" in the side panel)
+  or take it when you are not on it, and not to sign in again. `fill_login` there is refused
+  (`site_open_in_person_tab`) unless the agent says you asked for a fresh sign-in
+  (`fresh_sign_in: true`).
+
 Turning the switch off in the popup ends it at once: Walnut hears that the browser stopped,
 every command waiting on it fails, and every agent tab is yours again.
 

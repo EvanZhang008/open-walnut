@@ -22,6 +22,7 @@ import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
+import { mountBrowserView, _resetBrowserViewForTesting } from './browser-view-v1.js'
 
 export const browserV1Router = Router()
 
@@ -114,7 +115,16 @@ browserV1Router.post('/browser/poll', (req, res, next) => {
   void run(res, next, async () => {
     const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
     const h = await hub()
-    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown }>).filter((t) => typeof t?.id === 'number' && typeof t?.owner === 'string').map((t) => ({ id: t.id as number, owner: t.owner as string })).slice(0, 200) : undefined
+    // Each agent tab, who holds it, and where it is (address, title, window: the task's Browser view; hub.ts cuts them to size).
+    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown; url?: unknown; title?: unknown; window?: unknown; windowState?: unknown }>)
+      .filter((t) => typeof t?.id === 'number' && typeof t?.owner === 'string')
+      .map((t) => ({
+        id: t.id as number, owner: t.owner as string,
+        ...(typeof t.url === 'string' ? { url: t.url } : {}),
+        ...(typeof t.title === 'string' ? { title: t.title } : {}),
+        ...(t.window === 'agent' || t.window === 'person' ? { window: t.window as 'agent' | 'person' } : {}),
+        ...(typeof t.windowState === 'string' ? { windowState: t.windowState } : {}),
+      })).slice(0, 200) : undefined
     const label = await deviceLabel(device)
     let gone = false
     let polling: Promise<import('../../core/browser-control/hub.js').WireCommand[]> | undefined
@@ -427,6 +437,20 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     if (action === 'open' || FOR_OWNER.has(action)) args.owner = owner
 
     let f = await s.readSites()
+    const w = await import('../../core/browser-control/where-words.js')
+    // A sign-in on a site the person already has open in a tab of their own: never a second one
+    // behind their back (2026-11-07), unless they asked for it (fresh_sign_in).
+    if (action === 'fill_login' && b.fresh_sign_in !== true && left() > 20_000) {
+      const listing = await allTabsOf(c.device, owner, { ...s.allowOf(f), walnut: own })
+      const mine = listing?.find((t) => t.id === tab)
+      if (mine && typeof mine.url === 'string') {
+        const theirs = w.sameSiteTabs(listing, mine.url)
+        if (theirs.length) {
+          log.web.info('browser fill_login refused: the person has the site open', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
+          throw new h.BrowserError(w.signInRefusal(w.siteOf(mine.url), theirs), 409, 'site_open_in_person_tab', { site: w.siteOf(mine.url), person_tabs: theirs })
+        }
+      }
+    }
     if (action === 'fill_login') return fillLoginAct(req, res, b, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own } })
     // A step that buys, sends or deletes the person approved: it goes to the page with the approval's mark.
     const outward = await import('../../core/browser-control/outward-asks.js')
@@ -448,6 +472,15 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       log.web.info('browser act waits for the person', { action, device: c.device, owner, tab, kind: hold.kind })
       return outward.askOutward({ owner, tab: tab!, action, args, hold, requester, testRun: ambientTestRun() })
     }
+    // The person's own tabs on the site this open or navigate goes to, read before it goes (the
+    // answer names them, so the agent asks for that tab instead of signing in again).
+    const theirs = (action === 'open' || action === 'navigate') && typeof args.url === 'string' && left() > 55_000
+      ? w.sameSiteTabs(await allTabsOf(c.device, owner, { ...s.allowOf(f), walnut: own }, 6000), args.url)
+      : undefined
+    // A close ends the tab for the agent: so says the view, also when the browser's report comes in first.
+    const undoEnd = action === 'close' && tab !== undefined
+      ? h.endingTab(c.device, tab, handed.has(tabKey(c.device, tab)) || h.viewOf(owner).tabs.find((t) => t.tab === tab && t.device === c.device)?.window === 'person' ? 'given_back' : 'closed')
+      : undefined
     let result: unknown
     try {
       result = await go()
@@ -464,16 +497,24 @@ browserV1Router.post('/browser/act', (req, res, next) => {
           if (ask2) { res.status(202).json(ask2); return undefined }
           throw again
         }
-      } else throw err
+      } else { undoEnd?.(); throw err }
     }
-    const r = (result ?? {}) as { tab?: number; tabs?: Array<{ id: number; owner?: string }>; released?: boolean; opened?: { tab?: unknown } }
-    if ((action === 'open' || action === 'take') && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner)
-    if (action === 'close' && tab !== undefined) { h.releaseTab(c.device, tab); handed.delete(tabKey(c.device, tab)) }
+    const r = (result ?? {}) as { tab?: number; url?: string; title?: string; window?: 'agent' | 'person'; windowState?: string; tabs?: Array<{ id: number; owner?: string; url?: string; title?: string }>; released?: boolean; opened?: { tab?: unknown; url?: unknown } }
+    const facts = { url: r.url, title: r.title, window: r.window, windowState: r.windowState }
+    if ((action === 'open' || action === 'take') && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner, { ...facts, window: r.window ?? (action === 'open' ? 'agent' : 'person') })
+    if (action === 'close' && tab !== undefined) { h.releaseTab(c.device, tab, r.released ? 'given_back' : 'closed'); handed.delete(tabKey(c.device, tab)) }
     // A tab the agent's tab opened (a link to a new tab, a popup window) is the same agent's.
-    if (typeof r.opened?.tab === 'number') h.ownTab(c.device, r.opened.tab, owner)
+    if (typeof r.opened?.tab === 'number') h.ownTab(c.device, r.opened.tab, owner, typeof r.opened.url === 'string' ? { url: r.opened.url } : undefined)
     const used = action === 'open' || action === 'take' ? r.tab : tab
-    if (typeof used === 'number' && action !== 'close') lastTab.set(owner, { device: c.device, tab: used })
+    if (typeof used === 'number' && action !== 'close') {
+      lastTab.set(owner, { device: c.device, tab: used })
+      if (action !== 'open' && action !== 'take' && typeof r.url === 'string') h.noteTab(c.device, used, facts)
+    }
     log.web.info('browser act', { action, device: c.device, owner, tab: used })
+    // Which window and tab, every time it may have changed; and the person's own tabs on the site.
+    const extra: Record<string, unknown> = {}
+    if (WHERE_ACTS.has(action) && typeof r.tab === 'number') extra.where = w.whereLine(action, r)
+    if (theirs?.length) { extra.person_tabs = theirs; extra.person_tabs_note = w.personTabsNote(w.siteOf(String(args.url)), theirs) }
     if (action === 'tabs') {
       const all = Array.isArray(r.tabs) ? r.tabs : []
       for (const t of all) if (t.owner === owner && h.tabOwner(c.device, t.id) !== owner) h.ownTab(c.device, t.id, owner)
@@ -481,9 +522,27 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (args.all === true) return { browser: c.label, all: true, tabs: all.map(({ owner: o, ...t }) => ({ ...t, owner: o === owner ? 'mine' : o ? 'other task' : 'person' })) }
       return { browser: c.label, tabs: all.filter((t) => t.owner === owner).map(({ owner: _o, ...t }) => t) }
     }
-    return { browser: c.label, ...(r as Record<string, unknown>) }
+    return { browser: c.label, ...(r as Record<string, unknown>), ...extra }
   })
 })
+
+/** Actions whose answer names the window and tab (where-words.ts). */
+const WHERE_ACTS = new Set<Action>(['open', 'navigate', 'back', 'take'])
+
+/**
+ * Every tab of the browser, the person's too (title, address, whose), for the same-site check; nothing
+ * when the browser answers no list (agents only in a handed tab, an older extension, no time).
+ */
+async function allTabsOf(device: string, owner: string, allow: import('../../core/browser-control/hub.js').WireCommand['allow'], ms = 8000): Promise<Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }> | undefined> {
+  const h = await hub()
+  try {
+    const r = await h.send(device, 'tabs', { all: true, owner }, allow, ms) as { tabs?: Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }> }
+    return Array.isArray(r?.tabs) ? r.tabs : undefined
+  } catch (err) {
+    log.web.info('browser tab list for the same-site check failed', { device, code: err instanceof h.BrowserError ? err.code : 'error' })
+    return undefined
+  }
+}
 
 /**
  * `fill_login`: the vault decides (core/browser-control/fill-login.ts); the login goes to the
@@ -519,10 +578,14 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
   }
 }
 
+// The task's Browser view: its tabs, a live frame, Stop (browser-view-v1.ts).
+mountBrowserView(browserV1Router, { personCaller, run, walnutAddresses })
+
 export function _resetBrowserRoutesForTesting(): void {
   ownCache = null
   lastTab.clear()
   siteAsks.clear()
   siteDenied.clear()
   handed.clear()
+  _resetBrowserViewForTesting()
 }

@@ -83,6 +83,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
+import { SessionBrowserCard } from './SessionBrowserCard';
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
@@ -3122,6 +3123,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             />
           </div>
         )}
+        {/* The task's Browser view: shows itself while the session drives the person's browser. */}
+        {!inset && !plainChat && session?.taskId && <SessionBrowserCard taskId={session.taskId} />}
         {session?.cwdGone && !session.archived && (
           <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} />
         )}

@@ -173,3 +173,77 @@ describe('browser hub', () => {
     expect(() => hub.pickController('extension-cccccc')).toThrow(/No browser named/)
   })
 })
+
+describe('a task\'s tabs for its Browser view', () => {
+  const owner = 'task:t-view'
+
+  it('lists the owner\'s tabs with what the report and the answers say of them', async () => {
+    const seen: string[] = []
+    const off = hub.onTabsChanged((o) => seen.push(o))
+    void hub.poll(info('extension-aaaaaa', { caps: ['screenshot'] }), 10)
+    hub.ownTab('extension-aaaaaa', 5, owner, { url: 'https://shop.example.test/', title: 'Shop', window: 'agent', windowState: 'normal' })
+    expect(seen).toEqual([owner])
+    hub.noteTab('extension-aaaaaa', 5, { title: 'Cart', url: 'https://shop.example.test/cart' })
+    // A note on a tab no one holds is dropped.
+    hub.noteTab('extension-aaaaaa', 6, { title: 'Nobody\'s' })
+    expect(hub.viewOf(owner)).toEqual({ tabs: [{ device: 'extension-aaaaaa', browser: 'Walnut extension (Chrome on Mac)', tab: 5, connected: true, pictures: true, url: 'https://shop.example.test/cart', title: 'Cart', window: 'agent', windowState: 'normal' }] })
+    expect(hub.viewOf('task:other')).toEqual({ tabs: [] })
+    off()
+  })
+
+  it('a restarted server learns the tabs and their titles back from the next report', async () => {
+    await hub.poll({ ...info(), tabs: [{ id: 9, owner, url: 'https://bank.example.test/', title: 'Bank', window: 'person' }] }, 10)
+    expect(hub.viewOf(owner).tabs).toMatchObject([{ tab: 9, title: 'Bank', window: 'person', url: 'https://bank.example.test/' }])
+  })
+
+  it('says why the last tab went: closed, given back, stopped, gone from the report, the browser left', async () => {
+    const seen: string[] = []
+    hub.onTabsChanged((o) => seen.push(o))
+    void hub.poll(info(), 10)
+    hub.ownTab('extension-aaaaaa', 1, owner)
+    hub.ownTab('extension-aaaaaa', 2, owner)
+    hub.releaseTab('extension-aaaaaa', 1, 'closed')
+    // One tab left: no end yet.
+    expect(hub.viewOf(owner).ended).toBeUndefined()
+    hub.releaseTab('extension-aaaaaa', 2, 'stopped')
+    expect(hub.viewOf(owner)).toMatchObject({ tabs: [], ended: { why: 'stopped' } })
+    expect(seen.filter((o) => o === owner).length).toBe(4)
+    // A new tab ends the end.
+    hub.ownTab('extension-aaaaaa', 3, owner)
+    expect(hub.viewOf(owner).ended).toBeUndefined()
+    // The report no longer lists it: gone.
+    await hub.poll({ ...info(), tabs: [{ id: 3, owner }] }, 10)
+    await hub.poll({ ...info(), tabs: [] }, 10)
+    expect(hub.viewOf(owner)).toMatchObject({ tabs: [], ended: { why: 'gone' } })
+    hub.ownTab('extension-aaaaaa', 4, owner)
+    hub.disconnect('extension-aaaaaa', 'off')
+    expect(hub.viewOf(owner)).toMatchObject({ tabs: [], ended: { why: 'browser_left' } })
+  })
+
+  it('a tab that moves to another owner ends the first owner\'s use', () => {
+    void hub.poll(info(), 10)
+    hub.ownTab('extension-aaaaaa', 1, owner)
+    hub.ownTab('extension-aaaaaa', 1, 'task:t-other')
+    expect(hub.viewOf(owner)).toMatchObject({ tabs: [], ended: { why: 'gone' } })
+    expect(hub.viewOf('task:t-other').tabs).toHaveLength(1)
+  })
+
+  it('a Stop whose tab leaves the report before its answer comes back still reads as stopped; a failed one ends nothing', async () => {
+    await hub.poll({ ...info(), tabs: [{ id: 7, owner }] }, 10)
+    hub.endingTab('extension-aaaaaa', 7, 'stopped')
+    await hub.poll({ ...info(), tabs: [] }, 10)
+    expect(hub.viewOf(owner)).toMatchObject({ tabs: [], ended: { why: 'stopped' } })
+    hub.ownTab('extension-aaaaaa', 8, owner)
+    const undo = hub.endingTab('extension-aaaaaa', 8, 'closed')
+    undo()
+    hub.releaseTab('extension-aaaaaa', 8, 'gone')
+    expect(hub.viewOf(owner).ended?.why).toBe('gone')
+  })
+
+  it('the end is forgotten after half an hour', () => {
+    void hub.poll(info(), 10)
+    hub.ownTab('extension-aaaaaa', 1, owner)
+    hub.releaseTab('extension-aaaaaa', 1, 'closed')
+    expect(hub.viewOf(owner, Date.now() + 31 * 60_000)).toEqual({ tabs: [] })
+  })
+})

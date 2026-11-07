@@ -1362,6 +1362,11 @@ export interface OrgThreadsChangedEvent {
   threadId?: string;
 }
 
+/** A task's agent tabs in the person's browser came or went (routes/browser-v1.ts): re-read the Browser view. */
+export interface BrowserTabsChangedEvent {
+  taskId: string;
+}
+
 export interface BoardChangedEvent {
   taskId: string;
   kind: 'html' | 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'reminder' | 'seen' | 'deleted' | 'lanes' | 'card';
@@ -1488,6 +1493,7 @@ export interface EventPayloadMap {
   'human-inbox:state': HumanInboxStateEvent;
 
   'board:changed': BoardChangedEvent;
+  'browser:tabs': BrowserTabsChangedEvent;
   'org-threads:changed': OrgThreadsChangedEvent;
   'vault:changed': VaultChangedEvent;
 

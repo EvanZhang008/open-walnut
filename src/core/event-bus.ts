@@ -180,6 +180,10 @@ export const EventNames = {
   // Envelope only: clients re-read GET /api/v1/tasks/:id/board.
   BOARD_CHANGED: 'board:changed',
 
+  // A task's tabs in the person's browser changed (core/browser-control/hub.ts): the task's
+  // Browser view re-reads GET /api/v1/browser/view. Envelope only, never a frame.
+  BROWSER_TABS_CHANGED: 'browser:tabs',
+
   // An Org node's Threads (the user's own requests to it) changed (core/org/threads-store.ts).
   // Envelope only: clients re-read GET /api/v1/tasks/:id/threads.
   ORG_THREADS_CHANGED: 'org-threads:changed',

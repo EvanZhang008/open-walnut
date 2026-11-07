@@ -15,6 +15,25 @@ The user lets Walnut agents into their browser from the Walnut extension's popup
 first: `walnut browser status` (or `browser_status`). If no browser is connected, tell the user
 in one line how to turn it on; do not ask them to do the step by hand instead.
 
+## Say where you are, every time
+
+Every `open`, `take`, `navigate` and `back` answers with the window and the tab: "In Walnut's
+agent window (behind theirs, not minimized), tab 812 "Orders" (https://...)", or "In the
+person's own window ..." for a tab they handed over or you took. **When you start using the
+browser, your first line to the user says which window and tab you are in**, so they know
+where to look. Walnut's agent window is a window of its own behind theirs: never minimize it,
+never bring it to the front. The task's session panel shows a live picture of your tab (the
+Browser view) with a Stop button for the user.
+
+## Never sign in again on a site they have open
+
+An `open` or `navigate` to a site the user already has open in a tab of their own lists those
+tabs (`person_tabs`: id, title, whether they are on it) and says so. If they are signed in
+there, ask them to hand that tab over ("Act in tab" in Walnut's side panel, on that tab), or
+`take` it when they are not on it. **Do not sign in again in a tab of your own.** `fill-login`
+there answers `site_open_in_person_tab`; only when the user asked you for a fresh sign-in, run
+it again with `--fresh-sign-in` (op: `fresh_sign_in: true`).
+
 ## The loop
 
 ```bash
@@ -95,6 +114,10 @@ type somewhere `fill-login` cannot reach. On a page you ran `evaluate` or real i
 loaded, `fill-login` answers `page_tampered`: navigate to the page again (a reload), then fill.
 
 ## Rules
+
+- Your first line to the user when you start using the browser names the window and tab.
+- Never start a sign-in on a site the user already has open in their own tab: ask for that tab
+  (see above).
 
 - Do a step that sends, buys, posts or deletes only when the user asked for it. Walnut asks
   them itself for the click (see above): do not also ask in chat. A step Walnut does not catch

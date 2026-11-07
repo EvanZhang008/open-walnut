@@ -40,9 +40,20 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     case 'tabs': return args.all
       ? { outcome: `${(body.tabs as unknown[] | undefined)?.length ?? 0} tab(s) in the browser (owner: mine, other task, person).`, next: 'take {tab} to act in one of the person\'s tabs (never the one they are on), or open a page.' }
       : { outcome: `${(body.tabs as unknown[] | undefined)?.length ?? 0} tab(s) of this task.`, next: 'Act in one with its tab id, or open a page.' }
-    case 'open': case 'navigate': case 'back':
-      return { outcome: `At ${body.url ?? '?'}${tab}: ${body.title ?? ''}`, next: 'snapshot to see what is on the page and its element refs.' }
-    case 'take': return { outcome: `You may act in the person's tab ${body.tab} (${body.url ?? ''}); it shows your frame and their Stop button.`, next: 'snapshot it; close gives it back (it stays open).' }
+    case 'open': case 'navigate': case 'back': {
+      const where = typeof body.where === 'string' ? body.where : `At ${body.url ?? '?'}${tab}: ${body.title ?? ''}`
+      const theirs = typeof body.person_tabs_note === 'string' ? ` ${body.person_tabs_note}` : ''
+      return {
+        outcome: `${where}${theirs}`,
+        next: theirs ? 'Ask the person for their tab (or take it) before you sign in anywhere; else snapshot to see the page.'
+          : args.action === 'open' ? 'Tell the person in your first line which window and tab you are working in; then snapshot to see the page and its element refs.'
+            : 'snapshot to see what is on the page and its element refs.',
+      }
+    }
+    case 'take': return {
+      outcome: `${typeof body.where === 'string' ? `${body.where} ` : ''}You may act in the person's tab ${body.tab} (${body.url ?? ''}); it shows your frame and their Stop button.`,
+      next: 'Tell the person which tab you took; snapshot it; close gives it back (it stays open).',
+    }
     case 'snapshot': return { outcome: `Page snapshot${tab}.`, next: 'click, type or select an element by its ref (e12, or f3:e12 in a frame); refs hold until the page changes, then snapshot again.' }
     case 'find': return { outcome: `${body.count ?? 0} match(es)${tab}.`, next: 'Act on a match by its ref.' }
     case 'form_values': return { outcome: `${body.count ?? 0} field(s)${tab}.`, next: 'fill_form {fields: [{ref or label, value}]} to fill several at once.' }
@@ -74,6 +85,9 @@ defineOp({
     + 'Real input (off unless the user turned it on in the extension: trusted_off): trusted: true on click, hover, type, press, upload {paths on the browser\'s machine}; '
     + 'dialog {accept, text?} answers an alert, confirm or prompt; evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
     + '`tab` may be left out after you used one. A site agents have not used yet may ask the user first (needs_ok): call the same action again (wait_ms up to 25000 holds for the answer). '
+    + 'Every open, take, navigate and back names the window (Walnut\'s agent window, behind theirs, not minimized; or the person\'s own) and the tab (id, title, address): '
+    + 'say which in your first line to the user when you start using the browser. An open or navigate to a site the person already has open in a tab of their own lists those tabs (person_tabs): '
+    + 'ask them to hand that tab over, or take it, instead of signing in again; fill_login there answers site_open_in_person_tab unless they asked for a fresh sign-in (fresh_sign_in: true). '
     + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off, test_run. '
     + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
@@ -112,6 +126,7 @@ defineOp({
     item: z.string().max(200).optional().describe('fill_login: the login (its id, name or username) when the site has several'),
     request: z.string().max(100).optional().describe('fill_login, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their approval'),
     purpose: z.string().max(200).optional().describe('fill_login: why, in a few words the user reads on the approval'),
+    fresh_sign_in: z.boolean().optional().describe('fill_login: the person asked you for a new sign-in here, although they have this site open in a tab of their own'),
     trusted: z.boolean().optional().describe('click / hover / type / press / upload: real mouse and keys through the browser\'s debugger (the user turns it on)'),
     accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false)'),
     expression: z.string().max(100_000).optional().describe('evaluate: JavaScript to run in the page (its value comes back as JSON)'),

@@ -7,6 +7,7 @@ import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { toPage } from './page-reach'
 import { framesOf } from './agent-page'
+import { capture, withCapture } from './capture-gate'
 import { AgentError, WALNUT_PAGE, agentWindowId, checkPage, frameOp, mark, personsTab, reached, sleep, where, type AgentTab, type WireCommand } from './agent-shared'
 
 export const FULL_MAX_PX = 12_000
@@ -43,7 +44,7 @@ async function full(c: WireCommand, tabId: number, tab: Tab): Promise<{ image: s
       const at = await frameOp(tabId, 0, 'capture', { step: 'at', y, hideFixed: slices.length > 0 }, c.allow, 5000) as { y: number }
       await sleep(Math.max(slices.length ? 150 : 300, last + CAPTURE_GAP_MS - Date.now()))
       last = Date.now()
-      slices.push({ y: at.y, img: await ext.tabs.captureVisibleTab(tab.windowId!, { format: 'jpeg', quality: 80 }) })
+      slices.push({ y: at.y, img: await capture(tab.windowId!, { format: 'jpeg', quality: 80 }) })
       // The page would not scroll further: this was its bottom.
       if (at.y < y - 1 || at.y + m.h >= height) break
       y = at.y + m.h
@@ -75,30 +76,34 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
   const before = await reached(tabId)
   if (before.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
   await checkPage(c.allow, before.href)
-  // Only a tab on screen in its window can be captured: bring it up there, in the agent window.
-  await ext.tabs.update(tabId, { active: true })
-  // A password the page shows as text (its "show" button) is drawn as dots for the capture.
-  let out: Record<string, unknown>
-  try {
-    if (!(await maskAll(tabId, true))) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
-    await sleep(250)
-    if (c.args.full === true) {
-      // The frame and its Stop pill would be drawn once per screen: off while the agent's own tab
-      // is scrolled through (a tab of the person's keeps them, they may be looking).
-      const unmark = !personsTab(rec)
-      if (unmark) await mark(tabId, false)
-      const f = await full(c, tabId, tab).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
-      out = { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
-    } else {
-      out = { image: await ext.tabs.captureVisibleTab(tab.windowId!, pngOf(c) ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
+  // One capture at a time (capture-gate.ts): the live Browser view's frames wait while this tab is brought up and taken.
+  const out = await withCapture(async () => {
+    // Only a tab on screen in its window can be captured: bring it up there, in the agent window.
+    await ext.tabs.update(tabId, { active: true })
+    // A password the page shows as text (its "show" button) is drawn as dots for the capture.
+    let out: Record<string, unknown>
+    try {
+      if (!(await maskAll(tabId, true))) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
+      await sleep(250)
+      if (c.args.full === true) {
+        // The frame and its Stop pill would be drawn once per screen: off while the agent's own tab
+        // is scrolled through (a tab of the person's keeps them, they may be looking).
+        const unmark = !personsTab(rec)
+        if (unmark) await mark(tabId, false)
+        const f = await full(c, tabId, tab).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
+        out = { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
+      } else {
+        out = { image: await capture(tab.windowId!, pngOf(c) ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
+      }
+    } finally {
+      await maskAll(tabId, false)
     }
-  } finally {
-    await maskAll(tabId, false)
-  }
-  // What was on screen must still be that tab on that page (not a window the page opened).
-  const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
-  if (shown?.id !== tabId || siteKey(shown.url ?? '')?.domain !== siteKey(before.href)?.domain) {
-    throw new AgentError('The page changed while the screenshot was taken: try again.', 'page_changed')
-  }
+    // What was on screen must still be that tab on that page (not a window the page opened).
+    const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
+    if (shown?.id !== tabId || siteKey(shown.url ?? '')?.domain !== siteKey(before.href)?.domain) {
+      throw new AgentError('The page changed while the screenshot was taken: try again.', 'page_changed')
+    }
+    return out
+  })
   return { ...(await where(tabId)), ...out }
 }

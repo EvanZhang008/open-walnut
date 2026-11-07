@@ -27,6 +27,8 @@ import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-trusted'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
+import { openInAgentWindow, windowOf } from './agent-window'
+import { viewFrame } from './agent-view'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -70,18 +72,6 @@ async function tabOnlyCheck(c: WireCommand): Promise<void> {
 
 export async function isAgentTab(tabId: number | undefined): Promise<{ owner: string; who?: string } | undefined> {
   return tabId === undefined ? undefined : agentTabs.get(tabId)
-}
-
-async function agentWindow(url: string) {
-  const { agentWindow: id } = await ext.storage.session.get('agentWindow')
-  if (typeof id === 'number') {
-    const w = await ext.windows.get(id).catch(() => null)
-    if (w) return ext.tabs.create({ url, windowId: id, active: true })
-  }
-  // A window of its own, behind the person's: agents never take their tabs or their focus.
-  const w = await ext.windows.create({ url, focused: false, width: 1280, height: 900, type: 'normal' })
-  await ext.storage.session.set({ agentWindow: w.id })
-  return w.tabs?.[0] ?? (await ext.tabs.query({ active: true, windowId: w.id }))[0] ?? {}
 }
 
 const ownerArg = (a: Record<string, unknown>): string => {
@@ -158,7 +148,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
       const url = String(a.url ?? '')
       await checkPage(c.allow, url)
       const owner = ownerArg(a)
-      const t = await agentWindow(url)
+      const t = await openInAgentWindow(ext, url)
       if (t.id === undefined) throw new AgentError('The browser did not open the tab.', 'open_failed')
       const who = typeof a.who === 'string' ? a.who : undefined
       await agentTabs.set(t.id, { owner, ...(who ? { who } : {}), history: [url] })
@@ -260,9 +250,31 @@ function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
   return mine
 }
 
+/**
+ * The person's own commands from the Browser view in Walnut (agent-view.ts): a frame of a tab, and
+ * Stop. Neither waits in a tab's turn (a frame behind an agent's 40 s wait would be no live view),
+ * and neither is an agent's: the server sends them only for a person's request.
+ */
+async function viewAct(c: WireCommand): Promise<unknown> {
+  if (c.action === 'view_frame') return viewFrame(c, (id) => perTab.has(id))
+  // Stop: the tab is no agent's any more, as the Stop on the page does; it stays open.
+  const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
+  const rec = await agentTabs.get(tabId)
+  if (!rec) return { tab: tabId, stopped: false }
+  await agentTabs.delete(tabId)
+  await mark(tabId, false)
+  await stopIfNoReach()
+  return { tab: tabId, stopped: true, ...(personsTab(rec) ? { givenBack: true } : {}) }
+}
+
 async function run(c: WireCommand): Promise<void> {
   let body: Record<string, unknown>
   try {
+    if (c.action === 'view_frame' || c.action === 'view_stop') {
+      body = { id: c.id, ok: true, result: await viewAct(c) }
+      await call('POST', '/browser/result', body, { noSession: true, timeoutMs: 20_000 }).catch(() => undefined)
+      return
+    }
     // The person may have turned agents off since this poll left (or let them in one tab only).
     await tabOnlyCheck(c)
     body = { id: c.id, ok: true, result: await inTurn(c.args.tab, () => act(c)) }
@@ -272,11 +284,13 @@ async function run(c: WireCommand): Promise<void> {
   await call('POST', '/browser/result', body, { noSession: true, timeoutMs: 20_000 }).catch(() => undefined)
 }
 
-async function report(): Promise<Array<{ id: number; owner: string }>> {
-  const out: Array<{ id: number; owner: string }> = []
+/** The agent tabs, who holds each, and where each is (a restarted Walnut shows them in the task's Browser view at once). */
+async function report(): Promise<Array<{ id: number; owner: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }>> {
+  const out: Array<{ id: number; owner: string; url?: string; title?: string; window?: string; windowState?: string; handed?: boolean }> = []
   for (const id of await agentTabs.keys()) {
     const o = await agentTabs.get(id)
-    if (o && await ext.tabs.get(id).catch(() => null)) out.push({ id, owner: o.owner })
+    const t = o ? await ext.tabs.get(id).catch(() => null) : null
+    if (o && t) out.push({ id, owner: o.owner, url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)), ...(personsTab(o) ? { handed: true } : {}) })
     else await agentTabs.delete(id)
   }
   return out
