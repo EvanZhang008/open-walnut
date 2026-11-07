@@ -253,6 +253,10 @@ export function createTransferCore(deps: TransferCoreDeps) {
   var UPLOAD_RECORD = '.upload.json'
   // Staging files nobody touched for this long are uploads given up on.
   var UPLOAD_STALE_MS = 24 * 60 * 60 * 1000
+  // Finished uploads in the folder no task owns (a file sent before its session
+  // existed) are kept this long. A task's uploads go with its directory, but
+  // nothing else ever empties that folder.
+  var UPLOAD_OWNERLESS_KEEP_MS = 30 * 24 * 60 * 60 * 1000
 
   async function readUploadSize(dir: string): Promise<number | null> {
     try {
@@ -261,10 +265,24 @@ export function createTransferCore(deps: TransferCoreDeps) {
     } catch (_e) { return null }
   }
 
+  // The newest change in a finished upload's folder (its file, its record, the
+  // folder itself), or null when it cannot be read.
+  async function newestChange(dir: string, names: string[]): Promise<number | null> {
+    try {
+      var newest = (await deps.fs.promises.stat(dir)).mtimeMs
+      for (var k = 0; k < names.length; k++) {
+        var m = (await deps.fs.promises.lstat(deps.path.join(dir, names[k]))).mtimeMs
+        if (m > newest) newest = m
+      }
+      return newest
+    } catch (_e) { return null }
+  }
+
   // Best effort, never awaited by a chunk: remove uploads whose staging file has
   // not moved in a day, and their folders once empty. Finished files stay; they
-  // go with the task's directory.
-  async function sweepStaleUploads(root: string, keep: string): Promise<void> {
+  // go with the task's directory. In the folder no task owns (ownerless), a
+  // finished upload untouched for UPLOAD_OWNERLESS_KEEP_MS goes too.
+  async function sweepStaleUploads(root: string, keep: string, ownerless: boolean): Promise<void> {
     var ids: string[]
     try { ids = await deps.fs.promises.readdir(root) } catch (_e) { return }
     for (var i = 0; i < ids.length && i < 500; i++) {
@@ -273,6 +291,12 @@ export function createTransferCore(deps: TransferCoreDeps) {
       try {
         var names = await deps.fs.promises.readdir(dir)
         var parts = names.filter(function (n) { return n.slice(-STAGING_SUFFIX.length) === STAGING_SUFFIX })
+        if (parts.length === 0) {
+          if (!ownerless) continue
+          var newest = await newestChange(dir, names)
+          if (newest !== null && now() - newest > UPLOAD_OWNERLESS_KEEP_MS) await deps.fs.promises.rm(dir, { recursive: true, force: true })
+          continue
+        }
         var stale = 0
         for (var j = 0; j < parts.length; j++) {
           var st = await deps.fs.promises.stat(deps.path.join(dir, parts[j]))
@@ -285,7 +309,9 @@ export function createTransferCore(deps: TransferCoreDeps) {
     }
   }
 
-  async function uploadPart(cmd: Record<string, unknown>, uploadsRoot: string): Promise<WritePartReply> {
+  // ownerless: uploadsRoot is the host's folder no task owns, whose finished
+  // uploads only the age sweep removes (the daemon's uploadsRootFor fallback).
+  async function uploadPart(cmd: Record<string, unknown>, uploadsRoot: string, ownerless?: boolean): Promise<WritePartReply> {
     if (typeof uploadsRoot !== 'string' || !deps.path.isAbsolute(uploadsRoot)) throw fail('unavailable', 'this host has no place for uploads')
     var uploadId = typeof cmd.uploadId === 'string' ? cmd.uploadId : ''
     if (!UPLOAD_ID.test(uploadId)) throw fail('bad_request', 'uploadId must look like up-<id>')
@@ -307,12 +333,12 @@ export function createTransferCore(deps: TransferCoreDeps) {
     // state (writePart serializes on the target itself, so this key differs).
     var total: number = size, at: number = offset
     return serialize('upload:' + target, function () {
-      return uploadChunk(cmd, uploadsRoot, dir, target, name, total, at, final, sha)
+      return uploadChunk(cmd, uploadsRoot, ownerless === true, dir, target, name, total, at, final, sha)
     })
   }
 
   async function uploadChunk(
-    cmd: Record<string, unknown>, uploadsRoot: string, dir: string, target: string, name: string,
+    cmd: Record<string, unknown>, uploadsRoot: string, ownerless: boolean, dir: string, target: string, name: string,
     size: number, offset: number, final: boolean, sha: string | undefined,
   ): Promise<WritePartReply> {
     var uploadId = deps.path.basename(dir)
@@ -329,7 +355,7 @@ export function createTransferCore(deps: TransferCoreDeps) {
       throw fail('bad_request', 'this upload is finished; send the file under a new upload id')
     }
     if (offset === 0) {
-      void sweepStaleUploads(uploadsRoot, uploadId).catch(function () { /* best effort */ })
+      void sweepStaleUploads(uploadsRoot, uploadId, ownerless).catch(function () { /* best effort */ })
     } else {
       var declared = await readUploadSize(dir)
       if (declared !== null && declared !== size) throw fail('bad_request', 'this upload was started for ' + declared + ' bytes, not ' + size)

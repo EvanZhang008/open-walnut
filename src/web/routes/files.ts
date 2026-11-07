@@ -428,13 +428,16 @@ filesRouter.get('/locate', async (req: Request, res: Response, next: NextFunctio
 })
 
 /**
- * POST /api/files/exists { paths: string[], host? } -> { exists: { [path]: boolean } }
+ * POST /api/files/exists { paths: string[], host? }
+ *   -> { exists: { [path]: boolean }, sizes: { [path]: number } }
  *
  * Whether the files a task's link tags point at are still there (a /tmp report is often cleaned
  * away): the session header leaves a gone one out. A path this server cannot answer for (a host that
  * is not answering, a path outside what it may read, a cloud box asked about the Mac's files) is
  * left out, and a caller reads "left out" as "not known gone": a link is never marked gone on a
  * guess. A remote host answers with its daemon's fs.stat, at most EXISTS_MAX paths a request.
+ * `sizes` has the byte size of each file found (a sent attachment's card shows it); a path that
+ * is gone, unknown, or a folder here has none.
  */
 const EXISTS_MAX = 8
 /** How long a remote host gets to answer (the header waits on this to draw its link pills). */
@@ -443,12 +446,23 @@ const EXISTS_DEADLINE_MS = 3_000
 /** Whether each path still exists on the host; a path this server cannot answer for is left out
  *  (the route above). The task detail (task-v1.ts) asks the same for the phone. */
 export async function linkPathsExist(rawPaths: readonly unknown[], rawHost: string | undefined): Promise<Record<string, boolean>> {
+  return (await linkPathsStat(rawPaths, rawHost)).exists
+}
+
+export interface LinkPathsStat {
+  exists: Record<string, boolean>
+  sizes: Record<string, number>
+}
+
+/** linkPathsExist, plus the size of each file found (the route above). */
+export async function linkPathsStat(rawPaths: readonly unknown[], rawHost: string | undefined): Promise<LinkPathsStat> {
   const host = rawHost === '__local__' || rawHost === 'local' ? undefined : rawHost
   const paths = [...new Set(rawPaths.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 1024))].slice(0, EXISTS_MAX)
   const exists: Record<string, boolean> = {}
+  const sizes: Record<string, number> = {}
   // The companion's own disk is not where a "local" session's files are (the Mac's are).
   const { placement } = await import('../../core/server-role.js')
-  if (paths.length === 0 || (!host && placement() === 'cloud')) return exists
+  if (paths.length === 0 || (!host && placement() === 'cloud')) return { exists, sizes }
   const { assertPathAllowed } = await import('./file-content.js')
   const allowed: { raw: string; filePath: string }[] = []
   for (const raw of paths) {
@@ -457,16 +471,20 @@ export async function linkPathsExist(rawPaths: readonly unknown[], rawHost: stri
   }
   if (!host) {
     await Promise.all(allowed.map(async ({ raw, filePath }) => {
-      try { await fsp.stat(filePath); exists[raw] = true } catch (err) {
+      try {
+        const st = await fsp.stat(filePath)
+        exists[raw] = true
+        if (st.isFile()) sizes[raw] = st.size
+      } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         if (code === 'ENOENT' || code === 'ENOTDIR') exists[raw] = false
       }
     }))
-    return exists
+    return { exists, sizes }
   }
   const config = await getConfig()
   const hostDef = hostEntryOf(config.hosts, host)
-  if (!hostDef?.hostname) return exists
+  if (!hostDef?.hostname) return { exists, sizes }
   // A host replica reads its own host through the follower link, which answers "no such file"
   // for a path outside its sessions' folders as well (follower-reads-core.ts), so from there only
   // "it exists" is an answer.
@@ -479,20 +497,24 @@ export async function linkPathsExist(rawPaths: readonly unknown[], rawHost: stri
       onHost(host, async (conn) => {
         await Promise.all(allowed.map(async ({ raw, filePath }) => {
           const st = await conn.send('fs.stat', { path: filePath }).catch(() => undefined)
-          if (st?.ok && typeof st.exists === 'boolean' && (st.exists || !follower)) exists[raw] = st.exists
+          if (st?.ok && typeof st.exists === 'boolean' && (st.exists || !follower)) {
+            exists[raw] = st.exists
+            if (st.exists && typeof st.size === 'number' && Number.isFinite(st.size) && st.size >= 0) sizes[raw] = st.size
+          }
         }))
       }),
       new Promise<void>((resolve) => { timer = setTimeout(resolve, EXISTS_DEADLINE_MS); timer.unref?.() }),
     ])
   } catch { /* the host is not answering: nothing is known gone */ } finally { clearTimeout(timer) }
-  return { ...exists }
+  // Copies: a host answering after the deadline must not change what was returned.
+  return { exists: { ...exists }, sizes: { ...sizes } }
 }
 
 filesRouter.post('/exists', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = (req.body ?? {}) as { paths?: unknown; host?: unknown }
     const host = typeof body.host === 'string' && body.host ? body.host : undefined
-    res.json({ exists: await linkPathsExist(Array.isArray(body.paths) ? body.paths : [], host) })
+    res.json(await linkPathsStat(Array.isArray(body.paths) ? body.paths : [], host))
   } catch (err) {
     next(err)
   }

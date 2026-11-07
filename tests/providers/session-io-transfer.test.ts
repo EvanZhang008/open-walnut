@@ -185,3 +185,146 @@ describe('RemoteSessionManager.prepareOutbound (local → remote image upload)',
     expect(conn.send).not.toHaveBeenCalled()
   })
 })
+
+describe('RemoteSessionManager.prepareOutbound (Walnut-owned files to the remote host)', () => {
+  // The local daemon files an upload with no task beside the task directories:
+  // pointed into the temp home so `<state>/uploads` is tmpBase/uploads.
+  let savedRoot: string | undefined
+  beforeEach(() => {
+    savedRoot = process.env.WALNUT_TASK_DIR_ROOT
+    process.env.WALNUT_TASK_DIR_ROOT = path.join(tmpBase, 'tasks')
+  })
+  afterEach(() => {
+    if (savedRoot === undefined) delete process.env.WALNUT_TASK_DIR_ROOT
+    else process.env.WALNUT_TASK_DIR_ROOT = savedRoot
+  })
+
+  const FILES = '[Files attached — open them from these paths]'
+
+  function uploaded(id: string, name: string, data: string | Buffer): string {
+    const dir = path.join(tmpBase, 'uploads', id)
+    fs.mkdirSync(dir, { recursive: true })
+    const p = path.join(dir, name)
+    fs.writeFileSync(p, data)
+    return p
+  }
+
+  /** A host that takes `upload.part`, finishing each upload on its last chunk. */
+  function filesConn(onPart?: (payload: Record<string, unknown>) => Promise<void> | void) {
+    const held = new Map<string, number>()
+    return {
+      ...makeConn(async (cmd, payload) => {
+        if (cmd !== 'upload.part') return { ok: true }
+        await onPart?.(payload)
+        const got = (held.get(String(payload.uploadId)) ?? 0) + Buffer.from(String(payload.data), 'base64').length
+        held.set(String(payload.uploadId), got)
+        return got === payload.size
+          ? { ok: true, staged: got, done: true, path: `/home/admin/.local/state/open-walnut/uploads/${payload.uploadId}/${payload.name}` }
+          : { ok: true, staged: got }
+      }),
+      hasCapability: (cap: string) => cap === 'upload-part-v1',
+    }
+  }
+
+  it('ships an attachment uploaded before the session existed and names the host copy', async () => {
+    const local = uploaded('up-abcdefgh-1234', 'crash report.log', 'line 1\nline 2\n')
+    const mgr = new RemoteSessionManager('sid-files', 'remotehost', REMOTE_TARGET)
+    const conn = filesConn()
+    injectConn(mgr, conn)
+    const text = `${FILES}\n- ${local}\n\nwhy does it crash?`
+    const out = await mgr.prepareOutbound(text)
+    expect(out).toBe(`${FILES}\n- /home/admin/.local/state/open-walnut/uploads/up-abcdefgh-1234/crash report.log\n\nwhy does it crash?`)
+    const part = conn.send.mock.calls.find((c) => c[0] === 'upload.part')![1] as Record<string, unknown>
+    expect(Buffer.from(String(part.data), 'base64').toString()).toBe('line 1\nline 2\n')
+    expect(part.uploadId).toBe('up-abcdefgh-1234')
+  })
+
+  it('names the session and its task, so the host files the copy under the task directory', async () => {
+    const local = uploaded('up-abcdefgh-4321', 'notes.txt', 'n')
+    const mgr = new RemoteSessionManager('sid-owner', 'remotehost', REMOTE_TARGET)
+    const conn = filesConn()
+    injectConn(mgr, conn)
+    // What start() records before its first prepareOutbound.
+    ;(mgr as unknown as { _sid: string; _taskId: string })._sid = 'sid-owner'
+    ;(mgr as unknown as { _taskId: string })._taskId = 'task-77'
+    await mgr.prepareOutbound(`${FILES}\n- ${local}\n\nread`)
+    const part = conn.send.mock.calls.find((c) => c[0] === 'upload.part')![1] as Record<string, unknown>
+    expect(part).toMatchObject({ sessionId: 'sid-owner', taskId: 'task-77', home: WALNUT_HOME })
+  })
+
+  it('a picture listed as a file goes through upload.part in chunks, never fs.write', async () => {
+    // Over the picture lane's limit, so the composer listed it under the files header.
+    const local = uploaded('up-abcdefgh-png1', 'chart.png', Buffer.alloc(3 * 1024 * 1024, 9))
+    const mgr = new RemoteSessionManager('sid-bigpng', 'remotehost', REMOTE_TARGET)
+    const conn = filesConn()
+    injectConn(mgr, conn)
+    const out = await mgr.prepareOutbound(`${FILES}\n- ${local}\n\nwhat does it show?`)
+    expect(fsWrites(conn)).toEqual([])
+    expect(conn.send.mock.calls.filter((c) => c[0] === 'upload.part')).toHaveLength(2)
+    expect(out).toBe(`${FILES}\n- /home/admin/.local/state/open-walnut/uploads/up-abcdefgh-png1/chart.png\n\nwhat does it show?`)
+  })
+
+  it('two sends naming the same file at once ship it once', async () => {
+    const local = uploaded('up-abcdefgh-dup1', 'big.bin', Buffer.alloc(3 * 1024 * 1024, 1))
+    const mgr = new RemoteSessionManager('sid-dup', 'remotehost', REMOTE_TARGET)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const conn = filesConn(() => gate)
+    injectConn(mgr, conn)
+    const text = `${FILES}\n- ${local}\n\nfirst`
+    const a = mgr.prepareOutbound(text)
+    const b = mgr.prepareOutbound(text.replace('first', 'second'))
+    await new Promise((r) => setTimeout(r, 20))
+    release()
+    const [outA, outB] = await Promise.all([a, b])
+    const host = '/home/admin/.local/state/open-walnut/uploads/up-abcdefgh-dup1/big.bin'
+    expect(outA).toBe(`${FILES}\n- ${host}\n\nfirst`)
+    expect(outB).toBe(`${FILES}\n- ${host}\n\nsecond`)
+    // Two chunks for one ship; a second ship would have sent four.
+    expect(conn.send.mock.calls.filter((c) => c[0] === 'upload.part').map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 2 * 1024 * 1024])
+  })
+
+  it('a host whose daemon cannot take files gets the local path with a note saying so', async () => {
+    const local = uploaded('up-abcdefgh-5678', 'a.pdf', '%PDF')
+    const mgr = new RemoteSessionManager('sid-files-old', 'remotehost', REMOTE_TARGET)
+    const conn = { ...makeConn(), hasCapability: () => false }
+    injectConn(mgr, conn)
+    const out = await mgr.prepareOutbound(`${FILES}\n- ${local}\n\nread it`)
+    expect(out).toBe(`${FILES}\n- ${local} (could not be copied to this host: this host's Walnut daemon cannot take files yet)\n\nread it`)
+    expect(conn.send.mock.calls.some((c) => c[0] === 'upload.part')).toBe(false)
+  })
+
+  it('a refused or failed ship keeps the local path with the reason', async () => {
+    const refused = uploaded('up-abcdefgh-9999', 'full.zip', 'z')
+    const broken = uploaded('up-abcdefgh-8888', 'cut.zip', 'c')
+    const mgr = new RemoteSessionManager('sid-files-bad', 'remotehost', REMOTE_TARGET)
+    const conn = {
+      ...makeConn(async (_cmd, payload) => {
+        if (payload.uploadId === 'up-abcdefgh-8888') throw new Error('daemon command timeout: upload.part')
+        return { ok: false, error: 'upload.part failed: this host has 10 bytes free', code: 'no_space' }
+      }),
+      hasCapability: (cap: string) => cap === 'upload-part-v1',
+    }
+    injectConn(mgr, conn)
+    const out = await mgr.prepareOutbound(`${FILES}\n- ${refused}\n- ${broken}\n\nunzip`)
+    expect(out).toBe([
+      FILES,
+      `- ${refused} (could not be copied to this host: this host has 10 bytes free)`,
+      `- ${broken} (could not be copied to this host: daemon command timeout: upload.part)`,
+      '', 'unzip',
+    ].join('\n'))
+  })
+
+  it('a path shaped like an upload outside the upload folders is never read or sent', async () => {
+    const dir = path.join(tmpBase, 'projects', 'x', 'uploads', 'up-abcdefgh-0000')
+    fs.mkdirSync(dir, { recursive: true })
+    const local = path.join(dir, 'secrets.env.txt')
+    fs.writeFileSync(local, 'TOKEN=1')
+    const mgr = new RemoteSessionManager('sid-outside', 'remotehost', REMOTE_TARGET)
+    const conn = filesConn()
+    injectConn(mgr, conn)
+    const text = `${FILES}\n- ${local}\n\nhi`
+    expect(await mgr.prepareOutbound(text)).toBe(text)
+    expect(conn.send).not.toHaveBeenCalled()
+  })
+})

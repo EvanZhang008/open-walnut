@@ -6,7 +6,8 @@
  *
  * Now each Home draft column's row (folder, host, project, model, task fields)
  * is kept beside its composer text under `draft:new-session-col:<id>`. At load a
- * column whose composer still has words comes back in its slot; one without
+ * column whose composer still has words (or uploaded attachments: a file sent
+ * with no words) comes back in its slot; one without
  * words is forgotten, row and key. A drawer's draft (`ask-object:…` ids, keyed by
  * the object it asks about) is reachable again by opening that object, so it is
  * never swept here.
@@ -14,6 +15,7 @@
 import { isDraftColumnId } from '@/utils/column-ids';
 import type { DraftColumn } from './draft-column';
 import { draftComposerKey } from './draft-column';
+import { keptAttachmentsKey, parseSavedAttachments } from '@/components/common/composer-attachments';
 
 const COL_PREFIX = 'draft:new-session-col:';
 const TEXT_PREFIX = draftComposerKey('');
@@ -63,11 +65,18 @@ export function restoreDraftColumns(fresh: (id: string) => DraftColumn, store: S
   for (const id of new Set([...textIds, ...colIds])) {
     if (!isDraftColumnId(id)) continue;
     const text = store.getItem(draftComposerKey(id)) ?? '';
-    if (!text.trim()) {
+    const attachKey = keptAttachmentsKey(draftComposerKey(id));
+    // Only an uploaded one is something to come back for (an unfinished one is just a note).
+    const attached = attachKey ? parseSavedAttachments(store.getItem(attachKey)).some((a) => !a.orphan) : false;
+    if (!text.trim() && !attached) {
       // A row with no words may be another open window's column, still being
       // filled in: it is not brought back here, and goes only once it is a day old.
       if (now - openedAt(id) > ROW_KEEP_MS) {
-        try { store.removeItem(draftColumnKey(id)); if (text) store.removeItem(draftComposerKey(id)); } catch { /* storage off */ }
+        try {
+          store.removeItem(draftColumnKey(id));
+          if (text) store.removeItem(draftComposerKey(id));
+          if (attachKey) store.removeItem(attachKey);
+        } catch { /* storage off */ }
       }
       continue;
     }

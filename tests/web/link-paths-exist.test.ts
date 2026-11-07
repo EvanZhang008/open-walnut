@@ -26,7 +26,7 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
   getDaemonConnection: async () => ({ send: (_cmd: string, args: { path: string }) => stat(args.path) }),
 }))
 
-const { linkPathsExist } = await import('../../src/web/routes/files.js')
+const { linkPathsExist, linkPathsStat } = await import('../../src/web/routes/files.js')
 
 describe('linkPathsExist', () => {
   it('answers a local path that is there, one that is gone, and leaves out one it may not read', async () => {
@@ -46,4 +46,27 @@ describe('linkPathsExist', () => {
     expect(Date.now() - started).toBeLessThan(4_500)
     expect(out).toEqual({ '/srv/run/quick.md': false })
   }, 10_000)
+
+  it('answers the size of each file found, here and on a host; exists stays as it was', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'link-exists-'))
+    const here = path.join(dir, 'report.pdf')
+    await fs.writeFile(here, 'x'.repeat(1234))
+    const gone = path.join(dir, 'gone.pdf')
+    const folder = path.join(dir, 'sub')
+    await fs.mkdir(folder)
+    expect(await linkPathsStat([here, gone, folder], undefined)).toEqual({
+      exists: { [here]: true, [gone]: false, [folder]: true },
+      sizes: { [here]: 1234 },
+    })
+    expect(await linkPathsExist([here, gone, folder], undefined)).toEqual({ [here]: true, [gone]: false, [folder]: true })
+    await fs.rm(dir, { recursive: true, force: true })
+
+    stat.mockImplementation(async (p) => (p.endsWith('big.mov')
+      ? { ok: true, exists: true, size: 5_000_000_000, mtimeMs: 1 }
+      : { ok: true, exists: false }))
+    expect(await linkPathsStat(['/srv/u/big.mov', '/srv/u/none.mov'], 'slowbox')).toEqual({
+      exists: { '/srv/u/big.mov': true, '/srv/u/none.mov': false },
+      sizes: { '/srv/u/big.mov': 5_000_000_000 },
+    })
+  })
 })

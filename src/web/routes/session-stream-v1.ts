@@ -41,7 +41,7 @@ import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buf
 import { resolveCloudSessionHost, PrimaryUnreachableError } from '../../core/sessions/cloud-session-host.js'
 import { resolveHostOrAnswer } from './cloud-session-send.js'
 import { postSessionMessage, getSessionMessageStatus } from './session-send-v1.js'
-import { putSessionUploadChunk, uploadChunkBody } from './session-upload-v1.js'
+import { putLocalUploadChunk, putSessionUploadChunk, uploadChunkBody } from './session-upload-v1.js'
 import { transcriptFromJsonl, TRANSCRIPT_TAIL_BYTES } from '../../core/sessions/transcript-from-jsonl.js'
 import { log } from '../../logging/index.js'
 
@@ -264,6 +264,8 @@ sessionStreamV1Router.post('/sessions/:id/messages', postSessionMessage)
 sessionStreamV1Router.get('/sessions/:id/messages/:messageId', getSessionMessageStatus)
 // One chunk of a file attached from a phone (session-upload-v1.ts).
 sessionStreamV1Router.put('/sessions/:id/uploads/:uploadId', uploadChunkBody, putSessionUploadChunk)
+// The same for a file with no session yet: it lands on this machine (session-upload-v1.ts).
+sessionStreamV1Router.put('/uploads/:uploadId', uploadChunkBody, putLocalUploadChunk)
 
 // ─── GET /sessions/:id/stream ───────────────────────────────────────────────
 

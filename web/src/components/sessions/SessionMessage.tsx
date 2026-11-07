@@ -33,6 +33,8 @@ import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
+import { splitAttachmentHeaders } from '@/api/file-upload';
+import { MessageAttachments } from './MessageAttachments';
 import { injectedContextLabel } from '@open-walnut/walnut-added';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
@@ -1295,6 +1297,11 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     const body = bannerSplit ? bannerSplit.body : ownText;
     return isUser && body ? shortenFileAboutLine(body, sessionCwd) : body;
   }, [bannerSplit, ownText, isUser, sessionCwd]);
+  // The attachments a person sent ride in front of their words as headers
+  // naming the saved paths (`[Images attached …]`, `[Files attached …]`): drawn
+  // as pictures and file cards above the words instead of as path lists.
+  const attachmentSplit = useMemo(() => (isUser && bodyText ? splitAttachmentHeaders(bodyText) : null), [isUser, bodyText]);
+  const shownUserText = attachmentSplit ? attachmentSplit.body : bodyText;
 
   // …and its ANSWER is a JSON object, usually with the model's own reasoning
   // above it ("Looking at the seed results, I can see strong matches for …" plus
@@ -1451,7 +1458,12 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           // placeholder inside a user message, and it would also make anything
           // they copied off a web page render as DOM rather than as the text
           // they can see they pasted.
-          <StableMarkdownBody text={showHintTagsAsTyped(bodyText)} cwd={sessionCwd} />
+          <>
+            {attachmentSplit && (
+              <MessageAttachments images={attachmentSplit.images} files={attachmentSplit.files} host={sessionHost} {...(onFileOpen ? { onFileOpen } : {})} />
+            )}
+            {shownUserText && <StableMarkdownBody text={showHintTagsAsTyped(shownUserText)} cwd={sessionCwd} />}
+          </>
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}

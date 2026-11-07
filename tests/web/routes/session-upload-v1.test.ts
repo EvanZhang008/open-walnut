@@ -10,9 +10,19 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-session-upload', { CLOUD_MODE: false }))
 
-const { records, uploadPartMock } = vi.hoisted(() => ({
+const { records, uploadPartMock, role, bridgeRequestMock } = vi.hoisted(() => ({
   records: new Map<string, Record<string, unknown>>(),
   uploadPartMock: vi.fn(),
+  role: { companion: false },
+  bridgeRequestMock: vi.fn(),
+}))
+vi.mock('../../../src/core/server-role.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/server-role.js')>()),
+  isCompanion: () => role.companion,
+}))
+vi.mock('../../../src/web/ws/bridge-registry.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/web/ws/bridge-registry.js')>()),
+  bridgeRequest: bridgeRequestMock,
 }))
 vi.mock('../../../src/core/session-tracker.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/core/session-tracker.js')>()),
@@ -55,6 +65,8 @@ beforeEach(() => {
   records.clear()
   records.set(SID, { claudeSessionId: SID, host: 'devbox', taskId: 'task-abc' })
   uploadPartMock.mockReset()
+  bridgeRequestMock.mockReset()
+  role.companion = false
 })
 
 describe('PUT /api/v1/sessions/:id/uploads/:uploadId (primary)', () => {
@@ -149,6 +161,70 @@ describe('PUT /api/v1/sessions/:id/uploads/:uploadId (primary)', () => {
   it('an unknown session is 404', async () => {
     const res = await put({ offset: '0', size: '5', name: 'a.txt' }, Buffer.from('hello'), 'nobody')
     expect(res.status).toBe(404)
+    expect(uploadPartMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('PUT /api/v1/uploads/:uploadId (no session yet)', () => {
+  function putLocal(query: Record<string, string>, body: Buffer, up = UP) {
+    return request(app())
+      .put(`/api/v1/uploads/${up}`)
+      .query(query)
+      .set('Content-Type', 'application/octet-stream')
+      .send(body)
+  }
+
+  it('writes on this machine with no session or task, and answers the path at the end', async () => {
+    uploadPartMock.mockResolvedValue({ staged: 5, done: true, path: '/h/.local/state/open-walnut/uploads/x/notes.pdf' })
+    const res = await putLocal({ offset: '0', size: '5', name: 'notes.pdf' }, Buffer.from('%PDF-'))
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ received: 5, size: 5, done: true, path: '/h/.local/state/open-walnut/uploads/x/notes.pdf' })
+    const [host, opts] = uploadPartMock.mock.calls[0]
+    expect(host).toBe('__local__')
+    expect(opts.sessionId).toBeUndefined()
+    expect(opts.taskId).toBeUndefined()
+    expect(opts).toMatchObject({ uploadId: UP, name: 'notes.pdf', size: 5, offset: 0, home: WALNUT_HOME })
+  })
+
+  it('answers a resume point in the contract shape', async () => {
+    uploadPartMock.mockRejectedValue(new TransferCommandError('staged 2', '__local__', 'upload.part', 'gap', { have: 2 }))
+    const res = await putLocal({ offset: '4', size: '8', name: 'a.zip' }, Buffer.from('abcd'))
+    expect(res.status).toBe(409)
+    expect(res.body.error).toMatchObject({ code: 'upload_offset_mismatch', received: 2 })
+  })
+
+  it('refuses a bad name or id before anything reaches the daemon', async () => {
+    expect((await putLocal({ offset: '0', size: '1', name: '../a' }, Buffer.from('a'))).status).toBe(400)
+    expect((await putLocal({ offset: '0', size: '1', name: 'a' }, Buffer.from('a'), 'up-x')).status).toBe(400)
+    expect(uploadPartMock).not.toHaveBeenCalled()
+  })
+
+  it("on the companion, every chunk goes to the Mac's daemon over the bridge, never its own disk", async () => {
+    role.companion = true
+    bridgeRequestMock
+      .mockResolvedValueOnce({ ok: true, staged: 4 })
+      .mockResolvedValueOnce({ ok: true, staged: 8, done: true, path: '/Users/me/.local/state/open-walnut/uploads/x/a.zip' })
+    const first = await putLocal({ offset: '0', size: '8', name: 'a.zip' }, Buffer.from('abcd'))
+    const last = await putLocal({ offset: '4', size: '8', name: 'a.zip', sha256: 'b'.repeat(64) }, Buffer.from('efgh'))
+    expect(first.status).toBe(200)
+    expect(last.body).toEqual({ received: 8, size: 8, done: true, path: '/Users/me/.local/state/open-walnut/uploads/x/a.zip' })
+    expect(uploadPartMock).not.toHaveBeenCalled()
+    expect(bridgeRequestMock.mock.calls.map((c) => c[0])).toEqual(['__local__', '__local__'])
+    const [, cmd, params] = bridgeRequestMock.mock.calls[1]
+    expect(cmd).toBe('upload.part')
+    expect(params).toMatchObject({ uploadId: UP, name: 'a.zip', size: 8, offset: 4, sha256: 'b'.repeat(64) })
+    expect(Buffer.from(params.data, 'base64').toString()).toBe('efgh')
+    // No session or task to name: the Mac's daemon files it where the Mac's own route does.
+    expect(params.sessionId).toBeUndefined()
+    expect(params.taskId).toBeUndefined()
+  })
+
+  it('on the companion with the Mac away, a chunk answers a retryable 503', async () => {
+    role.companion = true
+    bridgeRequestMock.mockRejectedValue(new Error('No live bridge for host: __local__'))
+    const res = await putLocal({ offset: '0', size: '4', name: 'a.zip' }, Buffer.from('abcd'))
+    expect(res.status).toBe(503)
+    expect(res.body.error).toMatchObject({ code: 'bridge_offline' })
     expect(uploadPartMock).not.toHaveBeenCalled()
   })
 })

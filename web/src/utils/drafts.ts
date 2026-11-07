@@ -26,6 +26,7 @@ import { getDeviceToken } from '@/api/device-token';
 import { log } from '@/utils/log';
 import { foldPending, hasCredential, isDraftKey, MAX_SYNCED_DRAFT_LEN, planDraftMerge, type DraftEntry } from './draft-merge';
 import { onLocalStorageWrite, rawLocalStorage } from './ui-prefs-sync';
+import { KEPT_ATTACHMENTS_PREFIX } from './kept-attachments-key';
 
 export { isDraftKey } from './draft-merge';
 
@@ -82,6 +83,8 @@ export function clearDraft(key: string | null | undefined): void {
 export function discardDraft(key: string): void {
   discardedAt.set(key, ++saveSeq);
   writeDraft(key, '');
+  // The attachments kept beside the words go with them (ChatInput keeps them on this device).
+  try { localStorage.removeItem(KEPT_ATTACHMENTS_PREFIX + key); } catch { /* storage off */ }
 }
 
 /** A mark for a save a box owes, taken when the words were typed. */

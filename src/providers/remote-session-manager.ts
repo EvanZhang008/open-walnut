@@ -19,13 +19,17 @@ import fs from 'node:fs'
 import { statusReplyAlive } from './daemon-status-reply.js'
 import path from 'node:path'
 import { IS_EPHEMERAL, REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
+import {
+  attachedFilePaths, findShippableFiles, localShipRoots, rewriteShipped, shipFile, UPLOAD_PART_CAPABILITY,
+  type ShippableFile, type ShipOutcome,
+} from './outbound-uploads.js'
 import { cliStateOf, isConversationActivityLine, type CliTurnState } from './stream-activity.js'
 import {
   writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored,
   fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply, startMirrorDownload,
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
-import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
+import { getConnectedDaemonConnection, getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { BudgetCheckingError, BudgetPausedError, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
 import { linkFailureKind } from './link-failure.js'
@@ -118,6 +122,16 @@ export class RemoteSessionManager implements SessionManager {
   // those we fall back to the uuid Set below. -1 = nothing seen yet.
   private _lastSeenV = -1
   private _imageCache = new Map<string, string>()
+  /** Local file (resolved) → its copy on the host, for files shipLocalFiles already sent (outbound-uploads.ts). */
+  private _shippedFiles = new Map<string, string>()
+  /**
+   * Local file (resolved) → its ship in flight. Two sends naming the same file
+   * at once (a queued line and a resend) share one, so the host never takes two
+   * interleaved copies of one upload id.
+   */
+  private _shipping = new Map<string, Promise<ShipOutcome>>()
+  /** The task start() was given: the host files shipped files under its directory. */
+  private _taskId: string | undefined
   /**
    * The exact text of the last outbound user message AFTER prepareOutbound()
    * (remote sessions: local image paths uploaded + rewritten to remote paths).
@@ -350,6 +364,7 @@ export class RemoteSessionManager implements SessionManager {
     this._onOutput = opts.onOutput
     this._onExit = opts.onExit
     this._sid = this.tmpId
+    if (opts.taskId) this._taskId = opts.taskId
     this.rebindEventListener()
 
     // Quick Start spill file: upload to the same absolute path on the remote host
@@ -1355,6 +1370,8 @@ export class RemoteSessionManager implements SessionManager {
     // events after a detach but before re-attach, so clearing there would drop
     // dedup state mid-reconnect. cleanup() = real teardown, safe to clear.
     this._imageCache.clear()
+    this._shippedFiles.clear()
+    this._shipping.clear()
     this._seenUuids.clear()
     this.cloudRewriteAttempts.clear()
     this.knownPermissionRequests.clear()
@@ -1373,8 +1390,12 @@ export class RemoteSessionManager implements SessionManager {
 
     let rewritten = message
 
-    // Upload local images to remote host via daemon (path rewritten to remote location)
-    const imagePaths = findLocalImagePaths(message)
+    // Upload local images to remote host via daemon (path rewritten to remote location).
+    // A picture sent as a file (one too big for the picture lane is listed under
+    // the files header) is read whole by fs.write here, so a path listed under a
+    // files or paste header takes shipLocalFiles' chunked lane, whatever its extension.
+    const asFiles = attachedFilePaths(message)
+    const imagePaths = findLocalImagePaths(message).filter((p) => !asFiles.has(p))
     for (const localPath of imagePaths) {
       try {
         const data = fs.readFileSync(localPath)
@@ -1407,7 +1428,57 @@ export class RemoteSessionManager implements SessionManager {
       }
     }
 
-    return rewritten
+    return this.shipLocalFiles(rewritten)
+  }
+
+  /**
+   * Walnut's own files the message names (an attachment uploaded before the
+   * session existed, a spilled paste) exist only here: send them to the host in
+   * chunks and name the host's copy (outbound-uploads.ts). A file that could not
+   * be sent (the host refused it, its daemon has no `upload.part`, the link
+   * failed) keeps its local path with a note after it, so the agent is told why
+   * it cannot open it rather than handed a path that does not exist there.
+   */
+  private async shipLocalFiles(message: string): Promise<string> {
+    const conn = this.conn
+    if (!conn?.connected) return message
+    const files = findShippableFiles(message, localShipRoots(getConnectedDaemonConnection('__local__')?.taskDirRoot))
+    if (files.length === 0) return message
+    const shipped = new Map<string, string>()
+    const failed = new Map<string, string>()
+    if (!conn.hasCapability(UPLOAD_PART_CAPABILITY)) {
+      log.session.warn('RemoteSessionManager: host cannot take files yet, keeping local paths', { host: this.hostKey, count: files.length })
+      for (const file of files) failed.set(file.localPath, "this host's Walnut daemon cannot take files yet")
+      return rewriteShipped(message, shipped, failed)
+    }
+    for (const file of files) {
+      const outcome = await this.shipOnce(file, conn)
+      if (outcome.ok) shipped.set(file.localPath, outcome.path)
+      else failed.set(file.localPath, outcome.reason)
+    }
+    return rewriteShipped(message, shipped, failed)
+  }
+
+  /** One file to the host, at most one ship of it at a time; a shipped one is not sent again. */
+  private shipOnce(file: ShippableFile, conn: DaemonConnection): Promise<ShipOutcome> {
+    const known = this._shippedFiles.get(file.readPath)
+    if (known) return Promise.resolve({ ok: true, path: known })
+    const inFlight = this._shipping.get(file.readPath)
+    if (inFlight) return inFlight
+    const owner = { ...(this._sid ? { sessionId: this._sid } : {}), ...(this._taskId ? { taskId: this._taskId } : {}), home: WALNUT_HOME }
+    const ship = shipFile(file, (cmd, params, timeoutMs) => conn.send(cmd, params, timeoutMs) as Promise<Record<string, unknown>>, owner)
+      .then((outcome): ShipOutcome => {
+        if (outcome.ok) this._shippedFiles.set(file.readPath, outcome.path)
+        else log.session.warn('RemoteSessionManager: file upload refused by daemon, keeping local path', { localPath: file.localPath, host: this.hostKey, reason: outcome.reason })
+        return outcome
+      }, (err: unknown): ShipOutcome => {
+        const reason = err instanceof Error ? err.message : String(err)
+        log.session.warn('RemoteSessionManager: file upload failed', { localPath: file.localPath, host: this.hostKey, error: reason })
+        return { ok: false, reason }
+      })
+      .finally(() => { this._shipping.delete(file.readPath) })
+    this._shipping.set(file.readPath, ship)
+    return ship
   }
 
   /**

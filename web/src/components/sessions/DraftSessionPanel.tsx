@@ -79,6 +79,9 @@ import '@/styles/walnut-agent.css';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { focusWhenShown } from '@/utils/focus-when-shown';
 import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
+
+/** Files attached before the session exists (api/file-upload.ts). */
+const NO_SESSION_YET = {} as const;
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 const PLACEHOLDER = 'What should this session do?';
@@ -891,6 +894,8 @@ export function DraftSessionPanel({
         />}
         <ChatInput
           onSend={(body, images) => startWith(body, images)}
+          // No session yet: files land on this machine and go to the session's host with its first message.
+          fileTarget={NO_SESSION_YET}
           onValueChange={setText}
           // The arrow is the ONE start affordance, so an empty composer may send
           // only where '' means something: a bound draft sends its task's title, a

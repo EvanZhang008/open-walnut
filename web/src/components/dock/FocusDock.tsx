@@ -179,6 +179,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
         <div className="dock-task-input" onClick={(e) => e.stopPropagation()}>
           <ChatInput
             onSend={handleSend}
+            fileTarget={{ sessionId }}
             placeholder="Send message... (/ for commands)"
             sessionCommands={slashCommands}
             searchSessionCommands={searchSlashCommands}

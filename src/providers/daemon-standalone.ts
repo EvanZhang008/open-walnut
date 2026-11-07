@@ -2711,7 +2711,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // A private write ('transfer-private-v1') is authorized by this socket's own
     // binding (leader.configure / leader.claim), never by a field of the command.
     // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
-    case 'upload.part': return replyTransfer(ws, id as number, 'upload.part', () => transferCore.uploadPart(cmd, uploadsRootFor(cmd, ws.data?.origin === 'bridge')), false)
+    case 'upload.part': return replyTransfer(ws, id as number, 'upload.part', () => {
+      const root = uploadsRootFor(cmd, ws.data?.origin === 'bridge')
+      return transferCore.uploadPart(cmd, root, root === uploadsOwnerlessRoot())
+    }, false)
     case 'fs.writePart': return replyTransfer(ws, id as number, 'fs.writePart', () => transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) ?? null, origin: ws.data?.origin ?? null }), false)
     case 'transfer.pack': return replyTransfer(ws, id as number, 'transfer.pack', () => transferPack.pack(cmd), true)
     case 'transfer.reach': return replyTransfer(ws, id as number, 'transfer.reach', () => transferCore.reach(cmd), false)
@@ -11677,11 +11680,15 @@ function readDaemonOwnerStamp(): string | null | undefined {
  * empties). The directory is made by an upload's first chunk only. Keep in sync
  * with daemon-source.ts.
  */
+/** The uploads folder no task owns (a file sent before its session existed); twin of daemon-source.ts. */
+function uploadsOwnerlessRoot(): string {
+  return path.join(path.dirname(TASK_DIR_ROOT), 'uploads')
+}
 function uploadsRootFor(cmd: Record<string, unknown>, bridge: boolean): string {
   const sid = typeof cmd.sessionId === 'string' ? cmd.sessionId : ''
   const known = sid ? (sessions.get(sid)?.spawnInfo?.task ?? hostResume.recall(sid)?.task) : undefined
   const taskId = known ?? (bridge ? undefined : cmd.taskId)
-  const fallback = path.join(path.dirname(TASK_DIR_ROOT), 'uploads')
+  const fallback = uploadsOwnerlessRoot()
   if (cmd.offset !== 0) {
     const dir = isTaskDirId(taskId) ? taskDirPath(TASK_DIR_ROOT, taskId) : null
     return dir && fs.existsSync(dir) ? path.join(dir, 'uploads') : fallback

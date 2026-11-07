@@ -9,6 +9,8 @@
  * - Primary box, and a session the companion runs itself: the host's daemon
  *   connection ('__local__' for this machine).
  * - Companion, a session on another machine: the bridge to that host.
+ * - PUT /api/v1/uploads/:uploadId (no session yet): the Mac's daemon, over the
+ *   bridge on the companion (putLocalUploadChunk says why).
  *
  * Resumable: a chunk the host already holds is acknowledged without writing, a
  * chunk past what it holds answers 409 `upload_offset_mismatch` with `received`
@@ -67,14 +69,19 @@ async function viaBridge(sessionId: string, part: Part): Promise<WritePartReply>
     throw err
   }
   if (!projected) throw new HostRefusal('not_found', `Session not found: ${sessionId}`)
+  // The host files it under the task IT started this session for.
+  return bridgePart(projected.host, part, { sessionId })
+}
+
+/** One chunk over the bridge to `host`'s daemon, every failure named the contract's way. */
+async function bridgePart(host: string, part: Part, extra: { sessionId?: string }): Promise<WritePartReply> {
   const { bridgeRequest } = await import('../ws/bridge-registry.js')
   let res: Record<string, unknown>
   try {
-    res = await bridgeRequest(projected.host, 'upload.part', {
+    res = await bridgeRequest(host, 'upload.part', {
       uploadId: part.uploadId, name: part.name, size: part.size, offset: part.offset,
       data: part.data.toString('base64'), ...(part.sha256 ? { sha256: part.sha256 } : {}),
-      // The host files it under the task IT started this session for.
-      sessionId,
+      ...extra,
     }, BRIDGE_PART_TIMEOUT_MS)
   } catch (err) {
     // No bridge, a timeout, a link that closed mid-chunk: all retry the chunk.
@@ -93,14 +100,17 @@ async function viaDaemon(sessionId: string, part: Part): Promise<WritePartReply>
   const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
   const record = await getSessionByClaudeId(sessionId)
   if (!record) throw new HostRefusal('not_found', `Session not found: ${sessionId}`)
-  const host = record.host || '__local__'
+  return toHost(record.host || '__local__', part, { ...(record.taskId ? { taskId: record.taskId } : {}), sessionId })
+}
+
+/** One chunk onto `host` through its daemon connection, every failure named the contract's way. */
+async function toHost(host: string, part: Part, owner: { taskId?: string; sessionId?: string }): Promise<WritePartReply> {
   const client = await import('../../core/transfer/daemon-transfer-client.js')
   const { DaemonNeedsUpgradeError } = await import('../../core/daemon-file-reader.js')
   try {
     return await client.uploadPart(host, {
       uploadId: part.uploadId, name: part.name, size: part.size, offset: part.offset, data: part.data,
-      ...(part.sha256 ? { sha256: part.sha256 } : {}), ...(record.taskId ? { taskId: record.taskId } : {}), home: WALNUT_HOME,
-      sessionId,
+      ...(part.sha256 ? { sha256: part.sha256 } : {}), ...owner, home: WALNUT_HOME,
     })
   } catch (err) {
     if (err instanceof DaemonNeedsUpgradeError) throw new NeedsUpgrade(err.message)
@@ -111,40 +121,54 @@ async function viaDaemon(sessionId: string, part: Part): Promise<WritePartReply>
   }
 }
 
+/** The chunk a request carries, or null after answering why it cannot be taken. */
+function partOf(req: Request, res: Response): Part | null {
+  const uploadId = String(req.params.uploadId ?? '')
+  if (!UPLOAD_ID_RE.test(uploadId)) {
+    sendError(res, 400, 'bad_request', 'Invalid upload id')
+    return null
+  }
+  const name = req.query.name
+  if (!isUploadName(name)) {
+    sendError(res, 400, 'bad_request', 'name must be a plain file name (no slash, no leading dot, at most 200 bytes)')
+    return null
+  }
+  const size = intParam(req.query.size, Number.MAX_SAFE_INTEGER)
+  const offset = intParam(req.query.offset, Number.MAX_SAFE_INTEGER)
+  const sha = typeof req.query.sha256 === 'string' && req.query.sha256 !== '' ? req.query.sha256.toLowerCase() : undefined
+  if (size === null || offset === null || (sha !== undefined && !SHA_RE.test(sha))) {
+    sendError(res, 400, 'bad_request', 'size and offset must be whole numbers; sha256 is 64 hex characters')
+    return null
+  }
+  if (size > MAX_UPLOAD_BYTES) {
+    sendError(res, 413, 'too_large', `A file can be at most ${MAX_UPLOAD_BYTES / 1024 ** 3} GB`)
+    return null
+  }
+  const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+  if (data.length > UPLOAD_CHUNK_BYTES) {
+    sendError(res, 413, 'too_large', `A chunk can be at most ${UPLOAD_CHUNK_BYTES} bytes`)
+    return null
+  }
+  if (offset + data.length > size) {
+    sendError(res, 400, 'bad_request', 'The chunk ends past the file size')
+    return null
+  }
+  return { uploadId, name, size, offset, data, ...(sha ? { sha256: sha } : {}) }
+}
+
+function answerReply(res: Response, part: Part, reply: WritePartReply): void {
+  res.json({ received: reply.staged, size: part.size, done: reply.done === true, ...(reply.done && reply.path ? { path: reply.path } : {}) })
+}
+
 export async function putSessionUploadChunk(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const sessionId = String(req.params.id ?? '')
-    const uploadId = String(req.params.uploadId ?? '')
-    if (!SID_RE.test(sessionId) || !UPLOAD_ID_RE.test(uploadId)) {
+    if (!SID_RE.test(sessionId)) {
       sendError(res, 400, 'bad_request', 'Invalid session or upload id')
       return
     }
-    const name = req.query.name
-    if (!isUploadName(name)) {
-      sendError(res, 400, 'bad_request', 'name must be a plain file name (no slash, no leading dot, at most 200 bytes)')
-      return
-    }
-    const size = intParam(req.query.size, Number.MAX_SAFE_INTEGER)
-    const offset = intParam(req.query.offset, Number.MAX_SAFE_INTEGER)
-    const sha = typeof req.query.sha256 === 'string' && req.query.sha256 !== '' ? req.query.sha256.toLowerCase() : undefined
-    if (size === null || offset === null || (sha !== undefined && !SHA_RE.test(sha))) {
-      sendError(res, 400, 'bad_request', 'size and offset must be whole numbers; sha256 is 64 hex characters')
-      return
-    }
-    if (size > MAX_UPLOAD_BYTES) {
-      sendError(res, 413, 'too_large', `A file can be at most ${MAX_UPLOAD_BYTES / 1024 ** 3} GB`)
-      return
-    }
-    const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
-    if (data.length > UPLOAD_CHUNK_BYTES) {
-      sendError(res, 413, 'too_large', `A chunk can be at most ${UPLOAD_CHUNK_BYTES} bytes`)
-      return
-    }
-    if (offset + data.length > size) {
-      sendError(res, 400, 'bad_request', 'The chunk ends past the file size')
-      return
-    }
-    const part: Part = { uploadId, name, size, offset, data, ...(sha ? { sha256: sha } : {}) }
+    const part = partOf(req, res)
+    if (!part) return
     const relayed = isCompanion() && !(await (await import('../../core/cloud-owned-session.js')).cloudOwnedSession(sessionId))
     let reply: WritePartReply
     try {
@@ -154,9 +178,44 @@ export async function putSessionUploadChunk(req: Request, res: Response, next: N
       return
     }
     if (reply.done) {
-      log.web.info('session upload complete', { sessionId, uploadId, size, relayed })
+      log.web.info('session upload complete', { sessionId, uploadId: part.uploadId, size: part.size, relayed })
     }
-    res.json({ received: reply.staged, size, done: reply.done === true, ...(reply.done && reply.path ? { path: reply.path } : {}) })
+    answerReply(res, part, reply)
+  } catch (err) {
+    next(err)
+  }
+}
+
+/**
+ * PUT /api/v1/uploads/:uploadId: the same chunk contract for a file that has no
+ * session yet (the first message of a new session, Main's chat on the phone).
+ * It lands on the Mac, in the folder beside the task directories; a session that
+ * then runs on another host gets the file through
+ * RemoteSessionManager.prepareOutbound, which ships such paths there.
+ *
+ * The companion never keeps such a file on its own disk. The session it is for
+ * is started by the Mac (POST /sessions waits for the Mac), which reads the path
+ * on its own disk; and the chunks of one upload split between the two servers
+ * (a chunk over MAX_FORWARD_REQUEST_BYTES stays on the companion, a smaller last
+ * one is forwarded to the Mac), so writing here would leave half a file on each.
+ * It hands the chunk to the Mac's daemon over the bridge instead ('__local__',
+ * the same lane a Mac session's upload takes), which files it where the Mac's
+ * own route does. The Mac being away answers 503 bridge_offline, which the
+ * client retries.
+ */
+export async function putLocalUploadChunk(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const part = partOf(req, res)
+    if (!part) return
+    let reply: WritePartReply
+    try {
+      reply = isCompanion() ? await bridgePart('__local__', part, {}) : await toHost('__local__', part, {})
+    } catch (err) {
+      answerFailure(res, '', part, err)
+      return
+    }
+    if (reply.done) log.web.info('upload complete', { uploadId: part.uploadId, size: part.size })
+    answerReply(res, part, reply)
   } catch (err) {
     next(err)
   }

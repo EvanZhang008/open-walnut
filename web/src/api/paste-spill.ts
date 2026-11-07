@@ -6,11 +6,12 @@
  * `ws` enforces the cap by CLOSING the socket (1009) before any handler runs.
  * A pasted log file easily exceeds that. Spilling keeps the socket alive AND
  * keeps the conversation lean — the agent reads the file with its Read tool
- * instead of holding megabytes in context. Remote sessions work unchanged:
- * RemoteSessionManager.prepareOutbound() ships referenced local file paths to
- * the remote host the same way it ships image paths.
+ * instead of holding megabytes in context. A session on another host gets the
+ * file too: RemoteSessionManager.prepareOutbound() ships Walnut's own files
+ * named on a `- <path>` line there first (src/providers/outbound-uploads.ts).
  */
 
+import { splitAttachmentHeaders, withFilePaths } from './file-upload';
 import { apiPost } from './client';
 
 /**
@@ -30,13 +31,20 @@ export const PASTE_SPILL_THRESHOLD = 200_000;
 export async function spillOversizedText(text: string): Promise<string> {
   if (text.length <= PASTE_SPILL_THRESHOLD) return text;
 
+  // Attached files stay in front, in the message itself: the server finds them
+  // there (to copy them to a remote session's host), never inside the spilled file.
+  const parts = splitAttachmentHeaders(text);
+  const files = parts?.files ?? [];
+  const body = files.length > 0 && parts ? parts.body : text;
+  if (body.length <= PASTE_SPILL_THRESHOLD) return text;
   const res = await apiPost<{ path: string; chars: number }>(
     '/api/pastes',
-    { text },
+    { text: body },
     { timeoutMs: 60_000 },
   );
-  return (
+  return withFilePaths(
     `[Large text attached — ${res.chars.toLocaleString()} chars, spilled to a file. `
-    + `Use the Read tool to view it]\n- ${res.path}`
+    + `Use the Read tool to view it]\n- ${res.path}`,
+    files,
   );
 }

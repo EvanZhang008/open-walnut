@@ -665,3 +665,17 @@ export async function fetchPathsExist(paths: readonly string[], host?: string): 
   const body = await apiPost<{ exists?: Record<string, boolean> }>('/api/files/exists', { paths, ...(host ? { host } : {}) }, { background: true, timeoutMs: 10_000 });
   return body?.exists ?? {};
 }
+
+/** The sizes of these files on the host, from the same request (`sizes`), and which the host
+ *  said are gone (`exists: false`); a path it could not answer for (slow, offline) is in neither.
+ *  At most 8 paths a request (the route's cap). */
+export async function fetchPathSizes(paths: readonly string[], host?: string): Promise<{ sizes: Record<string, number>; gone: Set<string> }> {
+  const sizes: Record<string, number> = {};
+  const gone = new Set<string>();
+  for (let i = 0; i < paths.length; i += 8) {
+    const body = await apiPost<{ sizes?: Record<string, number>; exists?: Record<string, boolean> }>('/api/files/exists', { paths: paths.slice(i, i + 8), ...(host ? { host } : {}) }, { background: true, timeoutMs: 10_000 });
+    Object.assign(sizes, body?.sizes ?? {});
+    for (const [p, there] of Object.entries(body?.exists ?? {})) if (there === false) gone.add(p);
+  }
+  return { sizes, gone };
+}

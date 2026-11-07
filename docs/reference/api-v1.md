@@ -250,6 +250,7 @@ path on the companion".
 | POST | `/api/v1/sessions/:id/execute-compact` | Execute a plan after a compact boundary (cloud relays) |
 | GET | `/api/v1/sessions/:id/messages/:messageId` | What became of a message the companion held (`queued`); cloud only |
 | PUT | `/api/v1/sessions/:id/uploads/:uploadId` | One chunk of a file attached to a session (a video, a PDF), saved on the session's host; resumable (cloud relays to the host) |
+| PUT | `/api/v1/uploads/:uploadId` | The same chunk for a file with no session yet (a new session's first message, Main's chat), saved on the machine Walnut runs on; needs the Mac |
 | GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays). A row may carry `sentBy` (`person` \| `agent`, read from the send's source; additive, absent on older rows). Additive (2026-11-06): `stage` (`waiting`: Walnut cannot vouch that it is in the CLI yet; `written`: Walnut wrote its line into the CLI's stdin, which reads it after its current step; `taken`: the CLI read it, only the answer is to come), `delivered` (`stage === 'taken'`: the chat already shows it), `words` (only what the person typed: no attachment headers, no Walnut notices in front), `images` (`[{ path, url }]`, `url` a `/api/v1/media?path=…&session=…` path) and `files` (`[{ path, name }]`). `message` keeps its meaning (the text without hint blocks and reference cards, attachment headers included), so a client that resends it as it is keeps the pictures. A `PATCH` with words alone keeps the row's attachment headers and notices; one whose text carries its own headers keeps those |
 | PATCH | `/api/v1/sessions/:id/queue/:messageId` | Edit a queued message (cloud relays) |
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
@@ -2871,6 +2872,21 @@ primary box the same endpoints serve directly — no bridge involved.
     or a chunk that got no answer: retry the same chunk), `502 upload_failed`
     (retryable). An older server answers `404` for the route: it cannot take
     files.
+- `PUT /api/v1/uploads/:uploadId?offset=&size=&name=&sha256=` (additive
+  2026-11) → the same replies and errors as the session route above, for a file
+  attached before any session exists (the first message of a new session, the
+  main chat). It is written by the Mac's own daemon in the folder beside the
+  task directories (`<state dir>/uploads/<uploadId>/<name>`; the cloud companion
+  hands every chunk to that daemon over the bridge, never its own disk, and
+  answers `503 bridge_offline` while the Mac is away), and the message names that
+  path under the same `[Files attached …]` header. Finished files in that folder
+  are removed after 30 days. When the session that message starts runs on
+  another host, the server sends the file there before the message (over the
+  host daemon's `upload.part`, filed under the session's task) and names the
+  host's copy instead. A file it could not send keeps the local path with a note
+  after it on the same line: `- <path> (could not be copied to this host:
+  <reason>)`. A replica answers `503 needs_leader` while the Mac is away. An
+  older server answers `404`.
 - `GET /api/v1/sessions/:id/messages/:messageId` (additive, cloud only; the
   primary answers `404`, it never holds a message) → `200 { "messageId", "state", … }`.
   Read-only, safe to ask repeatedly. `state`: `held` (`waitingFor`,

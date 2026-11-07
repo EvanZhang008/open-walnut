@@ -4183,7 +4183,10 @@ function dispatchCommand(ws, id, cmd) {
     // A private write ('transfer-private-v1') is authorized by this socket's own
     // binding (leader.configure / leader.claim), never by a field of the command.
     // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
-    case 'upload.part': return replyTransfer(ws, id, 'upload.part', function () { return transferCore.uploadPart(cmd, uploadsRootFor(cmd, ws.origin === 'bridge')); }, false);
+    case 'upload.part': return replyTransfer(ws, id, 'upload.part', function () {
+      var root = uploadsRootFor(cmd, ws.origin === 'bridge');
+      return transferCore.uploadPart(cmd, root, root === uploadsOwnerlessRoot());
+    }, false);
     case 'fs.writePart': return replyTransfer(ws, id, 'fs.writePart', function () { return transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) || null, origin: ws.origin || null }); }, false);
     case 'transfer.pack': return replyTransfer(ws, id, 'transfer.pack', function () { return transferPack.pack(cmd); }, true);
     case 'transfer.reach': return replyTransfer(ws, id, 'transfer.reach', function () { return transferCore.reach(cmd); }, false);
@@ -13332,14 +13335,19 @@ function ensureTaskDirFor(taskId, home) {
 // Where a session's uploads land ('upload-part-v1'): the task's own directory,
 // the task being the one THIS daemon started the session for (a bridge caller
 // cannot name another), else a durable folder beside the task directories. Made
-// by an upload's first chunk only. Keep in sync with daemon-standalone.ts.
+// by an upload's first chunk only. Without a task, uploadsOwnerlessRoot(), whose
+// finished uploads a later upload's first chunk sweeps after 30 days
+// (transfer-core.ts sweepStaleUploads). Keep in sync with daemon-standalone.ts.
+function uploadsOwnerlessRoot() {
+  return TASK_DIR_ROOT ? path.join(path.dirname(TASK_DIR_ROOT), 'uploads') : path.join(DAEMON_DIR, 'uploads');
+}
 function uploadsRootFor(cmd, bridge) {
   var sid = typeof cmd.sessionId === 'string' ? cmd.sessionId : '';
   var s = sid ? sessions.get(sid) : null;
   var rec = sid && !(s && s.spawnInfo && s.spawnInfo.task) ? hostResume.recall(sid) : null;
   var known = (s && s.spawnInfo && s.spawnInfo.task) || (rec && rec.task) || undefined;
   var taskId = known || (bridge ? undefined : cmd.taskId);
-  var fallback = TASK_DIR_ROOT ? path.join(path.dirname(TASK_DIR_ROOT), 'uploads') : path.join(DAEMON_DIR, 'uploads');
+  var fallback = uploadsOwnerlessRoot();
   if (cmd.offset !== 0) {
     var dir0 = taskDirCore && TASK_DIR_ROOT && taskDirCore.isTaskDirId(taskId) ? taskDirCore.taskDirPath(TASK_DIR_ROOT, taskId) : null;
     return dir0 && fs.existsSync(dir0) ? path.join(dir0, 'uploads') : fallback;

@@ -189,6 +189,36 @@ describe('upload.part', () => {
     expect(fs.existsSync(path.join(root, done, 'f.bin'))).toBe(true)
   })
 
+  it('in the folder no task owns, a first chunk also sweeps finished uploads a month old; a task folder keeps them', async () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const five = Buffer.from('12345')
+    const finish = (root: string, uploadId: string, ownerless: boolean) =>
+      core.uploadPart({ uploadId, name: 'f.bin', size: 5, offset: 0, data: b64(five), sha256: sha(five) }, root, ownerless)
+    const backdate = (dir: string, days: number) => {
+      const at = new Date(Date.now() - days * DAY)
+      for (const n of fs.readdirSync(dir)) fs.utimesSync(path.join(dir, n), at, at)
+      fs.utimesSync(dir, at, at)
+    }
+    const ownerless = path.join(tmp, 'r12', 'uploads')
+    const task = path.join(tmp, 'r12', 'tasks', 'task-1', 'uploads')
+    const old = 'up-bbbbbbbb-0000-0000-0000-000000000001'
+    const recent = 'up-bbbbbbbb-0000-0000-0000-000000000002'
+    const trigger = 'up-bbbbbbbb-0000-0000-0000-000000000003'
+    for (const [root, flag] of [[ownerless, true], [task, false]] as const) {
+      await finish(root, old, flag)
+      await finish(root, recent, flag)
+      backdate(path.join(root, old), 31)
+      backdate(path.join(root, recent), 29)
+      await finish(root, trigger, flag)
+    }
+    await new Promise((r) => setTimeout(r, 200))
+    expect(fs.existsSync(path.join(ownerless, old))).toBe(false)
+    expect(fs.existsSync(path.join(ownerless, recent, 'f.bin'))).toBe(true)
+    expect(fs.existsSync(path.join(ownerless, trigger, 'f.bin'))).toBe(true)
+    expect(fs.existsSync(path.join(task, old, 'f.bin'))).toBe(true)
+    expect(fs.existsSync(path.join(task, recent, 'f.bin'))).toBe(true)
+  })
+
   it('the inlined factory text answers the same', async () => {
     const strict = new Function('"use strict"; return (' + String(createTransferCore) + ')')() as typeof createTransferCore
     const inlined = strict(deps())
@@ -215,6 +245,8 @@ describe('upload.part twin wiring', () => {
       expect(setLiteral(src, 'BRIDGE_ALLOWED_COMMANDS'), rel).toContain("'upload.part'")
       expect(setLiteral(src, 'FOLLOWER_ALLOWED_COMMANDS'), rel).not.toContain("'upload.part'")
       expect(src, rel).toContain('function uploadsRootFor(')
+      // The folder no task owns is named to the core, which sweeps its finished uploads by age.
+      expect(src, rel).toMatch(/transferCore\.uploadPart\(cmd, root, root === (UPLOADS_OWNERLESS_ROOT|uploadsOwnerlessRoot\(\))\)/)
     }
   })
 

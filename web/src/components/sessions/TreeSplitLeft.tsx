@@ -220,6 +220,7 @@ export const TreeSplitLeft = memo(function TreeSplitLeft(p: TreeSplitLeftProps) 
         <ChatInput
           onSend={send}
           onInterruptSend={interruptSend}
+          fileTarget={{ sessionId }}
           onStop={p.onStop}
           isStreaming={p.isStreaming}
           sendBlocked={p.sendBlocked}

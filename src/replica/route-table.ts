@@ -108,6 +108,8 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: W, pattern: '/api/v1/sessions/:id/messages', away: 'needs-leader', why: 'session_writes_need_mac' },
   // A phone's file for a session, one chunk at a time (session-upload-v1.ts): the Mac relays it to the host.
   { method: 'PUT', pattern: '/api/v1/sessions/:id/uploads/:uploadId', away: 'needs-leader', why: 'session_writes_need_mac' },
+  // A file for a message with no session yet (a new session's first words): it lands on the Mac.
+  { method: 'PUT', pattern: '/api/v1/uploads/:uploadId', away: 'needs-leader', why: 'session_writes_need_mac' },
   // Host data, answered on this host even while the Mac answers (WP6, self-host.ts):
   // a session that runs here, a file or a diff of this host, read through the
   // follower link. A session or a host elsewhere goes to the Mac as before.

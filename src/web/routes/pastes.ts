@@ -7,9 +7,10 @@
  * on the socket. Same story as image attachments (see ImageRef in images.ts):
  * the bytes go over HTTP here, and the message carries only the file path.
  *
- * The path lands inside the message text, so the session CLI reads it with the
- * Read tool, and RemoteSessionManager.prepareOutbound() ships it to the remote
- * host exactly like it ships image paths.
+ * The path lands inside the message text on its own `- <path>` line, so the
+ * session CLI reads it with the Read tool, and for a session on another host
+ * RemoteSessionManager.prepareOutbound() ships the file there first and names
+ * the host's copy (src/providers/outbound-uploads.ts).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'

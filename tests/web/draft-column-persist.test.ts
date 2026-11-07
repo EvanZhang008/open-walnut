@@ -8,6 +8,7 @@ import {
   draftColumnKey, parseDraftColumn, restoreDraftColumns, saveDraftColumns, serializeDraftColumn,
 } from '../../web/src/components/sessions/draft-column-persist';
 import { draftComposerKey, type DraftColumn } from '../../web/src/components/sessions/draft-column';
+import { keptAttachmentsKey } from '../../web/src/components/common/composer-attachments';
 
 function memStore(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -52,6 +53,23 @@ describe('draft column rows', () => {
     expect(s.m.has(draftColumnKey('draft:9-0'))).toBe(false);
     expect(s.m.has(draftComposerKey('draft:9-0'))).toBe(false);
     expect(s.m.get(draftComposerKey('ask-object:walnut:mail:42'))).toBe('a drawer draft');
+  });
+
+  it('restores a column that holds only uploaded attachments (a file sent with no words)', () => {
+    const id = 'draft:5-0';
+    const kept = [{ id: 'att-1', kind: 'file', name: 'a.log', size: 3, mediaType: 'text/plain', status: 'done', sent: 3, path: '/s/uploads/up-1/a.log' }];
+    const s = memStore({
+      [draftColumnKey(id)]: serializeDraftColumn(col(id, { project: 'Files' })),
+      [keptAttachmentsKey(draftComposerKey(id))!]: JSON.stringify(kept),
+      [draftColumnKey('draft:6-0')]: serializeDraftColumn(col('draft:6-0')),
+      [keptAttachmentsKey(draftComposerKey('draft:6-0'))!]: '[]',
+    });
+    const out = restoreDraftColumns(fresh, s, 2 * 86_400_000)
+    expect(out.map((d) => d.id)).toEqual([id]);
+    expect(out[0].project).toBe('Files');
+    // The empty one goes, its attachments key with it.
+    expect(s.m.has(draftColumnKey('draft:6-0'))).toBe(false);
+    expect(s.m.has(keptAttachmentsKey(draftComposerKey('draft:6-0'))!)).toBe(false);
   });
 
   it('leaves a young row without words alone: it may be another window\'s column', () => {

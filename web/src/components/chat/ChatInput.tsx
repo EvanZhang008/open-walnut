@@ -31,7 +31,11 @@ import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './pl
 import { keepCommandFirst } from './leading-command';
 import { placePrefill, type PrefillMode } from './prefill-place';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
-import { IMAGE_ACCEPT, MAX_IMAGES, imageFilesOf, pastedImageFiles, readImageFile } from '@/components/common/image-attachments';
+import { IMAGE_ACCEPT, MAX_IMAGES, pastedImageFiles } from '@/components/common/image-attachments';
+import { attachmentLimitsShort, attachmentLimitsText, keptAttachmentsKey, parseSavedAttachments, savedAttachments, sentFilePaths, sentImages, useComposerAttachments, type ComposerAttachment } from '@/components/common/composer-attachments';
+import { ComposerAttachmentStrip } from './ComposerAttachmentStrip';
+import { MAX_FILES, withFilePaths, type UploadTarget } from '@/api/file-upload';
+import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { focusWhenShown } from '@/utils/focus-when-shown';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
@@ -77,9 +81,161 @@ function readDraftSplit(key: string | undefined): InlineRefSplit {
   try { return inlineRefs(localStorage.getItem(key) ?? ''); } catch { return { body: '', table: new Map() }; }
 }
 
+/** How long a person must stop typing before a message waiting for its uploads goes by itself. */
+const AUTO_SEND_PAUSE_MS = 1500;
+
+/** A drag that carries files from the desktop (not text, not a tab being moved). */
+function dragHasFiles(e: globalThis.DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types ?? []).includes('Files');
+}
+
+/**
+ * Files let go of anywhere outside a box that takes them must not leave Walnut:
+ * a browser opens a dropped file in place of the page. Installed once, by the
+ * first composer that takes files.
+ */
+let pageDropGuarded = false;
+function guardPageDrop(): void {
+  if (pageDropGuarded || typeof window === 'undefined') return;
+  pageDropGuarded = true;
+  window.addEventListener('dragover', (e) => { if (dragHasFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => { if (dragHasFiles(e)) e.preventDefault(); });
+}
+
+// A draft's uploaded attachments are kept beside its words (composer-attachments.ts).
+const attachmentsKeyOf = keptAttachmentsKey;
+
+/**
+ * One box keeps a draft's attachments: the first mounted under its key. Others
+ * showing the same draft (the plan popup, a dock card) keep theirs in the box
+ * only: two boxes writing one key cleared each other's, and both restoring it
+ * sent the same file twice.
+ */
+const keptKeyOwners = new Map<string, symbol>();
+function claimKeptKey(key: string | null | undefined, me: symbol): boolean {
+  if (!key) return false;
+  const owner = keptKeyOwners.get(key);
+  if (!owner) { keptKeyOwners.set(key, me); return true; }
+  return owner === me;
+}
+function releaseKeptKey(key: string | null | undefined, me: symbol): void {
+  if (key && keptKeyOwners.get(key) === me) keptKeyOwners.delete(key);
+}
+
+/** A kept picture's bytes, read back from its upload, as base64 (null when it cannot be read). */
+async function readUploadedPicture(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => { const v = String(reader.result ?? ''); resolve(v.includes(',') ? v.slice(v.indexOf(',') + 1) : null); };
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch { return null; }
+}
+
+/**
+ * The boxes in one session panel that take dropped files. The panel has one set
+ * of listeners; a drop on it goes to the panel's main box (the composer under
+ * the conversation), else to the box that joined last, decided at the drop, so
+ * a box that goes away hands the panel to the others.
+ */
+interface DropEntry { primary: boolean; take: (files: FileList) => void }
+const dropZones = new Map<HTMLElement, { entries: DropEntry[]; leave: () => void }>();
+function joinDropZone(zone: HTMLElement, entry: DropEntry): () => void {
+  let z = dropZones.get(zone);
+  if (!z) {
+    let hideTimer: ReturnType<typeof setTimeout> | undefined;
+    // Enters and leaves pair up as the pointer crosses the panel's children: the
+    // drag is over the panel while more entered than left.
+    let depth = 0;
+    const hide = () => { clearTimeout(hideTimer); depth = 0; delete zone.dataset.fileDrop; };
+    const onEnter = (e: globalThis.DragEvent) => { if (dragHasFiles(e)) { depth++; zone.dataset.fileDrop = 'over'; } };
+    const onLeave = (e: globalThis.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) hide();
+    };
+    const onOver = (e: globalThis.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      zone.dataset.fileDrop = 'over';
+      // A drag that ends outside the window sends no leave here: dragover stops,
+      // and after a while with none the overlay goes. Far longer than the gap
+      // between two dragovers of a pointer held still (about 350 ms).
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(hide, 2000);
+    };
+    const onDrop = (e: globalThis.DragEvent) => {
+      hide();
+      // A drop on a box is that box's own (its React handlers).
+      const inComposer = e.target instanceof Element && !!e.target.closest('.chat-input-container');
+      if (!dragHasFiles(e) || e.defaultPrevented || inComposer) return;
+      const entries = dropZones.get(zone)?.entries ?? [];
+      const to = entries.find((x) => x.primary) ?? entries[entries.length - 1];
+      const files = e.dataTransfer?.files;
+      if (!to || !files || files.length === 0) return;
+      e.preventDefault();
+      to.take(files);
+    };
+    zone.addEventListener('dragenter', onEnter);
+    zone.addEventListener('dragleave', onLeave);
+    zone.addEventListener('dragover', onOver);
+    zone.addEventListener('drop', onDrop);
+    zone.addEventListener('dragend', hide);
+    z = {
+      entries: [],
+      leave: () => {
+        hide();
+        zone.removeEventListener('dragenter', onEnter);
+        zone.removeEventListener('dragleave', onLeave);
+        zone.removeEventListener('dragover', onOver);
+        zone.removeEventListener('drop', onDrop);
+        zone.removeEventListener('dragend', hide);
+      },
+    };
+    dropZones.set(zone, z);
+  }
+  z.entries.push(entry);
+  return () => {
+    const cur = dropZones.get(zone);
+    if (!cur) return;
+    cur.entries = cur.entries.filter((x) => x !== entry);
+    if (cur.entries.length === 0) { cur.leave(); dropZones.delete(zone); }
+  };
+}
+
+function writeKeptAttachments(key: string | null | undefined, items: ComposerAttachment[]): void {
+  const k = attachmentsKeyOf(key);
+  if (!k) return;
+  try {
+    // Progress re-renders the box often; only a change in what is kept is written.
+    if (items.length > 0) { const v = JSON.stringify(items); if (localStorage.getItem(k) !== v) localStorage.setItem(k, v); }
+    else localStorage.removeItem(k);
+  } catch { /* quota or storage off: they stay in the box */ }
+}
+
+function readKeptAttachments(key: string | null | undefined): ComposerAttachment[] {
+  const k = attachmentsKeyOf(key);
+  if (!k) return [];
+  try { return parseSavedAttachments(localStorage.getItem(k)); } catch { return []; }
+}
+
 interface ChatInputProps {
   /** May return a Promise<boolean> — false means the send failed and the draft must be preserved. */
   onSend: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>;
+  /**
+   * Where files other than pictures go: given, the box takes any file (a log, a
+   * PDF, a zip), uploads it as it is attached, and the sent text names its saved
+   * path under the `[Files attached …]` header (api/file-upload.ts). A live
+   * session's id sends them to its host; `{}` (no session yet) to this machine.
+   * Absent, the box takes pictures only.
+   */
+  fileTarget?: UploadTarget;
   onCommand?: (cmd: SlashCommand, args?: string) => void;
   onStop?: () => void;
   onInterruptSend?: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>;
@@ -254,7 +410,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -294,8 +450,29 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     return split;
   }, []);
 
-  const [images, setImages] = useState<ImageAttachment[]>([]);
+  const attachments = useComposerAttachments(fileTarget ?? null);
+  const acceptsFiles = !!fileTarget;
+  // What the last attach left out (over a limit, not a picture), said under the strip.
+  const [attachNotice, setAttachNotice] = useState<string | null>(null);
+  const attachNoticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(attachNoticeTimer.current), []);
+  const hasAttachments = attachments.items.length > 0;
+  const uploadsBlockSend = attachments.pending > 0 || attachments.failed > 0;
+  // Sent while uploads still ran: the message goes by itself once they are all up
+  // (a failed one stops it, and the strip says so).
+  const [sendWhenReady, setSendWhenReady] = useState<false | 'send' | 'interrupt'>(false);
+  // When the person last typed: an auto-send waits for a pause, so a sentence
+  // typed on after Enter is not cut in two.
+  const lastInputAtRef = useRef(0);
+  const [autoSendTick, setAutoSendTick] = useState(0);
+  const atAttachLimit = attachments.imageCount >= MAX_IMAGES && (!acceptsFiles || attachments.fileCount >= MAX_FILES);
   const [dragOver, setDragOver] = useState(false);
+  // The draft the attachments in the box belong to (they are kept under its key),
+  // and whether this box is the one that keeps them (claimKeptKey).
+  const attachmentsKeyRef = useRef<string | null>(draftKey ?? null);
+  const keeperRef = useRef(Symbol('composer'));
+  const keepsKeyRef = useRef(false);
+  useEffect(() => () => { releaseKeptKey(attachmentsKeyRef.current, keeperRef.current); }, []);
   // Span of composer text currently owned by an in-progress dictation, so each
   // live draft replaces the previous one instead of stacking. null = no active
   // dictation (the final result releases it).
@@ -306,6 +483,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // Set by MicButton: abandons a live recording without delivering text.
   const micControlRef = useRef<MicControl | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // "+" attach menu + send split-button dropdown (Claude-style). Both close on
   // outside click; refs anchor the click-outside test to each group.
@@ -385,6 +563,29 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // text under the new key, and cancelling it lost the last keystrokes).
     flushDraft();
 
+    // The attachments go with the draft they were attached under: the previous
+    // key keeps its own, and this key's come back (a reload, another session).
+    if (acceptsFiles) {
+      const prev = attachmentsKeyRef.current;
+      if (prev !== (draftKey ?? null)) {
+        if (prev && keepsKeyRef.current) writeKeptAttachments(prev, savedAttachments(attachments.items));
+        releaseKeptKey(prev, keeperRef.current);
+        attachments.clear();
+      }
+      attachmentsKeyRef.current = draftKey ?? null;
+      keepsKeyRef.current = claimKeptKey(draftKey, keeperRef.current);
+      const back = keepsKeyRef.current ? readKeptAttachments(draftKey) : [];
+      if (back.length > 0) {
+        attachments.restore(back);
+        // A send that inlines pictures (a new session's first message, a fork)
+        // needs their bytes, which are not kept: read them back from the upload.
+        for (const a of back) {
+          if (a.kind !== 'image' || !a.image?.url || a.image.data) continue;
+          void readUploadedPicture(a.image.url).then((data) => { if (data) attachments.fillImage(a.id, data); });
+        }
+      }
+    }
+
     if (!mountedRef.current) {
       mountedRef.current = true;
       return;
@@ -404,6 +605,25 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       });
     } catch { /* localStorage unavailable */ }
   }, [draftKey]);
+
+  // Every change of the box's attachments is kept under its draft (the first run
+  // is the mount, before the kept ones are back).
+  const keepArmedRef = useRef(false);
+  // The attachments of a send not yet confirmed stay kept under its draft, as
+  // its words do, so a reload during the send still finds them.
+  const sendingAttachmentsRef = useRef<{ key: string; items: ComposerAttachment[] } | null>(null);
+  const attachmentItemsRef = useRef(attachments.items);
+  attachmentItemsRef.current = attachments.items;
+  useEffect(() => {
+    if (!acceptsFiles) return;
+    if (!keepArmedRef.current) { keepArmedRef.current = true; return; }
+    if (!keepsKeyRef.current) return;
+    const key = attachmentsKeyRef.current;
+    const now = savedAttachments(attachments.items);
+    const sending = sendingAttachmentsRef.current;
+    if (now.length === 0 && sending && sending.key === key) return;
+    writeKeptAttachments(key, now);
+  }, [attachments.items, acceptsFiles]);
 
   // Typed in another window or on another device (utils/drafts.ts): shown here
   // while this box is not being typed in.
@@ -676,22 +896,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }, [closeMention]);
 
   const processFiles = useCallback((files: FileList | File[]) => {
-    // Start the FileReader OUTSIDE any setState updater. The reader is a side effect;
-    // React invokes state updaters more than once (always in StrictMode, and possibly
-    // on a concurrent re-render), so kicking off the read inside a setImages(prev => …)
-    // updater fired two FileReaders per file and appended the same image twice — every
-    // pasted/dropped photo showed up doubled. Keep the updater pure; do the read here.
-    for (const file of imageFilesOf(files)) {
-      void readImageFile(file).then((img) => {
-        if (!img) return;
-        setImages((curr) => (curr.length >= MAX_IMAGES ? curr : [...curr, img]));
-      });
-    }
-  }, []);
-
-  const removeImage = useCallback((index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+    // The reads and uploads start here, never inside a state updater: React may
+    // run an updater twice, and a read started there attached every picture twice.
+    void attachments.add(files).then((notice) => {
+      clearTimeout(attachNoticeTimer.current);
+      setAttachNotice(notice);
+      if (notice) attachNoticeTimer.current = setTimeout(() => setAttachNotice(null), 8000);
+    });
+  }, [attachments.add]);
 
   const saveDraft = useCallback((text: string) => {
     clearTimeout(draftTimerRef.current);
@@ -742,7 +954,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (textareaRef.current) textareaRef.current.value = '';
     tableRef.current = new Map();
     pickedFilesRef.current = new Set();
-    setImages([]);
+    attachments.clear();
+    setAttachNotice(null);
     closePalette();
     closeMention();
     mentionOrderOverrideRef.current = null;
@@ -760,11 +973,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // Restore the input box to the given text + images after a failed send, and make
   // sure the draft is persisted so a page refresh still recovers it. This is the
   // hard guarantee: the user's input must never silently disappear.
-  const restoreInput = (text: string, imgs: ImageAttachment[]) => {
+  const restoreInput = (text: string, sent: ComposerAttachment[]) => {
+    // Words typed for the next message while this one was on its way stay: the
+    // failed words go back in front of them, never over them.
+    const typed = composeRefs(valueRef.current, tableRef.current);
+    if (typed.trim()) {
+      text = text.trim() ? `${text}\n\n${typed}` : typed;
+      clearTimeout(attachNoticeTimer.current);
+      setAttachNotice('The last message did not send: its words and attachments are back in the box');
+      attachNoticeTimer.current = setTimeout(() => setAttachNotice(null), 8000);
+    }
     // `text` is the composed message that failed to send, so its tags go back to
     // being tokens. The box was reset on dispatch, hence keepRefs: false.
     const split = applyText(text, { keepRefs: false });
-    setImages(imgs);
+    attachments.restore(sent);
     saveDraft(text);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -782,8 +1004,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const dispatchSend = (
     cb: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>,
     text: string,
-    imgs: ImageAttachment[],
+    sent: ComposerAttachment[],
   ) => {
+    const imgs = sentImages(sent);
+    // The files go as words: the header naming where each one was saved.
+    const message = withFilePaths(text, sentFilePaths(sent));
     // Optimistically clear the box for snappy feel, but keep the draft until we know
     // the send was accepted server-side.
     // The key the words were typed under: the box may show another one by the
@@ -801,20 +1026,40 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       } catch { /* unavailable */ }
       sentMark = markDraftSent(sentKey, text);
     }
+    const keptSent = acceptsFiles && keepsKeyRef.current ? savedAttachments(sent) : [];
+    const sending = sentKey && keptSent.length > 0 ? { key: sentKey, items: keptSent } : null;
+    if (sending) { writeKeptAttachments(sentKey, keptSent); sendingAttachmentsRef.current = sending; }
+    // Settled: the box's own attachments (if it still shows this draft) are what is kept now.
+    const settleAttachments = () => {
+      if (!sending || sendingAttachmentsRef.current !== sending) return;
+      sendingAttachmentsRef.current = null;
+      if (attachmentsKeyRef.current === sentKey) writeKeptAttachments(sentKey, savedAttachments(attachmentItemsRef.current));
+      else writeKeptAttachments(sentKey, readKeptAttachments(sentKey).filter((a) => !keptSent.some((k) => k.id === a.id)));
+    };
     resetInput(true);
     const failed = () => {
+      // Its attachments go back to the box or stay kept (below): not cleared as sent.
+      if (sending && sendingAttachmentsRef.current === sending) sendingAttachmentsRef.current = null;
       if (sentKey) unmarkDraftSent(sentKey, sentMark);
-      if (sentKey === draftKeyRef.current) restoreInput(text, imgs);
-      else if (sentKey) { try { localStorage.setItem(sentKey, text); } catch { /* unavailable */ } }
+      if (sentKey === draftKeyRef.current) restoreInput(text, sent);
+      else if (sentKey) {
+        try { localStorage.setItem(sentKey, text); } catch { /* unavailable */ }
+        // The box shows another draft now: the attachments go back to the one they were sent from.
+        if (acceptsFiles) {
+          const kept = readKeptAttachments(sentKey);
+          writeKeptAttachments(sentKey, [...savedAttachments(sent).filter((a) => !kept.some((k) => k.id === a.id)), ...kept]);
+        }
+      }
     };
-    const result = cb(text, imgs.length > 0 ? imgs : undefined);
+    const result = cb(message, imgs.length > 0 ? imgs : undefined);
     if (result instanceof Promise) {
       result.then((ok) => {
-        if (ok) clearSentDraft(sentKey);
+        if (ok) { clearSentDraft(sentKey); settleAttachments(); }
         else failed();
       }).catch(failed);
     } else {
       clearSentDraft(sentKey);
+      settleAttachments();
     }
   };
 
@@ -825,7 +1070,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const text = composeRefs(value, tableRef.current);
     // A token the table knows was swapped, so the message carries a reference.
     const hasRefs = text !== body;
-    if ((!text && images.length === 0 && !allowEmptySend) || disabled || sendBlocked || queueFull) return;
+    if ((!text && !hasAttachments && !allowEmptySend) || disabled || sendBlocked || queueFull) return;
+    // Every attachment must be up first; the strip says which one it waits for.
+    if (attachments.failed > 0) return;
+    if (attachments.pending > 0) { setSendWhenReady('send'); return; }
+    setSendWhenReady(false);
 
     // The send waited for the dictation (useSendAfterDictation), so the mic is
     // idle here and its words are in the message; the discard is a no-op belt.
@@ -836,7 +1085,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // Control commands: intercepted by UI, not sent as text to Claude. Only with
     // no reference in the text: a message carrying references is a message, and
     // swallowing it as a command would drop them.
-    if (isSessionMode && !hasRefs && body === '/model' && onControlCommand) {
+    if (isSessionMode && !hasRefs && !hasAttachments && body === '/model' && onControlCommand) {
       onControlCommand('model');
       resetInput();
       return;
@@ -844,7 +1093,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
     // In session mode, slash commands are sent as regular text (to Claude Code)
     // Only intercept in main chat mode (showCommands + no sessionCommands)
-    if (showCommands && !isSessionMode && !hasRefs && body.startsWith('/')) {
+    if (showCommands && !isSessionMode && !hasRefs && !hasAttachments && body.startsWith('/')) {
       const spaceIndex = body.indexOf(' ');
       const name = spaceIndex === -1 ? body.slice(1) : body.slice(1, spaceIndex);
       const args = spaceIndex === -1 ? undefined : body.slice(spaceIndex + 1).trim() || undefined;
@@ -860,7 +1109,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
 
     // Send as regular message (includes session slash commands)
-    dispatchSend(onSend, text, images);
+    dispatchSend(onSend, text, attachments.items);
   };
 
   const closePalette = useCallback(() => {
@@ -1149,6 +1398,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handleChange = (newValue: string) => {
+    lastInputAtRef.current = Date.now();
     // A pasted ref tag (someone copies a pill's markup, or a draft written by
     // another surface arrives through here) becomes its inline token.
     const split = applyText(newValue);
@@ -1340,10 +1590,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // Excel/Word/PowerPoint ship a picture of the selection ALONGSIDE the real
     // HTML, so the image branch below used to win and attach a screenshot of
     // the cells. For an Office clipboard the text is what was copied.
-    const imageFiles = pastedImageFiles(e);
-    if (imageFiles.length > 0) {
+    // A box that takes files takes any pasted file (one copied in Finder), not only pictures.
+    const pastedFiles = acceptsFiles
+      ? (isOfficeClipboardHtml(e.clipboardData?.getData('text/html')) ? [] : Array.from(e.clipboardData?.files ?? []))
+      : pastedImageFiles(e);
+    if (pastedFiles.length > 0) {
       e.preventDefault();
-      processFiles(imageFiles);
+      processFiles(pastedFiles);
       return;
     }
     // Rich text from a wiki/doc editor: its text/plain flavour loses list
@@ -1359,6 +1612,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const handleDragLeave = (e: DragEvent) => {
     e.preventDefault();
+    // Moving onto a child of the box (the text, a card) is not leaving it.
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
     setDragOver(false);
   };
 
@@ -1370,6 +1625,21 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       processFiles(files);
     }
   };
+
+  // The whole session panel takes dropped files, not only this box: people drop
+  // a log onto the conversation, and the panel says so while files are over it
+  // (joinDropZone: one panel, its main box takes them).
+  const processFilesRef = useRef(processFiles);
+  processFilesRef.current = processFiles;
+  useEffect(() => {
+    if (!acceptsFiles) return;
+    guardPageDrop();
+    const box = containerRef.current;
+    const zone = box?.closest<HTMLElement>('.session-panel');
+    if (!box || !zone) return;
+    const primary = !!box.closest('.session-panel-input:not(.tree-split-input)');
+    return joinDropZone(zone, { primary, take: (files) => processFilesRef.current(files) });
+  }, [acceptsFiles]);
 
   const handleAttachClick = () => {
     setPlusOpen(false);
@@ -1428,13 +1698,32 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const interruptNow = () => {
     setSendMenuOpen(false);
     const text = composeRefs(value, tableRef.current);
-    if ((!text && images.length === 0) || disabled || sendBlocked || !onInterruptSend) return;
-    dispatchSend(onInterruptSend, text, images);
+    if ((!text && !hasAttachments) || disabled || sendBlocked || !onInterruptSend || attachments.failed > 0) return;
+    if (attachments.pending > 0) { setSendWhenReady('interrupt'); return; }
+    setSendWhenReady(false);
+    dispatchSend(onInterruptSend, text, attachments.items);
   };
 
   // Send (the button, Enter, Interrupt & send) waits for a live dictation's words.
   const sendGate = useSendAfterDictation([micControlRef], sendNow, draftKey);
   const interruptGate = useSendAfterDictation([micControlRef], interruptNow, draftKey);
+  const autoSendRef = useRef({ send: sendGate.send, interrupt: interruptGate.send });
+  autoSendRef.current = { send: sendGate.send, interrupt: interruptGate.send };
+  useEffect(() => {
+    if (!sendWhenReady || (attachments.pending > 0 && attachments.failed === 0)) return;
+    if (attachments.failed > 0) { setSendWhenReady(false); return; }
+    // Still typing: the send waits for a pause of AUTO_SEND_PAUSE_MS.
+    const quiet = Date.now() - lastInputAtRef.current;
+    if (quiet < AUTO_SEND_PAUSE_MS) {
+      const t = setTimeout(() => setAutoSendTick((n) => n + 1), AUTO_SEND_PAUSE_MS - quiet);
+      return () => clearTimeout(t);
+    }
+    const how = sendWhenReady;
+    setSendWhenReady(false);
+    autoSendRef.current[how]();
+  }, [sendWhenReady, attachments.pending, attachments.failed, autoSendTick]);
+  // Another draft in the box: what was waiting to send was the previous one's.
+  useEffect(() => { setSendWhenReady(false); }, [draftKey]);
   const handleSend = sendGate.send;
   const handleInterruptSend = interruptGate.send;
 
@@ -1443,9 +1732,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     onStop?.();
   };
 
-  const hasInput = !!(value.trim() || images.length > 0);
+  const hasInput = !!(value.trim() || hasAttachments);
   // A live dictation counts as input: its words are on their way, and Send waits for them.
-  const canSend = !disabled && !sendBlocked && !queueFull && (hasInput || !!allowEmptySend || sendGate.micBusy || sendGate.waiting);
+  const canSend = !disabled && !sendBlocked && !queueFull && attachments.failed === 0 && (hasInput || !!allowEmptySend || sendGate.micBusy || sendGate.waiting);
 
   // Claude-style primary action swap: while a turn is streaming and the composer is
   // EMPTY, the primary button is a square STOP (there is nothing to send anyway).
@@ -1456,9 +1745,14 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // whether a live turn is running (queue / interrupt) so the icon-only button
   // stays self-explanatory. The overflow "▾" exposes Interrupt / Stop while streaming.
   let sendTitle = sendTitleProp ?? 'Send';
-  if (isStreaming && !onInterruptSend) {
+  if (attachments.failed > 0) sendTitle = 'An attachment did not upload: retry or remove it';
+  else if (sendWhenReady && attachments.pending > 0) sendTitle = 'Sends when the uploads finish';
+  else if (attachments.pending > 0) sendTitle = 'Send once the attachments finish uploading';
+  // What the send waits for (an upload) says more than where it will queue.
+  const waitsOnAttachments = !!sendWhenReady || attachments.failed > 0;
+  if (!waitsOnAttachments && isStreaming && !onInterruptSend) {
     sendTitle = queueFull ? 'Queue full' : 'Queue message (sends after the current turn)';
-  } else if (isStreaming && onInterruptSend) {
+  } else if (!waitsOnAttachments && isStreaming && onInterruptSend) {
     sendTitle = 'Send (queues after the current turn)';
   }
   // The split-menu is only useful mid-turn with something composed (Interrupt & send /
@@ -1499,6 +1793,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   return (
     <div
+      ref={containerRef}
       className={`chat-input-container${compact ? ' is-compact' : ''}${dragOver ? ' drag-over' : ''}`}
       // Only while blocked: a composer that can send renders exactly as before.
       data-send-blocked={sendBlocked ? 'true' : undefined}
@@ -1588,27 +1883,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               <span className="pill-title">{focusedTask.title}</span>
             </div>
           )}
-          {/* Image preview area */}
-          {images.length > 0 && (
-            <div className="chat-image-previews">
-              {images.map((img, i) => (
-                <div key={i} className="chat-image-preview">
-                  <img
-                    src={`data:${img.mediaType};base64,${img.data}`}
-                    alt={img.name}
-                  />
-                  <button
-                    className="chat-image-remove"
-                    onClick={() => removeImage(i)}
-                    type="button"
-                    aria-label="Remove image"
-                  >
-                    &times;
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* Attachments: pictures and files, each with its own upload state */}
+          <ComposerAttachmentStrip attachments={attachments} acceptsFiles={acceptsFiles} notice={attachNotice} sendWhenReady={!!sendWhenReady} kept={acceptsFiles && keepsKeyRef.current} onCancelSend={() => setSendWhenReady(false)} />
           {pills.on && <ComposerRefLayer textareaRef={textareaRef} segments={pills.segments} />}
           <textarea
             ref={textareaRef}
@@ -1662,12 +1938,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                 onClick={handleAttachClick}
                 type="button"
                 role="menuitem"
-                disabled={images.length >= MAX_IMAGES}
+                disabled={atAttachLimit}
+                title={attachmentLimitsText(acceptsFiles)}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                 </svg>
-                <span>{images.length >= MAX_IMAGES ? 'Image limit reached' : 'Attach image'}</span>
+                <span className="chat-plus-menu-item-text">
+                  <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
+                  <span className="chat-plus-menu-item-hint">{attachmentLimitsShort(acceptsFiles)}</span>
+                </span>
               </button>
               {/* Shortcuts — the discoverable index of the composer's special
                   commands (each row inserts its trigger and opens its picker). */}
@@ -1818,7 +2098,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         <input
           ref={fileInputRef}
           type="file"
-          accept={IMAGE_ACCEPT}
+          {...(acceptsFiles ? {} : { accept: IMAGE_ACCEPT })}
           multiple
           style={{ display: 'none' }}
           onChange={handleFileChange}

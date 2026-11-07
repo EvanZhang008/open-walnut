@@ -2882,6 +2882,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                       </div>
                       <div className="plan-popup-input">
           <ChatInput
+            // Any file goes to this session's host (api/file-upload.ts).
+            fileTarget={{ sessionId }}
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
             // The session's own draft: the words follow between this box and the panel's composer.
@@ -3646,6 +3648,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           />
           <ChatInput
             sendBlocked={macSessionAway}
+            // Any file goes to this session's host (api/file-upload.ts).
+            fileTarget={{ sessionId }}
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).

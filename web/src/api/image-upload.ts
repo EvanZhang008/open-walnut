@@ -16,6 +16,8 @@
  */
 
 import { apiPost } from './client';
+import { getDeviceToken } from './device-token';
+import { TEST_RUN_HEADER, testRunLabel } from './test-run';
 import type { ImageAttachment } from './chat';
 
 /** Pointer to an uploaded image, as accepted by the `chat` / `session:send` RPCs. */
@@ -31,6 +33,9 @@ export interface ImageRef {
  */
 export async function uploadImages(images: ImageAttachment[]): Promise<ImageRef[]> {
   return Promise.all(images.map(async (img) => {
+    // Uploaded when it was attached (composer-attachments.ts): named by that upload.
+    const uploaded = uploadedImageName(img);
+    if (uploaded) return { filename: uploaded };
     const res = await apiPost<{ filename?: string; url?: string }>(
       '/api/images/upload',
       { data: img.data, mediaType: img.mediaType },
@@ -53,4 +58,50 @@ export async function buildImageRefsPayload(
 ): Promise<{ imageRefs?: ImageRef[] }> {
   if (!images || images.length === 0) return {};
   return { imageRefs: await uploadImages(images) };
+}
+
+const UPLOADED_URL_RE = /^\/api\/images\/([\w.-]+)$/;
+
+/** The images-folder name of a picture already uploaded (its `url`), or null. */
+export function uploadedImageName(img: ImageAttachment): string | null {
+  const m = img.url ? UPLOADED_URL_RE.exec(img.url) : null;
+  return m && !m[1].includes('..') ? m[1] : null;
+}
+
+/**
+ * Upload one picture as it is attached, reporting the bytes sent (XHR: fetch
+ * reports no upload progress). Answers its `/api/images/<name>` URL.
+ */
+export function uploadImageWithProgress(
+  img: ImageAttachment,
+  opts: { signal: AbortSignal; onProgress: (sent: number) => void },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/images/upload');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    const token = getDeviceToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    const label = testRunLabel();
+    if (label) xhr.setRequestHeader(TEST_RUN_HEADER, label);
+    // Base64 is 4/3 of the bytes: progress is reported on the picture's own size.
+    const body = JSON.stringify({ data: img.data, mediaType: img.mediaType });
+    const ratio = img.data.length > 0 ? (img.data.length * 3 / 4) / body.length : 1;
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) opts.onProgress(Math.round(e.loaded * ratio)); };
+    const onAbort = () => xhr.abort();
+    opts.signal.addEventListener('abort', onAbort, { once: true });
+    const settle = () => opts.signal.removeEventListener('abort', onAbort);
+    xhr.onabort = () => { settle(); reject(new DOMException('Upload cancelled', 'AbortError')); };
+    xhr.onerror = () => { settle(); reject(new Error('The connection to Walnut dropped')); };
+    xhr.onload = () => {
+      settle();
+      let json: { filename?: string; url?: string; error?: unknown } | null = null;
+      try { json = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+      const filename = json?.filename ?? json?.url?.split('/').pop();
+      if (xhr.status >= 200 && xhr.status < 300 && filename) { resolve(`/api/images/${filename}`); return; }
+      if (xhr.status === 413) { reject(new Error('This picture is too large to send')); return; }
+      reject(new Error(typeof json?.error === 'string' ? json.error : xhr.status === 502 || xhr.status === 503 ? 'Walnut is not reachable right now' : `The upload was refused (error ${xhr.status})`));
+    };
+    xhr.send(body);
+  });
 }

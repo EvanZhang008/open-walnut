@@ -136,7 +136,13 @@ export function listUnsavedWork(doc: Document = document, active: Element | null
   // sent with the same classes (SessionChatHistory's OptimisticImagePreviews), and
   // counting those held a reload over images marked "Delivered" (2026-10-25).
   for (const group of Array.from(doc.querySelectorAll(`${COMPOSER} .chat-image-previews`))) {
-    if (group.querySelector('.chat-image-preview')) items.push(item('attachment', 'An attached image that is not sent', group));
+    // A box that keeps its uploaded attachments with the draft loses only an unfinished one.
+    const kept = group.getAttribute('data-kept') === 'true';
+    if (kept ? group.querySelector('.chat-image-preview.is-uploading, .chat-image-preview.is-failed') : group.querySelector('.chat-image-preview')) {
+      items.push(item('attachment', 'An attached image that is not sent', group));
+    }
+    // An uploaded file stays with the draft over a reload; one still uploading or failed does not.
+    else if (group.querySelector('.file-card .file-card-progress, .file-card.is-failed')) items.push(item('attachment', 'An attached file that has not finished uploading', group));
   }
   for (const el of Array.from(doc.querySelectorAll(`${COMPOSER} .chat-image-preview`))) {
     if (!el.closest('.chat-image-previews')) items.push(item('attachment', 'An attached image that is not sent', el));
