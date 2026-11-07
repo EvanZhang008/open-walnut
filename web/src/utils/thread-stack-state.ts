@@ -489,13 +489,14 @@ export function deriveThreadStats(
   };
   for (const r of rows) {
     const text = r.text ?? '';
+    // A stopped turn's marker ends the question it sits in (and starts no turn).
+    if (r.role === 'user' && INTERRUPT_RE.test(text.trim())) {
+      if (turnHead && !out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'interrupted');
+      continue;
+    }
     // Injected context (a compaction's summary, a hook's) answers nothing and starts no turn.
     if (r.role === 'user' && !isTurnHead(r)) continue;
     if (r.role === 'user') {
-      if (INTERRUPT_RE.test(text.trim())) {
-        if (turnHead && !out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'interrupted');
-        continue;
-      }
       const takenIn = turnKey;
       const before = turnHead;
       turnHead = r.sourceUuid ?? r.msgId ?? r.walnutMessageId;

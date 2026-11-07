@@ -177,11 +177,20 @@ function rowIdOf(m: ThreadTreeMessage): string | undefined {
  * belongs to the turn it sits in. 2026-11-03: question 6 was asked, the session
  * compacted, and its answer came after the summary and the hook's context; both
  * started turns of their own, so the card read "No answer" while the question
- * read Answered. Every thread reader that cuts turns goes through this
+ * read Answered. The line the CLI writes when a turn is stopped is no one's
+ * message either: it ends the turn it sits in (2026-11-07: a question page's
+ * turn stopped in Tree Mode, and its "Turn interrupted" line started a turn of
+ * its own, which no anchor names, so it was drawn on the main conversation).
+ * Every thread reader that cuts turns goes through this
  * (tests/web/turn-head-guard.test.ts).
  */
-export function isTurnHead(m: { role?: string; injected?: boolean }): boolean {
-  return m.role === 'user' && !m.injected;
+export function isTurnHead(m: { role?: string; injected?: boolean; text?: string }): boolean {
+  return m.role === 'user' && !m.injected && !isInterruptMarker(m.text);
+}
+
+/** The CLI's own line for a stopped turn (both of its variants). */
+export function isInterruptMarker(text: string | undefined): boolean {
+  return typeof text === 'string' && /^\[Request interrupted by user( for tool use)?\]$/.test(text.trim());
 }
 
 export function threadIdOf(m: ThreadTreeMessage): string | undefined {

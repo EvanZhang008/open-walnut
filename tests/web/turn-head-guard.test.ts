@@ -68,6 +68,40 @@ describe('an injected row inside a question\'s turn', () => {
   });
 });
 
+// 2026-11-07, Tree Mode on a copy of the user's data: a question page's turn was
+// stopped, and the CLI's "[Request interrupted by user]" line started a turn of
+// its own, which no anchor names, so "Turn interrupted" was drawn on the main
+// conversation's page instead of the question's.
+describe('a stopped turn inside a question\'s turn', () => {
+  const stopped: Row[] = [
+    { role: 'user', msgId: 'u1', text: 'List the steps.' },
+    { role: 'assistant', msgId: 'a1', text: 'One, two, three.' },
+    { role: 'user', msgId: 'q2', text: 'Write a long list about step two.' },
+    { role: 'assistant', msgId: 'a2', text: '', tools: [{ name: 'Read' }] as never },
+    { role: 'user', msgId: 'x1', text: '[Request interrupted by user]' },
+    { role: 'user', msgId: 'x2', text: '[Request interrupted by user for tool use]' },
+    { role: 'user', msgId: 'u3', text: 'Back to the list.' },
+  ];
+  const qa: SessionThreadAnchor[] = [{ msgId: 'q2', parent: 'a1', quote: { exact: 'two' }, source: 'selection', at: '2026-11-07T08:20:00Z' }];
+  const tree = buildThreadTree(stopped as never, qa);
+  const key = threadKeyOf(qa[0]);
+  const keyOf = (id: string | undefined) => tree.byRow.get(id ?? '')?.key ?? ROOT_THREAD_KEY;
+
+  it('is no turn head, in either of the CLI\'s variants', () => {
+    expect(isTurnHead(stopped[4])).toBe(false);
+    expect(isTurnHead(stopped[5])).toBe(false);
+    expect(isTurnHead({ role: 'user', text: 'I was [Request interrupted by user] here' })).toBe(true);
+  });
+
+  it('stays on the question\'s page, and a question stopped before its answer reads stopped', () => {
+    expect(keyOf('x1')).toBe(key);
+    expect(keyOf('x2')).toBe(key);
+    expect(keyOf('u3')).toBe(ROOT_THREAD_KEY);
+    const stats = deriveThreadStats(stopped as never, keyOf);
+    expect(stats.turnEnds.get('q2')).toBe('interrupted');
+  });
+});
+
 // ── Guard: every thread reader cuts turns through isTurnHead ──
 
 const WEB = path.resolve(__dirname, '../../web/src');
@@ -85,6 +119,7 @@ const NOT_A_TURN_CUT: Array<[RegExp, string]> = [
   [/isStrictAskRow\(|strictAskOf\(|strictHint\(/, 'reads one row\'s hint: an injected row carries none'],
   [/userUuid/, 'an optimistic bubble, never a history row'],
   [/role === 'user' && !!m\.userUuid/, 'optimistic bubbles'],
+  [/INTERRUPT_RE\.test\(/, 'a stopped turn\'s marker: it ends the question it sits in, it cuts no turn'],
 ];
 
 describe('guard: thread readers cut turns only through isTurnHead', () => {
