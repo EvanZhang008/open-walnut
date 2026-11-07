@@ -154,6 +154,19 @@ test('the Scratchpad opens under the agenda, takes the caret, and is the same no
   await expect.poll(async () => (await (await page.request.get('/api/notes/global')).json()).content).toContain(line)
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-org-both.png`, clip: { x: 0, y: 0, width: 1280, height: 900 } })
 
+  // Back from another app the note is read again; the next edit, even one keystroke, is saved
+  // (a flag waiting for the reload's own update swallowed it, and the next reload wrote over it).
+  await page.waitForTimeout(2100)
+  const reread = page.waitForResponse(res => new URL(res.url()).pathname === '/api/notes/global' && res.request().method() === 'GET')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await reread
+  const afterFocus = page.waitForResponse(res => new URL(res.url()).pathname === '/api/notes/global' && res.request().method() === 'PUT', { timeout: 10_000 })
+  await editor.locator('p').last().click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('!')
+  await afterFocus
+  await expect.poll(async () => (await (await page.request.get('/api/notes/global')).json()).content).toContain(`${line}!`)
+
   // Home's Scratchpad is the same note, and the same editor: one in the window.
   await page.getByTestId('sidebar-core-app-home').click()
   await expect(page).toHaveURL(/\/$/)

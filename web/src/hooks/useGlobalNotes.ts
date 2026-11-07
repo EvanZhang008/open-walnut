@@ -52,8 +52,6 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
   /** Bumped on every keystroke — lets a settling save detect newer edits it didn't include. */
   const editSeqRef = useRef(0);
   const contentHashRef = useRef<string | null>(null);
-  /** Set when reloading from external update — prevents reload from triggering a save */
-  const externalUpdateRef = useRef(false);
   /**
    * Hash from a notes:updated WS event that arrived while OUR save was in
    * flight. The server emits the bus event BEFORE the PUT response is sent, so
@@ -96,6 +94,8 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
       fetchGlobalNotes()
         .then(({ content: c, contentHash }) => {
           if (!mounted) return;
+          // A reload or another view's save landed first: it is newer than this read.
+          if (contentHashRef.current !== null) { setLoadError(null); setLoaded(true); return; }
           const { frontmatter, body } = splitFrontmatter(c);
           frontmatterRef.current = frontmatter;
           setContent(body);
@@ -121,10 +121,11 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         contentHashRef.current = contentHash;
         deferredWsHashRef.current = null; // we now hold the latest — nothing deferred
         dirty.current = false;
-        externalUpdateRef.current = true;
         const { frontmatter, body } = splitFrontmatter(c);
         frontmatterRef.current = frontmatter;
         setContent(body);
+        setLoadError(null);
+        setLoaded(true);
       })
       .catch(() => {});
   }, []);
@@ -184,7 +185,6 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
       log.info('notes', 'Adopting global notes saved in another view');
       contentHashRef.current = sig.contentHash;
       dirty.current = false;
-      externalUpdateRef.current = true;
       const { frontmatter, body } = splitFrontmatter(sig.content);
       frontmatterRef.current = frontmatter;
       setContent(body);
@@ -335,13 +335,11 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
       });
     }
 
-    // TipTap fires onUpdate when content is set programmatically via
-    // reloadContent -> setContent; without this guard, that would trigger a
-    // debounced save, potentially racing with the next agent write.
-    if (externalUpdateRef.current) {
-      externalUpdateRef.current = false;
-      return;
-    }
+    // No guard for content set by a reload or another view: NotesEditor applies it with
+    // emitUpdate off and its own isExternalUpdate flag, so onDirty only ever sees the user's
+    // edits. A flag here waited for an update that never came (and none at all when the
+    // content was the same), then swallowed the user's NEXT edit: not dirty, not saved, and
+    // the next focus reload wrote over it (2026-11-07, review of the side bar).
 
     editSeqRef.current++;
     dirty.current = true;
