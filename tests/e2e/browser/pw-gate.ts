@@ -78,7 +78,14 @@ export function engageGate(port: number): void {
   // Hold off if something ELSE is already saturating the machine (a concurrent
   // vitest suite, Xcode, simulators). Done while holding the lease so we don't
   // lose our place in line, and after the reap so we don't wait on our own debris.
-  waitForCapacitySync()
+  // A machine still overloaded after the wait ends the run with an error: let the port go
+  // first, so the next run in line does not wait on this one's lease.
+  try {
+    waitForCapacitySync()
+  } catch (err) {
+    release(lease)
+    throw err
+  }
 
   // The full suite (245 tests) can outlive the lease TTL; heartbeat so no other
   // run mistakes a live holder for a dead one and seizes the port mid-run.
