@@ -65,10 +65,14 @@ test('one reload reads the task list once, the skill list at most twice, and pai
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
   // Contract 3: rows render while status batches are still being held.
   await expect(page.locator('#home-task-navigation [data-task-id]').first()).toBeVisible({ timeout: 30_000 })
-  const heldWhilePainted = heldStatus
+  // The fixture's tasks carry sessions, so this load asks for at least one batch, and
+  // none can finish before releaseStatus(). The batch is asked for AFTER the list
+  // answers and may wait for a free connection (api/client caps them at six), so the
+  // rows can paint before its request even leaves: wait for it rather than read the
+  // count at the moment of paint (a slow CI runner painted first, 2026-11-07).
+  await expect.poll(() => heldStatus, { message: 'the list must paint while a status batch is still open', timeout: 30_000 }).toBeGreaterThan(0)
+  await expect(page.locator('#home-task-navigation [data-task-id]').first()).toBeVisible()
   releaseStatus()
-  // The fixture's tasks carry sessions, so at least one batch was open.
-  expect(heldWhilePainted, 'the list must paint while a status batch is still open').toBeGreaterThan(0)
 
   // Let the post-connect window (1s debounce) and the plugin loader's connect
   // refresh (250ms coalesce) pass before counting.
