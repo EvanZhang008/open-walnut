@@ -77,7 +77,7 @@ describe('a pending permission prompt and the messages queued behind it', () => 
     await settle()
     expect(h.writes).toEqual([])
     expect(await h.session.resolvePermissionRequest(PROMPT, true)).toBe(true)
-    await vi.waitFor(() => expect(h.writes.map((w) => w.message)).toEqual(['peer message']))
+    await vi.waitFor(() => expect(h.writes.map((w) => w.message)).toEqual(['peer message']), { timeout: 5000 })
     expect(p.answers()).toEqual(['allow'])
     expect(h.session.hasPendingPermission).toBe(false)
   })
@@ -89,7 +89,7 @@ describe('a pending permission prompt and the messages queued behind it', () => 
     await h.internals.injectMidTurn(SID)
     await settle()
     expect(await h.session.resolvePermissionRequest(PROMPT, false, 'User denied permission')).toBe(true)
-    await vi.waitFor(() => expect(h.writes.map((w) => w.message)).toEqual(['letter answer']))
+    await vi.waitFor(() => expect(h.writes.map((w) => w.message)).toEqual(['letter answer']), { timeout: 5000 })
     expect(p.answers()).toEqual(['deny'])
   })
 

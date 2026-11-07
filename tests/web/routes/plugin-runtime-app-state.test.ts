@@ -149,8 +149,8 @@ describe('the app_state op', () => {
   })
 
   it('a caller with no session, or a session with nothing shared, reads nothing', async () => {
-    expect(await meAppState()).toEqual({ taskId: null, states: [] })
-    expect(await meAppState('not-a-session')).toEqual({ taskId: null, states: [] })
+    expect(await meAppState()).toEqual({ taskId: null, states: [], briefs: [] })
+    expect(await meAppState('not-a-session')).toEqual({ taskId: null, states: [], briefs: [] })
     const { sid, taskId } = await seedSession()
     const r = await executeOp('app_state', {}, { apiBase: apiBase(), callerSid: sid, origin: LOCAL_ORIGIN })
     expect(r.ok).toBe(true)
