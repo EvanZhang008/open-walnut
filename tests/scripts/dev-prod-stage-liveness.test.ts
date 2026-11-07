@@ -115,10 +115,9 @@ describe('stage reap guard', () => {
   })
 
   it('the reap loop consults the guard and skips a stage in use', () => {
-    const reap = script.indexOf('for old_stage in "$STAGE_ROOT"/open-walnut-stage.*')
+    const reap = script.indexOf('sweep_old_stages() {')
     expect(reap).toBeGreaterThan(-1)
-    // The loop's own `done` (its body holds a nested loop of its own).
-    const body = script.slice(reap, script.indexOf('\ndone\n', reap))
+    const body = script.slice(reap, script.indexOf('\n}\n', reap))
     expect(body).toMatch(/stage_has_live_process/)
     expect(body).toMatch(/continue/)
     // The rm must be reachable only after the guard said no.

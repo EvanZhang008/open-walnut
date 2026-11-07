@@ -1504,31 +1504,42 @@ stage_serves_web() {
   return 1
 }
 
-for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
-  if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" ]]; then
-    continue
-  fi
-  live_pid="$(stage_has_live_process "$old_stage" || true)"
-  if [[ "$live_pid" == "unknown" ]]; then
-    echo "Keeping stage $old_stage: the process table could not be read, so nothing here is provably dead." >&2
-    continue
-  fi
-  if [[ -n "$live_pid" ]]; then
-    echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
-    # Only a serving server reads its stage's other files (host servers take them
-    # from beside its own file, src/core/host-server/host-file.ts); a stage kept
-    # for a daemon or a session's MCP child needs only this machine's, and the
-    # four Linux files are most of its size.
-    if ! stage_serves_web "$old_stage"; then
-      for sibling in "$old_stage"/dist-bin/walnut-*; do
-        [[ -f "$sibling" && "$sibling" != "$old_stage/dist-bin/walnut-$MACHINE_TARGET" ]] || continue
-        rm -f "$sibling" 2>/dev/null || true
-      done
+# Removes every stage of an earlier deploy that no process runs from (a server, its local daemon, a
+# session's child). It runs before the launch and again once the new server serves: the local daemon
+# the new server replaces at its start still ran from the old stage the first time, and so did session
+# children that ended since, and without the second pass those stages stayed until the next deploy
+# (2026-11-07: nine stages of 708 MB in one day on the Mac).
+sweep_old_stages() {
+  local old_stage live_pid sibling
+  for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
+    # The LKG lives off the temp dir, but keep it by name too: a rehearsal or a WALNUT_DEVPROD_LKG_DIR
+    # may put it beside the stages.
+    if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" || "${old_stage%/}" == "${LKG_DIR%/}" ]]; then
+      continue
     fi
-    continue
-  fi
-  rm -rf "$old_stage" 2>/dev/null || true
-done
+    live_pid="$(stage_has_live_process "$old_stage" || true)"
+    if [[ "$live_pid" == "unknown" ]]; then
+      echo "Keeping stage $old_stage: the process table could not be read, so nothing here is provably dead." >&2
+      continue
+    fi
+    if [[ -n "$live_pid" ]]; then
+      echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
+      # Only a serving server reads its stage's other files (host servers take them
+      # from beside its own file, src/core/host-server/host-file.ts); a stage kept
+      # for a daemon or a session's MCP child needs only this machine's, and the
+      # four Linux files are most of its size.
+      if ! stage_serves_web "$old_stage"; then
+        for sibling in "$old_stage"/dist-bin/walnut-*; do
+          [[ -f "$sibling" && "$sibling" != "$old_stage/dist-bin/walnut-$MACHINE_TARGET" ]] || continue
+          rm -f "$sibling" 2>/dev/null || true
+        done
+      fi
+      continue
+    fi
+    rm -rf "$old_stage" 2>/dev/null || true
+  done
+}
+sweep_old_stages
 
 # One launchd job for the given cli.js. launchd gives jobs a minimal PATH
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
@@ -2105,6 +2116,10 @@ fi
 if ! snapshot_lkg; then
   echo "Warning: last-known-good snapshot failed; rollback will use the previous one." >&2
 fi
+
+# The new server has replaced the old daemon by now: the stage it ran from goes, and any a session's
+# child held until now.
+sweep_old_stages
 
 # The `walnut` CLI here runs $SERVE_ROOT/dist and its op registry in process, so
 # op descriptions, schemas and outcomes come from that bundle, not the server. A

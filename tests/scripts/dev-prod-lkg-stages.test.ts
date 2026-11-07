@@ -22,11 +22,7 @@ function fn(name: string): string {
 
 /** The stage reap loop (top-level code), from its `for` to its `done`. */
 function reapLoop(): string {
-  const start = script.indexOf('for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do')
-  const end = script.indexOf('\ndone\n', start)
-  expect(start).toBeGreaterThan(-1)
-  expect(end).toBeGreaterThan(start)
-  return script.slice(start, end + '\ndone\n'.length)
+  return `${fn('sweep_old_stages')}\nsweep_old_stages\n`
 }
 
 function bash(body: string): { status: number | null; stdout: string; stderr: string } {
@@ -315,13 +311,43 @@ describe('the stage reaper', () => {
     await runFrom(path.join(stage('daemon'), 'dist-bin', 'walnut-darwin-arm64'), ['__daemon', '--start'])
     await runFrom(path.join(stage('web'), 'dist-bin', 'walnut-darwin-arm64'), ['web', '--port', '1'])
     const r = bash([fn('stage_has_live_process'), fn('stage_serves_web'),
-      `STAGE_ROOT='${root}'`, `STAGE_DIR='${stage('current')}'`, 'MACHINE_TARGET=darwin-arm64', reapLoop()].join('\n'))
+      `STAGE_ROOT='${root}'`, `STAGE_DIR='${stage('current')}'`, `LKG_DIR='${root}/elsewhere'`, 'MACHINE_TARGET=darwin-arm64', reapLoop()].join('\n'))
     expect(r.status, r.stderr).toBe(0)
     expect(fs.existsSync(stage('dead'))).toBe(false)
     expect(fs.readdirSync(path.join(stage('daemon'), 'dist-bin'))).toEqual(['walnut-darwin-arm64'])
     expect(fs.existsSync(path.join(stage('daemon'), 'runtime', 'id'))).toBe(true)
     expect(fs.readdirSync(path.join(stage('web'), 'dist-bin')).sort()).toEqual(['walnut-darwin-arm64', 'walnut-linux-arm64-musl', 'walnut-linux-x64'])
     expect(fs.readdirSync(path.join(stage('current'), 'dist-bin'))).toHaveLength(3)
+  })
+})
+
+describe('the stage sweep at the end of a deploy', () => {
+  it('runs again once the new server serves, before the success stamp, so the replaced server\'s stage goes now', () => {
+    const calls = [...script.matchAll(/^sweep_old_stages$/gm)].map((m) => m.index!)
+    expect(calls).toHaveLength(2)
+    const ready = script.indexOf('if ! snapshot_lkg; then')
+    const stamp = script.indexOf('date +%s > "$SUCCESS_STAMP"')
+    expect(ready).toBeGreaterThan(-1)
+    expect(calls[1]).toBeGreaterThan(ready)
+    expect(calls[1]).toBeLessThan(stamp)
+    // The first pass still runs before the launch (a full temp volume is found before the kill).
+    expect(calls[0]).toBeLessThan(script.indexOf('rollback_to_lkg() {'))
+  })
+
+  it('removes every earlier stage nothing runs from, and keeps the LKG, this deploy\'s stage and one a process runs from', async () => {
+    const root = tmp()
+    const tag = `t${process.pid}x${Date.now()}`
+    const stage = (name: string) => path.join(root, `open-walnut-stage.${tag}.${name}`)
+    for (const n of ['old1', 'old2', 'rollback', 'session', 'current']) program(path.join(stage(n), 'dist-bin', 'walnut-darwin-arm64'))
+    // An LKG named like a stage (a rehearsal may put it beside them) is never swept, even when idle.
+    const lkg = stage('lkg')
+    program(path.join(lkg, 'dist-bin', 'walnut-darwin-arm64'))
+    await runFrom(path.join(stage('session'), 'dist-bin', 'walnut-darwin-arm64'), ['--session-host', '--'])
+    const r = bash([fn('stage_has_live_process'), fn('stage_serves_web'),
+      `STAGE_ROOT='${root}'`, `STAGE_DIR='${stage('current')}'`, `LKG_DIR='${lkg}/'`, 'MACHINE_TARGET=darwin-arm64', reapLoop()].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    for (const n of ['old1', 'old2', 'rollback']) expect(fs.existsSync(stage(n)), n).toBe(false)
+    for (const n of ['session', 'current', 'lkg']) expect(fs.existsSync(stage(n)), n).toBe(true)
   })
 })
 
