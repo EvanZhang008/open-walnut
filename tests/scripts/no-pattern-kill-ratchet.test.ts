@@ -286,7 +286,9 @@ describe('no tool or test kills by name or pattern', () => {
       }
     }
     expect(offenders, 'Kill the pid the script recorded when it started the process (scripts/lib/recorded-pid.sh), or allowlist that exact line here with a reason.').toEqual([])
-  })
+    // It scans the whole tree (about 7,000 files, 15 s on a loaded host by 2026-11-07), so
+    // the quick tier's 15 s default timed it out as the tree grew; the scan, not a hang.
+  }, 120_000)
 
   it('the allowlist gives a reason for every entry and has no stale ones', () => {
     for (const entry of ALLOWLIST) {
