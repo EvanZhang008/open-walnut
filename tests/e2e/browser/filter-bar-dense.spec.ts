@@ -47,8 +47,10 @@ test.describe('Owner: dense board', () => {
     expect(rows).toEqual(['sort', 'group', 'view', 'quick-views', 'session-panels'])
     // The menu is the search box and its body, nothing more: no footer.
     expect(await filterMenu(page).evaluate((el) => Array.from(el.children).map((c) => c.className))).toEqual(['fb-search fb-menu-search', 'fb-menu-body'])
+    // Home's panel has the layout Group row, so page one says which of its picks are
+    // experimental, below every row and above Collapse all (d7715e5b1).
     expect(await filterMenu(page).locator('.fb-menu-body').evaluate((el) => Array.from(el.children).map((c) => c.className)))
-      .toEqual(['fb-home fb-group', 'dm-section dm-order', 'dm-section dm-settings', 'dm-section dm-context'])
+      .toEqual(['fb-home fb-group', 'dm-section dm-order', 'dm-section dm-settings', 'dm-note dm-experimental-note', 'dm-section dm-context'])
   })
 
   test('S7 + C28 + C34 + C29: the Project page holds all 30 in board order behind a focused search; Source by name; the menu caps and scrolls', async ({ page }) => {

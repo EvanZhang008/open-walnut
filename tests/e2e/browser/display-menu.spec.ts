@@ -327,7 +327,7 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   await openDisplayMenu(page)
   const sort = option(page, 'sort')
   await expect(sort.locator('[aria-pressed="true"]')).toHaveCount(0)
-  await expect(displayMenu(page).locator('.dm-note')).toHaveText('2 projects use their own order')
+  await expect(displayMenu(page).locator('.dm-order .dm-note')).toHaveText('2 projects use their own order')
   const before = await sortKeys(page)
   await sort.locator('[data-choice="priority"]').click()
   await expect(displayMenu(page).locator('.dm-confirm')).toContainText('Use Priority for every project? This replaces 2 project orders.')
@@ -337,7 +337,7 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   await sort.locator('[data-choice="date"]').click()
   await displayMenu(page).getByRole('button', { name: 'Replace', exact: true }).click()
   await expect(sort.locator('[data-choice="date"]')).toHaveAttribute('aria-pressed', 'true')
-  await expect(displayMenu(page).locator('.dm-note')).toHaveCount(0)
+  await expect(displayMenu(page).locator('.dm-order .dm-note')).toHaveCount(0)
   expect(JSON.parse((await readLs(page, 'walnut-todo-project-sort')) ?? '{}')).toEqual({})
   expect(await readLs(page, 'walnut-todo-sortBy')).toContain('date')
 
