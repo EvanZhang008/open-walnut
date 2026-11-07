@@ -20,6 +20,7 @@ async function open(page: Page) {
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: 'Open task board', exact: true }).click();
   await expect(page.getByTestId('home-board')).toBeVisible();
+  await expect(page.getByTestId('home-board').locator('.home-board-columns')).toBeVisible();
   await page.getByRole('button', { name: 'By pin', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill(project);
 }
@@ -467,10 +468,13 @@ test('completed totals stay stable when the archive contains hidden organization
   });
   await open(page);
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('');
-  const openCount = await page.locator('.home-board-count').innerText();
+  const visible = fullPage!.tasks.filter(t => !['main', 'lead'].includes(t.org_role ?? '') && !t.plugin_only);
+  const expected = visible.filter(t => t.phase === 'COMPLETE' || t.status === 'done').length;
+  const expectedOpen = visible.length - expected;
+  const openCount = `${expectedOpen} open ${expectedOpen === 1 ? 'task' : 'tasks'}`;
+  await expect(page.locator('.home-board-count')).toHaveText(openCount);
   await page.getByRole('button', { name: 'By status', exact: true }).click();
   const doneCount = column(page, 'done').locator('.home-board-column-head > span');
-  const expected = fullPage!.tasks.filter(t => !['main', 'lead'].includes(t.org_role ?? '') && !t.plugin_only && (t.phase === 'COMPLETE' || t.status === 'done')).length;
   // The server's hidden count, which leaves the organization nodes out, matches the full list.
   await expect(doneCount).toHaveText(String(expected));
   await expect(page.locator('.home-board-count')).toHaveText(`${openCount} · ${expected} completed`);
