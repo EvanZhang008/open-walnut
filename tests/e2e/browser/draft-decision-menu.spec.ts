@@ -262,6 +262,12 @@ for (const vp of [DESKTOP, SMALL]) {
 // C5 C65: what More opens on a fresh draft, with and without priority shown.
 for (const showPriority of [true, false]) {
   test(`More on a fresh draft lists Project and the four tiers, no dates or unread; priority row ${showPriority ? 'shown' : 'hidden'}`, async ({ page }) => {
+    // The fixture server is shared, and specs running beside this one make custom tiers
+    // on it (display-order-every-view's MixA/MixB showed here on CI, 2026-11-07). The list
+    // below is exact, so this page reads a board with no custom tier.
+    await page.route('**/api/focus/tiers', (route) => (route.request().method() === 'GET'
+      ? route.fulfill({ json: { tiers: [] } })
+      : route.continue()))
     await boot(page, {}, DESKTOP, showPriority)
     const panel = await openDraft(page)
     const menu = await openDraftSettings(panel, 'more')
