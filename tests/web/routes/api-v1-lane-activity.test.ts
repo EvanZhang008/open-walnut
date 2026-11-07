@@ -216,7 +216,9 @@ async function connectSse(url: string): Promise<SseConn> {
   })()
   return {
     events,
-    waitFor: (pred, timeoutMs = 10_000) => {
+    // A loaded runner (load 100+ on 2026-11-07) boots each test's server and drains its turn in
+    // tens of seconds: the wait and the test's clock give it that room, a stuck stream still fails.
+    waitFor: (pred, timeoutMs = 30_000) => {
       const existing = events.find(pred)
       if (existing) return Promise.resolve(existing)
       return new Promise<SseEvt>((resolve, reject) => {
@@ -267,6 +269,8 @@ async function runTurn(convId: string, sse: SseConn, text = 'do the thing'): Pro
     && sse.events.filter((x) => x.event === 'message-end').length > before)
   return sse.events
 }
+
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 beforeEach(() => {
   started = []

@@ -67,10 +67,10 @@ describe('G2 (B3): a teardown Walnut asked for, with a human line queued in the 
     // The agent completes its own task mid-turn: completeTaskSessions marks the teardown and stops the CLI.
     h.session.markExpectedTeardown('task_completed')
     ;(h.session as unknown as { handleRemoteProcessExit(code: number, stderr?: string): void }).handleRemoteProcessExit(143)
-    await settle(200)
-    expect(named(h, EventNames.SESSION_BATCH_FAILED, row.id)).toHaveLength(1)
+    // Polled, not a fixed 200 ms: on a loaded runner the exit's park lands later (2026-11-07, load 100+).
+    await vi.waitFor(() => expect(named(h, EventNames.SESSION_BATCH_FAILED, row.id)).toHaveLength(1), { timeout: 5_000, interval: 20 })
     expect(await isMessageQueued(SID, row.id)).toBe(true)
-    expect(await rows()).toEqual(['please also run the tests:parked'])
+    await vi.waitFor(async () => expect(await rows()).toEqual(['please also run the tests:parked']), { timeout: 5_000, interval: 20 })
     // Never delivered to a new process on its own.
     expect(h.resumes).toEqual([])
   })
