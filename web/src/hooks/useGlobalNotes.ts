@@ -8,6 +8,7 @@ import {
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
 import type { Editor } from '@tiptap/core';
+import { markdownKeepingSource } from '@/components/notes/editor-keep-source';
 
 export interface UseGlobalNotesReturn {
   content: string;
@@ -36,6 +37,10 @@ const DEBOUNCE_MS = 500;
 
 export function useGlobalNotes(): UseGlobalNotesReturn {
   const [content, setContent] = useState('');
+  /** The body as it is on disk (content state follows every load, adopt and
+   *  save): what a save keeps on every line the user did not edit. */
+  const diskBodyRef = useRef(content);
+  diskBodyRef.current = content;
   const savingRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -301,7 +306,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         return;
       }
       try {
-        performSave(ed.storage.markdown.getMarkdown());
+        performSave(markdownKeepingSource(ed, diskBodyRef.current));
       } catch {
         savingRef.current = false;
         setSaving(false);
@@ -324,7 +329,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         if (!dirty.current) return;
         if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
         try {
-          performSave(editor.storage.markdown.getMarkdown());
+          performSave(markdownKeepingSource(editor, diskBodyRef.current));
         } catch {
           // State already torn down — nothing recoverable; reset so the panel
           // keeps accepting external updates.
@@ -358,7 +363,7 @@ export function useGlobalNotes(): UseGlobalNotesReturn {
         const ed = editorRef.current;
         if (dirty.current && !inFlightRef.current && ed && !ed.isDestroyed) {
           try {
-            const md = ed.storage.markdown.getMarkdown();
+            const md = markdownKeepingSource(ed, diskBodyRef.current);
             const hash = contentHashRef.current ?? undefined;
             saveGlobalNotes(joinFrontmatter(frontmatterRef.current, md), hash, surfaceIdRef.current).catch((e) => {
               log.warn('notes', 'Unmount flush failed', { error: e instanceof Error ? e.message : String(e) });

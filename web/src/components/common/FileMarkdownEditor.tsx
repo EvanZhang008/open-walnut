@@ -25,20 +25,13 @@
  *    vault autosaves; the wrapper catches it before the browser's Save dialog).
  */
 import { useRef, useMemo, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
-import { createDocument, type Editor } from '@tiptap/core';
+import type { Editor } from '@tiptap/core';
 import { NotesEditor } from '@/components/notes/NotesEditor';
 import { normalizeForEditor } from '@/components/notes/notes-content-preprocess';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
-import { keepUntouchedSource } from '@/utils/markdown-keep-source';
+import { markdownKeepingSource, untouchedMarkdown } from '@/components/notes/editor-keep-source';
 import type { FileSourceEditorHandle } from './FileSourceEditor';
-
-/** The Markdown the editor would make of `body` with nobody touching it: the same
- *  parse setContent runs, then the serializer. */
-function serializeUntouched(ed: Editor, body: string): string {
-  const html = ed.storage.markdown.parser.parse(normalizeForEditor(entityRefsToMarkdownLinks(body))) as string;
-  return ed.storage.markdown.serializer.serialize(createDocument(html, ed.schema, ed.options.parseOptions)) as string;
-}
 
 
 interface FileMarkdownEditorProps {
@@ -105,20 +98,6 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
     const editorRef = useRef<Editor | null>(null);
     const appliedRef = useRef<{ text: string; body: string } | null>(null);
     const dirtyRef = useRef(false);
-    /** serializeUntouched(seed body), computed once per seed: the merge base that
-     *  lets a save keep every line the user did not edit (keepUntouchedSource). */
-    const untouchedRef = useRef<{ body: string; md: string } | null>(null);
-    const untouchedOf = (ed: Editor, body: string): string | null => {
-      if (untouchedRef.current?.body === body) return untouchedRef.current.md;
-      try {
-        const md = serializeUntouched(ed, body);
-        untouchedRef.current = { body, md };
-        return md;
-      } catch { return null; }
-    };
-    /** The last body handed out and what it became, so a draft capture and the
-     *  write that follows it do not merge the same text twice. */
-    const keptRef = useRef<{ seed: string; body: string; text: string } | null>(null);
     // Re-render channel for setValue when no editor has been captured yet — see
     // the handle below. Only the setter is needed; the count itself is never read.
     const [, bumpSeed] = useState(0);
@@ -130,29 +109,6 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
     const onSaveRef = useRef(onSave);
     onSaveRef.current = onSave;
 
-    /** `body` with every line the user did not edit put back to the seed's own
-     *  bytes. Used only when the editor loads the result as the same document as
-     *  `body` (both load and serialize to the same text: loading also collapses
-     *  runs of spaces, which typing can leave in `body`); anything else writes
-     *  `body` as it is, the editor's own spelling. Not "renders to the same HTML":
-     *  the serializer is lossy (inline code ending in a space loses the space after
-     *  it), so the file's own bytes can render better than the editor's spelling,
-     *  and that check threw the whole merge away (2026-11-07, a 153-line note). */
-    const keepSource = (ed: Editor, body: string): string => {
-      const seed = seedRef.current.body;
-      if (keptRef.current?.body === body && keptRef.current.seed === seed) return keptRef.current.text;
-      let text = body;
-      try {
-        const untouched = untouchedOf(ed, seed);
-        if (untouched != null) {
-          const kept = keepUntouchedSource(seed, untouched, body);
-          if (kept === body || serializeUntouched(ed, kept) === serializeUntouched(ed, body)) text = kept;
-        }
-      } catch { /* the editor's spelling is always a correct save */ }
-      keptRef.current = { seed, body, text };
-      return text;
-    };
-
     useImperativeHandle(ref, () => ({
       getValue: () => {
         const ed = editorRef.current;
@@ -162,7 +118,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
           : seedRef.current.body;
         // 程序装入后尚未编辑的正文保留原始字节，避免格式化被当成保存期间的新输入。
         if (appliedRef.current?.body === body) return appliedRef.current.text;
-        return joinFrontmatter(seedRef.current.frontmatter, ed && !ed.isDestroyed ? keepSource(ed, body) : body);
+        return joinFrontmatter(seedRef.current.frontmatter, ed && !ed.isDestroyed ? markdownKeepingSource(ed, seedRef.current.body, body) : body);
       },
       getBase: () => baseRef.current,
       /** See FileSourceEditorHandle.setBase — base moves, document does not. */
@@ -228,7 +184,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
         try { md = editor.storage.markdown.getMarkdown() as string; } catch { return; }
         const seed = seedRef.current.body;
         if (md.replace(/\s+$/, '') === seed.replace(/\s+$/, '')) return;
-        if (md === untouchedOf(editor, seed)) return;
+        if (md === untouchedMarkdown(editor, seed)) return;
         dirtyRef.current = true;
         onDirtyChangeRef.current(true);
       }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Editor } from '@tiptap/core';
+import { markdownKeepingSource } from '@/components/notes/editor-keep-source';
 
 /**
  * useFieldContent — a save/load adapter that lets ANY flat markdown field (a task
@@ -74,7 +75,7 @@ export function useFieldContent(
       const ed = editorRef.current;
       if (!ed || ed.isDestroyed) { setSaveStatus('idle'); return; }
       let md: string;
-      try { md = ed.storage.markdown.getMarkdown(); } catch { setSaveStatus('idle'); return; }
+      try { md = markdownKeepingSource(ed, savedRef.current); } catch { setSaveStatus('idle'); return; }
       if (md === savedRef.current) { dirtyRef.current = false; setSaveStatus('saved'); return; }
       save(md, hashRef.current)
         .then((res) => {
@@ -114,7 +115,7 @@ export function useFieldContent(
       const ed = editorRef.current;
       if (dirtyRef.current && ed && !ed.isDestroyed) {
         try {
-          const md = ed.storage.markdown.getMarkdown();
+          const md = markdownKeepingSource(ed, savedRef.current);
           if (md !== savedRef.current) void save(md, hashRef.current).catch(() => {});
         } catch { /* editor gone */ }
       }

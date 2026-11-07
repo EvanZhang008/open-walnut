@@ -54,6 +54,7 @@ import type { TagSuggestion } from './TagAutocomplete';
 import type { NoteListItem } from '@/api/notes-v2';
 import type { Task } from '@open-walnut/core';
 import { openExternalLink, openInDefaultBrowser } from '@/plugins/link-handlers';
+import { loadsAs } from './editor-keep-source';
 import './notes-editor.css';
 import './editor-mic.css';
 
@@ -586,7 +587,10 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
 
     const currentMd = editor.storage.markdown.getMarkdown();
     const preprocessed = entityRefsToMarkdownLinks(content);
-    if (currentMd !== preprocessed) {
+    // Saves keep the note's own bytes (markdownKeepingSource), so `content` after a
+    // save is usually not the serializer's spelling of the same document. Reloading
+    // it would only reset the doc under the caret: skip when it loads as this doc.
+    if (currentMd !== preprocessed && !loadsAs(editor, content, currentMd)) {
       log.info('notes', 'external content sync applied', {
         currentLen: currentMd.length, newLen: preprocessed.length,
       });

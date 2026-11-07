@@ -12,6 +12,7 @@ import { threeWayMerge } from '@open-walnut/three-way-merge';
 import { leaderErrorMessage } from '@/api/leader-presence';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
 import { normalizeForEditor } from '@/components/notes/notes-content-preprocess';
+import { markdownKeepingSource, loadsAs } from '@/components/notes/editor-keep-source';
 import {
   dropCachedNote, getCachedNote, loadNoteIntoCache, peekCachedNote, putCachedNote, wireNoteContentCacheEvents, type CachedNote,
 } from '@/stores/note-content-cache';
@@ -88,6 +89,11 @@ export function useNoteContent(notePath: string | null) {
    * reconcile, a `notes:updated` broadcast and a backlinks refetch on every open.
    */
   const lastWrittenRef = useRef<string | null>(null);
+  /** The editor's body as it is saved: the note's own bytes (lastWrittenRef) on
+   *  every line the user did not edit, so one typed sentence does not rewrite the
+   *  rest of the note in the serializer's spelling. */
+  const savedBody = (editor: Editor): string =>
+    markdownKeepingSource(editor, lastWrittenRef.current == null ? null : splitFrontmatter(lastWrittenRef.current).body);
   /**
    * Mirrors `pendingExternal` for use inside the WS callback / idle-flush
    * without re-subscribing. Tracks whether a deferred external change is
@@ -141,7 +147,7 @@ export function useNoteContent(notePath: string | null) {
   /** The bytes to flush for `path`: the live editor's, else its destroy snapshot; null when neither exists. */
   const departingMarkdown = useCallback((path: string): string | null => {
     const editor = editorRef.current;
-    if (editor && !editor.isDestroyed) return joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+    if (editor && !editor.isDestroyed) return joinFrontmatter(frontmatterRef.current, savedBody(editor));
     const snap = departedEditRef.current;
     return snap && snap.path === path ? snap.md : null;
   }, []);
@@ -173,7 +179,7 @@ export function useNoteContent(notePath: string | null) {
       } catch { return false; }
     }
     if (currentPathRef.current !== pathToSave || editorRef.current !== editor || editor.isDestroyed) return false;
-    const ours = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+    const ours = joinFrontmatter(frontmatterRef.current, savedBody(editor));
     const merge = threeWayMerge(base, ours, theirs.content, { idFrom: 'theirs' });
     if (!merge.ok) {
       log.warn('notes', 'note save conflict did not merge cleanly', { path: pathToSave, conflicts: merge.conflicts, overBudget: merge.overBudget });
@@ -183,7 +189,9 @@ export function useNoteContent(notePath: string | null) {
     lastWrittenRef.current = theirs.content;
     const { frontmatter, body } = splitFrontmatter(merge.merged);
     frontmatterRef.current = frontmatter;
-    if (body !== editor.storage.markdown.getMarkdown()) {
+    const shown = editor.storage.markdown.getMarkdown();
+    // The merge keeps the note's own bytes, so compare documents, not spellings.
+    if (body !== shown && !loadsAs(editor, body, shown)) {
       const { from, to } = editor.state.selection;
       editor.commands.setContent(normalizeForEditor(entityRefsToMarkdownLinks(body)), { emitUpdate: false });
       const max = editor.state.doc.content.size;
@@ -549,7 +557,7 @@ export function useNoteContent(notePath: string | null) {
       if (!snap || snap.path !== pathToSave) return;
       editorMd = splitFrontmatter(snap.md).body;
     } else {
-      editorMd = editor.storage.markdown.getMarkdown();
+      editorMd = savedBody(editor);
     }
     const md = joinFrontmatter(frontmatterRef.current, editorMd);
     if (md === lastWrittenRef.current) {
@@ -711,7 +719,7 @@ export function useNoteContent(notePath: string | null) {
         if (editorRef.current !== editor) return;
         const path = currentPathRef.current;
         if (dirtyRef.current && path) {
-          const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+          const md = joinFrontmatter(frontmatterRef.current, savedBody(editor));
           if (md !== lastWrittenRef.current) departedEditRef.current = { path, md };
         }
         editorRef.current = null;
