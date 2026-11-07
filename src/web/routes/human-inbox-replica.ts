@@ -1,6 +1,6 @@
 /**
- * The replica half of the reader's inbox routes: list, one letter, and the
- * read / pin / archive flags.
+ * The replica half of the reader's inbox routes: list, one letter, the
+ * read / pin / archive flags, and the human's reply and answer on the companion.
  *
  * The primary is asked first, because it is the freshest. When it cannot be
  * reached (no bridge, a relay timeout, a primary too old for the action), the
@@ -13,9 +13,12 @@
  * primary is still the authority whenever it answers.
  */
 
+import crypto from 'node:crypto'
 import type { Response } from 'express'
 import { log } from '../../logging/index.js'
-import { callPrimaryControl, sendV1Error as sendError, type RelayFailure } from './v1-control-relay.js'
+import {
+  callPrimaryControl, classifyRelayReply, sendRelayReplyError, sendV1Error as sendError, tryControlRelay, type RelayFailure,
+} from './v1-control-relay.js'
 import type { LetterStateField } from '../../core/human-inbox/store.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 
@@ -96,8 +99,9 @@ export async function replicaListLetters(res: Response, archived: boolean): Prom
   // With changes still queued, the copy is the consistent list: the primary's
   // would show those letters as they were, and an archive moves a letter
   // between the two lists, which an overlay on one list cannot do. The primary
-  // is asked anyway when there is no copy to answer from.
-  const pending = await queueStillPending(q)
+  // is asked anyway when there is no copy to answer from. A reply or answer
+  // still in the journal counts too: the Mac has not got it yet.
+  const pending = (await queueStillPending(q)) || (await q.pendingTurnCount()) > 0
   let failure: Unreachable | null = null
   if (!pending || !(await q.readMirrorIndex())) {
     const relayed = await relayRead(res, 'server.human-inbox', { archived })
@@ -129,14 +133,18 @@ export async function replicaGetLetter(res: Response, id: string): Promise<void>
     throw new NeedsLeaderError('not_kept_here', INBOX_NOT_KEPT)
   }
   const q = await replicaState()
-  const pending = await queueStillPending(q)
+  // Queued flags replay first (what still waits goes on top of the answer below).
+  await queueStillPending(q)
   // One letter is always asked for: the queued changes go on top of the
   // primary's answer, and a letter newer than the copy still opens.
   const relayed = await relayRead(res, 'server.human-inbox.get', { id })
   if (relayed === true) return
   if ('result' in relayed) {
     const letter = relayed.result.letter as Parameters<ReplicaState['overlayQueued']>[0] | undefined
-    res.json(pending && letter ? { ...relayed.result, letter: await q.overlayQueued(letter) } : relayed.result)
+    // Queued flags go on top, and so does a reply or answer this box took that the Mac's
+    // letter does not show yet (still in the journal, or acked and not in the copy yet).
+    // Nothing waiting is the Mac's letter as it is (overlayQueued adds nothing then).
+    res.json(letter ? { ...relayed.result, letter: await q.overlayQueued(letter) } : relayed.result)
     return
   }
   const letter = await q.mirrorLetter(id)
@@ -181,4 +189,114 @@ export async function replicaSetLetterState(
     return
   }
   res.json({ letter: await q.mirrorRecord(id), queued: true })
+}
+
+/** The request carries pictures (uploads named here, or inline). */
+function hasPictures(b: Record<string, unknown>): boolean {
+  return (Array.isArray(b.images) && b.images.length > 0) || (Array.isArray(b.imageRefs) && b.imageRefs.length > 0)
+}
+
+/** 202 when the turn is on record and its delivery is still running, else 200 (human-inbox-v1.ts). */
+function deliveringStatus(result: Record<string, unknown>): number {
+  return (result.delivery as { status?: unknown } | undefined)?.status === 'pending' ? 202 : 200
+}
+
+/**
+ * POST /human-inbox/:id/{human-reply,answer} on the companion.
+ *
+ * 2026-11-05: the user answered a letter by voice on the phone while the Mac was away;
+ * this route only relayed, answered `503 bridge_offline` in 1 ms, and the reply reached the
+ * Mac 1h45m later when the phone resent its draft. Now the Mac is asked first, as before,
+ * and every answer it gives (its refusals included) is passed through unchanged. When the
+ * Mac provably did not take the request (no bridge, a daemon with no server behind it, a
+ * Mac too old for the action), the turn goes into the companion's journal (`inbox-reply`,
+ * core/companion-journal.ts journalInboxReply) and the answer is the Mac's own shape:
+ * `202 {letter, delivery: {status: 'pending'}, queued: true}`, the letter from this box's
+ * copy with the turn in its thread (replica-state.ts shows it on every read here until the
+ * copy holds it). The Mac records and delivers it when it drains (apply-inbox-reply.ts).
+ *
+ * A relay that MAY have reached the Mac (a timeout after the send) keeps its 503, except a
+ * reply: the Mac keeps one turn per `clientId`, so one is made here when the phone sent
+ * none, the relay carries it, and the record replays the same turn at most once.
+ *
+ * Kept as before (the Mac's answer or the 503): an older Mac that does not drain the kind;
+ * a session answering for the user (`callerSid`: the Mac resolves the caller and records
+ * its task); a letter not in this box's copy; a turn the Mac would refuse (no words, a bad
+ * clientId, an option the letter does not offer, a letter already answered otherwise).
+ * KNOWN GAP: a reply or answer with pictures (`images` / `imageRefs`) still needs the Mac,
+ * whose image store keeps them; the journal would have to carry the bytes as blobs.
+ */
+export async function replicaLetterTurn(
+  res: Response,
+  op: 'reply' | 'answer',
+  id: string,
+  body: Record<string, unknown>,
+  relayParams: Record<string, unknown>,
+  opts: { callerSid?: string; answerBy: number },
+): Promise<void> {
+  // The human's moment, taken before any wait.
+  const madeAt = Date.now()
+  const action = op === 'reply' ? 'server.human-inbox.human-reply' : 'server.human-inbox.answer'
+  const { macDrains, journalInboxReply } = await import('../../core/companion-journal.js')
+  const journalable = macDrains('inbox-reply') && !opts.callerSid && !hasPictures(body)
+  const madeId = op === 'reply' && journalable && body.clientId === undefined ? `rp-${crypto.randomUUID()}` : undefined
+  const params = madeId ? { ...relayParams, clientId: madeId } : relayParams
+  // A journalable turn answers inside the route's deadline even when the relay hangs.
+  const out = await tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? Math.max(1_000, opts.answerBy - Date.now()) : undefined)
+  if (out.ok) {
+    const reply = out.reply
+    if (reply.ok === true && reply.result && typeof reply.result === 'object') {
+      const result = reply.result as Record<string, unknown>
+      res.status(deliveringStatus(result)).json(result)
+      return
+    }
+    // The Mac's daemon answered that it could not take it at all (needs_upgrade, or no
+    // server behind it): provably not run. Any other answer is the Mac's, passed through.
+    if (!journalable || !unreachable(classifyRelayReply(reply))) {
+      sendRelayReplyError(res, reply)
+      return
+    }
+  } else if (!journalable || !(out.notSent || op === 'reply')) {
+    out.answer(res)
+    return
+  }
+  const fail = (): void => { if (out.ok) sendRelayReplyError(res, out.reply); else out.answer(res) }
+  const q = await replicaState()
+  const record = await q.mirrorRecord(id)
+  if (!record) { fail(); return }
+  let input: Parameters<typeof journalInboxReply>[0]
+  if (op === 'reply') {
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    const clientId = madeId ?? body.clientId
+    const { CLIENT_ID_RE } = await import('../../core/human-inbox/normalize.js')
+    if (!text || typeof clientId !== 'string' || !CLIENT_ID_RE.test(clientId)) { fail(); return }
+    input = { letterId: id, op: 'reply', text, clientId, madeAt }
+  } else {
+    const actionId = typeof body.actionId === 'string' ? body.actionId.trim() : ''
+    const freeText = typeof body.freeText === 'string' ? body.freeText.trim() : ''
+    if (!record.actions?.some((a) => a.id === actionId)) { fail(); return }
+    if (record.answered && !record.answered.by) {
+      // The same answer again (a retry, its record waiting or taken): the letter as it stands.
+      // Another answer the Mac refuses (one answer per letter), so it gets the old answer.
+      // Notes compared as the store keeps them (bounded), whichever side was cut.
+      const { boundThreadText } = await import('../../core/human-inbox/store.js')
+      const same = record.answered.actionId === actionId && boundThreadText(record.answered.freeText ?? '') === boundThreadText(freeText)
+      if (!same) { fail(); return }
+      res.status(202).json({ letter: (await q.mirrorLetter(id)) ?? record, delivery: { status: 'pending' }, queued: true })
+      return
+    }
+    input = { letterId: id, op: 'answer', actionId, ...(freeText ? { freeText } : {}), madeAt }
+  }
+  const saved = journalInboxReply(input)
+  if (!saved?.ok) { fail(); return }
+  log.notif.info('human-inbox replica: a reply kept for the Mac (primary unreachable)', {
+    letterId: id, op, opId: saved.opId, seq: saved.seq, ...(saved.duplicate ? { duplicate: true } : {}),
+    relay: out.ok ? classifyRelayReply(out.reply).kind : out.notSent ? 'not_sent' : 'maybe_sent',
+  })
+  res.status(202).json({
+    letter: (await q.mirrorLetter(id)) ?? (await q.mirrorRecord(id)) ?? record,
+    delivery: { status: 'pending' },
+    queued: true,
+    ...(input.op === 'reply' ? { clientId: input.clientId } : {}),
+  })
 }

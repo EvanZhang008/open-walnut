@@ -115,7 +115,10 @@ export function isSlowHostFailure(err: unknown): boolean {
  * message was never written, so it waits and goes out when the link is back
  * (the reconnect redelivers it), never a "Send failed".
  */
-const HOST_LINK_DOWN = /waiting for the connection to the session host|no companion connection is available|^DaemonConnection not connected to\b|connection to .+ failed \d+s ago|connection to .+ was closed/i;
+// The companion's hop (cloud-session-link.ts) is the way the Mac takes when its own link to
+// the host is down; its words for "it has no way through either" are the same wait
+// (2026-11-06: "Send failed: The companion refused the session stream", sent a second later).
+const HOST_LINK_DOWN = /waiting for the connection to the session host|no companion connection is available|^DaemonConnection not connected to\b|connection to .+ failed \d+s ago|connection to .+ was closed|^The companion (refused the session stream|did not confirm the session stream|has no connection to the session host|credential is awaiting recovery)|^The connection to the companion failed|^The session stream closed before|^The session host bridge disconnected/i;
 export function isHostLinkFailure(err: unknown): boolean {
   return err instanceof Error && !(err instanceof SendOutcomeUnknownError) && HOST_LINK_DOWN.test(err.message);
 }

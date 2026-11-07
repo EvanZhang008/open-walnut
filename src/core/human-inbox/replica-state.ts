@@ -14,8 +14,12 @@
  *           primary cannot be reached (`servedFrom: 'mirror'`);
  *   writes  read / pin / archive relay first; when the primary cannot be
  *           reached they are QUEUED here and answered at once, and replayed on
- *           the next primary bridge connect (plus a 60s sweep). Answers and
- *           replies still need the primary: they are a delivery to a session.
+ *           the next primary bridge connect (plus a 60s sweep). The human's reply
+ *           and the option they pick relay first too; when the primary provably
+ *           did not take one, it goes into the companion's journal (kind
+ *           `inbox-reply`, once the Mac drains it) and the Mac delivers it to the
+ *           letter's session when it drains (2026-11-05). Until the copy holds that
+ *           turn, every read here shows it (the turn overlay below).
  *
  * One file per (letter, flag) under HUMAN_INBOX_QUEUE_DIR (cache/, never git),
  * so a newer change to the same flag replaces the older one in place. An entry
@@ -43,7 +47,7 @@ import { writeJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import { normalizeStore, LETTER_ID_RE, type LetterStoreFile } from './normalize.js';
 import type { LetterStateField } from './store.js';
-import type { LetterDetail, LetterList, LetterRecord } from './types.js';
+import type { LetterDetail, LetterList, LetterRecord, ThreadEntry } from './types.js';
 
 export interface LetterStateEntry {
   letterId: string;
@@ -56,6 +60,24 @@ export interface LetterStateEntry {
   storeUpdatedAt?: string;
   /** applied only: when the primary answered (this box's clock), for the TTL. */
   appliedAt?: number;
+}
+
+/**
+ * A human turn on a letter this box took for the Mac (journal kind `inbox-reply`): a reply
+ * (`text`, `clientId`) or a picked option (`actionId`, `freeText`). Read from the journal
+ * while the record waits, then from the acked list until the copy holds the turn.
+ */
+export interface LetterTurnEntry {
+  letterId: string;
+  op: 'reply' | 'answer';
+  text?: string;
+  clientId?: string;
+  actionId?: string;
+  freeText?: string;
+  /** When the human made it (this box's clock, epoch ms): the turn's `at` on every read here. */
+  at: number;
+  /** acked only: when the Mac acked the record (this box's clock), for the TTL. */
+  ackedAt?: number;
 }
 
 /** A list answered from the git-synced copy. Additive to the v1 shape. */
@@ -89,6 +111,19 @@ const MIRROR_READ_ATTEMPTS = 3;
 const MIRROR_RETRY_MS = 150;
 
 const ENTRY_FILE_RE = /^(lt-[0-9a-z]{1,12}-[0-9a-z]{4,12})\.(read|pinned|archived)\.json$/;
+
+/**
+ * Turns the Mac acked, kept on this box until its copy holds them (a restart keeps them):
+ * the ack and the next copy round are seconds to a minute apart, and without this the
+ * reply the human just sent would vanish from the letter in between. A turn the copy never
+ * shows (the Mac refused it into its drain letter) is dropped after ACKED_TURN_TTL_MS; the
+ * list keeps at most ACKED_TURNS_MAX (the newest).
+ */
+const ACKED_TURNS_FILE = (): string => path.join(HUMAN_INBOX_QUEUE_DIR, 'turns-acked.json');
+const ACKED_TURN_TTL_MS = 10 * 60 * 1000;
+const ACKED_TURNS_MAX = 200;
+/** The store's THREAD_TEXT_MAX_CHARS: a turn here reads as the Mac will record it. */
+const TURN_TEXT_MAX_CHARS = 4_000;
 
 function entryFile(letterId: string, field: LetterStateField): string {
   return path.join(HUMAN_INBOX_QUEUE_DIR, `${letterId}.${field}.json`);
@@ -271,6 +306,149 @@ export async function pendingStateCount(): Promise<number> {
   return (await readStateEntries()).filter(e => e.state === 'pending').length;
 }
 
+// ── Human turns taken for the Mac (journal kind `inbox-reply`) ──
+
+function isTurnEntry(v: unknown): v is LetterTurnEntry {
+  const e = v as LetterTurnEntry | null;
+  if (!e || typeof e.letterId !== 'string' || !LETTER_ID_RE.test(e.letterId)) return false;
+  if (typeof e.at !== 'number' || !Number.isFinite(e.at)) return false;
+  if (e.ackedAt !== undefined && (typeof e.ackedAt !== 'number' || !Number.isFinite(e.ackedAt))) return false;
+  if (e.op === 'reply') return typeof e.text === 'string' && typeof e.clientId === 'string' && e.clientId.length > 0;
+  return e.op === 'answer' && typeof e.actionId === 'string' && e.actionId.length > 0
+    && (e.freeText === undefined || typeof e.freeText === 'string');
+}
+
+/** A journal record (or a stored entry) as a turn entry, or null. */
+function turnOf(r: Record<string, unknown>, ackedAt?: number): LetterTurnEntry | null {
+  const e: LetterTurnEntry = r.op === 'reply'
+    ? { letterId: r.letterId as string, op: 'reply', text: r.text as string, clientId: r.clientId as string, at: (r.madeAt ?? r.at) as number }
+    : { letterId: r.letterId as string, op: 'answer', actionId: r.actionId as string, ...(r.freeText !== undefined ? { freeText: r.freeText as string } : {}), at: (r.madeAt ?? r.at) as number };
+  if (ackedAt !== undefined) e.ackedAt = ackedAt;
+  return isTurnEntry(e) ? e : null;
+}
+
+/** The `inbox-reply` records still in the companion's journal (the Mac has not acked them). */
+async function journalTurns(): Promise<LetterTurnEntry[]> {
+  try {
+    const { companionJournalRecords } = await import('../companion-journal.js');
+    const out: LetterTurnEntry[] = [];
+    for (const r of companionJournalRecords()) {
+      if (r.kind !== 'inbox-reply') continue;
+      const e = turnOf(r);
+      if (e) out.push(e);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** How many human turns wait for the Mac in the journal. */
+export async function pendingTurnCount(): Promise<number> {
+  return (await journalTurns()).length;
+}
+
+async function readAckedTurns(): Promise<LetterTurnEntry[]> {
+  try {
+    const raw: unknown = JSON.parse(await fsp.readFile(ACKED_TURNS_FILE(), 'utf-8'));
+    const list = (raw as { turns?: unknown } | null)?.turns;
+    return Array.isArray(list) ? list.filter(isTurnEntry) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Rewrite the acked list under the queue lock: `edit` gets what is on disk now. */
+async function editAckedTurns(edit: (turns: LetterTurnEntry[]) => LetterTurnEntry[]): Promise<void> {
+  await withQueueLock(async () => {
+    const before = await readAckedTurns();
+    const after = edit(before).slice(-ACKED_TURNS_MAX);
+    if (after.length === before.length && after.every((t, i) => t === before[i])) return;
+    if (after.length === 0) await fsp.rm(ACKED_TURNS_FILE(), { force: true });
+    else await writeJsonFile(ACKED_TURNS_FILE(), { v: 1, turns: after });
+  });
+}
+
+/**
+ * The Mac acked these `inbox-reply` records: each stays on this box's reads, as an acked
+ * turn, until the copy holds it or ACKED_TURN_TTL_MS passes. Written before the journal
+ * lets the record go (companion-journal.ts ackCompanionJournal).
+ */
+export async function noteJournalTurnsAcked(records: ReadonlyArray<Record<string, unknown>>): Promise<void> {
+  const now = Date.now();
+  const add = records.filter(r => r.kind === 'inbox-reply').map(r => turnOf(r, now)).filter((e): e is LetterTurnEntry => !!e);
+  if (!add.length) return;
+  try {
+    await editAckedTurns(turns => [...turns, ...add]);
+  } catch (err) {
+    log.notif.warn('human-inbox replica: could not keep acked replies', { turns: add.length, err: String(err) });
+  }
+}
+
+/** The copy holds this turn: a reply by its clientId, an answer as the letter's own answer. */
+function copyHoldsTurn(letter: LetterRecord, turn: LetterTurnEntry): boolean {
+  if (turn.op === 'reply') return letter.thread.some(t => t.from === 'human' && t.clientId === turn.clientId);
+  return !!letter.answered && !letter.answered.by && letter.answered.actionId === turn.actionId;
+}
+
+/**
+ * The turns to show on top of the copy `letters`: every one still in the journal, and the
+ * acked ones the copy does not hold yet (those it holds, or past the TTL, are dropped here).
+ */
+async function liveTurns(letters: ReadonlyArray<LetterRecord> | null): Promise<LetterTurnEntry[]> {
+  const pending = await journalTurns();
+  const acked = await readAckedTurns();
+  if (!acked.length) return pending;
+  const now = Date.now();
+  const byId = new Map((letters ?? []).map(l => [l.id, l]));
+  const settled = (t: LetterTurnEntry): boolean => {
+    if (now - (t.ackedAt ?? t.at) > ACKED_TURN_TTL_MS) return true;
+    const letter = byId.get(t.letterId);
+    return !!letter && copyHoldsTurn(letter, t);
+  };
+  const keep = acked.filter(t => !settled(t));
+  if (keep.length !== acked.length) {
+    await editAckedTurns(turns => turns.filter(t => !settled(t))).catch(err => {
+      log.notif.warn('human-inbox replica: could not prune acked replies', { err: String(err) });
+    });
+  }
+  return [...pending, ...keep];
+}
+
+/**
+ * One turn on a letter as the Mac's store will write it (store.ts humanReplyTurn,
+ * answerLetter): a human turn with a pending delivery at the human's moment, an answer also
+ * the letter's `answered`, and the letter read and back in the inbox. Shown once: a reply
+ * whose clientId the letter holds, or an answer on a letter the user already answered (the
+ * Mac takes one answer; a task's answer for the user is replaced), adds nothing.
+ */
+function overlayTurn<T extends LetterRecord>(letter: T, turn: LetterTurnEntry): T {
+  const bound = (text: string): string => (text.length > TURN_TEXT_MAX_CHARS ? text.slice(0, TURN_TEXT_MAX_CHARS) : text);
+  const delivery = { status: 'pending' as const, at: turn.at };
+  let entry: ThreadEntry;
+  let answered = letter.answered;
+  if (turn.op === 'reply') {
+    if (letter.thread.some(t => t.from === 'human' && t.clientId === turn.clientId)) return letter;
+    entry = { from: 'human', text: bound((turn.text ?? '').trim()), at: turn.at, clientId: turn.clientId, delivery };
+  } else {
+    if (letter.answered && !letter.answered.by) return letter;
+    const action = letter.actions?.find(a => a.id === turn.actionId);
+    if (!action) return letter;
+    const note = bound((turn.freeText ?? '').trim());
+    answered = { actionId: action.id, label: action.label, at: turn.at, ...(note ? { freeText: note } : {}) };
+    entry = { from: 'human', text: note ? `${action.label}: ${note}` : action.label, at: turn.at, delivery };
+  }
+  const out = { ...letter, thread: [...letter.thread, entry], ...(answered ? { answered } : {}) } as T;
+  if (!out.read) { out.read = true; out.readAt = turn.at; }
+  if (out.archived) {
+    out.archived = false;
+    out.archivedAt = turn.at;
+    delete out.archivedReason;
+    delete out.settled;
+  }
+  return out;
+}
+
 // ── The git-synced copy ──
 
 /**
@@ -350,11 +528,21 @@ async function liveEntries(mirrorUpdatedAt: string | undefined): Promise<LetterS
   return live;
 }
 
-/** Apply the changes this box took on top of a letter from the copy. */
-function overlay<T extends LetterRecord>(letter: T, entries: LetterStateEntry[]): T {
+/**
+ * Apply the changes this box took on top of a letter from the copy, in the order the human
+ * made them: a reply un-archives the letter as the store does, and an archive after it wins.
+ */
+function overlay<T extends LetterRecord>(letter: T, entries: LetterStateEntry[], turns: LetterTurnEntry[] = []): T {
+  const steps: Array<{ at: number; flag?: LetterStateEntry; turn?: LetterTurnEntry }> = [
+    ...entries.filter(e => e.letterId === letter.id).map(flag => ({ at: flag.at, flag })),
+    ...turns.filter(t => t.letterId === letter.id).map(turn => ({ at: turn.at, turn })),
+  ];
+  if (!steps.length) return letter;
+  steps.sort((a, b) => a.at - b.at);
   let out = letter;
-  for (const entry of entries) {
-    if (entry.letterId !== letter.id) continue;
+  for (const step of steps) {
+    if (step.turn) { out = overlayTurn(out, step.turn); continue; }
+    const entry = step.flag!;
     if (entry.field === 'read') {
       if (out.read !== entry.value) out = { ...out, read: entry.value, readAt: entry.at };
     } else if (out[entry.field] !== entry.value) {
@@ -369,7 +557,8 @@ export async function mirrorList(opts: { archived?: boolean } = {}): Promise<Mir
   const index = await readMirrorIndex();
   if (!index) return null;
   const entries = await liveEntries(index.lastUpdated);
-  const letters = index.letters.map(l => overlay(l, entries));
+  const turns = await liveTurns(index.letters);
+  const letters = index.letters.map(l => overlay(l, entries, turns));
   const { sortLetters } = await import('./store.js');
   const wantArchived = opts.archived === true;
   return {
@@ -382,10 +571,12 @@ export async function mirrorList(opts: { archived?: boolean } = {}): Promise<Mir
 
 /**
  * The primary's own answer for one letter, with the changes still queued here
- * on top (the ones it has taken are already in it).
+ * on top (the ones it has taken are already in it). A human turn the Mac acked
+ * is on top too until the copy holds it: one the Mac's letter holds is never
+ * shown twice (overlayTurn), and nothing here prunes against the Mac's answer.
  */
 export async function overlayQueued<T extends LetterRecord>(letter: T): Promise<T> {
-  return overlay(letter, (await readStateEntries()).filter(e => e.state === 'pending'));
+  return overlay(letter, (await readStateEntries()).filter(e => e.state === 'pending'), await liveTurns(null));
 }
 
 /** One index record from the copy with this box's changes on top, or null. */
@@ -393,7 +584,7 @@ export async function mirrorRecord(id: string): Promise<LetterRecord | null> {
   const index = await readMirrorIndex();
   const record = index?.letters.find(l => l.id === id);
   if (!index || !record) return null;
-  return overlay(record, await liveEntries(index.lastUpdated));
+  return overlay(record, await liveEntries(index.lastUpdated), await liveTurns(index.letters));
 }
 
 /** One letter from the copy (bodies included, as the primary would send it), or null. */
@@ -416,7 +607,7 @@ export async function mirrorLetter(id: string): Promise<LetterDetail | null> {
     detail = await getLetter(id, opts);
   }
   if (!detail) return null;
-  return overlay(detail, await liveEntries(index.lastUpdated));
+  return overlay(detail, await liveEntries(index.lastUpdated), await liveTurns(index.letters));
 }
 
 // ── Replay ──
@@ -499,7 +690,10 @@ async function replayPending(budgetMs: number): Promise<number> {
 /** Drop the applied entries the copy has caught up with (the sweep's other half). */
 async function pruneApplied(): Promise<void> {
   const index = await readMirrorIndex();
-  if (index) await liveEntries(index.lastUpdated);
+  if (index) {
+    await liveEntries(index.lastUpdated);
+    await liveTurns(index.letters);
+  }
 }
 
 /**

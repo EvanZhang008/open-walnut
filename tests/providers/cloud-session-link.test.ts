@@ -139,6 +139,22 @@ describe('the read-only cloud session link', () => {
     expect(refusals).toHaveBeenCalledTimes(1)
   })
 
+  it('a companion with no bridge to the host (503) says so, and it reads as the host link being down', async () => {
+    // 2026-11-06: the host's daemon restarted, taking the Mac's link and the companion's together.
+    server = http.createServer()
+    server.on('upgrade', (_request, socket) => {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    h.endpoint.mockResolvedValue({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}/bridge`, token: 'machine-test-token' })
+    link = new CloudSessionLink('devbox', 'session-a', () => 0, () => {})
+    const err = await link.connect().catch((e: unknown) => e)
+    expect(err).toMatchObject({ name: 'SendHeldError', message: 'The companion has no connection to the session host either' })
+    const { isHostLinkFailure } = await import('../../src/providers/delivery-failure.js')
+    expect(isHostLinkFailure(err)).toBe(true)
+    expect(h.recover).not.toHaveBeenCalled()
+  })
+
   it('reconnects from the current owner cursor without sending any daemon command', async () => {
     const sockets = await fixture()
     let offset = 80

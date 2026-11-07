@@ -22,7 +22,9 @@
  * companion-memory.ts), 4d `note-move` (a note moved or renamed here:
  * companion-note-paths.ts), 4d `note-attachment` (a picture pasted into a note here,
  * its bytes as a blob: companion-note-attachments.ts), 4d `conversation-edit` (a chat
- * made, renamed, pinned or deleted here: companion-conversations.ts); the other queues are unchanged until their slice. A record carries no device actor
+ * made, renamed, pinned or deleted here: companion-conversations.ts), `inbox-reply` (the human's
+ * reply to a letter, or the option picked on it, while the Mac was away: replica-state.ts
+ * shows it at once, offline-merge/apply-inbox-reply.ts delivers it); the other queues are unchanged until their slice. A record carries no device actor
  * yet: the companion's pairing ids are not always the Mac's, and the Mac drops a
  * record whose device it does not know.
  *
@@ -316,6 +318,51 @@ export function journalInboxState(input: { letterId: string; field: 'read' | 'pi
   return r
 }
 
+/** A human turn on a letter, as the companion takes it while the Mac is away (`inbox-reply`). */
+export type InboxReplyInput =
+  | { letterId: string; op: 'reply'; text: string; clientId: string; madeAt: number }
+  | { letterId: string; op: 'answer'; actionId: string; freeText?: string; madeAt: number }
+
+const shortSha = (text: string): string => crypto.createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 24)
+
+/**
+ * The op id of one human turn: the same human action is one record whatever retries it
+ * (a double tap, the phone's resend of its draft). A reply is named by its letter and
+ * `clientId` (the Mac dedupes the turn by it too); an answer by its letter, option and
+ * words (the Mac takes one answer per letter).
+ */
+export function inboxReplyOpId(input: InboxReplyInput): string {
+  return input.op === 'reply'
+    ? `ir-${shortSha(`${input.letterId}\n${input.clientId}`)}`
+    : `ia-${shortSha(`${input.letterId}\n${input.actionId}\n${shortSha((input.freeText ?? '').trim())}`)}`
+}
+
+/**
+ * Save one human turn on a letter for the Mac (2026-11-05: a voice reply to a letter on the
+ * phone, while the Mac slept, answered 503 and reached the Mac only 1h45m later when the
+ * phone resent its draft): `inbox-reply`, op `reply` (`text`, `clientId`) or `answer`
+ * (`actionId`, `freeText?`), `madeAt` the human's moment on this box's clock. A retry of the
+ * same action is the first record (`duplicate`, inboxReplyOpId). The Mac records the turn
+ * and delivers it to the letter's session (offline-merge/apply-inbox-reply.ts). Null when
+ * the Mac does not drain the kind: the caller keeps its 503 (an older Mac never gets a
+ * record it cannot take). The checks (the letter in this box's copy, no pictures, the
+ * human's own turn) are the caller's (web/routes/human-inbox-replica.ts).
+ */
+export function journalInboxReply(input: InboxReplyInput): AppendResult | null {
+  if (!macDrains('inbox-reply')) return null
+  const body = input.op === 'reply'
+    ? { kind: 'inbox-reply', letterId: input.letterId, op: 'reply', text: input.text, clientId: input.clientId, madeAt: input.madeAt }
+    : { kind: 'inbox-reply', letterId: input.letterId, op: 'answer', actionId: input.actionId, ...(input.freeText ? { freeText: input.freeText } : {}), madeAt: input.madeAt }
+  const r = journalOf().append(COMPANION_JOURNAL_HOME, body, { opId: inboxReplyOpId(input), limit: true, coalesce: false })
+  if (r.ok) {
+    log.notif.info('companion journal: saved a reply to a letter for the Mac', { letterId: input.letterId, op: input.op, opId: r.opId, seq: r.seq, ...(r.duplicate ? { duplicate: true } : {}) })
+    for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+  } else {
+    log.notif.error('companion journal: a reply to a letter was refused', { letterId: input.letterId, op: input.op, code: r.code, why: r.why, error: r.message })
+  }
+  return r
+}
+
 /**
  * Save one chat turn this box answered itself while the Mac did not answer (slice 3e):
  * `chat-turn`, the user's words and the answer as blobs (`userBlob`, `answerBlob`), op id
@@ -466,6 +513,13 @@ export async function ackCompanionJournal(seqs: unknown, macNow?: unknown): Prom
   if (flags.length) {
     const { noteJournalStateAcked } = await import('./human-inbox/replica-state.js')
     await noteJournalStateAcked(flags, at)
+  }
+  // A reply to a letter the same way: shown on the box's inbox until its copy holds the turn
+  // (replica-state.ts), so it never blinks out between the ack and the next copy round.
+  const replies = acked.filter((x) => x.kind === 'inbox-reply')
+  if (replies.length) {
+    const { noteJournalTurnsAcked } = await import('./human-inbox/replica-state.js')
+    await noteJournalTurnsAcked(replies)
   }
   // A note the Mac took stays over the copy until a copy round from after the ack (4c).
   const notes = acked.filter((x) => x.kind === 'note' || x.kind === 'note-move')

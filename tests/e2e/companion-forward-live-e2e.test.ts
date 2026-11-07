@@ -41,7 +41,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
 import { liveEnv, liveWallsAvailable } from '../helpers/live-isolation.js'
-import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
+import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, claudeLogOf, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 // The companion counts the Mac silent after min(three of its own 15s beats, T).
@@ -50,6 +50,10 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 // answers the next one at once, as in production (45s).
 const T = 20_000
 const SILENT_MS = T
+
+// LIVE_VIDEO_DIR=<dir>: the servers serve the built web app (bun run build first), and the
+// inbox steps are also done in a real WebKit page on each box, recorded there as video.
+const VIDEO_DIR = process.env.LIVE_VIDEO_DIR ?? ''
 
 const sha256 = (t: string): string => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 const newToken = (): string => crypto.randomBytes(16).toString('hex')
@@ -101,7 +105,7 @@ ${BOOT_HEAD}
 const c = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/constants.ts'))})
 if (c.WALNUT_HOME !== ${JSON.stringify(data)} || c.CLOUD_MODE !== ${cloud}) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/web/server.ts'))})
-const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
+const server = await startServer({ port: 0, dev: ${JSON.stringify(!VIDEO_DIR)}, bindAddress: '127.0.0.1' })
 ${cloud ? '' : `const { localDaemon } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/providers/local-daemon.ts'))})
 const dc = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/providers/daemon-connection.ts'))})
 const { awaitLocalDaemonLink, failBootLink } = await import(${JSON.stringify(path.join(REPO_ROOT, 'tests/helpers/local-daemon-link.ts'))})
@@ -221,6 +225,17 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
 
   afterAll(async () => {
     if (!procs) return
+    // The web app a video run opens asks each box for the CLI's version (the stub
+    // refuses it): that one call is allowed there, any other still fails the run.
+    if (VIDEO_DIR) {
+      for (const s of [primary, companion]) {
+        const calls = await fsp.readFile(claudeLogOf(s), 'utf8').catch(() => null)
+        if (calls === null) continue
+        const rest = calls.split('\n').filter((l) => l !== '' && l !== '--version')
+        if (rest.length === 0) await fsp.rm(claudeLogOf(s), { force: true })
+        else await fsp.writeFile(claudeLogOf(s), rest.join('\n') + '\n')
+      }
+    }
     try { await finishLive(procs, base, [primary, companion]) } finally { unhookTerm?.() }
   }, 400_000)
 
@@ -338,6 +353,53 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     expect(queuedOps()).toEqual([])
   }, 60_000)
 
+  // 2026-11-05: the user answered a letter by voice on the phone while the Mac was away; the
+  // companion could only relay and answered 503, and the reply reached the Mac 1h45m later.
+  // Now it is kept in the companion's journal (`inbox-reply`) and the Mac drains it once.
+  let letterId = ''
+  const REPLY = 'Is the questionnaire required to keep the policy?'
+  const REPLY_ID = 'rp-live-away-reply-1'
+  const fileHolds = (dir: string, needle: string): boolean => {
+    let names: fs.Dirent[]
+    try { names = fs.readdirSync(dir, { withFileTypes: true }) } catch { return false }
+    for (const d of names) {
+      const full = path.join(dir, d.name)
+      if (d.isDirectory()) { if (d.name !== 'journal' && fileHolds(full, needle)) return true; continue }
+      if (d.name.endsWith('.json')) { try { if (fs.readFileSync(full, 'utf8').includes(needle)) return true } catch { /* torn */ } }
+    }
+    return false
+  }
+  const VIDEO_REPLY = 'Typed on the companion while the Mac sleeps'
+  /** One recorded WebKit page on a box: the letter open in the inbox, then `steps`. */
+  async function filmLetter(port: number, token: string | null, clip: string, steps: (reader: import('@playwright/test').Locator) => Promise<void>): Promise<void> {
+    const { webkit, expect: see } = await import('@playwright/test')
+    const browser = await webkit.launch()
+    try {
+      const size = { width: 1280, height: 800 }
+      const ctx = await browser.newContext({ viewport: size, recordVideo: { dir: path.join(VIDEO_DIR, clip), size } })
+      if (token) await ctx.addInitScript((t) => { localStorage.setItem('walnut.deviceToken', t) }, token)
+      const page = await ctx.newPage()
+      await page.goto(`http://127.0.0.1:${port}/`)
+      await see(page.locator('.main-page')).toBeVisible({ timeout: 60_000 })
+      await page.getByRole('button', { name: /^Notifications/ }).click()
+      const center = page.locator('.notification-panel')
+      await center.locator('.nfc-rail-btn').filter({ hasText: 'Inbox' }).click()
+      await center.locator('.hib-row').filter({ hasText: 'Policy renewal' }).locator('.hib-subject').click()
+      const reader = page.locator('.hib-reader')
+      await see(reader.locator('.hib-reader-subject')).toHaveText('Policy renewal: approve two replies', { timeout: 30_000 })
+      await steps(reader)
+      await page.waitForTimeout(1_500)
+      await ctx.close()
+    } finally { await browser.close() }
+  }
+
+  it('a letter the Mac sent is in the companion\'s copy', async () => {
+    const sent = await mac('/api/v1/human-inbox', { method: 'POST', body: JSON.stringify({ subject: 'Policy renewal: approve two replies', type: 'review', markdown: '# Renewal\nTwo replies to approve.' }) })
+    expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
+    letterId = sent.json.id as string
+    await waitFor(() => fileHolds(companion.data, letterId), 90_000, 'the letter in the companion\'s copy')
+  }, 120_000)
+
   it('the Mac\'s own rules hold: an op only this Mac may run is refused, as for any paired client', async () => {
     const r = await phone('/api/v1/actions/invoke', { method: 'POST', body: JSON.stringify({ tool: 'health_status' }) })
     expect(r).toMatchObject({ status: 403, by: 'primary' })
@@ -395,6 +457,38 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     expect(queuedOps().filter((o) => o.task?.id === consoleTaskId)).toEqual([])
   }, 150_000)
 
+  it('the Mac asleep: a reply to a letter is kept in the companion\'s journal and shown at once', async () => {
+    await waitFor(() => drainsKnown().includes('inbox-reply'), 30_000, 'the Mac to drain inbox-reply records')
+    const body = JSON.stringify({ text: REPLY, clientId: REPLY_ID })
+    const r = await phone(`/api/v1/human-inbox/${encodeURIComponent(letterId)}/human-reply`, { method: 'POST', body })
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(r.json).toMatchObject({ queued: true, delivery: { status: 'pending' } })
+    expect(r.ms).toBeLessThan(13_000)
+    const turns = (l: Record<string, any> | undefined) => (l?.thread ?? []).filter((t: Record<string, any>) => t.clientId === REPLY_ID)
+    expect(turns(r.json.letter)).toHaveLength(1)
+    // A retry of the same reply (the phone's Retry, a double tap) is the same record.
+    const again = await phone(`/api/v1/human-inbox/${encodeURIComponent(letterId)}/human-reply`, { method: 'POST', body })
+    expect(again.status).toBe(202)
+    expect(journalRecords().filter((x) => x.kind === 'inbox-reply' && x.letterId === letterId)).toHaveLength(1)
+    // Every read on the companion shows it while the Mac sleeps.
+    const read = await phone(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)
+    expect(read.status).toBe(200)
+    expect(turns(read.json.letter)).toHaveLength(1)
+    if (!VIDEO_DIR) return
+    // The same, by hand in the companion's web app: the reply typed and sent, shown at once, no error.
+    await filmLetter(companion.port, tokens.phone, '1-companion-mac-asleep', async (reader) => {
+      const { expect: see } = await import('@playwright/test')
+      // One letter asks the Mac first (6s read budget), then the companion's copy answers.
+      await see(reader.locator('.hib-thread')).toContainText(REPLY, { timeout: 30_000 })
+      await reader.locator('.hib-composer-input').pressSequentially(VIDEO_REPLY, { delay: 40 })
+      await reader.locator('.hib-send-btn').click()
+      await see(reader.locator('.hib-thread')).toContainText(VIDEO_REPLY, { timeout: 20_000 })
+      await see(reader.locator('.hib-composer-input')).toHaveValue('')
+      await see(reader.locator('.hib-error, [role="alert"]')).toHaveCount(0)
+    })
+    expect(journalRecords().filter((x) => x.kind === 'inbox-reply' && x.letterId === letterId && x.text === VIDEO_REPLY)).toHaveLength(1)
+  }, 240_000)
+
   it('keeps seven-minute voice and completed text on the companion while the Mac sleeps, then copies both after wake', async () => {
     const id = crypto.randomUUID()
     const audio = Buffer.alloc(13_440_068, 0x32)
@@ -431,6 +525,32 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     const copiedAudio = await fsp.readFile(path.join(primary.data, 'voice-archive', id, 'audio'))
     expect(copiedAudio.equals(audio)).toBe(true)
     expect(crypto.createHash('sha256').update(copiedAudio).digest('hex')).toBe(audioDigest)
+  }, 300_000)
+
+  it('the Mac back: the reply is on its letter exactly once, and the journal lets it go', async () => {
+    await wakeMac()
+    const onMac = await waitFor(async () => {
+      const l = (await mac(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)).json.letter as Record<string, any> | undefined
+      const mine = (l?.thread ?? []).filter((t: Record<string, any>) => t.clientId === REPLY_ID)
+      return mine.length > 0 ? mine : null
+    }, 120_000, 'the reply on the Mac\'s letter')
+    expect(onMac).toHaveLength(1)
+    expect(onMac[0].text).toBe(REPLY)
+    await waitFor(() => journalRecords().every((x) => !(x.kind === 'inbox-reply' && x.letterId === letterId)), 60_000, 'the journal to let the reply go')
+    // Still once after the drain settled (a redrain or the phone's copy never adds a second).
+    await sleep(3_000)
+    const l = (await mac(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)).json.letter as Record<string, any>
+    expect((l.thread ?? []).filter((t: Record<string, any>) => t.clientId === REPLY_ID)).toHaveLength(1)
+    if (!VIDEO_DIR) return
+    await waitFor(() => journalRecords().every((x) => x.letterId !== letterId), 60_000, 'the journal to let the typed reply go')
+    const onMacNow = (await mac(`/api/v1/human-inbox/${encodeURIComponent(letterId)}`)).json.letter as Record<string, any>
+    expect((onMacNow.thread ?? []).filter((t: Record<string, any>) => t.from === 'human' && t.text === VIDEO_REPLY)).toHaveLength(1)
+    // The Mac's own web app: both replies on the letter, once each.
+    await filmLetter(primary.port, null, '2-mac-back', async (reader) => {
+      const { expect: see } = await import('@playwright/test')
+      await see(reader.locator('.hib-thread')).toContainText(VIDEO_REPLY, { timeout: 30_000 })
+      await see(reader.locator('.hib-turn--human')).toHaveCount(2)
+    })
   }, 300_000)
 
   it('the Mac wakes: the Mac answers again', async () => {

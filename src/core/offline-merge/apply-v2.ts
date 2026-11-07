@@ -33,12 +33,12 @@ export { RefusedWrite };
 /**
  * The v2 kinds this Mac applies (`offline.drain {kinds}`); `note` since WP11 (offline-merge/notes.ts);
  * `letter`, a session's letter to the user a host saved while away (apply-letter.ts);
- * `session-meta`, `inbox-state`, `chat-turn`, `memory`, `note-move`, `note-attachment` and
- * `conversation-edit` only the cloud companion writes (apply-session-meta.ts,
+ * `session-meta`, `inbox-state`, `chat-turn`, `memory`, `note-move`, `note-attachment`,
+ * `conversation-edit` and `inbox-reply` only the cloud companion writes (apply-session-meta.ts,
  * apply-inbox-state.ts, apply-chat-turn.ts, apply-memory.ts, apply-note-move.ts,
- * apply-note-attachment.ts, apply-conversation-edit.ts).
+ * apply-note-attachment.ts, apply-conversation-edit.ts, apply-inbox-reply.ts).
  */
-export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit', 'letter'] as const;
+export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'board', 'device-revoke', 'note', 'session', 'session-meta', 'inbox-state', 'chat-turn', 'memory', 'note-move', 'note-attachment', 'conversation-edit', 'letter', 'inbox-reply'] as const;
 /**
  * What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks, plus
  * `routine-run` (a `session` record with `routine` is adopted as a routine's run, not an ask:
@@ -427,6 +427,8 @@ export async function applyV2(ctx: V2Context, record: V2Record): Promise<void> {
     case 'conversation-edit': return (await import('./apply-conversation-edit.js')).applyConversationEdit(ctx, record);
     // A session's letter to the user a host saved while this Mac was away.
     case 'letter': return (await import('./apply-letter.js')).applyLetter(ctx, record);
+    // The human's reply to a letter, or the option picked on it, on the cloud companion while away.
+    case 'inbox-reply': return (await import('./apply-inbox-reply.js')).applyInboxReply(ctx, record);
     default: throw new Error(`unknown journal kind ${record.kind}`);
   }
 }

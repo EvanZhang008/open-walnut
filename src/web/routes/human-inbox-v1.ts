@@ -34,17 +34,15 @@
  * reader's side (list, one letter, read / pin / archive) asks the primary first
  * and, when it cannot be reached, answers from the replica's git-synced copy
  * and queues the flag changes (human-inbox-replica.ts), so the inbox keeps
- * working while the Mac sleeps. Sending, agent replies, answers and human
- * replies still need the primary.
+ * working while the Mac sleeps. The human's reply and answer go into the
+ * companion's journal when the Mac provably did not take them (replicaLetterTurn).
+ * Sending and agent replies still need the primary.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import {
-  driveControlRelay, relayControlAction, sendRelayReplyError, sendV1Error as sendError,
-} from './v1-control-relay.js'
-import type { SessionControlAction } from '../../core/sessions/session-controls.js'
+import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import {
   LETTER_HTML_MAX_BYTES, letterFieldMaxBytes,
   type AgentReplyInput, type NewLetter,
@@ -206,19 +204,6 @@ function oversizeField(fields: Record<string, unknown>): { name: string; max: nu
 function deliveringStatus(result: unknown): number {
   const delivery = (result as { delivery?: { status?: unknown } } | null)?.delivery
   return delivery?.status === 'pending' ? 202 : 200
-}
-
-/** A replica's relay of answer / human-reply, keeping the primary's 202. */
-async function relayDelivering(
-  res: Response, action: SessionControlAction, params: Record<string, unknown>,
-): Promise<void> {
-  const reply = await driveControlRelay(res, action, SERVER_RELAY_SID, params)
-  if (!reply) return
-  if (reply.ok === true && reply.result && typeof reply.result === 'object') {
-    res.status(deliveringStatus(reply.result)).json(reply.result)
-    return
-  }
-  sendRelayReplyError(res, reply)
 }
 
 function readBool(res: Response, value: unknown, field: string): boolean | null {
@@ -462,7 +447,9 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
     const sid = callerSid(req)
     if (CLOUD_MODE) {
       // The primary resolves the caller and checks the letter: it holds the letter for sure.
-      await relayDelivering(res, 'server.human-inbox.answer', { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) })
+      // While it is away, the human's own answer waits for it in the journal (human-inbox-replica.ts).
+      const { replicaLetterTurn } = await import('./human-inbox-replica.js')
+      await replicaLetterTurn(res, 'answer', id, b, { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) }, { ...(sid ? { callerSid: sid } : {}), answerBy })
       return
     }
     const { answerLetterAndDeliver, answeredByCaller, savePicturesOnce, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
@@ -506,7 +493,8 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
     }
     const sid = callerSid(req)
     if (CLOUD_MODE) {
-      await relayDelivering(res, 'server.human-inbox.human-reply', { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) })
+      const { replicaLetterTurn } = await import('./human-inbox-replica.js')
+      await replicaLetterTurn(res, 'reply', id, b, { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) }, { ...(sid ? { callerSid: sid } : {}), answerBy })
       return
     }
     const { humanReplyAndDeliver, answeredByCaller, savePicturesOnce, withUserWords } = await import('../../core/human-inbox/letter-ops.js')

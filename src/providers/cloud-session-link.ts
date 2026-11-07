@@ -95,7 +95,11 @@ export class CloudSessionLink {
           refusedCredential = { token: endpoint.token, retryAt: Date.now() + 30_000 }
           void recoverCloudSessionCredential(endpoint.token)
         }
-        fail('The companion refused the session stream')
+        // 503: the companion has no live bridge to that host either (its daemon is
+        // restarting), the common case when the Mac's own link to it dropped too.
+        fail(res.statusCode === 503
+          ? 'The companion has no connection to the session host either'
+          : `The companion refused the session stream (${res.statusCode ?? 'no status'})`)
       })
       socket.on('message', (bytes) => {
         if (!current()) return

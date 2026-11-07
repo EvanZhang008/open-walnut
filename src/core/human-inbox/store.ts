@@ -196,7 +196,7 @@ const THREAD_TEXT_MAX_CHARS = 4_000;
 const letterCheck = createLetterCheck();
 
 /** Keep newlines (a reply is prose); truncatePreview would flatten them. */
-function boundThreadText(text: string): string {
+export function boundThreadText(text: string): string {
   return text.length > THREAD_TEXT_MAX_CHARS ? text.slice(0, THREAD_TEXT_MAX_CHARS) : text;
 }
 
@@ -774,10 +774,22 @@ function find(store: LetterStoreFile, id: string): LetterRecord {
  * `lastUpdated`, never by this field. No stamp when the value is unchanged:
  * re-opening an already-read letter is not news, and must not restart the window.
  */
-function setReadFlag(letter: LetterRecord, read: boolean): void {
+function setReadFlag(letter: LetterRecord, read: boolean, at?: number): void {
   if (letter.read === read) return;
+  // A late write (a journaled turn, `at` = the human's moment) never undoes a newer change.
+  if (at !== undefined && (letter.readAt ?? 0) > at) return;
   letter.read = read;
-  letter.readAt = Date.now();
+  letter.readAt = at ?? Date.now();
+}
+
+/**
+ * The moment a late turn's read and unarchive take effect: the human's (a turn the cloud
+ * companion journaled while the Mac was away, offline-merge/apply-inbox-reply.ts), never
+ * later than now. Stamping them at the drain instead made a later flag the human set while
+ * away (archive again, mark unread) read as superseded by the reply and dropped.
+ */
+function lateFlagsAt(at: unknown): number | undefined {
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? Math.min(at, Date.now()) : undefined;
 }
 
 /** `pinned` / `archived` with their change stamps, the same rule as setReadFlag. */
@@ -787,10 +799,11 @@ function setPinnedFlag(letter: LetterRecord, pinned: boolean): void {
   letter.pinnedAt = Date.now();
 }
 
-function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: LetterArchiveReason): void {
+function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: LetterArchiveReason, at?: number): void {
   if (letter.archived === archived) return;
+  if (at !== undefined && (letter.archivedAt ?? 0) > at) return;
   letter.archived = archived;
-  letter.archivedAt = Date.now();
+  letter.archivedAt = at ?? Date.now();
   // The reason belongs to this one archive: any other move of the flag drops it, and a settled
   // letter brought back to the inbox asks again.
   if (archived && reason) letter.archivedReason = reason;
@@ -957,11 +970,13 @@ export async function setLetterState(
     if (current !== want && opts.since !== undefined && supersededSince(letter, field, want, opts.since)) {
       superseded = true;
     } else if (field === 'read') {
-      setReadFlag(letter, want);
+      // A late write is stamped at its own moment, so a reply made after it while away
+      // (stamped at the human's moment too) still wins over it.
+      setReadFlag(letter, want, opts.since !== undefined ? lateFlagsAt(opts.since) : undefined);
     } else if (field === 'pinned') {
       setPinnedFlag(letter, want);
     } else {
-      setArchivedFlag(letter, want);
+      setArchivedFlag(letter, want, undefined, opts.since !== undefined ? lateFlagsAt(opts.since) : undefined);
     }
     return { ...letter };
   }));
@@ -1111,10 +1126,11 @@ export async function settleLettersWhere(
  */
 export async function answerLetter(
   id: string,
-  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[] },
+  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
 ): Promise<LetterRecord> {
   requireValidId(id);
   const actionId = str(input?.actionId).trim();
+  const flagsAt = lateFlagsAt(input?.flagsAt);
   const images = cleanPictureNames(input?.images);
   if (!actionId) throw invalid('actionId is required');
   const freeText = str(input?.freeText).trim();
@@ -1151,11 +1167,11 @@ export async function answerLetter(
       delivery: { status: 'pending', at },
     });
     // A task answering in the user's place leaves the letter unread: the user has not seen it.
-    if (!by) setReadFlag(letter, true);
-    setArchivedFlag(letter, false);
+    if (!by) setReadFlag(letter, true, flagsAt);
+    setArchivedFlag(letter, false, undefined, flagsAt);
     return { ...letter };
   }));
-  if (!input.by) void mirrorLetterReadState(record.id, true);
+  if (!input.by) void mirrorLetterReadState(record.id, record.read);
   return record;
 }
 
@@ -1258,10 +1274,11 @@ export async function repeatsRecordedTurn(
  */
 export async function humanReplyTurn(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[] },
+  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
 ): Promise<HumanReplyTurn> {
   requireValidId(id);
   const text = str(input?.text).trim();
+  const flagsAt = lateFlagsAt(input?.flagsAt);
   const images = cleanPictureNames(input?.images);
   // A picture alone is a reply too, as in the chat. A retry names its turn by `clientId` and may
   // carry neither (the phone does not keep a recorded turn's pictures), so it is checked below.
@@ -1292,11 +1309,11 @@ export async function humanReplyTurn(
       // replaces it), instead of seeing a turn with no delivery at all.
       delivery: { status: 'pending', at },
     });
-    if (!input.by) setReadFlag(letter, true);
-    setArchivedFlag(letter, false);
+    if (!input.by) setReadFlag(letter, true, flagsAt);
+    setArchivedFlag(letter, false, undefined, flagsAt);
     return { record: { ...letter }, turn: letter.thread.length - 1, duplicate: false };
   }));
-  if (!out.duplicate && !input.by) void mirrorLetterReadState(out.record.id, true);
+  if (!out.duplicate && !input.by) void mirrorLetterReadState(out.record.id, out.record.read);
   return out;
 }
 

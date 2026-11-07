@@ -605,7 +605,7 @@ export async function answeredByCaller(sid: string | undefined): Promise<LetterA
 /** An action was picked (by the user, or a task for them): record it first, then deliver the choice. */
 export async function answerLetterAndDeliver(
   id: string,
-  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[] },
+  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
   source: LetterAnswerSource = 'web',
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
@@ -666,7 +666,7 @@ export async function withdrawLetterAndAnnounce(
  */
 export async function humanReplyAndDeliver(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[] },
+  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
   await refuseApprovalByTask(id, input.by, { text: input.text });
@@ -687,6 +687,35 @@ export async function humanReplyAndDeliver(
     trackInFlight(key, attempt);
   }
   return answerWhenDue(record, turn, attempt, wait);
+}
+
+/**
+ * The user's answer on record whose delivery never finished (`pending` with no attempt
+ * running: the process ended between recording it and handing it to the session), delivered
+ * now and awaited. Null when there is nothing to deliver: no user answer, its turn not found,
+ * or its delivery already settled. A journaled answer's redrain uses it
+ * (offline-merge/apply-inbox-reply.ts): the answer is on record, so answering again is refused.
+ */
+export async function deliverPendingAnswer(id: string): Promise<LetterDelivery | null> {
+  const record = await getLetter(id, { deferBodies: true });
+  const answered = record?.answered;
+  if (!record || !answered || answered.by) return null;
+  const turn = record.thread.findIndex((t) => t.from === 'human' && !t.by && t.at === answered.at);
+  if (turn < 0 || record.thread[turn].delivery?.status !== 'pending') return null;
+  const key = `${id}#${turn}`;
+  let attempt = inFlightDeliveries.get(key);
+  if (!attempt) {
+    // An answer over a task's answer for the user says so, as answerLetterAndDeliver does.
+    const replaces = record.thread.slice(0, turn).reverse().find((t) => t.from === 'human')?.by;
+    attempt = deliverAndRecord(record, turn, {
+      choice: answered.label ?? answered.actionId,
+      ...(replaces ? { replaces } : {}),
+      ...(answered.freeText ? { text: answered.freeText } : {}),
+      ...(record.thread[turn].images ? { images: record.thread[turn].images } : {}),
+    });
+    trackInFlight(key, attempt);
+  }
+  return attempt;
 }
 
 /** Deliveries running now, keyed `<letterId>#<turn>`. See humanReplyAndDeliver. */

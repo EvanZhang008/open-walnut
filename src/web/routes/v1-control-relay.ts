@@ -177,6 +177,30 @@ function relayErrorStatus(errorKind: string): number {
 }
 
 /**
+ * driveControlRelay's round trip with the answer left to the caller: the raw reply,
+ * or the failure with `answer(res)`, which writes exactly the error
+ * driveControlRelay writes. For a route that has its own way out when the primary
+ * provably never saw the request (`notSent`): the inbox's reply and answer on the
+ * cloud companion journal it instead (human-inbox-replica.ts replicaLetterTurn).
+ */
+export async function tryControlRelay(
+  action: SessionControlAction,
+  sessionId: string,
+  params: Record<string, unknown> | undefined,
+  timeoutMs = CONTROL_RELAY_TIMEOUT_MS,
+): Promise<{ ok: true; reply: Record<string, unknown> } | { ok: false; notSent: boolean; answer: (res: Response) => void }> {
+  const sent = await sendControlToPrimary(action, sessionId, params, timeoutMs)
+  if (sent.ok) return { ok: true, reply: sent.reply }
+  // Same sentence as session-launch-v1.ts. The duration is strictly diagnostic
+  // (an unreadable loss clock means the plain wording, never a different
+  // status), and waitedMs is non-zero only when a wait really happened.
+  // Sent, then failed (timeout, socket dropped mid-request): ambiguous, so it is
+  // reported verbatim and never retried.
+  const message = sent.offline ? bridgeOfflineMessage(sent.lastLossAt, sent.waitedMs) : errorText(sent.error)
+  return { ok: false, notSent: sent.offline, answer: (res) => sendV1Error(res, 503, 'bridge_offline', message) }
+}
+
+/**
  * Drive one control-relay action over the bridge and return the raw reply, or
  * null after answering a bridge-offline error. Callers that need to reshape a
  * successful result (e.g. workflow's 204-on-null) use this; everyone else
@@ -191,19 +215,10 @@ export async function driveControlRelay(
   /** Filled when the answer is null: `notSent` = provably never reached a socket. */
   fate?: { notSent?: boolean },
 ): Promise<Record<string, unknown> | null> {
-  const sent = await sendControlToPrimary(action, sessionId, params, timeoutMs)
-  if (sent.ok) return sent.reply
-  if (fate) fate.notSent = sent.offline
-  if (sent.offline) {
-    // Same sentence as session-launch-v1.ts. The duration is strictly diagnostic
-    // (an unreadable loss clock means the plain wording, never a different
-    // status), and waitedMs is non-zero only when a wait really happened.
-    sendV1Error(res, 503, 'bridge_offline', bridgeOfflineMessage(sent.lastLossAt, sent.waitedMs))
-    return null
-  }
-  // Sent, then failed (timeout, socket dropped mid-request): ambiguous, so it is
-  // reported verbatim and never retried.
-  sendV1Error(res, 503, 'bridge_offline', errorText(sent.error))
+  const out = await tryControlRelay(action, sessionId, params, timeoutMs)
+  if (out.ok) return out.reply
+  if (fate) fate.notSent = out.notSent
+  out.answer(res)
   return null
 }
 
