@@ -66,6 +66,7 @@ describe('the charter itself', () => {
     expect(MESSAGE_TEXT_HINT).toMatch(/undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs: decide it and say what you chose/)
     expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, your summary after\./)
     expect(TEAM_CHARTER).toMatch(/None of this permits an outward step, a public push, a destructive action or a way around a safety limit/)
+    expect(TEAM_CHARTER).toMatch(/Never use a broader role \(an infrastructure or admin credential\) to get past an application's own access control; stop and tell its owner\./)
   })
 
   it('is plain ASCII English with no dash punctuation and no personal name', () => {

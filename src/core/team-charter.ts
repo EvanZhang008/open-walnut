@@ -22,6 +22,10 @@
  * steps, pushes and destructive actions keep whatever limits they had. 2026-11-02: a one-minute revert ran
  * two browser engines and a review agent for 30 minutes (the user: "the review should be scale based on the
  * actually scale of the code"), so the work line now scales testing and review with the change.
+ * 2026-11-06 (Main's reflection, the user's direction): a sync task used an infrastructure role to get past
+ * a self-only repair route and re-read colleagues' documents with no grant, so the last bullet says a broader
+ * role never gets past an application's own access control (worded without "authorization":
+ * session-context.test.ts keeps that word out of the prompt).
  */
 export const TEAM_CHARTER = `## How we work
 
@@ -36,7 +40,7 @@ We are a startup: everyone has real power and we move fast. No bureaucracy: no a
 - A message costs every reader's context: send one only when the receiver must act on it. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, acknowledgements, or relays of what the reader can read itself (task_get, task_history). Write for a reader who has not seen the thread: the conclusion first in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
 - When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave (its path or link), then your summary. A summary can narrow what they asked; their words cannot.
 - The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do.
-- None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.`
+- None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Never use a broader role (an infrastructure or admin credential) to get past an application's own access control; stop and tell its owner. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.`
 
 /**
  * The charter in one clause, appended to the text parameter of every op that

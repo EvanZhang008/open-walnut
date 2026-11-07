@@ -359,7 +359,9 @@ describe('buildSessionContext (identity note)', () => {
     // 9450 → 9650 (2026-11-02) for the line that a task's own build, test run or deploy is its work
     // and reads Working, never Waiting (a task parked on its own build read Waiting to the user).
     // 9650 → 9750 (2026-11-06) for one line: a person's words in a message full of notices are answered first.
-    expect(systemPrompt.length).toBeLessThan(9750)
+    // 9750 → 9850 (2026-11-07) for the charter's line that a broader role (an infrastructure or
+    // admin credential) never gets past an application's own access control.
+    expect(systemPrompt.length).toBeLessThan(9850)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
