@@ -62,7 +62,9 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
   const lines = open ? projectTasks(p, tasks) : [];
   const shown = all ? lines : lines.slice(0, PROJECT_TASKS_SHOWN);
   const detailId = domId('oc-tasks', p.key);
-  const counts = [p.line, p.needsYou > 0 ? needsTitle(p.needsYou) : ''].filter(Boolean).join(' · ');
+  // Its tasks' asks: a VP's own threads waiting on the user are the card's line, not this project's.
+  const asks = p.row.alerts.length;
+  const counts = [p.line, asks > 0 ? needsTitle(asks) : ''].filter(Boolean).join(' · ');
   return (
     <li
       className={`oc-project${dragging ? ' is-dragging' : ''}${open ? ' is-open' : ''}`}
@@ -98,7 +100,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
       </div>
       {open && (
         <div className="oc-project-detail" id={detailId}>
-          <p className={`oc-detail-line${p.needsYou > 0 ? ' is-alert' : ' is-muted'}`} data-testid="org-chart-project-line">{counts}</p>
+          <p className={`oc-detail-line${asks > 0 ? ' is-alert' : ' is-muted'}`} data-testid="org-chart-project-line">{counts}</p>
           {/* "Nothing open" is said once, by the counts. */}
           {p.news && p.news !== p.line && <p className="oc-detail-news" data-testid="org-chart-project-news">{p.news}</p>}
           <ul className="oc-tasks" data-testid="org-chart-tasks" hidden={lines.length === 0 && p.line === 'Nothing open'}>
