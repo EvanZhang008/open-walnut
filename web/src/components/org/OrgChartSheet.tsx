@@ -2,12 +2,13 @@
  * The org chart: Main and its VPs, one screen.
  *
  *   Main · CEO
- *   └ one card per VP: its name, its news in its tasks' own words, when that was, how many
- *     things need the user, and the projects it leads (its own included), each with its
- *     counts; a project opens to its tasks and where each stands, and a task opens beside
- *     the Org page (OrgChartProject.tsx)
+ *   └ one card per VP: its name and the names of the projects it leads (its own included),
+ *     nothing else until it is opened (OrgChartVp.tsx); an open card says what is in it now
+ *     (its threads, news, counts, Open chat and its menu), an open project its counts and
+ *     tasks, and a task opens beside the Org page (OrgChartProject.tsx)
  *
- * Drag a project onto another VP's card to put it under that VP (or use its ⋯ menu); drag it
+ * Drag a project onto another VP's card to put it under that VP (or use the move menu: a
+ * right-click on it, or Move to another VP… in it opened); drag it
  * onto "Own VP" to give it back. The card says what a drop would do before it happens, and
  * every change is confirmed first. No task changes project: the server only changes who
  * leads it (POST /api/v1/org/vp), and the VP that lets go sums up its work for the new one.
@@ -15,18 +16,16 @@
  * A click outside the sheet closes it, as × and Escape do; the move menu and the question
  * close first (the same order as Escape).
  */
-import { useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { useMemo, useRef, useState, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { setProjectVp } from '@/api/org';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
-import { stateCountLabel } from '@open-walnut/user-status';
-import { threadCountLabel } from '@open-walnut/thread-view';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { OrgAvatar, shortAgo } from './OrgChannelList';
 import { OrgChartProject } from './OrgChartProject';
+import { OrgChartCeo, OrgChartVp } from './OrgChartVp';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgNodeEditor, type OrgNodeEditorMode } from './OrgNodeEditor';
 import { useOrgSettings } from './useOrgSettings';
@@ -58,23 +57,8 @@ interface Props {
 
 const DRAG_TYPE = 'application/x-walnut-org-project';
 
-/** A clickable div: Enter and Space press it too. */
-function pressable(onPress: () => void) {
-  return {
-    role: 'button' as const,
-    tabIndex: 0,
-    onClick: onPress,
-    onKeyDown: (e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); }
-    },
-  };
-}
-const needsTitle = (n: number) => stateCountLabel('needs', n);
 /** The drop zone that gives a project a dedicated VP again. */
 const OWN = '__own__';
-
-/** "23m · Renew the permit": when the news was written, and the task it is about. */
-const metaLine = (newsAt: number, task: string | undefined, now: number) => [shortAgo(newsAt, now), task].filter(Boolean).join(' · ');
 
 export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, now, startWith }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
@@ -207,10 +191,11 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
     },
   });
 
-  const openMenu = (e: MouseEvent<HTMLButtonElement>, project: VpProject) => {
-    e.stopPropagation();
-    const r = e.currentTarget.getBoundingClientRect();
-    setMenu({ project, x: r.left, y: r.bottom + 4, from: e.currentTarget });
+  const openMenu = (project: VpProject, from: HTMLElement, point?: { x: number; y: number }) => {
+    const r = from.getBoundingClientRect();
+    // A right-click lands on the row: focus comes back to its name, a control that takes it.
+    const back = from.matches('button') ? from : from.querySelector<HTMLElement>('[data-testid="org-chart-project-toggle"]') ?? from;
+    setMenu({ project, x: point?.x ?? r.left, y: point?.y ?? r.bottom + 4, from: back });
   };
   const menuItems = (project: VpProject): ContextMenuItem[] => {
     const own = dropPlan(cards, project, null);
@@ -229,8 +214,9 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
   const openNodeMenu = (card: VpCard | null, from: HTMLElement, point?: { x: number; y: number }) => {
     const r = from.getBoundingClientRect();
     // A right-click lands on the card head: focus comes back to its ⋯, a control that takes it.
+    // (Its ⋯ shows only on an open card; else its name, the card's toggle.)
     const more = from.matches('button') ? from
-      : from.closest('[data-testid="org-chart-vp"], .oc-ceo-wrap')?.querySelector<HTMLElement>('[data-testid="org-chart-vp-menu"], [data-testid="org-chart-ceo-menu"]');
+      : from.closest('[data-testid="org-chart-vp"], .oc-ceo-wrap')?.querySelector<HTMLElement>('[data-testid="org-chart-vp-menu"], [data-testid="org-chart-ceo-menu"], [data-testid="org-chart-vp-toggle"], [data-testid="org-chart-ceo"]');
     setNodeMenu({ card, x: point?.x ?? r.left, y: point?.y ?? r.bottom + 4, from: more ?? from });
   };
   const nodeMenuItems = (card: VpCard | null, from: HTMLElement): ContextMenuItem[] => {
@@ -258,19 +244,6 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
       title={label}
       onClick={(e) => { e.stopPropagation(); openNodeMenu(card, e.currentTarget); }}
     >⋯</button>
-  );
-
-  const projectHandle = (p: VpProject) => (
-    p.project ? (
-      <button
-        type="button"
-        className="oc-more"
-        data-testid="org-chart-project-menu"
-        aria-label={`Move ${p.name} to another VP`}
-        title="Move to another VP"
-        onClick={(e) => openMenu(e, p)}
-      >⋯</button>
-    ) : null
   );
 
   const draggingUnder = dragged ? cardOf(cards, dragged.key) : undefined;
@@ -326,15 +299,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
           </div>
           <div className="oc-stem" aria-hidden="true" />
           <div className="oc-ceo-wrap" onContextMenu={(e) => { e.preventDefault(); openNodeMenu(null, e.currentTarget as HTMLElement, { x: e.clientX, y: e.clientY }); }}>
-            <button type="button" className="oc-card oc-ceo" data-testid="org-chart-ceo" onClick={() => pick(main.key)} title="Open the CEO">
-              <OrgAvatar row={main} size={34} />
-              <span className="oc-card-text">
-                <span className="oc-card-name"><span className="oc-card-title">CEO</span></span>
-                <span className="oc-card-line">{ceoLine(cards)}</span>
-              </span>
-              <span className={`oc-badge${main.threadsBadge ? '' : ' is-none'}`} data-testid="org-chart-ceo-threads" title={threadCountLabel(main.threadsBadge ?? 0)}>{main.threadsBadge ?? 0}</span>
-            </button>
-            {nodeMore(null, 'More for the CEO')}
+            <OrgChartCeo main={main} line={ceoLine(cards)} onOpenChat={() => pick(main.key)} more={nodeMore(null, 'More for the CEO')} />
           </div>
           <div className="oc-stem" aria-hidden="true" />
           {hasGroups && (
@@ -358,42 +323,19 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
               const single = c.projects.length === 1;
               const home = c.home;
               return (
-                <li
+                <OrgChartVp
                   key={c.key}
+                  card={c}
+                  now={now}
                   className={`oc-vp${over ? ' is-over' : ''}${dragged && plan ? ' can-drop' : ''}${dragKey === c.key && single ? ' is-dragging' : ''}`}
-                  data-testid="org-chart-vp"
-                  data-key={c.key}
-                  data-project={c.project}
-                  {...(c.role === 'VP' ? dropZone(c.key, c) : {})}
+                  zone={c.role === 'VP' ? dropZone(c.key, c) : {}}
+                  draggable={!!c.project && !c.vpOnly}
+                  onDragStart={(e) => onDragStart(e, home)}
+                  onDragEnd={endDrag}
+                  onContextMenu={(from, point) => openNodeMenu(c, from, point)}
+                  onOpenChat={() => pick(c.key)}
+                  more={c.role === 'VP' ? nodeMore(c, `More for ${theVp(c.name)}`) : null}
                 >
-                  <div
-                    className="oc-vp-head"
-                    // A VP made only to put projects under has no project of its own to move.
-                    draggable={!!c.project && !c.vpOnly}
-                    onDragStart={(e) => onDragStart(e, home)}
-                    onDragEnd={endDrag}
-                    onContextMenu={(e) => { e.preventDefault(); openNodeMenu(c, e.currentTarget, { x: e.clientX, y: e.clientY }); }}
-                    data-testid="org-chart-vp-handle"
-                  >
-                    {/* A div, not a button: WebKit and Firefox start no drag from inside a button. */}
-                    <div className="oc-card-btn" {...pressable(() => pick(c.key))} title={`Open ${c.name}`}>
-                      <OrgAvatar row={c.row} size={30} />
-                      <span className="oc-card-text">
-                        <span className="oc-card-name">
-                          <span className="oc-card-title">{c.name}</span>
-                          <span className="oc-role">{c.role}</span>
-                        </span>
-                        <span className={`oc-card-news${c.row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-chart-vp-news" title={c.newsTask ? `${c.newsTask}: ${c.news}` : c.news}>{c.news}</span>
-                        <span className="oc-card-line" data-testid="org-chart-vp-meta">{metaLine(c.newsAt, c.newsTask, now)}</span>
-                        {c.projects.length > 1 && <span className="oc-card-line" data-testid="org-chart-vp-line">{c.line}</span>}
-                      </span>
-                      {/* A VP's own card counts its threads, 0 in grey, as its row does in the list. */}
-                      {c.row.threadsBadge !== undefined
-                        ? <span className={`oc-badge${c.row.threadsBadge ? '' : ' is-none'}`} data-testid="org-chart-vp-threads" title={threadCountLabel(c.row.threadsBadge)}>{c.row.threadsBadge}</span>
-                        : c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={needsTitle(c.needsYou)}>{c.needsYou}</span>}
-                    </div>
-                    {c.role === 'VP' && nodeMore(c, `More for ${theVp(c.name)}`)}
-                  </div>
                   {c.projects.length === 0 && <p className="oc-vp-empty" data-testid="org-chart-vp-empty">{c.line}</p>}
                   <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${theVp(c.name)} leads`} hidden={c.projects.length === 0}>
                     {c.projects.map((p) => (
@@ -405,12 +347,12 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                         onDragStart={onDragStart}
                         onDragEnd={endDrag}
                         onOpenTask={openTask}
-                        menu={projectHandle(p)}
+                        {...(p.project ? { onMove: (from: HTMLElement, point?: { x: number; y: number }) => openMenu(p, from, point) } : {})}
                       />
                     ))}
                   </ul>
                   {over && <div className="oc-hint" data-testid="org-chart-hint" title={plan!.hint}>{plan!.hint}</div>}
-                </li>
+                </OrgChartVp>
               );
             })}
             <li className="oc-vp-new" data-testid="org-chart-new">

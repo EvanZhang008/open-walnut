@@ -1,16 +1,18 @@
 /**
  * The org chart as a user meets it (web/src/components/org/OrgChartSheet.tsx, POST /api/v1/org/vp):
- *   - Main is the CEO; every project is a VP card with its own name, its news and a needs-you
- *     count, never a made-up "lead" name, and every card lists the projects its VP leads, its
- *     own included
+ *   - Main is the CEO; every project is a VP card with its own name, never a made-up "lead"
+ *     name, and every card lists the projects its VP leads, its own included; closed, a card and
+ *     its rows are their names alone; opened, a card says its news and counts and a project its
+ *     counts and tasks, and both stay open across a reload
  *   - dragging one project onto another VP says what the drop does before it happens, asks
  *     first, and Cancel changes nothing; after Confirm that VP's card lists both projects,
  *     each still its own project (no task moved), and the VP that let go has stepped down
- *   - dragging it onto the drop zone creates a dedicated VP for it again; the ⋯ menu does the same without a drag, and
+ *   - dragging it onto the drop zone creates a dedicated VP for it again; the move menu (in the
+ *     opened project, or a right-click on it) does the same without a drag, and
  *     Escape closes the question before the sheet
  *   - a project opens to its tasks and where each stands; a task opens beside the Org page
  *   - a project under another VP is part of that VP's channel on the Org page, not one of its own
- *   - a card opens its project on the Org page, on its chat (chat is the first tab)
+ *   - an opened card's Open chat opens its project on the Org page, on its chat (chat is the first tab)
  *   - a click outside the sheet closes it (the menu and the question close first)
  *   - a right-click on an Org row opens Walnut's menu, kept short: its tabs, "Move under another VP…"
  *     (a picker of VPs) and "Create a dedicated VP for X…", each asked in the chart first;
@@ -57,6 +59,17 @@ async function openChart(page: Page): Promise<Locator> {
 
 const vp = (page: Page, name: string) => page.locator(`[data-testid="org-chart-vp"][data-project="${name}"]`)
 const handle = (page: Page, name: string) => vp(page, name).getByTestId('org-chart-vp-handle')
+const row = (page: Page, card: string, name: string) => vp(page, card).locator(`[data-testid="org-chart-project"][data-project="${name}"]`)
+
+/** Open a card or a project row by its toggle (a click on its name). */
+async function expand(toggle: Locator): Promise<void> {
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
+/** The words a closed card shows, line by line, chevrons left out. */
+const shownWords = async (card: Locator) =>
+  (await card.innerText()).replace(/[▸▾]/g, '').split('\n').map((l) => l.trim()).filter(Boolean)
 
 /** Drag with the mouse, so the card under the pointer can be read before the drop. */
 async function dragOver(page: Page, from: Locator, to: Locator): Promise<void> {
@@ -91,23 +104,43 @@ test.afterAll(async ({ request }) => {
   for (const id of [...made, ...leads]) await removeTask(request, id)
 })
 
-test('Main is the CEO and each project a VP card with its own name', async ({ page }) => {
+test('Main is the CEO and each project a VP card with its own name: names alone until opened, and opened stays open', async ({ page }) => {
   await openChart(page)
   await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
-  await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
   for (const name of [A, B]) {
-    await expect(vp(page, name)).toContainText(name)
-    await expect(vp(page, name)).toContainText('VP')
-    await expect(vp(page, name)).not.toContainText('lead')
-    // Two tasks not started: Waiting, by the one user status (src/core/user-status.ts); with no
-    // words of their own, the card's news says so too. The card lists its one project with
-    // its counts; the card itself has no counts line then.
-    await expect(vp(page, name).getByTestId('org-chart-vp-news')).toContainText('Waiting: ')
-    const own = vp(page, name).getByTestId('org-chart-project')
+    const card = vp(page, name)
+    // Closed: the VP's name and its one project's name, nothing else (2026-11-06, the user:
+    // "just show the name"): no counts, news, time, badge or menu.
+    await expect(card.getByTestId('org-chart-vp-name')).toHaveText(name)
+    expect(await shownWords(card)).toEqual([name, name])
+    await expect(card.locator('.oc-badge, .oc-more, [data-testid="org-chart-vp-detail"], [data-testid="org-chart-project-line"]')).toHaveCount(0)
+    await expect(card.getByTestId('org-chart-vp-dot')).toHaveCount(0)
+    // Opened ("and can expand for more detail"): two tasks not started are Waiting, by the one
+    // user status (src/core/user-status.ts); with no words of their own, the news says so too.
+    await expand(card.getByTestId('org-chart-vp-toggle'))
+    await expect(card.getByTestId('org-chart-vp-news')).toContainText('Waiting: ')
+    await expect(card.getByTestId('org-chart-vp-line')).toHaveText('2 Waiting / snoozed')
+    await expect(card.getByTestId('org-chart-vp-open')).toBeVisible()
+    await expect(card).not.toContainText('lead')
+    // Its own project opens apart from the card: the card's key is that row's key too.
+    const own = card.getByTestId('org-chart-project')
     await expect(own).toHaveCount(1)
-    await expect(own).toContainText(name)
+    await expect(own.getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'false')
+    await expand(own.getByTestId('org-chart-project-toggle'))
     await expect(own.getByTestId('org-chart-project-line')).toHaveText('2 Waiting / snoozed')
-    await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveCount(0)
+    await expect(own.getByTestId('org-chart-task')).toHaveCount(2)
+  }
+  // B's VP has a lead, so its card counts its threads: none here, so no dot, "0 threads" opened.
+  await expect(vp(page, B).getByTestId('org-chart-vp-threads')).toHaveText('0 threads')
+  // What was opened is opened again after a reload, and closes again on a click.
+  await page.reload()
+  await page.getByTestId('org-open-chart').click()
+  for (const name of [A, B]) {
+    await expect(vp(page, name).getByTestId('org-chart-vp-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await expect(row(page, name, name).getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await row(page, name, name).getByTestId('org-chart-project-toggle').click()
+    await vp(page, name).getByTestId('org-chart-vp-toggle').click()
+    expect(await shownWords(vp(page, name))).toEqual([name, name])
   }
 })
 
@@ -136,6 +169,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   const card = vp(page, A)
   await expect(card.getByTestId('org-chart-project')).toHaveCount(2)
   await expect(card.getByTestId('org-chart-project').nth(1)).toContainText(B)
+  await expand(card.getByTestId('org-chart-vp-toggle'))
   await expect(card.getByTestId('org-chart-vp-line')).toHaveText(/^2 projects · \d+ Waiting \/ snoozed$/)
   await expect(vp(page, B)).toHaveCount(0)
 
@@ -149,10 +183,9 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   expect((await taskOf(request, aLead.id))?.org_leads).toEqual([B])
 
   // A project on the card opens to its tasks, each with where it stands.
-  const seeds = card.locator(`[data-testid="org-chart-project"][data-project="${B}"]`)
+  const seeds = row(page, A, B)
   await expect(seeds.getByTestId('org-chart-tasks')).toHaveCount(0)
-  await seeds.getByTestId('org-chart-project-toggle').click()
-  await expect(seeds.getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'true')
+  await expand(seeds.getByTestId('org-chart-project-toggle'))
   const tasks = seeds.getByTestId('org-chart-task')
   await expect(tasks).toHaveCount(2)
   await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Collect seeds ${STAMP}`)
@@ -202,7 +235,14 @@ test('a drag onto the drop zone creates a dedicated VP again; the menu asks the 
   expect(b.vp).toBeUndefined()
   expect((await taskOf(request, b.lead!.id))?.phase).not.toBe('COMPLETE')
 
-  // The ⋯ menu: the same question, no drag. Escape closes the question first, then the sheet.
+  // The move menu: the same question, no drag, from the opened project (and a right-click on it
+  // opens the same menu). Escape closes the question first, then the sheet.
+  await row(page, B, B).click({ button: 'right' })
+  await expect(page.getByTestId('org-chart-move-menu')).toContainText(`Move ${B} under`)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('org-chart-move-menu')).toHaveCount(0)
+  await expect(page.getByTestId('org-chart')).toBeVisible()
+  await expand(row(page, B, B).getByTestId('org-chart-project-toggle'))
   await vp(page, B).getByTestId('org-chart-project-menu').click()
   const menu = page.getByTestId('org-chart-move-menu')
   await expect(menu).toContainText(`Move ${B} under`)
@@ -223,7 +263,8 @@ test('a click outside the sheet closes it; inside, or with the menu or the quest
   // Inside the sheet, on its title: nothing closes.
   await sheet.locator('.org-sheet-title').click()
   await expect(sheet).toBeVisible()
-  // The ⋯ menu open: the click outside closes only the menu.
+  // The move menu open: the click outside closes only the menu.
+  await expand(row(page, B, B).getByTestId('org-chart-project-toggle'))
   await vp(page, B).getByTestId('org-chart-project-menu').click()
   await expect(page.getByTestId('org-chart-move-menu')).toBeVisible()
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)

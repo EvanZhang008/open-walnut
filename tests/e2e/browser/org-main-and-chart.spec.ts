@@ -386,6 +386,9 @@ test('the org chart\'s CEO form opens on Walnut\'s default core instructions; Re
   await page.getByTestId('org-open-chart').click()
   await expect(page.getByTestId('org-chart')).toBeVisible()
   const openForm = async () => {
+    // The CEO's ⋯ shows on its card opened (closed, the card is its name alone).
+    const ceo = page.getByTestId('org-chart-ceo')
+    if ((await ceo.getAttribute('aria-expanded')) !== 'true') await ceo.click()
     await page.getByTestId('org-chart-ceo-menu').click()
     await page.getByTestId('org-chart-node-menu').getByText('Edit instructions…').click()
     const form = page.getByTestId('org-node-editor')

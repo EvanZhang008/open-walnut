@@ -199,6 +199,8 @@ const PASSING: Record<string, string> = {
 const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: string }> = [
   { file: 'components/org/OrgNodeDetail.tsx', state: 'topPick', key: /usePageViewOf<OrgTopView>\('org', 'node\.view', row\.key,/, what: 'an Org node\'s Threads / Task / Brief view, per node' },
   { file: 'components/org/OrgNodeDetail.tsx', state: 'keptTab', key: /usePageViewOf<KeptRailTab>\('org', 'node\.taskTab', row\.key,/, what: 'the Task view\'s tab, per node' },
+  // 2026-11-06, the user: "and can expand for more detail"; what was opened stays opened.
+  { file: 'components/org/OrgChartVp.tsx', state: 'open', key: /usePageViewOf\('org', 'chart\.open', key, false, isBoolean\)/, what: 'an org chart card or project row opened, per card and per row' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },
   { file: 'pages/AppsPage.tsx', state: 'kept', key: /usePageView<AppsFilter>\('apps', 'filter'/, what: 'the Apps category chip' },
   // Kept as KeptStatusFilter: a To read chip an older build kept opens as Needs you (statusFilterShown).

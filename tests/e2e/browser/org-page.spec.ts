@@ -245,11 +245,13 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
   await expect(page.locator(`[data-testid="org-channel"][data-key="${below}"]`)).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('[data-testid="org-channel"]:focus')).toHaveAttribute('aria-selected', 'true')
 
-  // The org chart is one click away, and a VP card selects its project here.
+  // The org chart is one click away; a VP card opens on a click, and its Open chat selects its project here.
   await page.getByTestId('org-open-chart').click()
   const card = page.locator(`[data-testid="org-chart-vp"][data-project="${ALPHA}"]`)
   await card.scrollIntoViewIfNeeded()
-  await card.locator('.oc-card-btn').click()
+  await card.getByTestId('org-chart-vp-toggle').click()
+  await expect(page.getByTestId('org-chart')).toBeVisible()
+  await card.getByTestId('org-chart-vp-open').click()
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
   await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)

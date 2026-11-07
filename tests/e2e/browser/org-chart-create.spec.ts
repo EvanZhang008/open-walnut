@@ -55,6 +55,13 @@ async function openChart(page: Page): Promise<Locator> {
 
 const vp = (page: Page, project: string) => page.locator(`[data-testid="org-chart-vp"][data-project="${project}"]`)
 
+/** A VP card's ⋯, which shows on the card opened (closed, a card is its name alone). */
+async function vpMenu(page: Page, project: string): Promise<Locator> {
+  const toggle = vp(page, project).getByTestId('org-chart-vp-toggle')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  return vp(page, project).getByTestId('org-chart-vp-menu')
+}
+
 test.beforeAll(async ({ request }) => {
   // A project with work of its own, to drag under the new VP.
   const res = await request.post('/api/tasks', { data: { title: `Paint the door ${STAMP}`, project: OTHER, source: 'local' } })
@@ -123,7 +130,7 @@ test('an agent writes a VP\'s instructions; the form says who and when, and the 
   expect(((await put.json()) as { task: { org_instructions?: unknown } }).task.org_instructions).toMatchObject({ text: words, by: `task:${writerId}`, by_name: `the task "${writer}"` })
 
   await openChart(page)
-  await vp(page, GATE).getByTestId('org-chart-vp-menu').click()
+  await (await vpMenu(page, GATE)).click()
   await page.getByTestId('org-chart-node-menu').getByText('Edit name and instructions…').click()
   const form = page.getByTestId('org-node-editor')
   const box = form.getByTestId('org-node-instructions')
@@ -139,7 +146,7 @@ test('an agent writes a VP\'s instructions; the form says who and when, and the 
   await form.getByTestId('org-node-save').click()
   await expect(form).toHaveCount(0)
   expect((await leadOf(request, GATE))?.org_instructions).toMatchObject({ text: `${shown} Then the rest.`, by: 'human' })
-  await vp(page, GATE).getByTestId('org-chart-vp-menu').click()
+  await (await vpMenu(page, GATE)).click()
   await page.getByTestId('org-chart-node-menu').getByText('Edit name and instructions…').click()
   await expect(source).toHaveText('by you, just now')
   await page.keyboard.press('Escape')
@@ -183,7 +190,7 @@ test('a VP card edits its name and instructions; a project dragged onto a new VP
   expect(lead).toMatchObject({ title: `${VP} VP`, org_name: `${VP} team`, org_instructions: { text: 'Own the launch plan.\nShip on Fridays only.' } })
 
   // Saving with nothing changed writes nothing.
-  await vp(page, VP).getByTestId('org-chart-vp-menu').click()
+  await (await vpMenu(page, VP)).click()
   await page.getByTestId('org-chart-node-menu').getByText('Edit name and instructions…').click()
   await expect(form.getByTestId('org-node-name')).toHaveValue(`${VP} team`)
   await form.getByTestId('org-node-save').click()

@@ -78,11 +78,14 @@ describe('threads come first', () => {
     expect(main.state).not.toBe('alert')
   })
 
-  it('the list badge and the chart badges of a node are its threads, grey at 0', () => {
+  it('the list badge of a node is its threads, grey at 0; the chart\'s dot and opened card follow the same threads', () => {
     const read = (f: string) => fs.readFileSync(path.join(__dirname, '../../web/src/components/org', f), 'utf8')
     const list = read('OrgChannelList.tsx')
     expect(list).toMatch(/row\.threadsBadge !== undefined[\s\S]{0,200}is-alert' : 'is-none'/)
-    const chart = read('OrgChartSheet.tsx')
+    // The chart's closed card keeps only a dot (2026-11-06, the user: "just show the name"),
+    // drawn by the list's rule: a node's threads when it keeps them, else its tasks' asks.
+    const chart = read('OrgChartVp.tsx')
+    expect(chart).toMatch(/if \(row\.threadsBadge !== undefined\) return row\.threadsBadge > 0/)
     expect(chart).toMatch(/org-chart-ceo-threads/)
     expect(chart).toMatch(/org-chart-vp-threads/)
   })
