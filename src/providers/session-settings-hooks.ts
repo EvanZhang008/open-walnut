@@ -12,6 +12,7 @@ import { stopUnansweredHooks } from './stop-unanswered-hook.js'
 import { shellDollarGuardHooks } from './shell-dollar-guard-hook.js'
 import { patternSignalGuardHooks } from './pattern-kill-guard-hook.js'
 import { codexProviderGuardHooks } from './codex-provider-guard-hook.js'
+import { soundGuardHooks } from './sound-guard-hook.js'
 import { orgWorkGuardHooks } from './org-work-guard-hook.js'
 import type { OrgRole } from '../core/types.js'
 
@@ -23,7 +24,7 @@ import type { OrgRole } from '../core/types.js'
 export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts: { orgRole?: OrgRole } = {}): Record<string, unknown> | null {
   const hooks: Record<string, unknown[]> = {}
   // Concatenate per event, so two sources on the same event never drop one.
-  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), codexProviderGuardHooks(env), stopUnansweredHooks(env), orgWorkGuardHooks(opts.orgRole, env)]) {
+  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), codexProviderGuardHooks(env), stopUnansweredHooks(env), orgWorkGuardHooks(opts.orgRole, env)]) {
     for (const [event, groups] of Object.entries(part ?? {})) hooks[event] = [...(hooks[event] ?? []), ...(groups as unknown[])]
   }
   return Object.keys(hooks).length > 0 ? hooks : null

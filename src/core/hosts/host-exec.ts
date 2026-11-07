@@ -19,6 +19,8 @@
  *     the whole log stays in the task's directory on that host;
  *   - a line of output that looks like a credential is replaced before it leaves
  *     this server (the git-sync scanner), which stops an accident, not a reader;
+ *   - a command that would make sound there (speech, a player, a volume change or an
+ *     unmute) never runs (sound-guard.ts, the same rule as every session's Bash hook);
  *   - on a Mac, a command that can show a password dialog on its screen (`security`
  *     on a keychain, host-exec-prompts.ts) runs only with `allow_prompts`;
  *   - a found ~/.ssh/config row of a machine that joined the host network is that
@@ -38,6 +40,8 @@ import { ambientAnswerBy } from '../../lib/answer-by.js'
 import { JOB_ID_RE, shellQuote } from '../../providers/host-exec-core.js'
 import type { RunShape } from './host-exec-legacy.js'
 import { redact } from './host-exec-redact.js'
+import { soundGuardOn, soundRisk } from '../../providers/sound-guard.js'
+import { soundAdvice } from '../../providers/sound-rules.js'
 
 export { redact }
 import { GRANT_ID_RE, assertStillGranted, grantFor, isOwnHost, pinnedGrant } from './host-exec-grant.js'
@@ -350,6 +354,16 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
   }
 }
 
+/**
+ * A command that would make sound on that machine (speech, a player, a volume change or an unmute) never
+ * runs, with no override: the same rule the Bash hook holds every session to (src/providers/sound-guard.ts).
+ */
+function refuseSound(line: string): void {
+  if (!soundGuardOn()) return
+  const what = soundRisk(line)
+  if (what) throw new HostExecError(`Walnut refused this command: ${soundAdvice(what)} Nothing ran.`, 409, 'makes_sound', { sound: what })
+}
+
 /** A command that can show a dialog on a Mac's screen runs only with `allow_prompts` (host-exec-prompts.ts). */
 async function screenForPrompts(host: string, line: string, allowed: boolean, cwd: string | undefined, taskId: string): Promise<void> {
   if (allowed) return
@@ -381,6 +395,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   // The line the host runs (host-exec-core.ts commandLine): argv too may start a dialog.
   const line = hasCommand ? params.command! : 'exec ' + params.argv!.map(shellQuote).join(' ')
   // Before the grant: a command it would refuse asks nothing of the user.
+  refuseSound(line)
   await screenForPrompts(host, line, params.allow_prompts === true, params.cwd, caller.taskId)
   const grantId = pinned !== null ? await pinnedGrant(caller, host, pinned) : await grantFor(caller, host, preview)
   const jobId = asked ?? `hx-${randomUUID()}`

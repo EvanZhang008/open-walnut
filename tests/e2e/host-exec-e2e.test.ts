@@ -599,6 +599,30 @@ describe('host_exec', () => {
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'security find-generic-password -s svc' }, OWN_SID)).body.code).toBe('may_prompt')
   }, 30_000)
 
+  it('a command that makes sound there never runs, whatever the host (2026-11-07)', async () => {
+    const runs = () => sent.filter((m) => m.cmd === 'exec.run').length
+    const before = runs()
+    for (const command of [
+      `osascript -e 'set volume output volume 70 without output muted'`,
+      'say "the build is done"',
+      'afplay /System/Library/Sounds/Glass.aiff',
+      `ssh other "osascript -e 'set volume 5'"`,
+    ]) {
+      const r = await api('POST', '/api/v1/hosts/macbox/exec', { command, allow_prompts: true }, OWN_SID)
+      expect(r).toMatchObject({ status: 409, body: { code: 'makes_sound', error: expect.stringContaining('make sound on the machine it runs on') } })
+      expect(r.body.error).toContain('say -o out.aiff')
+    }
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { argv: ['/usr/bin/afplay', 'x.wav'] }, OWN_SID)).body.code).toBe('makes_sound')
+    const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'say hi' },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID }) as { ok: boolean; error?: string }
+    expect(viaOp.ok).toBe(false)
+    expect(runs()).toBe(before)
+    // Silent ways still run: speech into a file, muting, reading the volume.
+    for (const command of ['say -o /tmp/s.aiff hi; true', `osascript -e 'set volume with output muted'; true`, `osascript -e 'get volume settings'; true`]) {
+      expect((await api('POST', '/api/v1/hosts/macbox/exec', { command }, OWN_SID)).status).toBe(200)
+    }
+  }, 30_000)
+
   it('the line runs in bash with WALNUT_TASK_DIR set to the task\'s directory on that host', async () => {
     const taskDir = path.join(hostRoot, 'tasks', ownTaskId)
     const r = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo ===; echo hi > "$WALNUT_TASK_DIR/x.txt"; cat "$WALNUT_TASK_DIR/x.txt"; echo "$WALNUT_TASK_DIR"' }, OWN_SID)

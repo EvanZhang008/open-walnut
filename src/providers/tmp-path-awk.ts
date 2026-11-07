@@ -9,7 +9,8 @@
  * may have no node). Callers set HOME, TMPD (the session's TMPDIR) and TD (its
  * WALNUT_TASK_DIR, trailing slashes stripped) before calling volatile().
  */
-export const TMP_PATH_AWK = String.raw`
+/** Reading one string field of a hook's JSON stdin, and escaping a JSON string: what every Bash hook needs. */
+export const JSON_AWK = String.raw`
 # The string field key of the JSON s, unescaped, in linear time: a per-character
 # loop is quadratic on some awks, and a payload can carry a long command. ""
 # when it is missing or its JSON form is over 100,000 characters.
@@ -34,6 +35,20 @@ function jstr(s, key,   raw, parts, n, i, p, c, out) {
   while ((i = index(out, "\001")) > 0) { p = p substr(out, 1, i - 1) "\\"; out = substr(out, i + 1) }
   return p out
 }
+# JSON string escape by hand: awks disagree on backslashes in a gsub replacement.
+function jesc(s,   i, c, out) {
+  out = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "\\" || c == "\"") out = out "\\" c
+    else if (c == "\n" || c == "\t" || c == "\r") out = out " "
+    else out = out c
+  }
+  return out
+}
+`
+
+export const TMP_PATH_AWK = JSON_AWK + String.raw`
 function strip(p) { while (length(p) > 1 && substr(p, length(p)) == "/") p = substr(p, 1, length(p) - 1); return p }
 function norm(p,   parts, n, i, out, k, stack) {
   n = split(p, parts, "/"); k = 0
@@ -52,17 +67,6 @@ function under(p, root) { p = canon(p); root = canon(strip(root)); return root !
 function volatile(p) {
   if (p == "" || (TD != "" && under(p, TD))) return 0
   return under(p, "/tmp") || under(p, "/var/folders") || (TMPD != "" && under(p, norm(TMPD)))
-}
-# JSON string escape by hand: awks disagree on backslashes in a gsub replacement.
-function jesc(s,   i, c, out) {
-  out = ""
-  for (i = 1; i <= length(s); i++) {
-    c = substr(s, i, 1)
-    if (c == "\\" || c == "\"") out = out "\\" c
-    else if (c == "\n" || c == "\t" || c == "\r") out = out " "
-    else out = out c
-  }
-  return out
 }
 `
 

@@ -31,6 +31,7 @@ import { CLONE_IDENTITY_COMMAND } from '../../src/providers/clone-identity-hook.
 import { STOP_UNANSWERED_HOOK_COMMAND } from '../../src/providers/stop-unanswered-hook.js'
 import { SHELL_DOLLAR_GUARD_COMMAND } from '../../src/providers/shell-dollar-guard-hook.js'
 import { PATTERN_KILL_GUARD_COMMAND } from '../../src/providers/pattern-kill-guard-hook.js'
+import { SOUND_GUARD_COMMAND } from '../../src/providers/sound-guard-hook.js'
 import { CODEX_PROVIDER_GUARD_COMMAND } from '../../src/providers/codex-provider-guard-hook.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
@@ -86,11 +87,13 @@ const CLONE_IDENTITY = { matcher: 'Bash', hooks: [{ type: 'command', command: CL
 const DOLLAR_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: SHELL_DOLLAR_GUARD_COMMAND, timeout: 10 }] }
 // Then the guard refusing a kill by a name pattern (pattern-kill-guard-hook.ts).
 const KILL_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: PATTERN_KILL_GUARD_COMMAND, timeout: 10 }] }
+// Then the guard refusing a command that makes sound on the machine (sound-guard-hook.ts).
+const SOUND_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: SOUND_GUARD_COMMAND, timeout: 10 }] }
 // Then the guard refusing a Codex model run with no provider override (codex-provider-guard-hook.ts).
 const CODEX_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: CODEX_PROVIDER_GUARD_COMMAND, timeout: 10 }] }
 // And the Stop hook that names a request the session has not answered (stop-unanswered-hook.ts).
 const STOP = { Stop: [{ hooks: [{ type: 'command', command: STOP_UNANSWERED_HOOK_COMMAND, timeout: 5 }] }] }
-const TOOL_HOOKS = { PreToolUse: [GUARD, CLONE_IDENTITY, DOLLAR_GUARD, KILL_GUARD, CODEX_GUARD], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP }
+const TOOL_HOOKS = { PreToolUse: [GUARD, CLONE_IDENTITY, DOLLAR_GUARD, KILL_GUARD, SOUND_GUARD, CODEX_GUARD], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP }
 
 const SESSION_HOOKS = { ...COMPACT_HOOK, ...TOOL_HOOKS }
 
@@ -149,6 +152,7 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_CLONE_IDENTITY = '0'
     process.env.WALNUT_SHELL_DOLLAR_GUARD = '0'
     process.env.WALNUT_PATTERN_KILL_GUARD = '0'
+    process.env.WALNUT_SOUND_GUARD = '0'
     process.env.WALNUT_CODEX_PROVIDER_GUARD = '0'
     process.env.WALNUT_STOP_UNANSWERED = '0'
     try {
@@ -161,6 +165,7 @@ describe('local session spawn → launching server URL', () => {
       delete process.env.WALNUT_CLONE_IDENTITY
       delete process.env.WALNUT_SHELL_DOLLAR_GUARD
       delete process.env.WALNUT_PATTERN_KILL_GUARD
+      delete process.env.WALNUT_SOUND_GUARD
       delete process.env.WALNUT_CODEX_PROVIDER_GUARD
       delete process.env.WALNUT_STOP_UNANSWERED
     }

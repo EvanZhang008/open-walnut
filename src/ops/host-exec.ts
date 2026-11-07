@@ -71,6 +71,8 @@ defineOp({
     + 'containers, /Volumes, or a walk such as du, find or grep -r over ~, ~/Library or ~/Library/Caches). Walnut refuses those '
     + 'with 409 may_prompt; ask the user first, then pass allow_prompts:true. A run found idle at such a dialog is stopped and '
     + 'comes back with `blocked`. A tool that reads the keychain itself (codesign, git, gh) can hit one too when the keychain is locked. '
+    + 'A command that makes sound there (say without -o, afplay or another player, a volume change or an unmute) is refused with '
+    + '409 makes_sound, no override: render audio to a file or a virtual device instead. '
     + 'A run ends by its deadline (timeout_ms, default 2 minutes, at most 10; '
     + 'with background:true at most 2 hours), its whole process group stopped. The call waits for the run to end, but from a session on '
     + 'another host at most about 12 seconds: a run still going comes back running:true with its job_id, and host_exec_read with '
