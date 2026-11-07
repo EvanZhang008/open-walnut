@@ -30,9 +30,22 @@
  * The double reads CLAUDE_HOME lazily (per call) from the mocked constants module, so it
  * always tracks the current test's tmp dir even though createMockConstants() generates a
  * fresh path per import.
+ *
+ * EVERY METHOD OF THE REAL READER EXISTS HERE (tests/core/daemon-file-reader-mock-parity.test.ts
+ * enumerates the real class and module). A method missing from a double does not fail the test
+ * that reaches it: its caller catches the TypeError, and the test goes on in a state production
+ * never has (2026-11-06: the resume path's new `probeSessionPath` was missing, so every resume
+ * through this double failed to spawn and left its session record `running`, and the Org Threads
+ * e2e read its lead as mid-turn). A method the double can serve from the real fs is served; the
+ * ones it cannot are listed in NOT_SERVED and throw an error that names them.
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import {
+  DaemonNeedsUpgradeError,
+  STREAM_EVIDENCE_MAX_BYTES,
+  streamTextHeldConversation,
+} from '../../src/core/daemon-file-reader-shared.js';
 
 /** Resolve a tilde/glob path to an absolute path under the mocked CLAUDE_HOME. */
 async function resolveTilde(p: string): Promise<string> {
@@ -147,6 +160,24 @@ class MockLocalDaemonFileReader {
     }
   }
 
+  /** Raw bytes, refusing a file over `maxBytes` with 'EFBIG' (mirrors the real reader). */
+  async readFileBytes(remotePath: string, maxBytes: number): Promise<Buffer | null> {
+    const abs = await this.resolve(remotePath);
+    if (!abs) return null;
+    let size: number;
+    try {
+      size = (await fsp.stat(abs)).size;
+    } catch {
+      return null;
+    }
+    if (size > maxBytes) throw new Error(`file is ${size} bytes, larger than the ${maxBytes}-byte limit for this read (EFBIG)`);
+    try {
+      return await fsp.readFile(abs);
+    } catch {
+      return null;
+    }
+  }
+
   async stat(remotePath: string): Promise<{ mtimeMs: number; size: number; epoch?: string } | null> {
     const abs = await this.resolve(remotePath);
     if (!abs) return null;
@@ -212,6 +243,17 @@ class MockLocalDaemonFileReader {
     }
   }
 
+  /** listDir that throws when the folder cannot be read (mirrors the real reader). */
+  async listDirStrict(remotePath: string): Promise<string[]> {
+    const abs = await this.resolve(remotePath);
+    if (!abs) throw new Error(`could not list ${remotePath}: fs.ls failed`);
+    try {
+      return await fsp.readdir(abs);
+    } catch (err) {
+      throw new Error(`could not list ${remotePath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /** listDir with per-file size/mtimeMs — mirrors the real reader's fs.ls detail:true. */
   async listDirDetailed(remotePath: string): Promise<Array<{ name: string; type: string; size?: number; mtimeMs?: number }>> {
     const abs = await this.resolve(remotePath);
@@ -267,6 +309,59 @@ class MockLocalDaemonFileReader {
     return null;
   }
 
+  /**
+   * Whether the CLI ever wrote this conversation for `cwd` (mirrors the real reader): its path,
+   * null only when proven absent (every transcripts root exists, its own path does not, and no
+   * copy is anywhere under them), undefined when that cannot be told.
+   */
+  async probeSessionPath(sessionId: string, cwd: string): Promise<string | null | undefined> {
+    const { encodeProjectPath, isSafeForProjectEncoding } = await import('../../src/core/session-file-reader.js');
+    if (!isSafeForProjectEncoding(cwd)) return undefined;
+    const { claudeProjectsSearchRoots } = await import('../../src/core/claude-config-dir.js');
+    const roots = await Promise.all(claudeProjectsSearchRoots(this.host).map((r) => this.resolve(r)));
+    for (const root of roots) {
+      if (!root) return undefined;
+      try {
+        if (!(await fsp.stat(root)).isDirectory()) return undefined;
+      } catch {
+        return undefined;
+      }
+      const own = path.join(root, encodeProjectPath(cwd), `${sessionId}.jsonl`);
+      try {
+        await fsp.access(own);
+        return own;
+      } catch { /* not at its own path: look for a copy */ }
+    }
+    for (const root of roots) {
+      const hit = await expandGlob(path.join(root!, `${sessionId}.jsonl`));
+      if (hit && path.basename(hit) === `${sessionId}.jsonl`) return hit;
+    }
+    return null;
+  }
+
+  /** Whether a session's stream file shows its CLI held a conversation (mirrors the real reader). */
+  async streamHeldConversation(streamPaths: string[]): Promise<boolean | undefined> {
+    for (const p of streamPaths) {
+      const abs = await this.resolve(p);
+      if (!abs) return undefined;
+      let size: number;
+      try {
+        size = (await fsp.stat(abs)).size;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        return undefined;
+      }
+      if (size > STREAM_EVIDENCE_MAX_BYTES) return undefined;
+      if (size === 0) continue;
+      try {
+        if (streamTextHeldConversation(await fsp.readFile(abs, 'utf-8'))) return true;
+      } catch {
+        return undefined;
+      }
+    }
+    return false;
+  }
+
   async batchReadSubagents(remoteDirPath: string): Promise<Map<string, string>> {
     const result = new Map<string, string>();
     const abs = await this.resolve(remoteDirPath);
@@ -289,7 +384,32 @@ class MockLocalDaemonFileReader {
   }
 }
 
-/** Factory for `vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())`. */
+/**
+ * The real reader's methods this double does not serve: writes, git history and the daemon's own
+ * cost scans. Each throws an error naming it; a test that reaches one mocks it (a subclass of
+ * `mockLocalDaemonReader().DaemonFileReader`, as tests/core/session-history-incremental-disk.test.ts
+ * does), so a test never runs on with a TypeError its caller swallowed.
+ */
+export const NOT_SERVED = [
+  'writeFile', 'writeFileAtomic', 'ensureGitExcluded', 'renamePath', 'removePath', 'copyPath',
+  'ensureDir', 'mkdirExclusive', 'createEmptyFile', 'gitFileLog', 'gitFileShow',
+  'readSessionCost', 'readCodexOutside',
+] as const;
+
+for (const name of NOT_SERVED) {
+  Object.defineProperty(MockLocalDaemonFileReader.prototype, name, {
+    configurable: true,
+    writable: true,
+    value: async function notServed(): Promise<never> {
+      throw new Error(`MockLocalDaemonFileReader does not serve ${name}: mock it in this test (see NOT_SERVED in tests/helpers/mock-local-daemon-reader.ts)`);
+    },
+  });
+}
+
+/**
+ * Factory for `vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())`:
+ * every export the real module has, the non-class ones being the real values.
+ */
 export function mockLocalDaemonReader() {
-  return { DaemonFileReader: MockLocalDaemonFileReader };
+  return { DaemonFileReader: MockLocalDaemonFileReader, DaemonNeedsUpgradeError, streamTextHeldConversation };
 }

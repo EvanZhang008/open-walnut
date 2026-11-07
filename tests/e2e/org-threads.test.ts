@@ -70,6 +70,26 @@ async function patch(id: string, body: unknown, sid?: string): Promise<Response>
   })
 }
 
+/**
+ * Writes the lead's chat (Claude's JSONL) as its CLI would: every row stamped when it is written,
+ * so before the turn's result that follows. A row stamped ahead of the turn's end reads as a turn
+ * still talking (thread-answers.ts answersIn `wholeUntil`) and is rightly not kept; these rows were
+ * once stamped 50 and 100 ms after his message, which failed whenever the steps between filing it
+ * and the turn's result took less than that (CI, 2026-11-06).
+ */
+async function writeLeadChat(rows: Array<{ type: 'user' | 'assistant'; uuid: string; text: string }>, append = false): Promise<void> {
+  const lines = rows.map((r) => ({
+    type: r.type, uuid: r.uuid, timestamp: new Date().toISOString(),
+    message: r.type === 'user'
+      ? { role: 'user', content: [{ type: 'text', text: r.text }] }
+      : { id: `msg-${r.uuid}`, role: 'assistant', content: [{ type: 'text', text: r.text }] },
+  }))
+  const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(WALNUT_HOME))
+  await fs.mkdir(dir, { recursive: true })
+  const body = lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
+  await (append ? fs.appendFile : fs.writeFile)(path.join(dir, `${LEAD_SID}.jsonl`), body)
+}
+
 const hintOf = (text: string) => /Walnut \(threads\):([\s\S]*?)<\/system-reminder>/.exec(text)?.[1] ?? ''
 
 beforeAll(async () => {
@@ -201,16 +221,11 @@ describe('Org Threads', () => {
     await typeIntoChat(LEAD_SID, ask)
     const t = (await threads()).find((x) => x.messages[0]?.text === ask)!
     expect(t.messages[0].sid).toBe(LEAD_SID)
-    // The lead's chat on disk: his message, a notice, then its reply (Claude's JSONL).
-    const base0 = Date.parse(t.messages[0].at)
-    const ts = (s: number) => new Date(base0 + s * 1000).toISOString()
-    const lines = [
-      { type: 'user', uuid: 'u-1', timestamp: ts(0.05), message: { role: 'user', content: [{ type: 'text', text: ask }] } },
-      { type: 'assistant', uuid: 'a-1', timestamp: ts(0.1), message: { id: 'msg-1', role: 'assistant', content: [{ type: 'text', text: 'The fast model in the local config, for titles and summaries.' }] } },
-    ]
-    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(WALNUT_HOME))
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(path.join(dir, `${LEAD_SID}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+    // The lead's chat on disk: his message, then its reply; then its turn ends.
+    await writeLeadChat([
+      { type: 'user', uuid: 'u-1', text: ask },
+      { type: 'assistant', uuid: 'a-1', text: 'The fast model in the local config, for titles and summaries.' },
+    ])
     bus.emit(EventNames.SESSION_RESULT, { sessionId: LEAD_SID, taskId: leadId, result: 'done' }, ['web-ui'], { source: 'test' })
     await expect.poll(async () => (await threads()).find((x) => x.id === t.id)?.messages[0].answer?.text, { timeout: 15_000 })
       .toBe('The fast model in the local config, for titles and summaries.')
@@ -238,13 +253,10 @@ describe('Org Threads', () => {
     const t = raw.threads.find((x) => x.messages[0]?.text === ask)!
     delete (t.messages[0] as { sid?: string }).sid
     await fs.writeFile(file, JSON.stringify(raw))
-    const base0 = Date.parse(t.messages[0].at)
-    const ts = (s: number) => new Date(base0 + s * 1000).toISOString()
-    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(WALNUT_HOME))
-    await fs.appendFile(path.join(dir, `${LEAD_SID}.jsonl`), [
-      { type: 'user', uuid: 'u-p1', timestamp: ts(0.05), message: { role: 'user', content: [{ type: 'text', text: ask }] } },
-      { type: 'assistant', uuid: 'a-p1', timestamp: ts(0.1), message: { id: 'msg-p1', role: 'assistant', content: [{ type: 'text', text: 'Port 5174, the dev proxy.' }] } },
-    ].map((l) => JSON.stringify(l)).join('\n') + '\n')
+    await writeLeadChat([
+      { type: 'user', uuid: 'u-p1', text: ask },
+      { type: 'assistant', uuid: 'a-p1', text: 'Port 5174, the dev proxy.' },
+    ], true)
     // No turn end: reading the Threads page reads the answer (at most every 15 s).
     await expect.poll(async () => (await threads()).find((x) => x.id === t.id)?.messages[0].answer?.text, { timeout: 40_000, interval: 2_000 })
       .toBe('Port 5174, the dev proxy.')
