@@ -13,6 +13,25 @@ import type { Editor } from '@tiptap/core';
 import { uploadNoteImage } from '@/api/notes';
 import { uploadNoteAttachment } from '@/api/notes-v2';
 
+/**
+ * The picture a paste carries, or null. `files` first: macOS WebKit hands a
+ * pasted picture (a screenshot, a copied image) there, while its `items` entry
+ * may give no file (2026-11-07 review: a pasted PNG did nothing in the note).
+ * A paste with no picture file is left to the editor, never swallowed.
+ */
+export function imageFileOf(data: DataTransfer | null | undefined): File | null {
+  if (!data) return null;
+  for (const file of Array.from(data.files ?? [])) {
+    if (file.type.startsWith('image/')) return file;
+  }
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+    const file = item.getAsFile();
+    if (file) return file;
+  }
+  return null;
+}
+
 export function insertImageFile(file: File, editor: Editor, notePath?: string): void {
   const reader = new FileReader();
   reader.onload = async () => {

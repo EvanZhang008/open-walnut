@@ -8,7 +8,7 @@ import zlib from 'node:zlib'
 const API = 'http://localhost:3457'
 
 /** A solid-colour PNG of w×h (real bytes, so naturalWidth is real). */
-function pngOf(w: number, h: number, [r, g, b]: [number, number, number]): string {
+export function pngOf(w: number, h: number, [r, g, b]: [number, number, number]): string {
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1

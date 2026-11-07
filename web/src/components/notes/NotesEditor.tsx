@@ -34,7 +34,7 @@ import { FenceCodeBlock } from './extensions/fence-code-block';
 import { LiteralText } from './extensions/literal-text';
 import { MarkdownCopy } from './extensions/markdown-copy';
 import { findListItemType, indentListItem, outdentListItem } from './extensions/list-indent';
-import { insertImageFile } from './image-insert';
+import { imageFileOf, insertImageFile } from './image-insert';
 import { normalizeForEditor } from './notes-content-preprocess';
 import { TagNode } from './extensions/tag-node';
 import { Callout } from './extensions/callout-node';
@@ -403,18 +403,11 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         // screenshot of the cells. Let ProseMirror take the HTML instead.
         const fromOffice = isOfficeClipboardHtml(event.clipboardData?.getData('text/html'));
         // Image paste (takes priority over URL detection)
-        const items = fromOffice ? null : event.clipboardData?.items;
-        if (items) {
-          for (const item of items) {
-            if (item.type.startsWith('image/')) {
-              event.preventDefault();
-              const file = item.getAsFile();
-              if (file && editorRef.current) {
-                handleImageUpload(file, editorRef.current);
-              }
-              return true;
-            }
-          }
+        const file = fromOffice ? null : imageFileOf(event.clipboardData);
+        if (file && editorRef.current) {
+          event.preventDefault();
+          handleImageUpload(file, editorRef.current);
+          return true;
         }
         // Paste text containing entity refs → convert to markdown links
         // (URL auto-linking on paste is handled natively by TaskAwareLink's linkOnPaste)
