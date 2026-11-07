@@ -345,11 +345,12 @@ function scrollerUnder(x: number, y: number): HTMLElement | null {
 }
 
 /** The shortened scroller still counts as under the stack where its end was before. */
-function shrunkUnder(x: number, y: number): HTMLElement | null {
+function shrunkUnder(x: number, y: number): { el: HTMLElement; mode: 'room'; overColumn: boolean } | null {
   if (!reserved?.isConnected || reserved.dataset.cornerRoomShrink === undefined) return null;
   const b = reserved.getBoundingClientRect();
   const held = parseFloat(reserved.style.getPropertyValue('--corner-room')) || 0;
-  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom + held ? reserved : null;
+  // It keeps the room it took, and the stack keeps how it sat over it.
+  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom + held ? { el: reserved, mode: 'room', overColumn: stack?.dataset.over === 'column' } : null;
 }
 
 function release(): void {
