@@ -28,10 +28,33 @@ const view: ReaderView = {
 }
 
 describe('foldPlace', () => {
-  it('a row in view makes the fold open, by key (message id or tool call) or by history index', () => {
+  it('the row the reader reads, or a row across the top edge, makes the fold open, by key or by history index', () => {
     expect(foldPlace(view, { keys: ['m:above', 'm:seen'], indices: [] })).toBe('inside')
     expect(foldPlace(view, { keys: ['t:call-1'], indices: [] })).toBe('inside')
+    expect(foldPlace({ ...view, indices: new Map([[59, { top: 980, bottom: 1200 }]]) }, { keys: [], indices: [59] })).toBe('inside')
+  })
+
+  it('rows in view below the row the reader reads fold as usual (2026-11-06: every reply made its fold open)', () => {
+    // A full-screen chat a little above its bottom: the reader reads the answer
+    // across the top edge, and a reply's turn lands under it.
+    const tail: ReaderView = {
+      top: 1000,
+      bottom: 1400,
+      keys: new Map([
+        ['m:answer', { top: 900, bottom: 1150 }],
+        ['m:reply', { top: 1160, bottom: 1200 }],
+        ['t:call-2', { top: 1200, bottom: 1240 }],
+      ]),
+      indices: new Map([[60, { top: 1160, bottom: 1200 }]]),
+      anchor: { key: 'm:answer', top: 900 },
+    }
+    expect(foldPlace(tail, { keys: ['m:reply', 't:call-2'], indices: [60] })).toBe('after')
+    // A row in view above the end of the row read may be read: it opens.
     expect(foldPlace(view, { keys: [], indices: [40, 59] })).toBe('inside')
+    // With no row known to be read, any row in view opens it.
+    expect(foldPlace({ ...tail, anchor: null }, { keys: ['m:reply'], indices: [] })).toBe('inside')
+    // Nothing across the top edge: the row read is the first below it, and a fold holding it opens.
+    expect(foldPlace({ ...tail, anchor: { key: 'm:reply', top: 1160 } }, { keys: ['m:reply', 't:call-2'], indices: [] })).toBe('inside')
   })
 
   it('rows all above the viewport, one ending at its top edge included, are above', () => {

@@ -4769,6 +4769,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!view) return;
     const place = foldPlace(view, drawn);
     if (!place) return;
+    // Open only over rows the reader reads; rows after their row fold as usual.
     if (place === 'inside') readerOpened.add(key);
     readerHold.at ??= view.anchor;
   };

@@ -7,8 +7,9 @@
  * mid-turn to read the steps, that took thousands of px out from under them in
  * one frame and the browser clamped them toward the top (inc-1786553756848,
  * back with the fold: top 4295 -> 1650, scrollHeight 10109 -> 2106). So a fold
- * that takes in rows the reader can see (a new fold, or one that grew) opens,
- * for this panel only; and whenever such a fold forms in or above the viewport,
+ * that takes in the rows the reader reads (a new fold, or one that grew) opens,
+ * for this panel only (rows in view below the row they read fold as usual,
+ * foldPlace); and whenever such a fold forms in or above the viewport,
  * the row the reader sees goes back to where it was before the new rows paint (the
  * history box has `overflow-anchor: none`, and WebKit anchors nothing anyway).
  * Read from the DOM the reader still sees, at render time, as foldAnchor does.
@@ -80,12 +81,27 @@ export function readReaderView(box: HTMLElement): ReaderView {
 }
 
 /**
- * Where a fold's rows were last commit: `inside` when one of them is in view,
- * `above` when the ones drawn all sit above it, null when none was drawn (older
- * rows just loaded, rows a closed fold held) or all sit below it.
+ * Where a fold's rows were last commit: `inside` when the reader may read one of
+ * them (the row they read is one of them, one crosses the viewport's top edge,
+ * or one in view starts before the row they read ends; any in view when that row
+ * is not known), `after` when the ones in view all start below the row they
+ * read, `above` when the ones drawn all sit above it, null when none was drawn
+ * (older rows just loaded, rows a closed fold held) or all sit below it.
+ *
+ * Only `inside` opens the fold. Rows below the row being read fold as usual and
+ * the reader's row is held: folding them moves nothing the reader reads, except
+ * that a reader closer to the bottom than the rows' height ends at the bottom (the
+ * browser clamps the scroll): their row moves down by at most that distance.
+ * 2026-11-06, the user, of a full-screen chat a little above its bottom: "why it
+ * keep show the receive for every message"; every reply another task sent made
+ * its turn's fold open with the call and the whole card in it, because the new
+ * rows were in view.
  */
-export function foldPlace(view: ReaderView, rows: { keys: readonly string[]; indices: readonly number[] }): 'inside' | 'above' | null {
+export function foldPlace(view: ReaderView, rows: { keys: readonly string[]; indices: readonly number[] }): 'inside' | 'after' | 'above' | null {
+  if (view.anchor && rows.keys.includes(view.anchor.key)) return 'inside';
+  const read = view.anchor ? view.keys.get(view.anchor.key) : undefined;
   let above = false;
+  let after = false;
   const boxes = [
     ...rows.keys.map((k) => view.keys.get(k)),
     ...rows.indices.map((i) => view.indices.get(i)),
@@ -93,8 +109,12 @@ export function foldPlace(view: ReaderView, rows: { keys: readonly string[]; ind
   for (const b of boxes) {
     if (!b) continue;
     if (b.bottom <= view.top) above = true;
-    else if (b.top < view.bottom) return 'inside';
+    else if (b.top < view.bottom) {
+      if (!read || b.top < view.top || b.top < read.bottom) return 'inside';
+      after = true;
+    }
   }
+  if (after) return 'after';
   return above ? 'above' : null;
 }
 
