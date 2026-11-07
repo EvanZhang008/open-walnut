@@ -65,7 +65,7 @@ async function openDoc(page: Page, name = DOC): Promise<{ panel: Locator; view: 
   await page.addStyleTag({ content: '.notification-toaster { display: none !important; }' })
   const panel = await openThreadsSession(page, DOC_COMMENTS_SESSION, TASK, READY, { view: 'linear' })
   if (!(await panel.locator('.session-file-explorer').isVisible())) {
-    await panel.getByRole('button', { name: 'Files' }).click()
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
   }
   const explorer = panel.locator('.session-file-explorer')
   const row = explorer.locator('.session-file-explorer-node', { hasText: name }).first()

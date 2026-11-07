@@ -251,7 +251,7 @@ test.describe('The scanning line under a passage being answered', () => {
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1400, height: 820 })
     const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
-    await panel.getByRole('button', { name: 'Files' }).click()
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 10_000 })
     const openFile = async (name: string) => {

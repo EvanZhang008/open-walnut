@@ -43,7 +43,7 @@ async function openSessionPanel(page: Page) {
 }
 
 async function openFiles(panel: Locator) {
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return explorer

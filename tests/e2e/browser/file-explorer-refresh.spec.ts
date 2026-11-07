@@ -37,7 +37,7 @@ async function openFilesPanel(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return explorer
@@ -55,25 +55,25 @@ test.beforeEach(async ({ page }) => {
   await page.waitForLoadState('networkidle')
 })
 
-test('Refresh button is discoverable: accessible name, visible label, real icon', async ({ page }) => {
+test('Refresh button is discoverable: accessible name, a tooltip that says what it does, real icon', async ({ page }) => {
   const explorer = await openFilesPanel(page)
 
-  const refresh = explorer.getByRole('button', { name: 'Refresh file panel' })
+  // Since the file page redesign (2026-11-06, "Document first") the folder
+  // tools sit on the tree head as quiet icons, so the name and the tooltip carry
+  // what the old written label did.
+  const refresh = explorer.locator('.sfe-tree-head').getByRole('button', { name: 'Refresh file panel' })
   await expect(refresh).toBeVisible()
-
-  // A written label, not a lone glyph — that's what made it invisible before.
-  await expect(refresh.locator('.sfe-btn-label')).toHaveText('Refresh')
+  await expect(refresh).toHaveAttribute('title', /Refresh/)
   // An SVG icon (currentColor) rather than a text codepoint at the mercy of font fallback.
   await expect(refresh.locator('svg')).toHaveCount(1)
 
-  // Actually visible against the toolbar: it must carry a border, and be big
-  // enough to hit. (The old chip was borderless --bg-tertiary on near-white.)
+  // Big enough to hit with a mouse, and it shows itself on hover.
   const box = await refresh.boundingBox()
-  expect(box!.width).toBeGreaterThan(50)
-  expect(box!.height).toBeGreaterThanOrEqual(18)
-  const borderWidth = await refresh.evaluate((el) =>
-    parseFloat(getComputedStyle(el).borderTopWidth))
-  expect(borderWidth).toBeGreaterThan(0)
+  expect(box!.width).toBeGreaterThanOrEqual(28)
+  expect(box!.height).toBeGreaterThanOrEqual(28)
+  const idle = await refresh.evaluate((el) => getComputedStyle(el).backgroundColor)
+  await refresh.hover()
+  await expect.poll(() => refresh.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(idle)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step1-button-visible.png` })
 })

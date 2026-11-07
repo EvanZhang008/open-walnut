@@ -35,7 +35,7 @@ async function openFilesPanel(page: Page) {
   // moment lands where Files was, on Changed (WebKit, main as well), so the
   // explorer never opens. Click once the row holds its last chip in front.
   await expect(panel.locator('[data-header-id="fork"] button')).toBeAttached()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return explorer
@@ -211,12 +211,12 @@ test('a tree reopened from its cache while the host is down: the folders\' "last
   await row('report').click()
   await expect(row('summary.html')).toBeVisible({ timeout: 10_000 })
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
 
   // Reopened while the host is down: the cached rows paint, each folder notes it.
   down.on = true
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const reopened = panel.locator('.session-file-explorer')
   await expect(rowIn(reopened)('summary.html')).toBeVisible({ timeout: 10_000 })
   const notes = reopened.locator('.sfe-notice').filter({ hasText: 'Showing the last known contents' })

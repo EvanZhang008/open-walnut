@@ -180,7 +180,7 @@ test.describe('the /notes editor and the session Files pane on one note', () => 
     await page.locator('.notes-context-menu button', { hasText: 'Start Claude Code session' }).click()
     const panel = page.locator('.notes-chat-pane .session-panel')
     await expect(panel).toBeVisible({ timeout: 30_000 })
-    await panel.getByRole('button', { name: 'Files' }).click()
+    await panel.getByRole('button', { name: 'Files', exact: true }).click()
     const explorer = panel.locator('.session-file-explorer')
     await expect(explorer).toBeVisible({ timeout: 15_000 })
 

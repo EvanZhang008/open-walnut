@@ -126,7 +126,7 @@ export async function openSessionPanel(page: Page): Promise<Locator> {
 
 /** Files promotes the panel to the fullscreen sheet. */
 export async function enterFilesFullscreen(page: Page, panel: Locator): Promise<void> {
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 15_000 })
   await expect(panel).toHaveClass(/open-walnut-fullscreen/)
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)

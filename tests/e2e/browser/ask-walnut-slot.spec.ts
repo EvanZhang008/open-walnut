@@ -355,7 +355,7 @@ test('a launch from the slot streams its reply in the slot, and files an amber t
   await expect(panel.locator('.session-panel-header-top .session-panel-header-leading [data-testid="ask-walnut-menu"]'))
     .toBeVisible()
   await expect(panel.locator('.session-meta-row-2 .session-panel-header-leading')).toHaveCount(0)
-  await expect(panel.locator('.session-meta-row-2').getByRole('button', { name: 'Files' })).toBeVisible()
+  await expect(panel.locator('.session-meta-row-2').getByRole('button', { name: 'Files', exact: true })).toBeVisible()
   await expect(panel.locator('.session-panel-close')).toBeVisible()
   await expect(panel.locator('.session-panel-popout')).toBeVisible()
   await expect(panel.locator('.session-panel-expand')).toBeVisible()

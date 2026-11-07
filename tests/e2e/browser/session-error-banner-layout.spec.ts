@@ -87,7 +87,7 @@ async function openSessionPanel(page: Page): Promise<Locator> {
 }
 
 async function openFiles(panel: Locator): Promise<void> {
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 15_000 })
 }
 

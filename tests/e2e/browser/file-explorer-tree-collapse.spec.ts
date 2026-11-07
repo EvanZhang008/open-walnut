@@ -36,7 +36,7 @@ async function openFilesPanel(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   return { panel, explorer }
@@ -102,9 +102,9 @@ test('collapsed state persists across closing and reopening the Files view', asy
   await expect(explorer.locator('.session-file-explorer-tree')).toHaveCount(0)
 
   // Close the Files view and reopen it — the tree stays hidden.
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(explorer).not.toBeVisible()
-  await panel.getByRole('button', { name: 'Files' }).click()
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
   const explorer2 = panel.locator('.session-file-explorer')
   await expect(explorer2).toBeVisible({ timeout: 10_000 })
   await expect(explorer2.locator('.session-file-explorer-tree')).toHaveCount(0)
