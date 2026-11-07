@@ -130,7 +130,8 @@ describe('a lead the user is away from', () => {
     const rec = await getSessionByClaudeId(LEAD_SID);
     const away = await prepareHintedSend(LEAD_SID, rec, 'a worker finished', { sentBy: 'agent' });
     expect(away.hints.map((h) => h.kind)).toContain('user-away');
-    expect(away.enqueueText).toMatch(/Walnut \(user-away\): the user has not been in this chat since/);
+    // One line since 431efa56a (the rules are in the prompt): the absence and where updates go.
+    expect(away.enqueueText).toMatch(/Walnut \(user-away\): the user has been away from this chat /);
     await away.commit();
     const again = await prepareHintedSend(LEAD_SID, await getSessionByClaudeId(LEAD_SID), 'another note', { sentBy: 'agent' });
     expect(again.hints.map((h) => h.kind)).not.toContain('user-away');
