@@ -52,6 +52,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+/** Still pending 50 ms on: used only to show a push IS held (a held push stays pending however loaded the host). */
 const settled = (p: Promise<unknown>) => Promise.race([p.then(() => true), new Promise((r) => setTimeout(() => r(false), 50))]);
 const notLoadedErrors = (spy: ReturnType<typeof vi.spyOn>) =>
   spy.mock.calls.filter(([msg]) => msg === 'sync skipped: plugin not loaded');
@@ -132,8 +133,12 @@ describe('a push while the plugin set is changing', () => {
     registry.beginClosing();
     registry.unregister(PLUGIN_ID);
     registry.track(dispose.promise);
+    const wait = vi.spyOn(registry, 'waitForPlugins');
     try {
-      expect(await settled(autoPushIfConfigured(await getTask(id)))).toBe(true);
+      // The dispose stays open throughout: a push that waited on it could only end at the wait's deadline.
+      const result = await autoPushIfConfigured(await getTask(id));
+      expect(wait).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
     } finally {
       dispose.resolve();
       await dispose.promise;
@@ -160,9 +165,12 @@ describe('a push while the plugin set is changing', () => {
     const id = await seed();
     const errors = vi.spyOn(log.task, 'error');
     registry.unregister(PLUGIN_ID);
+    const wait = vi.spyOn(registry, 'waitForPlugins');
     const push = autoPushIfConfigured(await getTask(id));
-    expect(await settled(push), 'no wait').toBe(true);
     expect(await push).toEqual({ success: false, error: MISSING });
+    // It asked, and nothing was changing: no wait at all (a wall-clock budget would fail on a loaded host).
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(await wait.mock.results[0].value, 'no wait').toBe(false);
     expect(notLoadedErrors(errors)).toHaveLength(1);
   });
 
