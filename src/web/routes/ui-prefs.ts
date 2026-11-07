@@ -30,6 +30,7 @@ import { WALNUT_HOME, UI_PREFS_FILE } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
 import { MAX_KEY_LEN, machineLocalKey, syncableKey } from '../../core/ui-prefs-keys.js'
+import { UNION_PREF_KEYS } from '../../core/recent-opened-list.js'
 import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
@@ -221,12 +222,19 @@ export class UiPrefsInputError extends Error {}
  */
 export async function mergeUiPrefs(patch: unknown): Promise<{ ok: true }> {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new UiPrefsInputError('prefs object is required')
-  const prefs = await loadPrefs()
-  applyUiPrefsPatch(prefs, patch)
-  await writeJsonFile(PREFS_FILE(), prefs)
+  // One read-merge-write at a time: two PUTs interleaving would each write the file they read,
+  // and the later write would drop the other's keys (or its half of a union key).
+  const run = mergeChain.then(async () => {
+    const prefs = await loadPrefs()
+    applyUiPrefsPatch(prefs, patch)
+    await writeJsonFile(PREFS_FILE(), prefs)
+  })
+  mergeChain = run.catch(() => undefined)
+  await run
   for (const cb of writeListeners) { try { cb() } catch { /* never fails the write */ } }
   return { ok: true }
 }
+let mergeChain: Promise<void> = Promise.resolve()
 
 /** The PUT's LWW merge of `patch` into `prefs`, in place (the file's, or a test run's copy). */
 function applyUiPrefsPatch(prefs: Record<string, PrefEntry>, patch: object): void {
@@ -237,6 +245,13 @@ function applyUiPrefsPatch(prefs: Record<string, PrefEntry>, patch: object): voi
     if (typeof ts !== 'number' || !Number.isFinite(ts)) continue
     if (v !== null && (typeof v !== 'string' || v.length > MAX_VALUE_LEN)) continue
     const existing = prefs[key]
+    // A list every window adds to (the tasks opened lately) keeps both sides, whichever is newer:
+    // a window that read the server before another's write must not drop that write's entries.
+    const union = UNION_PREF_KEYS[key]
+    if (union && typeof v === 'string' && typeof existing?.v === 'string') {
+      prefs[key] = { v: union(existing.v, v), ts: Math.max(existing.ts, ts) }
+      continue
+    }
     if (existing && existing.ts > ts) continue // stale write loses
     prefs[key] = { v, ts }
   }

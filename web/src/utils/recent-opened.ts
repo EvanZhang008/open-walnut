@@ -19,60 +19,12 @@
 import { useSyncExternalStore } from 'react';
 import { apiGet } from '@/api/client';
 
-export const RECENT_OPENED_KEY = 'walnut-todo-recent-opened';
-/** How many opens the list keeps (about 3 KB, well under a ui-prefs value's 8 KB). */
-export const RECENT_OPENED_MAX = 50;
+export {
+  RECENT_OPENED_KEY, RECENT_OPENED_MAX, parseRecentOpened, mergeRecentOpened, mergeRecentOpenedRaw, withOpened,
+  type RecentOpen,
+} from '../../../src/core/recent-opened-list';
+import { RECENT_OPENED_KEY, mergeRecentOpened, parseRecentOpened, withOpened, type RecentOpen } from '../../../src/core/recent-opened-list';
 const CHANGE_EVENT = 'walnut:recent-opened';
-
-export interface RecentOpen {
-  /** The task id. */
-  id: string;
-  /** When the person last opened it (ISO). */
-  at: string;
-}
-
-/** Entries from any stored value: bad rows dropped, one per task, newest first, capped. */
-export function parseRecentOpened(raw: string | null): RecentOpen[] {
-  if (!raw) return [];
-  try {
-    const value = JSON.parse(raw) as unknown;
-    if (!Array.isArray(value)) return [];
-    return normalize(value.filter((e): e is RecentOpen =>
-      !!e && typeof e === 'object' && typeof (e as RecentOpen).id === 'string' && !!(e as RecentOpen).id
-      && typeof (e as RecentOpen).at === 'string' && !isNaN(Date.parse((e as RecentOpen).at))));
-  } catch { return []; }
-}
-
-function normalize(entries: readonly RecentOpen[]): RecentOpen[] {
-  const newest = new Map<string, RecentOpen>();
-  for (const e of entries) {
-    const seen = newest.get(e.id);
-    if (!seen || Date.parse(e.at) > Date.parse(seen.at)) newest.set(e.id, { id: e.id, at: e.at });
-  }
-  return [...newest.values()]
-    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
-    .slice(0, RECENT_OPENED_MAX);
-}
-
-/** Two lists as one: each task at its newest open, newest first, capped. */
-export function mergeRecentOpened(a: readonly RecentOpen[], b: readonly RecentOpen[]): RecentOpen[] {
-  return normalize([...a, ...b]);
-}
-
-/**
- * The boot merge's rule for this key (ui-prefs-sync): this browser's stored value and the
- * server's, as one list, instead of the newer one replacing the other. An open whose write never
- * reached the server (offline, a quit within the mirror's debounce) survives another device's
- * later write.
- */
-export function mergeRecentOpenedRaw(local: string | null, server: string | null): string {
-  return JSON.stringify(mergeRecentOpened(parseRecentOpened(local), parseRecentOpened(server)));
-}
-
-/** The list with `id` opened at `at` (moved to the top when already there). */
-export function withOpened(list: readonly RecentOpen[], id: string, at: string): RecentOpen[] {
-  return normalize([{ id, at }, ...list.filter((e) => e.id !== id)]);
-}
 
 /** A Recent row opened from the list itself: its open time before that click, and when the click was. */
 export interface HeldRow {

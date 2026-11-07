@@ -155,6 +155,34 @@ describe('PUT /api/ui-prefs', () => {
     expect(res.body.prefs['open-walnut-a']).toEqual({ v: 'new', ts: 200 });
   });
 
+  it('the tasks opened lately are stored as the union of every write, stale or concurrent', async () => {
+    // 2026-11-07 verifier: two devices each read the server, opened A and B, and PUT at once;
+    // last-writer-wins kept only B. The key is a list every window adds to.
+    const KEY = 'walnut-todo-recent-opened';
+    const app = createApp();
+    const list = (...e: Array<[string, string]>) => JSON.stringify(e.map(([id, at]) => ({ id, at })));
+    await request(app).put('/api/ui-prefs').send({ prefs: { [KEY]: { v: list(['old', '2026-11-07T08:00:00.000Z']), ts: 100 } } });
+    await Promise.all([
+      request(app).put('/api/ui-prefs').send({ prefs: { [KEY]: { v: list(['A', '2026-11-07T09:00:00.000Z'], ['old', '2026-11-07T08:00:00.000Z']), ts: 300 } } }),
+      request(app).put('/api/ui-prefs').send({ prefs: { [KEY]: { v: list(['B', '2026-11-07T09:00:01.000Z'], ['old', '2026-11-07T08:00:00.000Z']), ts: 200 } } }),
+    ]);
+    // A stale write still adds its opens; the newest open of a task wins.
+    await request(app).put('/api/ui-prefs').send({ prefs: { [KEY]: { v: list(['C', '2026-11-07T07:00:00.000Z'], ['A', '2026-11-07T06:00:00.000Z']), ts: 50 } } });
+    const res = await request(app).get('/api/ui-prefs');
+    expect(JSON.parse(res.body.prefs[KEY].v).map((e: { id: string }) => e.id)).toEqual(['B', 'A', 'old', 'C']);
+    expect(res.body.prefs[KEY].ts).toBe(300);
+    // Any other key keeps last-writer-wins.
+    await Promise.all([
+      request(app).put('/api/ui-prefs').send({ prefs: { 'open-walnut-x': { v: '1', ts: 10 }, 'open-walnut-y': { v: 'y', ts: 10 } } }),
+      request(app).put('/api/ui-prefs').send({ prefs: { 'open-walnut-x': { v: '2', ts: 20 }, 'open-walnut-z': { v: 'z', ts: 20 } } }),
+    ]);
+    const after = (await request(app).get('/api/ui-prefs')).body.prefs;
+    expect(after['open-walnut-x'].v).toBe('2');
+    // Concurrent PUTs never drop each other's keys.
+    expect(after['open-walnut-y'].v).toBe('y');
+    expect(after['open-walnut-z'].v).toBe('z');
+  });
+
   it('null value is a delete tombstone', async () => {
     const app = createApp();
     await request(app).put('/api/ui-prefs').send({ prefs: { 'open-walnut-a': { v: '1', ts: 100 } } });

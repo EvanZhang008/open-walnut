@@ -27,7 +27,7 @@ import { apiGet, apiPut } from '@/api/client';
 import { getDeviceToken } from '@/api/device-token';
 import { SKIP_PREFS_MERGE_FLAG } from './crash-recovery';
 import { LAYOUT_PREFIX, adoptsServerLayout } from './layout-record';
-import { RECENT_OPENED_KEY, mergeRecentOpenedRaw } from './recent-opened';
+import { UNION_PREF_KEYS } from '../../../src/core/recent-opened-list';
 
 const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
 /**
@@ -47,9 +47,7 @@ const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
  */
 const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:', 'open-walnut-view:panel.', 'open-walnut-view:tab.', 'open-walnut-diff-state:'];
 /** Keys the boot merge combines instead of taking the newer side (each side's raw value in, the stored value out). */
-const MERGED_KEYS: Record<string, (local: string, server: string) => string> = {
-  [RECENT_OPENED_KEY]: mergeRecentOpenedRaw,
-};
+const MERGED_KEYS = UNION_PREF_KEYS;
 /** Local write timestamps per key — lets boot-merge decide who's newer. */
 const META_KEY = 'open-walnut-ui-prefs-sync-meta';
 
