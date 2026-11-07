@@ -12,7 +12,9 @@
 # Runs on a runner, with GH_TOKEN and GitHub's GITHUB_* variables.
 set -uo pipefail
 TIERS=10  # quick 1/8 .. 8/8, frontend, browser specs
-repo=$GITHUB_REPOSITORY sha=$GITHUB_SHA
+# The commit judged (push-gate.yml's GATE_SHA: a dispatched run's input, else the gate branch's head).
+repo=$GITHUB_REPOSITORY sha=${GATE_SHA:-$GITHUB_SHA}
+[[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "push-gate-status: $sha is not a commit sha" >&2; exit 1; }
 url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
 
 post() { # state context description

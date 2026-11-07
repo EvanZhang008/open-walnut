@@ -15,11 +15,18 @@
 #   WALNUT_PUSH_GATE=0                  off for one push (say why in the commit or the task)
 #
 # Where the tests run:
-#   on GitHub (the default, for a GitHub remote): the commit goes to a `gate/<sha>` branch of the
-#     same remote, where .github/workflows/push-gate.yml runs the tiers on CI's own runners and
-#     writes commit statuses; this waits for its own run's `walnut/push-gate`
-#     (WALNUT_PUSH_GATE_TIMEOUT minutes, default 75), then deletes the branch. A commit whose
-#     newest `walnut/push-gate` already reads success passes at once. Needs `gh` signed in and jq.
+#   on GitHub (the default, for a GitHub remote): the commit goes to `refs/gate/<sha>` of the same
+#     remote, a ref outside refs/heads that GitHub shows nowhere (a `gate/<sha>` branch put a
+#     "had recent pushes / Compare & pull request" banner on the repository's page for each run,
+#     2026-11-07, the user: "why has so many of this"), and the gate workflow is dispatched on
+#     main for that commit (.github/workflows/push-gate.yml), which runs the tiers on CI's own
+#     runners and writes commit statuses; this waits for its own run's `walnut/push-gate`
+#     (WALNUT_PUSH_GATE_TIMEOUT minutes, default 75), then deletes the ref, also when a signal
+#     stops it. A main whose gate workflow takes no dispatch yet (an older main) gets the
+#     `gate/<sha>` branch that workflow runs on instead. A ref a killed hook could not delete is
+#     removed by scripts/push-gate-sweep.sh, which this runs first and GitHub runs every hour
+#     (.github/workflows/push-gate-sweep.yml). A commit whose newest `walnut/push-gate` already
+#     reads success passes at once. Needs `gh` signed in and jq.
 #     It tests the pushed commit itself. A push to another remote is not judged.
 #   git config walnut.testRunner '<prefix>': a command prefix (split on spaces, no quoted
 #     arguments) that runs the rest of the line in a copy of this checkout on a test host and
@@ -186,15 +193,44 @@ if [ -z "$runner" ]; then
     | jq -r '[.[] | select(.context == "walnut/push-gate")][0] | select(.state == "success") | .target_url // empty' 2>/dev/null)
   if [ -n "$passed" ]; then echo "✓ Test gate passed on $short ($passed)."; passed_files "$passed"; rm -f "$errf"; exit 0; fi
 
-  branch=gate/$(git rev-parse --short=12 "$target")
+  # Gate refs a killed hook left behind (their run ended over an hour ago), in the background so
+  # the gate never waits on it. WALNUT_GATE_SWEEP=0: not (the tests).
+  [ "${WALNUT_GATE_SWEEP:-1}" = 0 ] \
+    || ( bash "$(dirname "$0")/push-gate-sweep.sh" "$remote_url" "$repo" </dev/null >/dev/null 2>&1 & )
+  name=gate/$(git rev-parse --short=12 "$target")
+  # The push time rides the ref's name: the sweep never removes a ref younger than 15 minutes,
+  # so it cannot take this one while its run is still being made.
+  ref=refs/$name-$(date +%s)
   # The run this push starts (2 minutes of slack for the runners' clock against this one).
   since=$(date -u -r $(( $(date +%s) - 120 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - 120 ))" +%Y-%m-%dT%H:%M:%SZ)
-  trap 'git push -q --no-verify "$remote_url" ":refs/heads/$branch" >/dev/null 2>&1 || true; rm -f "$errf"' EXIT
-  # The commit already passed this push's other hooks (the type check, the leak scan): the branch
+  # The ref goes however the hook ends: a signal exits through the EXIT trap too (a land stopped
+  # mid-gate left its branch on GitHub, 2026-11-07).
+  trap 'git push -q --no-verify "$remote_url" ":$ref" >/dev/null 2>&1 || true; rm -f "$errf"' EXIT
+  trap 'exit 130' INT TERM HUP
+  # A dispatch runs main's copy of the gate workflow, so a commit that changes it runs its own
+  # copy on the gate branch (a new tier would otherwise never report, and the push never pass).
+  mode=dispatch
+  [ $have_base = 1 ] && ! git diff --quiet "$base" "$target" -- .github/workflows/push-gate.yml && mode=branch
+  # The commit already passed this push's other hooks (the type check, the leak scan): the ref
   # push only carries it to the runners, so it does not run them again.
-  git push -q --no-verify "$remote_url" "+$target:refs/heads/$branch" \
-    || refuse "could not push $branch to $plain for the test gate."
-  echo "Test gate on $short: quick tier, frontend tier and the browser specs it touches, on GitHub's runners ($branch)…"
+  if [ $mode = dispatch ]; then
+    git push -q --no-verify "$remote_url" "+$target:$ref" \
+      || refuse "could not push $ref to $plain for the test gate."
+    # Once again after a failed call (a timeout may have started the run: the newest one counts).
+    # Only GitHub's answer that main's workflow takes no dispatch (an older main) means the branch.
+    dispatch() { ghcall api "repos/$repo/actions/workflows/push-gate.yml/dispatches" -X POST -f ref=main -f "inputs[sha]=$target" >/dev/null 2>"$errf"; }
+    dispatch || { grep -q "workflow_dispatch" "$errf" || { sleep 5; dispatch; } || true; }
+    if grep -q "workflow_dispatch" "$errf"; then
+      git push -q --no-verify "$remote_url" ":$ref" >/dev/null 2>&1 || true
+      mode=branch
+    fi
+  fi
+  if [ $mode = branch ]; then
+    ref=refs/heads/$name
+    git push -q --no-verify "$remote_url" "+$target:$ref" \
+      || refuse "could not push $name to $plain for the test gate."
+  fi
+  echo "Test gate on $short: quick tier, frontend tier and the browser specs it touches, on GitHub's runners ($ref)…"
   mins=${WALNUT_PUSH_GATE_TIMEOUT:-75}
   # How many tiers the run writes (push-gate-status.sh, as the pushed commit has it).
   tiers=$(git show "$target:scripts/push-gate-status.sh" 2>/dev/null | sed -n 's/^TIERS=\([0-9][0-9]*\).*/\1/p')
@@ -204,7 +240,10 @@ if [ -z "$runner" ]; then
   while :; do
     # Only what this push's own run wrote: an earlier or a cancelled gate of the same commit
     # may still be writing its own verdict.
-    if [ -z "$run" ] && r=$(ghq "repos/$repo/actions/runs?branch=$branch&head_sha=$target&event=push&per_page=20"); then
+    # A dispatched run names its commit in its title (run-name), a branch run in its head.
+    if [ -z "$run" ] && [ $mode = dispatch ] && r=$(ghq "repos/$repo/actions/workflows/push-gate.yml/runs?event=workflow_dispatch&per_page=30"); then
+      run=$(printf '%s' "$r" | jq -r --arg t "$since" --arg n "Push gate $target" '[.workflow_runs[] | select(.created_at >= $t and .display_title == $n)] | max_by(.created_at) | .id // empty')
+    elif [ -z "$run" ] && [ $mode = branch ] && r=$(ghq "repos/$repo/actions/runs?branch=$name&head_sha=$target&event=push&per_page=20"); then
       run=$(printf '%s' "$r" | jq -r --arg t "$since" '[.workflow_runs[] | select(.created_at >= $t)] | max_by(.created_at) | .id // empty')
     fi
     if [ -n "$run" ] && r=$(ghq "repos/$repo/commits/$target/statuses?per_page=100"); then
@@ -223,11 +262,12 @@ if [ -z "$runner" ]; then
     fi
     [ $fails -lt 10 ] || blocked "GitHub did not answer the test gate 10 times in a row ($(tail -1 "$errf")), so nothing was judged."
     [ "$(date +%s)" -lt "$deadline" ] || break
-    sleep "${WALNUT_PUSH_GATE_POLL:-30}"
+    # In the background, so a signal ends the wait at once (bash runs a trap only between commands).
+    sleep "${WALNUT_PUSH_GATE_POLL:-30}" & wait $!
   done
   printf '%s' "$statuses" | jq -r '.[] | select(.context != "walnut/push-gate") | "  \(.state)  \(.context | sub("^walnut/push-gate "; ""))  \(.description // "")"'
   [ "$state" = success ] && { echo "✓ Test gate passed."; passed_files "https://github.com/$repo/actions/runs/$run"; exit 0; }
-  [ "$state" != pending ] || blocked "the test gate did not answer within $mins minutes, so nothing was judged ($branch${run:+, run $run})."
+  [ "$state" != pending ] || blocked "the test gate did not answer within $mins minutes, so nothing was judged ($name${run:+, run $run})."
   # The failing tests, from each failed tier's job log.
   for tier in $(printf '%s' "$statuses" | jq -r '.[] | select(.state != "success" and .context != "walnut/push-gate") | .context | sub("^walnut/push-gate \\("; "") | sub("\\)$"; "") | gsub(" "; "_")'); do
     tier=${tier//_/ }

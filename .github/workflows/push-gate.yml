@@ -1,11 +1,14 @@
 name: Push gate
 
 # The test gate a push to main waits on (scripts/push-gate.sh, run by .husky/pre-push when
-# `git config walnut.pushGate` is true). The hook pushes the commit to a `gate/<sha>` branch;
-# this runs CI's quick and frontend tiers on it, and the browser specs the commit touches, on
-# the same runners and with the same commands as ci.yml, and writes the verdict as commit
-# statuses: one per tier, and `walnut/push-gate` for the whole. The hook pushes main only when
-# that reads success, then deletes the branch.
+# `git config walnut.pushGate` is true). The hook pushes the commit to `refs/gate/<sha>`, a ref
+# GitHub shows nowhere, and dispatches this on main with the commit's sha (an older hook pushed a
+# `gate/<sha>` branch instead, which put a "Compare & pull request" banner on the repository's
+# page for each run: 2026-11-07, the user: "why has so many of this"). This runs CI's quick and
+# frontend tiers on that commit, and the browser specs it touches, on the same runners and with
+# the same commands as ci.yml, and writes the verdict as commit statuses on it: one per tier, and
+# `walnut/push-gate` for the whole. The hook pushes main only when that reads success, then
+# deletes the ref; scripts/push-gate-sweep.sh removes one a killed hook left.
 #
 # Why: every team pushed to main without CI's checks, so one team's red test turned every later
 # run red and mailed "Run failed" each hour (2026-11-04, the user: "this happens every day").
@@ -18,18 +21,28 @@ name: Push gate
 on:
   push:
     branches: ['gate/**']
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: The commit to judge (scripts/push-gate.sh pushes it to refs/gate/<sha>)
+        required: true
+
+# scripts/push-gate.sh and push-gate-sweep.sh find a dispatched run of a commit by this title.
+run-name: Push gate ${{ inputs.sha || github.ref_name }}
 
 permissions:
   contents: read
   statuses: write
 
 concurrency:
-  group: push-gate-${{ github.ref }}
+  group: push-gate-${{ inputs.sha || github.ref }}
   cancel-in-progress: true
 
 env:
   CI: 'true'
   ONNXRUNTIME_NODE_INSTALL: skip
+  # The commit judged: the dispatched sha, or the gate branch's head.
+  GATE_SHA: ${{ inputs.sha || github.sha }}
 
 jobs:
   test:
@@ -61,6 +74,8 @@ jobs:
             cmd: bun run test:frontend:ci
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GATE_SHA }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -96,6 +111,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GATE_SHA }}
       # GitHub's main, to tell which browser specs this commit touches (two trees are enough).
       - run: git fetch -q --depth=1 origin main
       - id: specs
@@ -155,6 +172,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GATE_SHA }}
       - name: Verdict
         env:
           GH_TOKEN: ${{ github.token }}

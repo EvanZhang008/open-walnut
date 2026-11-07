@@ -1,0 +1,33 @@
+name: Push gate sweep
+
+# Removes push gate refs whose run ended over an hour ago (scripts/push-gate-sweep.sh). The hook
+# deletes its own ref when it ends; one that was killed cannot, and each leftover `gate/<sha>`
+# branch put a "Compare & pull request" banner on the repository's page (2026-11-07).
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: push-gate-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Sweep gate refs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/push-gate-sweep.sh
+          sparse-checkout-cone-mode: false
+      - name: Sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/push-gate-sweep.sh origin "$GITHUB_REPOSITORY"

@@ -50,7 +50,7 @@ if [ -n "$scanner" ]; then
 fi
 
 # 4. The test gate (scripts/push-gate.sh): CI's quick and frontend tiers and the browser specs a
-#    push to main touches, on the commit being pushed, on GitHub's runners (a gate/<sha> branch
-#    and .github/workflows/push-gate.yml). Off unless `git config walnut.pushGate` is true, so a
+#    push to main touches, on the commit being pushed, on GitHub's runners (a hidden
+#    refs/gate/<sha> ref and .github/workflows/push-gate.yml). Off unless `git config walnut.pushGate` is true, so a
 #    contributor's push is unchanged.
 printf '%s\n' "$refs" | bash scripts/push-gate.sh "$@" || exit 1

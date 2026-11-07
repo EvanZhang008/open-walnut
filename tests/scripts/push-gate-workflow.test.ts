@@ -30,9 +30,20 @@ describe('push-gate.yml', () => {
     expect([...tiers(gate)]).toEqual([...want])
   })
 
-  it('runs only for a gate branch, never for main or a pull request', () => {
-    expect(gate).toMatch(/^on:\n {2}push:\n {4}branches: \['gate\/\*\*'\]\n\n/m)
+  it('runs only for a gate: a dispatch naming its commit, or an older hook\'s gate branch; never for main or a pull request', () => {
+    expect(gate).toMatch(/^on:\n {2}push:\n {4}branches: \['gate\/\*\*'\]\n {2}workflow_dispatch:\n {4}inputs:\n {6}sha:\n/m)
     expect(gate).not.toMatch(/pull_request/)
+    // The hook finds its dispatched run by this title.
+    expect(gate).toMatch(/^run-name: Push gate \$\{\{ inputs\.sha \|\| github\.ref_name \}\}$/m)
+  })
+
+  it('judges the dispatched commit, not main: every checkout and every status names it', () => {
+    expect(gate).toMatch(/^ {2}GATE_SHA: \$\{\{ inputs\.sha \|\| github\.sha \}\}$/m)
+    const checkouts = [...gate.matchAll(/- uses: actions\/checkout@v\d+\n((?: {8}.*\n)*)/g)].map((m) => m[1]!)
+    expect(checkouts.length).toBeGreaterThanOrEqual(3)
+    for (const c of checkouts) expect(c).toMatch(/ref: \$\{\{ env\.GATE_SHA \}\}/)
+    expect(read('scripts/push-gate-status.sh')).toMatch(/sha=\$\{GATE_SHA:-\$GITHUB_SHA\}/)
+    expect(gate).toMatch(/group: push-gate-\$\{\{ inputs\.sha \|\| github\.ref \}\}/)
   })
 
   it('never fails its run for a failing test: the verdict is a status', () => {

@@ -5,7 +5,7 @@
  * the line it was asked to run and exits as told, and feeds the gate pre-push lines on stdin.
  * Nothing real runs: the stub never executes the test line.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -216,7 +216,7 @@ describe('push-gate.sh on GitHub', () => {
   const URL = 'https://github.com/acme/demo.git'
   const later = '2999-01-01T00:00:00Z'
   const RUN = 'https://github.com/acme/demo/actions/runs/77'
-  function ghRepo(answers: { before?: unknown[]; statuses?: unknown[]; runs?: unknown[]; jobs?: unknown; log?: string; signedIn?: boolean }) {
+  function ghRepo(answers: { before?: unknown[]; statuses?: unknown[]; runs?: unknown[]; jobs?: unknown; log?: string; signedIn?: boolean; dispatch?: 'ok' | '422' | '500' }) {
     const g = repo()
     git(g.r, 'config', '--unset', 'walnut.testRunner')
     const dir = path.dirname(g.r)
@@ -232,9 +232,16 @@ describe('push-gate.sh on GitHub', () => {
     fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh
 [ "$1" = auth ] && { [ ${answers.signedIn === false ? 1 : 0} = 0 ]; exit $?; }
 url=$2
-gate=$(git --git-dir=${JSON.stringify(bare)} for-each-ref --format='%(refname)' refs/heads/gate)
+gate=$(git --git-dir=${JSON.stringify(bare)} for-each-ref --format='%(refname)' refs/heads/gate refs/gate)
+hidden=$(git --git-dir=${JSON.stringify(bare)} for-each-ref --format='%(objectname)' refs/gate | head -1)
 echo "$url $gate" >> ${JSON.stringify(seen)}
 case $url in
+  *dispatches) echo "dispatch $*" >> ${JSON.stringify(seen)}
+    case ${JSON.stringify(answers.dispatch ?? 'ok')} in
+      422) echo "HTTP 422: Workflow does not have 'workflow_dispatch' trigger" >&2; exit 1 ;;
+      500) echo "HTTP 500: Server Error" >&2; exit 1 ;;
+    esac ;;
+  *workflows/push-gate.yml/runs\\?*) [ -n "$hidden" ] && jq -c --arg t "Push gate $hidden" '{workflow_runs: [.runs[] | . + {display_title: (.display_title // $t)}]}' ${a} || echo '{"workflow_runs":[]}' ;;
   *actions/runs\\?*) [ -n "$gate" ] && jq -c '{workflow_runs: .runs}' ${a} || echo '{"workflow_runs":[]}' ;;
   *statuses*) if [ -n "$gate" ]; then jq -c .statuses ${a}; else jq -c .before ${a}; fi ;;
   *jobs\\?*) jq -c .jobs ${a} ;;
@@ -242,22 +249,89 @@ case $url in
   *) exit 1 ;;
 esac
 `, { mode: 0o755 })
-    return { ...g, bare, seen, env: { PATH: `${bin}:${process.env.PATH}`, WALNUT_PUSH_GATE_POLL: '0', WALNUT_PUSH_GATE_TIMEOUT: '0' } }
+    return { ...g, bare, seen, env: { PATH: `${bin}:${process.env.PATH}`, WALNUT_PUSH_GATE_POLL: '0', WALNUT_PUSH_GATE_TIMEOUT: '0', WALNUT_GATE_SWEEP: '0' } }
   }
   const st = (context: string, state: string, description = '', target_url = RUN) => ({ context, state, description, created_at: later, target_url })
   const gateRun = (g: { r: string; base: string; env: Record<string, string> }, tip: string, url = URL) =>
     spawnSync('bash', [GATE, 'origin', url], { cwd: g.r, input: line(tip, g.base), encoding: 'utf8', env: cleanEnv(g.env) })
-  const gateBranches = (bare: string) => spawnSync('git', ['--git-dir', bare, 'for-each-ref', 'refs/heads/gate'], { encoding: 'utf8' }).stdout
+  /** Every gate ref on the remote: the hidden `refs/gate/*` and the older `gate/*` branches. */
+  const gateBranches = (bare: string) => spawnSync('git', ['--git-dir', bare, 'for-each-ref', 'refs/heads/gate', 'refs/gate'], { encoding: 'utf8' }).stdout
 
-  it('lets the push through when its own run writes success, and deletes the gate branch', () => {
+  it('lets the push through when its own run writes success, and deletes the gate ref', () => {
     const g = ghRepo({ statuses: [st('walnut/push-gate (quick 1/3)', 'success', 'passed'), st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
     const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
     const out = gateRun(g, tip)
     expect(out.status, out.stdout + out.stderr).toBe(0)
     expect(out.stdout).toMatch(/Test gate passed\./)
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/gate/${tip.slice(0, 12)}`)
+    expect(gateBranches(g.bare)).toBe('')
+  })
+
+  // 2026-11-07, the user, of the repository's page: "why has so many of this" (a "gate/<sha> had
+  // recent pushes / Compare & pull request" banner per gate run).
+  it('runs on a hidden ref GitHub shows nowhere, dispatching the gate workflow on main for its commit', () => {
+    // A newer dispatched run of another commit is not this one's: only run 77 wrote the statuses.
+    const g = ghRepo({
+      statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')],
+      runs: [{ id: 77, created_at: later }, { id: 78, created_at: '2999-06-01T00:00:00Z', display_title: `Push gate ${'f'.repeat(40)}` }],
+    })
+    const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+    const out = gateRun(g, tip)
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    const seen = fs.readFileSync(g.seen, 'utf8')
+    expect(seen).toContain(`dispatch api repos/acme/demo/actions/workflows/push-gate.yml/dispatches -X POST -f ref=main -f inputs[sha]=${tip}`)
+    expect(seen).toMatch(new RegExp(`refs/gate/${tip.slice(0, 12)}-\\d{10}\\b`))
+    expect(seen).not.toContain('refs/heads/gate')
+    expect(gateBranches(g.bare)).toBe('')
+  })
+
+  it('falls back to the gate branch only when GitHub\'s main takes no dispatch yet, and deletes it', () => {
+    const g = ghRepo({ dispatch: '422', statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
+    const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+    const out = gateRun(g, tip)
+    expect(out.status, out.stdout + out.stderr).toBe(0)
     expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/heads/gate/${tip.slice(0, 12)}`)
     expect(gateBranches(g.bare)).toBe('')
   })
+
+  it('tries a failed dispatch once more and stays off the branch (a timeout may have started the run)', () => {
+    const g = ghRepo({ dispatch: '500', statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
+    const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+    const out = gateRun(g, tip)
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    const seen = fs.readFileSync(g.seen, 'utf8')
+    expect(seen.match(/^dispatch /gm)).toHaveLength(2)
+    expect(seen).not.toContain('refs/heads/gate')
+    expect(gateBranches(g.bare)).toBe('')
+  })
+
+  it('runs a commit that changes the gate workflow on its own copy, on the gate branch (a dispatch runs main\'s)', () => {
+    const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
+    const tip = commit(g.r, { '.github/workflows/push-gate.yml': 'name: Push gate\n# a sixth tier\n' }, 'gate: a new tier')
+    const out = gateRun(g, tip)
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    const seen = fs.readFileSync(g.seen, 'utf8')
+    expect(seen).not.toMatch(/^dispatch /m)
+    expect(seen).toContain(`refs/heads/gate/${tip.slice(0, 12)}`)
+    expect(gateBranches(g.bare)).toBe('')
+  })
+
+  it('deletes its gate ref when a signal stops it mid-wait (a land stopped mid-gate left its branch)', async () => {
+    const g = ghRepo({})
+    const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+    const child = spawn('bash', [GATE, 'origin', URL], { cwd: g.r, env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_POLL: '30', WALNUT_PUSH_GATE_TIMEOUT: '30' }) })
+    child.stdin.end(line(tip, g.base))
+    const ended = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)))
+    const deadline = Date.now() + 20_000
+    while (!gateBranches(g.bare) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100))
+    expect(gateBranches(g.bare)).toContain(`refs/gate/${tip.slice(0, 12)}`)
+    const stopped = Date.now()
+    child.kill('SIGTERM')
+    expect(await ended).toBe(130)
+    // At once, not after the 30 s poll sleep.
+    expect(Date.now() - stopped).toBeLessThan(10_000)
+    expect(gateBranches(g.bare)).toBe('')
+  }, 40_000)
 
   it('refuses a failing gate with the failing tests from the tier\'s job log, and the commits', () => {
     const g = ghRepo({
@@ -305,7 +379,7 @@ esac
     const out = gateRun(g, tip)
     expect(out.status, out.stdout + out.stderr).toBe(0)
     expect(out.stdout).toMatch(/Test gate passed on [0-9a-f]+ \(https:\/\/github\.com\/acme\/demo\/actions\/runs\/77\)/)
-    expect(fs.readFileSync(g.seen, 'utf8')).not.toContain('refs/heads/gate')
+    expect(fs.readFileSync(g.seen, 'utf8')).not.toMatch(/refs\/(heads\/)?gate/)
   })
 
   it('runs the gate for a commit\'s files with --run: one new commit on GitHub\'s main, never the commit\'s own history', () => {
@@ -321,7 +395,7 @@ esac
     expect(gated).not.toBe(tip)
     expect(git(g.r, 'rev-parse', `${gated}^`)).toBe(ghMain)
     expect(git(g.r, 'rev-parse', `${gated}^{tree}`)).toBe(git(g.r, 'rev-parse', `${tip}^{tree}`))
-    expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/heads/gate/${gated.slice(0, 12)}`)
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/gate/${gated.slice(0, 12)}`)
   })
 
   it('names the commits GitHub has no copy of when --run is refused, not the gate commit', () => {
@@ -353,7 +427,7 @@ esac
     const other = commit(g.r, { 'c.txt': '3\n' }, 'three')
     const again = spawnSync('bash', [GATE, 'origin', URL], { cwd: g.r, input: line(other, g.base), encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts }) })
     expect(again.status, again.stdout + again.stderr).toBe(0)
-    expect(fs.readFileSync(g.seen, 'utf8')).toContain('refs/heads/gate/')
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain('refs/gate/')
   })
 
   it('judges nothing with --run when GitHub\'s main already has the files', () => {
@@ -478,5 +552,83 @@ describe('the GitHub reads of the gate', () => {
     expect(run('slow').status).toBe(124)
     expect(Date.now() - started).toBeLessThan(10_000)
     expect(run('quick').status).toBe(3)
+  })
+})
+
+/**
+ * scripts/push-gate-sweep.sh removes gate refs a killed hook left (2026-11-07: two finished
+ * `gate/<sha>` branches each showed a "Compare & pull request" banner on the repository's page).
+ */
+describe('push-gate-sweep.sh', () => {
+  const SWEEP = path.join(ROOT, 'scripts/push-gate-sweep.sh')
+  const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const HOUR = 3_600_000
+
+  it('removes the refs whose runs ended over an hour ago, or that never ran and are old, and nothing else', () => {
+    const { r } = repo()
+    const dir = path.dirname(r)
+    const bare = path.join(dir, 'remote.git')
+    spawnSync('git', ['init', '-q', '--bare', bare], { env: cleanEnv() })
+    const mk = (name: string, date?: string) => {
+      fs.writeFileSync(path.join(r, `${name}.txt`), name)
+      git(r, 'add', '.')
+      spawnSync('git', ['commit', '-q', '-m', name], { cwd: r, env: cleanEnv(date ? { GIT_COMMITTER_DATE: date } : {}) })
+      return git(r, 'rev-parse', 'HEAD')
+    }
+    const sha = {
+      doneDispatched: mk('a'), doneBranch: mk('b'), running: mk('c'), recent: mk('d'),
+      neverRanOld: mk('e', '2020-01-01T00:00:00Z'), neverRanNew: mk('f'), young: mk('g'), oldStamped: mk('h'), main: mk('m'),
+    }
+    const secs = (msAgo: number) => Math.floor((Date.now() - msAgo) / 1000)
+    const youngAt = secs(60_000)
+    const refs: Record<string, string> = {
+      [`refs/gate/${sha.doneDispatched.slice(0, 12)}`]: sha.doneDispatched,
+      [`refs/heads/gate/${sha.doneBranch.slice(0, 12)}`]: sha.doneBranch,
+      [`refs/gate/${sha.running.slice(0, 12)}`]: sha.running,
+      [`refs/gate/${sha.recent.slice(0, 12)}`]: sha.recent,
+      [`refs/gate/${sha.neverRanOld.slice(0, 12)}`]: sha.neverRanOld,
+      [`refs/gate/${sha.neverRanNew.slice(0, 12)}`]: sha.neverRanNew,
+      // Pushed a minute ago for a re-gate: its earlier runs ended hours ago, its new run is not listed yet.
+      [`refs/gate/${sha.young.slice(0, 12)}-${youngAt}`]: sha.young,
+      [`refs/gate/${sha.oldStamped.slice(0, 12)}-${secs(3 * HOUR)}`]: sha.oldStamped,
+      'refs/heads/main': sha.main, 'refs/heads/bun-ci': sha.main, 'refs/heads/claude/x': sha.main,
+    }
+    for (const [ref, at] of Object.entries(refs)) git(r, 'push', '-q', bare, `${at}:${ref}`)
+    const runs = [
+      { event: 'workflow_dispatch', display_title: `Push gate ${sha.doneDispatched}`, head_sha: sha.main, status: 'completed', updated_at: iso(2 * HOUR) },
+      { event: 'push', display_title: 'Push gate gate/x', head_sha: sha.doneBranch, status: 'completed', updated_at: iso(3 * HOUR) },
+      { event: 'workflow_dispatch', display_title: `Push gate ${sha.running}`, head_sha: sha.main, status: 'completed', updated_at: iso(5 * HOUR) },
+      { event: 'workflow_dispatch', display_title: `Push gate ${sha.running}`, head_sha: sha.main, status: 'in_progress', updated_at: iso(0) },
+      { event: 'workflow_dispatch', display_title: `Push gate ${sha.recent}`, head_sha: sha.main, status: 'completed', updated_at: iso(10 * 60_000) },
+      { event: 'workflow_dispatch', display_title: `Push gate ${sha.young}`, head_sha: sha.main, status: 'completed', updated_at: iso(4 * HOUR) },
+      { event: 'workflow_dispatch', display_title: `Push gate ${sha.oldStamped}`, head_sha: sha.main, status: 'completed', updated_at: iso(2 * HOUR) },
+    ]
+    const bin = path.join(dir, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(dir, 'runs.json'), JSON.stringify({ workflow_runs: runs }))
+    fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh
+case $2 in
+  *workflows/push-gate.yml/runs*) cat ${JSON.stringify(path.join(dir, 'runs.json'))} ;;
+  */commits/*) TZ=UTC git --git-dir=${JSON.stringify(bare)} log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "\${2##*/}" ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 })
+    const out = spawnSync('bash', [SWEEP, bare, 'acme/demo'], { cwd: r, encoding: 'utf8', env: cleanEnv({ PATH: `${bin}:${process.env.PATH}` }) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    const left = spawnSync('git', ['--git-dir', bare, 'for-each-ref', '--format=%(refname)'], { encoding: 'utf8' }).stdout.trim().split('\n').sort()
+    expect(left).toEqual([
+      'refs/gate/' + sha.neverRanNew.slice(0, 12), 'refs/gate/' + sha.recent.slice(0, 12), 'refs/gate/' + sha.running.slice(0, 12),
+      `refs/gate/${sha.young.slice(0, 12)}-${youngAt}`,
+      'refs/heads/bun-ci', 'refs/heads/claude/x', 'refs/heads/main',
+    ].sort())
+  })
+
+  it('runs before every GitHub gate, in the background, and every hour on GitHub', () => {
+    const src = fs.readFileSync(GATE, 'utf8')
+    expect(src).toMatch(/\( bash "\$\(dirname "\$0"\)\/push-gate-sweep\.sh" "\$remote_url" "\$repo" <\/dev\/null >\/dev\/null 2>&1 & \)/)
+    const wf = fs.readFileSync(path.join(ROOT, '.github/workflows/push-gate-sweep.yml'), 'utf8')
+    expect(wf).toMatch(/schedule:\n\s+- cron: '\d+ \* \* \* \*'/)
+    expect(wf).toMatch(/run: bash scripts\/push-gate-sweep\.sh origin "\$GITHUB_REPOSITORY"/)
+    expect(wf).toMatch(/contents: write/)
   })
 })
