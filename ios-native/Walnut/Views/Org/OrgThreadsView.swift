@@ -89,6 +89,13 @@ struct OrgThreadsView: View {
                     fold("\(closedCount) closed this week", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
                     if showClosed {
                         ForEach(sections.closed) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
+                        if closedCount > sections.closed.count {
+                            Text("The newest \(sections.closed.count) are here; all \(closedCount) are on the web.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("org.threads.closed.more")
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -169,7 +176,7 @@ struct OrgThreadsView: View {
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
             ("snoozed", "Snoozed", s.snoozed.count, foldBinding("snoozed")),
             ("inProgress", "In progress", s.inProgress.count, foldBinding("inProgress")),
-            ("closed", "Closed", s.closed.count, foldBinding("closed")),
+            ("closed", "Closed", max(store.closedCount ?? 0, s.closed.count), foldBinding("closed")),
         ].filter { $0.count > 0 }
         return HStack(spacing: 8) {
             Text("\(s.open.count) for you")
