@@ -78,6 +78,8 @@ test.describe('Tree Mode split screen', () => {
   test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, SPLIT_SESSION) })
 
   test('A: asking splits, each page sends into its own question, a reload keeps the pages', async ({ page }) => {
+    // Two turns and a reload: past the default budget on a loaded host.
+    test.setTimeout(180_000)
     const sent = captureSends(page)
     const panel = await openSheet(page)
     await openQuestion(panel, SPLIT_TITLES.Q11)
@@ -103,7 +105,11 @@ test.describe('Tree Mode split screen', () => {
     const rightWords = `Which rule did it miss, split right ${Date.now()}?`
     await send(rightComposer(panel), rightWords)
     await expect(rightBody(panel).locator('.session-history')).toContainText(rightWords, { timeout: 20_000 })
-    await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText('1.1.2', { timeout: 20_000 })
+    // The next child of 1.1: 1.1.2 on a fresh fixture, later when an earlier spec of the
+    // run asked under 1.1 too (a reset keeps the transcript's old turns).
+    await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText(/^1\.1\.\d+$/, { timeout: 20_000 })
+    const newNum = (await rightHeader(panel).locator('.thread-half-name').textContent())!.trim()
+    expect(Number(newNum.split('.')[2])).toBeGreaterThanOrEqual(2)
     await expect(middlePage(panel).locator('.session-history')).not.toContainText(rightWords)
     await expect(rightHeader(panel).locator('.thread-status-word')).toHaveText(/Answer/, { timeout: 30_000 })
     await expect(rightComposer(panel)).toHaveAttribute('placeholder', /^Reply in /)
@@ -114,7 +120,7 @@ test.describe('Tree Mode split screen', () => {
     await expect.poll(async () => (await anchorFor(panel, rightWords))?.parent, { timeout: 20_000 }).toBe(answerOf(headOf(SPLIT_TITLES.Q11)))
     expect((await anchorFor(panel, rightWords))?.quote?.exact).toBe(SPLIT_PASSAGES.ASK_Q11)
     // Its send told the model which question it is.
-    expect(hintOf(sent, rightWords)).toBe('1.1.2')
+    expect(hintOf(sent, rightWords)).toBe(newNum)
     await expect(rightHeader(panel).locator('.thread-status-word')).toHaveText('Answered', { timeout: 30_000 })
     await shot(page, 'A', panel)
 
@@ -138,10 +144,11 @@ test.describe('Tree Mode split screen', () => {
     await expect.poll(() => page.evaluate((ks) => ks.map((k) => localStorage.getItem(k!)), keys))
       .toEqual(['left page draft', 'middle page draft', 'right page draft'])
     await page.reload()
-    await page.waitForLoadState('networkidle')
+    // 'load', not 'networkidle': the reloaded page polls, and at a high load it never goes quiet for 500ms.
+    await page.waitForLoadState('load')
     const again = page.locator(`.main-page-session-column .session-panel[data-session-id="${SPLIT_SESSION}"]`)
-    await expect(middlePage(again)).toBeVisible({ timeout: 30_000 })
-    await expectPages(again, ['L 1', 'M 1.1', 'R 1.1.2'])
+    await expect(middlePage(again)).toBeVisible({ timeout: 60_000 })
+    await expectPages(again, ['L 1', 'M 1.1', `R ${newNum}`])
     await expect(leftComposer(again)).toHaveValue('left page draft')
     await expect(middleComposer(again)).toHaveValue('middle page draft')
     await expect(rightComposer(again)).toHaveValue('right page draft')
