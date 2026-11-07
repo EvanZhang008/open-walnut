@@ -94,7 +94,7 @@ describe('guard: the bare turn sentence', () => {
     const src = await fs.readFile(path.join(root, 'src/core/user-status.ts'), 'utf8')
     const uses = src.split('\n').filter((l) => /toRead\('turn'/.test(l))
     expect(uses, 'A new hand-back status with the bare turn sentence: give it its last words (sessions/last-words.ts)').toHaveLength(1)
-    expect(uses[0]).toMatch(/input\.lastWords \?/)
+    expect(uses[0]).toMatch(/input\.lastWords \?|turnToReadLine\(input\.lastWords\)/)
     expect(src.split('\n').filter((l) => /ask:.*HANDED_BACK_ASK/.test(l)), 'The old hand-back sentence is read, never written').toHaveLength(0)
     const walk = async (dir: string, out: string[] = []): Promise<string[]> => {
       for (const e of await fs.readdir(dir, { withFileTypes: true })) {

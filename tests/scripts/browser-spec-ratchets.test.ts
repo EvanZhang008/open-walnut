@@ -1594,7 +1594,9 @@ describe('the sidebar on the shared fixture', () => {
   const helpers = sources.filter(({ file }) => !file.endsWith('.spec.ts'))
   const imports = (text: string, test: { test: (t: string) => boolean }) => helpers.some(({ file, text: h }) =>
     test.test(h) && new RegExp(String.raw`from ['"]\./${file.replace(/\.ts$/, '').replace(/[.]/g, '\\.')}['"]`).test(text))
-  const offendersNow = () => sources
+  // Read once: each pass over every spec and helper costs seconds (the quick tier allows 15 s a test).
+  let offenders: string[] | null = null
+  const offendersNow = () => offenders ??= sources
     .filter(({ file }) => file.endsWith('.spec.ts') && !own.has(file))
     .filter(({ text }) => (toggles.test(text) || imports(text, toggles)) && !keepsPrefs.test(text) && !imports(text, keepsPrefs))
     .map(({ file }) => file)
