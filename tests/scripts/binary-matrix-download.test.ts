@@ -15,6 +15,9 @@ type Step = { id?: string; uses?: string; if?: string; run?: string; with?: Reco
 type Job = { env?: Record<string, string>; steps?: Step[] }
 
 const isFilesDownload = (s: Step) => !!s.uses?.startsWith('actions/download-artifact@') && s.with?.name === 'walnut-files'
+// A release's assets (inputs.files): on 2026-11-07 this download hung on macos-26-intel
+// until the job's 30 minutes ran out, which cancelled the 0.6.28 promotion.
+const isReleaseDownload = (s: Step) => !!s.uses?.startsWith('actions/download-artifact@') && s.with?.name === '${{ inputs.files }}'
 
 describe('binary matrix rows survive a download that fails or ends without the file', () => {
   const jobs = Object.entries<Job>(parseYaml(fs.readFileSync(WORKFLOW, 'utf8')).jobs)
@@ -43,4 +46,25 @@ describe('binary matrix rows survive a download that fails or ends without the f
       expect(file(require)).toBe(file(check))
     })
   }
+
+  for (const [name, job] of takers) {
+    it(`${name}: a release's assets are cut off when the download hangs, checked, and downloaded again`, () => {
+      const steps = job.steps!
+      const first = steps.findIndex(isReleaseDownload)
+      expect(first).toBeGreaterThan(0)
+      const [check, again] = steps.slice(first + 1, first + 3)
+      expect((steps[first] as Step & { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
+      expect(check?.id).toBe('release')
+      expect(check?.run).toContain('-s "$RUNNER_TEMP/release/SHA256SUMS"')
+      expect(check?.run).toContain('walnut-$VERSION-${FILE#walnut-}.gz')
+      expect(check?.run).toContain('missing=true')
+      expect(check?.env?.FILE ?? job.env?.FILE).toBeTruthy()
+      expect(isReleaseDownload(again!)).toBe(true)
+      expect(again?.if).toContain("steps.release.outputs.missing == 'true'")
+      // the unpack that reads them comes after both downloads
+      const unpack = steps.findIndex((s) => !!s.run?.includes('release-unpack.sh'))
+      expect(unpack).toBeGreaterThan(first + 2)
+    })
+  }
 })
+

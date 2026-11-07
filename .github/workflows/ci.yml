@@ -839,6 +839,8 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           pattern: browser-report-*
           path: ${{ runner.temp }}/browser-reports

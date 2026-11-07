@@ -223,6 +223,8 @@ jobs:
           bun-version: 1.4.4
       - run: npm install -g npm@12
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           name: ${{ needs.stable-build.outputs.files }}
           path: ${{ runner.temp }}/release/assets
@@ -439,6 +441,8 @@ jobs:
       - if: steps.recheck.outputs.publish == 'true'
         run: npm install -g npm@12
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         if: steps.recheck.outputs.publish == 'true'
         with:
           name: ${{ needs.nightly-build.outputs.files }}
@@ -666,10 +670,14 @@ jobs:
         with:
           path: harness
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           name: release-notes
           path: ${{ runner.temp }}
       - uses: actions/download-artifact@v4
+        # a hung artifact download ends here, not at the job limit (tests/scripts/workflow-download-limit.test.ts)
+        timeout-minutes: 8
         with:
           name: ${{ needs.promote-build.outputs.files }}
           path: ${{ runner.temp }}/release/assets
