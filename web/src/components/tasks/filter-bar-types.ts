@@ -199,6 +199,6 @@ export interface DisplayOrder {
   projectSortCount: number;
   group: GroupBy | null;
   onGroup(v: GroupBy): void;
-  /** Why the rows do nothing here (a search ranks by match), or null. */
+  /** Why the rows do nothing here (a search ranks by match, Recent by open time), or null. */
   note: string | null;
 }

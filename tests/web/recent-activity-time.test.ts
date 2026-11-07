@@ -1,5 +1,5 @@
 /**
- * The Recent feed's row time and its sort share one clock
+ * One clock per task for the status sections' order and row time
  * (web/src/components/tasks/recent-activity-time.ts). Pure logic — no React mount.
  *
  * Reported 2026-09-25: a task with no session showed "5mo ago" (its created_at)
@@ -81,10 +81,14 @@ describe('recentActivityTitle', () => {
 describe('TodoPanel Recent card wiring (source ratchet)', () => {
   const src = readFileSync(resolve(__dirname, '../../web/src/components/tasks/TodoPanel.tsx'), 'utf8');
 
-  it('the row time and the feed sort both read recentActivityTime', () => {
-    expect(src).toMatch(/const activity = recentActivityTime\(task, timeMode\);\s*\n\s*const ago = timeAgo\(activity\.at\);/);
-    expect(src).toMatch(/const recentTime = \(t: Task\) => recentActivityTime\(t, recentSortMode\)\.at;/);
-    expect(src).toContain('className="todo-recent-ago" title={recentActivityTitle(activity)}');
+  // Recent lists what the person opened (2026-11-06): the row's time and the list's order are
+  // both the open time, never a task clock (recentActivityTime ranks the status sections).
+  it('the row time and the list order both read the open time', () => {
+    expect(src).toContain('const recentTasksLive = recentOpened.tasks;');
+    expect(src).toContain('openedAt={recentOpened.openedAt.get(task.id)}');
+    expect(src).toMatch(/const ago = openedAt \? timeAgo\(openedAt\) : '';/);
+    expect(src).toContain('className="todo-recent-ago" title={openedTitle(openedAt)}');
+    expect(src).not.toMatch(/recentActivityTime\(/);
   });
 
   it('no row falls back to created_at on its own any more', () => {

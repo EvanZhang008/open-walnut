@@ -317,10 +317,23 @@ export async function isolateUiPrefs(page: Page, opts: { newInstall?: boolean } 
       localStorage.removeItem('walnut-todo-panel-design')
     })
   }
-  await page.route('**/api/ui-prefs', async (route) => {
+  // A query too (`?key=`, a window merging one key on its return: utils/recent-opened.ts).
+  await page.route(/\/api\/ui-prefs(\?|$)/, async (route) => {
     // GET → the boot shape, so the merge adopts nothing another spec left.
     // PUT → accepted and dropped (the real route answers `{ ok: true }`).
     const body = route.request().method() === 'GET' ? JSON.stringify({ prefs }) : '{"ok":true}'
     await route.fulfill({ status: 200, contentType: 'application/json', body })
   })
+}
+
+/**
+ * Give the Recent tab these tasks as the person's recent opens (web/src/utils/recent-opened.ts),
+ * newest first, on the page as it is: Recent lists only what was opened.
+ */
+export async function seedRecentOpened(page: Page, ids: readonly string[]): Promise<void> {
+  await page.evaluate((list) => {
+    const now = Date.now();
+    localStorage.setItem('walnut-todo-recent-opened', JSON.stringify(list.map((id, i) => ({ id, at: new Date(now - i * 60_000).toISOString() }))));
+    window.dispatchEvent(new Event('walnut:recent-opened'));
+  }, [...ids]);
 }

@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
+import { isolateUiPrefs, openListProject, seedRecentOpened } from './todo-panel-helpers';
 import { presetPanelDesign } from './status-section-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
@@ -625,6 +625,8 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
   await expect(cardMenu).toHaveCount(0);
   await expect(navigation(page).locator(member)).toHaveClass(/todo-pinned-card-active/);
 
+  // Recent lists what was opened: the card's task among them (seeded, so the selection stays).
+  await seedRecentOpened(page, [ids[0], members[0]]);
   await chooseViewOption(page, 'recent');
   await expect(navigation(page).locator(card)).toBeVisible();
   expect(await grid(row)).toEqual({ circle: 22, dot: 12 });

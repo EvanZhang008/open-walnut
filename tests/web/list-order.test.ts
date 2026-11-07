@@ -5,8 +5,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  RECENT_SORT_VALUES, SORT_VALUES, commonValue, groupByProject, groupOfTierMode, keepPinOrder, orderLists,
-  parseTierSorts, recentOrderOfSort, sortOfRecentOrder, tierModeOfGroup,
+  SORT_VALUES, commonValue, groupOfTierMode, keepPinOrder, orderLists,
+  parseTierSorts, tierModeOfGroup,
 } from '../../web/src/components/tasks/list-order';
 
 describe('orderLists: the lists a view draws', () => {
@@ -20,9 +20,8 @@ describe('orderLists: the lists a view draws', () => {
     expect(orderLists('focus', tiers)).toEqual({ tiers: ['focus'], projects: false, recent: false });
     expect(orderLists('ct_a', tiers)).toEqual({ tiers: ['ct_a'], projects: false, recent: false });
   });
-  it('Recent has no Manual; the rest offer all four', () => {
+  it('every list offers all four sorts', () => {
     expect(SORT_VALUES).toEqual(['manual', 'priority', 'date', 'updated']);
-    expect(RECENT_SORT_VALUES).toEqual(['priority', 'date', 'updated']);
   });
 });
 
@@ -40,13 +39,6 @@ describe('group and order mappings', () => {
     expect(groupOfTierMode('custom')).toBe('none');
     expect(tierModeOfGroup('none')).toBe('custom');
     expect(tierModeOfGroup('project')).toBe('project');
-  });
-  it('Recent stores its sort as the time it ranks by, or priority', () => {
-    expect(recentOrderOfSort('date')).toBe('created');
-    expect(recentOrderOfSort('updated')).toBe('updated');
-    expect(recentOrderOfSort('priority')).toBe('priority');
-    expect(sortOfRecentOrder('created')).toBe('date');
-    expect(sortOfRecentOrder('updated')).toBe('updated');
   });
   it('stored tier sorts keep only real non-Manual sorts', () => {
     expect(parseTierSorts(JSON.stringify({ focus: 'priority', wait: 'manual', ct_x: 'bogus', satellite: 'date' })))
@@ -71,12 +63,5 @@ describe('keepPinOrder: a drop never rewrites a sorted tier it did not reorder',
   });
   it('no kept tier: the order is unchanged', () => {
     expect(keepPinOrder(['b', 'a'], [], pin)).toEqual(['b', 'a']);
-  });
-});
-
-describe('groupByProject (Recent, By project)', () => {
-  it('gathers each project, projects in the order their first row came', () => {
-    const rows = [{ id: '1', project: 'Home' }, { id: '2', project: '' }, { id: '3', project: 'Home' }, { id: '4' }, { id: '5', project: 'Garden' }];
-    expect(groupByProject(rows).map((r) => r.id)).toEqual(['1', '3', '2', '4', '5']);
   });
 });

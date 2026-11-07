@@ -1,15 +1,14 @@
 /**
  * list-order: the Sort and Group of every list the home task panel draws, so the
- * Display menu's two rows work in every view. Each pinned tier, the Recent feed
- * and the Projects list keep their own choice; a view's rows read and set the
- * view's own lists (All and Projects: the Projects list, Pinned: every tier, a
- * tier view: its tier, Recent: its feed). Pure, no React. Relative runtime imports on purpose.
+ * Display menu's two rows work in every view. Each pinned tier and the Projects
+ * list keep their own choice; a view's rows read and set the view's own lists (All
+ * and Projects: the Projects list, Pinned: every tier, a tier view: its tier).
+ * Recent has none: it is one list, newest opened first (`recent` names it so the
+ * rows can say so). Pure, no React. Relative runtime imports on purpose.
  */
 import type { GroupBy, SortBy } from './ViewDropdown';
 
 export const SORT_VALUES: readonly SortBy[] = ['manual', 'priority', 'date', 'updated'];
-/** Recent is a time feed: it has no hand order to keep. */
-export const RECENT_SORT_VALUES: readonly SortBy[] = ['priority', 'date', 'updated'];
 
 /** The lists a view draws, the ones its Sort and Group rows act on. */
 export interface OrderLists {
@@ -61,15 +60,6 @@ export function parseTierSorts(raw: string | null): Record<string, SortBy> {
   }
 }
 
-/** Recent's stored order: the time it ranks by, or Priority. */
-export type RecentOrder = 'updated' | 'created' | 'priority';
-export function recentOrderOfSort(sort: SortBy): RecentOrder {
-  return sort === 'date' ? 'created' : sort === 'priority' ? 'priority' : 'updated';
-}
-export function sortOfRecentOrder(order: RecentOrder): SortBy {
-  return order === 'created' ? 'date' : order;
-}
-
 /**
  * A drop writes every tier's drawn order as the pin order. A tier drawn by a
  * sort must not lose its hand order to that: each `keep` set's ids go back to
@@ -86,15 +76,4 @@ export function keepPinOrder(order: readonly string[], keep: readonly ReadonlySe
     slots.forEach((slot, i) => { out[slot] = sorted[i]; });
   }
   return out;
-}
-
-/** Recent grouped by project: each project's rows together, the projects in the order their first row came. */
-export function groupByProject<T extends { project?: string | null }>(rows: readonly T[]): T[] {
-  const runs = new Map<string, T[]>();
-  for (const row of rows) {
-    const key = row.project || '';
-    const run = runs.get(key);
-    if (run) run.push(row); else runs.set(key, [row]);
-  }
-  return [...runs.values()].flat();
 }

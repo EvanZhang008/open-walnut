@@ -6,8 +6,8 @@
  * ("Only in All and Projects") with a separate Tier layout row under them that
  * did what Group does. The user: "group, tier layout, that is the same thing ...
  * should be unified ... and sort, why can't it?". Now each tier keeps its own
- * sort and its Group is the old view mode, Recent sorts and groups its feed, and
- * All and Pinned set every list they draw. On the Status page the three open
+ * sort and its Group is the old view mode, and All and Pinned set every list they
+ * draw (Recent has one order, newest opened first, and its rows say so). On the Status page the three open
  * statuses sit under one Open row, and every page tags its default.
  *
  * All data is owned by the test: two custom tiers nobody else pins into and
@@ -268,42 +268,16 @@ test('All: the Pinned heading menu sets every tier\'s Group and Sort, the tier h
   await page.keyboard.press('Escape')
 })
 
-test('Recent sorts by Priority, Created or Updated (no Manual) and groups by project under quiet labels', async ({ page, baseURL }) => {
-  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
-  const p1 = `RecentOak${stamp}`
-  const p2 = `RecentElm${stamp}`
-  const r1 = await createTask('Recent oak backlog', p1, 'backlog')
-  const r2 = await createTask('Recent elm immediate', p2, 'immediate')
-  const r3 = await createTask('Recent oak immediate', p1, 'immediate')
-  const mine = new Set([r1, r2, r3])
-  const feed = async () => (await page.locator('.todo-pinned-list-recent [data-task-id]').evaluateAll((els) =>
-    els.map((el) => (el as HTMLElement).dataset.taskId ?? ''))).filter((id) => mine.has(id))
+test('Recent has one order, newest opened first: its Sort and Group rows say so', async ({ page, baseURL }) => {
+  // Recent lists what the person opened (2026-11-06, "very simple flat list for recent"):
+  // recent-opened-tab.spec.ts covers the list; here, the Display rows do not offer dead controls.
   await openHome(page, baseURL!)
   await chooseViewOption(page, 'recent')
-  await expect.poll(feed, { timeout: 20_000 }).toEqual([r3, r2, r1])
   await openDisplayMenu(page)
-  await expect(displayMenu(page).locator('[data-view-option="sort"] [data-choice="manual"]')).toHaveCount(0)
+  await expect(displayMenu(page).locator('[data-view-option="sort"] [data-choice]')).toHaveCount(0)
+  await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Newest opened first')
+  await expect(displayMenu(page).locator('[data-view-option="group"] [data-choice]')).toHaveCount(0)
   await closeDisplayMenu(page)
-  // Touch the first one: Updated puts it on top, Created keeps creation order.
-  await api('PATCH', `/api/tasks/${r1}`, { title: 'Recent oak backlog touched' })
-  await arrange(page, 'Updated')
-  await expect.poll(feed).toEqual([r1, r3, r2])
-  await arrange(page, 'Created')
-  await expect.poll(feed).toEqual([r3, r2, r1])
-  await arrange(page, 'Priority')
-  await expect.poll(feed).toEqual([r3, r2, r1])
-  await arrange(page, 'Created')
-  // By project: each project's rows together under its label, the projects in the order
-  // their first row comes.
-  await arrange(page, 'By project')
-  await expect.poll(feed).toEqual([r3, r1, r2])
-  const label = (p: string) => page.locator(`.todo-pinned-list-recent .recent-project-label[data-project="${p}"]`)
-  await expect(label(p1)).toHaveCount(1)
-  await expect(label(p2)).toHaveCount(1)
-  await expect(label(p1).locator('.tier-project-label-count')).toHaveText('2')
-  await page.locator('.todo-panel').screenshot({ path: `${SHOTS}/recent-by-project.png` })
-  await arrange(page, 'In one list')
-  await expect(page.locator('.todo-pinned-list-recent .recent-project-label')).toHaveCount(0)
 })
 
 test('Status: an Open row over its three statuses toggles them as one; every page tags its default', async ({ page, baseURL }) => {

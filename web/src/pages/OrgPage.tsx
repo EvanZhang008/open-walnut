@@ -32,6 +32,7 @@ import { fetchTask } from '@/api/tasks';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { createStripWriter, readColumns } from '@/utils/layout-record';
+import { recordTaskOpened } from '@/utils/recent-opened';
 import type { SessionSlot } from '@/pages/sessionColumns';
 import { log } from '@/utils/log';
 import { OrgChartSheet, type ChartStart } from '@/components/org/OrgChartSheet';
@@ -285,6 +286,8 @@ export function OrgPage() {
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
   const select = useCallback((key: string, tab?: OrgTab) => {
+    // An open for Home's Recent tab (utils/recent-opened.ts); Main is left out, it is always at hand.
+    if (key !== MAIN_KEY) recordTaskOpened(rowOf(channels, key)?.contactId);
     setParams(() => {
       const next = liveParams();
       next.set('node', key);
@@ -292,7 +295,7 @@ export function OrgPage() {
       next.delete('open');
       return next;
     }, phone ? { state: { orgPick: true } } : { replace: true });
-  }, [setParams, phone]);
+  }, [setParams, phone, channels]);
   const back = useCallback(() => {
     if ((window.history.state as { usr?: { orgPick?: boolean } } | null)?.usr?.orgPick) { navigate(-1); return; }
     // Opened straight on a node (a link, a reload): the list is this page's own way back.
@@ -344,14 +347,16 @@ export function OrgPage() {
     // A node lists its own letter on its chat, with Answer there.
     if (node) { select(node.key, opts?.inbox ? 'chat' : undefined); return; }
     setSideInbox(opts?.inbox ? { taskId, n: Date.now() } : null);
+    recordTaskOpened(taskId);
     openSide({ kind: 'task', id: taskId });
   }, [nodeOf, select, openSide]);
   const openSession = useCallback((sessionId: string) => {
     const node = nodeOf((t) => resolveTaskSessionId(t) === sessionId);
     if (node) { select(node.key, 'chat'); return; }
     setSideInbox(null);
+    recordTaskOpened(tasks.find((t) => resolveTaskSessionId(t) === sessionId)?.id);
     openSide({ kind: 'session', id: sessionId });
-  }, [nodeOf, select, openSide]);
+  }, [nodeOf, select, openSide, tasks]);
   const closeSide = useCallback(() => {
     if (closing.current) return;
     closing.current = true;

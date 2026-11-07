@@ -11588,6 +11588,19 @@ body.walnut-dragging {
   opacity: 0;
 }
 
+/* Recent: a task open in this window right now (a session column, the chat slot, a
+   full-screen detail) is greyed (2026-11-06, the user: "grey out the one currently open in
+   the window"). It stays clickable: a click brings it forward. */
+.todo-recent-card-open .todo-pinned-title,
+.todo-recent-card-open .task-phase-icon-btn,
+.todo-recent-card-open .todo-recent-ago,
+.todo-recent-card-open .todo-recent-tier-dot {
+  opacity: 0.45;
+}
+/* The open-session chevron sits at the row's right edge: the time steps clear of it, as a
+   status-section card's does. */
+.todo-pinned-list-recent .todo-pinned-card-session-open .todo-recent-ago { margin-right: 8px; }
+
 .todo-pinned-unpin {
   background: none;
   border: none;

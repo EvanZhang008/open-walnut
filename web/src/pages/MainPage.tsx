@@ -99,6 +99,7 @@ import {
 import { useColumnCompleteClose } from './useColumnCompleteClose';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { createStripWriter, readColumns, readLayoutField, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
+import { recordTaskOpened } from '@/utils/recent-opened';
 import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -370,6 +371,20 @@ function formatQuickTaskDate(iso: string): string {
   const dayLabel = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${date.getMonth() + 1}-${date.getDate()}`;
   if (dateOnly) return dayLabel;
   return `${dayLabel} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+/** A task may own several session ids (plan / exec / legacy / the list): true when any passes `has`. */
+function taskHasSession(t: Task, has: (sessionId: string) => boolean): boolean {
+  return !!((t.session_id && has(t.session_id))
+    || (t.exec_session_id && has(t.exec_session_id))
+    || (t.plan_session_id && has(t.plan_session_id))
+    || t.session_ids?.some(has));
+}
+
+/** The task a session belongs to, among the loaded ones. */
+function taskIdOfSession(tasks: Iterable<Task>, sessionId: string): string | null {
+  for (const t of tasks) if (taskHasSession(t, (s) => s === sessionId)) return t.id;
+  return null;
 }
 
 interface MainPageProps {
@@ -791,14 +806,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const openSessionTaskIds = useMemo(() => {
     const ids = new Set<string>();
     if (openSessionIdSet.size === 0) return ids;
-    for (const t of tasks) {
-      if (
-        (t.session_id && openSessionIdSet.has(t.session_id)) ||
-        (t.exec_session_id && openSessionIdSet.has(t.exec_session_id)) ||
-        (t.plan_session_id && openSessionIdSet.has(t.plan_session_id)) ||
-        t.session_ids?.some((s) => openSessionIdSet.has(s))
-      ) ids.add(t.id);
-    }
+    const open = (s: string) => openSessionIdSet.has(s);
+    for (const t of tasks) if (taskHasSession(t, open)) ids.add(t.id);
     return ids;
   }, [tasks, openSessionIdSet]);
 
@@ -1653,7 +1662,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Clicking a session pill always opens/moves to rightmost — use close button to dismiss.
   // Single path for "open a session, with toast if fully locked" — shared by pill
   // clicks, dock events, chat session-link clicks.
-  const openSessionOrToast = useCallback((sessionId: string) => {
+  const openSessionOrToast = useCallback((sessionId: string, opts?: { restore?: boolean }) => {
     const current = sessionColumnsRef.current;
     const next = addSessionColumn(current, sessionId, triageOpenRef.current, maxPanelsRef.current);
     if (next === current && !current.some(c => c.id === sessionId)) {
@@ -1675,6 +1684,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     setSessionColumns(next);
     followGrownStrip(realColumnCount(current), realColumnCount(next));
+    // An open for the Recent tab (utils/recent-opened.ts); a load putting back the columns it had is not one.
+    if (!opts?.restore) recordTaskOpened(taskIdOfSession(taskMapRef.current.values(), sessionId));
   }, [showOperationError, followGrownStrip]);
   // For the launch resolvers below (stable callbacks): a resolved session with no
   // column of its own to morph is a plain open, with the same grant and toast.
@@ -1749,7 +1760,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   usePhoneRestore({
     ready: !loading,
     isSessionOpen: (sid) => phoneColumnsRef.current.some((c) => c.id === sid),
-    openSession: openSessionOrToast,
+    openSession: (sid) => openSessionOrToast(sid, { restore: true }),
   });
 
   // ⌘⇧O opens the session finder from anywhere on the home page (no mouse
@@ -2306,6 +2317,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // "focused task went away" effects below.
   const focusedTaskRef = useRef(focusedTask);
   focusedTaskRef.current = focusedTask;
+  // Every focus the person asks for bumps the nonce (a row click, a locate from anywhere, a
+  // dock or chat link, a task detail); a load restoring the focus never does (restoreFocus).
+  // So the nonce is the one place an open is recorded for the Recent tab (utils/recent-opened.ts).
+  useEffect(() => {
+    if (focusNonce > 0) recordTaskOpened(focusedTaskRef.current?.id);
+  }, [focusNonce]);
 
 
   const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean; fromOutside?: boolean }) => {
@@ -2367,6 +2384,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // A task the list does not carry (finished over a week ago, a plugin's own, an id prefix) opens
   // in its details popup over Home (OutsideTaskDetail): there is no task page to send it to.
   const [outsideTask, setOutsideTask] = useState<Task | null>(null);
+  // Every task on screen in this window right now: a session column (a new-session draft bound
+  // to the task too), the chat slot's ask, the full-screen detail (a listed task's or one from
+  // outside the list). The Recent tab greys these out ("grey out the one currently open in the
+  // window"): the list is for finding the others.
+  const shownTaskIds = [
+    focusedTask && !suppressDetail ? focusedTask.id : null,
+    chatVisible ? askSlotSelection.taskId : null,
+    outsideTask?.id ?? null,
+    ...sessionColumns.map((c) => draftById.get(c.id)?.taskId ?? null),
+  ].filter((id): id is string => !!id).join(',');
+  const openInWindowTaskIds = useMemo(() => {
+    if (!shownTaskIds) return openSessionTaskIds;
+    const ids = new Set(openSessionTaskIds);
+    for (const id of shownTaskIds.split(',')) ids.add(id);
+    return ids;
+  }, [openSessionTaskIds, shownTaskIds]);
   const loadingRef = useCommittedRef(loading);
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
@@ -2418,6 +2451,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setTodoVisible(true);
       yieldFullscreen('locate-task');
       setOutsideTask(full as Task);
+      recordTaskOpened(full.id);
     };
     // Only a task made in the last minute may still be on its way to the list; any other opens now.
     const fresh = !!full.created_at && Date.now() - Date.parse(full.created_at) < 60_000 && full.status !== 'done';
@@ -3062,6 +3096,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *     with title + description as the first message. The brief already exists.
    */
   const handleStartSessionForTask = useCallback(async (task: Task) => {
+    // Starting a session on a task (its ▶) is opening it, for the Recent tab.
+    recordTaskOpened(task.id);
     const existing = resolveTaskSessionId(task);
     if (existing) { openSessionOrToast(existing); return; }
 
@@ -3268,6 +3304,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onStartSession={handleStartSessionForTask}
           openSessionIds={openSessionIdSet}
           openSessionTaskIds={openSessionTaskIds}
+          openInWindowTaskIds={openInWindowTaskIds}
           onOpenTriageForTask={handleOpenTriageForTask}
           onPinTask={focusBar.pin}
           onUnpinTask={focusBar.unpin}

@@ -1,9 +1,9 @@
 import type { Task } from '@open-walnut/core';
 
 /**
- * Recent feed sort mode: 'updated' ranks by the latest activity of any kind (the
- * historical behavior), 'created' by pure creation time. Sorting only; nothing is
- * rewritten.
+ * Activity sort mode: 'updated' ranks by the latest activity of any kind, 'created'
+ * by pure creation time. Sorting only; nothing is rewritten. (The Recent tab ranks by
+ * when the person opened each task instead: utils/recent-opened.ts.)
  */
 export type RecentSortMode = 'updated' | 'created';
 
@@ -17,8 +17,8 @@ export interface RecentActivity {
 }
 
 /**
- * The ONE clock behind a Recent row: the feed sorts by it and the row's "3w ago"
- * shows it. They used to differ (the sort took the latest of update / session /
+ * The ONE clock behind a status-section row: the section sorts by it and the row's
+ * "3w ago" shows it (Recent once did too). They used to differ (the sort took the latest of update / session /
  * completion while the row fell back to created_at for a task with no session), so
  * a task edited yesterday sat at the top of the feed labelled "5mo ago".
  *

@@ -68,13 +68,14 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
   return (
     <>
       {/* Sort and Group, the same two rows at the same y in every view (C29b, spec
-          3.3): they act on the lists the view draws. A search ranks by match, and
-          the rows say so instead of offering a dead control. */}
+          3.3): they act on the lists the view draws. A search ranks by match and
+          Recent by when each task was opened, and the rows say so instead of
+          offering a dead control. */}
       <div className="dm-section dm-order">
         {o.note ? (
           <>
-            <DisplayRow option="sort" label="Sort" title="Search results rank by match"><span className="dm-row-note">{o.note}</span></DisplayRow>
-            <DisplayRow option="group" label="Group" title="Search results rank by match"><span className="dm-row-note">{o.note}</span></DisplayRow>
+            <DisplayRow option="sort" label="Sort" title={o.note}><span className="dm-row-note">{o.note}</span></DisplayRow>
+            <DisplayRow option="group" label="Group" title={o.note}><span className="dm-row-note">{o.note}</span></DisplayRow>
           </>
         ) : (
           <>

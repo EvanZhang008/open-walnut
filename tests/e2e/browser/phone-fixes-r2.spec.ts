@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, seedRecentOpened } from './todo-panel-helpers'
 import { PHONE, findSmallTargets, findSmallText, menuButton, openDrawer } from './phone-helpers'
 void findSmallTargets; void findSmallText; void openDrawer
 
@@ -58,6 +58,9 @@ test('N2-01: opening a row from Recent keeps Recent, writes no tab preference, a
   page.on('request', (r) => {
     if (r.method() !== 'GET' && r.url().includes('/api/ui-prefs') && (r.postData() ?? '').includes('todo-active-section')) tabWrites.push(r.postData() ?? '')
   })
+  // Recent lists what was opened: a screenful of the fixture's open tasks.
+  const listed = await (await page.request.get('/api/tasks', { params: { fields: 'list' } })).json() as { tasks: Array<{ id: string; status?: string }> }
+  await seedRecentOpened(page, listed.tasks.filter((t) => t.status !== 'done').slice(0, 30).map((t) => t.id))
   const recent = page.locator('.todo-section-tab.todo-section-tab-recent')
   await recent.tap()
   await expect(recent).toHaveAttribute('aria-selected', 'true')

@@ -50,6 +50,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { getAgentsSnapshot, loadAgents, subscribeAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { readString, writeLayoutField } from '@/utils/layout-record';
+import { recordTaskOpened } from '@/utils/recent-opened';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
@@ -449,6 +450,8 @@ export function AskWalnutSlot({
     setNewMode(false);
     // Main is Walnut's: showing it from another agent's list moves the drawer back to Walnut.
     if (taskId === MAIN_PICK) setAgentId(GENERAL_AGENT_ID);
+    // An open for the Recent tab; Main is always one tap away in this slot, so it is left out.
+    else recordTaskOpened(taskId);
     setSelectedTaskId(taskId);
   }, [dropLaunchedUnless]);
 
@@ -540,6 +543,7 @@ export function AskWalnutSlot({
         ...(asMain ? { main: true } : {}),
       });
       setSelectedTaskId(asMain ? MAIN_PICK : result.taskId);
+      if (!asMain) recordTaskOpened(result.taskId);
       setNewMode(false);
       setPending(null);
       return true;

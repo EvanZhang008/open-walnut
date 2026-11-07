@@ -51,6 +51,21 @@ describe('GET /api/ui-prefs', () => {
     const res = await request(createApp()).get('/api/ui-prefs');
     expect(res.body.prefs['open-walnut-legacy']).toEqual({ v: '0.4', ts: 0 });
   });
+
+  it('?key= answers that one entry, or none when it is not saved', async () => {
+    await fs.mkdir(path.dirname(UI_PREFS_FILE), { recursive: true });
+    await fs.writeFile(UI_PREFS_FILE, JSON.stringify({
+      'walnut-todo-recent-opened': { v: '[{"id":"t1","at":"2026-11-06T19:30:00.000Z"}]', ts: 5 },
+      'open-walnut-theme': { v: 'dark', ts: 6 },
+    }));
+    const one = await request(createApp()).get('/api/ui-prefs').query({ key: 'walnut-todo-recent-opened' });
+    expect(one.body.prefs).toEqual({ 'walnut-todo-recent-opened': { v: '[{"id":"t1","at":"2026-11-06T19:30:00.000Z"}]', ts: 5 } });
+    const none = await request(createApp()).get('/api/ui-prefs').query({ key: 'walnut-todo-missing' });
+    expect(none.body.prefs).toEqual({});
+    // An inherited name is not a key.
+    const proto = await request(createApp()).get('/api/ui-prefs').query({ key: 'constructor' });
+    expect(proto.body.prefs).toEqual({});
+  });
 });
 
 describe('one-time move of the root ui-prefs.json into config/share/', () => {

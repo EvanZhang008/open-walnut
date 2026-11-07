@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useDraft } from '@/hooks/useDraft';
 import { useIntegrations } from '@/hooks/useIntegrations';
@@ -25,7 +25,7 @@ import type { TaskPriority } from '@open-walnut/core';
 import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
-import { recentActivityTime, recentActivityTitle, type RecentSortMode } from './recent-activity-time';
+import { useRecentOpenedTasks } from './useRecentOpenedTasks';
 import { footerStatusScope } from './footer-scope';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { TAB_BAR_HIDDEN_TABS_KEY, TASK_SHORTCUTS_KEY, useNavigationList, useNavigationPreference } from '@/hooks/useNavigationPreference';
@@ -113,8 +113,8 @@ import { formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { type SortBy, type GroupBy } from './ViewDropdown';
 import {
-  RECENT_SORT_VALUES, SORT_VALUES, commonValue, groupByProject, groupOfTierMode, keepPinOrder, orderLists,
-  parseTierSorts, recentOrderOfSort, sortOfRecentOrder, tierModeOfGroup, type RecentOrder, type TierViewMode,
+  SORT_VALUES, commonValue, groupOfTierMode, keepPinOrder, orderLists,
+  parseTierSorts, tierModeOfGroup, type TierViewMode,
 } from './list-order';
 import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
@@ -248,6 +248,8 @@ interface TodoPanelProps {
   openSessionIds?: Set<string>;
   /** Set of task IDs whose session is open on the home page — highlights their cards. */
   openSessionTaskIds?: Set<string>;
+  /** Every task open in this window (a session column, the chat slot's ask, a full-screen detail): Recent greys them. */
+  openInWindowTaskIds?: Set<string>;
   // operationError VALUE is surfaced globally via the unified notification toaster
   // (AppShell), so TodoPanel only needs the report callback, not the value.
   onOperationError?: (msg: string) => void;
@@ -645,29 +647,6 @@ function readTierSorts(): Record<string, SortBy> {
 
 function persistTierSorts(sorts: Record<string, SortBy>) {
   try { localStorage.setItem(LS_TIER_SORT_KEY, JSON.stringify(sorts)); } catch { /* ignore */ }
-}
-
-// Recent's Group (Flat by default, the feed as it always was).
-const LS_RECENT_GROUP_KEY = 'walnut-todo-recent-group';
-
-function readRecentGroup(): GroupBy {
-  try { return localStorage.getItem(LS_RECENT_GROUP_KEY) === 'project' ? 'project' : 'none'; } catch { return 'none'; }
-}
-
-// Recent tab sort mode — see RecentSortMode in recent-activity-time.ts (the row's
-// time and the feed's sort share it). 'walnut-todo-' prefix rides ui-prefs-sync.
-const LS_RECENT_SORT_KEY = 'walnut-todo-recent-sort';
-
-function readRecentSortMode(): RecentOrder {
-  try {
-    const v = localStorage.getItem(LS_RECENT_SORT_KEY);
-    if (v === 'updated' || v === 'created' || v === 'priority') return v;
-  } catch { /* ignore */ }
-  return 'updated';
-}
-
-function persistRecentSortMode(mode: RecentOrder) {
-  try { localStorage.setItem(LS_RECENT_SORT_KEY, mode); } catch { /* ignore */ }
 }
 
 // Disable layout animation for items that were just dragged to prevent
@@ -1659,10 +1638,6 @@ function persistGroupBy(v: GroupBy) {
   try { localStorage.setItem(LS_GROUP_KEY, v); } catch { /* ignore */ }
 }
 
-function priorityRank(t: Task): number {
-  return PRIORITY_RANK[effectivePriority(t.priority)] ?? 3;
-}
-
 /** The order each non-Manual sort draws a list in: the Projects list and the tiers alike. */
 const TASK_COMPARATORS: Record<Exclude<SortBy, 'manual'>, (a: Task, b: Task) => number> = {
   priority: comparePriority, date: compareDate, updated: compareUpdated,
@@ -2073,6 +2048,8 @@ interface RecentCardProps {
   /** Completion grace period is ending in removal — play the fade+collapse exit. */
   isVanishing?: boolean;
   isSessionOpen?: boolean;
+  /** Open in this window right now (a column, the chat slot, a detail): drawn greyed. */
+  isOpenInWindow?: boolean;
   isDetailOpen?: boolean;
   onClick?: (task: Task) => void;
   onPinTask?: (taskId: string) => void;
@@ -2095,13 +2072,19 @@ interface RecentCardProps {
   onDelete?: (id: string) => void;
   /** Move this task to another project ('' = Inbox) — kebab "Project" select. */
   onMoveToProject?: (taskId: string, project: string) => void;
-  /** The feed's sort mode: the row shows the same clock the feed ranks by. */
-  timeMode: RecentSortMode;
+  /** When the person last opened it (ISO): the row's "5m ago", the clock the list ranks by. */
+  openedAt?: string;
 }
 
-// ── SortableRecentCard — draggable recent-activity card with kebab menu ──
+/** A Recent row's time tooltip: "Opened" and the full local date. */
+function openedTitle(at: string | undefined): string {
+  const t = at ? new Date(at) : null;
+  return t && !isNaN(t.getTime()) ? `Opened ${t.toLocaleString()}` : '';
+}
 
-function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, timeMode }: RecentCardProps) {
+// ── SortableRecentCard — a draggable row of the Recent list, with its kebab menu ──
+
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpenInWindow, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, openedAt }: RecentCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
@@ -2129,10 +2112,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
   // is not acting). The DOT follows the stored unread marker and clears on open.
   const needsAction = taskNeedsAction(task);
   const unread = !isDone && Boolean(task.unread);
-  // The row shows the clock the feed sorts by (latest of update / session /
-  // completion; creation in 'created' mode) — see recentActivityTime.
-  const activity = recentActivityTime(task, timeMode);
-  const ago = timeAgo(activity.at);
+  // The row shows the clock the list ranks by: when the person opened it.
+  const ago = openedAt ? timeAgo(openedAt) : '';
 
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -2145,7 +2126,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
-      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isOpenInWindow ? ' todo-recent-card-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -2203,7 +2184,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <AwaySyncMark item={task} />
-      {ago && <span className="todo-recent-ago" title={recentActivityTitle(activity)}>{ago}</span>}
+      {ago && <span className="todo-recent-ago" title={openedTitle(openedAt)}>{ago}</span>}
       {/* One-click ▶ Start — hover-revealed, before the kebab */}
       <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
       <TaskKebabMenu
@@ -2233,7 +2214,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2496,19 +2477,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Read by the drag-end handler, whose deps leave the sort out.
   const tierSortRef = useRef(tierSort);
   tierSortRef.current = tierSort;
-  // Recent's order: the time the feed ranks by (the row's time too, see
-  // RecentSortMode), or Priority, which keeps the feed and orders it by priority.
-  const [recentOrder, setRecentOrder] = useState<RecentOrder>(readRecentSortMode);
-  const recentSortMode: RecentSortMode = recentOrder === 'created' ? 'created' : 'updated';
-  const handleRecentSortChange = useCallback((mode: RecentOrder) => {
-    setRecentOrder(mode);
-    persistRecentSortMode(mode);
-  }, []);
-  const [recentGroup, setRecentGroup] = useState<GroupBy>(readRecentGroup);
-  const handleRecentGroupChange = useCallback((g: GroupBy) => {
-    setRecentGroup(g);
-    try { localStorage.setItem(LS_RECENT_GROUP_KEY, g); } catch { /* ignore */ }
-  }, []);
   // Ephemeral view override while a search query is active. Search defaults to the
   // stacked All view (every region shows its matches at once); picking a tab during
   // a search narrows the view WITHOUT touching the persisted tab, so clearing the
@@ -3450,36 +3418,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return 'satellite';
   }, [pinnedIdsWithGrace, focusIdsWithGrace, waitIdsWithGrace, customIdsWithGrace]);
 
-  // Recent tasks: an ACTIVITY FEED — every recently created/updated task pops up
-  // here, INCLUDING pinned ones (they render in their tier AND here; the Recent
-  // card shows a tier dot and isn't draggable — it's already placed). When "Show
-  // completed" is on, recently completed tasks surface too, ranked by completion.
-  // FROZEN during a pinned drag: Recent sorts by last_session_update/updated_at and
-  // shares the pinned DndContext — a mid-drag re-sort moves/remounts cards and
-  // feeds the useRect #185 loop. Converges to live order on drop.
-  const recentTasksLive = useMemo(() => {
-    // 'updated': most recent of creation / any update / session activity /
-    // completion (the activity feed). 'created': pure creation time. The row's
-    // "3w ago" reads the same function, so what it says matches where it sits.
-    const recentTime = (t: Task) => recentActivityTime(t, recentSortMode).at;
-    // Completed tasks join the feed DURING SEARCH (2026-08-26, user request —
-    // a matching done task must be findable in Recent too); the everyday feed
-    // keeps the "Show completed" gate (+ the completion-animation grace).
-    const feed = tasks
-      .filter(t => {
-        const isDone = t.status === 'done' || t.phase === 'COMPLETE';
-        if (isDone) return isSearchMode || showCompleted || keepWhileCompleting(t);
-        return isSearchMode || !hiddenAsWaiting(t) || keepWhileParking(t);
-      })
-      .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
-      .slice(0, 50);
-    // Priority reorders the same 50 (newest first among equals); By project then
-    // gathers each project's rows under its label.
-    const ranked = recentOrder === 'priority'
-      ? feed.map((t, i) => ({ t, i })).sort((a, b) => priorityRank(a.t) - priorityRank(b.t) || a.i - b.i).map((x) => x.t)
-      : feed;
-    return recentGroup === 'project' ? groupByProject(ranked) : ranked;
-  }, [tasks, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, recentSortMode, recentOrder, recentGroup, isSearchMode]);
+  // Recent: the tasks the person opened lately, newest open first, in ONE flat list
+  // (useRecentOpenedTasks; 2026-11-06, the user: "very simple flat list for recent"). Every
+  // state shows, a completed or parked one too: it is what they looked at, and the list is
+  // for finding it again. Pinned ones show here too (a tier dot; not draggable, already
+  // placed). FROZEN during a pinned drag: it shares the pinned DndContext, and an open
+  // landing mid-drag would move or remount cards and feed the useRect #185 loop.
+  const recentOpened = useRecentOpenedTasks(tasks, loading, effectiveSection === 'recent');
+  const recentTasksLive = recentOpened.tasks;
   const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
@@ -4816,8 +4762,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // below leaves them out), the list itself as Working, Waiting and Completed
   // folded under it. A Status pick narrower than Open shows exactly what it names,
   // with no sections; a watched task stays on top either way. A search ranks
-  // everything in one list.
-  const sectionsActive = !isSearchMode && statusOnSections;
+  // everything in one list. Recent is one flat list of what was opened, with no sections
+  // (2026-11-06, the user: "very simple flat list for recent").
+  const isRecentView = effectiveSection === 'recent';
+  const sectionsActive = !isSearchMode && statusOnSections && !isRecentView;
   /** Flat draws Needs you as its own section; By project keeps those rows in the list. */
   const needsSection = sectionsActive && panelDesign === 'status';
   // Open and fold by the one fold rule (section-fold-rule.ts): Watching and Needs you keep the
@@ -5175,19 +5123,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return list.filter(task => keep.has(task.id));
   }, [filterResult.list, dedupePinned, displayedPinIds]);
+  // The filter chips leave Recent alone (it lists what was opened, whatever its state); a
+  // search narrows it to the matches, as it does every list.
   const visibleRecentTasks = useMemo(
-    () => recentTasks.filter((task) => visibleTaskIds.has(task.id)),
-    [recentTasks, visibleTaskIds],
+    () => (isSearchMode ? recentTasks.filter((task) => visibleTaskIds.has(task.id)) : recentTasks),
+    [recentTasks, visibleTaskIds, isSearchMode],
   );
   const visibleRecentIds = useMemo(
     () => visibleRecentTasks.map(recentStaticId),
     [recentStaticId, visibleRecentTasks],
   );
-  const recentProjectCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const t of visibleRecentTasks) map.set(t.project || '', (map.get(t.project || '') ?? 0) + 1);
-    return map;
-  }, [visibleRecentTasks]);
   // Projects with a visible card per tier, AT REST (frozen for a pinned drag): which
   // project labels a tier draws. Frozen so a label never comes or goes under a live
   // drag, the way the old plain-DOM labels read their set from tierIdsAtRest.
@@ -6749,6 +6694,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [selectionInfo, projectRegistry.sourceByName, projectRegistry.loaded, confirm, onMoveTask, exitSelectMode]);
 
   const handlePinnedCardClick = handleTaskClick;
+  // A Recent row the board list does not carry (finished long ago, opened from search) opens
+  // the way any task link does, by id: Home reads it and shows its details.
+  const openUnlistedTask = useCallback((task: Task) => {
+    window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: task.id, openDetail: true } }));
+  }, []);
 
   const handleExpandDetail = useCallback((task: Task) => {
     setDetailTarget(null);
@@ -7782,29 +7732,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const sorts: SortBy[] = [
       ...reads.tiers.map(tierSort),
       ...(reads.projects ? [sortBy] : []),
-      ...(reads.recent ? [sortOfRecentOrder(recentOrder)] : []),
     ];
     const groups: GroupBy[] = [
       ...reads.tiers.map((t) => groupOfTierMode(tierViewMode(t))),
       ...(reads.projects ? [groupBy] : []),
-      ...(reads.recent ? [recentGroup] : []),
     ];
     return {
       sort: commonValue(sorts),
-      sortChoices: reads.recent ? RECENT_SORT_VALUES : SORT_VALUES,
+      sortChoices: SORT_VALUES,
       onSort: (v: SortBy) => {
         for (const t of writes.tiers) setTierSort(t, v);
         if (writes.projects) setSortForAll(v);
-        if (writes.recent && v !== 'manual') handleRecentSortChange(recentOrderOfSort(v));
       },
       projectSortCount: reads.projects ? Object.keys(projectSorts).length : 0,
       group: commonValue(groups),
       onGroup: (v: GroupBy) => {
         for (const t of writes.tiers) setTierViewMode(t, tierModeOfGroup(v));
         if (writes.projects) { setGroupBy(v); persistGroupBy(v); }
-        if (writes.recent) handleRecentGroupChange(v);
       },
-      note: isSearchMode ? 'Search ranks by match' : null,
+      note: isSearchMode ? 'Search ranks by match' : reads.recent ? 'Newest opened first' : null,
     };
   })();
   // The Pinned heading sets every tier's Group and Sort at once, as Pinned's Display rows
@@ -7960,7 +7906,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {!isSearchMode && !phoneFirstLoad && (
         <LimitedSummary model={sectionModel} onShow={showLimitedSection} />
       )}
-      {!isSearchMode && !phoneFirstLoad && (
+      {!isSearchMode && !phoneFirstLoad && !isRecentView && (
         <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
       )}
       {!flatSections && (
@@ -8112,6 +8058,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           {/* Recent tasks section — draggable cards, drop on Pinned tiers to pin.
               When expanded it flex-grows to fill the wrapper's leftover space (no
               dead gap above TASKS); the list scrolls once items exceed that space. */}
+          {/* Nothing opened yet (a new install, a cleared browser): say what the list is for. */}
+          {recentVisible && recentTasks.length === 0 && !loading && !isSearchMode && (
+            <p className="todo-pinned-empty" data-testid="todo-recent-empty">Tasks you open show up here, newest first.</p>
+          )}
           {recentVisible && visibleRecentTasks.length > 0 && (
             <div className={`todo-pinned-section${!isFolded('recent') ? ' todo-pinned-section-recent' : ''}${isAll ? '' : ' todo-pinned-section-solo'}`}>
               {isAll && (
@@ -8135,23 +8085,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       ? { maxHeight: recentResize.height, flex: 'none' }
                       : { minHeight: RECENT_VISIBLE_MAX * 30 }}
                   >
-                    {visibleRecentTasks.map((task, i) => (
-                      <Fragment key={task.id}>
-                      {/* Group by project: a quiet label over each project's rows (read only:
-                          the feed has no order of its own to drag). */}
-                      {recentGroup === 'project' && (i === 0 || (visibleRecentTasks[i - 1].project || '') !== (task.project || '')) && (
-                        <div className="tier-project-label recent-project-label" data-project={task.project || ''}>
-                          <span className="tier-project-label-name">{task.project || 'Inbox'}</span>
-                          <span className="tier-project-label-count" aria-hidden="true">{recentProjectCounts.get(task.project || '') ?? 0}</span>
-                        </div>
-                      )}
+                    {visibleRecentTasks.map((task) => (
                       <SortableRecentCard
+                        key={task.id}
                         task={task}
                         isFocused={focusedTaskId === task.id}
                         isVanishing={graceExiting && ((keepWhileCompleting(task) && !showCompleted) || (keepWhileParking(task) && waitingWillHide))}
                         isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
+                        isOpenInWindow={openInWindowTaskIds?.has(task.id) ?? false}
                         isDetailOpen={focusedTaskId === task.id && !suppressDetail}
-                        onClick={handlePinnedCardClick}
+                        onClick={recentOpened.outside.has(task.id) ? openUnlistedTask : handlePinnedCardClick}
                         onPinTask={onPinTask}
                         onUnpinTask={onUnpinTask}
                         isPinned={pinnedTaskIds?.has(task.id)}
@@ -8169,9 +8112,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                         onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                         onDelete={onDelete}
-                        timeMode={recentSortMode}
+                        openedAt={recentOpened.openedAt.get(task.id)}
                       />
-                      </Fragment>
                     ))}
                   </div>
                   {isAll && (

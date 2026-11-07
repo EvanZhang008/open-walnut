@@ -43,7 +43,7 @@ async function pinTask(
   expect(tierRes.ok()).toBe(true);
 }
 
-test('search filters the Pinned tiers and Recent feed like the Tasks list', async ({ page, request }) => {
+test('search filters the Pinned tiers and the Recent list like the Tasks list', async ({ page, request }) => {
   // Unique token so parallel workers' fixture data can never collide.
   const token = `pinsearch${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -70,6 +70,10 @@ test('search filters the Pinned tiers and Recent feed like the Tasks list', asyn
   // search" proves nothing.
   await expect(focusCard(pinnedMatch)).toBeVisible({ timeout: 10_000 });
   await expect(focusCard(pinnedMiss)).toBeVisible();
+  // Recent lists what the person opened: open both, the way a task link does.
+  for (const id of [recentMiss, recentMatch]) {
+    await page.evaluate((taskId) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId } })), id);
+  }
   await selectSection(page, 'Recent');
   await expect(recentCard(recentMatch)).toBeVisible();
   await expect(recentCard(recentMiss)).toBeVisible();

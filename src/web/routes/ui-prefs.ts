@@ -145,8 +145,15 @@ function withTestRunWrites(prefs: Record<string, PrefEntry>): Record<string, Pre
   return own ? { ...prefs, ...own } : prefs
 }
 
+/** `?key=<name>` answers that one entry (a window merging one key mid-session); none, every key. */
+function onlyAskedKey(req: Request, prefs: Record<string, PrefEntry>): Record<string, PrefEntry> {
+  const key = typeof req.query.key === 'string' ? req.query.key : ''
+  if (!key) return prefs
+  return Object.prototype.hasOwnProperty.call(prefs, key) ? { [key]: prefs[key] } : {}
+}
+
 // GET /api/ui-prefs → { prefs: Record<string, { v: string|null, ts: number }> }
-uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+uiPrefsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Turned off for this replica (Settings): the Mac's prefs alone, never this box's own file.
     await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('prefs')
@@ -156,7 +163,7 @@ uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
       const prefs = asOf === null ? null : await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
       if (prefs) {
         res.setHeader(COPY_AS_OF_HEADER, String(asOf))
-        res.json({ prefs: withTestRunWrites(prefs) })
+        res.json({ prefs: onlyAskedKey(req, withTestRunWrites(prefs)) })
         return
       }
     }
@@ -165,10 +172,10 @@ uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
       const prefs = await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
       // No copy yet (or the host turned it off): not "no prefs", which a client would merge as such.
       if (!prefs) throw new NeedsLeaderError(KIND_NOT_COPIED)
-      res.json({ prefs: withTestRunWrites(prefs) })
+      res.json({ prefs: onlyAskedKey(req, withTestRunWrites(prefs)) })
       return
     }
-    res.json({ prefs: withTestRunWrites(await loadPrefs()) })
+    res.json({ prefs: onlyAskedKey(req, withTestRunWrites(await loadPrefs())) })
   } catch (err) {
     next(err)
   }
