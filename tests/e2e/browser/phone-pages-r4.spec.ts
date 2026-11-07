@@ -63,6 +63,11 @@ async function addAfternoon(page: Page): Promise<void> {
 }
 
 test('R3-06: hours are tall enough for a half hour; no meeting covers another; a short one still takes a finger', async ({ page }) => {
+  // A phone's day opens at the current hour (TimeGrid's phoneLandingMinute), so where
+  // the afternoon sits on screen hangs on the wall clock. Start the page's clock at
+  // 06:33 today, the hour that left 'Seed order review' below the fold when CI ran
+  // there (2026-11-07), so the probes below meet the same layout at any hour.
+  await page.clock.install({ time: new Date(`${localDay()}T06:33:00`) })
   await addAfternoon(page)
   const errors = await bootHome(page)
   await openDrawer(page)
@@ -88,7 +93,12 @@ test('R3-06: hours are tall enough for a half hour; no meeting covers another; a
     }
   }
   // A half-hour chip's tap band reaches 44 px (the scan's four probes land on it).
-  const band = await chips.filter({ hasText: 'Seed order review' }).evaluate((el) => {
+  // elementFromPoint only sees what is on screen: bring this chip to the middle of
+  // the day's scroller first (scrolling the first chip into view can leave it under
+  // the bottom edge).
+  const seed = chips.filter({ hasText: 'Seed order review' })
+  await seed.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  const band = await seed.evaluate((el) => {
     const r = el.getBoundingClientRect()
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2
     return [cy - 21.5, cy + 21.5].map((y) => { const t = document.elementFromPoint(cx, y); return !!t && (t === el || el.contains(t)) })
